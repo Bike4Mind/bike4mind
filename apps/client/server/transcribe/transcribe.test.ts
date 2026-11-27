@@ -54,7 +54,7 @@ vi.mock('@aws-sdk/s3-presigned-post', () => ({
   createPresignedPost: (...a: unknown[]) => mockPresign(...a),
 }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   getEffectiveApiKeyByBackend: mockGetApiKey,
 }));
@@ -64,11 +64,17 @@ vi.mock('@server/utils/transcriptionCost', async orig => ({
   holdTranscriptionCredits: mockHoldCredits,
 }));
 vi.mock('@bike4mind/database', () => ({
+  spendFreezeRepository: { findActiveForSubject: async () => null },
   userRepository: {},
   organizationRepository: {},
   adminSettingsRepository: {},
   creditTransactionRepository: {},
   usageEventRepository: { record: mockUsageRecord },
+  // No samples and no settings rows: the spend cap reads defaults and never refuses here.
+  newAccountSpendCapAdapters: {
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
+    personalSpendSince: async () => [],
+  },
 }));
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<typeof import('@bike4mind/services')>();
@@ -161,6 +167,23 @@ describe('transcribeUpload rejection kinds', () => {
     await expect(
       transcribeUpload({ user: { id: 'u1' }, fileKey: 'transcribe-uploads/u2/a.mp3', receivedAt: new Date(), logger })
     ).rejects.toMatchObject({ kind: 'invalid_key' });
+  });
+
+  it('refuses a moderated user before any credit, storage or provider work', async () => {
+    const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+
+    await expect(
+      transcribeUpload({
+        user: { id: 'u1', isModerated: true } as never,
+        fileKey: 'transcribe-uploads/u1/a.mp3',
+        receivedAt: new Date(),
+        logger,
+      })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockAssertCredits).not.toHaveBeenCalled();
+    expect(mockHoldCredits).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockOpenAI).not.toHaveBeenCalled();
   });
 
   it('rethrows a credit pre-flight fault that is not a BadRequestError unchanged', async () => {
@@ -277,6 +300,22 @@ describe('transcribeUpload credit hold', () => {
     expect(await result).toEqual({ text: 'finished' });
     expect(hold.settle).toHaveBeenCalledTimes(1);
     expect(hold.release).not.toHaveBeenCalled();
+  });
+
+  it('records the authenticating API key on the settled charge', async () => {
+    mockOpenAI.mockResolvedValue({ text: 'hello' });
+
+    await transcribeUpload({
+      user: { id: 'u1' } as never,
+      fileKey: 'transcribe-uploads/u1/a.mp3',
+      receivedAt: new Date(),
+      logger,
+      apiKeyId: 'key-1',
+    });
+
+    expect(hold.settle).toHaveBeenCalledWith(expect.any(Number), expect.objectContaining({ apiKeyId: 'key-1' }));
+    // The hold checks the spend freeze, so a frozen key must reach it.
+    expect(mockHoldCredits).toHaveBeenCalledWith(expect.anything(), expect.any(Number), logger, 'key-1');
   });
 
   it('holds the size-based cost before the provider runs, then settles that hold', async () => {

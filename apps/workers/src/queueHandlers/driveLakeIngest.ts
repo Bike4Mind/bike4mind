@@ -1,6 +1,6 @@
 import type { drive_v3 } from '@googleapis/drive';
 import type { Logger } from '@bike4mind/observability';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   User,
   adminSettingsRepository,
@@ -28,7 +28,9 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { connectingUserCanStillManage } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import {
   assertConnectorLakeWrite,
   createLakeIngestRetirer,
@@ -41,7 +43,7 @@ import {
   getValidConnectionDriveAccessToken,
   isTerminalDriveGrantError,
   releaseDriveConnection,
-} from '@server/integrations/google/drive/common';
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 import {
   createDriveClient,
   isDriveAuthError,
@@ -56,7 +58,7 @@ import {
   type ConnectedFolderReachability,
   type DriveChange,
   type DriveFile,
-} from '@server/integrations/google/drive/driveClient';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
 import {
   walkFolder,
   fetchDriveFileContent,
@@ -64,19 +66,18 @@ import {
   isUnderRoot,
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
-} from '@server/integrations/google/drive/driveContent';
+} from '@bike4mind/server-utils/integrations/google/drive/driveContent';
 import {
   MAX_INGEST_CANDIDATES,
   MAX_INGEST_FILE_BYTES,
   driveIngestSkipReason,
 } from '@bike4mind/server-utils/integrations/google/drive/driveIngestLimits';
-import { finalizeBatchIfComplete } from '@server/dataLakes/dataLakeBatchProgress';
+import { finalizeBatchIfComplete } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 const Payload = z.object({
   connectionId: z.string(),
@@ -634,6 +635,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
       if (resumeBatchId) await settleChainedBatch(resumeBatchId);
       await releaseClaim(null);
+      return;
+    }
+    await resolveRoleAdminPermissions(user);
+    if (!(await connectingUserCanStillManage(user, lake))) {
+      logger.warn('[driveLakeIngest] connecting user can no longer manage the lake; dropping', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim(
+        'The account that connected this folder can no longer manage this data lake. Reconnect the folder.'
+      );
       return;
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
@@ -1333,7 +1343,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
 
         const ext = mime.extension(mimeType);
-        const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+        const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
         const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
 
         const fabFile = await ingestLakeFile({

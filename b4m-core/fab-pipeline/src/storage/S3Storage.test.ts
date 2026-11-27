@@ -3,7 +3,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
 import { describe, it, expect, vi } from 'vitest';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  DeleteObjectsCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { S3Storage } from './S3Storage';
 
 /**
@@ -38,6 +44,67 @@ describe('S3Storage.upload', () => {
   });
 });
 
+describe('S3Storage ranged reads on empty objects', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+  const s3Error = (name: string, httpStatusCode: number) =>
+    Object.assign(new Error(name), { name, $metadata: { httpStatusCode } });
+
+  it('downloadRange returns an empty buffer when S3 answers 416 InvalidRange', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('InvalidRange', 416));
+
+    const result = await storage.downloadRange('uploads/__init__.py', 4100);
+
+    expect(result).toEqual(Buffer.alloc(0));
+  });
+
+  it('downloadRange returns the ranged bytes for a non-empty object', async () => {
+    const { storage, send } = setup();
+    send.mockResolvedValue({ Body: Readable.from([Buffer.from('abc')]) });
+
+    await expect(storage.downloadRange('uploads/a.txt', 4100)).resolves.toEqual(Buffer.from('abc'));
+  });
+
+  it.each([
+    ['AccessDenied', 403],
+    ['SlowDown', 503],
+  ])('downloadRange still propagates %s', async (name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/a.txt', 4100)).rejects.toMatchObject({ name });
+  });
+
+  it('getPreview returns an empty string when S3 answers 416 InvalidRange', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('InvalidRange', 416));
+
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
+  it.each([
+    ['only the error name matches', 'InvalidRange', 400],
+    ['only the HTTP status matches', 'RequestedRangeNotSatisfiable', 416],
+  ])('treats a range error as empty when %s', async (_case, name, status) => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error(name, status));
+
+    await expect(storage.downloadRange('uploads/__init__.py', 4100)).resolves.toEqual(Buffer.alloc(0));
+    await expect(storage.getPreview('uploads/__init__.py')).resolves.toBe('');
+  });
+
+  it('getPreview still propagates other S3 errors', async () => {
+    const { storage, send } = setup();
+    send.mockRejectedValue(s3Error('AccessDenied', 403));
+
+    await expect(storage.getPreview('uploads/a.txt')).rejects.toMatchObject({ name: 'AccessDenied' });
+  });
+});
+
 describe('S3Storage upload input handling', () => {
   const setup = () => {
     const storage = new S3Storage('test-bucket', 'us-east-2');
@@ -67,14 +134,176 @@ describe('S3Storage upload input handling', () => {
     const dir = mkdtempSync(join(tmpdir(), 's3storage-'));
     const existing = join(dir, 'data.json');
     writeFileSync(existing, '{"a":1}');
+    let body = '';
+    send.mockImplementation(async command => {
+      if (!(command instanceof PutObjectCommand) || !(command.input.Body instanceof Readable)) {
+        throw new Error('Expected a streamed upload');
+      }
+      for await (const chunk of command.input.Body) body += chunk;
+      return {};
+    });
     try {
       await expect(storage.uploadFile(existing, 'imports/data.json')).resolves.toBe('imports/data.json');
       const command = send.mock.calls[0][0] as PutObjectCommand;
       expect(command.input.Body).toBeInstanceOf(Readable);
       expect(command.input.ContentType).toBe('application/json');
-      let body = '';
-      for await (const chunk of command.input.Body as Readable) body += chunk;
       expect(body).toBe('{"a":1}');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('S3Storage.deletePrefix', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+
+  it('lists every page under the prefix and deletes each key, returning the count', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async (command: unknown) => {
+      if (command instanceof ListObjectsV2Command) {
+        return command.input.ContinuationToken
+          ? { Contents: [{ Key: 'thumbs/a1/c.webp' }], IsTruncated: false }
+          : {
+              Contents: [{ Key: 'thumbs/a1/a.webp' }, { Key: 'thumbs/a1/b.webp' }],
+              IsTruncated: true,
+              NextContinuationToken: 't2',
+            };
+      }
+      return {};
+    });
+
+    await expect(storage.deletePrefix('thumbs/a1/')).resolves.toBe(3);
+
+    const lists = send.mock.calls
+      .map(([c]) => c)
+      .filter(c => c instanceof ListObjectsV2Command) as ListObjectsV2Command[];
+    expect(lists.map(c => c.input)).toEqual([
+      { Bucket: 'test-bucket', Prefix: 'thumbs/a1/', ContinuationToken: undefined },
+      { Bucket: 'test-bucket', Prefix: 'thumbs/a1/', ContinuationToken: 't2' },
+    ]);
+    const deletes = send.mock.calls
+      .map(([c]) => c)
+      .filter(c => c instanceof DeleteObjectCommand) as DeleteObjectCommand[];
+    expect(deletes.map(c => c.input.Key)).toEqual(['thumbs/a1/a.webp', 'thumbs/a1/b.webp', 'thumbs/a1/c.webp']);
+  });
+
+  it.each(['', '/', 'thumbs/', 'thumbs', 'thumbs/a1', '//a1/'])('refuses the unscoped prefix %j', async prefix => {
+    const { storage, send } = setup();
+    await expect(storage.deletePrefix(prefix)).rejects.toThrow('unscoped prefix');
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('S3Storage permanent deletion', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+
+  it('erases current, previous, null versions and delete markers without deleting sibling keys', async () => {
+    const { storage, send } = setup();
+    let listed = false;
+    send.mockImplementation(async command => {
+      if (command instanceof ListObjectVersionsCommand) {
+        if (listed) return {};
+        listed = true;
+        return {
+          Versions: [
+            { Key: 'files/a', VersionId: 'v2' },
+            { Key: 'files/a', VersionId: 'v1' },
+            { Key: 'files/a', VersionId: 'null' },
+            { Key: 'files/a-other', VersionId: 'keep' },
+          ],
+          DeleteMarkers: [{ Key: 'files/a', VersionId: 'marker' }],
+        };
+      }
+      return {};
+    });
+    await expect(storage.deletePermanentlyWithCount('files/a')).resolves.toBe(4);
+    const deletes = send.mock.calls
+      .map(([command]) => command)
+      .filter(command => command instanceof DeleteObjectsCommand);
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0].input.Delete?.Objects).toEqual([
+      { Key: 'files/a', VersionId: 'v2' },
+      { Key: 'files/a', VersionId: 'v1' },
+      { Key: 'files/a', VersionId: 'null' },
+      { Key: 'files/a', VersionId: 'marker' },
+    ]);
+    expect(send.mock.calls.some(([command]) => command instanceof DeleteObjectCommand)).toBe(false);
+  });
+
+  it('reports zero when no exact object version or marker was observed', async () => {
+    const { storage, send } = setup();
+    send.mockResolvedValue({});
+    await expect(storage.deletePermanentlyWithCount('files/a')).resolves.toBe(0);
+    expect(send.mock.calls.some(([command]) => command instanceof DeleteObjectsCommand)).toBe(false);
+  });
+
+  it('drains successive version pages under the entity prefix', async () => {
+    const { storage, send } = setup();
+    const pages = [
+      { Versions: [{ Key: 'exports/u/a', VersionId: 'v1' }], IsTruncated: true },
+      { DeleteMarkers: [{ Key: 'exports/u/b', VersionId: 'v2' }] },
+      {},
+    ];
+    send.mockImplementation(async command => (command instanceof ListObjectVersionsCommand ? pages.shift() : {}));
+    await expect(storage.deletePrefixPermanently('exports/u/')).resolves.toBe(2);
+    expect(send.mock.calls.filter(([command]) => command instanceof ListObjectVersionsCommand)).toHaveLength(3);
+  });
+
+  it('propagates a per-object deletion failure so the account purge can retry', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async command =>
+      command instanceof ListObjectVersionsCommand
+        ? { Versions: [{ Key: 'files/a', VersionId: 'v1' }] }
+        : { Errors: [{ Key: 'files/a', Code: 'AccessDenied' }] }
+    );
+    await expect(storage.deletePermanently('files/a')).rejects.toThrow('Failed to permanently delete');
+  });
+
+  it('rejects an unchanged successful batch rather than looping forever', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async command =>
+      command instanceof ListObjectVersionsCommand ? { Versions: [{ Key: 'files/a', VersionId: 'v1' }] } : {}
+    );
+    await expect(storage.deletePermanently('files/a')).rejects.toThrow('Storage did not remove');
+  });
+
+  it.each(['', '/', 'files/', 'files', 'files/u', '//u/'])('refuses unscoped prefix %j', async prefix => {
+    const { storage, send } = setup();
+    await expect(storage.deletePrefixPermanently(prefix)).rejects.toThrow('unscoped prefix');
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('S3Storage failed file upload cleanup', () => {
+  it('closes its file stream when the storage request rejects', async () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    const dir = mkdtempSync(join(tmpdir(), 's3storage-'));
+    const localPath = join(dir, 'file.txt');
+    writeFileSync(localPath, 'data');
+    let source: Readable | undefined;
+    vi.spyOn(client, 'send').mockImplementation(async command => {
+      if (!(command instanceof PutObjectCommand) || !(command.input.Body instanceof Readable)) {
+        throw new Error('Expected a streamed upload');
+      }
+      source = command.input.Body;
+      await new Promise<void>((resolve, reject) => {
+        source?.once('open', () => resolve());
+        source?.once('error', reject);
+      });
+      throw new Error('upload interrupted');
+    });
+    try {
+      await expect(storage.uploadFile(localPath, 'files/a.txt')).rejects.toThrow('upload interrupted');
+      expect(source?.destroyed).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

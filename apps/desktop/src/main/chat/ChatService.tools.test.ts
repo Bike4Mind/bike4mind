@@ -11,6 +11,10 @@ import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
@@ -28,7 +32,10 @@ describe('ChatService tool loop', () => {
   let store: SessionStore;
 
   /** `turnLimits` is how a test reaches a budget whose real values it could not afford to. */
-  function build(turnLimits?: ChatServiceDeps['turnLimits']): ChatService {
+  function build(
+    turnLimits?: ChatServiceDeps['turnLimits'],
+    turnExtensions?: ChatServiceDeps['turnExtensions']
+  ): ChatService {
     // Bound to this test's sinks: a previous service replying late must not write into the next test's.
     const emitted = events;
     const boundPost = post;
@@ -48,6 +55,7 @@ describe('ChatService tool loop', () => {
       access: { list: async () => [root] } as unknown as AccessStore,
       logger: { debug: vi.fn(), warn: vi.fn() },
       ...(turnLimits ? { turnLimits } : {}),
+      ...(turnExtensions ? { turnExtensions } : {}),
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
@@ -110,6 +118,7 @@ describe('ChatService tool loop', () => {
       'web_fetch',
       'ask_user',
       'request_directory',
+      'loop',
     ]);
   });
 
@@ -151,9 +160,10 @@ describe('ChatService tool loop', () => {
     await service.send(id, 'what is in my shared folder?');
     await firstRequest();
 
-    const preamble = post.mock.calls[0][1].messages[0];
-    expect(preamble.role).toBe('system');
-    expect(preamble.content).toContain(root);
+    const [shared, sessionTail] = post.mock.calls[0][1].messages;
+    expect([shared.role, sessionTail.role]).toEqual(['system', 'system']);
+    expect(sessionTail.content).toContain(root);
+    const preamble = shared;
     expect(preamble.content).toMatch(/absolute paths/);
   });
 
@@ -196,10 +206,10 @@ describe('ChatService tool loop', () => {
     expect(toolEnd && 'call' in toolEnd ? toolEnd.call.preview : '').toContain('huge.bin');
 
     // The second request must carry the provider's tool_use / tool_result pair.
-    // Index 0 is the access preamble, 1 the user prompt.
+    // Indexes 0 and 1 are the two halves of the system prompt, 2 the user prompt.
     const second = post.mock.calls[1][1].messages;
-    expect(second[2]).toMatchObject({ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1' }] });
-    expect(second[3]).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1' }] });
+    expect(second[3]).toMatchObject({ role: 'assistant', content: [{ type: 'tool_use', id: 'call_1' }] });
+    expect(second[4]).toMatchObject({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1' }] });
 
     const persisted = (await service.getSession(id))?.messages[1];
     expect(persisted?.toolCalls).toHaveLength(1);
@@ -222,7 +232,7 @@ describe('ChatService tool loop', () => {
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
     expect(events.find(event => event.type === 'tool-end')).toMatchObject({ call: { status: 'denied' } });
 
-    const result = post.mock.calls[1][1].messages[3].content[0];
+    const result = post.mock.calls[1][1].messages[4].content[0];
     expect(result).toMatchObject({ type: 'tool_result', is_error: true });
     expect(result.content).toMatch(/outside the folders shared with you/);
 
@@ -300,6 +310,76 @@ describe('ChatService tool loop', () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 
+  describe('automatic extension of a productive turn', () => {
+    const sentText = (call: number): string => JSON.stringify(post.mock.calls[call][1].messages);
+
+    it('carries a varied turn past its round budget, tells the model, and stops once the cap is spent', async () => {
+      service = build({ rounds: 2 }, async () => 1);
+      const { id } = await service.createSession();
+      await service.send(id, 'work');
+      await firstRequest();
+
+      // Round 2 reaches the budget and is extended once (two more rounds); round 4 has no extension left.
+      await driveRounds(4, round => `{"pattern":"*${round}"}`);
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+      expect(post).toHaveBeenCalledTimes(4);
+      expect(sentText(2)).toContain('extended automatically (1 of 1)');
+      // One extension, one note: the stopping round adds none.
+      expect(sentText(3).split('extended automatically').length - 1).toBe(1);
+    });
+
+    it('carries a turn past its time budget the same way', async () => {
+      service = build({ wallClockMs: 0 }, async () => 1);
+      const { id } = await service.createSession();
+      await service.send(id, 'slow');
+      await firstRequest();
+
+      await driveRounds(2, round => `{"pattern":"*${round}"}`);
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'turn_time_limit' });
+      expect(post).toHaveBeenCalledTimes(2);
+    });
+
+    it('never extends a turn that is repeating the same round', async () => {
+      service = build({ rounds: 3 }, async () => 3);
+      const { id } = await service.createSession();
+      await service.send(id, 'loop');
+      await firstRequest();
+
+      // Two repeats in a row by the budget round: short of the stall stop, but not progress either.
+      await driveRounds(3, () => '{"pattern":"*"}');
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+      expect(post).toHaveBeenCalledTimes(3);
+    });
+
+    it('still stops a stalled turn immediately, whatever the setting allows', async () => {
+      service = build(undefined, async () => 10);
+      const { id } = await service.createSession();
+      await service.send(id, 'loop');
+      await firstRequest();
+
+      await driveRounds(6, () => '{"pattern":"*"}');
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_stall_limit' });
+      expect(post).toHaveBeenCalledTimes(6);
+    });
+
+    it('stops at the budget as before when the setting is "always stop"', async () => {
+      service = build({ rounds: 2 }, async () => 0);
+      const { id } = await service.createSession();
+      await service.send(id, 'work');
+      await firstRequest();
+
+      await driveRounds(2, round => `{"pattern":"*${round}"}`);
+
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(sentText(1)).not.toContain('extended automatically');
+    });
+  });
+
   it('continues a budget-stopped turn in the same message, keeping what it already said', async () => {
     service = build({ rounds: 1 });
     const { id } = await service.createSession();
@@ -359,9 +439,225 @@ describe('ChatService tool loop', () => {
         toolCallIds: [expect.any(String)],
         timing: expect.any(Object),
         usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 50, creditsUsed: 20 },
+        model: 'test-model',
+        sent: { text: 'Reading the config.' },
       },
-      { text: 'Done.', toolCallIds: [], timing: expect.any(Object) },
+      { text: 'Done.', toolCallIds: [], timing: expect.any(Object), model: 'test-model', sent: { text: 'Done.' } },
     ]);
+  });
+
+  it('stamps each round of a continued reply with the model its own request went to', async () => {
+    service = build({ rounds: 1 });
+    const { id } = await service.createSession();
+    await service.send(id, 'build it');
+    await firstRequest();
+
+    streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+    await driveRounds(1, () => '{"pattern":"*"}');
+    expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+    await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+    events.length = 0;
+    expect(await service.continueReply(id)).toMatchObject({ ok: true });
+    await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+    expect(post.mock.calls[1][1].model).toBe(ChatModels.CLAUDE_5_SONNET);
+    streams[1].write(frame({ type: 'content', text: 'Done.' }));
+    streams[1].write(frame('[DONE]'));
+    await waitFor(events, 'done');
+
+    const reply = (await service.getSession(id))?.messages.find(message => message.role === 'assistant');
+    expect(reply?.rounds?.map(round => [round.text, round.model])).toEqual([
+      ['Reading the config.', 'test-model'],
+      ['Done.', ChatModels.CLAUDE_5_SONNET],
+    ]);
+  });
+
+  describe('a continued reply keeps the model it started on', () => {
+    async function stopThenSwitch(firstRound: () => void): Promise<string> {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      firstRound();
+      await driveRounds(1, () => '{"pattern":"*"}');
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      return id;
+    }
+
+    const reply = async (id: string) =>
+      (await service.getSession(id))?.messages.find(message => message.role === 'assistant');
+
+    it('after a budget stop, a switch and Continue', async () => {
+      const id = await stopThenSwitch(() => streams[0].write(frame({ type: 'content', text: 'Reading the config.' })));
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+    });
+
+    it('after a stop before the first token', async () => {
+      const id = await stopThenSwitch(() => undefined);
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.map(round => [round.text, round.model])).toEqual([
+        ['', 'test-model'],
+        ['Done.', ChatModels.CLAUDE_5_SONNET],
+      ]);
+    });
+
+    it('when the stored message has no rounds, stamping the one it resumes as', async () => {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(1, () => '{"pattern":"*"}');
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      await store.updateMessage(id, stopped?.id ?? '', { rounds: undefined });
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      expect((await reply(id))?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+    });
+
+    it('when the continued run fails after finishing a round of its own, keeping that round too', async () => {
+      service = build({ rounds: 2 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(2, () => '{"pattern":"*"}');
+      expect(await waitFor(events, 'done')).toMatchObject({ stopReason: 'tool_turn_limit' });
+
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 3, { timeout: 3000, interval: 5 });
+      streams[2].write(frame({ type: 'content', text: 'Found it.' }));
+      streams[2].write(
+        frame({ type: 'tool_use', tools: [{ id: 'c2', name: 'glob_files', arguments: '{"pattern":"*"}' }] })
+      );
+      streams[2].write(frame('[DONE]'));
+      await vi.waitUntil(() => streams.length === 4, { timeout: 3000, interval: 5 });
+      streams[3].destroy(new Error('the server fell over'));
+      await waitFor(events, 'error');
+
+      const failed = await reply(id);
+      expect(failed?.rounds?.map(round => [round.toolCallIds, round.text])).toEqual([
+        [['c0'], 'Reading the config.'],
+        [['c1'], ''],
+        [['c2'], 'Found it.'],
+      ]);
+
+      await service.send(id, 'try again');
+      await vi.waitUntil(() => streams.length === 5, { timeout: 3000, interval: 5 });
+      const wire = JSON.stringify(post.mock.calls[4][1].messages);
+      expect(wire).toContain('"id":"c2"');
+      expect(wire).toContain('Found it.');
+    });
+
+    it('keeps a round for a continued run that called no tools, so its model can be told', async () => {
+      service = build({ wallClockMs: 0 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Thinking.' }));
+      streams[0].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      expect(stopped?.rounds).toBeUndefined();
+      await store.updateMessage(id, stopped?.id ?? '', { stopReason: 'turn_time_limit' });
+
+      service = build();
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.', usage: { inputTokens: 5, outputTokens: 2 } }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.map(round => round.model)).toEqual(['test-model', ChatModels.CLAUDE_5_SONNET]);
+    });
+
+    it('carries the context snapshot model for a reply stored before it was stamped', async () => {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(1, () => '{"pattern":"*"}');
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      await store.updateMessage(id, stopped?.id ?? '', {
+        model: undefined,
+        rounds: undefined,
+        contextSnapshot: { model: 'test-model', inputTokens: 10, overhead: [] },
+      });
+
+      await service.setSessionModel(id, ChatModels.CLAUDE_5_SONNET);
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await waitFor(events, 'done');
+
+      const finished = await reply(id);
+      expect(finished?.model).toBe('test-model');
+      expect(finished?.rounds?.[0].model).toBe('test-model');
+    });
+
+    it('when the continued run fails', async () => {
+      const id = await stopThenSwitch(() => streams[0].write(frame({ type: 'content', text: 'Reading the config.' })));
+      streams[1].destroy(new Error('the server fell over'));
+      await waitFor(events, 'error');
+
+      const failed = await reply(id);
+      expect(failed).toMatchObject({ model: 'test-model', error: 'the server fell over' });
+      expect(failed?.rounds?.map(round => [round.text, round.model])).toEqual([['Reading the config.', 'test-model']]);
+    });
+
+    it('when the continued run fails, keeping the artifacts the reply already published', async () => {
+      service = build({ rounds: 1 });
+      const { id } = await service.createSession();
+      await service.send(id, 'build it');
+      await firstRequest();
+      streams[0].write(frame({ type: 'content', text: 'Reading the config.' }));
+      await driveRounds(1, () => '{"pattern":"*"}');
+      await waitFor(events, 'done');
+      const stopped = await reply(id);
+      const artifact = { id: 'a1', type: 'code', title: 'Plan', content: 'step 1', mimeType: 'text/plain' };
+      await store.updateMessage(id, stopped?.id ?? '', { artifacts: [artifact] });
+
+      events.length = 0;
+      expect(await service.continueReply(id)).toMatchObject({ ok: true });
+      await vi.waitUntil(() => streams.length === 2, { timeout: 3000, interval: 5 });
+      streams[1].destroy(new Error('the server fell over'));
+      await waitFor(events, 'error');
+
+      expect((await reply(id))?.artifacts).toEqual([artifact]);
+    });
   });
 
   it('records each round with the calls it made, so a reply can be drawn in order', async () => {
@@ -485,6 +781,12 @@ describe('ChatService tool loop', () => {
     });
 
     const wireOf = (request: number): string => JSON.stringify(post.mock.calls[request][1].messages);
+    /** Only the running turn: earlier turns replay the nudges they were sent. */
+    const turnWireOf = (request: number): string => {
+      const messages: { role: string; content: unknown }[] = post.mock.calls[request][1].messages;
+      const prompt = messages.findLastIndex(message => message.role === 'user' && typeof message.content === 'string');
+      return JSON.stringify(messages.slice(prompt));
+    };
 
     /** Three tool rounds that leave the plan alone - enough to earn a nudge if one is owed. */
     async function bareRounds(from: number): Promise<void> {
@@ -534,12 +836,13 @@ describe('ChatService tool loop', () => {
       streams[4].write(frame('[DONE]'));
       await waitFor(events, 'done');
 
-      // Ephemeral: the rebuilt history carries only the results themselves, so the cached prefix
-      // a later turn sends is byte-for-byte the one it was built from.
+      // The rebuilt history replays the nudge where it was sent, so a later turn's prefix is
+      // byte-for-byte the one the last round cached; the stored results stay clean.
       await service.send(id, 'thanks');
       await vi.waitUntil(() => post.mock.calls.length === 6, { timeout: 3000, interval: 5 });
-      const rebuilt = post.mock.calls[5][1].messages;
-      expect(JSON.stringify(rebuilt.slice(0, -1))).not.toContain('system-reminder');
+      const unmarked = ({ cache: _cache, ...rest }: { cache?: boolean }) => rest;
+      const lastRound = post.mock.calls[4][1].messages;
+      expect(post.mock.calls[5][1].messages.slice(0, lastRound.length).map(unmarked)).toEqual(lastRound.map(unmarked));
       const stored = (await service.getSession(id))?.messages[1];
       expect(JSON.stringify(stored?.toolCalls)).not.toContain('system-reminder');
     });
@@ -566,7 +869,7 @@ describe('ChatService tool loop', () => {
       // Two replies back: the panel has dropped it, and so has the nudge.
       await service.send(id, 'and again');
       await bareRounds(6);
-      expect(wireOf(9)).not.toContain('system-reminder');
+      expect(turnWireOf(9)).not.toContain('system-reminder');
       await endTurn(9, 3);
     });
 

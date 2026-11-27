@@ -18,14 +18,14 @@ vi.mock('@server/middlewares/baseApi', () => {
   };
   return { baseApi: () => chain };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: { limit: number; windowMs: number }) => {
     refs.rateLimitOpts = opts;
     return () => undefined;
   },
 }));
 vi.mock('@bike4mind/database', () => ({ activeCodeAgentRepository: { findByInstanceIdForUser: refs.findAgent } }));
-vi.mock('@server/websocket/utils', () => ({ sendToConnection: refs.send }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToConnection: refs.send }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.test' } } }));
 
 import '../command';

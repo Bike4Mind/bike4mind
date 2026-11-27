@@ -3,7 +3,6 @@
  * Only `ensureAdmin` is defined locally.
  */
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
 import {
   HttpStatus,
   HTTPError,
@@ -19,6 +18,7 @@ import {
   ServiceUnavailableError,
   TooManyRequestsError,
   isZodError,
+  formatZodError,
   canAccessTavern,
 } from '@bike4mind/common';
 
@@ -53,7 +53,7 @@ export function ensureAdmin(isAdmin?: boolean | null): void {
 }
 
 /**
- * Ensure the current user may access the Tavern (admin or 'tavern'-tagged).
+ * Ensure the current user may access the Tavern (admin, developer, or 'tavern'-tagged).
  * Throws ForbiddenError if not. Shares the `canAccessTavern` predicate with the
  * client route/tab guard so server and UI authorization can never diverge.
  *
@@ -74,6 +74,6 @@ export function ensureTavernAccess(user?: { isAdmin?: boolean | null; tags?: rea
  */
 export function parseOrBadRequest<T>(schema: z.ZodType<T>, input: unknown): T {
   const parsed = schema.safeParse(input);
-  if (!parsed.success) throw new BadRequestError(fromZodError(parsed.error).message);
+  if (!parsed.success) throw new BadRequestError(formatZodError(parsed.error));
   return parsed.data;
 }

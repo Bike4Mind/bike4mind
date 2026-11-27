@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
-import { PublishedArtifact } from '@bike4mind/database';
+import { Annotation, PublishedArtifact } from '@bike4mind/database';
 import type { CanCommentResponse, CommentPolicy, PublishVisibility } from '@bike4mind/common';
 import {
   checkVisibility,
@@ -53,9 +53,15 @@ const handler = baseApi({ auth: false })
     });
     if (!vis.ok) return res.status(vis.status).json({ error: vis.error });
 
+    const mine = publishUser?.id
+      ? await Annotation.find({ publicId, authorId: publishUser.id, deletedAt: null })
+          .select('_id')
+          .lean<{ _id: unknown }[]>()
+      : [];
     const response: CanCommentResponse = {
       commentPolicy: artifact.commentPolicy,
       canComment: canAnnotate(artifact, publishUser, true),
+      mineIds: mine.map(row => String(row._id)),
     };
     return res.status(200).json(response);
   });

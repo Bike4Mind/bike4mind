@@ -78,7 +78,8 @@ Build order for core packages: `common → utils → agents → services → sla
 
 | Task | Command | Notes |
 |---|---|---|
-| Typecheck (fast) | `pnpm turbo:typecheck` | Cached |
+| Verify a branch | `pnpm verify` | Typecheck, tests and lint for what your branch changed only |
+| Typecheck | `pnpm turbo:typecheck` | TypeScript 7 as `tsgo`, as CI gates; `pnpm turbo:typecheck:tsc` is pure tsc 5.9 (nightly) |
 | Run all tests | `pnpm turbo:test` | Parallel across packages |
 | Test one package | `pnpm --filter <package> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 | Lint | `pnpm lint:check` | Mirrors CI |

@@ -4,7 +4,7 @@ vi.mock('@bike4mind/database/social', () => ({
   Connection: { findOne: vi.fn() },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -12,7 +12,7 @@ vi.mock('@server/websocket/utils', () => ({
 }));
 
 import { Connection } from '@bike4mind/database/social';
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { func } from '../keepCommandResponse';
 
 /**
@@ -32,7 +32,7 @@ describe('keepCommandResponse relay target', () => {
   };
   const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
 
-  const connectionsByIdReturning = (rows: Record<string, { userId: string } | null>) =>
+  const connectionsByIdReturning = (rows: Record<string, { userId: string; scopes?: string[] } | null>) =>
     (Connection.findOne as Mock).mockImplementation(
       async ({ connectionId }: { connectionId: string }) => rows[connectionId] ?? null
     );
@@ -56,6 +56,26 @@ describe('keepCommandResponse relay target', () => {
     expect(await func(event as never, {} as never, logger as never)).toEqual({ statusCode: 200 });
     expect(sendToConnection).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('belongs to another user'));
+  });
+
+  it('drops a result sent from a socket whose key does not receive keep_command', async () => {
+    connectionsByIdReturning({
+      'cli-conn': { userId: 'user-1', scopes: ['cc-bridge:connect'] },
+      'hud-conn': { userId: 'user-1' },
+    });
+
+    expect(await func(event as never, {} as never, logger as never)).toEqual({ statusCode: 200 });
+    expect(sendToConnection).not.toHaveBeenCalled();
+  });
+
+  it('relays a result sent from a socket whose key holds ai:chat', async () => {
+    connectionsByIdReturning({
+      'cli-conn': { userId: 'user-1', scopes: ['ai:chat'] },
+      'hud-conn': { userId: 'user-1' },
+    });
+
+    await func(event as never, {} as never, logger as never);
+    expect(sendToConnection).toHaveBeenCalledTimes(1);
   });
 
   it('drops a relay aimed at an unknown connection', async () => {

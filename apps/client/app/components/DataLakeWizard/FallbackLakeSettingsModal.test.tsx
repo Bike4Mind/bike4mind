@@ -135,7 +135,8 @@ describe('FallbackLakeSettingsModal', () => {
     const textarea = screen.getByTestId('fallback-lake-systemprompt-input').querySelector('textarea')!;
     expect(textarea).toHaveValue('');
 
-    await user.type(textarea, '  Answer only from this lake.  ');
+    await user.click(textarea);
+    await user.paste('  Answer only from this lake.  ');
     await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(

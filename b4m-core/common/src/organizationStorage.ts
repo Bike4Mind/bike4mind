@@ -20,7 +20,7 @@ export interface OrganizationStorageUsage {
   organizationId: string;
   /** The org counter (Organization.currentStorageSize) that quota checks enforce against. */
   usedBytes: number;
-  /** organizationStorageLimitBytes: the org's own limit, else the default. */
+  /** organizationStorageLimitBytes: the override, else the plan allowance, else the default. */
   limitBytes: number;
   /** Largest first. Sums to the rows' truth, which can differ from `usedBytes` while the counter drifts. */
   uploaders: OrganizationStorageUploader[];

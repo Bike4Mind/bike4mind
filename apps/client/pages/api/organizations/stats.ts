@@ -7,6 +7,7 @@ import { Request } from 'express';
 import { Organization, organizationRepository } from '@bike4mind/database/infra';
 import { UserActivityCounter } from '@bike4mind/database/auth';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 
 const OrganizationStatsSchema = z.object({
   organizationIds: z.array(z.string()),
@@ -34,6 +35,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(
     })
       .select('id name users')
       .populate('users.userId', 'loginRecords counters');
+    await recordOrganizationRead(req, organizations, { view: 'stats' });
 
     const statsMap: {
       [key: string]: {

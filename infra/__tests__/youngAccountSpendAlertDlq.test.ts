@@ -1,0 +1,235 @@
+// @vitest-environment node
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createEventBusDeadLetter } from '../eventBusDeadLetter';
+
+const readInfra = (name: string) => readFileSync(new URL(`../${name}`, import.meta.url), 'utf8');
+const cronSource = readInfra('youngAccountSpendAlert.ts');
+// Execute the actual declaration, bounded before the module's export, without loading the full SST app.
+const declaration = cronSource.slice(
+  cronSource.indexOf('const [youngAccountSpendPageAlarm, youngAccountSpendWarnAlarm] ='),
+  cronSource.indexOf('export { youngAccountSpendAlert };')
+);
+
+/** What alarmSlackMentionFunctionArgs() returns on a monitored stage; declared above the sliced source. */
+const MENTION = {
+  environment: { ALARM_SLACK_MENTION_PARAMETER: '/bike4mind/production/alarm-slack-mention' },
+  permissions: [{ actions: ['ssm:GetParameter'], resources: ['alarm-slack-mention-arn'] }],
+};
+
+/** Alarm resources supplied to the real threshold-override wiring below. */
+const SPEND_ALARMS = [
+  { name: 'app-production-young-account-spend-rate', arn: 'page-arn' },
+  { name: 'app-production-young-account-spend-rate-warn', arn: 'warn-arn' },
+];
+
+const PROVIDER_ALARMS = {
+  openai: { name: 'app-production-provider-reported-spend-hourly-openai', arn: 'openai-arn' },
+  anthropic: { name: 'app-production-provider-reported-spend-hourly-anthropic', arn: 'anthropic-arn' },
+};
+
+const PROVIDER = {
+  environment: {
+    PROVIDER_SPEND_ALARM_NAME_OPENAI: 'app-production-provider-reported-spend-hourly-openai',
+    PROVIDER_SPEND_ALARM_NAME_ANTHROPIC: 'app-production-provider-reported-spend-hourly-anthropic',
+  },
+  permissions: [
+    {
+      actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'],
+      resources: ['openai-arn', 'anthropic-arn'],
+    },
+  ],
+};
+
+/** Expected permissions and environment produced by that wiring. */
+const ALARMS = {
+  environment: {
+    YOUNG_ACCOUNT_SPEND_ALARM_NAME: 'app-production-young-account-spend-rate',
+    YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: 'app-production-young-account-spend-rate-warn',
+  },
+  permissions: [
+    { actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'], resources: ['page-arn', 'warn-arn'] },
+  ],
+};
+
+function output<T>(value: T) {
+  return { value, apply: <Result>(callback: (input: T) => Result) => callback(value) };
+}
+
+function loadCron(
+  source = declaration,
+  runsScheduledJobs = true,
+  youngAccountSpendAlarms = SPEND_ALARMS,
+  providerReportedSpendAlarms: Partial<typeof PROVIDER_ALARMS> = PROVIDER_ALARMS
+) {
+  const policy = vi.fn(function (_name: string, _args: Record<string, unknown>) {});
+  vi.stubGlobal('aws', { sqs: { QueuePolicy: policy } });
+  vi.stubGlobal('$util', {
+    all: (values: unknown[]) =>
+      output(
+        values.map(value => (typeof value === 'object' && value !== null && 'value' in value ? value.value : value))
+      ),
+  });
+  const queue = { arn: 'spend-alert-dlq', url: 'spend-alert-dlq-url' };
+  const deadLetter = createEventBusDeadLetter(
+    'YoungAccountSpendAlert',
+    queue as unknown as Parameters<typeof createEventBusDeadLetter>[1]
+  );
+  const cron = vi.fn(function (_name: string, _args: Record<string, unknown>) {
+    return { nodes: { rule: { arn: 'spend-alert-rule' }, target: { arn: 'spend-alert-fn' } } };
+  });
+  runInNewContext(source, {
+    runsScheduledJobs,
+    youngAccountSpendAlertDeadLetter: deadLetter,
+    youngAccountSpendAlertMention: MENTION,
+    youngAccountSpendAlarms,
+    providerReportedSpendAlarms,
+    sst: { aws: { Cron: cron } },
+    lambdaVpc: {},
+    allSecrets: [],
+    DEFAULT_LAMBDA_ENVIRONMENT: {},
+    $app: { stage: 'production' },
+    process: { env: {} },
+    $util: { output },
+  });
+  const configuration = cron.mock.calls[0]?.[1];
+  const transform = configuration?.transform as { target: Record<string, unknown> } | undefined;
+  const target: Record<string, unknown> = { input: '{}', ...transform?.target };
+  return { cron, policy, target, configuration };
+}
+
+function verifyDeadLetters(source = declaration) {
+  const { cron, policy, target } = loadCron(source);
+  expect(cron).toHaveBeenCalledExactlyOnceWith(
+    'youngAccountSpendAlert',
+    expect.objectContaining({
+      schedule: 'rate(1 hour)',
+      transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' }, input: undefined } },
+      function: expect.objectContaining({
+        environment: expect.objectContaining({
+          ...MENTION.environment,
+          ...ALARMS.environment,
+          ...PROVIDER.environment,
+        }),
+        permissions: [
+          { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+          ...MENTION.permissions,
+          ...ALARMS.permissions,
+          ...PROVIDER.permissions,
+        ],
+        transform: { function: { deadLetterConfig: { targetArn: 'spend-alert-dlq' } } },
+      }),
+    })
+  );
+  expect(target.deadLetterConfig).toEqual({ arn: 'spend-alert-dlq' });
+  const args = policy.mock.calls[0]?.[1];
+  expect(args?.queueUrl).toBe('spend-alert-dlq-url');
+  expect(JSON.parse(String(args?.policy))).toMatchObject({
+    Statement: [
+      {
+        Principal: { Service: 'events.amazonaws.com' },
+        Action: 'sqs:SendMessage',
+        Resource: 'spend-alert-dlq',
+        Condition: { ArnEquals: { 'aws:SourceArn': ['spend-alert-rule'] } },
+      },
+    ],
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('young-account spend alert failure recovery', () => {
+  it('dead-letters both delivery and handler failures with a source-scoped policy', () => {
+    verifyDeadLetters();
+  });
+
+  it('clears SST default input to preserve the ScheduledEvent carrying event.time', () => {
+    const verify = (source: string) => {
+      const { target } = loadCron(source);
+      expect(target.input).toBeUndefined();
+    };
+    verify(declaration);
+    expect(() => verify(declaration.replace('input: undefined,', ''))).toThrow();
+  });
+
+  it('creates no cron or policy on stages without scheduled jobs', () => {
+    const { cron, policy } = loadCron(declaration, false);
+    expect(cron).not.toHaveBeenCalled();
+    expect(policy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'youngAccountSpendAlertDeadLetter.sendPermission,',
+    '...youngAccountSpendAlarmArgs.permissions,',
+    'transform: youngAccountSpendAlertDeadLetter.functionTarget,',
+    '...youngAccountSpendAlertDeadLetter.ruleTarget.target,',
+    'youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);',
+  ])('rejects a missing recovery link: %s', wiring => {
+    expect(declaration).toContain(wiring);
+    expect(() => verifyDeadLetters(declaration.replace(wiring, ''))).toThrow();
+  });
+
+  it.each([{ alarmResources: [] }, { alarmResources: SPEND_ALARMS.slice(0, 1) }])(
+    'omits alarm management when the alarm set is incomplete: $alarmResources',
+    ({ alarmResources }) => {
+      const { configuration } = loadCron(declaration, true, alarmResources);
+      expect(configuration?.function).toMatchObject({
+        environment: {
+          YOUNG_ACCOUNT_SPEND_ALARM_NAME: '',
+          YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '',
+        },
+        permissions: [
+          { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+          ...MENTION.permissions,
+          ...PROVIDER.permissions,
+        ],
+      });
+    }
+  );
+
+  it('omits provider spend alarm management on a stage without those alarms', () => {
+    const { configuration } = loadCron(declaration, true, SPEND_ALARMS, {});
+    expect(configuration?.function).toMatchObject({
+      environment: { PROVIDER_SPEND_ALARM_NAME_OPENAI: '', PROVIDER_SPEND_ALARM_NAME_ANTHROPIC: '' },
+      permissions: [
+        { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+        ...MENTION.permissions,
+        ...ALARMS.permissions,
+      ],
+    });
+  });
+
+  it.each([
+    ['youngAccountSpendPageAlarm.name', "''"],
+    ['youngAccountSpendWarnAlarm.name', "''"],
+    ['youngAccountSpendAlarms.map(alarm => alarm.arn)', "['unrelated-alarm-arn']"],
+    ["['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm']", "['cloudwatch:DescribeAlarms']"],
+    ['providerReportedSpendAlarms.openai?.name', "''"],
+    ['providerReportedSpendAlarms.anthropic?.name', "''"],
+    ['providerSpendAlarmList.map(alarm => alarm.arn)', "['unrelated-alarm-arn']"],
+    ['...providerSpendAlarmArgs.environment,', ''],
+    ['...providerSpendAlarmArgs.permissions,', ''],
+  ])('rejects broken threshold-override wiring: %s', (wiring, replacement) => {
+    expect(declaration).toContain(wiring);
+    expect(() => verifyDeadLetters(declaration.replace(wiring, replacement))).toThrow();
+  });
+
+  it('retains failures for 14 days and registers a standalone DLQ alarm', () => {
+    const queueSource = readInfra('youngAccountSpendAlertDeadLetter.ts');
+    const source = readInfra('dlqAlarms.ts');
+    const block = source.slice(
+      source.indexOf('if (youngAccountSpendAlertDeadLetter)'),
+      source.indexOf('// FabFile Moderation DLQ')
+    );
+    const verify = (retention: string, alarm: string) => {
+      expect(retention).toContain('messageRetentionSeconds: 1209600');
+      expect(alarm).toContain('queue: youngAccountSpendAlertDeadLetter.queue,');
+    };
+    verify(queueSource, block);
+    expect(() => verify(queueSource.replace('messageRetentionSeconds: 1209600', ''), block)).toThrow();
+    expect(() => verify(queueSource, block.replace('queue: youngAccountSpendAlertDeadLetter.queue,', ''))).toThrow();
+  });
+});

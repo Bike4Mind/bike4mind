@@ -1,4 +1,4 @@
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { z } from 'zod';
 import { adminSettingsRepository, sreErrorTrackingRepository } from '@bike4mind/database';
 import {
@@ -9,8 +9,8 @@ import {
   SRE_TEST_FILE_GLOBS,
   resolveFullConfig,
 } from '@bike4mind/common';
-import { GitHubService } from '@server/services/githubService';
-import { postSreFixFailureMessage } from '@server/integrations/slack/sreSlackApproval';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
+import { postSreFixFailureMessage } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 
 const SreFixRequestSchema = z.object({
   trackingId: z.string(),

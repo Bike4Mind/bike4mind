@@ -38,7 +38,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: mockBaseApi,
 }));
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: mockRateLimit,
 }));
 

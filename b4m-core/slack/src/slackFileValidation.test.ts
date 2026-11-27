@@ -37,6 +37,18 @@ describe('validateSlackFileForIngest', () => {
     expect(result).toMatchObject({ ok: false, reason: 'incomplete' });
   });
 
+  it.each([
+    'https://example.com/notes.pdf',
+    'http://files.slack.com/notes.pdf',
+    'https://files.slack.com.example.com/notes.pdf',
+    'http://169.254.169.254/latest/meta-data',
+  ])('drops an attachment whose download URL is not a Slack file host: %s', url => {
+    expect(validateSlackFileForIngest(attachment({ url_private_download: url }))).toMatchObject({
+      ok: false,
+      reason: 'incomplete',
+    });
+  });
+
   it('rejects a type outside the Slack allow-list even though the wizard accepts it', () => {
     // CSV is a SupportedFabFileMimeType but deliberately NOT in the narrower Slack list.
     const result = validateSlackFileForIngest(attachment({ name: 'rows.csv', mimetype: 'text/csv' }));

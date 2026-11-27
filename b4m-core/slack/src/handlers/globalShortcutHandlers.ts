@@ -1,4 +1,3 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 /**
  * Global Shortcut Handlers
  *
@@ -6,10 +5,18 @@ import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
  * These shortcuts are accessible from anywhere in Slack without typing commands.
  */
 
-import { WebClient } from '@slack/web-api';
+import mongoose from 'mongoose';
+import { KnownBlock, WebClient } from '@slack/web-api';
 import { Logger } from '@bike4mind/observability';
-import { IUserDocument, requireEnv } from '@bike4mind/common';
+import {
+  IChatHistoryItemDocument,
+  ISessionDocument,
+  IUserDocument,
+  requireEnv,
+  slackIdentityFilter,
+} from '@bike4mind/common';
 import { getSlackDeps, getSlackDb } from '../di/registry';
+import { NOTEBOOK_DM_BUDGET_MS, NOTEBOOK_DM_CLIENT_OPTIONS } from './notebookNotification';
 
 /** Payload structure for global shortcut events */
 export interface GlobalShortcutPayload {
@@ -77,7 +84,7 @@ export async function handleGlobalShortcut(
   }
 
   // Look up user if not prefetched
-  const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id));
+  const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id, payload.team?.id));
 
   switch (callback_id) {
     case SHORTCUT_CALLBACK_IDS.CREATE_NOTEBOOK:
@@ -98,16 +105,23 @@ export async function handleGlobalShortcut(
   }
 }
 
+async function findUserBySlackId(slackUserId: string, slackTeamId: string | undefined): Promise<IUserDocument | null> {
+  if (!slackTeamId) return null;
+  // DI exposes models as unknown; the bound implementations are the database Mongoose models.
+  const User = getSlackDb().User as mongoose.Model<IUserDocument>;
+  return User.findOne(slackIdentityFilter(slackUserId, slackTeamId));
+}
+
 /**
- * Find user by Slack ID
+ * True when the account named in a modal's private_metadata is the one linked to the submitting
+ * Slack member in the submitting workspace.
  */
-async function findUserBySlackId(slackUserId: string): Promise<IUserDocument | null> {
-  const { User } = getSlackDb();
-  const user = await (User as any).findOne({
-    'slackSettings.slackUserId': slackUserId,
-    ...VERIFIED_SLACK_IDENTITY_FILTER,
-  });
-  return user;
+function isLinkedSubmitter(dbUser: IUserDocument, slackUserId: string, slackTeamId: string | undefined): boolean {
+  return (
+    !!slackTeamId &&
+    dbUser.slackSettings?.slackUserId === slackUserId &&
+    dbUser.slackSettings?.slackTeamId === slackTeamId
+  );
 }
 
 /**
@@ -258,21 +272,20 @@ async function handleViewNotebooksShortcut(
 
   const client = new WebClient(botToken);
 
-  const { Session } = getSlackDb();
+  const Session = getSlackDb().Session as mongoose.Model<ISessionDocument>;
 
   try {
     // Fetch recent notebooks for this user
-    const notebooks = await (Session as any)
-      .find({
-        userId: dbUser.id,
-        deletedAt: { $exists: false },
-      })
+    const notebooks = await Session.find({
+      userId: dbUser.id,
+      deletedAt: { $exists: false },
+    })
       .sort({ updatedAt: -1 })
       .limit(10)
       .select('name createdAt updatedAt')
       .lean();
 
-    const notebookBlocks: any[] = [];
+    const notebookBlocks: KnownBlock[] = [];
 
     if (notebooks.length === 0) {
       notebookBlocks.push({
@@ -550,7 +563,9 @@ export interface ViewSubmissionPayload {
     id: string;
     name?: string;
   };
+  team?: { id?: string };
   view: {
+    id?: string;
     callback_id: string;
     private_metadata?: string;
     state: {
@@ -573,6 +588,7 @@ export async function handleCreateNotebookSubmission(
   payload: ViewSubmissionPayload,
   botToken?: string
 ): Promise<ViewSubmissionResponse> {
+  const notificationDeadline = Date.now() + NOTEBOOK_DM_BUDGET_MS;
   const { view, user: slackUser } = payload;
 
   // Parse private_metadata to get userId
@@ -601,9 +617,11 @@ export async function handleCreateNotebookSubmission(
 
   try {
     // Get user document to create ability
-    const { User, defineAbilitiesFor: defineAbilitiesForCreate } = getSlackDb();
+    const db = getSlackDb();
+    const { defineAbilitiesFor: defineAbilitiesForCreate } = db;
+    const User = db.User as mongoose.Model<IUserDocument>;
     const { sessionManager } = getSlackDeps();
-    const dbUser = await (User as any).findById(userId);
+    const dbUser = await User.findById(userId);
     if (!dbUser) {
       return {
         response_action: 'errors',
@@ -615,7 +633,7 @@ export async function handleCreateNotebookSubmission(
 
     // SECURITY: Verify the userId from private_metadata matches the authenticated Slack user
     // This prevents attackers from modifying private_metadata to act as another user
-    if (dbUser.slackSettings?.slackUserId !== slackUser.id) {
+    if (!isLinkedSubmitter(dbUser, slackUser.id, payload.team?.id)) {
       logger.warn('[Slack Shortcut] User mismatch in create notebook submission', {
         claimedUserId: userId,
         authenticatedSlackUserId: slackUser.id,
@@ -633,7 +651,7 @@ export async function handleCreateNotebookSubmission(
     const ability = defineAbilitiesForCreate(dbUser);
 
     // Create the notebook
-    const session = await (sessionManager as any).createSession(
+    const session = await sessionManager.createSession(
       userId,
       { name: finalName, origin: { channel: 'slack' } },
       ability,
@@ -648,11 +666,9 @@ export async function handleCreateNotebookSubmission(
       name: finalName,
     });
 
-    // DM the user with the notebook link (async, don't wait)
+    // Awaited: Lambda freezes un-awaited work once the response is sent. Errors are caught inside.
     if (botToken && slackUser?.id) {
-      sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken).catch(error => {
-        logger.error('[Slack Shortcut] Failed to send notebook DM', { error, userId });
-      });
+      await sendNotebookCreatedDM(slackUser.id, session.id, finalName, botToken, notificationDeadline);
     }
 
     // Modal closes automatically on success (empty response)
@@ -675,13 +691,25 @@ async function sendNotebookCreatedDM(
   slackUserId: string,
   sessionId: string,
   notebookName: string,
-  botToken: string
+  botToken: string,
+  deadline: number
 ): Promise<void> {
-  const client = new WebClient(botToken);
+  const clientForRemainingBudget = () => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return null;
+    return new WebClient(botToken, {
+      ...NOTEBOOK_DM_CLIENT_OPTIONS,
+      timeout: Math.min(remainingMs, NOTEBOOK_DM_CLIENT_OPTIONS.timeout),
+    });
+  };
 
   try {
-    // Open DM channel
-    const dmResult = await client.conversations.open({
+    const openingClient = clientForRemainingBudget();
+    if (!openingClient) {
+      logger.info('[Slack Shortcut] Skipped notebook DM after its acknowledgement budget elapsed');
+      return;
+    }
+    const dmResult = await openingClient.conversations.open({
       users: slackUserId,
     });
 
@@ -698,8 +726,12 @@ async function sendNotebookCreatedDM(
     const brand = process.env.APP_NAME || '';
     const openLinkLabel = brand ? `Open in ${brand}` : 'Open Notebook';
 
-    // Send the notebook link
-    await client.chat.postMessage({
+    const postingClient = clientForRemainingBudget();
+    if (!postingClient) {
+      logger.info('[Slack Shortcut] Skipped notebook link after its acknowledgement budget elapsed');
+      return;
+    }
+    await postingClient.chat.postMessage({
       channel: dmResult.channel.id,
       text: `✅ Notebook "${escapeSlackMrkdwn(notebookName)}" created!\n\n<${notebookUrl}|${openLinkLabel}>`,
       blocks: [
@@ -745,7 +777,8 @@ async function sendNotebookCreatedDM(
 
 /**
  * Handle Quick Ask modal submission
- * Opens a DM with the user, posts the question, and processes it like a normal DM conversation
+ * Validates and publishes a quick ask request; the DM and completion run in a worker
+ * (see processQuickAskInDM) because background work does not survive the API response.
  */
 export async function handleQuickAskSubmission(
   payload: ViewSubmissionPayload,
@@ -796,11 +829,43 @@ export async function handleQuickAskSubmission(
     };
   }
 
-  // Close the modal immediately and process in the background
-  // We need to respond within 3 seconds, so we kick off async processing
-  processQuickAskInDM(user.id, userId, question, botToken, workspaceId).catch(error => {
-    logger.error('[Slack Shortcut] Background quick ask processing failed', { error, userId });
-  });
+  if (!workspaceId) {
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Unable to identify workspace. Please try again.',
+      },
+    };
+  }
+
+  const dbUser = await (getSlackDb().User as mongoose.Model<IUserDocument>).findById(userId);
+  if (!dbUser || !isLinkedSubmitter(dbUser, user.id, payload.team?.id)) {
+    logger.warn('[Slack Shortcut] User mismatch in quick ask submission', { claimedUserId: userId });
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Unauthorized access.',
+      },
+    };
+  }
+
+  try {
+    await getSlackDeps().eventBus.SlackEvents.QuickAskRequested.publish({
+      slackUserId: user.id,
+      b4mUserId: userId,
+      question,
+      workspaceId,
+      ...(view.id ? { requestId: view.id, requestedAt: new Date().toISOString() } : {}),
+    });
+  } catch (error) {
+    logger.error('[Slack Shortcut] Failed to publish quick ask request', { error, userId });
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Failed to submit your question. Please try again.',
+      },
+    };
+  }
 
   // Modal closes automatically on success
   return {};
@@ -810,7 +875,7 @@ export async function handleQuickAskSubmission(
  * Process quick ask by opening a DM and sending the question there
  * Uses async notification so Quest Processor can update the message with AI response
  */
-async function processQuickAskInDM(
+export async function processQuickAskInDM(
   slackUserId: string,
   b4mUserId: string,
   question: string,
@@ -865,8 +930,8 @@ async function processQuickAskInDM(
     }
 
     // Get user's notebook and process the question
-    const { User: UserModel } = getSlackDb();
-    const dbUser = await (UserModel as any).findById(b4mUserId);
+    const UserModel = getSlackDb().User as mongoose.Model<IUserDocument>;
+    const dbUser = await UserModel.findById(b4mUserId);
     if (!dbUser) {
       await client.chat.update({
         channel: dmChannelId,
@@ -893,7 +958,10 @@ async function processQuickAskInDM(
     }
 
     // Get dependencies from DI registry
-    const { Session: SessionModel, Quest: QuestModel, defineAbilitiesFor: defineAbilitiesForQuick } = getSlackDb();
+    const db = getSlackDb();
+    const { defineAbilitiesFor: defineAbilitiesForQuick } = db;
+    const SessionModel = db.Session as mongoose.Model<ISessionDocument>;
+    const QuestModel = db.Quest as mongoose.Model<IChatHistoryItemDocument>;
     const { sessionManager: smQuick, eventBus, chatCompletionDefaults } = getSlackDeps();
 
     // Create ability for the user
@@ -902,7 +970,7 @@ async function processQuickAskInDM(
     // Get or create default notebook
     let sessionId = dbUser.slackSettings?.defaultNotebookId;
     if (!sessionId) {
-      const session = await (smQuick as any).createSession(
+      const session = await smQuick.createSession(
         b4mUserId,
         { name: `Slack Chat ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
         ability,
@@ -910,14 +978,14 @@ async function processQuickAskInDM(
       );
       sessionId = session.id;
 
-      await (UserModel as any).findByIdAndUpdate(b4mUserId, {
+      await UserModel.findByIdAndUpdate(b4mUserId, {
         $set: { 'slackSettings.defaultNotebookId': sessionId },
       });
     } else {
       // Verify the notebook still exists
-      const existingSession = await (SessionModel as any).findById(sessionId);
+      const existingSession = await SessionModel.findById(sessionId);
       if (!existingSession || existingSession.deletedAt) {
-        const session = await (smQuick as any).createSession(
+        const session = await smQuick.createSession(
           b4mUserId,
           { name: `Slack Chat ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
           ability,
@@ -925,7 +993,7 @@ async function processQuickAskInDM(
         );
         sessionId = session.id;
 
-        await (UserModel as any).findByIdAndUpdate(b4mUserId, {
+        await UserModel.findByIdAndUpdate(b4mUserId, {
           $set: { 'slackSettings.defaultNotebookId': sessionId },
         });
       }
@@ -963,7 +1031,7 @@ async function processQuickAskInDM(
 
     // Update quest with slackNotification for async response delivery
     if (workspaceId) {
-      await (QuestModel as any).findByIdAndUpdate(createdQuest.id, {
+      await QuestModel.findByIdAndUpdate(createdQuest.id, {
         $set: {
           slackNotification: {
             workspaceId,
@@ -977,10 +1045,10 @@ async function processQuickAskInDM(
 
     // Use ChatCompletionInvoke to properly trigger AI processing
     // This handles all the quest setup and EventBridge publishing correctly
-    const { ChatCompletionInvoke } = await import('@bike4mind/services/llm/ChatCompletionInvoke');
+    const { ChatCompletionInvoke } = await import('@bike4mind/services-core/llm/ChatCompletionInvoke');
     const { SQSService } = await import('@bike4mind/utils');
 
-    // any: defaultChatCompletionOptions provides remaining IChatCompletionServiceOptions fields at runtime
+    // unknown: defaultChatCompletionOptions provides remaining IChatCompletionServiceOptions fields at runtime
     const chatCompletion = new ChatCompletionInvoke({
       ...chatCompletionDefaults.defaultChatCompletionOptions,
       queue: new SQSService(),
@@ -991,10 +1059,11 @@ async function processQuickAskInDM(
       invokeLambda: async (params: unknown) => {
         await eventBus.LLMEvents.CompletionStart.publish(params);
       },
-    } as any);
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
 
     // Trigger AI response using the existing quest
     await chatCompletion.invoke({
+      contributedToolNames: new Set<string>(),
       body: {
         params: {
           model: 'gpt-4.1-mini-2025-04-14',
@@ -1013,7 +1082,6 @@ async function processQuickAskInDM(
         historyCount: 5,
         fabFileIds: [],
         questId: createdQuest.id, // Use existing quest
-        enableQuestMaster: false,
         enableMementos: false,
         enableArtifacts: false,
         enableAgents: false,

@@ -78,6 +78,15 @@ beforeEach(() => {
   useSelectedAccount.setState({ selectedAccount: null });
 });
 
+// Opens the model panel on every model (the shortlist hides the rest), then finds one model's option.
+const modelOption = (suffix: string) => {
+  if (!screen.queryByTestId('video-form-model-panel'))
+    fireEvent.click(screen.getByTestId('video-form-model-change-btn'));
+  const showAll = screen.queryByTestId('video-form-model-show-all-btn');
+  if (showAll?.textContent?.startsWith('Show all')) fireEvent.click(showAll);
+  return screen.getByTestId(`video-form-model-option-${suffix}`);
+};
+
 describe('VideoStudioForm duration control', () => {
   it('renders a slider bounded by a range model', () => {
     render(tree([rangeModel]));
@@ -205,5 +214,57 @@ describe('video form payer note', () => {
     select('Acme', false);
     render(tree([discreteModel, rangeModel]));
     expect(screen.queryByTestId('video-form-payer-note')).not.toBeInTheDocument();
+  });
+});
+
+describe('VideoStudioForm in Create v2', () => {
+  const v2Tree = (models: readonly [VideoModel, ...VideoModel[]]) => (
+    <CssVarsProvider theme={appTheme}>
+      <VideoStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} createV2 />
+    </CssVarsProvider>
+  );
+
+  it('opens on the ranked pick in Create v2, while the legacy form keeps the server order', () => {
+    // Veo is retired, so the ranker sinks it below Grok; the legacy form still opens on the first model listed.
+    const { unmount } = render(v2Tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-model-row-name')).toHaveTextContent(rangeModel.display_name);
+    unmount();
+    render(tree([discreteModel, rangeModel]));
+    expect(screen.getByTestId('video-form-model-select')).toHaveTextContent(discreteModel.display_name);
+  });
+
+  it('picks models from cards and draws the aspect ratio as tiles', () => {
+    render(v2Tree([rangeModel, discreteModel]));
+    expect(screen.queryByTestId('video-form-model-select')).not.toBeInTheDocument();
+    expect(modelOption(`${rangeModel.id}`)).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByTestId('video-form-aspect-1:1-btn')).toBeInTheDocument();
+  });
+
+  it('keeps the values on a model switch, marks the ones it rejects, and submits after the fix', () => {
+    // Veo is retired, so the ranker makes it unpickable; the same discrete shape under a live catalog id.
+    const liveDiscrete = { ...discreteModel, id: 'gemini-omni-1.1-flash' };
+    render(v2Tree([rangeModel, liveDiscrete]));
+    typePrompt('a lighthouse');
+    fireEvent.click(screen.getByTestId('video-form-aspect-1:1-btn'));
+    fireEvent.click(modelOption(`${liveDiscrete.id}-radio`));
+
+    expect(screen.queryByTestId('video-form-changes')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-form-aspect-1:1-btn')).toHaveAttribute('data-invalid', 'true');
+    expect(screen.getByTestId('video-form-aspect-invalid')).toHaveTextContent('you asked for 1:1');
+    expect(screen.getByTestId('video-form-resolution-invalid')).toHaveTextContent('you asked for 480p');
+    expect(screen.queryByTestId('video-form-duration-invalid')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-form-submit-btn')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('video-form-aspect-fix-btn'));
+    fireEvent.click(screen.getByTestId('video-form-resolution-fix-btn'));
+    fireEvent.click(screen.getByTestId('video-form-submit-btn'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: liveDiscrete.id,
+        aspect_ratio: '16:9',
+        resolution: '720p',
+        duration_seconds: 6,
+      })
+    );
   });
 });

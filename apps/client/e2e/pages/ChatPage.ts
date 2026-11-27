@@ -1,7 +1,18 @@
-import { expect } from '@playwright/test';
+import { expect, type Response } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
-import { describeStall, isStreamComplete, StreamingTimeoutError, type StreamSnapshot } from '../ai-latency-budget';
+import { scopeWafBypass } from '../helpers/waf-bypass';
+import {
+  describeStall,
+  hasFirstAnswerText,
+  isStreamComplete,
+  parseCompletionResponse,
+  StreamingTimeoutError,
+  TurnTimer,
+  type CompletionRecorder,
+  type QuestProvenance,
+  type StreamSnapshot,
+} from '../ai-latency-budget';
 
 export class ChatPage extends BasePage {
   readonly chatInput = this.page.getByTestId('lexical-chat-input-container');
@@ -41,6 +52,78 @@ export class ChatPage extends BasePage {
     return target.innerText({ timeout: TIMEOUTS.ELEMENT_STATE }).catch(() => '');
   }
 
+  /** Text of the newest reply's markdown answer, or '' before its first answer token. Same count() guards as above. */
+  private async newestAnswerText(): Promise<string> {
+    if ((await this.aiResponseRoot.count()) === 0) return '';
+    const answer = this.aiResponseRoot.last().getByTestId('ai-response-markdown');
+    if ((await answer.count()) === 0) return '';
+    return answer
+      .first()
+      .innerText({ timeout: TIMEOUTS.ELEMENT_STATE })
+      .catch(() => '');
+  }
+
+  /**
+   * Feeds `recorder` every `POST /api/ai/llm` this page answers until the returned function is
+   * awaited, which also waits for bodies still being read. Scoped to this page, so other cells
+   * cannot reach it. Capture never throws: an unreadable body is just not recorded.
+   */
+  private captureCompletions(recorder?: CompletionRecorder): () => Promise<void> {
+    if (!recorder) return async () => undefined;
+    const pending: Promise<void>[] = [];
+    const onResponse = (response: Response) => {
+      const request = response.request();
+      if (request.method() !== 'POST' || !new URL(response.url()).pathname.endsWith('/api/ai/llm')) return;
+      const receivedAt = new Date().toISOString();
+      pending.push(
+        response
+          .json()
+          .catch(() => null)
+          .then(body =>
+            recorder.record(
+              parseCompletionResponse(body, response.headers(), receivedAt),
+              request.headers()['authorization']
+            )
+          )
+          .catch(() => undefined)
+      );
+    };
+    this.page.on('response', onResponse);
+    return async () => {
+      this.page.off('response', onResponse);
+      // Bounded: this runs inside the timed window's tail and must not stall a row.
+      await Promise.race([Promise.allSettled(pending), new Promise(resolve => setTimeout(resolve, 2_000))]);
+    };
+  }
+
+  /**
+   * Reads the quest's fallback with the bearer the page itself sent. Never throws: any failure
+   * yields 'unknown', since correlation must not fail a latency cell. A timeout of 0 or less skips
+   * the read.
+   */
+  async readQuestProvenance(recorder: CompletionRecorder, timeoutMs = 10_000): Promise<QuestProvenance> {
+    const unknown: QuestProvenance = { fallback: 'unknown' };
+    const refs = recorder.snapshot();
+    const authorization = recorder.authorization();
+    if (refs.length !== 1 || !authorization || timeoutMs <= 0) return unknown;
+    try {
+      const response = await scopeWafBypass(this.page.request).get(
+        `/api/quests/${encodeURIComponent(refs[0].questId)}`,
+        {
+          headers: { Authorization: authorization },
+          timeout: timeoutMs,
+        }
+      );
+      if (!response.ok()) return unknown;
+      const body = (await response.json()) as { type?: string; fallbackInfo?: Record<string, unknown> | null };
+      // The poll body drops fallbackInfo on an errored quest, so absence there does not mean none.
+      if (body.type === 'error') return unknown;
+      return { fallback: body.fallbackInfo ?? null };
+    } catch {
+      return unknown;
+    }
+  }
+
   async sendMessage(text: string) {
     await this.typeAndWaitForSendReady(text);
     await this.page.keyboard.press('Enter');
@@ -71,7 +154,26 @@ export class ChatPage extends BasePage {
     }
   }
 
-  async sendMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.AI_RESPONSE) {
+  /**
+   * `timer`, when given, is marked at Enter and at the first answer text (see TurnTimer for how
+   * the resend below is timed).
+   */
+  async sendMessageAndWaitForResponse(
+    text: string,
+    timeout: number = TIMEOUTS.AI_RESPONSE,
+    timer?: TurnTimer,
+    recorder?: CompletionRecorder
+  ) {
+    // One listener around the whole resend loop, so a resend's second completion is recorded too.
+    const stopCapture = this.captureCompletions(recorder);
+    try {
+      return await this.sendAndWait(text, timeout, timer);
+    } finally {
+      await stopCapture();
+    }
+  }
+
+  private async sendAndWait(text: string, timeout: number, timer?: TurnTimer) {
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Never anchor on a pre-send index. ChatHistory renders the reply list through
@@ -85,7 +187,9 @@ export class ChatPage extends BasePage {
       // the text-only completion path is live, so a prior reply that gains chrome while the turn
       // is still being prepared must already be in the baseline.
       const previousResponse = await this.newestResponseText();
+      const previousAnswerText = await this.newestAnswerText();
       await this.page.keyboard.press('Enter');
+      timer?.markSent();
 
       // Waits for the first container to mount in a fresh chat; in a resumed chat the prior
       // turn's container already satisfies it. Newness is proven by the streaming lifecycle
@@ -93,7 +197,7 @@ export class ChatPage extends BasePage {
       await expect(this.aiResponseRoot.last()).toBeVisible({ timeout });
 
       // Wait for streaming to complete by watching for "Stop Generation" button to disappear
-      await this.waitForStreamingComplete(timeout, previousResponse);
+      await this.waitForStreamingComplete(timeout, previousResponse, { timer, previousAnswerText });
 
       const responseText = await this.newestResponseText();
 
@@ -115,8 +219,15 @@ export class ChatPage extends BasePage {
    * `previousResponse` is the newest reply's text captured before sending. It proves a new reply
    * exists when the stop button flashed by between polls (a short reply can finish in one chunk);
    * chats are resumed across tests, so a prior turn's reply is normally already mounted.
+   *
+   * `firstText.timer` is marked on the first poll that sees new answer text, so time to first token
+   * is resolved to the 250ms poll interval (plus the reads inside one poll).
    */
-  private async waitForStreamingComplete(timeout: number = TIMEOUTS.AI_RESPONSE, previousResponse = '') {
+  private async waitForStreamingComplete(
+    timeout: number = TIMEOUTS.AI_RESPONSE,
+    previousResponse = '',
+    firstText?: { timer?: TurnTimer; previousAnswerText: string }
+  ) {
     const stopButton = this.page.getByTestId('stop-generation-btn');
     let sawStopButton = false;
     let snapshot: StreamSnapshot = { stopVisible: false, text: '' };
@@ -130,6 +241,13 @@ export class ChatPage extends BasePage {
               text: await this.newestResponseText(),
             };
             sawStopButton ||= snapshot.stopVisible;
+            // Skip the extra read once it has fired: on a long reply it is a full innerText per poll,
+            // which would delay seeing the stop button hide and inflate the timed stream.
+            if (firstText?.timer && firstText.timer.firstTokenMs() === undefined) {
+              if (hasFirstAnswerText(await this.newestAnswerText(), firstText.previousAnswerText)) {
+                firstText.timer.markFirstText();
+              }
+            }
             return isStreamComplete(snapshot, previousResponse, sawStopButton);
           },
           { timeout, intervals: [250] }
@@ -185,15 +303,15 @@ export class ChatPage extends BasePage {
 
   /**
    * Send a message, wait for the AI response, and return timing + credits.
-   * Timer starts just before the message is sent.
+   * Timer starts when the message is sent (Enter), not before typing.
    */
   async sendMessageAndMeasure(
     text: string,
     timeout: number = TIMEOUTS.AI_RESPONSE
   ): Promise<{ responseText: string; durationSecs: number; credits: number | null }> {
-    const startMs = Date.now();
-    const responseText = await this.sendMessageAndWaitForResponse(text, timeout);
-    const durationSecs = (Date.now() - startMs) / 1000;
+    const timer = new TurnTimer();
+    const responseText = await this.sendMessageAndWaitForResponse(text, timeout, timer);
+    const durationSecs = timer.elapsedSinceSendMs() / 1000;
     const credits = await this.getCreditsUsed();
     return { responseText, durationSecs, credits };
   }
@@ -209,7 +327,12 @@ export class ChatPage extends BasePage {
    * streaming timeout would always time out. The new-response assertion is therefore
    * deferred to {@link waitForImageResponse}, which holds the full IMAGE_GENERATION budget.
    */
-  async sendImageMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.IMAGE_GENERATION) {
+  async sendImageMessageAndWaitForResponse(
+    text: string,
+    timeout: number = TIMEOUTS.IMAGE_GENERATION,
+    timer?: TurnTimer,
+    recorder?: CompletionRecorder
+  ) {
     // Baseline the newest reply before sending: when the stop button flashes by unseen,
     // waitForStreamingComplete accepts any reply that differs from this, so without it
     // a prior chat's leftover reply (navigateToNewChat does not await DOM clearing) could be
@@ -217,15 +340,28 @@ export class ChatPage extends BasePage {
     // during preparation is part of the baseline, not read as this turn's reply.
     await this.typeAndWaitForSendReady(text);
     const previousResponse = await this.newestResponseText();
-    await this.page.keyboard.press('Enter');
-    await this.waitForStreamingComplete(timeout, previousResponse);
+    const previousAnswerText = await this.newestAnswerText();
+    const stopCapture = this.captureCompletions(recorder);
+    try {
+      await this.page.keyboard.press('Enter');
+      timer?.markSent();
+      await this.waitForStreamingComplete(timeout, previousResponse, { timer, previousAnswerText });
+    } finally {
+      await stopCapture();
+    }
   }
 
   /**
    * Asserts the generated image rendered. Call ONLY after
-   * {@link sendImageMessageAndWaitForResponse} - by then streaming is done and the
-   * <img> is mounted from messageData.images. This does NOT recover from WS drops on
+   * {@link sendImageMessageAndWaitForResponse}. This does NOT recover from WS drops on
    * its own; if invoked after a plain {@link sendMessage}, the resilience is lost.
+   *
+   * A generated image reaches the reply by one of two renderers, both inside the response
+   * container: `ai-response-image` (ImageContainer, from messageData.images - an image model
+   * answering directly) or `image-job-card-image` (ImageJobCard - the chat image_generation /
+   * edit_image tools, which run as image jobs since #7694). An image job finishes after the
+   * stream ends (the card shows its progress state meanwhile), so the visibility wait below is
+   * what covers the render time, not the send.
    *
    * Anchors on `aiResponseRoot.last()`: the newest response container. We deliberately
    * do NOT anchor on a pre-send index - navigateToNewChat does not await the prior
@@ -237,11 +373,14 @@ export class ChatPage extends BasePage {
   async waitForImageResponse(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     // The <img> lives inside the AI response container, so waiting on it
     // implicitly waits for the container too.
-    const img = this.aiResponseRoot.last().getByTestId('ai-response-image').first();
+    const reply = this.aiResponseRoot.last();
+    const img = reply.getByTestId('ai-response-image').or(reply.getByTestId('image-job-card-image')).first();
 
-    // Streaming has already completed by the time this is called, so the <img>
-    // should be mounted (PromptReplies renders it from messageData.images).
     await expect(img).toBeVisible({ timeout });
+
+    // The job card's <img> is loading="lazy": once the reply text below it streams in, the card
+    // can sit above the viewport and never fetch, leaving naturalWidth at 0. Bring it into view.
+    await img.scrollIntoViewIfNeeded();
 
     // Wait for the image to fully load (naturalWidth > 0).
     await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout }).toBeGreaterThan(0);

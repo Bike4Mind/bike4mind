@@ -34,4 +34,22 @@ describe('generateTranscriptMarkdown', () => {
     expect(md).not.toContain('invented');
     expect(md).not.toContain('b4m_map');
   });
+
+  describe('Summary section', () => {
+    const messages = [{ prompt: 'What is 2+2?', reply: '4' }];
+
+    it('omits the Summary TOC link when the session has no summary', () => {
+      const md = generateTranscriptMarkdown({ name: 'x' }, messages, []);
+
+      expect(md).not.toContain('[Summary](#summary)');
+      expect(md).not.toContain('## Summary');
+    });
+
+    it('links and renders Summary when the session has one', () => {
+      const md = generateTranscriptMarkdown({ name: 'x', summary: 'S' }, messages, []);
+
+      expect(md).toContain('[Summary](#summary)');
+      expect(md).toContain('## Summary');
+    });
+  });
 });

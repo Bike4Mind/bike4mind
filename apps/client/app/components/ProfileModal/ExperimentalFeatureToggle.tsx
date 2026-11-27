@@ -7,7 +7,7 @@ import type { ExperimentalFeature } from '@client/app/contexts/UserSettingsConte
 import { useExperimentalFeatureSettings } from '@client/app/hooks/data/settings';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { Box, Button, ButtonGroup, CircularProgress, Typography } from '@mui/joy';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
@@ -39,6 +39,10 @@ export default function ExperimentalFeatureToggle() {
   const [showNoneConfirm, setShowNoneConfirm] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState<'idle' | 'error' | 'empty'>('idle');
+  const [deletionStatus, setDeletionStatus] = useState<'idle' | 'incomplete' | 'complete'>('idle');
+  const [isDeleting, setIsDeleting] = useState(false);
+  // Bumped by every deletion request and every level change, so a result that was overtaken is dropped.
+  const deletionRequestRef = useRef(0);
 
   const handleExportTelemetry = useCallback(async () => {
     if (!currentUserId) return;
@@ -70,7 +74,24 @@ export default function ExperimentalFeatureToggle() {
       setShowNoneConfirm(true);
       return;
     }
+    deletionRequestRef.current += 1;
+    setIsDeleting(false);
+    setDeletionStatus('idle');
     updatePreferences({ contextTelemetryLevel: level });
+  };
+
+  // Always asks for the deletion to run, so confirming again while already on None repeats it.
+  const stopAndDeleteTelemetry = async () => {
+    const request = ++deletionRequestRef.current;
+    setIsDeleting(true);
+    const saved = await updatePreferences({ contextTelemetryLevel: 'none' }, { rerunTelemetryDeletion: true });
+    if (request !== deletionRequestRef.current) return;
+    setIsDeleting(false);
+    // No result means the request did not land, so what is on screen (an earlier incomplete notice
+    // and its retry button in particular) still stands.
+    if (!saved) return;
+    const outcome = saved.telemetryDeletion;
+    setDeletionStatus(!outcome ? 'idle' : outcome.verified ? 'complete' : 'incomplete');
   };
 
   const handleToggle = (feature: ExperimentalFeature) => {
@@ -142,17 +163,6 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableArtifacts')}
       />
-      <FeatureContainer
-        title="B4M Pi"
-        featureKey="enableBmPi"
-        description="Repository analysis, task scheduling, Gantt charts, and team activity dashboards for project intelligence."
-        helpId="features/b4m-pi"
-        enabled={isFeatureEnabled('enableBmPi')}
-        disabled={!getServerSettingValue('EnableBmPi')}
-        disabledReason={!getServerSettingValue('EnableBmPi') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableBmPi')}
-      />
       {(getServerSettingValue('EnableHearth') || currentUser?.isAdmin) && (
         <FeatureContainer
           title="Hearth"
@@ -204,28 +214,6 @@ export default function ExperimentalFeatureToggle() {
           onChange={() => handleToggle('enableOllama')}
         />
       )}
-      <FeatureContainer
-        title="Quest Master"
-        featureKey="enableQuestMaster"
-        description="Enable our AI model agnostic agentic Quest Master."
-        helpId="features/quest-master"
-        enabled={isFeatureEnabled('enableQuestMaster')}
-        disabled={!getServerSettingValue('EnableQuestMaster')}
-        disabledReason={!getServerSettingValue('EnableQuestMaster') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableQuestMaster')}
-      />
-      {/* User-only flag (no admin SettingKey), so it gates on the user's own
-          opt-in exactly like Mementos V2 - no `getServerSettingValue` here. */}
-      <FeatureContainer
-        title="Quest Master v5"
-        featureKey="enableQuestMasterV5"
-        description="Quests as a graph of nodes: each node is one scoreable task that runs its own agent, with arbitrary-depth sub-quests. Experimental - runs alongside Quest Master, not instead of it."
-        enabled={settings.experimentalFeatures?.enableQuestMasterV5}
-        disabled={false}
-        loading={false}
-        onChange={() => handleToggle('enableQuestMasterV5')}
-      />
       <FeatureContainer
         title="Rapid Reply"
         featureKey="enableRapidReply"
@@ -304,6 +292,38 @@ export default function ExperimentalFeatureToggle() {
               Export telemetry data downloads your usage telemetry as a JSON file. To keep a copy of your notebooks and
               files, use Export All on the Notebooks and Knowledge Files cards in General settings.
             </Typography>
+          )}
+          {telemetryLevel === 'none' && isDeleting && deletionStatus !== 'incomplete' && (
+            <Typography data-testid="telemetry-deletion-pending" level={TYPE.caption} sx={{ mt: 0.5 }}>
+              Deleting the telemetry we can identify from the last 90 days...
+            </Typography>
+          )}
+          {telemetryLevel === 'none' && !isDeleting && deletionStatus === 'complete' && (
+            <Typography data-testid="telemetry-deletion-complete" level={TYPE.caption} color="success" sx={{ mt: 0.5 }}>
+              Deleted the telemetry we could identify from the last 90 days.
+            </Typography>
+          )}
+          {telemetryLevel === 'none' && deletionStatus === 'incomplete' && (
+            <Box
+              data-testid="telemetry-deletion-incomplete"
+              role="alert"
+              sx={{ mt: 0.5, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
+            >
+              <Typography level={TYPE.caption} color="danger">
+                Collection is stopped, but we could not confirm deletion of the telemetry we can identify from the last
+                90 days.
+              </Typography>
+              <Button
+                data-testid="telemetry-deletion-retry-btn"
+                size="sm"
+                variant="outlined"
+                color="danger"
+                loading={isDeleting}
+                onClick={stopAndDeleteTelemetry}
+              >
+                Retry deletion
+              </Button>
+            </Box>
           )}
           {!telemetryAdminEnabled && (
             <Typography level={TYPE.caption} sx={{ mt: 0.5, color: 'warning.500', fontStyle: 'italic' }}>
@@ -431,11 +451,11 @@ export default function ExperimentalFeatureToggle() {
         open={showNoneConfirm}
         onClose={() => setShowNoneConfirm(false)}
         onConfirm={() => {
-          updatePreferences({ contextTelemetryLevel: 'none' });
+          void stopAndDeleteTelemetry();
           setShowNoneConfirm(false);
         }}
         title="Stop Telemetry Collection"
-        description="This will stop telemetry collection and delete all your existing telemetry data. This cannot be undone."
+        description="This will stop telemetry collection and delete the telemetry we can identify from the last 90 days. This cannot be undone."
         confirmText="Stop & Delete"
         confirmColor="danger"
         showWarningIcon

@@ -1,13 +1,16 @@
 import { Connection, User, wsConnectTicketRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyScopeValue, LiveHandoffRegistrationSchema } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { verifyApiKey } from '@server/cli/auth';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { withWebSocketContext } from '@server/websocket/utils';
+import { verifyApiKey } from '@bike4mind/server-utils/cli/auth';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ipBlockRefusal } from '@server/middlewares/checkBlockedIP';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { gatewayCapExpiry, assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
 import { APIGatewayProxyEvent, APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import jwt from 'jsonwebtoken';
@@ -91,7 +94,7 @@ async function resolveWebTicket(
 async function resolveIdentity(
   token: string,
   logger: Logger
-): Promise<{ userId: string; scopes?: ApiKeyScope[] } & ConnectionAuth> {
+): Promise<{ userId: string; scopes?: ApiKeyScopeValue[] } & ConnectionAuth> {
   let jwtErr: unknown;
   try {
     const decoded = authTokenGenerator.verifyToken(token) as jwt.JwtPayload;
@@ -110,6 +113,9 @@ async function resolveIdentity(
     }
     if (decoded?.mfaPending) {
       throw new UnauthorizedError('MFA verification required');
+    }
+    if (decoded?.impersonatedBy) {
+      throw new UnauthorizedError('Impersonated sessions cannot use realtime credentials');
     }
     // JWT connections are always version-gated. A legacy token issued before
     // this field existed carries no version and normalizes to 0, mirroring the
@@ -136,7 +142,8 @@ async function resolveIdentity(
     // below so action handlers can gate on it without re-verifying.
     const apiKeyInfo = await verifyApiKey(
       { authorization: `Bearer ${token}` },
-      { requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT, ApiKeyScope.CC_BRIDGE] }
+      // Opening a socket is not a use of the key; the actions sent over it are.
+      { requiredScopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT, ApiKeyScope.CC_BRIDGE], recordUse: false }
     );
     return {
       userId: apiKeyInfo.userId,
@@ -162,7 +169,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
     const ticketIdentity = await resolveWebTicket(event);
     let userId: string;
     let source: ConnectionSource;
-    let scopes: ApiKeyScope[] | undefined = undefined;
+    let scopes: ApiKeyScopeValue[] | undefined = undefined;
     let auth: ConnectionAuth;
     if (ticketIdentity) {
       const { userId: ticketUserId, source: ticketSource, ...ticketAuth } = ticketIdentity;
@@ -188,12 +195,50 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       throw new UnauthorizedError('Session expired');
     }
     assertAccountStateUsable(user);
+    assertNoPendingDeletion(user);
+    // A web ticket was minted behind the REST enrollment gate, and an API key is not a sign-in.
+    if (!ticketIdentity && !auth.apiKeyId && (await isMfaEnrollmentOwed(user))) {
+      throw new ForbiddenError(MFA_ENROLLMENT_REQUIRED_MESSAGE);
+    }
     await assertRealtimeSessionActive(auth.sid);
+    // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
+    if (!user.isAdmin) {
+      // No CloudFront fronts the WebSocket API, so every forwarding header on the upgrade request is
+      // client-supplied: resolve the address from API Gateway's sourceIp alone.
+      const clientRequest = {
+        headers: {},
+        socket: { remoteAddress: event.requestContext.identity?.sourceIp },
+      };
+      const refusal = await ipBlockRefusal(clientRequest, 'app', logger);
+      if (refusal) throw new ForbiddenError(refusal.message);
+    }
 
+    const handoff = LiveHandoffRegistrationSchema.safeParse({
+      platform: event.queryStringParameters?.handoffPlatform,
+      name: event.queryStringParameters?.handoffName,
+      clientId: event.queryStringParameters?.handoffClientId,
+    });
+    if (ticketIdentity && auth.sid && !handoff.success) {
+      const supplied = ['handoffPlatform', 'handoffName', 'handoffClientId'].some(
+        key => event.queryStringParameters?.[key] !== undefined
+      );
+      if (supplied) {
+        logger.warn('[WS_CONNECT] handoff registration ignored', {
+          issuePaths: handoff.error.issues.map(issue => issue.path.join('.')),
+        });
+      }
+    }
     await Connection.create({
       connectionId: event.requestContext.connectionId,
       userId: user.id,
       source,
+      ...(ticketIdentity &&
+        auth.sid &&
+        handoff.success && {
+          handoffPlatform: handoff.data.platform,
+          handoffName: handoff.data.name,
+          handoffClientId: handoff.data.clientId,
+        }),
       ...(scopes !== undefined && { scopes }),
       ...(auth.sid && { sid: auth.sid }),
       ...(tokenVersion !== undefined && { tokenVersion }),
@@ -201,7 +246,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       ...(auth.apiKeyId && { apiKeyId: auth.apiKeyId }),
     });
 
-    user.lastActiveAt = new Date();
+    // Presence only: connecting is not an action, so lastActiveAt is left to recordUserActivity.
     user.isOnline = true;
     await user.save();
 

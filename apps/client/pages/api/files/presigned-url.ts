@@ -1,17 +1,21 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
-import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
+import { grantingLakes, resolveAccessibleLakes } from '@bike4mind/server-utils/dataLakes/index';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
+import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
+
+const MAX_PRESIGNED_URL_EXPIRY_SECONDS = 3600;
 
 const GetPresignedUrlRequestInput = z.object({
   filePaths: z.array(z.string()),
-  expiresIn: z.number().prefault(3600), // Default to 1 hour
+  expiresIn: z.number().int().positive().max(MAX_PRESIGNED_URL_EXPIRY_SECONDS).prefault(3600), // Default to 1 hour
   // `server` exists for the in-process RLM `getArticle` loopback (see server/tavern/rlm/tools.ts),
   // whose container may not reach the browser origin. It only picks the signing client: the
   // moderation/ACL/lake gates all run before signing, and the SigV4 signature is host-bound.
@@ -22,6 +26,7 @@ const GetPresignedUrlRequestInput = z.object({
 type FabFileLookupResult = {
   _id: unknown;
   mimeType?: string | null;
+  fileName?: string | null;
   moderationStatus?: string | null;
   tags?: { name: string }[] | null;
   deletedAt?: Date | null;
@@ -112,9 +117,18 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       let lakesPromise: ReturnType<typeof resolveAccessibleLakes> | undefined;
       const accessibleLakes = () => (lakesPromise ??= resolveAccessibleLakes(req));
 
+      // Files (and their granting lakes) reached only through the lake fallback - what the access audit records.
+      const lakeFileIds: string[] = [];
+      const lakeIds = new Set<string>();
+
+      const lookedUp = new Map<string, FabFileLookupResult>();
       const serveableFileKeys = await filterServeableFilePaths(
         decodedFileKeys,
-        filePath => FabFile.findOne({ filePath }).lean(),
+        async filePath => {
+          const fabFile = await FabFile.findOne({ filePath }).lean();
+          lookedUp.set(filePath, fabFile);
+          return fabFile;
+        },
         async fabFile => {
           const id = String(fabFile._id);
           if (await fabFileRepository.shareable.findAccessibleById(req.user, id)) return true;
@@ -123,23 +137,37 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
           // mirrors the identical gate in loadAccessibleFabFile's single-file fallback (files/[id]).
           if (!holdsDataLakeReadScope(req)) return false;
           const lakes = await accessibleLakes();
-          return isFileInAccessibleLake(lakes, fabFile);
+          const granting = grantingLakes(
+            lakes,
+            (fabFile.tags ?? []).map(t => t.name)
+          );
+          if (granting.length === 0) return false;
+          lakeFileIds.push(id);
+          for (const lake of granting) lakeIds.add(lake.id);
+          return true;
         }
       );
+
+      // Before signing, so a strict (admin-bypass) audit failure hands out no URL.
+      if (lakeFileIds.length > 0) {
+        await recordLakeRead(req, { lakeIds: [...lakeIds], fileIds: lakeFileIds, surface: 'data-lake-file-fallback' });
+      }
 
       const presignedUrls = await Promise.all(
         serveableFileKeys.map(decodedFilePath => {
           if (!decodedFilePath) return null;
+          const fabFile = lookedUp.get(decodedFilePath);
           return getFilesStorage().getSignedUrl(decodedFilePath, 'get', {
             expiresIn,
             ...(audience === 'browser' && { audience: 'browser' as const }),
+            ...storageReadOverrides({ mimeType: fabFile?.mimeType, fileName: fabFile?.fileName, key: decodedFilePath }),
           });
         })
       );
 
       return res.json({ urls: presignedUrls });
     } catch (error) {
-      console.error('Error generating presigned URL:', error);
+      req.logger.error('Error generating presigned URL', { error });
       throw new BadRequestError('Failed to generate presigned URL');
     }
   }

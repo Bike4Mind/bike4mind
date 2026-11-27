@@ -19,7 +19,8 @@ describe('addSystemPrompts authorization', () => {
     const file = { id: 'file-1', userId: SHAREE, users: [], groups: [] };
 
     const projectUpdate = vi.fn().mockResolvedValue({});
-    const fabFileUpdate = vi.fn().mockResolvedValue(undefined);
+    const fileShares = createShareableFake([file as never]);
+    const fabFileUpdate = fileShares.updateUserShares;
 
     return {
       project,
@@ -28,7 +29,7 @@ describe('addSystemPrompts authorization', () => {
       adapters: {
         db: {
           projects: { shareable: createShareableFake([project as never]), updateWithUpdateAccess: projectUpdate },
-          fabFiles: { shareable: createShareableFake([file as never]), update: fabFileUpdate },
+          fabFiles: { shareable: fileShares },
         },
       },
     };
@@ -110,14 +111,14 @@ describe('addSystemPrompts authorization', () => {
     });
   });
 
-  it('lets a read-only adder pass on only read on the prompt file', async () => {
+  it('lets an adder holding read+share pass on only read on the prompt file', async () => {
     const MEMBER = 'user-member';
     const { adapters, project } = setup([Permission.read, Permission.update]);
     project.users.push({ userId: MEMBER, permissions: [Permission.read, Permission.update] });
     const file = {
       id: 'file-2',
       userId: 'someone-else',
-      users: [{ userId: SHAREE, permissions: [Permission.read] }] as {
+      users: [{ userId: SHAREE, permissions: [Permission.read, Permission.share] }] as {
         userId: string;
         permissions: Permission[];
         projectId?: string;

@@ -8,7 +8,9 @@ import ThumbDownIcon from '@mui/icons-material/ThumbDown';
 import FeedbackIcon from '@mui/icons-material/Feedback';
 import { FeedbackType } from '@bike4mind/common';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { createFeedbackOnServer } from '@client/app/utils/feedbackAPICalls';
+import { buildFeedbackClientContext } from '@client/app/utils/feedbackClientContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useTheme } from '@mui/joy';
 import { toast } from 'sonner';
@@ -42,6 +44,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
   const [feedbackType, setFeedbackType] = useState<FeedbackType>(FeedbackType.BUG);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const userContext = useUser();
+  const queryClient = useQueryClient();
   const theme = useTheme();
   const handleFeedbackTypeChange = (type: FeedbackType) => {
     setFeedbackType(type);
@@ -89,10 +92,11 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
         userEmail: userContext?.currentUser?.email ?? 'Unknown',
         tags: ['bug', 'feedback', 'bugReport'],
         type: feedbackType,
-        content: bugReport || 'No feedback details provided',
+        content: bugReport,
         promptMeta: promptMeta ?? {},
         sessionId,
         questId,
+        clientContext: buildFeedbackClientContext(queryClient),
       });
       onClose();
       onSubmitted?.();
@@ -123,6 +127,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({
         <Stack direction="row" justifyContent="start" spacing={5}>
           <Tooltip title="Good AI output">
             <ThumbUpIcon
+              data-testid="bug-report-modal-thumbs-up"
               sx={getIconStyle(FeedbackType.THUMBS_UP)}
               onClick={() => handleFeedbackTypeChange(FeedbackType.THUMBS_UP)}
             />

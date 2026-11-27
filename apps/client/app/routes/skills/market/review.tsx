@@ -41,6 +41,7 @@ import {
   FindingsList,
   HonestSummaryPanel,
   MismatchAlert,
+  SupportingFiles,
   TierChip,
   VisibilityChip,
 } from '@client/app/components/SkillMarket/parts';
@@ -99,7 +100,7 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
             <Chip size="sm" variant="outlined">
               v{version.version}
             </Chip>
-            <VisibilityChip visibility={listing.visibility} />
+            <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
             <TierChip tier={version.riskTier} />
           </Stack>
           <Typography level="body-xs" textColor="text.tertiary">
@@ -152,6 +153,7 @@ const VersionReviewCard: FC<{ item: ReviewQueueVersionItem; mode: 'pending' | 'a
           ) : (
             <BodyBlock body={version.snapshot.body} />
           )}
+          <SupportingFiles files={version.snapshot.files} />
         </Stack>
       </Box>
 
@@ -292,6 +294,7 @@ const ReportsQueue: FC = () => {
               </Typography>
               <Chip size="sm" color="danger" variant="soft">
                 {item.count} report{item.count > 1 ? 's' : ''}
+                {item.countingCount < item.count ? ` (${item.countingCount} count toward auto-hide)` : ''}
               </Chip>
               {item.listing.hiddenByReports ? (
                 <Chip size="sm" color="warning" variant="soft">

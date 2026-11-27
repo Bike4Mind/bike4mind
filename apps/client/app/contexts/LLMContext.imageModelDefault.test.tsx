@@ -101,7 +101,7 @@ describe('LLMProvider default image model', () => {
 
   it('never defaults to a model that mandates an input image', async () => {
     // Kontext is a transform, not a text-to-image model; picking it as the default makes
-    // /gen_image fail on a missing source image - even though its rank is the best here.
+    // a chat image send fail on a missing source image - even though its rank is the best here.
     h.accessibleIds = [TEXT.id, ImageModels.FLUX_KONTEXT_PRO, ImageModels.GEMINI_2_5_FLASH_IMAGE];
     render(<LLMProvider />);
     await waitFor(() => expect(useLLM.getState().imageModel).toBe(ImageModels.GEMINI_2_5_FLASH_IMAGE));

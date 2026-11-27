@@ -28,6 +28,13 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(),
 }));
 
+const mockedSave = vi.hoisted(() => vi.fn());
+vi.mock('../storage/ConfigStore.js', () => ({
+  ConfigStore: vi.fn(function ConfigStore() {
+    return { saveAutoUpdatePreference: mockedSave };
+  }),
+}));
+
 import axios from 'axios';
 import { promises as fs } from 'fs';
 import { execSync } from 'child_process';
@@ -348,54 +355,14 @@ describe('updateChecker', () => {
   });
 
   describe('setAutoUpdatePreference', () => {
-    // Helper: parse the JSON payload written to the global config file.
-    const writtenConfig = () => JSON.parse(mockedWriteFile.mock.calls[0][1] as string);
-
-    it('writes autoUpdate=true (always) to the global config file, 0600', async () => {
-      mockedReadFile.mockRejectedValueOnce(new Error('ENOENT')); // no existing file
-      await setAutoUpdatePreference(true);
-      expect(writtenConfig()).toEqual({ preferences: { autoUpdate: true } });
-      // Written to the GLOBAL config path (~/.bike4mind/config.json), 0600.
-      expect(mockedWriteFile.mock.calls[0][0]).toContain('config.json');
-      expect(mockedChmod).toHaveBeenCalledWith(expect.stringContaining('config.json'), 0o600);
+    it.each([true, false])('saves autoUpdate=%s through ConfigStore', async value => {
+      await setAutoUpdatePreference(value);
+      expect(mockedSave).toHaveBeenCalledWith(value);
+      expect(mockedWriteFile).not.toHaveBeenCalled();
     });
 
-    it('writes autoUpdate=false (never) to the global config file', async () => {
-      mockedReadFile.mockRejectedValueOnce(new Error('ENOENT'));
-      await setAutoUpdatePreference(false);
-      expect(writtenConfig()).toEqual({ preferences: { autoUpdate: false } });
-    });
-
-    it('preserves existing global preferences when adding autoUpdate', async () => {
-      mockedReadFile.mockResolvedValueOnce(
-        JSON.stringify({ preferences: { theme: 'light', model: 'claude-sonnet-4-6' } })
-      );
-      await setAutoUpdatePreference(true);
-      expect(writtenConfig()).toEqual({
-        preferences: { theme: 'light', model: 'claude-sonnet-4-6', autoUpdate: true },
-      });
-    });
-
-    // Regression for the project-config leak: setAutoUpdatePreference must NOT
-    // route through ConfigStore (global->project->local merge), because that would
-    // bake the *current project's* overrides into the user's GLOBAL config as a
-    // bootstrap-time side effect. It reads/writes the global file directly, so
-    // only what's already in the global file (plus autoUpdate) is persisted.
-    it('does not leak project-merged config values into the global file', async () => {
-      // The global file on disk only has theme:light. A project override of
-      // theme:dark / model would be present in a ConfigStore.load() merge but
-      // must never reach the written global file.
-      mockedReadFile.mockResolvedValueOnce(JSON.stringify({ preferences: { theme: 'light' } }));
-      await setAutoUpdatePreference(true);
-      const written = writtenConfig();
-      expect(written.preferences.theme).toBe('light'); // global value preserved
-      expect(written.preferences.model).toBeUndefined(); // project override NOT pulled in
-      expect(written.preferences.autoUpdate).toBe(true);
-    });
-
-    it('does not throw when the write fails (best-effort)', async () => {
-      mockedReadFile.mockRejectedValueOnce(new Error('ENOENT'));
-      mockedWriteFile.mockRejectedValueOnce(new Error('EROFS'));
+    it('does not throw when the save fails (best-effort)', async () => {
+      mockedSave.mockRejectedValueOnce(new Error('EROFS'));
       await expect(setAutoUpdatePreference(true)).resolves.toBeUndefined();
     });
   });

@@ -3,7 +3,7 @@ import { secretRotationRepository } from '@bike4mind/database/infra';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from './tokenGenerator';
-import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
+import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 
 async function resolveJwtSecret(token: string): Promise<string> {
   try {

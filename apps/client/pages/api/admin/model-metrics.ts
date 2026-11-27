@@ -2,11 +2,13 @@ import { Quest, cacheRepository } from '@bike4mind/database';
 import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { Request } from 'express';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'adminModelMetrics' } });
 
 export const ModelMetricFiltersSchema = z.object({
   dateFrom: z.string().optional(),
@@ -122,15 +124,11 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
     query.status = statusFilter;
   }
 
-  console.log('📊 Query filters:', { dateFrom, dateTo, userFilter, modelFilter, statusFilter });
-
   // Query quests with filters, sorted by most recent first
   const quests = await Quest.find(query)
     .sort({ timestamp: -1 })
     .limit(500) // Increased limit to handle filtered results
     .lean();
-
-  console.log(`Found ${quests.length} quests with performance data`);
 
   // Transform the data into the format expected by the frontend
   const metrics: ModelMetricResponse[] = quests.map(quest => ({
@@ -191,7 +189,7 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
           }
           return undefined;
         } catch (e) {
-          console.warn('Failed to convert featureExecutionTimes:', e);
+          logger.warn('Failed to convert featureExecutionTimes', { error: e });
           return undefined;
         }
       })(),
@@ -218,7 +216,7 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
           }
           return undefined;
         } catch (e) {
-          console.warn('Failed to convert databaseOperationTimes:', e);
+          logger.warn('Failed to convert databaseOperationTimes', { error: e });
           return undefined;
         }
       })(),
@@ -238,15 +236,8 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
   return metrics;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request<{}, {}, {}, ModelMetricsQuery>, res) => {
-    // Check if user has admin permissions
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
-    console.log('📊 Model metrics API called');
-
     try {
       const { recache, ...filters } = req.query;
 
@@ -258,10 +249,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
         logger: req.logger,
       });
 
-      console.log(`✅ Returning ${metrics.length} performance metrics`);
       return res.json(metrics);
     } catch (error) {
-      console.error('❌ Error fetching model metrics:', error);
+      req.logger.error('Error fetching model metrics', { error });
       return res.status(500).json({
         error: 'Failed to fetch model metrics',
         message: error instanceof Error ? error.message : 'Unknown error',

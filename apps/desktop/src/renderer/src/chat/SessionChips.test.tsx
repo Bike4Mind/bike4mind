@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatProject, ProjectInspection, RecentFolder } from '@shared/chat';
 import type { AppInfo } from '@shared/ipc';
-import { SessionChips } from './SessionChips';
+import { GrantedFolderChips, SessionChips } from './SessionChips';
 import type { ProjectBindingController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,10 +38,24 @@ function inspection(over: Partial<ProjectInspection> = {}): ProjectInspection {
   };
 }
 
+// Joy's Tooltip opens after its enter delay (100ms).
+async function hoverPastTooltipDelay(node: HTMLElement): Promise<void> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    await act(async () => {
+      node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(150);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 const getAppInfo = async (): Promise<Partial<AppInfo>> => ({ homeDirectory: '' });
 const listRecentFolders = async (): Promise<RecentFolder[]> => [];
 
 const binding: ProjectBindingController = {
+  hostId: LOCAL_HOST_ID,
   busy: false,
   error: null,
   dismissError: vi.fn(),
@@ -68,7 +84,11 @@ describe('the branch chip against what git answers', () => {
 
   beforeEach(() => {
     inspectProject.mockReset();
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -175,11 +195,7 @@ describe('the branch chip against what git answers', () => {
     await show(project({ branch: 'feat/chips', workspace: true }));
 
     const button = host.querySelector('[data-testid="session-chip-branch-btn"]') as HTMLElement;
-    await act(async () => {
-      button.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      // Joy's Tooltip opens after its enter delay (100ms).
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(button.parentElement as HTMLElement);
     const tooltip = document.body.querySelector('[role="tooltip"]')?.textContent ?? '';
     expect(tooltip).toMatch(/cut from feat\/chips/i);
     expect(tooltip).not.toMatch(/are created/i);
@@ -279,6 +295,105 @@ describe('the branch chip against what git answers', () => {
   });
 });
 
+describe('the workspace form', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+  const addContextDirectory = vi.fn();
+  const removeContextDirectory = vi.fn();
+
+  beforeEach(() => {
+    inspectProject.mockReset();
+    addContextDirectory.mockReset();
+    removeContextDirectory.mockReset();
+    inspectProject.mockResolvedValue(inspection());
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('lays out each workspace control in a labeled full-width row without chip semantics', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          layout="panel"
+          project={project()}
+          binding={{ ...binding, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    const form = host.querySelector('[data-testid="session-workspace-form"]') as HTMLElement;
+    expect(form.textContent).toContain('Project folder');
+    expect(form.textContent).toContain('Git branch');
+    expect(form.textContent).toContain('Worktree');
+    expect(form.querySelector('[data-testid="session-chip-project"]')?.tagName).toBe('BUTTON');
+    expect(form.querySelector('[data-testid="session-chip-branch-btn"]')?.tagName).toBe('BUTTON');
+    expect(form.querySelector('[data-testid="session-chip-add-context"]')?.textContent).toContain('Add directory');
+    expect(form.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+    expect(form.querySelectorAll('[data-testid$="-row"]')).toHaveLength(4);
+    for (const [testId, label] of [
+      ['session-chip-project', 'Project folder'],
+      ['session-chip-branch-btn', 'Git branch'],
+    ]) {
+      const button = form.querySelector(`[data-testid="${testId}"]`) as HTMLElement;
+      const [labelId] = (button.getAttribute('aria-labelledby') ?? '').split(' ');
+      expect(document.getElementById(labelId)?.textContent).toBe(label);
+      expect(document.querySelector(`label[for="${button.id}"]`)?.textContent).toBe(label);
+    }
+  });
+
+  it('adds and explicitly removes additional directories', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories: ['/Users/someone/shared'] })}
+          binding={{ ...binding, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    await act(async () => (host.querySelector('[data-testid="session-chip-add-context"]') as HTMLElement).click());
+    await act(async () =>
+      (host.querySelector('[data-testid="session-workspace-directory-remove-btn"]') as HTMLElement).click()
+    );
+    expect(addContextDirectory).toHaveBeenCalledTimes(1);
+    expect(removeContextDirectory).toHaveBeenCalledWith('/Users/someone/shared');
+    expect(host.querySelector('[data-testid="session-workspace-directory-remove-btn"]')?.textContent).toBe('Remove');
+    expect(host.querySelector('[data-testid="session-chip-context"]')).toBeNull();
+  });
+
+  it('holds directory removal while a binding change is in flight', async () => {
+    await act(async () =>
+      root.render(
+        <SessionChips
+          project={project({ contextDirectories: ['/Users/someone/shared'] })}
+          binding={{ ...binding, busy: true, addContextDirectory, removeContextDirectory }}
+          settledTurns={0}
+        />
+      )
+    );
+    await act(async () => undefined);
+
+    const remove = host.querySelector('[data-testid="session-workspace-directory-remove-btn"]') as HTMLButtonElement;
+    expect(remove.disabled).toBe(true);
+  });
+});
+
 /**
  * A session that has run commands in one folder must not be repointed at another: the transcript
  * above would then describe work done somewhere the session no longer claims. The lock is on
@@ -306,7 +421,11 @@ describe('the chip row once the session has run here', () => {
   beforeEach(() => {
     inspectProject.mockReset();
     inspectProject.mockResolvedValue(inspection());
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -357,15 +476,12 @@ describe('the chip row once the session has run here', () => {
     await show(true);
 
     const chip = host.querySelector('[data-testid="session-chip-project"]') as HTMLElement;
-    await act(async () => {
-      chip.parentElement?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      // Joy's Tooltip opens after its enter delay (100ms).
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(chip.parentElement as HTMLElement);
     const tooltip = document.body.querySelector('[role="tooltip"]') as HTMLElement;
 
     expect(tooltip.textContent?.split('\n')).toEqual([expect.stringMatching(/new session/i), CHECKOUT]);
     expect(getComputedStyle(tooltip).whiteSpace).toBe('pre-line');
+    expect(getComputedStyle(tooltip).backgroundColor).toContain('--joy-palette-background-popup');
   });
 });
 
@@ -398,10 +514,7 @@ describe('a branch another worktree has checked out', () => {
 
   async function hoverMark(name: string): Promise<string> {
     const node = option(name).querySelector('[data-testid="session-chip-branch-elsewhere-label"]') as HTMLElement;
-    await act(async () => {
-      node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(node);
     return [...document.body.querySelectorAll('[role="tooltip"]')].map(tip => tip.textContent).join('\n');
   }
 
@@ -413,7 +526,11 @@ describe('a branch another worktree has checked out', () => {
         checkedOutElsewhere: { 'feat/held': { path: HELD } },
       })
     );
-    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject, listRecentFolders }, getAppInfo };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { inspectProject, listRecentFolders },
+      getAppInfo,
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -579,6 +696,7 @@ describe("the folder chip's recent folders", () => {
     inspectProject.mockResolvedValue(inspection());
     listRecent.mockResolvedValue(recent);
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { inspectProject, listRecentFolders: listRecent, removeRecentFolder },
       getAppInfo,
     };
@@ -664,10 +782,7 @@ describe("the folder chip's recent folders", () => {
     await show(project());
     await openMenu();
 
-    await act(async () => {
-      inMenu('session-chip-project-recent')[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 150));
-    });
+    await hoverPastTooltipDelay(inMenu('session-chip-project-recent')[1]);
 
     const tooltips = Array.from(document.body.querySelectorAll('[role="tooltip"]')).map(node => node.textContent);
     expect(tooltips).toContain(OTHER);
@@ -691,5 +806,43 @@ describe("the folder chip's recent folders", () => {
     await openMenu();
 
     expect(inMenu('session-chip-project-recent').map(item => item.textContent)).toEqual(['thing']);
+  });
+});
+
+describe("a Chat session's granted folders", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const onRemove = vi.fn(async (_directory: string) => {});
+
+  async function show(directories: readonly string[]): Promise<void> {
+    await act(async () => root.render(<GrantedFolderChips directories={directories} onRemove={onRemove} />));
+  }
+
+  const chips = () => Array.from(host.querySelectorAll<HTMLElement>('[data-testid="session-chip-context"]'));
+
+  beforeEach(() => {
+    onRemove.mockClear();
+    (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), getAppInfo };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('draws nothing while no folder is shared', async () => {
+    await show([]);
+    expect(host.querySelector('[data-testid="session-granted-folders"]')).toBeNull();
+  });
+
+  it('draws one chip per folder, named by its last segments, and a click takes that one back', async () => {
+    await show(['/work/notes', '/Users/someone/code/thing/docs']);
+
+    expect(chips().map(chip => chip.textContent)).toEqual(['/work/notes', '.../thing/docs']);
+    await act(async () => chips()[1].querySelector('button')?.click());
+    expect(onRemove).toHaveBeenCalledExactlyOnceWith('/Users/someone/code/thing/docs');
   });
 });

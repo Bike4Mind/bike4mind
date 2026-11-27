@@ -1,5 +1,327 @@
 # @bike4mind/cli
 
+## 5.0.1
+
+### Patch Changes
+
+- [#8702](https://github.com/Bike4Mind/bike4mind/pull/8702) [`57cb747`](https://github.com/Bike4Mind/bike4mind/commit/57cb7473b476d4032b2b0f0540d7d56788264864) Thanks [@vinchi777](https://github.com/vinchi777)! - tighten shell command classification and session approvals
+
+- [#8750](https://github.com/Bike4Mind/bike4mind/pull/8750) [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0) Thanks [@vinchi777](https://github.com/vinchi777)! - keep prompt text, summaries and credentials out of logs and analytics
+
+## 5.0.0
+
+### Major Changes
+
+- [#8557](https://github.com/Bike4Mind/bike4mind/pull/8557) [`862fa66`](https://github.com/Bike4Mind/bike4mind/commit/862fa66be1993684c7d6610daef38970456b04fe) Thanks [@wescarda](https://github.com/wescarda)! - remove the v4 QuestMaster chat-plan path and its questmasterplans readers
+
+### Patch Changes
+
+- [#8527](https://github.com/Bike4Mind/bike4mind/pull/8527) [`c9da20b`](https://github.com/Bike4Mind/bike4mind/commit/c9da20bd0903e95df4333dd797c20c7c8e7397ef) Thanks [@maconard](https://github.com/maconard)! - replace six dependencies and align desktop versions
+
+## 4.10.0
+
+### Minor Changes
+
+- [#8436](https://github.com/Bike4Mind/bike4mind/pull/8436) [`88f0eed`](https://github.com/Bike4Mind/bike4mind/commit/88f0eed44cc701cea5b1f08e58e43616b1e922b0) Thanks [@ken-b4m](https://github.com/ken-b4m)! - undo a lake change through the public API and MCP
+
+- [#8438](https://github.com/Bike4Mind/bike4mind/pull/8438) [`81e1f88`](https://github.com/Bike4Mind/bike4mind/commit/81e1f88cea26079d8beac4e7815b7a6a9132faa1) Thanks [@maconard](https://github.com/maconard)! - list and call functions from the CLI MCP server
+
+- [#8445](https://github.com/Bike4Mind/bike4mind/pull/8445) [`08b784e`](https://github.com/Bike4Mind/bike4mind/commit/08b784efb1f2dea09c41c4320d4e71753bdc9bc3) Thanks [@maconard](https://github.com/maconard)! - share a pinned function with a project, an organization, or named people
+
+- [#8446](https://github.com/Bike4Mind/bike4mind/pull/8446) [`61712ac`](https://github.com/Bike4Mind/bike4mind/commit/61712acbf344243576c5d8ee5b67845aaefe9b80) Thanks [@maconard](https://github.com/maconard)! - review a shared function before it runs, kept while its interface holds
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
+### Patch Changes
+
+- [#8435](https://github.com/Bike4Mind/bike4mind/pull/8435) [`70222af`](https://github.com/Bike4Mind/bike4mind/commit/70222afea4779554d914024b78c8bddc5b412774) Thanks [@ken-b4m](https://github.com/ken-b4m)! - apply research changes from MCP without approval forms
+
+- [#8477](https://github.com/Bike4Mind/bike4mind/pull/8477) [`fd108d7`](https://github.com/Bike4Mind/bike4mind/commit/fd108d78049ecf1fd8715eeb102d473a14ff1eb0) Thanks [@maconard](https://github.com/maconard)! - drop unused external imports from the bundle
+
+## 4.9.0
+
+### Minor Changes
+
+- [#7880](https://github.com/Bike4Mind/bike4mind/pull/7880) [`0fe8a0c`](https://github.com/Bike4Mind/bike4mind/commit/0fe8a0c9288b97e98fe011157ac30137509c56c8) Thanks [@onoya](https://github.com/onoya)! - add the versioned image job API and deprecate the quest image routes
+
+- [#7933](https://github.com/Bike4Mind/bike4mind/pull/7933) [`1aa4837`](https://github.com/Bike4Mind/bike4mind/commit/1aa48370bae652aa38e9168be06dbda93358b965) Thanks [@vinchi777](https://github.com/vinchi777)! - add opt-in fullscreen terminal rendering
+
+- [#7950](https://github.com/Bike4Mind/bike4mind/pull/7950) [`8b06612`](https://github.com/Bike4Mind/bike4mind/commit/8b0661274bb784d7e2c7e5596b4bc0c13412cd6e) Thanks [@poysama](https://github.com/poysama)! - classify a moderated chat turn as content_blocked
+
+- [#8066](https://github.com/Bike4Mind/bike4mind/pull/8066) [`c42dbc5`](https://github.com/Bike4Mind/bike4mind/commit/c42dbc5eece3a386388916a5240fa34560f789ac) Thanks [@jjmarfa](https://github.com/jjmarfa)! - write_todos on the shared plan schema with an Ink plan block
+
+- [#8081](https://github.com/Bike4Mind/bike4mind/pull/8081) [`c26dfbd`](https://github.com/Bike4Mind/bike4mind/commit/c26dfbd83dfa1102d716242200b4a95c9571b148) Thanks [@ken-b4m](https://github.com/ken-b4m)! - let Spaces be a listing audience
+
+- [#8182](https://github.com/Bike4Mind/bike4mind/pull/8182) [`693ce9e`](https://github.com/Bike4Mind/bike4mind/commit/693ce9e68710b1675531f2f056ed332a0cd4a88f) Thanks [@ken-b4m](https://github.com/ken-b4m)! - MCP tools to set up and maintain lake research
+
+- [#8186](https://github.com/Bike4Mind/bike4mind/pull/8186) [`0607d38`](https://github.com/Bike4Mind/bike4mind/commit/0607d3899aed4bb1d6f107804180891bbc6e5491) Thanks [@onoya](https://github.com/onoya)! - require existing scopes on API-key routes for batch, artifacts, publish and userinfo
+
+- [#8193](https://github.com/Bike4Mind/bike4mind/pull/8193) [`a58c365`](https://github.com/Bike4Mind/bike4mind/commit/a58c365f63d54c74bccc497917ebfd6c9f9d84b7) Thanks [@ken-b4m](https://github.com/ken-b4m)! - record structured research changes and file events in lake history
+
+### Patch Changes
+
+- [#7881](https://github.com/Bike4Mind/bike4mind/pull/7881) [`5fbab72`](https://github.com/Bike4Mind/bike4mind/commit/5fbab7254c6c4767b420bf87c67b591e31b0a771) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - show the real site on web search source chips
+
+- [#7929](https://github.com/Bike4Mind/bike4mind/pull/7929) [`b394721`](https://github.com/Bike4Mind/bike4mind/commit/b394721a8a5413aac2e59a51f0faffa42de58615) Thanks [@juicewaa](https://github.com/juicewaa)! - drop unused picomatch dependency
+
+## 4.8.0
+
+### Minor Changes
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - add session Studio generation and asset workspaces
+
+## 4.7.0
+
+### Minor Changes
+
+- [#7604](https://github.com/Bike4Mind/bike4mind/pull/7604) [`92b4837`](https://github.com/Bike4Mind/bike4mind/commit/92b483768e5c33d0c2027c8f707a290b8bca490f) Thanks [@angelolao](https://github.com/angelolao)! - add local peer session messaging
+
+### Patch Changes
+
+- [#7506](https://github.com/Bike4Mind/bike4mind/pull/7506) [`9292bd0`](https://github.com/Bike4Mind/bike4mind/commit/9292bd03611f9abbb1e70523fb1ac0883b5558cf) Thanks [@onoya](https://github.com/onoya)! - move the CLI default off Sonnet 4.5 and alert only on a sustained deprecated-model rate
+
+- [#7667](https://github.com/Bike4Mind/bike4mind/pull/7667) [`2e57e2e`](https://github.com/Bike4Mind/bike4mind/commit/2e57e2ee13d2ece2b33e8977ff3cbf33ead633ea) Thanks [@onoya](https://github.com/onoya)! - make browser file uploads create-only
+
+- [#7818](https://github.com/Bike4Mind/bike4mind/pull/7818) [`946319d`](https://github.com/Bike4Mind/bike4mind/commit/946319db9c6ddcf5c3a9018ab4a881eacd3c5d74) Thanks [@poysama](https://github.com/poysama)! - publish the services package as @bike4mind/services-core
+
+## 4.6.0
+
+### Minor Changes
+
+- [#7479](https://github.com/Bike4Mind/bike4mind/pull/7479) [`7159763`](https://github.com/Bike4Mind/bike4mind/commit/7159763ebef29dc8fd6987fdbefae6dc0245555c) Thanks [@onoya](https://github.com/onoya)! - add an api-keys:manage scope for the user API key routes
+
+- [#7493](https://github.com/Bike4Mind/bike4mind/pull/7493) [`26b8b3c`](https://github.com/Bike4Mind/bike4mind/commit/26b8b3c644315d0928ee7e085fc171c62c9c4fd6) Thanks [@vinchi777](https://github.com/vinchi777)! - pull-based notebook mirror feed and b4m mirror command
+
+### Patch Changes
+
+- [#7281](https://github.com/Bike4Mind/bike4mind/pull/7281) [`75b38d8`](https://github.com/Bike4Mind/bike4mind/commit/75b38d872011560872cca26cd71f7bd0e5e1882c) Thanks [@ken-b4m](https://github.com/ken-b4m)! - require skills:write for API keys on the skill routes
+
+- [#7373](https://github.com/Bike4Mind/bike4mind/pull/7373) [`e78ee5e`](https://github.com/Bike4Mind/bike4mind/commit/e78ee5e321a9a3a27351bc8d266c0c0bee302b1c) Thanks [@poysama](https://github.com/poysama)! - map the direct Sonnet 4.5 id to Sonnet 5.5 before its retirement
+
+- [#7392](https://github.com/Bike4Mind/bike4mind/pull/7392) [`c01cde3`](https://github.com/Bike4Mind/bike4mind/commit/c01cde3f4b9a59e2eb92efd0e25b771ebf297276) Thanks [@onoya](https://github.com/onoya)! - remove the dead WebSocket completion path
+
+## 4.5.0
+
+### Minor Changes
+
+- [#6820](https://github.com/Bike4Mind/bike4mind/pull/6820) [`e5e1e29`](https://github.com/Bike4Mind/bike4mind/commit/e5e1e29ed9ddc60d4fae0d506861f67c1a7d5c98) Thanks [@onoya](https://github.com/onoya)! - explain and streamline detection review
+
+- [#6820](https://github.com/Bike4Mind/bike4mind/pull/6820) [`e5e1e29`](https://github.com/Bike4Mind/bike4mind/commit/e5e1e29ed9ddc60d4fae0d506861f67c1a7d5c98) Thanks [@onoya](https://github.com/onoya)! - account-level abuse assessment evidence and corroborated signup bursts
+
+- [#7153](https://github.com/Bike4Mind/bike4mind/pull/7153) [`ac0acb7`](https://github.com/Bike4Mind/bike4mind/commit/ac0acb7376cc558020dc3b81fd45d7f5559e0af8) Thanks [@maconard](https://github.com/maconard)! - retry refused Claude Fable 5.1 and 5.2 chats on Opus 4.8
+
+- [#7170](https://github.com/Bike4Mind/bike4mind/pull/7170) [`187b924`](https://github.com/Bike4Mind/bike4mind/commit/187b924b017417548b5e3d508ee79d9e9d356891) Thanks [@vinchi777](https://github.com/vinchi777)! - add MCP file upload tool
+
+- [#7190](https://github.com/Bike4Mind/bike4mind/pull/7190) [`88facf4`](https://github.com/Bike4Mind/bike4mind/commit/88facf4cd9c0f8d507cb6f4ddfa749f78fa0c1d5) Thanks [@onoya](https://github.com/onoya)! - accept share and upload tokens in headers and redact path tokens from request logs
+
+### Patch Changes
+
+- [#6822](https://github.com/Bike4Mind/bike4mind/pull/6822) [`721f320`](https://github.com/Bike4Mind/bike4mind/commit/721f3209c2275c6a707daec02ece734362eee923) Thanks [@maconard](https://github.com/maconard)! - show unusable saved SSH servers instead of hiding them
+
+- [#6827](https://github.com/Bike4Mind/bike4mind/pull/6827) [`40310ef`](https://github.com/Bike4Mind/bike4mind/commit/40310ef445c722e3d585037585d2a70ba6685187) Thanks [@maconard](https://github.com/maconard)! - show SSH servers saved without an address and lock their settings
+
+- [#6829](https://github.com/Bike4Mind/bike4mind/pull/6829) [`dbea457`](https://github.com/Bike4Mind/bike4mind/commit/dbea4575b2356cc0b4c627450c71477c61d81780) Thanks [@onoya](https://github.com/onoya)! - retry right after breaking a stale lock
+
+- [#6933](https://github.com/Bike4Mind/bike4mind/pull/6933) [`81e9ca1`](https://github.com/Bike4Mind/bike4mind/commit/81e9ca121b7668616b2efa7714b2f8e4aa9f1fc6) Thanks [@jjmarfa](https://github.com/jjmarfa)! - return a viewer-only shape to readers of a public artifact they have no grant on
+
+- [#6971](https://github.com/Bike4Mind/bike4mind/pull/6971) [`c957dbe`](https://github.com/Bike4Mind/bike4mind/commit/c957dbec656f7b243081a2b3b38c6b40dddcfa33) Thanks [@ken-b4m](https://github.com/ken-b4m)! - round-trip SKILL.md model and stop false missing-file warnings
+
+- [#7060](https://github.com/Bike4Mind/bike4mind/pull/7060) [`9874eac`](https://github.com/Bike4Mind/bike4mind/commit/9874eac7faff3d6680beb0834a2e7f80afddf35c) Thanks [@maconard](https://github.com/maconard)! - offer reasoning effort for gpt-oss under any model name
+
+- [#7064](https://github.com/Bike4Mind/bike4mind/pull/7064) [`ddbd189`](https://github.com/Bike4Mind/bike4mind/commit/ddbd189176458f2436b64b6eb9ace2dfa28553ff) Thanks [@maconard](https://github.com/maconard)! - keep llama-server's no-GPU warning after a restart
+
+- [#7131](https://github.com/Bike4Mind/bike4mind/pull/7131) [`6c3ca64`](https://github.com/Bike4Mind/bike4mind/commit/6c3ca64b29468e19b6091bb8f7579763df25c5fb) Thanks [@maconard](https://github.com/maconard)! - stale composer settings after switching chats
+
+## 4.4.0
+
+### Minor Changes
+
+- [#6814](https://github.com/Bike4Mind/bike4mind/pull/6814) [`d42d87d`](https://github.com/Bike4Mind/bike4mind/commit/d42d87df084411984595a2ca56d8c55252b99ee8) Thanks [@maconard](https://github.com/maconard)! - find and save model servers of any kind over ssh
+
+- [#6815](https://github.com/Bike4Mind/bike4mind/pull/6815) [`763126b`](https://github.com/Bike4Mind/bike4mind/commit/763126b28325007c1c0fd8088896b65c5f7ef999) Thanks [@maconard](https://github.com/maconard)! - detect intel gpus and size them for sycl and vulkan
+
+### Patch Changes
+
+- [#6792](https://github.com/Bike4Mind/bike4mind/pull/6792) [`09ee8d1`](https://github.com/Bike4Mind/bike4mind/commit/09ee8d1cb0541e12ef93ac03b54b153c54b92407) Thanks [@maconard](https://github.com/maconard)! - keep the saved config and session in sync, and fix mcp enable/disable
+
+- [#6793](https://github.com/Bike4Mind/bike4mind/pull/6793) [`c676608`](https://github.com/Bike4Mind/bike4mind/commit/c6766084fc6d7851e7094d741d16724da9c27b2d) Thanks [@maconard](https://github.com/maconard)! - clearer mcp enable/disable messages
+
+- [#6803](https://github.com/Bike4Mind/bike4mind/pull/6803) [`2c7fdfe`](https://github.com/Bike4Mind/bike4mind/commit/2c7fdfe2fbe5dc68ce729ee20f5b3c25204be497) Thanks [@onoya](https://github.com/onoya)! - enrich assessment campaign context
+
+## 4.3.0
+
+### Minor Changes
+
+- [#6790](https://github.com/Bike4Mind/bike4mind/pull/6790) [`841f45f`](https://github.com/Bike4Mind/bike4mind/commit/841f45fed7786b1f104861e2466a93e2d02cf264) Thanks [@maconard](https://github.com/maconard)! - chat with local models without signing in
+
+## 4.2.0
+
+### Minor Changes
+
+- [#5951](https://github.com/Bike4Mind/bike4mind/pull/5951) [`630bf8f`](https://github.com/Bike4Mind/bike4mind/commit/630bf8f19d08321065c8c1d8f5f9b47c8d907540) Thanks [@maconard](https://github.com/maconard)! - add a Curated models tab with per-machine picks and fit badges
+
+- [#5985](https://github.com/Bike4Mind/bike4mind/pull/5985) [`35539ab`](https://github.com/Bike4Mind/bike4mind/commit/35539ab4f28537ddc2146789d676f6397ef33285) Thanks [@juicewaa](https://github.com/juicewaa)! - review pending signup risk scores with approve and suspend actions
+
+- [#6079](https://github.com/Bike4Mind/bike4mind/pull/6079) [`af19cd4`](https://github.com/Bike4Mind/bike4mind/commit/af19cd40f6fbb6fc1e22542a7ac2c6f4dcfbfbab) Thanks [@maconard](https://github.com/maconard)! - add mcp serve --local to serve the local model tools without a backend
+
+- [#6080](https://github.com/Bike4Mind/bike4mind/pull/6080) [`0d99c48`](https://github.com/Bike4Mind/bike4mind/commit/0d99c4879a345e8b97e7e2465a3f5e8f0c744dde) Thanks [@maconard](https://github.com/maconard)! - rate model fit for this machine in b4m models and MCP models_pull
+
+- [#6090](https://github.com/Bike4Mind/bike4mind/pull/6090) [`e582260`](https://github.com/Bike4Mind/bike4mind/commit/e582260cb28548d339c51fca82c168fe05391c5f) Thanks [@maconard](https://github.com/maconard)! - store a Hugging Face token for private and gated repos
+
+- [#6157](https://github.com/Bike4Mind/bike4mind/pull/6157) [`d1975be`](https://github.com/Bike4Mind/bike4mind/commit/d1975be5dad2165854d7918f1c45fc333653f566) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add an admin held-grants tab with bulk release, undo and a next-day release cron
+
+- [#6289](https://github.com/Bike4Mind/bike4mind/pull/6289) [`3120c62`](https://github.com/Bike4Mind/bike4mind/commit/3120c626b6eba9ea9a98fb73a5481071de3bce12) Thanks [@maconard](https://github.com/maconard)! - read vLLM aliases, LoRA adapters and context, and chat without tools when they cannot fit
+
+- [#6304](https://github.com/Bike4Mind/bike4mind/pull/6304) [`80da24f`](https://github.com/Bike4Mind/bike4mind/commit/80da24fc8cc6ab639347bf5f70d8e155e3b0cb2f) Thanks [@maconard](https://github.com/maconard)! - read Desktop's saved model servers
+
+- [#6311](https://github.com/Bike4Mind/bike4mind/pull/6311) [`7584b87`](https://github.com/Bike4Mind/bike4mind/commit/7584b87589a6c9974658af8bd22deb5c6081ce32) Thanks [@maconard](https://github.com/maconard)! - chat with OpenAI-compatible model servers
+
+- [#6321](https://github.com/Bike4Mind/bike4mind/pull/6321) [`dc3bd33`](https://github.com/Bike4Mind/bike4mind/commit/dc3bd338e28511993050319df56b0da00d554f99) Thanks [@maconard](https://github.com/maconard)! - offer the hosted server first on a fresh install when a default is baked
+
+- [#6322](https://github.com/Bike4Mind/bike4mind/pull/6322) [`08cd6cc`](https://github.com/Bike4Mind/bike4mind/commit/08cd6ccc0439fa9949750c3f730e7246a9d68250) Thanks [@maconard](https://github.com/maconard)! - show a sign-in link with the code filled in and a key to copy it
+
+- [#6323](https://github.com/Bike4Mind/bike4mind/pull/6323) [`7a0ff80`](https://github.com/Bike4Mind/bike4mind/commit/7a0ff802ff3c6a9898d511f35fea47cf04667653) Thanks [@maconard](https://github.com/maconard)! - remember input history across sessions
+
+- [#6324](https://github.com/Bike4Mind/bike4mind/pull/6324) [`c26e2b4`](https://github.com/Bike4Mind/bike4mind/commit/c26e2b412c2d4560dc65d77477a836cf768f3f05) Thanks [@maconard](https://github.com/maconard)! - list Desktop's model servers and keep their credentials for the CLI
+
+- [#6327](https://github.com/Bike4Mind/bike4mind/pull/6327) [`2083472`](https://github.com/Bike4Mind/bike4mind/commit/208347241525eb99b8dd670dcbb1c4d6685ad4e8) Thanks [@maconard](https://github.com/maconard)! - chat with models on saved model servers
+
+- [#6341](https://github.com/Bike4Mind/bike4mind/pull/6341) [`f44ea7a`](https://github.com/Bike4Mind/bike4mind/commit/f44ea7aef1753fcf57cc2ecf7be983fb7d515597) Thanks [@maconard](https://github.com/maconard)! - chat with model servers over SSH
+
+- [#6343](https://github.com/Bike4Mind/bike4mind/pull/6343) [`bf84a67`](https://github.com/Bike4Mind/bike4mind/commit/bf84a679d2745d44288cbe7948069bc0bc3369fb) Thanks [@maconard](https://github.com/maconard)! - show where a model pull lands and list it in Settings > Permissions
+
+- [#6344](https://github.com/Bike4Mind/bike4mind/pull/6344) [`3fca898`](https://github.com/Bike4Mind/bike4mind/commit/3fca898cbe9aca22a1fb0e8b9101151e66de72df) Thanks [@maconard](https://github.com/maconard)! - add Use in chat to installed models on the Models screen
+
+- [#6346](https://github.com/Bike4Mind/bike4mind/pull/6346) [`63277be`](https://github.com/Bike4Mind/bike4mind/commit/63277beff7ba20349e3408f90c20eab09c3cd958) Thanks [@maconard](https://github.com/maconard)! - publish the curated list JSON Schema
+
+- [#6347](https://github.com/Bike4Mind/bike4mind/pull/6347) [`ab11f32`](https://github.com/Bike4Mind/bike4mind/commit/ab11f3210fcb6096a3f91b8c8f7e5234102047ab) Thanks [@maconard](https://github.com/maconard)! - probe host facts and Ollama settings for a model host
+
+- [#6349](https://github.com/Bike4Mind/bike4mind/pull/6349) [`5b7fab4`](https://github.com/Bike4Mind/bike4mind/commit/5b7fab4434e43a61e96de478f15295d2fd29ccc8) Thanks [@maconard](https://github.com/maconard)! - verify and cache the signed curated list
+
+- [#6351](https://github.com/Bike4Mind/bike4mind/pull/6351) [`69d81a3`](https://github.com/Bike4Mind/bike4mind/commit/69d81a3573ed10c138eee720f04163a8454ac4d1) Thanks [@maconard](https://github.com/maconard)! - add b4m-host with host facts on a local socket
+
+- [#6352](https://github.com/Bike4Mind/bike4mind/pull/6352) [`5cb5ed3`](https://github.com/Bike4Mind/bike4mind/commit/5cb5ed37bcacd59e769cdbffeb0c199b26559973) Thanks [@allan-gar2x](https://github.com/allan-gar2x)! - ask for macOS Local Network access and hint when it is declined
+
+- [#6353](https://github.com/Bike4Mind/bike4mind/pull/6353) [`bfcc016`](https://github.com/Bike4Mind/bike4mind/commit/bfcc0163c707605ebdc4490369f592cfe3ec8e9c) Thanks [@maconard](https://github.com/maconard)! - serve the curated list from the app
+
+- [#6354](https://github.com/Bike4Mind/bike4mind/pull/6354) [`a958e9d`](https://github.com/Bike4Mind/bike4mind/commit/a958e9d340db6bb826ff09fdb10a8126e1d9aced) Thanks [@maconard](https://github.com/maconard)! - run model pulls as server jobs
+
+- [#6365](https://github.com/Bike4Mind/bike4mind/pull/6365) [`454bb2a`](https://github.com/Bike4Mind/bike4mind/commit/454bb2a037089bf47128eb11fb9a20a023d680e0) Thanks [@onoya](https://github.com/onoya)! - let curated entries declare a minimum CLI version
+
+- [#6550](https://github.com/Bike4Mind/bike4mind/pull/6550) [`6ec5a16`](https://github.com/Bike4Mind/bike4mind/commit/6ec5a165248f2e077bebe3083f9eb9943f2fece6) Thanks [@maconard](https://github.com/maconard)! - per-model context, draft tokens and keep-alive for local models
+
+- [#6574](https://github.com/Bike4Mind/bike4mind/pull/6574) [`4728a74`](https://github.com/Bike4Mind/bike4mind/commit/4728a747083d5b5365e2e5f8e7619bcb5e45a067) Thanks [@maconard](https://github.com/maconard)! - match curated builds by weights digest and GGUF file name
+
+- [#6581](https://github.com/Bike4Mind/bike4mind/pull/6581) [`cb5c965`](https://github.com/Bike4Mind/bike4mind/commit/cb5c96598ae730a3f20f153947cd363cdd5fdeb3) Thanks [@maconard](https://github.com/maconard)! - import split Hugging Face GGUF builds into Ollama from the model hub
+
+- [#6582](https://github.com/Bike4Mind/bike4mind/pull/6582) [`9fc9914`](https://github.com/Bike4Mind/bike4mind/commit/9fc9914b6b2f0fc65cafaa574bf612f161ef6e8f) Thanks [@maconard](https://github.com/maconard)! - start and stop the local Ollama or llama-server from Desktop
+
+- [#6628](https://github.com/Bike4Mind/bike4mind/pull/6628) [`ed15e54`](https://github.com/Bike4Mind/bike4mind/commit/ed15e5430671d170c35bb11c68bbe7d302b6a610) Thanks [@maconard](https://github.com/maconard)! - curated catalog v3 with modality, license labels and runtime profiles
+
+- [#6631](https://github.com/Bike4Mind/bike4mind/pull/6631) [`8bcf9a4`](https://github.com/Bike4Mind/bike4mind/commit/8bcf9a4f88ab7cc9a98bb503db31feae9c5f2824) Thanks [@maconard](https://github.com/maconard)! - use Desktop's per-model settings when chatting with a local Ollama model
+
+### Patch Changes
+
+- [#6151](https://github.com/Bike4Mind/bike4mind/pull/6151) [`b43218e`](https://github.com/Bike4Mind/bike4mind/commit/b43218e7637b5820bce4b5559321f4b04c9672e6) Thanks [@jebie](https://github.com/jebie)! - route Linux sandbox egress through the allowlisting proxy
+
+- [#6244](https://github.com/Bike4Mind/bike4mind/pull/6244) [`f131766`](https://github.com/Bike4Mind/bike4mind/commit/f131766e0742364e263664430ad8fb6f88271936) Thanks [@maconard](https://github.com/maconard)! - give CLI curated pulls Desktop's checks and redact credentials in pull streams
+
+- [#6264](https://github.com/Bike4Mind/bike4mind/pull/6264) [`cc86fba`](https://github.com/Bike4Mind/bike4mind/commit/cc86fba4df7e0a8b28349df75569deb953ef5850) Thanks [@onoya](https://github.com/onoya)! - map retired Anthropic Opus 4 ids and fail cleanly on unknown models
+
+- [#6275](https://github.com/Bike4Mind/bike4mind/pull/6275) [`70be4dc`](https://github.com/Bike4Mind/bike4mind/commit/70be4dce93edfdc12d9241678204b2ccc8ee103c) Thanks [@onoya](https://github.com/onoya)! - record cache tokens and session on completion usage rows
+
+- [#6305](https://github.com/Bike4Mind/bike4mind/pull/6305) [`6665433`](https://github.com/Bike4Mind/bike4mind/commit/666543307808ab0f5d23c76c8b433b90e6add94c) Thanks [@maconard](https://github.com/maconard)! - share model server transport, probing and tool hints
+
+- [#6330](https://github.com/Bike4Mind/bike4mind/pull/6330) [`641fc97`](https://github.com/Bike4Mind/bike4mind/commit/641fc97249f2ae850c18ec007a42f980b83d3bbf) Thanks [@maconard](https://github.com/maconard)! - say when b4m -p is waiting on stdin
+
+- [#6348](https://github.com/Bike4Mind/bike4mind/pull/6348) [`8b22f54`](https://github.com/Bike4Mind/bike4mind/commit/8b22f541f9dcc5dd139e800ecacf9aea7cddcfac) Thanks [@maconard](https://github.com/maconard)! - share the curated source and keyring between Desktop and the CLI
+
+- [#6350](https://github.com/Bike4Mind/bike4mind/pull/6350) [`2e13a67`](https://github.com/Bike4Mind/bike4mind/commit/2e13a67fed4d5a68a9454e581eb327c8676f5678) Thanks [@maconard](https://github.com/maconard)! - share pull approval checks between Desktop, the CLI and a model host
+
+- [#6357](https://github.com/Bike4Mind/bike4mind/pull/6357) [`603fb55`](https://github.com/Bike4Mind/bike4mind/commit/603fb5543902dd9532965900ec4160891e193671) Thanks [@maconard](https://github.com/maconard)! - match fit verdicts to what loads near the memory limit
+
+- [#6368](https://github.com/Bike4Mind/bike4mind/pull/6368) [`b3261fe`](https://github.com/Bike4Mind/bike4mind/commit/b3261fe2a8286e35783637b322d65274d9f82ad4) Thanks [@maconard](https://github.com/maconard)! - clear stale Use in chat errors and recognize a host by its own names
+
+- [#6405](https://github.com/Bike4Mind/bike4mind/pull/6405) [`0733c28`](https://github.com/Bike4Mind/bike4mind/commit/0733c28d72ca80595d1f2d23084d5712cc65110a) Thanks [@maconard](https://github.com/maconard)! - clearer local model messages for SSH, WSL and embeddings
+
+- [#6480](https://github.com/Bike4Mind/bike4mind/pull/6480) [`c959137`](https://github.com/Bike4Mind/bike4mind/commit/c95913786fbe3f42d5e2bfcd6c0185574309bb11) Thanks [@ktdejesus](https://github.com/ktdejesus)! - bill web search and web fetch per provider call
+
+- [#6569](https://github.com/Bike4Mind/bike4mind/pull/6569) [`eb8615b`](https://github.com/Bike4Mind/bike4mind/commit/eb8615b3ab4a8ec4b846f542724170daae402c1a) Thanks [@maconard](https://github.com/maconard)! - add non-thinking sampling for Qwen3.5 and Qwen3.8 to the curated list
+
+- [#6595](https://github.com/Bike4Mind/bike4mind/pull/6595) [`ad23e54`](https://github.com/Bike4Mind/bike4mind/commit/ad23e54e50f90338244b8edda20044f0611ea50a) Thanks [@maconard](https://github.com/maconard)! - attach a running local ollama when no host is configured
+
+- [#6596](https://github.com/Bike4Mind/bike4mind/pull/6596) [`244cce6`](https://github.com/Bike4Mind/bike4mind/commit/244cce65f63d5adc87fff1bded8b8503cfb0c125) Thanks [@maconard](https://github.com/maconard)! - skip the nvidia npu row in nvidia-smi output
+
+## 4.1.0
+
+### Minor Changes
+
+- [#5271](https://github.com/Bike4Mind/bike4mind/pull/5271) [`aa80549`](https://github.com/Bike4Mind/bike4mind/commit/aa8054946833fbe7b083f239c7d073d74d48d871) Thanks [@poysama](https://github.com/poysama)! - let the shared provider keys authenticate through workload identity federation on AWS
+
+- [#5856](https://github.com/Bike4Mind/bike4mind/pull/5856) [`8130f1b`](https://github.com/Bike4Mind/bike4mind/commit/8130f1b603aa55befc0dbffe59bfa809b660b531) Thanks [@maconard](https://github.com/maconard)! - add b4m models commands for local models
+
+- [#5857](https://github.com/Bike4Mind/bike4mind/pull/5857) [`5b64eb3`](https://github.com/Bike4Mind/bike4mind/commit/5b64eb3bdb8f166df837093b4f8bedcb3e8a3d23) Thanks [@maconard](https://github.com/maconard)! - add model tools to b4m mcp serve
+
+- [#5925](https://github.com/Bike4Mind/bike4mind/pull/5925) [`dcc1738`](https://github.com/Bike4Mind/bike4mind/commit/dcc1738d6bb757e0de97a87a4d4baf5af1a673f3) Thanks [@julsanchez](https://github.com/julsanchez)! - serve Skill Market authoring to API keys under /api/v1 with a skills:write scope
+
+### Patch Changes
+
+- [#5649](https://github.com/Bike4Mind/bike4mind/pull/5649) [`49c0fa5`](https://github.com/Bike4Mind/bike4mind/commit/49c0fa56e8d0f735adc540fe5d7f533b41e534de) Thanks [@julsanchez](https://github.com/julsanchez)! - Recover the tools of a streamable-HTTP MCP server after it expires an idle session: the CLI bundles @bike4mind/mcp, whose client now starts a new session on a 404 and retries the call once.
+
+- [#5421](https://github.com/Bike4Mind/bike4mind/pull/5421) [`3beb481`](https://github.com/Bike4Mind/bike4mind/commit/3beb4812789587be08ce490f4293b01ead4cfe5b) Thanks [@onoya](https://github.com/onoya)! - sanitize untrusted text through one terminal escaping layer
+
+- [#5559](https://github.com/Bike4Mind/bike4mind/pull/5559) [`c668716`](https://github.com/Bike4Mind/bike4mind/commit/c668716920ee4cd0147bf9711cb3235844cc13b7) Thanks [@choyno](https://github.com/choyno)! - tighten sandbox path defaults and host git invocation
+
+- [#5562](https://github.com/Bike4Mind/bike4mind/pull/5562) [`60bb993`](https://github.com/Bike4Mind/bike4mind/commit/60bb9933603f8f61a15a85425dbf386c486e5dc3) Thanks [@choyno](https://github.com/choyno)! - scope session approval for shell commands to the approved command
+
+- [#5566](https://github.com/Bike4Mind/bike4mind/pull/5566) [`aee3b68`](https://github.com/Bike4Mind/bike4mind/commit/aee3b683f830087b8ca9ef272a54cd8c432ce8e6) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - lower sound-effects prompt cap to 450 chars
+
+- [#5571](https://github.com/Bike4Mind/bike4mind/pull/5571) [`25c233f`](https://github.com/Bike4Mind/bike4mind/commit/25c233f13123129551704ef1906810bb9a3266a3) Thanks [@onoya](https://github.com/onoya)! - remove the unused Keep command handler
+
+- [#5616](https://github.com/Bike4Mind/bike4mind/pull/5616) [`56ad0d4`](https://github.com/Bike4Mind/bike4mind/commit/56ad0d415fb07e69fb65105284014169e5463a5c) Thanks [@choyno](https://github.com/choyno)! - enforce the sandbox network allowlist at the sandbox boundary
+
+- [#5641](https://github.com/Bike4Mind/bike4mind/pull/5641) [`bd09831`](https://github.com/Bike4Mind/bike4mind/commit/bd09831db3775906aee7aca9ba9fe421fd36f15e) Thanks [@julsanchez](https://github.com/julsanchez)! - match --allowedTools mcp__<server>__* against MCP tools
+
+- [#5642](https://github.com/Bike4Mind/bike4mind/pull/5642) [`534bb10`](https://github.com/Bike4Mind/bike4mind/commit/534bb10a49564c827a6d6150045636de7f6c15c9) Thanks [@julsanchez](https://github.com/julsanchez)! - skip the folder-trust prompt on a host launch with a queued prompt
+
+## 4.0.0
+
+### Major Changes
+
+- [#5483](https://github.com/Bike4Mind/bike4mind/pull/5483) [`bf81707`](https://github.com/Bike4Mind/bike4mind/commit/bf81707cf7211ad846748bc012454ec79e721504) Thanks [@choyno](https://github.com/choyno)! - require a bearer token for mcp serve --http
+
+### Minor Changes
+
+- [#5162](https://github.com/Bike4Mind/bike4mind/pull/5162) [`3d73686`](https://github.com/Bike4Mind/bike4mind/commit/3d7368634829f526d919c5b09bbb704d95c04348) Thanks [@julsanchez](https://github.com/julsanchez)! - upload local skills and publish them to the Skill Market
+
+- [#5168](https://github.com/Bike4Mind/bike4mind/pull/5168) [`cb1220f`](https://github.com/Bike4Mind/bike4mind/commit/cb1220fd8fb877a50bd8a5cefbb9124794d2a1c0) Thanks [@julsanchez](https://github.com/julsanchez)! - add b4m skills push to import a SKILL.md as a skill
+
+- [#5212](https://github.com/Bike4Mind/bike4mind/pull/5212) [`8541a8e`](https://github.com/Bike4Mind/bike4mind/commit/8541a8e776eacefc3f241e15060493355333cf92) Thanks [@jebie](https://github.com/jebie)! - load deferred tools via tool_reference on Anthropic models
+
+- [#5219](https://github.com/Bike4Mind/bike4mind/pull/5219) [`d8bd931`](https://github.com/Bike4Mind/bike4mind/commit/d8bd931acf4e64c953a632f500c87c8040743686) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - serve solver tools from the stdio MCP server
+
+- [#5315](https://github.com/Bike4Mind/bike4mind/pull/5315) [`758a71f`](https://github.com/Bike4Mind/bike4mind/commit/758a71f49506ea81f3e665f0e179e10b123d449c) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - add Bob site-read tools to the B4M MCP server
+
+- [#5428](https://github.com/Bike4Mind/bike4mind/pull/5428) [`d0f839c`](https://github.com/Bike4Mind/bike4mind/commit/d0f839cb64f6db020c5184c038dca4a971cfed47) Thanks [@jebie](https://github.com/jebie)! - native tool search on Bedrock
+
+- [#5430](https://github.com/Bike4Mind/bike4mind/pull/5430) [`ba24fb7`](https://github.com/Bike4Mind/bike4mind/commit/ba24fb71a1c8ef55208cd4799f380883d76329db) Thanks [@onoya](https://github.com/onoya)! - queue steering and follow-up messages with race-safe cancel
+
+- [#5452](https://github.com/Bike4Mind/bike4mind/pull/5452) [`753dde5`](https://github.com/Bike4Mind/bike4mind/commit/753dde5096907966ae493c52748f38522a774fb6) Thanks [@vinchi777](https://github.com/vinchi777)! - collapse skill groups and list only SKILL.md as a skill
+
+- [#5481](https://github.com/Bike4Mind/bike4mind/pull/5481) [`40fa1d2`](https://github.com/Bike4Mind/bike4mind/commit/40fa1d2890551fb9f2cf6933be3725652ee8e655) Thanks [@vinchi777](https://github.com/vinchi777)! - list every model-invocable skill in the agent prompt
+
+### Patch Changes
+
+- [#5240](https://github.com/Bike4Mind/bike4mind/pull/5240) [`06b1887`](https://github.com/Bike4Mind/bike4mind/commit/06b1887b08c3fc4544168b6421e5aacfd1509627) Thanks [@jarlacut](https://github.com/jarlacut)! - return retryable 503 when Ollama or local image listing fails
+
+- [#5300](https://github.com/Bike4Mind/bike4mind/pull/5300) [`40c9433`](https://github.com/Bike4Mind/bike4mind/commit/40c9433f8be4b9c7df8bd1ddffe9d0fe24cb062e) Thanks [@vinchi777](https://github.com/vinchi777)! - show a started session before its worktree is ready
+
+- [#5313](https://github.com/Bike4Mind/bike4mind/pull/5313) [`e9a2ece`](https://github.com/Bike4Mind/bike4mind/commit/e9a2ece4478baa42ad0a3e4d95752d8e79c7a9a5) Thanks [@onoya](https://github.com/onoya)! - run redaction, output cap and checkpoint in the tool gateway
+
+- [#5460](https://github.com/Bike4Mind/bike4mind/pull/5460) [`0741792`](https://github.com/Bike4Mind/bike4mind/commit/074179264f77d6c72938e1d9769c906727d1b801) Thanks [@vinchi777](https://github.com/vinchi777)! - classify upstream caller errors
+
+- [#5507](https://github.com/Bike4Mind/bike4mind/pull/5507) [`920dd45`](https://github.com/Bike4Mind/bike4mind/commit/920dd4527f5a7e68dab5043cf5ec6fef7f6eb9d4) Thanks [@jjmarfa](https://github.com/jjmarfa)! - report hearth hook stdin errors and failed POSTs
+
 ## 3.4.0
 
 ### Minor Changes

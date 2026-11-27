@@ -20,6 +20,18 @@ export function isRealtimeVoiceTier(tier: IModelPriceTier): boolean {
 }
 
 /**
+ * The tier voice settlement bills from a per-token row: its lowest threshold, when that tier carries the audio
+ * rates. Undefined means settlement skips the row for the REALTIME_VOICE_PRICING literal.
+ */
+export function billableRealtimeVoiceTier(pricing: Record<string, IModelPriceTier>): IModelPriceTier | undefined {
+  const thresholds = Object.keys(pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+  const tier = pricing[String(thresholds[0])];
+  return tier && isRealtimeVoiceTier(tier) ? tier : undefined;
+}
+
+/**
  * Total provider USD for one realtime voice session. Absent cached rates
  * charge at the full input rate: fail-safe toward overcharge-then-reprice,
  * never toward free. Callers convert to credits ONCE (settlement draws

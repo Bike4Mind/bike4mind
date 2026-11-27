@@ -1,7 +1,32 @@
-import { PassThrough } from 'node:stream';
-import type { AxiosInstance } from 'axios';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { PassThrough, Readable } from 'node:stream';
+import axios, {
+  AxiosError,
+  type AxiosAdapter,
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
+import {
+  AuthenticatedApiClient,
+  SessionRevokedError,
+  type AuthTokens,
+  type RefreshingOAuthClient,
+  type TokenStore,
+} from '@bike4mind/client-auth';
+import type { CompletionRunAttribution } from '@bike4mind/common';
 import { describe, expect, it, vi } from 'vitest';
-import { streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
+import {
+  COMPLETION_HEADER_TIMEOUT_MS,
+  RunNotFoundError,
+  streamCompletion,
+  supportsPromptCache,
+  withCacheBreakpoints,
+  withRunFallback,
+  RunBudgetExhaustedError,
+} from './completions';
+import { devLog } from '../devlog/DevLogSink';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -33,6 +58,30 @@ describe('streamCompletion reasoning effort', () => {
   it('leaves the field off the payload when none is set', async () => {
     expect(await sentOptions(REQUEST)).not.toHaveProperty('reasoningEffort');
   });
+
+  it('sends a prompt cache lifetime under options only when one is set', async () => {
+    expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
+    expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
+  });
+
+  it('sends a temperature override under options, and none without one', async () => {
+    expect(await sentOptions({ ...REQUEST, generation: { temperature: 0.3 } })).toMatchObject({ temperature: 0.3 });
+    expect(await sentOptions({ ...REQUEST, thinking: true })).not.toHaveProperty('temperature');
+  });
+
+  it('puts a thinking budget on the thinking request, and nothing when thinking is off', async () => {
+    const budget = { ...REQUEST, generation: { thinkingBudgetTokens: 8192 } };
+    expect((await sentOptions({ ...budget, thinking: true })).thinking).toEqual({ enabled: true, budget_tokens: 8192 });
+    expect(await sentOptions(budget)).not.toHaveProperty('thinking');
+  });
+
+  it('never sends sampling fields the hosted API does not take', async () => {
+    const options = await sentOptions({
+      ...REQUEST,
+      generation: { topP: 0.5, topK: 10, minP: 0.1, repeatPenalty: 1.2 },
+    });
+    expect(Object.keys(options).sort()).toEqual(['stream', 'tools']);
+  });
 });
 
 describe('streamCompletion', () => {
@@ -50,6 +99,30 @@ describe('streamCompletion', () => {
     await done;
 
     expect(events.map(event => ('text' in event ? event.text : event.type))).toEqual(['meta', 'Hel', 'lo']);
+  });
+
+  it('drops a generation rate from a hosted stream, keeping its usage and credits', async () => {
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const events: CompletionStreamEvent[] = [];
+
+    const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+
+    stream.write(
+      frame({
+        type: 'content',
+        stopReason: 'end_turn',
+        usage: { outputTokens: 12 },
+        credits: { used: 3 },
+        rate: { evalTokens: 12, evalMs: 500 },
+      })
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(events).toEqual([
+      { type: 'content', stopReason: 'end_turn', usage: { outputTokens: 12 }, credits: { used: 3 } },
+    ]);
   });
 
   it('reassembles a frame split across chunk boundaries', async () => {
@@ -168,6 +241,106 @@ describe('streamCompletion', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it("does not let the client's request timeout cut an open stream that goes quiet", async () => {
+    // A real socket through real axios: the defect lives in how follow-redirects applies the
+    // timeout, which a fake post cannot show. Quiet for 3x the timeout, then the answer.
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write(': ping\n\n');
+      setTimeout(() => response.end(frame({ type: 'content', text: 'late' }) + frame('[DONE]')), 225);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const events: CompletionStreamEvent[] = [];
+      await streamCompletion(axios.create({ timeout: 75 }), `http://127.0.0.1:${port}/`, REQUEST, event =>
+        events.push(event)
+      );
+      expect(events).toEqual([{ type: 'content', text: 'late' }]);
+    } finally {
+      server.close();
+    }
+  });
+
+  describe('a dropped connection', () => {
+    const dropped = () => Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
+
+    function sequentialAxios(streams: PassThrough[]) {
+      const post = vi.fn();
+      for (const stream of streams) post.mockResolvedValueOnce({ data: stream, status: 200 });
+      return { instance: { post } as unknown as AxiosInstance, post };
+    }
+
+    it('is not retried when it drops before the reply produced anything', async () => {
+      const first = new PassThrough();
+      const { instance, post } = sequentialAxios([first, new PassThrough()]);
+      const events: CompletionStreamEvent[] = [];
+
+      const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+      first.write(frame({ type: 'meta', requestId: 'r1' }));
+      await vi.waitUntil(() => events.length === 1, { timeout: 2000, interval: 5 });
+      first.destroy(dropped());
+
+      await expect(done).rejects.toThrow('The connection to the server dropped before the reply finished (aborted).');
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not retried once content arrived, and says what happened instead of a bare "aborted"', async () => {
+      devLog.clear();
+      const stream = new PassThrough();
+      const { instance, post } = sequentialAxios([stream]);
+      const events: CompletionStreamEvent[] = [];
+
+      const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+      stream.write(frame({ type: 'content', text: 'half' }));
+      await vi.waitUntil(() => events.length === 1, { timeout: 2000, interval: 5 });
+      stream.destroy(dropped());
+
+      await expect(done).rejects.toThrow('The connection to the server dropped before the reply finished (aborted).');
+      expect(post).toHaveBeenCalledTimes(1);
+      const logged = devLog.snapshot().records.filter(record => record.tags.includes('errors'));
+      expect(logged).toHaveLength(1);
+      expect(logged[0].tags).toEqual(['chat-stream', 'errors']);
+      expect(logged[0].fields?.source).toBe('transport');
+      expect(logged[0].message).toContain('aborted');
+      expect(logged[0].fields?.requestId).toBe(post.mock.calls[0][2].headers['X-Request-ID']);
+    });
+
+    it('is not retried after the caller aborted', async () => {
+      const stream = new PassThrough();
+      const { instance, post } = sequentialAxios([stream, new PassThrough()]);
+      const controller = new AbortController();
+
+      const done = streamCompletion(instance, '/c', REQUEST, () => {}, controller.signal);
+      await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 2000, interval: 5 });
+      controller.abort();
+      stream.destroy(dropped());
+
+      await expect(done).resolves.toBeUndefined();
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('counts a stream with no bytes for the idle timeout as dropped', async () => {
+      const { instance, post } = sequentialAxios([new PassThrough(), new PassThrough()]);
+
+      const done = streamCompletion(instance, '/c', REQUEST, () => {}, undefined, { idleTimeoutMs: 30 });
+
+      await expect(done).rejects.toThrow(/dropped before the reply finished \(no data for \d+s\)/);
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a server-reported error alone: it is not a drop', async () => {
+      const stream = new PassThrough();
+      const { instance, post } = sequentialAxios([stream, new PassThrough()]);
+
+      const done = streamCompletion(instance, '/c', REQUEST, () => {});
+      stream.write(frame({ type: 'error', message: 'insufficient credits' }));
+
+      await expect(done).rejects.toThrow('insufficient credits');
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('asks for a stream, declaring no tools when the caller passes none', async () => {
     const stream = new PassThrough();
     const { instance, post } = fakeAxios(stream);
@@ -182,6 +355,7 @@ describe('streamCompletion', () => {
     expect(body).not.toHaveProperty('max_tokens');
     expect(body.options).not.toHaveProperty('thinking');
     expect(config.responseType).toBe('stream');
+    expect(config.timeout).toBe(COMPLETION_HEADER_TIMEOUT_MS);
   });
 
   it('sends an output ceiling as the top-level max_tokens the endpoint normalizes', async () => {
@@ -193,6 +367,17 @@ describe('streamCompletion', () => {
     await done;
 
     expect(post.mock.calls[0][1]).toMatchObject({ max_tokens: 16_384 });
+  });
+
+  it('sends the session id so the server ledger can tie the spend to the conversation', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(instance, '/c', { ...REQUEST, sessionId: 'session-1' }, () => {});
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1]).toMatchObject({ sessionId: 'session-1' });
   });
 
   it('asks for readable reasoning only when told to', async () => {
@@ -230,16 +415,308 @@ describe('streamCompletion', () => {
     expect(post.mock.calls[0][1].messages[0].content).toEqual(content);
   });
 
-  it('names an expired session on a 401 instead of leaking a bare status', async () => {
+  it('keeps the local-only turn marker off the wire', async () => {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+
+    const done = streamCompletion(
+      instance,
+      '/c',
+      {
+        model: 'm',
+        messages: [
+          { role: 'system', content: 'sys', cacheSplitAt: 1 },
+          { role: 'user', content: 'Image from the call above.', continuesTurn: true },
+        ],
+      },
+      () => {}
+    );
+    stream.write(frame('[DONE]'));
+    await done;
+
+    expect(post.mock.calls[0][1].messages).toEqual([
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'Image from the call above.' },
+    ]);
+  });
+
+  it("describes a 403 as not allowed, with the server's words, rather than as an expired session", async () => {
     const post = vi.fn().mockRejectedValue(
       Object.assign(new Error('Request failed'), {
         isAxiosError: true,
-        response: { status: 401 },
+        response: { status: 403, data: JSON.stringify({ message: 'Model not enabled for this organization' }) },
       })
     );
     const instance = { post } as unknown as AxiosInstance;
 
-    await expect(streamCompletion(instance, '/c', REQUEST, () => {})).rejects.toThrow(/session may have expired/);
+    const err = await streamCompletion(instance, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe('Model not enabled for this organization (status 403)');
+  });
+
+  it.each(['ECONNABORTED', 'ETIMEDOUT'])(
+    'describes a %s header timeout as a slow server and a stopped turn, not the raw axios text',
+    async code => {
+      const post = vi.fn().mockRejectedValue(new AxiosError('timeout of 120000ms exceeded', code));
+      const instance = { post } as unknown as AxiosInstance;
+
+      const err = await streamCompletion(instance, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+      expect((err as Error).message).toBe(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
+    }
+  );
+});
+
+describe('run attribution and request ids', () => {
+  const RUN: CompletionRunAttribution = {
+    runId: '7d0c8f3e-2b1a-4c5d-9e8f-0a1b2c3d4e5f',
+    role: 'root',
+    purpose: 'turn',
+  };
+
+  async function send(request: Parameters<typeof streamCompletion>[2]) {
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', request, () => undefined);
+    stream.end();
+    await done;
+    return post.mock.calls[0] as [string, Record<string, unknown>, { headers?: Record<string, string> }];
+  }
+
+  it('sends a fresh X-Request-ID on every request', async () => {
+    const [, , first] = await send(REQUEST);
+    const [, , second] = await send(REQUEST);
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    expect(first.headers?.['X-Request-ID']).toMatch(uuid);
+    expect(second.headers?.['X-Request-ID']).toMatch(uuid);
+    expect(first.headers?.['X-Request-ID']).not.toBe(second.headers?.['X-Request-ID']);
+  });
+
+  it('sends run only when one is given', async () => {
+    expect((await send({ ...REQUEST, run: RUN }))[1].run).toEqual(RUN);
+    expect((await send(REQUEST))[1]).not.toHaveProperty('run');
+  });
+
+  function refused(status: number, body: unknown) {
+    return vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status, data: JSON.stringify(body) },
+      })
+    );
+  }
+
+  it('raises RunNotFoundError for a 404 that names run_not_found', async () => {
+    const post = refused(404, { error: 'Run not found', errorCode: 'run_not_found' });
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('raises RunNotFoundError when the 404 envelope arrives as a stream, as it does for a streamed request', async () => {
+    const body = JSON.stringify({ error: 'Run not found', errorCode: 'run_not_found' });
+    const post = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status: 404, data: Readable.from([Buffer.from(body.slice(0, 10)), Buffer.from(body.slice(10))]) },
+      })
+    );
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('keeps any other 404 an ordinary request error', async () => {
+    const post = refused(404, { error: 'Not found' });
+    const err = await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQUEST, () => {})
+      .then(() => null)
+      .catch((caught: unknown) => caught);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(RunNotFoundError);
+  });
+
+  it('resends without the run once the server refuses it', async () => {
+    const send = vi
+      .fn<(run: CompletionRunAttribution | undefined) => Promise<string>>()
+      .mockRejectedValueOnce(new RunNotFoundError())
+      .mockResolvedValueOnce('ok');
+    const onRejected = vi.fn();
+    await expect(withRunFallback(RUN, send, onRejected)).resolves.toBe('ok');
+    expect(send.mock.calls).toEqual([[RUN], [undefined]]);
+    expect(onRejected).toHaveBeenCalledOnce();
+  });
+
+  it('passes any other failure through without resending', async () => {
+    const send = vi.fn().mockRejectedValue(new Error('boom'));
+    await expect(withRunFallback(RUN, send, vi.fn())).rejects.toThrow('boom');
+    expect(send).toHaveBeenCalledOnce();
+  });
+});
+
+describe('run budget refusals', () => {
+  const RUN: CompletionRunAttribution = {
+    runId: '7d0c8f3e-2b1a-4c5d-9e8f-0a1b2c3d4e5f',
+    role: 'root',
+    purpose: 'turn',
+  };
+  const REQUEST = { model: 'm', messages: [{ role: 'user' as const, content: 'hi' }] };
+  const refusal = (status: number, body: unknown) =>
+    vi.fn().mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        isAxiosError: true,
+        response: { status, data: Readable.from([Buffer.from(JSON.stringify(body))]) },
+      })
+    );
+  const caught = (post: ReturnType<typeof vi.fn>) =>
+    streamCompletion({ post } as unknown as AxiosInstance, '/c', { ...REQUEST, run: RUN }, () => {})
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+  it('raises RunBudgetExhaustedError for a 422 that names run_budget_exhausted', async () => {
+    const err = await caught(refusal(422, { error: 'Run budget used', errorCode: 'run_budget_exhausted' }));
+    expect(err).toBeInstanceOf(RunBudgetExhaustedError);
+  });
+
+  it('keeps a 422 for the account balance an ordinary request error', async () => {
+    const err = await caught(refusal(422, { error: 'Not enough credits', errorCode: 'insufficient_credits' }));
+    expect(err).not.toBeInstanceOf(RunBudgetExhaustedError);
+  });
+
+  it('never resends a budgeted run without it', async () => {
+    const send = vi
+      .fn<(run: CompletionRunAttribution | undefined) => Promise<string>>()
+      .mockRejectedValue(new RunNotFoundError());
+    const onRejected = vi.fn();
+    await expect(withRunFallback(RUN, send, onRejected, { budgeted: true })).rejects.toBeInstanceOf(RunNotFoundError);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes a budget refusal straight through, with no resend', async () => {
+    const send = vi
+      .fn<(run: CompletionRunAttribution | undefined) => Promise<string>>()
+      .mockRejectedValue(new RunBudgetExhaustedError());
+    await expect(withRunFallback(RUN, send, vi.fn())).rejects.toBeInstanceOf(RunBudgetExhaustedError);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('streamCompletion through the shared authenticated client', () => {
+  function unexpired(accessToken: string): AuthTokens {
+    return {
+      accessToken,
+      refreshToken: `refresh-${accessToken}`,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+      userId: 'user-1',
+    };
+  }
+
+  /** The desktop's client settings over an in-memory store; `respond` plays the server. */
+  function client(respond: (config: InternalAxiosRequestConfig) => Promise<AxiosResponse>) {
+    let stored: AuthTokens | null = unexpired('access-0');
+    const tokenStore: TokenStore = {
+      getAuthTokens: async () => stored,
+      setAuthTokens: async next => {
+        stored = next;
+      },
+      clearAuthTokens: async () => {
+        stored = null;
+      },
+      isAuthenticated: async () => stored !== null,
+    };
+    const refreshToken = vi.fn(async () => ({
+      access_token: 'access-1',
+      refresh_token: 'refresh-1',
+      token_type: 'Bearer',
+      expires_in: 1800,
+    }));
+    const api = new AuthenticatedApiClient({
+      baseUrl: 'https://b4m.example.com',
+      tokenStore,
+      oauthClient: { refreshToken } as unknown as RefreshingOAuthClient,
+      logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      reauthMessages: { refreshFailed: 'refresh failed', stillUnauthorized: 'still unauthorized' },
+      refreshUnexpiredOn401: true,
+    });
+    const adapter = vi.fn(respond);
+    api.getAxiosInstance().defaults.adapter = adapter as unknown as AxiosAdapter;
+    return { axios: api.getAxiosInstance(), adapter, refreshToken };
+  }
+
+  function sseResponse(config: InternalAxiosRequestConfig, body: string): AxiosResponse {
+    const stream = new PassThrough();
+    stream.end(body);
+    return { data: stream, status: 200, statusText: 'OK', headers: {}, config } as AxiosResponse;
+  }
+
+  function unauthorized(config: InternalAxiosRequestConfig): AxiosError {
+    const body = new PassThrough();
+    body.end('{"error":"Unauthorized"}');
+    return new AxiosError('Request failed with status code 401', 'ERR_BAD_REQUEST', config, {}, {
+      data: body,
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: {},
+      config,
+    } as AxiosResponse);
+  }
+
+  it('refreshes and retries a 401 that arrives before anything streamed', async () => {
+    const { axios, adapter, refreshToken } = client(async config => {
+      if (config.headers.Authorization !== 'Bearer access-1') throw unauthorized(config);
+      return sseResponse(config, frame({ type: 'content', text: 'hello' }) + frame('[DONE]'));
+    });
+    const events: CompletionStreamEvent[] = [];
+
+    await streamCompletion(axios, '/c', REQUEST, event => events.push(event));
+
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(adapter).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([{ type: 'content', text: 'hello' }]);
+  });
+
+  it('does not retry once the reply has started streaming', async () => {
+    const { axios, adapter, refreshToken } = client(async config =>
+      sseResponse(
+        config,
+        frame({ type: 'content', text: 'partial' }) + frame({ type: 'error', message: 'Unauthorized' })
+      )
+    );
+    const events: CompletionStreamEvent[] = [];
+
+    await expect(streamCompletion(axios, '/c', REQUEST, event => events.push(event))).rejects.toThrow('Unauthorized');
+
+    expect(events).toEqual([{ type: 'content', text: 'partial' }]);
+    expect(adapter).toHaveBeenCalledTimes(1);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it("passes an unrecoverable session through as the client's own error, not a status line", async () => {
+    const { axios, adapter } = client(async config => {
+      throw unauthorized(config);
+    });
+
+    const err = await streamCompletion(axios, '/c', REQUEST, () => {}).catch((caught: unknown) => caught);
+
+    expect(err).toBeInstanceOf(SessionRevokedError);
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits longer than the shared client's timeout for headers, and sends a timed-out request only once", async () => {
+    const { axios, adapter } = client(async config => {
+      throw new AxiosError(`timeout of ${config.timeout}ms exceeded`, 'ECONNABORTED', config);
+    });
+    axios.defaults.timeout = 30_000;
+
+    const err = await streamCompletion(axios, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+    expect(adapter).toHaveBeenCalledTimes(1);
+    expect(adapter.mock.calls[0][0].timeout).toBe(COMPLETION_HEADER_TIMEOUT_MS);
+    expect((err as Error).message).toMatch(/took too long to start replying/);
   });
 });
 
@@ -255,6 +732,20 @@ describe('withCacheBreakpoints', () => {
     expect(withCacheBreakpoints(history).map(message => message.cache)).toEqual([true, undefined, undefined, true]);
   });
 
+  it('sends a system prompt with a per-session tail as a cached shared block and the tail after it', () => {
+    const split = [{ role: 'system' as const, content: 'shared\ntail', cacheSplitAt: 7 }, ...history.slice(1)];
+    expect(withCacheBreakpoints(split).slice(0, 3)).toEqual([
+      { role: 'system', content: 'shared\n', cache: true },
+      { role: 'system', content: 'tail' },
+      { role: 'user', content: 'one' },
+    ]);
+  });
+
+  it('keeps one block when the split leaves nothing after it', () => {
+    const whole = [{ role: 'system' as const, content: 'sys', cacheSplitAt: 3 }, ...history.slice(1)];
+    expect(withCacheBreakpoints(whole)[0]).toEqual({ role: 'system', content: 'sys', cache: true });
+  });
+
   it('never touches the messages it was given', () => {
     const stamped = withCacheBreakpoints(history);
     expect(history.some(message => 'cache' in message)).toBe(false);
@@ -266,6 +757,19 @@ describe('withCacheBreakpoints', () => {
     const grown = [...history, { role: 'assistant' as const, content: 'two' }, { role: 'user' as const, content: 'x' }];
     const marked = withCacheBreakpoints(grown).flatMap((message, index) => (message.cache ? [index] : []));
     expect(marked).toEqual([0, 5]);
+  });
+
+  it('re-marks the previous rolling breakpoint only on the request right after a tool change', () => {
+    const change = {
+      role: 'system' as const,
+      content: [{ type: 'tool_addition', tool: { type: 'tool_reference', name: 'file_read' } }],
+    };
+    const ended = [history[0], history[1], change];
+    expect(withCacheBreakpoints(ended).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 1]);
+    const next = [...ended, { role: 'assistant' as const, content: 'a' }, { role: 'user' as const, content: 'b' }];
+    expect(withCacheBreakpoints(next).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 1, 4]);
+    const later = [...next, { role: 'assistant' as const, content: 'c' }, { role: 'user' as const, content: 'd' }];
+    expect(withCacheBreakpoints(later).flatMap((message, index) => (message.cache ? [index] : []))).toEqual([0, 6]);
   });
 
   it('never marks a message that ends on a reasoning block, and moves back to one that can carry it', () => {
@@ -328,5 +832,111 @@ describe('supportsPromptCache', () => {
     expect(supportsPromptCache(models, 'c')).toBe(false);
     expect(supportsPromptCache(models, 'missing')).toBe(false);
     expect(supportsPromptCache([], 'a')).toBe(false);
+  });
+});
+
+describe('streamCompletion error records', () => {
+  const REQ = { ...REQUEST, sessionId: 'sess-1' };
+  const errors = () => devLog.snapshot().records.filter(record => record.tags.includes('errors'));
+
+  function rejects(status: number, data: string) {
+    return vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('Request failed'), { isAxiosError: true, response: { status, data } })
+      );
+  }
+
+  it('logs a failed response with status, error code and the sent request id, with no window open', async () => {
+    devLog.clear();
+    const post = rejects(400, JSON.stringify({ message: 'Too long', errorCode: 'context_length_exceeded' }));
+    const err = (await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}).catch(
+      (caught: Error) => caught
+    )) as Error;
+
+    const [record, ...rest] = errors();
+    expect(rest).toHaveLength(0);
+    expect(record.tags).toEqual(['chat-stream', 'errors']);
+    expect(record.message).toBe(err.message);
+    expect(record.fields).toMatchObject({
+      source: 'request',
+      operation: 'completion',
+      status: 400,
+      errorCode: 'context_length_exceeded',
+      requestId: post.mock.calls[0][2].headers['X-Request-ID'],
+      model: 'm',
+      session: 'sess-1',
+    });
+  });
+
+  it('bounds and redacts a non-JSON error body instead of storing it whole', async () => {
+    devLog.clear();
+    const page = `<html>Bearer abcdefghijklmnop1234567890 ${'x'.repeat(5000)}</html>`;
+    const post = rejects(502, page);
+    const err = (await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}).catch(
+      (caught: Error) => caught
+    )) as Error;
+    const [record] = errors();
+    expect(record.fields?.status).toBe(502);
+    expect(err.message).toContain('abcdefghijklmnop');
+    expect(record.message.startsWith('<html>Bearer [redacted]')).toBe(true);
+    expect(record.message).not.toContain('abcdefghijklmnop');
+  });
+
+  it('logs a provider error delivered inside a 200 stream', async () => {
+    devLog.clear();
+    const stream = new PassThrough();
+    const { instance, post } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQ, () => {}).catch(() => undefined);
+    stream.write(frame({ type: 'error', message: 'Model provider returned an error (upstream 502)' }));
+    await done;
+
+    expect(errors()).toHaveLength(1);
+    const [record] = errors();
+    expect(record.tags).toEqual(['chat-stream', 'errors']);
+    expect(record.message).toContain('Model provider returned an error (upstream 502)');
+    expect(record.fields).toMatchObject({ source: 'stream', session: 'sess-1' });
+    expect(record.fields?.requestId).toBe(post.mock.calls[0][2].headers['X-Request-ID']);
+  });
+
+  it('logs an idle timeout as a transport error', async () => {
+    devLog.clear();
+    const { instance, post } = fakeAxios(new PassThrough());
+    const err = (await streamCompletion(instance, '/c', REQ, () => {}, undefined, { idleTimeoutMs: 30 }).catch(
+      (caught: Error) => caught
+    )) as Error;
+    const [record, ...rest] = errors();
+    expect(rest).toHaveLength(0);
+    expect(record.tags).toEqual(['chat-stream', 'errors']);
+    expect(record.fields?.source).toBe('transport');
+    expect(record.message).toBe('no data for 0s');
+    expect(err.message).toContain('no data for 0s');
+    expect(record.fields?.requestId).toBe(post.mock.calls[0][2].headers['X-Request-ID']);
+  });
+
+  it('does not log a user abort mid-stream', async () => {
+    devLog.clear();
+    const controller = new AbortController();
+    const stream = new PassThrough();
+    const { instance } = fakeAxios(stream);
+    const done = streamCompletion(instance, '/c', REQ, () => {}, controller.signal).catch(() => undefined);
+    stream.write(frame({ type: 'content', text: 'hi' }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    controller.abort();
+    await done;
+    expect(errors()).toHaveLength(0);
+  });
+
+  it('does not log a request cancelled in flight', async () => {
+    devLog.clear();
+    const controller = new AbortController();
+    const post = vi.fn().mockImplementation(async () => {
+      controller.abort();
+      throw Object.assign(new Error('canceled'), { isAxiosError: true, code: 'ERR_CANCELED' });
+    });
+    await streamCompletion({ post } as unknown as AxiosInstance, '/c', REQ, () => {}, controller.signal).catch(
+      () => undefined
+    );
+    expect(errors()).toHaveLength(0);
   });
 });

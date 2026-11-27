@@ -13,3 +13,6 @@ config:
 # agentExecutor:
 #   enabled: true
 #   image: registry.example.com/bike4mind/agentexecutor:tested-revision
+# renderWorker:
+#   enabled: true
+#   image: registry.example.com/bike4mind/render-worker:tested-revision

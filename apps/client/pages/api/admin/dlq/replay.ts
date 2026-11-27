@@ -1,32 +1,46 @@
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import {
+  ApiKeyScope,
+  AdminActionReasonSchema,
+  DLQ_MAX_REPLAY_ATTEMPTS,
+  requiresDlqReplayReason,
+} from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { receiveFromQueue, sendToQueue, deleteFromQueue } from '@bike4mind/server-utils/utils/sqs';
+import {
+  receiveFromQueue,
+  sendToQueue,
+  deleteFromQueue,
+  changeMessageVisibility,
+} from '@bike4mind/server-utils/utils/sqs';
 import type { Message } from '@aws-sdk/client-sqs';
-import { dlqReplayLogRepository } from '@bike4mind/database';
+import { dlqReplayLogRepository, adminAiSuggestionRepository, withTransaction } from '@bike4mind/database';
+import { visibleDlqSuggestion } from '@bike4mind/server-utils/admin/dlq/triage';
+import { triageActionSchema } from '@bike4mind/server-utils/admin/dlq/triagePolicy';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
-const MAX_REPLAY_ATTEMPTS = 3;
+const MAX_REPLAY_ATTEMPTS = DLQ_MAX_REPLAY_ATTEMPTS;
 const MAX_BATCH_SIZE = 100;
-
-const DirectMessageSchema = z.object({
-  messageId: z.string().min(1),
-  receiptHandle: z.string().min(1),
-  body: z.string().min(1),
-});
+// Short polling samples a subset of SQS servers, so a receive can miss messages the queue holds.
+const RECEIVE_WAIT_SECONDS = 2;
+// Upper bound on receives while searching the DLQ for specific message IDs.
+const TARGETED_MAX_RECEIVES = 20;
 
 const BodySchema = z
   .object({
     queueLabel: z.string().min(1, 'queueLabel is required'),
+    aiSuggestionId: z
+      .string()
+      .regex(/^[0-9a-f]{24}$/)
+      .optional(),
     batchSize: z.number().int().min(1).max(MAX_BATCH_SIZE).optional().default(10),
     messageIds: z.array(z.string().min(1)).min(1).max(MAX_BATCH_SIZE).optional(),
-    messages: z.array(DirectMessageSchema).min(1).max(MAX_BATCH_SIZE).optional(),
+    reason: AdminActionReasonSchema.optional(),
   })
-  .refine(data => !(data.messageIds && data.messages), {
-    message: 'Cannot specify both messageIds and messages',
-  });
+  // Rejects a client-supplied `messages` payload: only bodies received from the DLQ itself are replayed.
+  .strict();
 
 // API uses 'replayed' for user-facing clarity; maps to 'success' in DlqReplayLog DB model
 interface ReplayResult {
@@ -35,26 +49,49 @@ interface ReplayResult {
   reason?: string;
 }
 
+async function releaseReceivedMessages(
+  dlqUrl: string,
+  queueLabel: string,
+  messages: readonly Message[],
+  kind: 'untargeted' | 'acquired'
+): Promise<void> {
+  const released = await Promise.allSettled(
+    messages.filter(m => m.ReceiptHandle).map(m => changeMessageVisibility(dlqUrl, m.ReceiptHandle!, 0))
+  );
+  const releaseErrors = released.flatMap(r =>
+    r.status === 'rejected' ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []
+  );
+  if (releaseErrors.length > 0) {
+    Logger.warn(`[DLQ Replay] Could not release ${releaseErrors.length} ${kind} messages early`, {
+      queueLabel,
+      // Distinct messages only: a missing permission fails every release the same way.
+      errors: [...new Set(releaseErrors)],
+    });
+  }
+}
+
 /**
  * POST /api/admin/dlq/replay
  *
- * Replays messages from a DLQ back to its source queue.
- *
- * Two modes:
- * - Direct: Client passes `messages` with receipt handles from a prior peek.
- *   Sends to source queue and deletes using the provided handles.
- * - Batch: Receives messages from the DLQ (optionally filtered by `messageIds`),
- *   sends to source queue, then deletes from DLQ on success.
+ * Receives messages from a DLQ (optionally filtered by `messageIds`), sends each stored body
+ * back to its source queue, then deletes it from the DLQ on success.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = BodySchema.safeParse(req.body);
   if (!result.success) {
-    throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
+    const issue = result.error.issues[0];
+    if (issue?.code === 'unrecognized_keys') {
+      throw new BadRequestError(
+        `Unsupported field(s): ${issue.keys.join(', ')}. Accepted fields: ${Object.keys(BodySchema.shape).join(', ')}`
+      );
+    }
+    throw new BadRequestError(issue?.message || 'Invalid request body');
   }
 
-  const { queueLabel, batchSize, messageIds, messages: directMessages } = result.data;
+  const { queueLabel, batchSize, messageIds, reason } = result.data;
   const adminUserId = req.user?.id;
   if (!adminUserId) throw new BadRequestError('Admin user ID is required');
 
@@ -63,13 +100,77 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     throw new BadRequestError(`Unknown DLQ: ${queueLabel}`);
   }
 
+  if (!dlqEntry.sourceQueue) {
+    throw new BadRequestError(`Replay is not available for DLQ: ${queueLabel}`);
+  }
+
+  if ((requiresDlqReplayReason(dlqEntry.replay) || result.data.aiSuggestionId) && !reason) {
+    throw new BadRequestError('A reason of at least 5 characters is required for this replay');
+  }
+
+  const aiSuggestionId = result.data.aiSuggestionId;
+  if (aiSuggestionId) {
+    if (messageIds?.length !== 1) throw new BadRequestError('Suggestion approval requires one message ID');
+    const suggestion = await visibleDlqSuggestion(queueLabel, messageIds[0]);
+    const action = triageActionSchema.safeParse(suggestion?.proposedAction);
+    if (
+      !suggestion ||
+      suggestion.id !== aiSuggestionId ||
+      !action.success ||
+      action.data.action !== 'replay' ||
+      action.data.queueLabel !== queueLabel ||
+      action.data.messageId !== messageIds[0]
+    )
+      throw new BadRequestError('Suggestion does not match this replay');
+    await withTransaction(async () => {
+      const decided = await adminAiSuggestionRepository.transition(aiSuggestionId, ['pending'], 'accepted', {
+        decidedBy: { userId: adminUserId, name: req.user!.name || req.user!.username },
+      });
+      if (!decided) throw new BadRequestError('Suggestion has already been decided');
+      await recordAdminActionFromRequest(req, {
+        action: 'ops.dlq.triage.accepted',
+        target: { kind: 'system', id: queueLabel, displayName: 'DLQ triage' },
+        summary: 'approved a dead-letter replay recommendation',
+        reason,
+        details: { aiSuggestionId, queueLabel, messageId: messageIds[0] },
+      });
+    });
+  }
+
   const dlqUrl = getDlqUrl(dlqEntry.label);
-  const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
+  const sourceQueueUrl = getSourceQueueUrl(dlqEntry.sourceQueue);
   const results: ReplayResult[] = [];
+
+  const recordReplayAudit = (summary: {
+    replayed: number;
+    failed: number;
+    skipped: number;
+    total: number;
+    results: ReplayResult[];
+  }) =>
+    recordAdminActionFromRequest(req, {
+      action: 'ops.dlq.replayed',
+      target: { kind: 'system', id: 'dlq-replay', displayName: 'DLQ replay' },
+      summary: `replayed ${summary.replayed} messages from ${queueLabel}`,
+      reason,
+      details: {
+        queueLabel,
+        ...(aiSuggestionId ? { aiSuggestionId } : {}),
+        messageCount: summary.replayed,
+        failed: summary.failed,
+        skipped: summary.skipped,
+        total: summary.total,
+        // IDs only, never bodies; bounded by MAX_BATCH_SIZE via the request schema.
+        replayedMessageIds: summary.results.filter(r => r.status === 'replayed').map(r => r.messageId),
+      },
+    });
 
   const safeLogReplay = async (data: Omit<Parameters<typeof dlqReplayLogRepository.logReplay>[0], never>) => {
     try {
-      await dlqReplayLogRepository.logReplay(data);
+      await dlqReplayLogRepository.logReplay({
+        ...data,
+        ...(aiSuggestionId ? { aiSuggestionId, operation: 'replay' as const } : {}),
+      });
     } catch (logError) {
       Logger.error(`[DLQ Replay] Failed to write audit log for message ${data.messageId}`, {
         error: logError instanceof Error ? logError.message : String(logError),
@@ -78,157 +179,50 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     }
   };
 
-  // --- Direct replay path: uses receipt handles from peek to avoid re-receive ---
-  if (directMessages && directMessages.length > 0) {
-    Logger.info(`[DLQ Replay] Direct replay of ${directMessages.length} messages from ${queueLabel}`, {
-      adminUserId,
-      messageIds: directMessages.map(m => m.messageId),
-    });
-
-    for (const dm of directMessages) {
-      try {
-        const attemptCount = await dlqReplayLogRepository.countAttempts(dm.messageId);
-        if (attemptCount >= MAX_REPLAY_ATTEMPTS) {
-          results.push({
-            messageId: dm.messageId,
-            status: 'skipped',
-            reason: `Max replay attempts (${MAX_REPLAY_ATTEMPTS}) exceeded`,
-          });
-          await safeLogReplay({
-            queueLabel,
-            messageId: dm.messageId,
-            messageBody: dm.body,
-            sourceQueue: dlqEntry.displayName,
-            status: 'skipped',
-            errorMessage: `Max replay attempts (${MAX_REPLAY_ATTEMPTS}) exceeded`,
-            replayedBy: adminUserId,
-          });
-          continue;
-        }
-
-        let parsedBody: Record<string, unknown>;
-        try {
-          parsedBody = JSON.parse(dm.body);
-        } catch (parseErr) {
-          throw new Error(
-            `Message body is not valid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`
-          );
-        }
-        await sendToQueue(sourceQueueUrl, parsedBody);
-
-        // Delete from DLQ using the receipt handle from peek
-        try {
-          await deleteFromQueue(dlqUrl, dm.receiptHandle);
-        } catch (deleteError) {
-          // Receipt handle may have expired - fallback: re-receive and find by messageId
-          Logger.warn(`[DLQ Replay] Receipt handle expired for ${dm.messageId}, attempting fallback receive`, {
-            error: deleteError instanceof Error ? deleteError.message : String(deleteError),
-            queueLabel,
-          });
-
-          let fallbackDeleted = false;
-          const fallbackMessages = await receiveFromQueue(dlqUrl, 10, 60);
-          const match = fallbackMessages.find(m => m.MessageId === dm.messageId);
-          if (match?.ReceiptHandle) {
-            try {
-              await deleteFromQueue(dlqUrl, match.ReceiptHandle);
-              fallbackDeleted = true;
-            } catch (fallbackDeleteError) {
-              Logger.error(`[DLQ Replay] Fallback delete also failed for ${dm.messageId}`, {
-                error: fallbackDeleteError instanceof Error ? fallbackDeleteError.message : String(fallbackDeleteError),
-              });
-            }
-          }
-
-          if (!fallbackDeleted) {
-            Logger.error(
-              `[DLQ Replay] Message ${dm.messageId} sent to source but delete from DLQ failed — DUPLICATE RISK`,
-              { queueLabel }
-            );
-            results.push({
-              messageId: dm.messageId,
-              status: 'replayed',
-              reason: 'Warning: delete from DLQ failed — message may be duplicated',
-            });
-            await safeLogReplay({
-              queueLabel,
-              messageId: dm.messageId,
-              messageBody: dm.body,
-              sourceQueue: dlqEntry.displayName,
-              status: 'success',
-              errorMessage: 'Delete from DLQ failed after fallback',
-              replayedBy: adminUserId,
-            });
-            continue;
-          }
-        }
-
-        results.push({ messageId: dm.messageId, status: 'replayed' });
-        await safeLogReplay({
-          queueLabel,
-          messageId: dm.messageId,
-          messageBody: dm.body,
-          sourceQueue: dlqEntry.displayName,
-          status: 'success',
-          replayedBy: adminUserId,
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        results.push({ messageId: dm.messageId, status: 'failed', reason: errorMessage });
-        Logger.error(`[DLQ Replay] Failed to replay message ${dm.messageId}`, { error: errorMessage, queueLabel });
-        await safeLogReplay({
-          queueLabel,
-          messageId: dm.messageId,
-          messageBody: dm.body,
-          sourceQueue: dlqEntry.displayName,
-          status: 'failed',
-          errorMessage,
-          replayedBy: adminUserId,
-        });
-      }
-    }
-
-    const summary = {
-      replayed: results.filter(r => r.status === 'replayed').length,
-      failed: results.filter(r => r.status === 'failed').length,
-      skipped: results.filter(r => r.status === 'skipped').length,
-      notFound: 0,
-      total: results.length,
-      results,
-    };
-
-    Logger.info(`[DLQ Replay] Completed direct replay for ${queueLabel}`, { adminUserId, ...summary });
-    return res.json(summary);
-  }
-
-  // --- Batch replay path: receive from SQS and replay ---
-
-  // SQS ReceiveMessage returns a random subset (max 10 per call), with no way
-  // to request specific messages. When targeting specific messageIds, we over-fetch
-  // by 2x to increase the probability of receiving them.
-  const receiveCount = messageIds ? Math.max(messageIds.length * 2, 10) : batchSize;
-  const iterations = Math.ceil(receiveCount / 10);
   const allMessages: Message[] = [];
   const messageIdSet = messageIds ? new Set(messageIds) : null;
+  let messagesToReplay: Message[];
 
-  for (let i = 0; i < iterations; i++) {
-    const remaining = receiveCount - allMessages.length;
-    const toReceive = Math.min(remaining, 10);
-    const messages = await receiveFromQueue(dlqUrl, toReceive, 60);
-    allMessages.push(...messages);
-
-    // When targeting specific messages, stop early if we found them all
-    if (messageIdSet) {
-      const foundAll = messageIds!.every(id => allMessages.some(m => m.MessageId === id));
-      if (foundAll) break;
+  if (messageIdSet) {
+    // SQS cannot fetch a message by ID and a receive returns an arbitrary subset, often a
+    // single message on a small queue. Each receive hides what it returned, so the next one
+    // surfaces different messages; keep going until every target is found. Long polling reduces
+    // empty responses caused by short-poll sampling.
+    const found = new Map<string, Message>();
+    const others: Message[] = [];
+    try {
+      for (let i = 0; i < TARGETED_MAX_RECEIVES && found.size < messageIdSet.size; i++) {
+        const messages = await receiveFromQueue(dlqUrl, 10, 60, 1);
+        if (messages.length === 0) break;
+        allMessages.push(...messages);
+        for (const m of messages) {
+          const id = m.MessageId ?? '';
+          if (!messageIdSet.has(id)) others.push(m);
+          else found.set(id, m);
+        }
+      }
+    } catch (error) {
+      await releaseReceivedMessages(dlqUrl, queueLabel, allMessages, 'acquired');
+      throw error;
     }
+    messagesToReplay = [...found.values()];
 
-    // Stop if no more messages
-    if (messages.length < toReceive) break;
+    // Hand back the messages the search picked up but was not asked to replay,
+    // so they do not stay hidden for the rest of the visibility timeout.
+    await releaseReceivedMessages(dlqUrl, queueLabel, others, 'untargeted');
+  } else {
+    // Each non-empty receive adds at least one message, so batchSize calls is a hard upper bound.
+    for (let i = 0; i < batchSize && allMessages.length < batchSize; i++) {
+      const toReceive = Math.min(batchSize - allMessages.length, 10);
+      const messages = await receiveFromQueue(dlqUrl, toReceive, 60, RECEIVE_WAIT_SECONDS);
+      allMessages.push(...messages);
+
+      // SQS can return fewer messages than it holds, so only an empty receive means the queue is drained.
+      if (messages.length === 0) break;
+    }
+    // At-least-once delivery can return one message twice in a run; keep the latest copy, whose receipt handle is the valid one.
+    messagesToReplay = [...new Map(allMessages.map(m => [m.MessageId ?? '', m])).values()];
   }
-
-  // Filter to only requested messages when messageIds is specified
-  const messagesToReplay = messageIdSet ? allMessages.filter(m => messageIdSet.has(m.MessageId ?? '')) : allMessages;
 
   // Track which requested messageIds were not found in the received batch
   const notFoundCount = messageIds ? messageIds.length - messagesToReplay.length : 0;
@@ -343,6 +337,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     ...summary,
   });
 
+  await recordReplayAudit(summary);
   return res.json(summary);
 });
 

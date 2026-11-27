@@ -1,26 +1,28 @@
 import { useGetAllOrganizations } from '@client/app/utils/organizationAPICalls';
 import { useMigrateUsers } from '@client/app/utils/userAPICalls';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import {
-  Box,
-  Button,
-  Card,
-  Checkbox,
-  FormControl,
-  FormHelperText,
-  Grid,
-  IconButton,
-  Modal,
-  Sheet,
-  Stack,
-  Textarea,
-  Tooltip,
-  Typography,
-} from '@mui/joy';
+import { Alert, Box, Button, Checkbox, FormControl, FormHelperText, Stack, Textarea, Typography } from '@mui/joy';
 import React, { ReactNode, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { buildMigratedUsersCsv } from '@client/app/utils/migratedUsersCsv';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import SingleOrganizationSelector from '../common/SingleOrganizationSelector';
+import { AdminDialog, AdminDialogFooter, AdminPageHeader, DataTable, type DataColumn } from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
+
+type UserRow = { key: string; name: string; email: string };
+
+// A results table someone copies from: emails wrap instead of ending in an ellipsis.
+const userColumns: DataColumn<UserRow>[] = [
+  { id: 'name', label: 'Name', render: row => row.name },
+  { id: 'email', label: 'Email', wrap: true, render: row => row.email },
+];
+
+// Keyed by position: a pasted list can repeat an email.
+const toUserRows = (users: readonly { name: string; email: string }[]): UserRow[] =>
+  users.map((user, index) => ({ key: `${index}`, name: user.name, email: user.email }));
+const getUserRowId = (row: UserRow) => row.key;
+const noop = () => {};
 
 const MigrateUsersTab: React.FC = () => {
   const organizations = useGetAllOrganizations({ filters: { personal: false } });
@@ -35,6 +37,7 @@ const MigrateUsersTab: React.FC = () => {
     Array<{ name: string; email: string; tempPassword?: string; sendEmail?: boolean }>
   >([]);
   const [showModal, setShowModal] = useState(false);
+  const [createdWithEmail, setCreatedWithEmail] = useState(false);
   const [orgId, setOrgId] = useState('');
   const isOrgUsersExceed = useMemo(() => {
     if (!orgId) return false;
@@ -91,6 +94,7 @@ const MigrateUsersTab: React.FC = () => {
         {
           onSuccess: data => {
             setCreatedUsers(data.createdUsers);
+            setCreatedWithEmail(sendEmail);
             setShowModal(true);
           },
           onError: error => {
@@ -101,21 +105,7 @@ const MigrateUsersTab: React.FC = () => {
     }
   };
 
-  const generateCSV = () => {
-    const header = ['Name', 'Email'];
-
-    if (createdUsers[0].tempPassword) {
-      header.push('Temporary Password');
-    }
-
-    const rows = createdUsers.map(user => [
-      `"${user.name}"`, // Enclose in quotes to handle commas in names
-      `"${user.email}"`,
-      `"${user.tempPassword}"`,
-    ]);
-    const csvContent = [header, ...rows].map(e => e.join(',')).join('\n');
-    return csvContent;
-  };
+  const generateCSV = () => buildMigratedUsersCsv(createdUsers);
 
   const copyCSVToClipboard = async () => {
     const csv = generateCSV();
@@ -129,14 +119,17 @@ const MigrateUsersTab: React.FC = () => {
   };
 
   const secondOption = false;
+  const parsedRows = useMemo(() => toUserRows(migrateUsers), [migrateUsers]);
+  const createdRows = useMemo(() => toUserRows(createdUsers), [createdUsers]);
 
   return (
-    <Sheet sx={{ overflow: 'hidden', width: '100%' }}>
+    <Stack gap={ADMIN_REGION_GAP} sx={{ maxWidth: ADMIN_DETAIL_MAX_WIDTH }}>
+      <AdminPageHeader
+        title="Migrate users"
+        description="Add people to an organization in bulk from a pasted list, with an optional welcome email."
+        actions={<ContextHelpButton helpId="admin/user-migration" tooltipText="User migration help" />}
+      />
       <Stack spacing={2}>
-        <Stack direction="row" alignItems="center" spacing={1}>
-          <Typography level="h1">Migrate Users</Typography>
-          <ContextHelpButton helpId="admin/user-migration" tooltipText="User Migration Help" />
-        </Stack>
         <FormControl>
           <Checkbox
             label="Send Welcome Email to Users"
@@ -179,32 +172,19 @@ const MigrateUsersTab: React.FC = () => {
             Parse User List
           </Button>
           <SingleOrganizationSelector currentOrgId={orgId} onChange={orgId => setOrgId(orgId ?? '')} />
-          {migrateUsers.length > 0 && !isFaultyData && (
-            <Sheet sx={{ overflowY: 'auto', maxHeight: '400px', width: '100%' }}>
-              {migrateUsers.map((user, index) => (
-                <Card
-                  key={index}
-                  sx={{
-                    mb: 1,
-                    width: '100%',
-                    bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-                    p: 1,
-                  }}
-                >
-                  <Grid container spacing={2}>
-                    <Grid xs={6}>
-                      <Typography>{user.name}</Typography>
-                    </Grid>
-                    <Grid xs={6}>
-                      <Typography>{user.email}</Typography>
-                    </Grid>
-                  </Grid>
-                </Card>
-              ))}
-            </Sheet>
-          )}
           {isFaultyData && <Typography>The data entered does not match the given format.</Typography>}
         </Stack>
+        {migrateUsers.length > 0 && !isFaultyData && (
+          <DataTable
+            label="Parsed users"
+            testId="migrate-parsed-users-table"
+            rows={parsedRows}
+            columns={userColumns}
+            getRowId={getUserRowId}
+            onRetry={noop}
+            minWidth="20rem"
+          />
+        )}
         <Button
           onClick={handleMigrateUsers}
           disabled={migrateUsers.length === 0 || isFaultyData || isOrgUsersExceed}
@@ -213,82 +193,47 @@ const MigrateUsersTab: React.FC = () => {
           Migrate Users
         </Button>
       </Stack>
-      <Modal open={showModal} onClose={() => setShowModal(false)}>
-        <Sheet
-          sx={{
-            p: 3,
-            width: '100%',
-            maxWidth: '90%',
-            maxHeight: '80vh',
-            overflow: 'auto',
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            borderRadius: 'md',
-            boxShadow: 'lg',
-            bgcolor: 'background.body',
-          }}
-        >
-          <Stack spacing={2}>
-            <Typography level="h4" mb={2}>
-              Created Users
-            </Typography>
-
-            {!sendEmail && (
-              <Typography color="warning" fontWeight="bold">
-                Important: Make sure to copy these results. No welcome email was sent — users will need their login
-                email addresses to sign in via the email code flow.
-              </Typography>
-            )}
-
-            <Sheet sx={{ overflowY: 'auto', maxHeight: '400px', width: '100%' }}>
-              <Grid container spacing={2}>
-                <Grid xs={4}>
-                  <Typography level="body-xs" fontWeight="bold">
-                    Name:
-                  </Typography>
-                </Grid>
-                <Grid xs={4}>
-                  <Typography level="body-xs" fontWeight="bold">
-                    Email:
-                  </Typography>
-                </Grid>
-              </Grid>
-
-              {createdUsers.map((user, index) => (
-                <Card
-                  key={index}
-                  sx={{
-                    mb: 1,
-                    width: '100%',
-                    bgcolor: index % 2 ? 'background.level1' : 'background.level2',
-                    p: 1,
-                  }}
-                >
-                  <Grid container spacing={2}>
-                    <Grid xs={6}>
-                      <Typography>{user.name}</Typography>
-                    </Grid>
-                    <Grid xs={6}>
-                      <Typography>{user.email}</Typography>
-                    </Grid>
-                  </Grid>
-                </Card>
-              ))}
-            </Sheet>
-            <Stack direction="row" spacing={2} justifyContent="flex-end">
-              <Tooltip title="Copy CSV to Clipboard">
-                <IconButton color="primary" onClick={copyCSVToClipboard}>
-                  <ContentCopyIcon />
-                </IconButton>
-              </Tooltip>
-              <Button onClick={() => setShowModal(false)}>Close</Button>
-            </Stack>
-          </Stack>
-        </Sheet>
-      </Modal>
-    </Sheet>
+      <AdminDialog
+        open={showModal}
+        onClose={() => setShowModal(false)}
+        title="Created users"
+        width={720}
+        data-testid="migrate-created-users-dialog"
+      >
+        <Stack spacing={2}>
+          {!createdWithEmail && (
+            <Alert color="warning" variant="soft" data-testid="migrate-no-email-warning">
+              Important: Make sure to copy these results. No welcome email was sent{' \u2014 '}users will need their
+              login email addresses to sign in via the email code flow.
+            </Alert>
+          )}
+          <DataTable
+            label="Created users"
+            testId="migrate-created-users-table"
+            rows={createdRows}
+            columns={userColumns}
+            getRowId={getUserRowId}
+            onRetry={noop}
+            minWidth="18rem"
+            maxHeight="50vh"
+            pagination={false}
+          />
+        </Stack>
+        <AdminDialogFooter>
+          <Button
+            variant="outlined"
+            startDecorator={<ContentCopyIcon />}
+            onClick={() => void copyCSVToClipboard()}
+            data-testid="migrate-copy-csv-btn"
+          >
+            Copy CSV
+          </Button>
+          <Button onClick={() => setShowModal(false)} data-testid="migrate-created-users-done-btn">
+            Close
+          </Button>
+        </AdminDialogFooter>
+      </AdminDialog>
+    </Stack>
   );
 };
 

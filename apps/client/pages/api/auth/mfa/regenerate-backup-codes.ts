@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { stepUpGate } from '@server/auth/stepUp';
@@ -29,7 +29,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         res.json({ backupCodes: result.backupCodes });
       } catch (error: any) {
-        console.error('Error regenerating backup codes:', error);
+        req.logger.error('Error regenerating backup codes', { error });
         res.status(400).json({ error: error.message || 'Failed to regenerate backup codes' });
       }
     })

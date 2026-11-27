@@ -14,7 +14,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const state = vi.hoisted(() => ({ userId: '' }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: (handler: (...args: unknown[]) => unknown) => (event: unknown) =>
     handler(event, {}, { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
   sendToClient: vi.fn(),

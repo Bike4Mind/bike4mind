@@ -5,20 +5,38 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import {
   creditLotRepository,
   creditTransactionRepository,
-  integrationRequestRepository,
-  partnerSignupRuleRepository,
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
   userRepository,
+  orgDomainClaimRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { groupRepository } from '@bike4mind/database/social';
-import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { clearDeletedOrganizationReferences } from '@bike4mind/server-utils/organizations/clearDeletedOrganizationReferences';
+import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
+import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
-import { CreditHolderType, MAX_STORAGE_LIMIT_MB, toSafeOrganization } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { belongsToOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import {
+  CreditHolderType,
+  MAX_STORAGE_LIMIT_MB,
+  resolveOrganizationStorageLimit,
+  toSafeOrganization,
+  OrganizationSharingPolicySchema,
+  orgDomainPathIdSchema,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 const updateOrgBodySchema = z.object({
   name: z.string().optional(),
@@ -27,9 +45,11 @@ const updateOrgBodySchema = z.object({
   // No bare coerce: it reads null (what JSON makes of NaN) and '' as 0, which would wipe the balance.
   currentCredits: z
     .union([z.number(), z.string().trim().min(1)])
-    .pipe(z.coerce.number<string | number>().min(0))
+    .pipe(z.coerce.number<string | number>().int().min(0))
     .optional(),
   systemPrompt: z.string().max(10000).optional(),
+  redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
@@ -52,6 +72,13 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
   const previousBalance = organization.currentCredits ?? 0;
   const credits = requestedBalance - previousBalance;
   if (credits === 0) return;
+  const selfGrant = belongsToOrganization(req.user!, organization);
+  // Top up holds the same grant for a second admin (selfGrant.ts); this edit applies at once, so it refuses one.
+  if (credits > 0 && isHeldSelfGrant(req.user!, selfGrant)) {
+    throw new ForbiddenError(
+      'Add credits to an organization you belong to with Top up, so another admin can approve the grant.'
+    );
+  }
 
   const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
   const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
@@ -64,19 +91,37 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     metadata,
   } as const;
 
-  if (credits > 0) {
-    await creditService.addCredits({ ...ledgerEntry, type: 'generic_add' }, creditAdapters);
-  } else {
-    await creditService.subtractCredits({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
-  }
+  const { creditTransactionId } =
+    credits > 0
+      ? await creditService.addCreditsWithLedgerRow({ ...ledgerEntry, type: 'generic_add' }, creditAdapters)
+      : await creditService.subtractCreditsWithLedgerRow({ ...ledgerEntry, type: 'generic_deduct' }, creditAdapters);
   await recordAdminActionFromRequest(req, {
     action: 'org.credits.adjusted',
     target: { kind: 'organization', id: organization.id, displayName: organization.name },
     summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
     reason,
     changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
-    details: { credits, ownerId: organization.userId },
+    details: { credits, ownerId: organization.userId, selfGrant },
+    related: creditTransactionId ? { creditTransactionId } : undefined,
   });
+};
+
+const AUDITED_SETTINGS_FIELDS = [
+  'name',
+  'description',
+  'billingContact',
+  'systemPrompt',
+  'redactPushContent',
+  'maxCreditsPerMember',
+] as const;
+
+// The system prompt can run to 10,000 characters, so the entry records its length, not its text.
+const settingsAuditValue = (field: (typeof AUDITED_SETTINGS_FIELDS)[number], value: unknown) =>
+  field === 'systemPrompt' ? { characters: typeof value === 'string' ? value.length : 0 } : (value ?? null);
+
+const resolvedStorageOverride = (organization: Parameters<typeof resolveOrganizationStorageLimit>[0]) => {
+  const resolved = resolveOrganizationStorageLimit(organization);
+  return resolved.source === 'override' ? resolved.limitMb : null;
 };
 
 const handler = baseApi()
@@ -93,10 +138,12 @@ const handler = baseApi()
           },
         }
       );
+      await recordOrganizationRead(req, [organization], { view: 'detail' });
 
-      return res
-        .status(200)
-        .json(toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
+      const [safeOrganization] = await attachOrganizationLogos([
+        toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }),
+      ]);
+      return res.status(200).json(safeOrganization);
     })
   )
   .put(
@@ -119,26 +166,78 @@ const handler = baseApi()
           }
         );
 
+      const auditedFields = AUDITED_SETTINGS_FIELDS.filter(field => profile[field] !== undefined);
+      const auditsStorageOverride = req.user!.isAdmin && profile.storageLimit !== undefined;
+      const before =
+        auditedFields.length > 0 || auditsStorageOverride ? await organizationRepository.findById(orgId) : null;
+
       const updatedOrganization =
-        req.user!.isAdmin && currentCredits !== undefined
+        profile.sharingPolicy !== undefined || (req.user!.isAdmin && currentCredits !== undefined)
           ? await withTransaction(async () => {
-              await applyAdminCreditEdit(req, orgId, currentCredits);
-              return updateProfile();
+              if (req.user!.isAdmin && currentCredits !== undefined)
+                await applyAdminCreditEdit(req, orgId, currentCredits);
+              const updated = await updateProfile();
+              if (profile.sharingPolicy !== undefined) {
+                await recordOrganizationAuditEvent({
+                  organizationId: updated.id,
+                  actorUserId: req.user!.impersonatedBy ?? req.user!.id,
+                  action: 'policy.updated',
+                });
+              }
+              return updated;
             })
           : await updateProfile();
 
-      return res.json(toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
+      const changes: { field: string; before: unknown; after: unknown }[] = before
+        ? auditedFields
+            .filter(field => (before[field] ?? null) !== (updatedOrganization[field] ?? null))
+            .map(field => ({
+              field,
+              before: settingsAuditValue(field, before[field]),
+              after: settingsAuditValue(field, updatedOrganization[field]),
+            }))
+        : [];
+      if (before && auditsStorageOverride) {
+        // storageLimit mirrors the effective limit, so the override itself is what gets audited.
+        const overrideBefore = resolvedStorageOverride(before);
+        const overrideAfter = resolvedStorageOverride(updatedOrganization);
+        if (overrideBefore !== overrideAfter) {
+          changes.push({ field: 'storageLimitOverride', before: overrideBefore, after: overrideAfter });
+        }
+      }
+      if (changes.length > 0) {
+        await recordAdminActionFromRequest(req, {
+          action: 'org.settings.updated',
+          actorScope: 'organization',
+          target: { kind: 'organization', id: updatedOrganization.id, displayName: updatedOrganization.name },
+          summary: `updated team settings (${changes.map(change => change.field).join(', ')})`,
+          changes,
+        });
+      }
+
+      const [safeOrganization] = await attachOrganizationLogos([
+        toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }),
+      ]);
+      return res.json(safeOrganization);
     })
   )
   .delete<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {
-    const id = req.query.id;
+    // In-handler so GET and PUT keep their scope behaviour: deleting the org lapses members' lake
+    // grants and can hand lakes to the billing owner. No-ops for a session caller.
+    assertDataLakeShareScope(req);
+
+    const parsedId = orgDomainPathIdSchema.safeParse(req.query.id);
+    if (!parsedId.success) throw new BadRequestError('Invalid organization id');
+    const id = parsedId.data;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group
-    // soft-deletes, the user organizationId reset, and the org delete must commit together, or a
-    // partial failure leaves either dangling group access or an org that never actually deletes.
+    // soft-deletes, the members' lake-grant lapse, the user organizationId reset, and the org delete
+    // must commit together, or a partial failure leaves dangling group or lake access or an org that
+    // never actually deletes.
     // Repositories join the session automatically via transactionAsyncLocalStorage.
-    await withTransaction(() =>
-      organizationService.deleteOrganization(
+    const { revokedApiKeyIds } = await withTransaction(async () => {
+      const organization = await organizationRepository.findById(id);
+      const result = await organizationService.deleteOrganization(
         req.user!,
         { id },
         {
@@ -146,7 +245,13 @@ const handler = baseApi()
             organizations: organizationRepository,
             groups: groupRepository,
             users: userRepository,
+            userApiKeys: userApiKeyRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
           },
+          auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+          logger: req.logger,
           validation: {
             canDeleteOrganization: async organization => {
               const subscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
@@ -160,25 +265,30 @@ const handler = baseApi()
             },
           },
         }
-      )
-    );
-
-    // Clear the dangling reference from any partner signup rule that pointed at this org, so
-    // no future signup resolves to a deleted org. The rule survives (its entitlements/credits
-    // still apply); only the org association is dropped. Cache invalidation makes it immediate.
-    await partnerSignupRuleRepository.updateMany({ organizationId: id }, { organizationId: null });
-    invalidatePartnerRuleCache();
-    // Same for roadmap integration requests: they are the members' own votes and stay. Best-effort:
-    // the org is already gone, so a failure here must not turn the committed delete into a 500 a
-    // retry cannot fix. The request keeps a dangling organizationId, which the admin demand list
-    // already shows as a deleted organization.
-    try {
-      await integrationRequestRepository.clearOrganization(id);
-    } catch (err) {
-      req.logger.warn(
-        `Failed to clear integration requests' organization for deleted organization ${id}: ${String(err)}`
       );
-    }
+      await orgDomainClaimRepository.deleteByOrganization(id);
+      await recordAdminActionFromRequest(req, {
+        action: 'org.deleted',
+        actorScope: 'organization',
+        target: { kind: 'organization', id, displayName: organization?.name ?? id },
+        summary: 'deleted the team',
+        details: { revokedApiKeyCount: result.revokedApiKeyIds.length },
+      });
+      return result;
+    });
+
+    await clearDeletedOrganizationReferences(id, req.logger);
+    // The delete has committed, so a failed teardown is logged rather than turned into an error response.
+    const teardowns = await Promise.allSettled(
+      revokedApiKeyIds.map(keyId => endKeyRealtimeConnections(keyId, req.logger))
+    );
+    teardowns.forEach((outcome, i) => {
+      if (outcome.status === 'rejected') {
+        req.logger.warn(
+          `Failed to end realtime connections for revoked key ${revokedApiKeyIds[i]}: ${String(outcome.reason)}`
+        );
+      }
+    });
 
     return res.json({ id });
   });

@@ -9,8 +9,8 @@ import { type MigrationFile } from './index';
  * match over the trailing window instead of scanning the collection.
  *
  * Migration rather than autoIndex for the reason in 20260902000000_ensure-quest-retrieval-index:
- * prod runs DocumentDB, where an index build takes a foreground collection lock, and autoIndex
- * would take it on whichever request cold-boots onto this collection first. Id backdated below
+ * autoIndex builds are fire-and-forget (a failure is silent), and autoIndex
+ * would start on whichever request cold-boots onto this collection first. Id backdated below
  * BackfillOAuthClientTokenEndpointAuthMethod (20260922000001), whose test asserts it has the
  * highest id on disk.
  *

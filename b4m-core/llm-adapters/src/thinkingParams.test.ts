@@ -2,10 +2,14 @@ import { describe, it, expect } from 'vitest';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_EFFORT_LEVELS,
+  applyAnthropicOutputCeiling,
+  belowReasoningFloor,
   buildThinkingParams,
+  continuesToolTurnWithoutThinking,
   DEFAULT_ANTHROPIC_EFFORT,
   DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
   isAdaptiveThinkingByDefault,
+  thinkingCannotBeDisabled,
   planReasoningEffort,
   reasonsWithinOutputBudget,
   resolveAnthropicEffort,
@@ -21,6 +25,7 @@ import {
   ModelBackend,
   type ModelInfo,
   type ReasoningEffort,
+  type IMessage,
 } from '@bike4mind/common';
 
 const baseModelInfo: ModelInfo = {
@@ -134,6 +139,96 @@ describe('buildThinkingParams', () => {
   });
 });
 
+describe('applyAnthropicOutputCeiling', () => {
+  it('lowers an adaptive request raised to the thinking floor, and its effort with it', () => {
+    const body = {
+      max_tokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    };
+    expect(applyAnthropicOutputCeiling(body, 5000)).toBe(false);
+    expect(body).toEqual({ max_tokens: 5000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+  });
+
+  it('keeps the structured-output format when it lowers the effort', () => {
+    const format = { type: 'json_schema', schema: {} };
+    const body = { max_tokens: 45_000, thinking: { type: 'adaptive' }, output_config: { effort: 'xhigh', format } };
+    applyAnthropicOutputCeiling(body, 45_000);
+    expect(body.output_config).toEqual({ effort: 'low', format });
+  });
+
+  it('treats a maxTokens already capped down to the ceiling as binding', () => {
+    const body = { max_tokens: 45_000, thinking: { type: 'adaptive' } };
+    applyAnthropicOutputCeiling(body, 45_000);
+    expect(body).toEqual({ max_tokens: 45_000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+  });
+
+  it('leaves the adaptive effort alone when the ceiling still clears the thinking floor', () => {
+    const body = { max_tokens: 128_000, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } };
+    applyAnthropicOutputCeiling(body, ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    expect(body).toEqual({
+      max_tokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    });
+  });
+
+  it('leaves the adaptive effort alone when the ceiling does not bind', () => {
+    const body = { max_tokens: 4096, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } };
+    applyAnthropicOutputCeiling(body, 20_000);
+    expect(body).toEqual({ max_tokens: 4096, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } });
+  });
+
+  it('names a low effort for a model that would otherwise think unasked at the default', () => {
+    const body = { max_tokens: 45_000 };
+    expect(applyAnthropicOutputCeiling(body, 45_000, true)).toBe(true);
+    expect(body).toEqual({ max_tokens: 45_000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+  });
+
+  it('adds no thinking to a model that only thinks when asked', () => {
+    const body = { max_tokens: 45_000 };
+    expect(applyAnthropicOutputCeiling(body, 45_000, false)).toBe(false);
+    expect(body).toEqual({ max_tokens: 45_000 });
+  });
+
+  it('adds no thinking alongside a forced tool_choice', () => {
+    const body = { max_tokens: 45_000, tool_choice: { type: 'tool', name: 'respond' } };
+    expect(applyAnthropicOutputCeiling(body, 45_000, true)).toBe(false);
+    expect(body).toEqual({ max_tokens: 45_000, tool_choice: { type: 'tool', name: 'respond' } });
+  });
+
+  it('keeps an explicit off switch off', () => {
+    const body = { max_tokens: 45_000, thinking: { type: 'disabled' } };
+    expect(applyAnthropicOutputCeiling(body, 45_000, true)).toBe(false);
+    expect(body).toEqual({ max_tokens: 45_000, thinking: { type: 'disabled' } });
+  });
+
+  it('brings a legacy thinking budget down under the answer headroom', () => {
+    const body = { max_tokens: 17_000, thinking: { type: 'enabled', budget_tokens: 16_000 } };
+    applyAnthropicOutputCeiling(body, 5000);
+    expect(body).toEqual({
+      max_tokens: 5000,
+      thinking: { type: 'enabled', budget_tokens: 5000 - THINKING_ANSWER_HEADROOM_TOKENS },
+    });
+  });
+
+  it('turns legacy thinking off when the minimum budget no longer fits', () => {
+    const body: { max_tokens: number; thinking?: unknown } = {
+      max_tokens: 17_000,
+      thinking: { type: 'enabled', budget_tokens: 16_000 },
+    };
+    applyAnthropicOutputCeiling(body, 1500);
+    expect(body).toEqual({ max_tokens: 1500 });
+  });
+
+  it('leaves a request already within the ceiling, or with none, untouched', () => {
+    const body = { max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 3000 } };
+    applyAnthropicOutputCeiling(body, 8000);
+    applyAnthropicOutputCeiling(body, undefined);
+    expect(body).toEqual({ max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 3000 } });
+  });
+});
+
 describe('resolveOutputMaxTokens', () => {
   const resolve = (requested: number | undefined, modelInfo: ModelInfo) =>
     resolveOutputMaxTokens({
@@ -161,6 +256,62 @@ describe('resolveOutputMaxTokens', () => {
 
     it('honors a budget on an OpenAI reasoning model', () => {
       expect(resolve(16_000, openAiReasoningModel)).toBe(16_000);
+    });
+
+    // The client's old 8192 placeholder, the value most often below the floor in practice.
+    it('honors the saved placeholder on an adaptive model', () => {
+      expect(resolve(8192, adaptiveModel)).toBe(8192);
+    });
+
+    it('still clamps a budget above an adaptive model cap', () => {
+      expect(resolve(500_000, adaptiveModel)).toBe(128_000);
+    });
+  });
+
+  describe('belowReasoningFloor', () => {
+    const args = (requested: number | undefined, modelInfo: ModelInfo) => ({
+      requested,
+      fallback: 4096,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
+
+    it('reports an explicit budget below the floor without changing the resolved budget', () => {
+      expect(belowReasoningFloor(args(8192, adaptiveModel))).toEqual({
+        requested: 8192,
+        floor: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      });
+      expect(resolve(8192, adaptiveModel)).toBe(8192);
+    });
+
+    it('reports on an OpenAI reasoning model too', () => {
+      expect(belowReasoningFloor(args(16_000, openAiReasoningModel))?.floor).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('does not report a budget at or above the floor', () => {
+      expect(belowReasoningFloor(args(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, adaptiveModel))).toBeUndefined();
+      expect(belowReasoningFloor(args(100_000, adaptiveModel))).toBeUndefined();
+    });
+
+    // An absent request is sized for the model, so there is nothing below the floor to report.
+    it('does not report an absent or unusable request', () => {
+      expect(belowReasoningFloor(args(undefined, adaptiveModel))).toBeUndefined();
+      expect(belowReasoningFloor(args(Number.NaN, adaptiveModel))).toBeUndefined();
+      expect(belowReasoningFloor(args(0, adaptiveModel))).toBeUndefined();
+    });
+
+    it('does not report on a model that does not reason inside its budget', () => {
+      expect(belowReasoningFloor(args(2048, legacyModel))).toBeUndefined();
+      expect(
+        belowReasoningFloor(args(2048, { ...legacyModel, backend: ModelBackend.Gemini, max_tokens: 65_536 }))
+      ).toBeUndefined();
+    });
+
+    // A model capped below the floor cannot be given more than its cap, so asking for the cap is not a shortfall.
+    it('measures against the model cap when it is below the floor', () => {
+      const smallCap: ModelInfo = { ...adaptiveModel, max_tokens: 16_384 };
+      expect(belowReasoningFloor(args(16_384, smallCap))).toBeUndefined();
+      expect(belowReasoningFloor(args(8192, smallCap))).toEqual({ requested: 8192, floor: 16_384 });
     });
   });
 
@@ -359,6 +510,16 @@ describe('resolveOutputMaxTokens', () => {
 
     it('still honors an explicit caller budget', () => {
       expect(resolve(2048, kimiThinking)).toBe(2048);
+    });
+
+    it.each([
+      ChatModels.KIMI_K2_5,
+      ChatModels.KIMI_K2_6,
+      ChatModels.KIMI_K2_7_CODE,
+      ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+    ])('defaults direct %s to the reasoning floor, not the 4096 fallback', id => {
+      const model: ModelInfo = { ...kimiThinking, id, name: id, max_tokens: 131_072 };
+      expect(resolve(undefined, model)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
     });
 
     it('leaves a non-listed model on the fallback', () => {
@@ -584,6 +745,58 @@ describe('resolveAnthropicEffort', () => {
       expect(resolveAnthropicEffort({ questMaster: true, reasoningEffort: 'xhigh' })).toBe('xhigh');
     });
   });
+
+  describe('the unstated default is per model', () => {
+    const MEDIUM = [
+      ChatModels.CLAUDE_5_5_OPUS,
+      ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+      ChatModels.CLAUDE_5_5_HAIKU,
+      ChatModels.CLAUDE_5_5_HAIKU_BEDROCK,
+    ];
+    const HIGH = [
+      ChatModels.CLAUDE_5_OPUS,
+      ChatModels.CLAUDE_5_OPUS_BEDROCK,
+      ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+      ChatModels.CLAUDE_4_7_OPUS,
+      ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+    ];
+
+    it.each(MEDIUM)('is medium for %s', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('medium');
+    });
+
+    it.each(HIGH)('is high for %s', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('high');
+    });
+
+    it.each([
+      'claude-opus-5-5-20270101',
+      'us.anthropic.claude-opus-5-5',
+      'eu.anthropic.claude-haiku-5-5-v1:0',
+      'apac.anthropic.claude-opus-5-5-20270101-v1:0',
+      'claude-opus-5-5[1m]',
+    ])('is medium for %s, another spelling of a medium model', model => {
+      expect(resolveAnthropicEffort({ model })).toBe('medium');
+    });
+
+    it.each(['claude-sonnet-5-5', 'us.anthropic.claude-sonnet-5-5-v1:0', 'claude-opus-5-5-1', 'gpt-5', 'opus-5-5'])(
+      'is high for %s',
+      model => {
+        expect(resolveAnthropicEffort({ model })).toBe('high');
+      }
+    );
+
+    it.each(MEDIUM)('lets a stated effort override the default on %s', model => {
+      expect(resolveAnthropicEffort({ model, anthropicEffort: 'high' })).toBe('high');
+      expect(resolveAnthropicEffort({ model, anthropicEffort: 'xhigh' })).toBe('xhigh');
+      expect(resolveAnthropicEffort({ model, reasoningEffort: 'low' })).toBe('low');
+      expect(resolveAnthropicEffort({ model, reasoningEffort: 'high' })).toBe('high');
+    });
+
+    it('keeps QuestMaster at medium on a high-default model', () => {
+      expect(resolveAnthropicEffort({ model: ChatModels.CLAUDE_5_OPUS, questMaster: true })).toBe('medium');
+    });
+  });
 });
 
 describe('planReasoningEffort', () => {
@@ -601,13 +814,15 @@ describe('planReasoningEffort', () => {
       }
     );
 
-    it('uses `between_tools` for Sonnet 5.5, which rejects `disabled`', () => {
-      const id = ChatModels.CLAUDE_5_5_SONNET_BEDROCK;
-      expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
-        kind: 'off',
-        thinking: { type: 'between_tools' },
-      });
-    });
+    it.each([ChatModels.CLAUDE_5_5_SONNET, ChatModels.CLAUDE_5_5_SONNET_BEDROCK])(
+      'uses `between_tools` for Sonnet 5.5 (%s), which rejects `disabled`',
+      id => {
+        expect(planReasoningEffort(id, adaptive(id), 'none', 800)).toEqual({
+          kind: 'off',
+          thinking: { type: 'between_tools' },
+        });
+      }
+    );
 
     it('falls back to the lowest effort on a model with no off switch', () => {
       const id = ChatModels.CLAUDE_5_5_OPUS;
@@ -670,6 +885,7 @@ describe('isAdaptiveThinkingByDefault', () => {
     expect(byDefault).toEqual(
       expect.arrayContaining([
         ChatModels.CLAUDE_5_SONNET,
+        ChatModels.CLAUDE_5_5_SONNET,
         ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
         ChatModels.CLAUDE_FABLE_5,
         ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
@@ -697,5 +913,72 @@ describe('isAdaptiveThinkingByDefault', () => {
       thinking: { type: 'adaptive' },
       output_config: { effort: 'medium' },
     });
+  });
+});
+
+describe('continuesToolTurnWithoutThinking', () => {
+  const toolUse = { type: 'tool_use', id: 't1', name: 'f', input: {} };
+  const result = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] };
+  const turn = (...assistant: object[]) => [{ role: 'assistant', content: assistant }, result] as unknown as IMessage[];
+
+  it('is true when the replayed tool_use does not open with a thinking block', () => {
+    expect(continuesToolTurnWithoutThinking(turn(toolUse))).toBe(true);
+    expect(continuesToolTurnWithoutThinking(turn({ type: 'text', text: 'hi' }, toolUse))).toBe(true);
+  });
+
+  it('is false when it opens with a thinking or redacted_thinking block', () => {
+    expect(continuesToolTurnWithoutThinking(turn({ type: 'thinking', thinking: '', signature: 's' }, toolUse))).toBe(
+      false
+    );
+    expect(continuesToolTurnWithoutThinking(turn({ type: 'redacted_thinking', data: 'd' }, toolUse))).toBe(false);
+  });
+
+  it('is false when the history does not end in tool results', () => {
+    expect(continuesToolTurnWithoutThinking([{ role: 'user', content: 'hi' }] as unknown as IMessage[])).toBe(false);
+  });
+});
+
+describe('thinkingCannotBeDisabled', () => {
+  const adaptive = (id: string): ModelInfo => ({ ...baseModelInfo, id, thinkingStyle: 'adaptive' });
+  const kimi = (id: string): ModelInfo => ({
+    ...baseModelInfo,
+    id,
+    backend: ModelBackend.Kimi,
+    thinkingStyle: undefined,
+  });
+
+  it.each([
+    ChatModels.CLAUDE_5_5_OPUS,
+    ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
+    ChatModels.CLAUDE_FABLE_5,
+    ChatModels.CLAUDE_FABLE_5_BEDROCK,
+    ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+  ])('is true for adaptive %s, which has no off switch', id => {
+    expect(thinkingCannotBeDisabled(id, adaptive(id))).toBe(true);
+  });
+
+  it.each([ChatModels.KIMI_K2_7_CODE, ChatModels.KIMI_K2_7_CODE_HIGHSPEED])('is true for %s', id => {
+    expect(thinkingCannotBeDisabled(id, kimi(id))).toBe(true);
+  });
+
+  it.each([
+    ChatModels.CLAUDE_5_OPUS,
+    ChatModels.CLAUDE_5_SONNET,
+    ChatModels.CLAUDE_5_5_HAIKU,
+    ChatModels.CLAUDE_5_5_SONNET,
+    ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
+    ChatModels.CLAUDE_4_8_OPUS,
+  ])('is false for adaptive %s, which can be switched off', id => {
+    expect(thinkingCannotBeDisabled(id, adaptive(id))).toBe(false);
+  });
+
+  it('is false for a legacy model and a switchable Kimi model', () => {
+    expect(thinkingCannotBeDisabled(ChatModels.CLAUDE_4_6_OPUS, legacyModel)).toBe(false);
+    expect(thinkingCannotBeDisabled(ChatModels.KIMI_K2_6, kimi(ChatModels.KIMI_K2_6))).toBe(false);
+  });
+
+  it('is false for an adaptive id that cannot think', () => {
+    const id = ChatModels.CLAUDE_5_5_OPUS;
+    expect(thinkingCannotBeDisabled(id, { ...adaptive(id), can_think: false })).toBe(false);
   });
 });

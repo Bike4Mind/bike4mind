@@ -1,13 +1,17 @@
-import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
+import type { AdminUserListItem } from '@bike4mind/server-utils/app/utils/adminUserProjection';
 import React from 'react';
 import { Alert, Button, Chip, CircularProgress, Stack, Tooltip, Typography } from '@mui/joy';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserDocument } from '@bike4mind/common';
 import { EntitlementSourceType, useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
-import { IMPLIED_ENTITLEMENTS, applyImpliedEntitlements, entitlementsForTags } from '@client/lib/entitlements/registry';
+import {
+  IMPLIED_ENTITLEMENTS,
+  applyImpliedEntitlements,
+  entitlementsForTags,
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 
 interface ProductAccessProps {
-  /** The live-edited user (FullUsersView's formState) - tag grants are staged into it. */
+  /** The draft user that tag grants are staged into. */
   user: AdminUserListItem;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
 }

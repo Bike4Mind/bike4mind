@@ -1,41 +1,42 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { userRepository, withTransaction } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { userRepository } from '@bike4mind/database';
+import { withTransactionThenEmail } from '@server/utils/withTransactionThenEmail';
+import { ApiKeyScope, assertCanActOnAdminTarget } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { userService } from '@bike4mind/services';
-import { EmailEvents } from '@server/utils/eventBus';
 import {
   generateVerificationLink,
   getLogoUrl,
   buildEmailLogoImg,
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;
 }
 
 // Admin-only endpoint to resend email verification for a specific user
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { POST: 'users:moderate' },
+})
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      // Check admin authorization
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { userId } = req.query as RequestQuery;
 
       if (typeof userId !== 'string' || !userId) {
         throw new BadRequestError('Invalid user ID');
       }
 
-      await withTransaction(async () => {
+      const target = await userRepository.findById(userId);
+      if (target) assertCanActOnAdminTarget(req.user, target, 'resend email verification to');
+
+      await withTransactionThenEmail(async queueEmail => {
         await userService.resendEmailVerification(
           { userId },
           {
@@ -103,7 +104,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
           </body>
         </html>
       `;
-                await EmailEvents.Send.publish({
+                queueEmail({
                   to: user.email!,
                   subject: 'Verify Your Email Address',
                   body: emailBody,
@@ -121,9 +122,9 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         });
 
         req.logger.info(`Admin ${req.user.id} resent email verification for user ${userId}`);
-
-        return res.json({ message: 'Verification email resent successfully' });
       });
+
+      return res.json({ message: 'Verification email resent successfully' });
     })
   );
 

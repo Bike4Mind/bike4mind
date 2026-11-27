@@ -5,6 +5,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ISessionFavoriteItem,
+  MAX_BULK_ITEMS,
   SessionListFilters,
   SessionUpdateRequest,
 } from '@bike4mind/common';
@@ -12,18 +13,28 @@ import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export const getSessionsFromServer = async (
   search: string = '',
-  options: { pagination: { page: number; limit: number }; surface?: string; filters?: SessionListFilters } = {
+  options: {
+    pagination: { page: number; limit: number };
+    /** A previous page's `nextCursor`; the server then ignores `pagination.page`. */
+    cursor?: string;
+    surface?: string;
+    filters?: SessionListFilters;
+  } = {
     pagination: { page: 1, limit: 10 },
   }
 ) => {
-  const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean }>(`/api/sessions`, {
-    params: {
-      search,
-      pagination: options.pagination,
-      ...(options.surface ? { surface: options.surface } : {}),
-      ...options.filters,
-    },
-  });
+  const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean; nextCursor?: string | null }>(
+    `/api/sessions`,
+    {
+      params: {
+        search,
+        pagination: options.pagination,
+        ...(options.cursor ? { cursor: options.cursor } : {}),
+        ...(options.surface ? { surface: options.surface } : {}),
+        ...options.filters,
+      },
+    }
+  );
 
   return response.data;
 };
@@ -114,7 +125,6 @@ export const pushChatMessage = async (
   sessionId: string,
   message: IChatHistoryItem,
   experimentalFeatures?: {
-    enableQuestMaster?: boolean;
     enableMementos: boolean;
     enableArtifacts: boolean;
     enableAgents: boolean;
@@ -134,7 +144,6 @@ export const pushChatMessage = async (
 
   const response = await api.post(`/api/sessions/${sessionId}/chat`, {
     ...message,
-    enableQuestMaster: experimentalFeatures?.enableQuestMaster,
     enableMementos: experimentalFeatures?.enableMementos,
     enableArtifacts: experimentalFeatures?.enableArtifacts,
     enableAgents: experimentalFeatures?.enableAgents,
@@ -171,11 +180,12 @@ export const generateNewSession = async (
   knowledgeIds: string[] = [],
   agentIds: string[] = [],
   projectId?: string,
-  lastUsedModel?: string
+  lastUsedModel?: string,
+  organizationId?: string
 ) => {
   const response = await api.post<ISessionDocument>(
     `/api/sessions/create`,
-    { name, knowledgeIds, agentIds, projectId, lastUsedModel },
+    { name, knowledgeIds, agentIds, projectId, lastUsedModel, organizationId },
     { timeout: SEND_REQUEST_TIMEOUT_MS }
   );
   return response.data;
@@ -189,10 +199,18 @@ export const deleteSessionFromServer = async (sessionId: string): Promise<{ newL
 export const bulkDeleteSessionsFromServer = async (
   sessionIds: string[]
 ): Promise<{ deletedCount: number; newLastNotebookId: string | null }> => {
-  const response = await api.delete<{ deletedCount: number; newLastNotebookId: string | null }>('/api/sessions/bulk', {
-    data: { sessionIds },
-  });
-  return response.data;
+  // The route accepts at most MAX_BULK_ITEMS ids per call.
+  let deletedCount = 0;
+  let newLastNotebookId: string | null = null;
+  for (let i = 0; i < sessionIds.length; i += MAX_BULK_ITEMS) {
+    const response = await api.delete<{ deletedCount: number; newLastNotebookId: string | null }>(
+      '/api/sessions/bulk',
+      { data: { sessionIds: sessionIds.slice(i, i + MAX_BULK_ITEMS) } }
+    );
+    deletedCount += response.data.deletedCount;
+    newLastNotebookId = response.data.newLastNotebookId ?? newLastNotebookId;
+  }
+  return { deletedCount, newLastNotebookId };
 };
 
 export const generateSessionSummary = async (sessionId: string) => {

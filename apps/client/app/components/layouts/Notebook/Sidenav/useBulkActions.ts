@@ -2,9 +2,11 @@ import { RefObject, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { MAX_BULK_ITEMS } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDeleteSessions, useDownloadSession } from '@client/app/hooks/data/sessions';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage, getServerErrorField } from '@client/app/utils/error';
 import type { CombinedSessionDocument } from './types';
 
 interface UseBulkActionsArgs {
@@ -158,25 +160,51 @@ export function useBulkActions({
 
   const handleFavoriteSelected = async () => {
     const sessions = combinedSessions.filter(s => visibleSelectedIds.has(s.id));
+    if (sessions.length === 0) return;
 
-    // Batch favorite/unfavorite operations
+    const favoriteIds = new Set(filteredFavoriteSession.map(fav => fav.id));
+    let okCount = 0;
+    let failureMessage: string | undefined;
+    const settledIds = new Set<string>();
     try {
-      await Promise.all(
-        sessions.map(async session => {
-          const isFavorite = filteredFavoriteSession.some(fav => fav.id === session.id);
-          if (isFavorite) {
-            await api.delete(`/api/sessions/${session.id}/favorite`);
-          } else {
-            await api.post(`/api/sessions/${session.id}/favorite`);
+      for (let i = 0; i < sessions.length; i += MAX_BULK_ITEMS) {
+        const chunk = sessions.slice(i, i + MAX_BULK_ITEMS);
+        try {
+          const { data } = await api.post<{ okCount: number; results: { id: string; ok: boolean; error?: string }[] }>(
+            '/api/sessions/bulk',
+            {
+              action: 'favorite',
+              add: chunk.filter(s => !favoriteIds.has(s.id)).map(s => s.id),
+              remove: chunk.filter(s => favoriteIds.has(s.id)).map(s => s.id),
+            }
+          );
+          okCount += data.okCount;
+          for (const result of data.results) {
+            if (result.ok) settledIds.add(result.id);
+            else failureMessage ??= result.error;
           }
-        })
-      );
+        } catch (error) {
+          // This chunk may have committed despite a lost response. Do not offer to toggle it again.
+          for (const session of chunk) settledIds.add(session.id);
+          // Earlier chunks are committed server-side, so report them as a partial result.
+          if (okCount === 0) throw error;
+          failureMessage = getServerErrorField(error) ?? 'Failed to update the remaining favorites';
+          break;
+        }
+      }
 
-      queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
-      toast.success(`Updated favorites for ${sessions.length} item${sessions.length > 1 ? 's' : ''}`);
-      setSelectedItems(new Set());
+      const total = sessions.length;
+      if (okCount === total) {
+        toast.success(`Updated favorites for ${total} item${total > 1 ? 's' : ''}`);
+      } else {
+        toast.warning(`Updated favorites for ${okCount} of ${total} items`);
+        if (failureMessage) toast.error(failureMessage);
+      }
     } catch (error) {
-      toast.error('Failed to update favorites');
+      toast.error(getErrorMessage(error));
+    } finally {
+      setSelectedItems(previous => new Set([...previous].filter(id => !settledIds.has(id))));
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
     }
   };
 

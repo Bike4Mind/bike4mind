@@ -1,3 +1,4 @@
+{{- if eq .Values.mode "full" }}
 {{- if .Values.agentExecutor.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -48,4 +49,5 @@ spec:
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: agentexecutor}
   ports: [{name: http, port: 8080, targetPort: http}]
 
+{{- end }}
 {{- end }}

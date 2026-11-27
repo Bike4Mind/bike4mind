@@ -1,9 +1,6 @@
 /**
- * The effort this backend sends on `output_config`, which was hardcoded to
- * 'high' ('medium' for QuestMaster) before a caller could state one. Everything
- * here is asserted on the captured request body: the point of the fix is which
- * value reaches the wire, and an unstated turn must still reach it with exactly
- * the value it carried before.
+ * The effort this backend sends on `output_config`. Everything here is asserted on
+ * the captured request body, because which value reaches the wire is the point.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -68,6 +65,37 @@ describe('AnthropicBackend output_config.effort', () => {
     it('sends high when both effort options are explicitly undefined', async () => {
       expect(effortOf(await capture({ anthropicEffort: undefined, reasoningEffort: undefined }))).toBe('high');
     });
+  });
+
+  describe('the unstated default follows the model', () => {
+    it.each([ChatModels.CLAUDE_5_5_OPUS, ChatModels.CLAUDE_5_5_HAIKU])('sends medium for %s', async model => {
+      expect(effortOf(await capture({}, model))).toBe('medium');
+    });
+
+    it.each([ChatModels.CLAUDE_5_OPUS, ChatModels.CLAUDE_4_7_OPUS])('sends high for %s', async model => {
+      expect(effortOf(await capture({}, model))).toBe('high');
+    });
+
+    it.each(['high', 'xhigh', 'low'] as const)('sends a stated %s on a medium-default model', async level => {
+      expect(effortOf(await capture({ anthropicEffort: level }, ChatModels.CLAUDE_5_5_OPUS))).toBe(level);
+      expect(effortOf(await capture({ reasoningEffort: level }, ChatModels.CLAUDE_5_5_HAIKU))).toBe(level);
+    });
+
+    it('keeps QuestMaster at medium on a high-default model', async () => {
+      expect(effortOf(await capture({ questMaster: true, thinking: undefined }, ChatModels.CLAUDE_5_OPUS))).toBe(
+        'medium'
+      );
+    });
+
+    // No effort leaves these models on the provider's own default, which is medium for them.
+    it.each([ChatModels.CLAUDE_5_5_OPUS, ChatModels.CLAUDE_5_5_HAIKU])(
+      'sends no effort for %s when thinking is not enabled',
+      async model => {
+        const params = await capture({ thinking: undefined }, model);
+        expect(params).toBeDefined();
+        expect(effortOf(params)).toBeUndefined();
+      }
+    );
   });
 
   describe('a caller can choose the level', () => {

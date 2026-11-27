@@ -1,0 +1,245 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { makeAuditEntry } from '@client/app/components/admin/AuditLog/shared/auditTestFixtures';
+import { ProfileTestWrapper } from '../profileTestUtils';
+import type { ActivitySearch } from '../activitySearch';
+
+const mocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  navigate: vi.fn(),
+  search: {} as Record<string, unknown>,
+}));
+
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => mocks.search,
+  useNavigate: () => mocks.navigate,
+}));
+
+import { ActivityTab } from './ActivityTab';
+
+const USER_ID = 'test-user-1';
+
+const usage = (id: string, at: string) => ({
+  type: 'usage',
+  id,
+  at,
+  summary: `Started notebook "${id}"`,
+  detail: 'Via Web app',
+  notebookId: id,
+});
+const adminRow = {
+  type: 'admin',
+  id: 'a1',
+  at: '2026-10-20T09:00:00.000Z',
+  summary: 'updated isBanned',
+  audit: makeAuditEntry({
+    id: 'a1',
+    action: 'user.profile.updated',
+    reason: 'Chargeback',
+    changes: [{ field: 'isBanned', before: false, after: true }],
+  }),
+};
+const credit = {
+  type: 'credit',
+  id: 'c1',
+  at: '2026-10-19T09:00:00.000Z',
+  summary: 'Bought credits: +5,000 credits',
+  credits: 5000,
+  transactionType: 'purchase',
+};
+
+const lastParams = () => (mocks.get.mock.calls.at(-1)?.[1] as { params: Record<string, string> }).params;
+
+const renderTab = (search: ActivitySearch = {}) => {
+  mocks.search = { tab: 'activity', ...search };
+  const onOpenCredits = vi.fn();
+  render(<ActivityTab userId={USER_ID} onOpenCredits={onOpenCredits} />, { wrapper: ProfileTestWrapper });
+  return { onOpenCredits };
+};
+
+/** Applies the search updater the tab passed to navigate, the way the router would. */
+const navigatedSearch = () => {
+  const { search, replace } = mocks.navigate.mock.calls.at(-1)?.[0] as {
+    search: (previous: Record<string, unknown>) => Record<string, unknown>;
+    replace: boolean;
+  };
+  return { search: search(mocks.search), replace };
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('ActivityTab', () => {
+  it('shows API requests with the actual outcome and a coverage explanation', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        entries: [
+          {
+            type: 'api_request',
+            id: 'r1',
+            at: '2026-11-01T12:00:00Z',
+            summary: 'GET /api/v1/me - 200',
+            detail: '12 ms',
+            request: {
+              keyId: 'k',
+              endpoint: '/api/v1/me',
+              method: 'GET',
+              statusCode: 200,
+              responseTimeMs: 12,
+              ip: '203.0.113.1',
+            },
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    renderTab({ types: 'api_request' });
+    expect(await screen.findByTestId('user-timeline-row')).toHaveTextContent('GET /api/v1/me - 200');
+    expect(screen.getByTestId('user-timeline-api-coverage')).toHaveTextContent('no rows does not mean no attempts');
+    expect(lastParams().types).toBe('api_request');
+  });
+  it('renders the merged timeline in server order with plain-language rows', async () => {
+    mocks.get.mockResolvedValue({
+      data: { entries: [usage('Quarterly plan', '2026-10-21T09:00:00.000Z'), adminRow, credit], nextCursor: null },
+    });
+    renderTab();
+
+    const rows = await screen.findAllByTestId('user-timeline-row');
+    expect(rows.map(row => row.textContent)).toEqual([
+      expect.stringContaining('Started notebook "Quarterly plan"'),
+      expect.stringContaining('Suspended account'),
+      expect.stringContaining('Bought credits: +5,000 credits'),
+    ]);
+    expect(rows[1]).toHaveTextContent('Reason: Chargeback');
+    expect(within(rows[0]).getByRole('time')).toHaveAttribute('datetime', '2026-10-21T09:00:00.000Z');
+    expect(screen.queryByTestId('user-timeline-load-more-btn')).not.toBeInTheDocument();
+  });
+
+  it('asks the endpoint for every source when the URL has no filter', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    renderTab();
+
+    await screen.findByText('No activity yet');
+    expect(mocks.get).toHaveBeenCalledWith(`/api/admin/users/${USER_ID}/timeline`, {
+      params: { types: 'admin,api_request,credit,key,limit,moderation,payment,signin,signup,spend,usage', limit: '30' },
+    });
+  });
+
+  it('sends the URL filters to the endpoint as inclusive UTC instants', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    renderTab({ types: 'signin,admin', from: '2026-10-01', to: '2026-10-07' });
+
+    await screen.findByText('No activity matches these filters');
+    expect(lastParams()).toEqual({
+      types: 'admin,signin',
+      limit: '30',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-07T23:59:59.999Z',
+    });
+    expect(screen.getByTestId('user-timeline-filter-type-security')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('user-timeline-filter-type-admin')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('user-timeline-filter-type-spend')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('writes a category chip into the URL as its types without a history entry and keeps the tab', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    renderTab();
+    await screen.findByText('No activity yet');
+
+    fireEvent.click(screen.getByTestId('user-timeline-filter-type-money'));
+
+    expect(navigatedSearch()).toEqual({
+      search: { tab: 'activity', types: 'credit,payment', from: undefined, to: undefined },
+      replace: true,
+    });
+  });
+
+  it('writes the date range into the URL and clears every filter', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    renderTab({ types: 'admin', to: '2026-10-07' });
+    await screen.findByText('No activity matches these filters');
+
+    expect(screen.getByTestId('user-timeline-filter-from-empty')).toHaveTextContent('From any date');
+    expect(screen.queryByTestId('user-timeline-filter-from')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('user-timeline-filter-from-set-btn'));
+    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: '2026-10-07', to: '2026-10-07' });
+
+    fireEvent.click(screen.getByTestId('user-timeline-clear-btn'));
+    expect(navigatedSearch().search).toEqual({ tab: 'activity', types: undefined, from: undefined, to: undefined });
+  });
+
+  it('writes an edited start date into the URL and drops it when removed', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [], nextCursor: null } });
+    renderTab({ types: 'admin', from: '2026-10-02', to: '2026-10-07' });
+    await screen.findByText('No activity matches these filters');
+
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-10-01' } });
+    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: '2026-10-01', to: '2026-10-07' });
+    fireEvent.click(screen.getByTestId('user-timeline-filter-from-clear-btn'));
+    expect(navigatedSearch().search).toMatchObject({ types: 'admin', from: undefined, to: '2026-10-07' });
+  });
+
+  it('loads the next page from the returned cursor', async () => {
+    mocks.get
+      .mockResolvedValueOnce({ data: { entries: [usage('first', '2026-10-21T09:00:00.000Z')], nextCursor: 'CURSOR' } })
+      .mockResolvedValueOnce({ data: { entries: [usage('second', '2026-10-20T09:00:00.000Z')], nextCursor: null } });
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId('user-timeline-load-more-btn'));
+
+    await waitFor(() => expect(screen.getAllByTestId('user-timeline-row')).toHaveLength(2));
+    expect(lastParams()).toMatchObject({ cursor: 'CURSOR' });
+    expect(screen.queryByTestId('user-timeline-load-more-btn')).not.toBeInTheDocument();
+  });
+
+  it('opens the audit entry for an admin row and the credits tab for a credit row', async () => {
+    mocks.get.mockResolvedValue({ data: { entries: [adminRow, credit], nextCursor: null } });
+    const { onOpenCredits } = renderTab();
+
+    const [adminLink, creditLink] = await screen.findAllByTestId('user-timeline-row-open-btn');
+    fireEvent.click(adminLink);
+    expect(await screen.findByTestId('audit-drawer')).toBeInTheDocument();
+    fireEvent.click(creditLink);
+    expect(onOpenCredits).toHaveBeenCalled();
+  });
+
+  it('shows a spend roll-up with its warning flag and opens the credits tab from it', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        entries: [
+          {
+            type: 'spend',
+            id: 'a'.repeat(24),
+            at: '2026-10-21T10:30:00.000Z',
+            firstAt: '2026-10-21T10:00:00.000Z',
+            summary: 'Spent 2,400 credits: 14 chat messages on opus',
+            detail: 'CLI \u00b7 balance after -40',
+            credits: 2400,
+            calls: 14,
+            transactionType: 'text_generation_usage',
+            balanceAfter: -40,
+            partial: false,
+            flags: ['Negative balance'],
+            alert: true,
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    const { onOpenCredits } = renderTab();
+
+    const [row] = await screen.findAllByTestId('user-timeline-row');
+    expect(row).toHaveTextContent('Spent 2,400 credits: 14 chat messages on opus');
+    expect(within(row).getByTestId('user-timeline-row-flag')).toHaveTextContent('Negative balance');
+    fireEvent.click(within(row).getByTestId('user-timeline-row-open-btn'));
+    expect(onOpenCredits).toHaveBeenCalled();
+  });
+
+  it('shows a retryable error', async () => {
+    mocks.get.mockRejectedValue(new Error('boom'));
+    renderTab();
+    expect(await screen.findByText('The activity could not be loaded.')).toBeInTheDocument();
+  });
+});

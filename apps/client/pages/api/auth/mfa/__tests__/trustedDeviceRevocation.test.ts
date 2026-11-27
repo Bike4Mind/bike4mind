@@ -8,7 +8,15 @@ import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: any = { use: () => chain, post: (fn: any) => fn };
+    type Handler = (req: unknown, res: unknown, next?: () => void) => unknown;
+    let guard: Handler | undefined;
+    const chain = {
+      use: (fn: Handler) => ((guard = fn), chain),
+      post: (fn: Handler) => async (req: unknown, res: unknown) => {
+        guard?.(req, res, () => {});
+        return fn(req, res);
+      },
+    };
     return chain;
   },
 }));
@@ -33,8 +41,8 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: () => unknown) => fn(),
 }));
 // parseAdminActionReason and isSameUserId stay real; the audit write needs a database, so it is stubbed.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
@@ -43,6 +51,8 @@ const mockForceResetMFA = vi.fn();
 const mockCanDisable = vi.fn(() => true);
 vi.mock('@bike4mind/services', () => ({
   mfaService: {
+    userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
     disableMFA: (...a: any[]) => mockDisableMFA(...a),
     forceResetMFA: (...a: any[]) => mockForceResetMFA(...a),
     userCanDisableMFA: () => mockCanDisable(),
@@ -93,7 +103,7 @@ describe('/api/auth/mfa/disable', () => {
     await disableHandler(req as any, res as any);
 
     expect(mockRevokeAllForUser).toHaveBeenCalledWith('user-1');
-    expect(mockClearCookie).toHaveBeenCalledWith(res);
+    expect(mockClearCookie).toHaveBeenCalledWith(res, 'user-1');
     expect(revokedEvents()).toHaveLength(1);
     expect(revokedEvents()[0][1]).toMatchObject({ userId: 'user-1', metadata: { revoked: 2, scope: 'all' } });
   });
@@ -168,9 +178,7 @@ describe('/api/auth/mfa/force-reset', () => {
       { userId: 'target-1', reason: 'Lost authenticator' }
     );
 
-    await forceResetHandler(req as any, res as any);
-
-    expect(res._getStatusCode()).toBe(403);
+    await expect(forceResetHandler(req as any, res as any)).rejects.toThrow('Missing permission: users:moderate');
     expect(mockRevokeAllForUser).not.toHaveBeenCalled();
     expect(mockRemovePasskeys).not.toHaveBeenCalled();
   });

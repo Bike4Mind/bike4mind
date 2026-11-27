@@ -3,7 +3,7 @@ import { createMocks } from 'node-mocks-http';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 /**
- * POST /api/organizations/[id]/upload-logo. The real `verifyOrgAccess` runs here (only the repository
+ * POST /api/organizations/[id]/upload-logo. The real `verifyOrgPermission` runs here (only the repository
  * under it is mocked), so the role bar itself is pinned: an upload deletes the current logo for the
  * whole org, so only the owner, the manager or a platform admin may start one, and everyone else gets
  * the same non-enumerating 404 before anything is read or deleted.
@@ -50,8 +50,22 @@ vi.mock('@bike4mind/database/content', () => {
   return { AppFile };
 });
 
+// Mirrors withTransaction: work queued with runAfterCommit runs only once the callback resolves.
 vi.mock('@bike4mind/database', () => ({
-  withTransaction: async (fn: (session: unknown) => unknown) => fn({}),
+  withTransaction: async (fn: (session: unknown) => unknown) => {
+    const queue = new Map<string, () => Promise<unknown>>();
+    const result = await fn({ queue });
+    for (const work of queue.values()) await work();
+    return result;
+  },
+  runAfterCommit: (
+    session: { queue: Map<string, () => Promise<unknown>> },
+    key: string,
+    work: () => Promise<unknown>
+  ) => {
+    session.queue.set(key, work);
+    return true;
+  },
 }));
 
 const storageDelete = vi.hoisted(() => vi.fn(async () => undefined));
@@ -64,9 +78,17 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
 }));
 
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'bucket' } } }));
+const invalidate = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@bike4mind/server-utils/services/cdn/invalidateRouterCdn', async importActual => ({
+  ...(await importActual<typeof import('@bike4mind/server-utils/services/cdn/invalidateRouterCdn')>()),
+  invalidateRouterPaths: invalidate,
+}));
 vi.mock('@server/utils/browserUploadUrl', () => ({
   resolveBrowserAppFileUploadUrl: (_id: string, url: string) => url,
 }));
+
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '../upload-logo';
 
@@ -84,7 +106,8 @@ const invoke = async (user: { id: string; isAdmin: boolean }, orgId = ORG_ID) =>
     query: { id: orgId },
     body: { fileName: 'logo.png', mimeType: 'image/png', fileSize: 1024 },
   });
-  (req as unknown as { user: unknown }).user = user;
+  (req as unknown as { user: unknown; logger: unknown }).user = user;
+  (req as unknown as { logger: unknown }).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await mockRefs.postHandler!(req, res);
   return res;
 };
@@ -110,6 +133,8 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(storageDelete).not.toHaveBeenCalled();
     expect(appFileFindByIdAndDelete).not.toHaveBeenCalled();
     expect(orgUpdateOne).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -123,6 +148,48 @@ describe('POST /api/organizations/[id]/upload-logo', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ url: 'https://signed.example/put', fileId: 'newfile1' });
     expect(storageDelete).toHaveBeenCalledWith('organizations/old.png');
+    expect(invalidate).toHaveBeenCalledWith(['/org-files/old.png'], expect.objectContaining({ label: 'org-logo' }));
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.logo.updated',
+        actorScope: 'organization',
+        changes: [{ field: 'logoFileId', before: 'oldfile1', after: 'newfile1' }],
+      })
+    );
+  });
+
+  it('keeps the old logo and purges nothing when the transaction fails', async () => {
+    storageGetSignedUrl.mockRejectedValueOnce(new Error('presign failed'));
+
+    await expect(invoke({ id: OWNER, isAdmin: false })).rejects.toThrow('presign failed');
+    expect(storageDelete).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('deletes the old bytes before invalidating the CDN, both after the writes', async () => {
+    await invoke({ id: OWNER, isAdmin: false });
+
+    expect(storageDelete.mock.invocationCallOrder[0]).toBeLessThan(invalidate.mock.invocationCallOrder[0]);
+    expect(appFileFindByIdAndDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      storageDelete.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('answers 200 and skips the CDN purge when the post-commit delete fails', async () => {
+    storageDelete.mockRejectedValueOnce(new Error('s3 down'));
+
+    const res = await invoke({ id: OWNER, isAdmin: false });
+    expect(res._getStatusCode()).toBe(200);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('invalidates nothing when the org had no logo', async () => {
+    orgFindById.mockReturnValue({ populate: vi.fn(async () => ({ ...ORG, name: 'Acme', logo: null })) });
+
+    const res = await invoke({ id: OWNER, isAdmin: false });
+    expect(res._getStatusCode()).toBe(200);
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it('binds the declared fileSize into the presigned PUT, so S3 refuses a logo of any other length', async () => {

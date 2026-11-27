@@ -15,7 +15,7 @@
 // traced modules into a Lambda layout this repo does not produce at PR time, so that layout is
 // NOT covered here; the deployer is where that gap can be closed. The sanitize-html/htmlparser2
 // case that motivated the guard is defused upstream in this repo by the transpilePackages entry
-// (apps/client/next.config.mjs, pinned by packages/scripts/src/checkSanitizeHtmlTranspile.test.ts)
+// (apps/client/next.config.mjs, pinned by packages/scripts/src/checkSanitizeHtmlTranspile.repo.test.ts)
 // plus the dual-published-htmlparser2 override; this probe is the built-artifact check that would
 // catch either mitigation being dropped.
 //

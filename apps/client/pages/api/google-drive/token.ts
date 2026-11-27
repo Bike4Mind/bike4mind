@@ -3,8 +3,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import dayjs from 'dayjs';
-import { getAuthUrl, isInvalidGrantError, refreshAccessToken } from '@server/integrations/google/drive/common';
-import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import {
+  getAuthUrl,
+  isInvalidGrantError,
+  refreshAccessToken,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
+import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 /**
  * Hand the browser the caller's live Google Drive access token, refreshing it first
@@ -33,13 +37,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
 
     // If the access token is still valid, return it
     if (!isAccessTokenExpired) {
-      console.log('using existing access token...');
       return res.json({ accessToken });
     }
 
     // If the access token is expired, refresh it
     try {
-      console.log('refreshing access token...');
       if (!refreshToken) throw new BadRequestError('Refresh token not found');
       const credentials = await refreshAccessToken(refreshToken);
       await User.updateOne(

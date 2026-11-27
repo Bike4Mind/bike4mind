@@ -1,6 +1,7 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
+import type { IdentityProviderSecretPresence } from '@bike4mind/common';
 
 export interface IIdentityProviderDocument extends Document {
   id: string;
@@ -54,7 +55,7 @@ export interface IIdentityProviderDocument extends Document {
  * whether one is stored. See findAllWithSecretPresence.
  */
 export type IdentityProviderWithSecretPresence = IIdentityProviderDocument & {
-  hasSecrets: { decryptionPvk: boolean; privateCert: boolean; clientSecret: boolean };
+  hasSecrets: IdentityProviderSecretPresence;
 };
 
 export interface IIdentityProviderRepository {
@@ -62,6 +63,7 @@ export interface IIdentityProviderRepository {
   findActiveByEmailDomain: (domain: string) => Promise<IIdentityProviderDocument | null>;
   findAll: () => Promise<IIdentityProviderDocument[]>;
   findActiveIDPs: () => Promise<IIdentityProviderDocument[]>;
+  findActiveSamlIdpIdsByIssuer: (issuer: string) => Promise<string[]>;
   findByIdWithSecrets: (id: string) => Promise<IIdentityProviderDocument | null>;
   findAllWithSecrets: () => Promise<IIdentityProviderDocument[]>;
   findAllWithSecretPresence: () => Promise<IdentityProviderWithSecretPresence[]>;
@@ -183,6 +185,12 @@ const IdentityProviderSchema = new Schema<IIdentityProviderDocument>(
 IdentityProviderSchema.index({ emailDomain: 1, isActive: 1 });
 IdentityProviderSchema.index({ type: 1, isActive: 1 });
 
+/** Whether two Okta audiences name the same host; trailing slashes and case are not significant. */
+export function isSameOktaAudience(a: string | undefined, b: string | undefined): boolean {
+  const normalize = (value: string | undefined) => (value ?? '').trim().replace(/\/+$/, '').toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
 class IdentityProviderRepository
   extends BaseRepository<IIdentityProviderDocument>
   implements IIdentityProviderRepository
@@ -208,6 +216,18 @@ class IdentityProviderRepository
 
   async findActiveIDPs(): Promise<IIdentityProviderDocument[]> {
     return this.model.find({ isActive: true }).sort({ emailDomain: 1 });
+  }
+
+  /**
+   * Ids of the active SAML IdPs configured with this issuer (entity ID); more than one when they
+   * share an IdP. Compared trimmed, like the login check in setupSamlStrategy, since the admin form
+   * stores the value as typed. Filtered here rather than in the query: there are only a few SAML IdPs.
+   */
+  async findActiveSamlIdpIdsByIssuer(issuer: string): Promise<string[]> {
+    const wanted = issuer.trim();
+    if (!wanted) return [];
+    const docs = await this.model.find({ type: 'saml', isActive: true }).select('samlConfig.issuer').lean();
+    return docs.filter(doc => doc.samlConfig?.issuer?.trim() === wanted).map(doc => String(doc._id));
   }
 
   /**
@@ -296,9 +316,15 @@ class IdentityProviderRepository
           ? {
               oktaConfig: {
                 ...data.oktaConfig,
-                // '' only when there is no secret on either side, which is the same
-                // "not configured" the truthiness checks downstream already handle.
-                clientSecret: next.oktaConfig?.clientSecret || current?.oktaConfig?.clientSecret || '',
+                // The secret is sent to whatever host the audience names, so the stored one
+                // carries forward only while the audience is unchanged. '' reads downstream as
+                // "not configured".
+                clientSecret:
+                  next.oktaConfig?.clientSecret ||
+                  (isSameOktaAudience(data.oktaConfig.audience, current?.oktaConfig?.audience)
+                    ? current?.oktaConfig?.clientSecret
+                    : '') ||
+                  '',
               },
             }
           : {}),

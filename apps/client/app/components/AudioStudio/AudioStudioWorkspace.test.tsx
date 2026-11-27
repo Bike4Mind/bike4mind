@@ -25,6 +25,7 @@ import { SoundEffectsStudioWorkspace, SpeechStudioWorkspace } from './AudioStudi
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { useAudioStudioDraft } from './useAudioStudioDraft';
+import { useStudioRestore } from '@client/app/components/Studio/restore/studioRestore';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderWithTheme = (ui: React.ReactElement) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
@@ -159,5 +160,25 @@ describe('AudioStudioWorkspace payer note', () => {
     select('Acme', false);
     renderWithTheme(<SoundEffectsStudioWorkspace testId="sound-effects-studio" />);
     expect(screen.queryByTestId('audio-form-payer-note')).not.toBeInTheDocument();
+  });
+});
+
+describe('AudioStudioWorkspace restore from the trail', () => {
+  it('fills the text, says what did not come back, and drops that notice once another provider is picked', () => {
+    renderWithTheme(<SpeechStudioWorkspace testId="speech-studio" />);
+    act(() =>
+      useStudioRestore.getState().requestRestore({
+        medium: 'speech',
+        request: { provider: 'openai', text: 'hello there', stability: 0.4 },
+        lineageInputs: [],
+        fileNames: {},
+      })
+    );
+
+    expect(screen.getByTestId('speech-studio-text-input').querySelector('textarea')).toHaveValue('hello there');
+    expect(screen.getByTestId('speech-studio-restore-notices')).toBeInTheDocument();
+
+    act(() => useAudioGenSettings.getState().applySettings({ ttsProvider: 'elevenlabs' }));
+    expect(screen.queryByTestId('speech-studio-restore-notices')).not.toBeInTheDocument();
   });
 });

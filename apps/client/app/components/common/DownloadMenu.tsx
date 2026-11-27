@@ -8,6 +8,7 @@ import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
 import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 import { buildReplyDownloads, type ReplyDownload } from '@client/app/utils/replyDownloads';
+import { inlineBlessedScripts } from '@client/app/utils/inlineBlessedScripts';
 import { stripSearchResultCardFences } from '@bike4mind/common';
 
 // Utility: Download a file
@@ -21,6 +22,36 @@ export const downloadFile = (content: string, fileName: string, mimeType: string
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+};
+
+const SLOW_PREPARE_TOAST_DELAY_MS = 400;
+
+// Module scope: the menu unmounts on every pick, so a per-instance guard would reset on reopen.
+const htmlDownloadsInFlight = new Set<string>();
+
+const saveHtmlDownload = async (item: ReplyDownload, done: () => void) => {
+  const key = `${item.fileName}\n${item.content}`;
+  if (htmlDownloadsInFlight.has(key)) {
+    toast.info('This download is still being prepared');
+    return;
+  }
+  htmlDownloadsInFlight.add(key);
+  const toastId = `download-prepare-${item.fileName}`;
+  const slowTimer = setTimeout(
+    () => toast.loading('Preparing download...', { id: toastId }),
+    SLOW_PREPARE_TOAST_DELAY_MS
+  );
+  try {
+    downloadFile(await inlineBlessedScripts(item.content), item.fileName, item.mimeType);
+  } catch (error) {
+    console.error('Error preparing HTML download:', error);
+    toast.error('Failed to download HTML');
+  } finally {
+    clearTimeout(slowTimer);
+    toast.dismiss(toastId);
+    htmlDownloadsInFlight.delete(key);
+  }
+  done();
 };
 
 // Utility: Convert Markdown to DOCX
@@ -237,6 +268,10 @@ export const ReplyDownloadMenuItems: React.FC<{ content: string; fileName: strin
           className="download-menu-item-detected"
           data-testid={`download-menu-detected-${item.key}`}
           onClick={() => {
+            if (item.mimeType === 'text/html') {
+              void saveHtmlDownload(item, done);
+              return;
+            }
             downloadFile(item.content, item.fileName, item.mimeType);
             done();
           }}

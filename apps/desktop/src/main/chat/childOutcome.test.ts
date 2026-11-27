@@ -73,7 +73,7 @@ describe('childOutcomeDisplay', () => {
       childOutcomeDisplay(child({ stopReason: 'aborted' })),
     ];
     expect(said).toEqual([
-      'The session "Build the XP engine" stopped early after too many steps, so its work may be incomplete.',
+      'The session "Build the XP engine" paused at its turn budget before finishing, so its work is incomplete. Send it a message to carry on.',
       'The session "Build the XP engine" stopped early because it ran out of room, so its work may be incomplete.',
       'The session "Build the XP engine" has finished, but its last reply was cut short.',
       'The session "Build the XP engine" was stopped before it finished.',

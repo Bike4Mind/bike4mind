@@ -8,6 +8,7 @@ import { isAxiosError } from 'axios';
 import {
   AuthStrategy,
   INTEGRATION_CATEGORY_LABELS,
+  isMcpPresetId,
   type DerivedIntegration,
   type IntegrationCapabilityKind,
   type IntegrationId,
@@ -28,6 +29,7 @@ import JiraWebhookSection from '@client/app/components/ProfileModal/SettingsTabC
 import WebhookSubscriptionSection from '@client/app/components/ProfileModal/SettingsTabContent/WebhookSubscriptionSection';
 import McpSection from '@client/app/components/ProfileModal/SettingsTabContent/McpSection';
 import IntegrationLogo from './IntegrationLogo';
+import CustomMcpConnectorPanel from './customMcp/CustomMcpConnectorPanel';
 import { ADMIN_ONLY_NOTE, IntegrationStatusLabel, RequestButton, requestCountText } from './IntegrationStatusLabel';
 import type { ConnectionState } from './galleryModel';
 import { isConnectable, type ConnectableId } from './useIntegrationConnections';
@@ -122,20 +124,28 @@ const AccountConnectionPanel = ({
   return (
     <Stack gap="12px">
       <Stack direction="row" gap="8px" flexWrap="wrap">
-        {connection.connected ? (
+        {!connection.connected && (
+          <Button
+            size="sm"
+            loading={connecting}
+            disabled={disconnecting}
+            onClick={onConnect}
+            data-testid="integrations-drawer-connect-btn"
+          >
+            {connection.needsReconnect ? `Reconnect ${name}` : `Connect ${name}`}
+          </Button>
+        )}
+        {(connection.connected || connection.needsReconnect) && (
           <Button
             size="sm"
             variant="outlined"
             color="neutral"
             loading={disconnecting}
+            disabled={connecting}
             onClick={disconnect}
             data-testid="integrations-drawer-disconnect-btn"
           >
             Disconnect {name}
-          </Button>
-        ) : (
-          <Button size="sm" loading={connecting} onClick={onConnect} data-testid="integrations-drawer-connect-btn">
-            {connection.needsReconnect ? `Reconnect ${name}` : `Connect ${name}`}
           </Button>
         )}
         <Button
@@ -150,7 +160,7 @@ const AccountConnectionPanel = ({
       </Stack>
       {connection.needsReconnect && (
         <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-          The connection to {name} expired or was revoked. Reconnect to use it again.
+          The connection to {name} expired or was revoked. Reconnect to use it again, or disconnect it.
         </Typography>
       )}
     </Stack>
@@ -288,15 +298,12 @@ const IntegrationDrawer = ({
             onClick={() => openInNewTab(CLI_DOCS_URL)}
           />
         );
-      case 'google-calendar':
-        return (
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            Briefings are booked on a shared Bike4Mind calendar that an admin sets up. Nothing on your own calendar is
-            read or changed, so there is nothing to connect here.
-          </Typography>
-        );
+      case 'custom-mcp':
+        return <CustomMcpConnectorPanel />;
       default:
-        return null;
+        return isMcpPresetId(id) ? (
+          <CustomMcpConnectorPanel presetId={id} presetName={derived?.integration.name} />
+        ) : null;
     }
   };
 

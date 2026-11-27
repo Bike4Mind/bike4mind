@@ -76,6 +76,31 @@ describe('fetchUpstreamFeed video vetting', () => {
   });
 });
 
+describe('fetchUpstreamFeed image vetting', () => {
+  const pageWith = (note: Record<string, unknown>) => json({ data: [{ ...NOTE, ...note }], next_cursor: null });
+
+  it("keeps an image served from the upstream's own media route", async () => {
+    const image = {
+      landscape_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/image-landscape',
+      portrait_url: 'https://upstream.example.com/api/v1/whats-new/media/rn1/image-portrait',
+    };
+    mockSafeFetch.mockResolvedValue(pageWith({ image }));
+    expect((await fetchOnce())?.data[0].image).toEqual(image);
+  });
+
+  it('drops an image with any URL outside the allowlist and keeps the video', async () => {
+    const video = { landscape_url: 'https://d111.cloudfront.net/wide.mp4', portrait_url: null };
+    const image = {
+      landscape_url: 'https://d111.cloudfront.net/wide.png',
+      portrait_url: 'https://evil.example.com/t.png',
+    };
+    mockSafeFetch.mockResolvedValue(pageWith({ video, image }));
+    const note = (await fetchOnce())?.data[0];
+    expect(note?.image).toBeNull();
+    expect(note?.video).toEqual(video);
+  });
+});
+
 describe('fetchUpstreamFeed', () => {
   it('returns null without fetching when unset', async () => {
     vi.stubEnv('WHATS_NEW_FEED_URL', '');

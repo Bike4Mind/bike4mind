@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import React from 'react';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { renderHook } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -81,5 +82,50 @@ describe('useSemanticSearch onSuccess', () => {
     expect(state.semanticDebugInfo?.query).toBe('greeting');
     expect(state.semanticDebugInfo?.scores).toHaveLength(1);
     expect(state.isSemanticSearching).toBe(false);
+  });
+});
+
+describe('useSemanticSearch onError', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useAdvancedSearch.setState({ semanticSearchError: null });
+  });
+
+  const axiosError = (status: number, data: unknown) =>
+    new AxiosError(`Request failed with status code ${status}`, 'ERR_BAD_REQUEST', undefined, undefined, {
+      status,
+      statusText: '',
+      data,
+      headers: {},
+      config: { headers: new AxiosHeaders() },
+    });
+
+  it("surfaces the server's insufficient-credits message instead of the generic axios text", async () => {
+    const message = 'You do not have enough credits for semantic search.';
+    post.mockRejectedValue(axiosError(422, { errorCode: 'insufficient_credits', error: message }));
+    const { result } = renderSemanticSearch();
+
+    await expect(result.current.mutateAsync({ query: 'anything' })).rejects.toBeDefined();
+
+    expect(useAdvancedSearch.getState().semanticSearchError).toBe(message);
+  });
+
+  it("surfaces the server's message when AI features are disabled on the account (403)", async () => {
+    const message = 'AI features are disabled on your account by an administrator. Please contact support.';
+    post.mockRejectedValue(axiosError(403, { error: message }));
+    const { result } = renderSemanticSearch();
+
+    await expect(result.current.mutateAsync({ query: 'anything' })).rejects.toBeDefined();
+
+    expect(useAdvancedSearch.getState().semanticSearchError).toBe(message);
+  });
+
+  it('keeps the axios message for other errors', async () => {
+    post.mockRejectedValue(axiosError(500, { error: 'boom' }));
+    const { result } = renderSemanticSearch();
+
+    await expect(result.current.mutateAsync({ query: 'anything' })).rejects.toBeDefined();
+
+    expect(useAdvancedSearch.getState().semanticSearchError).toBe('Request failed with status code 500');
   });
 });

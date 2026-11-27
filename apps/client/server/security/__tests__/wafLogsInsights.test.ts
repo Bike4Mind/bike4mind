@@ -13,8 +13,8 @@ import {
 import { WAFV2Client, GetLoggingConfigurationCommand } from '@aws-sdk/client-wafv2';
 import { getWafBlockedRequests, getWafLogsInsightsOverview } from '../wafLogsInsights';
 import { WAF_MASKED_HEADER_VALUE } from '../wafHeaderRedaction';
-import { wafQueryCache } from '../wafQueryCache';
-import type { WafCustomRange } from '../wafSharedHelpers';
+import { wafQueryCache } from '@bike4mind/server-utils/security/wafQueryCache';
+import type { WafCustomRange } from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 const cloudFrontMock = mockClient(CloudFrontClient);
 const cloudWatchLogsMock = mockClient(CloudWatchLogsClient);
@@ -92,6 +92,32 @@ describe('wafLogsInsights', () => {
       expect(result.logGroupName).toBe('aws-waf-logs-bike4mind-dev');
       expect(result.logGroupRegion).toBe('us-east-1');
       expect(result.checkedAt).toBeDefined();
+    });
+
+    it('serves webhook paths in the aggregates without their routing segment and merges the rows', async () => {
+      const first = 'ab12cd'.padEnd(64, '0');
+      const second = 'ef34ab'.padEnd(64, '1');
+      const row = (token: string, requests: string, peakRequests: string) => [
+        { field: 'uri', value: `/api/webhooks/jira/${token}` },
+        { field: 'requests', value: requests },
+        { field: 'ip', value: '203.0.113.7' },
+        { field: 'peakRequests', value: peakRequests },
+      ];
+      cloudWatchLogsMock.on(GetQueryResultsCommand).resolves({
+        status: 'Complete',
+        results: [row(first, '7', '42'), row(second, '5', '30')],
+      });
+
+      const result = await getWafLogsInsightsOverview({ stage: 'dev', range: '24h' });
+
+      const expected = '/api/webhooks/jira/[redacted]';
+      expect(result.trafficCharacteristics?.topBlockedUris).toEqual([{ name: expected, count: 12 }]);
+      expect(result.managedRuleGroups?.rateLimitUsage.topIps).toEqual([
+        { ip: '203.0.113.7', uri: expected, peakRequests: 42 },
+      ]);
+      const served = JSON.stringify(result);
+      expect(served).not.toContain(first);
+      expect(served).not.toContain(second);
     });
 
     it('should handle case when WAF is not attached', async () => {
@@ -333,14 +359,14 @@ describe('wafLogsInsights', () => {
   });
 
   describe('getWafBlockedRequests', () => {
-    const blockedLogRecord = (headers: Array<{ name: string; value: string }>) =>
+    const blockedLogRecord = (headers: Array<{ name: string; value: string }>, uri = '/api/chat') =>
       JSON.stringify({
         action: 'BLOCK',
         terminatingRuleId: 'ai-route-rate-limit',
         httpRequest: {
           clientIp: '203.0.113.7',
           country: 'US',
-          uri: '/api/chat',
+          uri,
           args: '',
           httpVersion: 'HTTP/2.0',
           httpMethod: 'POST',
@@ -349,13 +375,13 @@ describe('wafLogsInsights', () => {
         },
       });
 
-    function mockBlockedRequest(headers: Array<{ name: string; value: string }>) {
+    function mockBlockedRequest(headers: Array<{ name: string; value: string }>, uri?: string) {
       cloudWatchLogsMock.on(GetQueryResultsCommand).resolves({
         status: 'Complete',
         results: [
           [
             { field: '@timestamp', value: '2026-09-03 01:02:03.000' },
-            { field: '@message', value: blockedLogRecord(headers) },
+            { field: '@message', value: blockedLogRecord(headers, uri) },
           ],
         ],
       });
@@ -381,6 +407,17 @@ describe('wafLogsInsights', () => {
         WAF_MASKED_HEADER_VALUE,
       ]);
       expect(JSON.stringify(result)).not.toContain('the_secret_value');
+    });
+
+    it('serves a webhook path without its routing segment', async () => {
+      const token = 'ab12cd'.padEnd(64, '0');
+      mockBlockedRequest([{ name: 'Host', value: 'app.example.com' }], `/api/webhooks/github/${token}`);
+
+      const result = await getWafBlockedRequests({ stage: 'dev', range: '24h' });
+
+      expect(result.requests[0].uri).toBe('/api/webhooks/github/[redacted]');
+      expect(result.requests[0].args).toBe('');
+      expect(JSON.stringify(result)).not.toContain(token);
     });
 
     it('still serves the diagnostic headers needed to triage the block', async () => {

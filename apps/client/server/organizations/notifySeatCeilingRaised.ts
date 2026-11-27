@@ -1,9 +1,9 @@
-import { postMessageToSlack } from '@server/integrations/slack/slack';
+import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { adminAuditLogRepository } from '@bike4mind/database';
 import { adminAuditService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database/auth';
 import type { AuditActor } from '@bike4mind/common';
-import { systemAuditActor } from '@server/utils/adminAudit';
+import { systemAuditActor } from '@bike4mind/server-utils/utils/adminAudit';
 
 interface SeatCeilingRaisedLogger {
   info: (message: string, ...args: unknown[]) => void;
@@ -19,7 +19,8 @@ export type SeatCeilingRaiseTrigger =
   | 'oauth-signup'
   | 'oauth-link-verification'
   | 'admin-verification'
-  | 'admin-backfill';
+  | 'admin-backfill'
+  | 'admin-unblock';
 
 interface SeatCeilingRaisedParams {
   organizationId: string;

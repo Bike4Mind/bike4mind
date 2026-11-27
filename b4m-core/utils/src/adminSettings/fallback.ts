@@ -1,7 +1,15 @@
-import { ModelInfo } from '@bike4mind/common';
+import { ModelBackend, ModelInfo } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { isAxiosError } from 'axios';
-import { getLlmByModel, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import {
+  directTwinId,
+  getLlmByModel,
+  isHiddenReasoningOnlyEmptyError,
+  isLlmTimeoutError,
+  isStreamEndedWithoutFinishError,
+  type ApiKeyTable,
+  type ICompletionBackend,
+} from '@bike4mind/llm-adapters';
 
 /**
  * Fallback attempt result
@@ -81,16 +89,77 @@ export function isSafetyRefusalError(error: Error): boolean {
   return error.message.toLowerCase().includes(SAFETY_REFUSAL_MESSAGE);
 }
 
+const OPENAI_POLICY_REFUSAL_CODES = new Set(['cyber_policy', 'content_policy_violation', 'content_filter']);
+
+function hasPolicyRefusalCode(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || !('code' in value)) return false;
+  return typeof value.code === 'string' && OPENAI_POLICY_REFUSAL_CODES.has(value.code);
+}
+
+export function isOpenAiPolicyRefusalError(error: Error): boolean {
+  if (hasPolicyRefusalCode(error)) return true;
+  if ('error' in error && hasPolicyRefusalCode(error.error)) return true;
+  if (isAxiosError<unknown>(error)) {
+    const body = error.response?.data;
+    if (typeof body === 'object' && body !== null && 'error' in body && hasPolicyRefusalCode(body.error)) return true;
+  }
+  return /\bcyber_policy\b/.test(error.message);
+}
+
+/** Expected provider outcomes that should not page the error alert channel. */
+export function isExpectedCompletionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (isLlmTimeoutError(error) || isSafetyRefusalError(error) || isOpenAiPolicyRefusalError(error))
+  );
+}
+
+// Provider account spend/credit exhaustion: the operator's key is out of budget, so every model on
+// that backend fails the same way until someone raises the limit. Anthropic returns these as a 400
+// invalid_request_error, OpenAI as a 429 insufficient_quota.
+const PROVIDER_SPEND_LIMIT_MESSAGES = [
+  'reached your specified api usage limits',
+  'credit balance is too low',
+  'insufficient_quota',
+  'exceeded your current quota',
+];
+
+/**
+ * Whether the provider refused the call because the operator's account hit its spend limit or ran
+ * out of credit. Never transient: retrying the same backend is pointless, so the caller should
+ * leave the whole backend and hop to another provider path for the same model.
+ */
+export function isProviderSpendLimitError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  // Gemini words its per-minute rate limit (429 RESOURCE_EXHAUSTED) like OpenAI's exhausted quota.
+  if (message.includes('resource_exhausted')) return false;
+  return PROVIDER_SPEND_LIMIT_MESSAGES.some(trigger => message.includes(trigger));
+}
+
 /**
  * Error types that should trigger fallback attempts
  */
 export function shouldTriggerFallback(error: Error): boolean {
   const message = error.message.toLowerCase();
 
+  if (isProviderSpendLimitError(error)) {
+    return true;
+  }
+
   // Rate limiting, server errors, timeouts. Status sourced from both Axios and AWS SDK
   // (e.g. Bedrock's 503 ServiceUnavailableException) error shapes.
   const status = getHttpStatus(error);
   if (status === 429 || status === 502 || status === 503 || status === 504) {
+    return true;
+  }
+
+  // A stream that closed with no finish reason and no output is a provider blip, not a bad request.
+  if (isStreamEndedWithoutFinishError(error)) {
+    return true;
+  }
+
+  // A turn that finished after only hidden reasoning is a one-off sampling outcome, not a bad request.
+  if (isHiddenReasoningOnlyEmptyError(error)) {
     return true;
   }
 
@@ -112,8 +181,8 @@ export function shouldTriggerFallback(error: Error): boolean {
     return true;
   }
 
-  // Check for TypeError: terminated (from undici/fetch)
-  if (error.name === 'TypeError' && message.includes('terminated')) {
+  // Check for TypeError: terminated / fetch failed (from undici/fetch)
+  if (error.name === 'TypeError' && (message.includes('terminated') || message === 'fetch failed')) {
     return true;
   }
 
@@ -144,9 +213,9 @@ export function shouldTriggerFallback(error: Error): boolean {
     'is not available',
     // Google's 404 for a model closed upstream: "models/<id> is no longer available to new users".
     'no longer available to new users',
-    // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
-    // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
-    // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
+    // Safety-classifier refusal: the Anthropic backends surface a stop_reason: 'refusal' as a thrown
+    // error when the model's refusalFallback resolves true, so blocked requests continue on the
+    // model's chain in FALLBACK_PREFERENCES below.
     SAFETY_REFUSAL_MESSAGE,
   ];
 
@@ -158,6 +227,16 @@ export function shouldTriggerFallback(error: Error): boolean {
  * with the same model before falling back to a different one.
  */
 export function isOverloadedError(error: Error): boolean {
+  // Our own timers gave up on a slow model; the provider never said it was busy.
+  if (isLlmTimeoutError(error)) {
+    return false;
+  }
+
+  // An exhausted account quota can arrive as a 429 (OpenAI) but backing off never clears it.
+  if (isProviderSpendLimitError(error)) {
+    return false;
+  }
+
   const message = error.message.toLowerCase();
 
   // Check HTTP status codes from both Axios and AWS SDK (e.g. Bedrock 503) error shapes.
@@ -234,12 +313,6 @@ export function validateFallbackModel(
  * a chain pointing at a retired model is an outage waiting for an incident.
  */
 export const FALLBACK_PREFERENCES: Record<string, string[]> = {
-  // Gemini models fallback to Claude or GPT
-  'gemini-2.5-pro-preview-05-06': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
-  'gemini-2.5-flash-preview-05-20': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-  'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
-  'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-
   // Top tier (Fable 5 / Opus 4.7-5.5) degrades within the Opus tier before dropping to Sonnet.
   // Fable 5 leads with Opus 5: same price as 4.8, near-Fable capability, and its safety
   // classifiers intervene far less often - so a Fable refusal is most likely to succeed there.
@@ -252,6 +325,10 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
     'claude-sonnet-4-6',
     'gpt-5',
   ],
+  // Opus 4.8 leads: Anthropic names it and Opus 5 as Fable 5.1/5.2's refusal-fallback targets, while
+  // Opus 5.5 runs similar classifiers and settles a repeat refusal as a decline.
+  'claude-fable-5-2': ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5', 'gpt-5'],
+  'claude-fable-5-1': ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-5-5', 'claude-sonnet-5', 'gpt-5'],
   'claude-haiku-5-5': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'claude-opus-5-5': [
     'claude-opus-5',
@@ -302,15 +379,17 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   'global.anthropic.claude-opus-4-5-20251101-v1:0': [
     'claude-opus-4-5-20251101',
     'claude-sonnet-4-6',
-    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5-5',
     'gpt-5',
   ],
   'global.anthropic.claude-haiku-5-5': ['claude-haiku-5-5', 'claude-haiku-4-5-20251001', 'gpt-4o-mini'],
   'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
-  'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'global.anthropic.claude-sonnet-5-5': ['claude-sonnet-5-5', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
   'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
+  // Leads with Sonnet 5.5, not the direct twin: Anthropic retires claude-sonnet-4-5-20250929
+  // on 2026-11-30 and names Sonnet 5.5 as its replacement.
   'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
-    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5-5',
     'claude-sonnet-5',
     'claude-sonnet-4-6',
     'gpt-5',
@@ -318,27 +397,24 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
   'us.anthropic.claude-haiku-4-5-20251001-v1:0': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
 
   // Claude 4.5/4.6 models fallback hierarchy
-  'claude-opus-4-5-20251101': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5', 'claude-haiku-4-5-20251001'],
+  'claude-opus-4-5-20251101': ['claude-sonnet-4-6', 'claude-sonnet-5-5', 'gpt-5', 'claude-haiku-4-5-20251001'],
   'claude-opus-4-6': [
     'claude-sonnet-5',
     'claude-sonnet-4-6',
-    'claude-sonnet-4-5-20250929',
+    'claude-sonnet-5-5',
     'gpt-5',
     'claude-haiku-4-5-20251001',
   ],
-  'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
-  'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
-  'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
-
-  // Deprecated Claude models fallback to modern versions
-  'claude-3-5-haiku-20241022': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-  'us.anthropic.claude-3-5-haiku-20241022-v1:0': ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'gpt-4o-mini'],
-  'claude-3-5-sonnet-20241022': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
-  'claude-3-7-sonnet-20250219': ['claude-sonnet-4-6', 'gpt-4o', 'claude-haiku-4-5-20251001'],
-  'claude-3-opus-20240229': ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-4o'],
-  'claude-3-haiku-20240307': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
-  'us.anthropic.claude-3-5-sonnet-20241022-v2:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
-  'us.anthropic.claude-3-7-sonnet-20250219-v1:0': ['global.anthropic.claude-sonnet-4-6', 'gpt-4o'],
+  'claude-sonnet-5-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+  'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-5-5', 'gpt-5'],
+  'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-4-5-20251101', 'gpt-5'],
+  'claude-sonnet-4-5-20250929': [
+    'claude-sonnet-5-5',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5-20251001',
+    'gpt-5',
+  ],
 
   // GPT models fallback to Claude
   'gpt-4o': ['claude-sonnet-4-6', 'claude-opus-4-6', 'gpt-5.5'],
@@ -349,7 +425,7 @@ export const FALLBACK_PREFERENCES: Record<string, string[]> = {
 export const DEFAULT_FALLBACK_CHAIN: string[] = [
   'claude-sonnet-5',
   'claude-sonnet-4-6',
-  'claude-sonnet-4-5-20250929',
+  'claude-sonnet-5-5',
   'gpt-5',
   'claude-haiku-4-5-20251001',
 ];
@@ -373,7 +449,8 @@ function findAutomaticFallback(
   logger: Logger,
   excludeModelIds?: Set<string>,
   preferUntriedBackend?: boolean,
-  requireTools?: boolean
+  requireTools?: boolean,
+  excludeBackends?: ReadonlySet<string>
 ): ModelInfo | null {
   logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
 
@@ -381,7 +458,30 @@ function findAutomaticFallback(
   // run (see ChatCompletionInvoke). Selecting one here would trade a clean fallback for
   // a raw provider error on the next hop, so it is not a candidate.
   const hasValidKey = (m: ModelInfo) =>
-    !m.disabled && canServeChat(m, requireTools) && !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
+    !excludeBackends?.has(m.backend) &&
+    !m.disabled &&
+    canServeChat(m, requireTools) &&
+    !!apiKeyTable[m.backend] &&
+    apiKeyTable[m.backend] !== 'expired';
+
+  // The original's whole backend is out (spend limit): the same model over Bedrock is the closest
+  // substitute. Bedrock takes no key (IAM), and is listed only when reachable, so a listed,
+  // enabled twin is runnable even though hasValidKey would skip it.
+  if (originalModel.backend && excludeBackends?.has(originalModel.backend)) {
+    const routeTwin = availableModels.find(
+      m =>
+        m.backend === ModelBackend.Bedrock &&
+        !excludeBackends.has(m.backend) &&
+        !excludeModelIds?.has(m.id) &&
+        !m.disabled &&
+        canServeChat(m, requireTools) &&
+        directTwinId(m) === originalModel.id
+    );
+    if (routeTwin) {
+      logger.info(`Found same-model fallback on Bedrock: ${routeTwin.id}`);
+      return routeTwin;
+    }
+  }
 
   // Get preference list for this model. Copied because the table is shared and
   // the generic tail below is pushed onto this list.
@@ -479,6 +579,18 @@ export type LlmWithFallbackOptions = {
   endUserId?: string | null;
   /** The request carries tools, so only a tool-capable model may take over. */
   requireTools?: boolean;
+  /**
+   * Backends that cannot serve any model this request (e.g. the provider account hit its spend
+   * limit). Never selected, and an original on one of them hops to its Bedrock twin first.
+   */
+  excludeBackends?: ReadonlySet<string>;
+  /**
+   * The caller's model admission (b4m-core/services/src/llm/modelAdmission.ts). A fallback the user
+   * could not have picked directly - entitlement-gated, admin-disabled, or unpriced - is never
+   * selected: a non-admitted frontend fallback is dropped in favour of automatic selection, and
+   * automatic selection skips non-admitted candidates.
+   */
+  isAdmitted?: (modelId: string) => Promise<boolean>;
 };
 
 /**
@@ -514,6 +626,28 @@ export async function getLlmWithFallback(
     fallbackModelId = undefined;
   }
 
+  const excludeBackends = options.excludeBackends;
+  if (fallbackModelId && excludeBackends?.size) {
+    const fallbackBackend = availableModels.find(m => m.id === fallbackModelId)?.backend;
+    if (fallbackBackend && excludeBackends.has(fallbackBackend)) {
+      logger.warn(
+        `Fallback model ${fallbackModelId} is on unavailable backend ${fallbackBackend}; selecting automatically`
+      );
+      fallbackModelId = undefined;
+    }
+  }
+
+  const isAdmitted = options.isAdmitted;
+  if (isAdmitted) {
+    const admitted = await Promise.all(availableModels.map(m => isAdmitted(m.id)));
+    const listed = availableModels.some(m => m.id === fallbackModelId);
+    availableModels = availableModels.filter((_, i) => admitted[i]);
+    if (fallbackModelId && listed && !availableModels.some(m => m.id === fallbackModelId)) {
+      logger.warn(`Fallback model ${fallbackModelId} is not admitted for this user; selecting automatically`);
+      fallbackModelId = undefined;
+    }
+  }
+
   // If no fallback model provided, try to find one automatically
   if (!fallbackModelId) {
     logger.warn('⚠️ No fallback model provided, attempting automatic fallback selection');
@@ -524,7 +658,8 @@ export async function getLlmWithFallback(
       logger,
       excludeModelIds,
       options.preferUntriedBackend,
-      options.requireTools
+      options.requireTools,
+      excludeBackends
     );
 
     if (!automaticFallback) {

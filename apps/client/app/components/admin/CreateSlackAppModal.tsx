@@ -1,8 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
-  Modal,
-  ModalDialog,
-  ModalClose,
   Typography,
   Stack,
   Button,
@@ -13,12 +10,10 @@ import {
   Box,
   Alert,
   Switch,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Divider,
 } from '@mui/joy';
-import { Info, Warning as WarningIcon } from '@mui/icons-material';
+import { AdminDialog, AdminDialogFooter } from '@client/app/components/admin/shared/AdminDialog';
+import Info from '@mui/icons-material/Info';
 import { useBrandingSettings } from '@client/app/hooks/data/settings';
 import { api } from '@client/app/contexts/ApiContext';
 import { generateFullManifest } from '@bike4mind/common';
@@ -141,256 +136,255 @@ export default function CreateSlackAppModal({ open, onClose, onSuccess }: Create
 
   return (
     <>
-      <Modal open={open} onClose={handleClose}>
-        <ModalDialog
-          sx={{
-            maxWidth: '90vw',
-            width: 1000,
-            maxHeight: '90vh',
-            overflow: 'auto',
-          }}
-        >
-          <ModalClose disabled={loading} />
-          <Typography level="h4" component="h2">
-            Create Slack App from Manifest
-          </Typography>
+      <AdminDialog
+        open={open}
+        onClose={handleClose}
+        closeDisabled={loading}
+        title="Create Slack app from manifest"
+        width={1000}
+        data-testid="create-slack-app-modal"
+      >
+        <form onSubmit={handleSubmit}>
+          <Stack spacing={3}>
+            <Alert color="primary" startDecorator={<Info />}>
+              This will create a new Slack app using the manifest below. Make sure to configure the values correctly
+              before submitting.
+            </Alert>
 
-          <form onSubmit={handleSubmit}>
-            <Stack spacing={3}>
-              <Alert color="primary" startDecorator={<Info />}>
-                This will create a new Slack app using the manifest below. Make sure to configure the values correctly
-                before submitting.
+            {error && (
+              <Alert color="danger">
+                <Typography level="body-sm">{error}</Typography>
               </Alert>
+            )}
 
-              {error && (
-                <Alert color="danger">
-                  <Typography level="body-sm">{error}</Typography>
-                </Alert>
-              )}
+            {success && (
+              <Alert color="success">
+                <Typography level="body-sm">Slack app created successfully!</Typography>
+              </Alert>
+            )}
 
-              {success && (
-                <Alert color="success">
-                  <Typography level="body-sm">Slack app created successfully!</Typography>
-                </Alert>
-              )}
+            <Stack direction="row" spacing={2}>
+              {/* Form Column */}
+              <Box sx={{ flex: 1 }}>
+                <Typography level="title-md" sx={{ mb: 2 }}>
+                  App Configuration
+                </Typography>
 
-              <Stack direction="row" spacing={2}>
-                {/* Form Column */}
-                <Box sx={{ flex: 1 }}>
-                  <Typography level="title-md" sx={{ mb: 2 }}>
-                    App Configuration
-                  </Typography>
+                <Stack spacing={2}>
+                  <FormControl required>
+                    <FormLabel>App Name</FormLabel>
+                    <Input
+                      value={formData.name}
+                      onChange={e => setFormData({ ...formData, name: e.target.value })}
+                      placeholder={defaultBotName}
+                      disabled={loading}
+                    />
+                  </FormControl>
 
-                  <Stack spacing={2}>
-                    <FormControl required>
-                      <FormLabel>App Name</FormLabel>
+                  <FormControl required>
+                    <FormLabel>Description</FormLabel>
+                    <Input
+                      value={formData.description}
+                      onChange={e => setFormData({ ...formData, description: e.target.value })}
+                      placeholder={defaultBotDescription}
+                      disabled={loading}
+                    />
+                  </FormControl>
+
+                  <FormControl required>
+                    <FormLabel>Background Color</FormLabel>
+                    <Stack direction="row" spacing={1} alignItems="center">
                       <Input
-                        value={formData.name}
-                        onChange={e => setFormData({ ...formData, name: e.target.value })}
-                        placeholder={defaultBotName}
+                        type="color"
+                        value={formData.backgroundColor}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            backgroundColor: e.target.value,
+                          })
+                        }
+                        sx={{ width: 60, height: 40 }}
                         disabled={loading}
                       />
-                    </FormControl>
-
-                    <FormControl required>
-                      <FormLabel>Description</FormLabel>
                       <Input
-                        value={formData.description}
-                        onChange={e => setFormData({ ...formData, description: e.target.value })}
-                        placeholder={defaultBotDescription}
+                        value={formData.backgroundColor}
+                        onChange={e =>
+                          setFormData({
+                            ...formData,
+                            backgroundColor: e.target.value,
+                          })
+                        }
+                        placeholder="#2c2d30"
                         disabled={loading}
+                        sx={{ flex: 1 }}
                       />
-                    </FormControl>
+                    </Stack>
+                  </FormControl>
 
-                    <FormControl required>
-                      <FormLabel>Background Color</FormLabel>
-                      <Stack direction="row" spacing={1} alignItems="center">
-                        <Input
-                          type="color"
-                          value={formData.backgroundColor}
-                          onChange={e =>
-                            setFormData({
-                              ...formData,
-                              backgroundColor: e.target.value,
-                            })
-                          }
-                          sx={{ width: 60, height: 40 }}
-                          disabled={loading}
-                        />
-                        <Input
-                          value={formData.backgroundColor}
-                          onChange={e =>
-                            setFormData({
-                              ...formData,
-                              backgroundColor: e.target.value,
-                            })
-                          }
-                          placeholder="#2c2d30"
-                          disabled={loading}
-                          sx={{ flex: 1 }}
-                        />
-                      </Stack>
-                    </FormControl>
+                  <FormControl required>
+                    <FormLabel>Base URL</FormLabel>
+                    <Input
+                      value={formData.baseUrl}
+                      onChange={e => setFormData({ ...formData, baseUrl: e.target.value })}
+                      placeholder={currentUrl}
+                      disabled={loading}
+                    />
+                  </FormControl>
 
-                    <FormControl required>
-                      <FormLabel>Base URL</FormLabel>
-                      <Input
-                        value={formData.baseUrl}
-                        onChange={e => setFormData({ ...formData, baseUrl: e.target.value })}
-                        placeholder={currentUrl}
-                        disabled={loading}
-                      />
-                    </FormControl>
+                  <FormControl required>
+                    <FormLabel>Slack Config Token</FormLabel>
+                    <Input
+                      type="password"
+                      value={formData.configToken}
+                      slotProps={{ input: { 'data-testid': 'create-slack-app-token-input' } }}
+                      onChange={e => setFormData({ ...formData, configToken: e.target.value })}
+                      placeholder="xoxp-..."
+                      disabled={loading}
+                    />
+                    <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.secondary' }}>
+                      Go to{' '}
+                      <a
+                        href="https://api.slack.com/apps"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: 'inherit', textDecoration: 'underline' }}
+                      >
+                        api.slack.com/apps
+                      </a>
+                      , scroll below the app list, and click Generate Token under Your App Configuration Tokens.
+                    </Typography>
+                  </FormControl>
 
-                    <FormControl required>
-                      <FormLabel>Slack Config Token</FormLabel>
-                      <Input
-                        type="password"
-                        value={formData.configToken}
-                        onChange={e => setFormData({ ...formData, configToken: e.target.value })}
-                        placeholder="xoxp-..."
-                        disabled={loading}
-                      />
-                      <Typography level="body-xs" sx={{ mt: 0.5, color: 'text.secondary' }}>
-                        Go to{' '}
-                        <a
-                          href="https://api.slack.com/apps"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ color: 'inherit', textDecoration: 'underline' }}
-                        >
-                          api.slack.com/apps
-                        </a>
-                        , scroll below the app list, and click Generate Token under Your App Configuration Tokens.
+                  <Divider sx={{ my: 1 }} />
+
+                  <FormControl
+                    orientation="horizontal"
+                    sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
+                    <Box>
+                      <FormLabel>Workflow Steps</FormLabel>
+                      <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                        Enable custom Slack Workflow functions (requires a paid Slack plan)
                       </Typography>
-                    </FormControl>
+                    </Box>
+                    <Switch
+                      data-testid="workflow-steps-toggle"
+                      checked={formData.enableWorkflowSteps}
+                      onChange={e => handleWorkflowStepsToggle(e.target.checked)}
+                      disabled={loading}
+                    />
+                  </FormControl>
+                </Stack>
+              </Box>
 
-                    <Divider sx={{ my: 1 }} />
+              {/* Manifest Preview Column */}
+              <Box sx={{ flex: 1 }}>
+                <Typography level="title-md" sx={{ mb: 2 }}>
+                  Manifest Preview
+                </Typography>
 
-                    <FormControl
-                      orientation="horizontal"
-                      sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                    >
-                      <Box>
-                        <FormLabel>Workflow Steps</FormLabel>
-                        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                          Enable custom Slack Workflow functions (requires a paid Slack plan)
-                        </Typography>
-                      </Box>
-                      <Switch
-                        data-testid="workflow-steps-toggle"
-                        checked={formData.enableWorkflowSteps}
-                        onChange={e => handleWorkflowStepsToggle(e.target.checked)}
-                        disabled={loading}
-                      />
-                    </FormControl>
-                  </Stack>
-                </Box>
-
-                {/* Manifest Preview Column */}
-                <Box sx={{ flex: 1 }}>
-                  <Typography level="title-md" sx={{ mb: 2 }}>
-                    Manifest Preview
-                  </Typography>
-
-                  <Textarea
-                    value={JSON.stringify(manifest, null, 2)}
-                    readOnly
-                    minRows={20}
-                    maxRows={20}
-                    sx={{
-                      fontFamily: 'monospace',
-                      fontSize: '0.75rem',
-                      '& textarea': {
-                        cursor: 'default',
-                      },
-                    }}
-                  />
-                </Box>
-              </Stack>
-
-              <Stack direction="row" spacing={2} justifyContent="flex-end">
-                <Button variant="plain" color="neutral" onClick={handleClose} disabled={loading}>
-                  Cancel
-                </Button>
-                <Button type="submit" loading={loading} disabled={success}>
-                  Create Slack App
-                </Button>
-              </Stack>
+                <Textarea
+                  value={JSON.stringify(manifest, null, 2)}
+                  readOnly
+                  minRows={20}
+                  maxRows={20}
+                  sx={{
+                    fontFamily: 'monospace',
+                    fontSize: '0.75rem',
+                    '& textarea': {
+                      cursor: 'default',
+                    },
+                  }}
+                />
+              </Box>
             </Stack>
-          </form>
-        </ModalDialog>
-      </Modal>
+
+            <AdminDialogFooter>
+              <Button
+                variant="plain"
+                color="neutral"
+                onClick={handleClose}
+                disabled={loading}
+                data-testid="create-slack-app-cancel-btn"
+              >
+                Cancel
+              </Button>
+              <Button type="submit" loading={loading} disabled={success} data-testid="create-slack-app-submit-btn">
+                Create Slack App
+              </Button>
+            </AdminDialogFooter>
+          </Stack>
+        </form>
+      </AdminDialog>
 
       {/* Confirmation dialog for disabling Workflow Steps */}
-      <Modal open={showWorkflowWarning} onClose={() => setShowWorkflowWarning(false)}>
-        <ModalDialog variant="outlined" role="alertdialog">
-          <DialogTitle>
-            <WarningIcon color="warning" sx={{ mr: 1 }} />
-            Disable Workflow Steps?
-          </DialogTitle>
-          <DialogContent>
-            <Stack spacing={2}>
-              <Typography level="body-md">
-                Disabling Workflow Steps will remove the following from the Slack manifest:
-              </Typography>
-              <Alert color="warning" variant="soft">
-                <Stack spacing={1}>
-                  <Typography level="body-sm">
-                    <strong>Custom functions removed:</strong>
-                  </Typography>
-                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                    <Typography level="body-sm" component="li">
-                      Create Notebook (b4m_create_notebook)
-                    </Typography>
-                    <Typography level="body-sm" component="li">
-                      Send to B4M (b4m_send_message)
-                    </Typography>
-                    <Typography level="body-sm" component="li">
-                      Query B4M (b4m_query)
-                    </Typography>
-                  </Box>
-                  <Typography level="body-sm" sx={{ mt: 1 }}>
-                    <strong>Settings changes:</strong>
-                  </Typography>
-                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                    <Typography level="body-sm" component="li">
-                      function_executed event removed
-                    </Typography>
-                    <Typography level="body-sm" component="li">
-                      function_runtime setting removed
-                    </Typography>
-                    <Typography level="body-sm" component="li">
-                      org_deploy_enabled set to false
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Alert>
+      <AdminDialog
+        open={showWorkflowWarning}
+        onClose={() => setShowWorkflowWarning(false)}
+        title="Disable workflow steps?"
+        role="alertdialog"
+        width={520}
+        data-testid="workflow-steps-warning-modal"
+      >
+        <Stack spacing={2}>
+          <Typography level="body-md">
+            Disabling Workflow Steps will remove the following from the Slack manifest:
+          </Typography>
+          <Alert color="warning" variant="soft">
+            <Stack spacing={1}>
               <Typography level="body-sm">
-                These features require a paid Slack plan. You can re-enable them at any time.
+                <strong>Custom functions removed:</strong>
               </Typography>
+              <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                <Typography level="body-sm" component="li">
+                  Create Notebook (b4m_create_notebook)
+                </Typography>
+                <Typography level="body-sm" component="li">
+                  Send to B4M (b4m_send_message)
+                </Typography>
+                <Typography level="body-sm" component="li">
+                  Query B4M (b4m_query)
+                </Typography>
+              </Box>
+              <Typography level="body-sm" sx={{ mt: 1 }}>
+                <strong>Settings changes:</strong>
+              </Typography>
+              <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                <Typography level="body-sm" component="li">
+                  function_executed event removed
+                </Typography>
+                <Typography level="body-sm" component="li">
+                  function_runtime setting removed
+                </Typography>
+                <Typography level="body-sm" component="li">
+                  org_deploy_enabled set to false
+                </Typography>
+              </Box>
             </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="warning"
-              onClick={confirmDisableWorkflowSteps}
-              data-testid="workflow-steps-confirm-disable"
-            >
-              Disable Workflow Steps
-            </Button>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => setShowWorkflowWarning(false)}
-              data-testid="workflow-steps-cancel-disable"
-            >
-              Cancel
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
+          </Alert>
+          <Typography level="body-sm">
+            These features require a paid Slack plan. You can re-enable them at any time.
+          </Typography>
+        </Stack>
+        <AdminDialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setShowWorkflowWarning(false)}
+            data-testid="workflow-steps-cancel-disable"
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="solid"
+            color="warning"
+            onClick={confirmDisableWorkflowSteps}
+            data-testid="workflow-steps-confirm-disable"
+          >
+            Disable Workflow Steps
+          </Button>
+        </AdminDialogFooter>
+      </AdminDialog>
     </>
   );
 }

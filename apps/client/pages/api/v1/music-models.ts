@@ -1,14 +1,24 @@
 /** GET /api/v1/music-models - the music models this caller can use right now. */
 import { listMusicModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getMusicJobDeps } from '@server/generationJobs/wiring';
+import { getMusicJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { listUsableMusicModels } from '@bike4mind/server-utils/musicGenerations/listUsableMusicModels';
+import { filterAdmittedMediaModels } from '@bike4mind/server-utils/billing/assertMediaModelAdmission';
+import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 
 const handler = nextRouteForContract(listMusicModelsContract, {
   exemptReadsFromDailyRateLimit: true,
   rateLimit: perUserRateLimit('GET /api/v1/music-models'),
-}).get(async (req, res) => res.json({ models: await listUsableMusicModels(req.user.id, getMusicJobDeps()) }));
+}).get(async (req, res) =>
+  res.json({
+    models: await filterAdmittedMediaModels(
+      req.user,
+      await listUsableMusicModels(req.user.id, getMusicJobDeps()),
+      await resolveMediaBillingOrgId(req, undefined)
+    ),
+  })
+);
 
 export const config = {
   api: { externalResolver: true },

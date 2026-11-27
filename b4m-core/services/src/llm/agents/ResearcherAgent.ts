@@ -13,6 +13,7 @@ export const ResearcherAgent = (config?: ServerAgentConfig): ServerAgentDefiniti
     'image_generation',
     'edit_image',
     'video_generation',
+    'production_*',
     'delegate_to_agent',
     ...(config?.extraDeniedTools ?? []),
   ],

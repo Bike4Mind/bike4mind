@@ -97,7 +97,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
     <Stack direction="row" spacing={1} alignItems="center">
       <Button
         size="sm"
-        variant="plain"
+        variant="outlined"
         color="neutral"
         startDecorator={<ArrowLeftIcon />}
         onClick={onBack}
@@ -109,7 +109,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
       {detail && (
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           endDecorator={<ExternalLinkIcon />}
           onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'listing', id: detail.listing.id })}
@@ -137,7 +137,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
   }
 
   const { listing, version, myImport, update } = detail;
-  const tools = version?.snapshot.allowedTools ?? [];
+  const tools = [...(version?.snapshot.allowedTools ?? []), ...(version?.snapshot.claudeCodeAllowedTools ?? [])];
   const summary = version?.honestSummary;
   const tier = version?.riskTier ?? listing.riskTier;
 
@@ -324,7 +324,7 @@ export function SkillListingDetail({ listingRef, onBack }: { listingRef: SkillMa
             >
               Replace my edits
             </Button>
-            <Button variant="plain" color="neutral" onClick={() => setConfirmOverwrite(null)}>
+            <Button variant="outlined" color="neutral" onClick={() => setConfirmOverwrite(null)}>
               Cancel
             </Button>
           </DialogActions>

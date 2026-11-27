@@ -284,6 +284,7 @@ export const extractSnippetMeta = (content: string): { sections: SnippetSection[
         sections.push({ type: 'snippet', meta, content: snippetContent });
       }
     } catch (e) {
+      // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
       console.error('Error parsing snippet meta:', e);
     }
 

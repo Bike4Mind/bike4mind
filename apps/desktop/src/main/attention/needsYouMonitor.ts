@@ -1,0 +1,92 @@
+import type { AttentionNotice, NotifyScope } from '@shared/attention';
+import type { ChatMessage, ChatSessionStatus, ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
+import { alertableSessions, needsYouBadgeCount, needsYouBody, needsYouTitle, rootSessionOf } from '@shared/needsYou';
+
+export type NeedsYouMonitorDeps = {
+  /** The signed-in scope's sessions (device-local ones when signed out): only these alert or count. */
+  listSessions(): Promise<ChatSessionSummary[]>;
+  sessionMessages(sessionId: string): Promise<readonly ChatMessage[]>;
+  /** Whether plain sessions alert too; the same setting the renderer follows. The badge ignores it. */
+  notifyScope(): NotifyScope;
+  /** An app window is open; its renderer then announces entries and owns the badge. */
+  hasWindow(): boolean;
+  /** The claim map the renderers use, so an entry a closing window already announced is not repeated. */
+  claim(sessionIds: readonly string[]): string[];
+  notify(notice: AttentionNotice): void;
+  setBadge(count: number): void;
+  warn(message: string): void;
+};
+
+/**
+ * Needs-you notices and the dock badge while no app window is open (macOS keeps the app running
+ * with every window closed). With a window open the renderer does this (useNeedsYouAlerts) and the
+ * monitor only keeps its status map current, so it can take over the moment the last window closes.
+ */
+export class NeedsYouMonitor {
+  private readonly statuses = new Map<string, ChatSessionStatus>();
+  // Sessions asking for something live; an unread finished reply counts on the badge but never alerts.
+  private readonly asking = new Set<string>();
+  // Serialised so badge writes land in event order even though each one reads the session list.
+  private pending: Promise<void> = Promise.resolve();
+
+  constructor(private readonly deps: NeedsYouMonitorDeps) {}
+
+  observe(event: ChatSessionStatusEvent): void {
+    const wasAsking = this.asking.has(event.sessionId);
+    const asking = event.status === 'needs-action' && !event.unreadReply;
+    this.statuses.set(event.sessionId, event.status);
+    if (asking) this.asking.add(event.sessionId);
+    else this.asking.delete(event.sessionId);
+    if (this.deps.hasWindow()) return;
+    // A worker task waiting on a decision counts too, and it surfaces as a session leaves processing,
+    // so every status event recounts the badge; only a new needs-action entry also raises a notice.
+    const entered = asking && !wasAsking ? event.sessionId : null;
+    this.enqueue(() => this.update(entered));
+  }
+
+  /** The last app window closed: the badge it kept is now main's to keep. */
+  windowsClosed(): void {
+    this.enqueue(() => this.update(null));
+  }
+
+  /**
+   * Signed in, out or into another account: the waiting sessions were the old scope's, so the badge
+   * is recounted from the new one's list. With a window open its renderer does that as the chat remounts.
+   */
+  scopeChanged(): void {
+    if (this.deps.hasWindow()) return;
+    this.enqueue(() => this.update(null));
+  }
+
+  /** Resolves once every queued update has run; for tests. */
+  settled(): Promise<void> {
+    return this.pending;
+  }
+
+  private enqueue(work: () => Promise<void>): void {
+    this.pending = this.pending.then(work).catch((error: unknown) => {
+      this.deps.warn(`ATTENTION: needs-you update failed: ${String(error)}`);
+    });
+  }
+
+  private async update(entered: string | null): Promise<void> {
+    const sessions = await this.deps.listSessions();
+    // A window that opened while the list was read has a renderer that took over from here.
+    if (this.deps.hasWindow()) return;
+    this.deps.setBadge(needsYouBadgeCount(this.statuses, sessions));
+    const scope = this.deps.notifyScope();
+    if (entered === null || !this.asking.has(entered)) return;
+    if (!alertableSessions(sessions, scope).has(entered)) return;
+    if (this.deps.claim([entered]).length === 0) return;
+
+    const rootId = rootSessionOf(sessions, entered);
+    // A session that cannot be read still gets its notice, just without the request spelled out.
+    const messages = await this.deps.sessionMessages(entered).catch(() => []);
+    this.deps.notify({
+      sessionId: entered,
+      rootId,
+      title: needsYouTitle(sessions, entered, rootId),
+      body: needsYouBody(messages),
+    });
+  }
+}

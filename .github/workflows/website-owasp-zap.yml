@@ -23,6 +23,9 @@ env:
   DEFAULT_ZAP_TARGET_URL: ${{ vars.OWASP_ZAP_TARGET }}
   DEFAULT_ZAP_STAGE: dev
 
+permissions:
+  contents: read
+
 jobs:
   zap-website-scan:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
@@ -133,7 +136,7 @@ jobs:
           fi
 
       - name: Run OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.15.0
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
         id: zap-scan
         # ZAP scan itself succeeds; artifact upload may fail with 400 on some backends.
         # We don't rely on the GitHub artifact, only on the JSON report for our ingest step,

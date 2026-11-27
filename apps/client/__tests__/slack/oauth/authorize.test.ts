@@ -3,7 +3,7 @@ import { createMocks } from 'node-mocks-http';
 
 // baseApi is stubbed (no auth chain) but errors go through the real errorHandler.
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 
 const mockCreateInstallProvider = vi.fn();
 const mockGetInstallUrlOptions = vi.fn();
@@ -13,7 +13,7 @@ vi.mock('@bike4mind/slack', () => ({
 }));
 
 import handler from '@pages/api/slack/oauth/authorize';
-import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const call = async (isAdmin: boolean, query: Record<string, string | string[]> = { workspaceId: 'ws-1' }) => {
   const { req, res } = createMocks({ method: 'GET', query });
@@ -35,12 +35,8 @@ describe('GET /api/slack/oauth/authorize', () => {
     mockCreateInstallProvider.mockResolvedValue({ generateInstallUrl: async () => 'https://slack.com/oauth?state=s' });
   });
 
-  it('refuses a non-admin before minting any state or cookie', async () => {
-    const res = await call(false);
-    expect(res._getStatusCode()).toBe(403);
-    expect(setCookies(res)).toEqual([]);
-    expect(mockCreateInstallProvider).not.toHaveBeenCalled();
-  });
+  // The settings:manage gate runs in adminApi's use() middleware, which this stub skips; the refusal
+  // cases live in pages/api/slack/oauth/__tests__/authorize.test.ts.
 
   it('rejects a missing workspaceId with 400 and sets no cookie', async () => {
     const res = await call(true, {});
@@ -65,6 +61,18 @@ describe('GET /api/slack/oauth/authorize', () => {
     expect(mockCreateInstallProvider).toHaveBeenCalledWith('ws-1', { nonceHash: expectedHash });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ authUrl: 'https://slack.com/oauth?state=s' });
+  });
+
+  it('generates the install URL from the workspace install options', async () => {
+    const installOptions = { scopes: ['chat:write'], redirectUri: 'https://example.com/cb', metadata: 'ws-1' };
+    mockGetInstallUrlOptions.mockResolvedValue(installOptions);
+    const generateInstallUrl = vi.fn().mockResolvedValue('https://slack.com/oauth?state=s');
+    mockCreateInstallProvider.mockResolvedValue({ generateInstallUrl });
+
+    await call(true);
+
+    expect(mockGetInstallUrlOptions).toHaveBeenCalledWith('ws-1');
+    expect(generateInstallUrl).toHaveBeenCalledWith(installOptions);
   });
 
   it('mints no nonce when the workspace cannot be resolved', async () => {

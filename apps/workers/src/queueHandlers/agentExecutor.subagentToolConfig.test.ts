@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import type { MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import type {
+  AudioToolJobs,
+  MusicToolConfig,
+  ProductionToolConfig,
+  VideoToolConfig,
+} from '@bike4mind/services/llm/tools';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 
 describe('buildSubagentToolConfig', () => {
@@ -34,6 +39,14 @@ describe('buildSubagentToolConfig', () => {
     expect(result.deep_research).toEqual({ model: 'claude-sonnet-4-6', apiKeys: undefined });
   });
 
+  it('hands both image tools the image job config when one is built, so they start capped jobs', () => {
+    const imageConfig = { model: 'gpt-image-2' } as const;
+    const imageJobConfig = { selection: imageConfig, createJobs: vi.fn() };
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', imageConfig, imageJobConfig });
+    expect(result.image_generation).toBe(imageJobConfig);
+    expect(result.edit_image).toBe(imageJobConfig);
+  });
+
   it('omits image tool config when imageConfig is undefined so a text-only run stays lean', () => {
     const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', imageConfig: undefined });
     expect(result.image_generation).toBeUndefined();
@@ -48,9 +61,25 @@ describe('buildSubagentToolConfig', () => {
     expect(result.image_generation).toBeUndefined();
   });
 
-  it('omits audio_generation when audioConfig is undefined so the tool uses its built-in defaults', () => {
+  it('omits audio_generation when neither audioConfig nor the audio jobs are provided', () => {
     const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', audioConfig: undefined });
     expect(result.audio_generation).toBeUndefined();
+  });
+
+  it('merges the audio jobs into audio_generation, with or without saved audio settings', () => {
+    const audioJobs: AudioToolJobs = {
+      createSpeechJob: vi.fn(),
+      createSoundEffectJob: vi.fn(),
+      runInline: vi.fn(),
+      readOutput: vi.fn(),
+      cancel: vi.fn(),
+    };
+    const audioConfig = { ttsProvider: 'elevenlabs', voice: 'Rachel' } as const;
+    expect(buildSubagentToolConfig({ audioConfig, audioJobs }).audio_generation).toEqual({
+      ...audioConfig,
+      jobs: audioJobs,
+    });
+    expect(buildSubagentToolConfig({ audioJobs }).audio_generation).toEqual({ jobs: audioJobs });
   });
 
   it('threads videoConfig into video_generation', () => {
@@ -73,6 +102,28 @@ describe('buildSubagentToolConfig', () => {
   it('omits music_generation when there is no music config, so the tool is not offered', () => {
     expect(buildSubagentToolConfig({ musicConfig: null }).music_generation).toBeUndefined();
     expect(buildSubagentToolConfig({}).music_generation).toBeUndefined();
+  });
+
+  it('hands all four production tools the same productionConfig instance', () => {
+    const productionConfig = { createJobs: vi.fn() } as unknown as ProductionToolConfig;
+    const result = buildSubagentToolConfig({ model: 'claude-sonnet-4-6', productionConfig });
+    for (const name of [
+      'production_storyboard',
+      'production_generate_shot',
+      'production_add_audio',
+      'production_assemble',
+    ]) {
+      expect(result[name]).toBe(productionConfig);
+    }
+  });
+
+  it('omits the production tools when there is no production config, so they are not offered', () => {
+    for (const config of [buildSubagentToolConfig({ productionConfig: null }), buildSubagentToolConfig({})]) {
+      expect(config.production_storyboard).toBeUndefined();
+      expect(config.production_generate_shot).toBeUndefined();
+      expect(config.production_add_audio).toBeUndefined();
+      expect(config.production_assemble).toBeUndefined();
+    }
   });
 
   it('threads imageUrlSigningSecret into web_search config so subagent web_search cards can verify', () => {

@@ -1,4 +1,3 @@
-import type { ReviewGateStatus, SubQuestStatus } from '@bike4mind/common';
 import type {
   AgentListResponse,
   CreateAgentRequest,
@@ -13,8 +12,6 @@ import type {
   GateResolveResponse,
   HeartbeatToggleResponse,
   TriggerHeartbeatResponse,
-  QuestPlanResponse,
-  QuestWorkflowResponse,
 } from './types.js';
 
 /**
@@ -69,30 +66,4 @@ export interface ITavernService {
 
   /** Abort all in-flight heartbeats */
   abortHeartbeats(): Promise<void>;
-
-  /** Fetch a quest master plan by ID (includes review gate status, handoff, etc.) */
-  getQuestPlan(planId: string): Promise<QuestPlanResponse>;
-
-  /** Update the review gate status on a sub-quest (approve/reject with note) */
-  updateReviewGate(
-    planId: string,
-    questId: string,
-    subQuestId: string,
-    reviewStatus: ReviewGateStatus,
-    reviewNote?: string
-  ): Promise<QuestWorkflowResponse>;
-
-  /** Update sub-quest progress (status, evidence, time spent) */
-  updateSubQuestProgress(
-    planId: string,
-    questId: string,
-    subQuestId: string,
-    updates: { status?: SubQuestStatus; evidence?: string; timeSpent?: number }
-  ): Promise<QuestWorkflowResponse>;
-
-  /** Write or update the handoff state for session continuity */
-  updateHandoff(
-    planId: string,
-    handoff: { summary: string; nextSteps: string[]; pendingDecisions: string[]; blockers: string[] }
-  ): Promise<QuestWorkflowResponse>;
 }

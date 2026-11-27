@@ -17,13 +17,33 @@
  */
 export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
 
-export type ProxyTarget = { bucket: 'appFiles' | 'generated'; key: string };
+// A constant, not an inline startsWith literal: checkUserFileCdnPrefixes.test.ts reads those as CDN routes.
+const GENERATED_PROXY_PREFIX = 'generated/';
+
+export type ProxyTarget = { bucket: 'appFiles'; key: string };
+
+/**
+ * The generated-bucket key behind a `generated/<key>` proxy path, or null. Not a CloudFront route:
+ * generated media is only reachable through signed URLs, and the self-host proxy serves this path
+ * solely behind a token (generatedMediaUrlToken.ts). Also resolves legacy `<cdnUrl>/generated/<key>`
+ * links stored in content.
+ */
+export function generatedKeyFromProxyPath(cdnPath: string): string | null {
+  const key = cdnPath.startsWith(GENERATED_PROXY_PREFIX) ? cdnPath.slice(GENERATED_PROXY_PREFIX.length) : '';
+  return key || null;
+}
+
+/**
+ * Maps an app-files bucket key to its CDN request path (no leading slash). Server-side twin of
+ * toCdnPath in apps/client/app/utils/s3.ts; a parity test keeps the two in sync.
+ */
+export function appFileKeyToCdnPath(key: string): string {
+  if (key.startsWith('organizations/')) return `org-files/${key.slice('organizations/'.length)}`;
+  if (key.startsWith('admin/logos/')) return `admin-logos/${key.slice('admin/logos/'.length)}`;
+  return key;
+}
 
 export function resolveProxyTarget(cdnPath: string): ProxyTarget | null {
-  if (cdnPath.startsWith('generated/')) {
-    // infra: generated -> generatedImagesBucket with `^/generated/(.*)$` -> `/$1`
-    return { bucket: 'generated', key: cdnPath.slice('generated/'.length) };
-  }
   if (cdnPath.startsWith('org-files/')) {
     // infra: org-files -> appFilesBucket with `^/org-files/(.*)$` -> `/organizations/$1`
     return { bucket: 'appFiles', key: `organizations/${cdnPath.slice('org-files/'.length)}` };
@@ -47,9 +67,6 @@ export function resolveProxyTarget(cdnPath: string): ProxyTarget | null {
   if (cdnPath.startsWith('app-config/')) {
     return { bucket: 'appFiles', key: cdnPath };
   }
-  // `whats-new/` is intentionally NOT allowlisted: it routes to
-  // whatsNewDistributionBucket (a separate distribution bucket), not
-  // appFilesBucket, so the proxy cannot serve it.
   // Not an allowlisted prefix - block.
   return null;
 }

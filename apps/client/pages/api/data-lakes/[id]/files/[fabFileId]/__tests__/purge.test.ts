@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHmac } from 'crypto';
+import { Resource } from 'sst';
 
 const h = vi.hoisted(() => ({
   assertLakeAccessById: vi.fn(),
@@ -41,6 +42,7 @@ const h = vi.hoisted(() => ({
   }),
 }));
 
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
@@ -79,15 +81,15 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ delete: h.storageDelete }),
 }));
-vi.mock('@server/utils/auditLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/auditLog', () => ({
   logAuditEvent: h.logAuditEvent,
   DataLakeAuditEvents: { LAKE_DOCUMENT_PURGED: 'LAKE_DOCUMENT_PURGED' },
 }));
-vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags', () => ({
   recomputeStatsForLakeTags: h.recomputeStatsForLakeTags,
 }));
 vi.mock('@bike4mind/server-utils/memory/ledgerMemoryStore', () => ({ shredMemoryFromSource: h.shredMemoryFromSource }));
@@ -487,10 +489,29 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
 
     const metadata = h.logAuditEvent.mock.calls[0][0].metadata;
     expect(metadata).not.toHaveProperty('fileName');
-    expect(metadata.fileNameHash).toBe(
-      createHmac('sha256', 'test-secret-encryption-key').update('q3.pdf').digest('hex')
-    );
+    const purgeKey = createHmac('sha256', 'test-secret-encryption-key')
+      .update('b4m-signing/purge-receipt/v1')
+      .digest('hex');
+    expect(metadata.fileNameHash).toBe(createHmac('sha256', purgeKey).update('q3.pdf').digest('hex'));
     expect(metadata).toMatchObject({ fabFileId: FILE_ID, verified: true, chunksBefore: 3 });
+  });
+
+  it('keys the file name hash with the purge-receipt key when a dedicated signing secret is set', async () => {
+    const resource = Resource as unknown as Record<string, unknown>;
+    resource.HMAC_SIGNING_SECRET = { value: 'test-dedicated-signing-secret' };
+    const { res } = makeRes();
+    try {
+      await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+    } finally {
+      delete resource.HMAC_SIGNING_SECRET;
+    }
+
+    const purgeKey = createHmac('sha256', 'test-dedicated-signing-secret')
+      .update('b4m-signing/purge-receipt/v1')
+      .digest('hex');
+    expect(h.logAuditEvent.mock.calls[0][0].metadata.fileNameHash).toBe(
+      createHmac('sha256', purgeKey).update('q3.pdf').digest('hex')
+    );
   });
 
   it('shreds the facts the lake distilled from the purged document, deduped against the purging lake handoff', async () => {

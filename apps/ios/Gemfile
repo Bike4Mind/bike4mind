@@ -1,0 +1,4 @@
+source "https://rubygems.org"
+
+# Conservative pin: refresh with `bundle update fastlane` and commit the new Gemfile.lock.
+gem "fastlane", "~> 2.225"

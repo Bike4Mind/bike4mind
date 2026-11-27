@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import type mongoose from 'mongoose';
 import {
   chargedBytes,
   IDataLakeRepository,
@@ -16,7 +17,7 @@ import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeServic
 import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
 import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
-import { deleteStoredObjects, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
+import { deleteStoredObjectsAfterCommit, type GeneratedCopyStore, type ObjectStorage } from './deleteStoredObjects';
 import { deletedFileReferences, type DeletedFileReferences } from './cleanUpDeletedFileReferences';
 import {
   recordLakeMembershipChange,
@@ -63,7 +64,7 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   db: LakeMembershipAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
-      'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
+      'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds' | 'shareable'
     >;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctRetrievalIndexModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
@@ -73,6 +74,8 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
     dataLakes?: Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
   };
   storage: ObjectStorage;
+  /** The owning withTransaction session; stored objects are deleted after it commits. */
+  session?: mongoose.mongo.ClientSession;
   /**
    * Where an in-chat generated asset's inline-playback copy lives. Optional so the doors that never delete
    * generated files need not wire it; a door that can must, or the copy outlives the file.
@@ -98,10 +101,14 @@ export interface DeleteFabFileAdapter extends LakeMembershipAuditAdapters {
   auditPrincipal?: ManageActor['auditPrincipal'];
 }
 
-export const deleteFabFile = async (
-  userId: string,
-  parameters: DeleteFabFileParameters,
-  adapter: DeleteFabFileAdapter
+export type DeleteAuthorizedFabFileAdapter = Omit<DeleteFabFileAdapter, 'db'> & {
+  db: Omit<DeleteFabFileAdapter['db'], 'users'>;
+};
+
+/** Internal: caller owns current file authorization and the deletion transaction scope. */
+export const deleteAuthorizedFabFile = async (
+  ownedFile: IFabFileDocument,
+  adapter: DeleteAuthorizedFabFileAdapter
 ): Promise<DeleteFabFileResult> => {
   const {
     db,
@@ -112,7 +119,99 @@ export const deleteFabFile = async (
     origin = 'person',
     auditPrincipal,
     logger,
+    session,
   } = adapter;
+  const userId = ownedFile.userId;
+  // User owns this file - soft-delete it
+  Logger.globalInstance.log(
+    `[deleteFabFile] Deleting owned file - fileId: ${ownedFile.id}, fileName: ${ownedFile.fileName}, userId: ${userId}`
+  );
+  await db.fabFiles.update({ id: ownedFile.id, deletedAt: new Date() });
+
+  // A soft delete evicts the file from every lake it belonged to without going through
+  // removeFileFromLake (the tags are left in place, not pulled), so that path's `removed` event
+  // never fires. Record one here per member lake, best-effort, so a reader reconstructing
+  // membership from the change log does not see the file as still present. Resolved from the
+  // file's own tags, which a soft delete leaves untouched - only `dataLakes` and the audit repo
+  // gate this; a caller that wires neither records nothing.
+  //
+  // The lake-level restore door (`restoreDeletedDataLake`) records the matching `added` for a
+  // file it revives, so the two sides of a lake teardown/restore cycle stay consistent.
+  if (db.dataLakes && db.lakeMembershipChangeEvents) {
+    const memberLakes: MembershipLake[] = await findMemberLakesForFile(ownedFile, db.dataLakes).catch(err => {
+      Logger.globalInstance.error('[deleteFabFile] failed to resolve member lakes for removed event', {
+        fileId: ownedFile.id,
+        err,
+      });
+      return [];
+    });
+    // `findMemberLakesForFile` resolves DB-backed lakes only - it exists for chunk policy, which a
+    // document-less registry lake cannot declare. A file under a registry lake's open prefix arm
+    // is still a member of it, and this delete still costs it that membership.
+    memberLakes.push(
+      ...registryCandidateLakes().filter(lake => satisfiesMembershipScope(registryMembershipScope(lake), ownedFile))
+    );
+    const actor: ManageActor = { userId, isAdmin: false, auditPrincipal };
+    await Promise.all(
+      memberLakes.map(lake =>
+        recordLakeMembershipChange({ actor, lake, fabFileId: ownedFile.id, action: 'removed', origin }, { db, logger })
+      )
+    );
+  }
+
+  let sizeToDeduct = 0;
+  if (ownedFile.filePath) {
+    sizeToDeduct += chargedBytes(ownedFile);
+  }
+
+  // Resolve BEFORE the Mongo chunks are deleted below - the chunk rows are the only place this
+  // survives once they're gone. A re-embedded file's chunks can span more than one model (see
+  // IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the file's CURRENT model
+  // only - would miss an OpenSearch index left by an earlier embed.
+  const chunkEmbeddingModels = searchIndex
+    ? await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([ownedFile.id])
+    : [];
+
+  // Handle deletion of new FabFileChunks
+  await db.fabFileChunks.deleteManyByFabFileId(ownedFile.id);
+  if (searchIndex) {
+    await Promise.all(chunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(ownedFile.id, model)));
+  }
+
+  // Unlink the deleted fabFile from all associated sessions
+  const sessions = await db.sessions.findAllWithKnowledgeId(ownedFile.id);
+  for (const notebook of sessions) {
+    const updatedKnowledgeIds = (notebook.knowledgeIds || []).filter(knowledgeId => knowledgeId !== ownedFile.id);
+    await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
+  }
+
+  await deleteStoredObjectsAfterCommit(
+    [ownedFile],
+    { files: storage, generated: generatedCopies },
+    { session, key: `storedObjects|${ownedFile.id}`, logger }
+  );
+
+  // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
+  if (onDeleteComplete) {
+    await onDeleteComplete(ownedFile, sizeToDeduct);
+  }
+
+  // The file is gone for everyone: its owner's and direct-share recipients' system files and
+  // projects are unlinked by the caller after commit. Group- or lake-held references are left to
+  // the turn-time scrub.
+  return {
+    action: 'deleted',
+    fabFile: ownedFile,
+    references: deletedFileReferences(ownedFile),
+  };
+};
+
+export const deleteFabFile = async (
+  userId: string,
+  parameters: DeleteFabFileParameters,
+  adapter: DeleteFabFileAdapter
+): Promise<DeleteFabFileResult> => {
+  const { db } = adapter;
   const { id } = secureParameters(parameters, deleteFabFileSchema);
 
   const user = await db.users.findById(userId);
@@ -120,89 +219,7 @@ export const deleteFabFile = async (
 
   // 1. Check if the user owns the file
   const ownedFile = await db.fabFiles.findByIdAndUserId(id, userId);
-  if (ownedFile) {
-    // User owns this file - soft-delete it
-    Logger.globalInstance.log(
-      `[deleteFabFile] Deleting owned file — fileId: ${ownedFile.id}, fileName: ${ownedFile.fileName}, userId: ${userId}`
-    );
-    await db.fabFiles.update({ id: ownedFile.id, deletedAt: new Date() });
-
-    // A soft delete evicts the file from every lake it belonged to without going through
-    // removeFileFromLake (the tags are left in place, not pulled), so that path's `removed` event
-    // never fires. Record one here per member lake, best-effort, so a reader reconstructing
-    // membership from the change log does not see the file as still present. Resolved from the
-    // file's own tags, which a soft delete leaves untouched - only `dataLakes` and the audit repo
-    // gate this; a caller that wires neither records nothing.
-    //
-    // The lake-level restore door (`restoreDeletedDataLake`) records the matching `added` for a
-    // file it revives, so the two sides of a lake teardown/restore cycle stay consistent.
-    if (db.dataLakes && db.lakeMembershipChangeEvents) {
-      const memberLakes: MembershipLake[] = await findMemberLakesForFile(ownedFile, db.dataLakes).catch(err => {
-        Logger.globalInstance.error('[deleteFabFile] failed to resolve member lakes for removed event', {
-          fileId: ownedFile.id,
-          err,
-        });
-        return [];
-      });
-      // `findMemberLakesForFile` resolves DB-backed lakes only - it exists for chunk policy, which a
-      // document-less registry lake cannot declare. A file under a registry lake's open prefix arm
-      // is still a member of it, and this delete still costs it that membership.
-      memberLakes.push(
-        ...registryCandidateLakes().filter(lake => satisfiesMembershipScope(registryMembershipScope(lake), ownedFile))
-      );
-      const actor: ManageActor = { userId, isAdmin: false, auditPrincipal };
-      await Promise.all(
-        memberLakes.map(lake =>
-          recordLakeMembershipChange(
-            { actor, lake, fabFileId: ownedFile.id, action: 'removed', origin },
-            { db, logger }
-          )
-        )
-      );
-    }
-
-    let sizeToDeduct = 0;
-    if (ownedFile.filePath) {
-      sizeToDeduct += chargedBytes(ownedFile);
-    }
-
-    // Resolve BEFORE the Mongo chunks are deleted below - the chunk rows are the only place this
-    // survives once they're gone. A re-embedded file's chunks can span more than one model (see
-    // IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the file's CURRENT model
-    // only - would miss an OpenSearch index left by an earlier embed.
-    const chunkEmbeddingModels = searchIndex
-      ? await db.fabFileChunks.distinctRetrievalIndexModelsByFabFileIds([ownedFile.id])
-      : [];
-
-    // Handle deletion of new FabFileChunks
-    await db.fabFileChunks.deleteManyByFabFileId(ownedFile.id);
-    if (searchIndex) {
-      await Promise.all(chunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(ownedFile.id, model)));
-    }
-
-    // Unlink the deleted fabFile from all associated sessions
-    const sessions = await db.sessions.findAllWithKnowledgeId(ownedFile.id);
-    for (const notebook of sessions) {
-      const updatedKnowledgeIds = (notebook.knowledgeIds || []).filter(knowledgeId => knowledgeId !== ownedFile.id);
-      await db.sessions.update({ id: notebook.id, knowledgeIds: updatedKnowledgeIds });
-    }
-
-    await deleteStoredObjects([ownedFile], { files: storage, generated: generatedCopies });
-
-    // sizeToDeduct is the bytes this row was charged (see chargedBytes), so 0 for a never-charged row
-    if (onDeleteComplete) {
-      await onDeleteComplete(ownedFile, sizeToDeduct);
-    }
-
-    // The file is gone for everyone: its owner's and direct-share recipients' system files and
-    // projects are unlinked by the caller after commit. Group- or lake-held references are left to
-    // the turn-time scrub.
-    return {
-      action: 'deleted',
-      fabFile: ownedFile,
-      references: deletedFileReferences(ownedFile),
-    };
-  }
+  if (ownedFile) return deleteAuthorizedFabFile(ownedFile, adapter);
 
   // 2. User doesn't own the file - check if it's shared to them. A self-unshare (below), a denied
   // removal, and a not-found id all leave the file's own tags untouched, so none of them change
@@ -227,8 +244,9 @@ export const deleteFabFile = async (
   Logger.globalInstance.log(
     `[deleteFabFile] Removing user from shared file — fileId: ${sharedFile.id}, fileName: ${sharedFile.fileName}, userId: ${userId}`
   );
+  // Atomic, so a grant to someone else landing between the read above and this write survives.
+  await db.fabFiles.shareable.updateUserShares(sharedFile.id, { remove: { userId } });
   sharedFile.users = sharedFile.users.filter(u => u.userId.toString() !== userId);
-  await db.fabFiles.update({ id: sharedFile.id, users: sharedFile.users });
 
   // Clean up any sessions owned by this user that reference the now-inaccessible file
   const sessionsWithFile = await db.sessions.findAllWithKnowledgeId(sharedFile.id);

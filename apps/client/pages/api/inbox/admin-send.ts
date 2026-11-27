@@ -1,23 +1,20 @@
 import { IUserDocument } from '@bike4mind/common';
 import { InboxType } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { User, inboxRepository } from '@bike4mind/database';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { sendToClient } from '@server/websocket/utils';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import * as z from 'zod';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { InboxEvents } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(
   asyncHandler(async (req, res) => {
     const user = req.user as IUserDocument;
     const adminId = user?.id;
-
-    if (!user?.isAdmin) {
-      throw new ForbiddenError('Only admins can send system messages');
-    }
 
     const wsEndpoint = Resource.websocket.managementEndpoint;
 
@@ -31,6 +28,7 @@ const handler = baseApi().post(
       .parse(req.body);
 
     const { receiverId, title, message, type } = validatedBody;
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     const receiverUser = await User.findById(receiverId);
     if (!receiverUser?.id) {
@@ -61,6 +59,14 @@ const handler = baseApi().post(
       },
       { ability: req.ability }
     );
+
+    await recordAdminActionFromRequest(req, {
+      action: 'support.inbox.message_sent',
+      target: { kind: 'user', id: receiverUser.id, displayName: receiverUser.username },
+      summary: `sent inbox message to ${receiverUser.username}`,
+      reason,
+      details: { inboxMessageId: newInbox.id, type, titleLength: title.length },
+    });
 
     return res.status(200).json(newInbox);
   })

@@ -1,0 +1,178 @@
+import type { ReactNode } from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getThemeConfig } from '@client/app/utils/themes';
+import { InviteCenterShell } from './InviteCenterShell';
+
+const routerMock = vi.hoisted(() => ({
+  search: {} as Record<string, unknown>,
+  navigate: vi.fn(),
+  isAdmin: true,
+}));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { isAdmin: routerMock.isAdmin, adminPermissions: ['credits:adjust'] } }),
+}));
+
+vi.mock('./InviteCenter/Pending/HeldGrantActions', () => ({
+  default: () => <div data-testid="held-grant-actions-stub" />,
+}));
+
+vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
+  default: ({ embedded }: { embedded?: boolean }) => (
+    <div data-testid="grant-packages-tab-stub" data-embedded={String(embedded)} />
+  ),
+}));
+
+vi.mock('./InviteCenter/Partners/PartnerRulesSection', () => ({
+  default: () => <div data-testid="partner-signup-rules-tab-stub" />,
+}));
+
+vi.mock('./InviteCenter', () => ({
+  default: () => <div data-testid="invite-center-body-stub" />,
+}));
+
+vi.mock('./InviteCenter/Pending/PendingSection', () => ({
+  PendingSection: () => <div data-testid="pending-section-stub" />,
+}));
+
+vi.mock('./InviteCenter/Rewards/RewardsSection', () => ({
+  RewardsSection: () => <div data-testid="rewards-section-stub" />,
+}));
+
+vi.mock('./InviteCenter/Schedule/ScheduleSection', () => ({
+  ScheduleSection: () => <div data-testid="schedule-section-stub" />,
+}));
+
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => routerMock.search,
+  useNavigate: () => routerMock.navigate,
+}));
+
+const theme = extendTheme({ ...getThemeConfig() });
+const Wrapper = ({ children }: { children: ReactNode }) => <CssVarsProvider theme={theme}>{children}</CssVarsProvider>;
+
+const renderShell = () =>
+  render(<InviteCenterShell waitlist={<div data-testid="waitlist-child">list</div>} />, { wrapper: Wrapper });
+
+describe('InviteCenterShell', () => {
+  beforeEach(() => {
+    routerMock.search = {};
+    routerMock.isAdmin = true;
+    routerMock.navigate.mockClear();
+  });
+
+  it('shows the header and the waitlist by default', () => {
+    renderShell();
+    expect(screen.getByText('Invite Center')).toBeInTheDocument();
+    expect(screen.getByTestId('invite-center-section-waitlist')).toContainElement(screen.getByTestId('waitlist-child'));
+  });
+
+  it('mounts only the retained held controls for a delegated credits admin', () => {
+    routerMock.isAdmin = false;
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-pending')).toContainElement(
+      screen.getByTestId('held-grant-actions-stub')
+    );
+    expect(screen.queryByTestId('waitlist-child')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('grant-packages-tab-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-section-stub')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('invite-center-sections')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the waitlist for an unknown section', () => {
+    routerMock.search = { inviteSection: 'bogus' };
+    renderShell();
+    expect(screen.getByTestId('waitlist-child')).toBeInTheDocument();
+  });
+
+  it('renders the section named in the URL', () => {
+    routerMock.search = { inviteSection: 'pending' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-pending')).toBeInTheDocument();
+    expect(screen.queryByTestId('waitlist-child')).not.toBeInTheDocument();
+    expect(screen.getByTestId('invite-center-section-pending')).toContainElement(
+      screen.getByTestId('pending-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('navigates with replace, keeping other params', () => {
+    renderShell();
+    fireEvent.click(screen.getByTestId('invite-center-sections-schedule-btn'));
+
+    const { to, replace, search } = routerMock.navigate.mock.calls[0][0];
+    expect(to).toBe('/admin');
+    expect(replace).toBe(true);
+    expect(search({ tab: 'waitlist', emergency_access: 'x' })).toEqual({
+      tab: 'waitlist',
+      emergency_access: 'x',
+      inviteSection: 'schedule',
+    });
+  });
+
+  it('writes undefined when the default section is selected', () => {
+    routerMock.search = { inviteSection: 'rewards' };
+    renderShell();
+    fireEvent.click(screen.getByTestId('invite-center-sections-waitlist-btn'));
+
+    const { search } = routerMock.navigate.mock.calls[0][0];
+    expect(search({ tab: 'waitlist', inviteSection: 'rewards' })).toEqual({
+      tab: 'waitlist',
+      inviteSection: undefined,
+    });
+  });
+
+  it('renders the schedule editor, not a stub, in the schedule section', () => {
+    routerMock.search = { inviteSection: 'schedule' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-schedule')).toContainElement(
+      screen.getByTestId('schedule-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('renders the rewards editor, not a stub, in the rewards section', () => {
+    routerMock.search = { inviteSection: 'rewards' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-rewards')).toContainElement(
+      screen.getByTestId('rewards-section-stub')
+    );
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('renders the grant packages table, not a stub, in the packages section', () => {
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    const tab = screen.getByTestId('grant-packages-tab-stub');
+    expect(screen.getByTestId('invite-center-section-packages')).toContainElement(tab);
+    expect(tab).toHaveAttribute('data-embedded', 'true');
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('hosts the bulk invite and codes body in the invites section', () => {
+    routerMock.search = { inviteSection: 'invites' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-invites')).toContainElement(
+      screen.getByTestId('invite-center-body-stub')
+    );
+  });
+
+  // Rules with no package (entitlements, plans, org joins, backfill, delete) are managed only here.
+  it('hosts the full partner signup rules list in the partners section', () => {
+    routerMock.search = { inviteSection: 'partners' };
+    renderShell();
+    expect(screen.getByTestId('invite-center-section-partners')).toContainElement(
+      screen.getByTestId('partner-signup-rules-tab-stub')
+    );
+  });
+
+  it('on packages, links out to neither Invites nor Partner signups since both are edited in the package form', () => {
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    expect(screen.queryByTestId('invite-center-open-invites-btn')).toBeNull();
+    expect(screen.queryByTestId('invite-center-open-partner-signups-btn')).toBeNull();
+  });
+});

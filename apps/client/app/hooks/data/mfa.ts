@@ -111,14 +111,21 @@ export function useForceResetMFA() {
   });
 }
 
+export const MFA_STATUS_QUERY_KEY = ['mfa', 'status'] as const;
+
+// MFAEnforcementWrapper holds the whole app behind this call, so a hung request must end as an
+// error (which the wrapper treats as "don't block") rather than a spinner that never clears.
+// Sized above the slowest cold-start answers seen in prod (~9s).
+export const MFA_STATUS_TIMEOUT_MS = 10_000;
+
 /**
  * Hook to get MFA status for the current user
  */
 export function useMFAStatus(enabled = true) {
   return useQuery<MFAStatusResponse, Error>({
-    queryKey: ['mfa', 'status'],
+    queryKey: MFA_STATUS_QUERY_KEY,
     queryFn: async () => {
-      const response = await api.get('/api/auth/mfa/status');
+      const response = await api.get('/api/auth/mfa/status', { timeout: MFA_STATUS_TIMEOUT_MS });
       return response.data;
     },
     retry: false,

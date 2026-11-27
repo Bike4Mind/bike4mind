@@ -238,9 +238,9 @@ describe('AnthropicBackend response_format', () => {
 
     const apiParams = getApiParams();
     expect(apiParams.tools).toHaveLength(1);
-    expect(apiParams.tools[0]).toMatchObject({ name: 'extract_user' });
+    expect(apiParams.tools[0]).toMatchObject({ name: 'extract_user', strict: true });
     expect(apiParams.tools[0].input_schema).toEqual(SAMPLE_SCHEMA.json_schema.schema);
-    expect(apiParams.tool_choice).toEqual({ type: 'tool', name: 'extract_user' });
+    expect(apiParams.tool_choice).toEqual({ type: 'tool', name: 'extract_user', disable_parallel_tool_use: true });
 
     // Streamed text should contain the raw JSON
     const allText = calls.flatMap(c => c.text.filter((t): t is string => typeof t === 'string')).join('');
@@ -460,8 +460,7 @@ describe('AnthropicBackend cache token forwarding', () => {
 
 describe('OpenAIBackend response_format', () => {
   it('passes response_format through to OpenAI natively and reports native mode', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const backend = new OpenAIBackend({ openai: 'test-key' } as any);
+    const backend = new OpenAIBackend('test-key');
     let lastParams: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (backend as unknown as { _api: any })._api = {

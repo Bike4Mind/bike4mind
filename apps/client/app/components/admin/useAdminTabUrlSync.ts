@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useSearch } from '@tanstack/react-router';
-import { AdminTab } from './adminSidebarConfig';
-import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
+import { adminTabAlias, adminTabFromSlug, adminTabRedirectFromSlug, adminTabToSlug } from './adminTabSlugs';
 import { adminSearchForTab } from './adminTabParams';
 
 /** The admin tab store holds non-member strings too, written by other surfaces. */
@@ -10,6 +10,12 @@ type AdminTabValue = AdminTab | string | null;
 export type IsAdminTabRenderable = (tab: AdminTab) => boolean;
 
 const ALL_TABS_RENDERABLE: IsAdminTabRenderable = () => true;
+
+const SIDEBAR_TABS: readonly AdminTab[] = SIDEBAR_SECTIONS.flatMap(section => section.items.map(item => item.tab));
+
+/** Users when it can be drawn; otherwise the first sidebar tab that can (a delegated admin's). */
+const fallbackTab = (isTabRenderable: IsAdminTabRenderable): AdminTab | undefined =>
+  isTabRenderable(AdminTab.Users) ? AdminTab.Users : SIDEBAR_TABS.find(isTabRenderable);
 
 /**
  * Keeps the admin console's active tab in the URL (`/admin?tab=<slug>`).
@@ -23,8 +29,9 @@ const ALL_TABS_RENDERABLE: IsAdminTabRenderable = () => true;
  * A caller that navigates with extra params must not also set the store: the mirror can run before the router commits the new URL and would rebuild search without them.
  *
  * `isTabRenderable` rules out tabs the page cannot currently draw (a gate is off, or the value has
- * no panel): such a tab is never selected, and one already selected falls back to Users, so a
- * crafted link cannot leave the console on a blank pane.
+ * no panel, or the user may not open it): such a tab is never selected, and one already selected
+ * falls back to Users, or to the first sidebar tab the user can open, so a crafted link cannot
+ * leave the console on a blank pane.
  */
 export function useAdminTabUrlSync(
   activeTab: AdminTabValue,
@@ -50,19 +57,43 @@ export function useAdminTabUrlSync(
   // load, a pasted link, back/forward). It also re-runs when a gate resolves, re-checking a slug
   // that arrived while the gate was still unknown.
   useEffect(() => {
-    const requestedTab = resolveRequestedTab(requestedTabSlug);
-    if (requestedTab !== undefined) {
-      setActiveTab(requestedTab);
+    const redirect = adminTabRedirectFromSlug(requestedTabSlug);
+    if (redirect) {
+      if (!isOnAdminRoute || !isTabRenderable(redirect.tab)) return;
+      // Navigate only: the run for the rewritten slug selects the tab (see the contract above).
+      const slug = adminTabToSlug(redirect.tab) as string;
+      navigate({
+        to: '/admin',
+        search: previous => ({ ...adminSearchForTab(previous, slug), ...redirect.search }),
+        replace: true,
+      });
+      return;
     }
-  }, [requestedTabSlug, setActiveTab, resolveRequestedTab]);
+    const requestedTab = resolveRequestedTab(requestedTabSlug);
+    if (requestedTab === undefined) return;
+    setActiveTab(requestedTab);
+    // A legacy slug becomes the current one, carrying the params that pick the page it used to name.
+    const alias = adminTabAlias(requestedTabSlug);
+    const slug = adminTabToSlug(requestedTab);
+    if (!alias || !isOnAdminRoute || slug === undefined) return;
+    navigate({
+      to: '/admin',
+      search: previous => adminSearchForTab({ ...previous, ...alias.search }, slug),
+      replace: true,
+    });
+  }, [requestedTabSlug, setActiveTab, resolveRequestedTab, isOnAdminRoute, navigate, isTabRenderable]);
 
   // A tab the console cannot render would leave a blank pane. The selection can come from the
   // URL, another surface, or a gate that resolved after the tab was chosen, so correct the store
   // rather than only the URL - the mirror below then writes the corrected slug back.
   useEffect(() => {
     if (typeof activeTab !== 'number' || isTabRenderable(activeTab)) return;
-    setActiveTab(AdminTab.Users);
-  }, [activeTab, setActiveTab, isTabRenderable]);
+    // A renderable deep link wins: the slug effect above set it in this same flush, but activeTab
+    // here is still the render-time store default (Dashboard, which a delegate cannot render).
+    if (resolveRequestedTab(requestedTabSlug) !== undefined) return;
+    const fallback = fallbackTab(isTabRenderable);
+    if (fallback !== undefined) setActiveTab(fallback);
+  }, [activeTab, setActiveTab, isTabRenderable, resolveRequestedTab, requestedTabSlug]);
 
   const lastMirroredTabRef = useRef(activeTab);
   useEffect(() => {
@@ -72,7 +103,11 @@ export function useAdminTabUrlSync(
     // Never write a slug while the URL names a tab the console can render: on mount that would
     // overwrite a deep link before the effect above has applied it, including on StrictMode's
     // double-run, which a first-run flag misses.
-    if (!tabChanged && resolveRequestedTab(requestedTabSlug) !== undefined) return;
+    const redirect = adminTabRedirectFromSlug(requestedTabSlug);
+    const pendingRedirect = redirect !== undefined && isTabRenderable(redirect.tab);
+    if (!tabChanged && (resolveRequestedTab(requestedTabSlug) !== undefined || pendingRedirect)) return;
+    // The URL effect owns an alias's params until the router commits the rewrite.
+    if (adminTabAlias(requestedTabSlug)?.tab === activeTab) return;
     const slug = adminTabToSlug(activeTab);
     if (slug === undefined || slug === requestedTabSlug) return;
     navigate({
@@ -81,5 +116,5 @@ export function useAdminTabUrlSync(
       search: previous => adminSearchForTab(previous, slug),
       replace: true,
     });
-  }, [activeTab, isOnAdminRoute, navigate, requestedTabSlug, resolveRequestedTab]);
+  }, [activeTab, isOnAdminRoute, navigate, requestedTabSlug, resolveRequestedTab, isTabRenderable]);
 }

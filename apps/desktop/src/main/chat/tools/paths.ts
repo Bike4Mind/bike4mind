@@ -1,8 +1,21 @@
-import { readlink, realpath } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
+import { readlinkSync, realpathSync } from 'node:fs';
+import { readlink, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
+import {
+  parseWslPath,
+  wslLocation,
+  wslOperandPlaces,
+  wslRealpath,
+  wslDrivePath,
+  wslUncPath,
+  type OperandReader,
+  type WslLocation,
+} from '../../wsl/wslPath';
+
+export type { OperandReader } from '../../wsl/wslPath';
 
 /** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
-const MAX_LINK_HOPS = 32;
+export const MAX_LINK_HOPS = 32;
 
 /**
  * Thrown when a tool is pointed outside every granted root. Carries no filesystem detail
@@ -22,8 +35,57 @@ export class PathAccessDenied extends Error {
   }
 }
 
+/** A WSL path with the share name and distro case that do not change where it lands made uniform. */
+function comparable(path: string): string {
+  const wsl = wslLocation(path);
+  return wsl ? wslUncPath({ host: 'wsl.localhost', distro: wsl.distro.toLowerCase() }, wsl.linuxPath) : path;
+}
+
+const sameDistro = (a: WslLocation | null, b: WslLocation): boolean =>
+  a !== null && a.distro.toLowerCase() === b.distro.toLowerCase();
+
+/** `paths` plus, on Windows, the drive path each WSL `/mnt/<x>` share path in them reaches. */
+export function withDriveSpellings(paths: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return [...paths];
+  return paths.flatMap(path => {
+    const drive = wslDrivePath(path);
+    return drive ? [path, drive] : [path];
+  });
+}
+
+/** On macOS and Windows, whose volumes ignore case by default, `path` in lower case. */
+export function caseFolded(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'darwin' || platform === 'win32' ? path.toLowerCase() : path;
+}
+
+/** `path` as the guards compare it: case folded where volumes ignore case, and `/`-separated on Windows. */
+export function guardForm(path: string, platform: NodeJS.Platform = process.platform): string {
+  const folded = caseFolded(path, platform);
+  return platform === 'win32' ? folded.replace(/\\/g, '/') : folded;
+}
+
+/** isWithin for two `guardForm` paths. */
+export function guardFormWithin(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root.endsWith('/') ? root : `${root}/`);
+}
+
+/** Whether any spelling of one target lies within any `guarded` path, its WSL drive spellings included. */
+export function withinGuarded(
+  guarded: readonly string[],
+  candidates: readonly string[],
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const spellings = withDriveSpellings(candidates, platform).map(path => guardForm(path, platform));
+  return guarded.some(entry => {
+    const root = guardForm(entry, platform);
+    return spellings.some(spelling => guardFormWithin(root, spelling));
+  });
+}
+
 /** True when `candidate` is `root` itself or lies beneath it. */
-export function isWithin(root: string, candidate: string): boolean {
+export function isWithin(rootPath: string, candidatePath: string): boolean {
+  const root = comparable(rootPath);
+  const candidate = comparable(candidatePath);
   if (candidate === root) return true;
   // The separator matters: without it "/Users/jude/Downloads-secret" passes a plain
   // startsWith test against "/Users/jude/Downloads".
@@ -53,11 +115,17 @@ export async function resolveWithinRoots(
   // A relative path resolves against the SESSION's working directory, not process.cwd() -
   // which for a packaged Electron app is wherever the app happened to be launched from, and
   // is never somewhere the user granted.
-  const lexical = isAbsolute(requested) || !baseDirectory ? resolve(requested) : resolve(baseDirectory, requested);
-  const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
+  // In a WSL folder a Linux program writes `/home/...` for a path in its own distro.
+  const base = baseDirectory ? wslLocation(baseDirectory) : null;
+  const spelled = base && /^\/(?!\/)/.test(requested) ? wslUncPath(base, requested) : requested;
+  const lexical = isAbsolute(spelled) || !baseDirectory ? resolve(spelled) : resolve(baseDirectory, spelled);
 
-  const real = await physicalTarget(lexical);
-  if (!realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
+  const wsl = wslLocation(lexical);
+  // Asking a distro no root lives in would start it only to refuse.
+  if (wsl && !roots.some(root => sameDistro(wslLocation(root), wsl))) throw new PathAccessDenied(requested);
+  const realRoots = await Promise.all(roots.map(root => realRoot(root, wsl)));
+  const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await physicalTarget(lexical);
+  if (real === null || !realRoots.some(root => isWithin(root, real))) throw new PathAccessDenied(requested);
 
   // The lexical path is what the caller gets back: `real` may point at the symlink TARGET,
   // and returning that would silently redirect a write the user believes is going elsewhere.
@@ -86,11 +154,90 @@ export async function resolveWithinRoots(
 export async function resolveWithinRootsPhysically(
   requested: string,
   roots: readonly string[],
-  baseDirectory: string
+  baseDirectory: string,
+  reader: OperandReader = 'program'
 ): Promise<string> {
   if (!requested) throw new PathAccessDenied(requested);
   if (roots.length === 0) throw new PathAccessDenied(requested);
 
+  const [landed, ...others] = await operandPlaces(requested, roots, baseDirectory, reader);
+  if (!landed?.inside || landed.physical === null || others.some(place => !place.inside)) {
+    throw new PathAccessDenied(requested);
+  }
+  return landed.physical;
+}
+
+export interface OperandPlace {
+  /** Where the operand lands as written. */
+  lexical: string;
+  /** With every symlink followed; null when it cannot be resolved, or would start a distro to find out. */
+  physical: string | null;
+  /** Whether `physical` lies inside one of the roots the place was checked against. */
+  inside: boolean;
+}
+
+/**
+ * Each place a command run in `baseDirectory` reaches with `operand`, resolved as the kernel will
+ * (see `resolveWithinRootsPhysically`) and checked against `roots`; the first is where the shell
+ * itself lands. In a WSL folder the operand is read by Linux rules, plus every other way
+ * `wslOperandPlaces` lists, so it is inside only when every reading is.
+ */
+export async function operandPlaces(
+  operand: string,
+  roots: readonly string[],
+  baseDirectory: string,
+  reader: OperandReader = 'program'
+): Promise<OperandPlace[]> {
+  const wsl = wslLocation(baseDirectory);
+  const realRoots = await Promise.all(roots.map(root => realRoot(root, wsl)));
+  // Asking a distro no root lives in would start it only to refuse.
+  const rooted = (place: string): boolean => {
+    const distro = wslLocation(place);
+    return !distro || roots.some(root => sameDistro(wslLocation(root), distro));
+  };
+  const resolved = wsl
+    ? await Promise.all(
+        wslOperandPlaces(wsl, operand, reader).map(async place => ({
+          lexical: lexicalPlace(place),
+          physical: rooted(place) ? await physicalPlace(wsl, place) : null,
+        }))
+      )
+    : [
+        {
+          lexical: resolve(baseDirectory, operand),
+          physical: rooted(resolve(baseDirectory, operand))
+            ? await physicallyOnHost(operand, baseDirectory).catch(() => null)
+            : null,
+        },
+      ];
+  return resolved.map(({ lexical, physical }) => ({
+    lexical,
+    physical,
+    inside: physical !== null && realRoots.some(root => isWithin(root, physical)),
+  }));
+}
+
+/** Where `operand` lands from `directory` as written: the places `operandPlaces` checks, symlinks left as they are. */
+export function operandTargets(directory: string, operand: string, reader: OperandReader = 'program'): string[] {
+  const wsl = wslLocation(directory);
+  return wsl ? wslOperandPlaces(wsl, operand, reader).map(lexicalPlace) : [resolve(directory, operand)];
+}
+
+/** `path.resolve` for a command's operands, which a command in a WSL folder reads by Linux rules. */
+export function resolveOperand(directory: string, ...operands: string[]): string {
+  return operands.reduce((from, operand) => operandTargets(from, operand, 'shell')[0] ?? from, resolve(directory));
+}
+
+/** A place from `wslOperandPlaces` with its `..` applied to the names before it. */
+function lexicalPlace(place: string): string {
+  const wsl = parseWslPath(place);
+  return wsl ? wslUncPath(wsl, posix.resolve(wsl.linuxPath)) : resolve(place);
+}
+
+/** A Windows path to another computer, which a command in a WSL folder names without opening a connection to it. */
+export const onAnotherComputer = (path: string): boolean => /^[\\/]{2}/.test(path) && !parseWslPath(path);
+
+async function physicallyOnHost(requested: string, baseDirectory: string): Promise<string> {
   const prefix = parse(requested).root;
   // A Windows drive-relative path - `C:notes.txt` - has a root and is still not absolute, and
   // the directory it is relative to is per-drive state no part of this app can see. Only ever
@@ -103,10 +250,190 @@ export async function resolveWithinRootsPhysically(
     // `current` is already resolved, so its parent is the one the kernel would step back to.
     current = part === '..' ? dirname(current) : await realpathOrSelf(join(current, part));
   }
-
-  const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
-  if (!realRoots.some(root => isWithin(root, current))) throw new PathAccessDenied(requested);
   return current;
+}
+
+/**
+ * A place from `wslOperandPlaces` for a command in the WSL folder `base`, with every symlink
+ * followed: by the distro itself for a place in it. A place in another distro is not on the
+ * command's filesystem, and a Windows path to another computer is not looked at; both are null.
+ */
+async function physicalPlace(base: WslLocation, place: string): Promise<string | null> {
+  const named = parseWslPath(place);
+  if (named) return sameDistro(named, base) ? inDistro(named, named.linuxPath) : null;
+  return onAnotherComputer(place) ? null : physicallyOnHost(place, place).catch(() => null);
+}
+
+/**
+ * Linux symlinks under the share do not resolve from Windows, so the distro follows them; null when it cannot.
+ * A backslash in a Linux name stays in that name, spelled as the share spells it (see `shareName`).
+ */
+async function inDistro(location: WslLocation, linuxPath: string): Promise<string | null> {
+  const real = await wslRealpath(location.distro, linuxPath);
+  return real === null ? null : wslUncPath(location, real);
+}
+
+/** A WSL root is resolved in its distro only when the path checked against it is in that distro too. */
+async function realRoot(root: string, checked: WslLocation | null): Promise<string> {
+  const wsl = wslLocation(root);
+  if (wsl && !(checked && sameDistro(wsl, checked))) return resolve(root);
+  const real = wsl ? await inDistro(wsl, wsl.linuxPath) : await realpath(root).catch(() => null);
+  return real ?? resolve(root);
+}
+
+/**
+ * `realpath`, failures included, except that a WSL path has its symlinks followed by its distro;
+ * Windows cannot follow them over the share.
+ */
+export async function hostRealpath(path: string): Promise<string> {
+  const wsl = wslLocation(path);
+  if (!wsl) return realpath(path);
+  const real = await inDistro(wsl, wsl.linuxPath);
+  if (real === null) throw new Error(`Cannot resolve ${path} in its WSL distro`);
+  // The distro also answers for a path that does not exist, which realpath refuses.
+  await stat(real);
+  return real;
+}
+
+/** `physicalTarget`, except that a WSL path has its symlinks followed by its distro. */
+export async function hostPhysicalTarget(target: string): Promise<string> {
+  const wsl = wslLocation(target);
+  if (!wsl) return physicalTarget(target);
+  const real = await inDistro(wsl, wsl.linuxPath);
+  if (real === null) throw new Error(`Cannot resolve ${target} in its WSL distro`);
+  return real;
+}
+
+/**
+ * `path`, plus its real path when a symlink makes the two differ, so a guard built from it holds
+ * against targets the checks have resolved. A path that does not exist yet is spelled under its
+ * nearest existing parent's real path. Sync, and runs per decision, so keep callers off hot loops.
+ */
+export function withRealPath(path: string): string[] {
+  return spellingsOf(path).known;
+}
+
+/** `withRealPath`, and whether both its real path and its own location resolved. */
+export function spellingsOf(path: string): { known: string[]; resolved: boolean } {
+  const real = realpathSyncNearest(path);
+  const own = ownLocation(path);
+  const known = [path, ...(real === null ? [] : [real]), ...(own === null ? [] : [own])];
+  return { known: [...new Set(known)], resolved: real !== null && own !== null };
+}
+
+/**
+ * Where `path` itself sits: its parent's real path plus its name, without following a final link.
+ * A relative path or a root is returned as given; null only when the parent cannot be resolved.
+ */
+export function ownLocation(path: string): string | null {
+  const parent = dirname(path);
+  if (!isAbsolute(path) || parent === path) return path;
+  const real = realpathSyncNearest(parent);
+  return real === null ? null : join(real, basename(path));
+}
+
+/**
+ * Codes meaning no file by this name exists. ERR_INVALID_ARG_VALUE is a NUL in the name; ENAMETOOLONG
+ * counts only when one component exceeds 255 bytes on POSIX or 255 UTF-16 units on Windows
+ * (see isMissingPathError).
+ */
+export const MISSING_PATH_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ERR_INVALID_ARG_VALUE']);
+
+const MAX_COMPONENT_LENGTH = 255;
+
+/** True when `code` from resolving `path` means no such file exists. A too-long total path could still hold a real link. */
+export function isMissingPathError(code: unknown, path: string): boolean {
+  if (MISSING_PATH_CODES.has(String(code))) return true;
+  if (code !== 'ENAMETOOLONG') return false;
+  // POSIX limits a component in bytes and allows a backslash in a name; Windows counts UTF-16 units.
+  const win = process.platform === 'win32';
+  return path
+    .split(win ? /[\\/]/ : '/')
+    .some(part => (win ? part.length : Buffer.byteLength(part, 'utf8')) > MAX_COMPONENT_LENGTH);
+}
+
+// Windows volumes outside the mount manager (RAM disks, some virtual drives) make native throw EISDIR.
+function nativeOrJsRealpath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EISDIR') throw error;
+    return realpathSync(path);
+  }
+}
+
+/**
+ * Whether `code` from reading the link `name` at `candidate` means nothing by that name exists.
+ * APFS, HFS+ and drvfs take 255 UTF-16 units, up to 765 bytes, so ENAMETOOLONG proves the name too
+ * long only while `candidate` is under PATH_MAX; past it the path's length may be what failed.
+ */
+export function isMissingNameError(code: unknown, candidate: string, name: string): boolean {
+  if (!isMissingPathError(code, name)) return false;
+  if (code !== 'ENAMETOOLONG' || process.platform === 'win32') return true;
+  return Buffer.byteLength(candidate) < (process.platform === 'darwin' ? 1024 : 4096);
+}
+
+/** A path resolved as far as it exists, the rest kept as given, and whether all of it exists. */
+export interface NearestPath {
+  path: string;
+  exists: boolean;
+}
+
+/** What one resolution has walked: link hops and names, each bounded. */
+export interface NearestWalk {
+  hops: number;
+  names: number;
+}
+
+/** Half of Linux PATH_MAX: more names than any path the kernel accepts can hold. */
+export const MAX_WALK_NAMES = 2048;
+
+/**
+ * `path` with symlinks resolved as far as it exists, the rest kept as given. Null when resolution
+ * fails for any reason but a missing component (EACCES, ELOOP, ...): where it lands is then unknown.
+ */
+export function realpathSyncNearest(path: string): string | null {
+  return nearestSync(path, { hops: 0, names: 0 })?.path ?? null;
+}
+
+/**
+ * When realpath fails as missing or too long, `path` is resolved one name at a time under its
+ * parent's physical path: macOS realpath refuses any path of PATH_MAX (1024) bytes or more, and
+ * Linux readlink past 4096, while the physical spelling may be short. A name that cannot be read
+ * under an existing parent is null. resolveSubject's `nearest` mirrors this.
+ */
+function nearestSync(path: string, walk: NearestWalk): NearestPath | null {
+  try {
+    return { path: nativeOrJsRealpath(path), exists: true };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENAMETOOLONG' && !isMissingPathError(code, path)) return null;
+  }
+  const parentPath = dirname(path);
+  if (++walk.names > MAX_WALK_NAMES || parentPath === path) return null;
+  const parent = nearestSync(parentPath, walk);
+  if (parent === null) return null;
+  const name = basename(path);
+  const candidate = join(parent.path, name);
+  // Nothing under a missing folder can be a link, but `..` climbs back out to where one can be.
+  if (!parent.exists) return name === '..' ? null : { path: candidate, exists: false };
+  let target: string;
+  try {
+    target = readlinkSync(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') {
+      try {
+        return { path: nativeOrJsRealpath(candidate), exists: true };
+      } catch {
+        return null;
+      }
+    }
+    return isMissingNameError(code, candidate, name) ? { path: candidate, exists: false } : null;
+  }
+  // A dangling link is still followed by a write, which creates its target.
+  if (++walk.hops > MAX_LINK_HOPS) return null;
+  return nearestSync(isAbsolute(target) ? target : `${parent.path}${sep}${target}`, walk);
 }
 
 async function realpathOrSelf(target: string): Promise<string> {
@@ -154,10 +481,16 @@ export async function physicalTarget(target: string): Promise<string> {
         continue;
       }
       const candidate = join(current, part);
-      const link = await readlink(candidate).catch(() => null);
+      const link = await linkAt(candidate, target);
+      if (link === undefined) {
+        current = candidate;
+        continue;
+      }
       if (link === null) {
         // Existing components also supply their canonical casing on case-insensitive volumes.
-        current = await realpath(candidate).catch(() => candidate);
+        current = await realpath(candidate).catch(() => {
+          throw new PathAccessDenied(target);
+        });
         continue;
       }
       if (++hops > MAX_LINK_HOPS) throw new PathAccessDenied(target);
@@ -166,5 +499,21 @@ export async function physicalTarget(target: string): Promise<string> {
       pending = [...link.slice(root.length).split(sep), ...pending];
     }
     return current;
+  }
+}
+
+/**
+ * The link text at `candidate`: null when it is no link, undefined when it does not exist; any other
+ * failure refuses, worded like a path outside the roots so the refusal does not tell the two apart.
+ */
+async function linkAt(candidate: string, target: string): Promise<string | null | undefined> {
+  try {
+    return await readlink(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') return null;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    // ENAMETOOLONG, EACCES, ...: the name could still be a link.
+    throw new PathAccessDenied(target);
   }
 }

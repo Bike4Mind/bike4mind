@@ -17,7 +17,8 @@ import {
   pullNumberSchema,
   githubUsernameSchema,
 } from '../helpers/schemas.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   TOOL_LIST_PULL_REQUESTS,
@@ -30,6 +31,8 @@ import {
   TOOL_SEARCH_PULL_REQUESTS,
 } from '../constants.js';
 import { MARK_PR_READY_FOR_REVIEW_MUTATION, CONVERT_PR_TO_DRAFT_MUTATION } from '../helpers/queries.js';
+
+const log = createStderrLogger('github');
 
 export function registerPullTools(server: McpServer) {
   // LIST PULL REQUESTS - View PRs for a repository
@@ -55,7 +58,6 @@ export function registerPullTools(server: McpServer) {
       try {
         // When labels or author are specified, use Search API (pulls.list doesn't support these filters)
         if ((labels && labels.length > 0) || author) {
-          console.error('Using github search');
           const stateFilter = state === 'all' ? '' : `is:${state || 'open'}`;
           const labelFilters = labels ? labels.map(label => `label:"${label}"`).join(' ') : '';
           const authorFilter = author ? `author:${author}` : '';
@@ -385,9 +387,10 @@ export function registerPullTools(server: McpServer) {
           }
         } catch (error) {
           // Silently continue to preview if check fails
-          console.error(
-            `[${TOOL_CREATE_PULL_REQUEST}] Warning: Could not check for existing PRs: ${getErrorMessage(error)}`
-          );
+          log.warn('could not check for existing PRs', {
+            toolName: TOOL_CREATE_PULL_REQUEST,
+            ...errorLogFields(error),
+          });
         }
 
         return createPreviewResponse(
@@ -410,7 +413,6 @@ export function registerPullTools(server: McpServer) {
       }
 
       // EXECUTE MODE
-      console.error(`[${TOOL_CREATE_PULL_REQUEST}] Attempting to create PR: ${fullRepoName} - "${title}"`);
 
       try {
         const result = await octokit.pulls.create({
@@ -424,8 +426,7 @@ export function registerPullTools(server: McpServer) {
           maintainer_can_modify,
         });
 
-        console.error(`[${TOOL_CREATE_PULL_REQUEST}] SUCCESS: PR #${result.data.number} created`);
-        console.error(`[${TOOL_CREATE_PULL_REQUEST}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_CREATE_PULL_REQUEST, number: result.data.number });
 
         return createSuccessResponse({
           pull_request: {
@@ -441,7 +442,7 @@ export function registerPullTools(server: McpServer) {
           },
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_PULL_REQUEST}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_PULL_REQUEST, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {
@@ -540,7 +541,7 @@ export function registerPullTools(server: McpServer) {
           pull_number,
         });
       } catch (error) {
-        console.error(`[${TOOL_UPDATE_PULL_REQUEST}] ERROR fetching PR: ${getErrorMessage(error)}`);
+        log.error('pr lookup failed', { toolName: TOOL_UPDATE_PULL_REQUEST, ...errorLogFields(error) });
         if (hasStatus(error, 404)) {
           return createErrorResponse(error, {
             suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}.`,
@@ -627,7 +628,6 @@ export function registerPullTools(server: McpServer) {
       }
 
       // EXECUTE MODE
-      console.error(`[${TOOL_UPDATE_PULL_REQUEST}] Attempting to update PR #${pull_number}: ${fullRepoName}`);
 
       try {
         // Step 1: Update REST API fields (title, body, state, base, maintainer_can_modify)
@@ -656,7 +656,6 @@ export function registerPullTools(server: McpServer) {
             ...restFields,
           });
           updatedPr = restResult.data;
-          console.error(`[${TOOL_UPDATE_PULL_REQUEST}] REST update successful`);
         }
 
         // Step 2: Handle draft status change via GraphQL (if requested)
@@ -665,7 +664,6 @@ export function registerPullTools(server: McpServer) {
 
           if (draft === false) {
             // Mark as ready for review
-            console.error(`[${TOOL_UPDATE_PULL_REQUEST}] Marking PR as ready for review via GraphQL`);
             const graphqlResult = await octokit.graphql<{
               markPullRequestReadyForReview: {
                 pullRequest: { id: string; isDraft: boolean; number: number; title: string };
@@ -674,10 +672,8 @@ export function registerPullTools(server: McpServer) {
               pullRequestId: nodeId,
             });
             updatedPr.draft = graphqlResult.markPullRequestReadyForReview.pullRequest.isDraft;
-            console.error(`[${TOOL_UPDATE_PULL_REQUEST}] PR marked ready for review`);
           } else {
             // Convert to draft
-            console.error(`[${TOOL_UPDATE_PULL_REQUEST}] Converting PR to draft via GraphQL`);
             const graphqlResult = await octokit.graphql<{
               convertPullRequestToDraft: {
                 pullRequest: { id: string; isDraft: boolean; number: number; title: string };
@@ -686,11 +682,10 @@ export function registerPullTools(server: McpServer) {
               pullRequestId: nodeId,
             });
             updatedPr.draft = graphqlResult.convertPullRequestToDraft.pullRequest.isDraft;
-            console.error(`[${TOOL_UPDATE_PULL_REQUEST}] PR converted to draft`);
           }
         }
 
-        console.error(`[${TOOL_UPDATE_PULL_REQUEST}] SUCCESS: PR #${pull_number} updated`);
+        log.info('succeeded', { toolName: TOOL_UPDATE_PULL_REQUEST, number: pull_number });
 
         return createSuccessResponse({
           pull_request: {
@@ -706,7 +701,7 @@ export function registerPullTools(server: McpServer) {
           changes_applied: changes,
         });
       } catch (error) {
-        console.error(`[${TOOL_UPDATE_PULL_REQUEST}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_UPDATE_PULL_REQUEST, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {
@@ -795,7 +790,7 @@ export function registerPullTools(server: McpServer) {
           pull_number,
         });
       } catch (error) {
-        console.error(`[${TOOL_MERGE_PULL_REQUEST}] ERROR fetching PR: ${getErrorMessage(error)}`);
+        log.error('pr lookup failed', { toolName: TOOL_MERGE_PULL_REQUEST, ...errorLogFields(error) });
         if (hasStatus(error, 404)) {
           return createErrorResponse(error, {
             suggestion: `Pull request #${pull_number} was not found in ${fullRepoName}.`,
@@ -860,13 +855,10 @@ export function registerPullTools(server: McpServer) {
       }
 
       // EXECUTE MODE
-      console.error(
-        `[${TOOL_MERGE_PULL_REQUEST}] Attempting to merge PR #${pull_number}: ${fullRepoName} (${merge_method})`
-      );
 
       // Check mergeability before attempting merge
       if (pr.mergeable === false) {
-        console.error(`[${TOOL_MERGE_PULL_REQUEST}] PR is not mergeable. State: ${pr.mergeable_state}`);
+        log.warn('PR is not mergeable', { toolName: TOOL_MERGE_PULL_REQUEST, state: pr.mergeable_state });
         return createErrorResponse(new Error('Pull request cannot be merged'), {
           suggestion: `PR is not mergeable (state: ${pr.mergeable_state}). Check for conflicts or required status checks.`,
         });
@@ -883,8 +875,7 @@ export function registerPullTools(server: McpServer) {
           ...(sha && { sha }),
         });
 
-        console.error(`[${TOOL_MERGE_PULL_REQUEST}] SUCCESS: PR #${pull_number} merged`);
-        console.error(`[${TOOL_MERGE_PULL_REQUEST}] Merge SHA: ${result.data.sha}`);
+        log.info('succeeded', { toolName: TOOL_MERGE_PULL_REQUEST, number: pull_number });
 
         return createSuccessResponse({
           merged: result.data.merged,
@@ -899,7 +890,7 @@ export function registerPullTools(server: McpServer) {
           },
         });
       } catch (error) {
-        console.error(`[${TOOL_MERGE_PULL_REQUEST}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_MERGE_PULL_REQUEST, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {

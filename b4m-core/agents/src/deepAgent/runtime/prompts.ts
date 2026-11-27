@@ -60,7 +60,7 @@ export function renderRecentEpisodes(episodes: Episode[]): string {
 
 /** The prior wake's handoff, rendered for the orient prompt. */
 export function renderHandoff(handoff: Handoff | null): string {
-  if (!handoff) return 'Handoff: (first wake — no prior handoff)';
+  if (!handoff || handoff.wakeCount === 0) return 'Handoff: (first wake \u2014 no prior handoff)';
   return [
     `Last wake (#${handoff.wakeCount}): ${handoff.lastActionSummary || '(no summary)'}`,
     `Intended next action: ${handoff.nextIntendedAction || '(none recorded)'}`,

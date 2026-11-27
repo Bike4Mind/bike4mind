@@ -1,0 +1,15 @@
+{
+  "manifest": 1,
+  "id": "chimes",
+  "name": "Chimes",
+  "version": "1.0.0",
+  "kind": "sounds",
+  "contract": 1,
+  "description": "Four short sounds, one per event. Test fixture for the sound pack loader.",
+  "sounds": {
+    "agent-done": "sounds/done.ogg",
+    "agent-error": "sounds/error.ogg",
+    "approval-requested": "sounds/approval.ogg",
+    "finale": "sounds/finale.ogg"
+  }
+}

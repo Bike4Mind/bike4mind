@@ -1,8 +1,28 @@
 import { MAX_IMAGE_PIXELS } from '../imageResize';
 import { UnsupportedImageFormatError } from './index';
+import { jimpFromRgba } from './jimpBitmap';
+import { isWebp } from './webpDecode';
 
-/** More frames than this and an animated image is not moderated frame by frame: it is blocked. */
+/**
+ * More frames than this and an animated image is not moderated frame by frame: it is blocked. Every
+ * distinct frame up to it is sent to the detector.
+ */
 export const MAX_MODERATED_FRAMES = 60;
+
+/**
+ * Returns a filter that is false for a frame whose pixels equal the last frame it passed, so a frame
+ * a viewer sees unchanged is not scanned again. It compares the bytes exactly rather than a digest:
+ * a frame is skipped only when it is provably the image already scanned.
+ */
+const changedSinceLastScan = () => {
+  let last: Buffer | undefined;
+  return (pixels: Uint8Array): boolean => {
+    const view = Buffer.from(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+    if (last?.equals(view)) return false;
+    last = Buffer.from(view); // a copy: the canvas is overwritten by later frames
+    return true;
+  };
+};
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -34,22 +54,16 @@ const clearRect = (canvas: Uint8Array, canvasWidth: number, r: Rect) => {
   }
 };
 
-const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): Promise<Buffer> => {
-  // Dynamic import for the same bundler reason as RekognitionImageModerationService's jimp use.
-  const { Jimp } = await import('jimp');
-  // Unpooled copy: jimp's fromBitmap re-reads a Buffer's whole backing ArrayBuffer from offset 0,
-  // so a pooled Buffer.from() slice would encode whatever sits at the start of the pool.
-  const data = Buffer.alloc(canvas.length);
-  data.set(canvas);
-  return Buffer.from(await Jimp.fromBitmap({ data, width, height }).getBuffer('image/jpeg'));
-};
+const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): Promise<Buffer> =>
+  Buffer.from(await (await jimpFromRgba(canvas, width, height)).getBuffer('image/jpeg'));
 
 /**
- * The images a viewer actually shows for an animated GIF, APNG or animated WebP, one per frame, or
- * null for a still image (moderated as-is). GIF and APNG frames are composited the way a browser
- * draws them (offsets, transparency, disposal, blending), so content split across partial frames
- * is moderated as it is displayed. Animated WebP cannot be decoded here, so it is only accepted when
- * every frame is a full-canvas frame that replaces the last (each frame then is what is shown).
+ * Every distinct image a viewer shows for an animated GIF, APNG or animated WebP, or null for a still
+ * image (moderated as-is). A frame identical to the one before it in the result is left out. GIF
+ * and APNG frames are composited the way a browser draws them (offsets, transparency, disposal,
+ * blending), so content split across partial frames is moderated as it is displayed. Animated WebP
+ * cannot be decoded here, so it is only accepted when every frame is a full-canvas frame that
+ * replaces the last (each frame then is what is shown).
  * Anything over MAX_MODERATED_FRAMES, over the pixel budget or malformed throws
  * UnsupportedImageFormatError, which moderation treats as blocked.
  */
@@ -69,7 +83,7 @@ async function splitAnimation(bytes: Buffer): Promise<Buffer[] | null> {
   if (magic === 'GIF87a' || magic === 'GIF89a') return gifFrames(bytes);
   // The chunk-name probes keep still PNG/WebP files off the parsers entirely.
   if (bytes.subarray(0, 8).equals(PNG_SIGNATURE)) return bytes.includes('acTL', 8, 'latin1') ? apngFrames(bytes) : null;
-  if (bytes.subarray(0, 4).toString('latin1') === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') {
+  if (isWebp(bytes)) {
     return bytes.includes('ANMF', 12, 'latin1') ? webpFrames(bytes) : null;
   }
   return null;
@@ -90,6 +104,7 @@ async function gifFrames(bytes: Buffer): Promise<Buffer[] | null> {
   const { width, height } = reader;
   assertBudget(count, width, height);
 
+  const changed = changedSinceLastScan();
   const canvas = new Uint8Array(width * height * 4);
   const out: Buffer[] = [];
   for (let i = 0; i < count; i++) {
@@ -101,7 +116,8 @@ async function gifFrames(bytes: Buffer): Promise<Buffer[] | null> {
     } catch (err) {
       throw unsupported(`undecodable GIF frame ${i}: ${(err as Error).message}`);
     }
-    out.push(await encodeCanvas(canvas, width, height));
+    // Every frame is still blitted: later frames composite onto it.
+    if (changed(canvas)) out.push(await encodeCanvas(canvas, width, height));
     if (info.disposal === 2) clearRect(canvas, width, info);
     else if (previous) canvas.set(previous);
   }
@@ -172,12 +188,13 @@ async function apngFrames(bytes: Buffer): Promise<Buffer[] | null> {
   }
 
   // The default image is shown by viewers without APNG support; when it is not frame 0 it is
-  // moderated as its own still image (the original bytes decode to it).
+  // moderated as its own still image (the original bytes decode to it), ahead of the animation.
   const extra = defaultIsFrame ? [] : [bytes];
   if (!animated || !ihdr || frames.length + extra.length <= 1) return null;
   const width = ihdr.readUInt32BE(0);
   const height = ihdr.readUInt32BE(4);
   assertBudget(frames.length + extra.length, width, height);
+  const changed = changedSinceLastScan();
 
   const { Jimp } = await import('jimp');
   const canvas = new Uint8Array(width * height * 4);
@@ -220,7 +237,7 @@ async function apngFrames(bytes: Buffer): Promise<Buffer[] | null> {
         }
       }
     }
-    out.push(await encodeCanvas(canvas, width, height));
+    if (changed(canvas)) out.push(await encodeCanvas(canvas, width, height));
     if (frame.dispose === 1 || (frame.dispose === 2 && i === 0)) clearRect(canvas, width, frame);
     else if (previous) canvas.set(previous);
   }
@@ -253,7 +270,9 @@ function webpFrames(bytes: Buffer): Buffer[] | null {
   if (frames.length === 0 || !canvas) return null;
   assertBudget(frames.length, canvas.width, canvas.height);
 
-  return frames.map(frame => {
+  // Only full-canvas replacing frames get here, so identical frame bytes are an identical image.
+  const changed = changedSinceLastScan();
+  return frames.filter(changed).map(frame => {
     // A still extended-format WebP: VP8X (alpha flag when the frame carries ALPH) + the frame's chunks.
     const vp8x = Buffer.alloc(18);
     vp8x.write('VP8X', 0, 'latin1');

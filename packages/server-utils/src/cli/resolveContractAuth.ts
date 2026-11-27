@@ -1,0 +1,67 @@
+import { type EndpointContract, ForbiddenError } from '@bike4mind/common';
+import { isAuthInfraFailure } from '../auth/apiKeyAuthFailure';
+import { verifyApiKey, verifyJwtToken, type ApiKeyInfo, type VerifiedUser } from './auth';
+
+export type ContractAuthResult =
+  { method: 'apiKey'; userId: string; apiKeyInfo: ApiKeyInfo } | { method: 'jwt'; userId: string; user: VerifiedUser };
+
+/**
+ * Authenticate a request per the contract's `auth` mode, reusing the shared
+ * verifyApiKey / verifyJwtToken primitives so every gate (mfaPending, tokenVersion,
+ * policy acceptance, scope check) stays identical to the hand-rolled paths.
+ *
+ * Authentication ONLY - rate limiting is left to the caller, because its policy
+ * (per-key vs per-user, window, source) is endpoint-specific and not modelled on
+ * the contract. The api-key-first order matches the existing v1 handlers; a valid
+ * key that is later rate-limited is surfaced by the caller (not fallen through to
+ * JWT), because this returns the apiKey result before any rate-limit check runs.
+ *
+ * @throws when the request cannot be authenticated per the contract's auth mode; a
+ * {@link ForbiddenError} for an authenticated-but-forbidden caller (when no other
+ * credential succeeds), so the transport can 403; a 5xx HTTPError when the API-key check
+ * itself failed (see toApiKeyAuthError), so the transport can 503/500.
+ */
+export async function resolveContractAuth(
+  headers: Record<string, string | undefined>,
+  contract: EndpointContract,
+  options: { allowExchangeKeys?: boolean } = {}
+): Promise<ContractAuthResult> {
+  const bearer = headers.authorization?.replace('Bearer ', '');
+
+  if (contract.auth === 'jwtOnly') {
+    const user = await verifyJwtToken(bearer, { requireApiAccess: true });
+    return { method: 'jwt', userId: user.id, user };
+  }
+
+  if (contract.auth === 'apiKeyOrJwt') {
+    try {
+      // Gate on the contract's declared scopes - the same set registerContract
+      // publishes as `x-required-scopes`. Empty/absent falls back to verifyApiKey's
+      // default completion scopes.
+      const apiKeyInfo = await verifyApiKey(headers, {
+        requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
+        allowExchangeKeys: options.allowExchangeKeys,
+      });
+      return { method: 'apiKey', userId: apiKeyInfo.userId, apiKeyInfo };
+    } catch (keyError) {
+      // The key check itself failed (database unreachable): the caller should retry, not be
+      // re-judged by the JWT path, whose 401 would read as a bad credential.
+      if (isAuthInfraFailure(keyError)) throw keyError;
+      // No valid API key - fall through to JWT (a valid-but-rate-limited key never
+      // reaches here; verifyApiKey does not rate-limit, so success returns above).
+      try {
+        const user = await verifyJwtToken(bearer, { requireApiAccess: true });
+        return { method: 'jwt', userId: user.id, user };
+      } catch (jwtError) {
+        // A session lookup outage is retryable even when a second supplied key is forbidden.
+        if (isAuthInfraFailure(jwtError)) throw jwtError;
+        // Both failed: a recognised key whose owner is forbidden (suspended, disputed)
+        // is the more useful answer than the JWT's 401.
+        throw keyError instanceof ForbiddenError ? keyError : jwtError;
+      }
+    }
+  }
+
+  // `public` (or any future mode) has no auth to resolve.
+  throw new Error(`resolveContractAuth: unsupported auth mode "${contract.auth}"`);
+}

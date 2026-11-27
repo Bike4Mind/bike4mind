@@ -225,8 +225,7 @@ function skipQuotedSpan(source: string, start: number): number {
  * `[ApiKeyScope.ADMIN]` so a route that swaps in a weaker/other scope is not accepted as "gated".
  * A trailing comma is allowed so a wrapped single-element array still reads as gated.
  *
- * Shared by adminApiKeyScopeCoverage.test.ts (which pins the accepted/rejected shapes) and
- * secretRotationsApiKeyScopeCoverage.test.ts.
+ * Shared by adminApiKeyScopeCoverage.test.ts, which pins the accepted/rejected shapes.
  */
 export const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,?\s*\]/;
 

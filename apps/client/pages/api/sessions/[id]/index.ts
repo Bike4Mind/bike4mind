@@ -1,11 +1,9 @@
 import {
   SessionEvents,
-  applyWorkspaceSessionSettings,
   redactSessionForClient,
   sessionDeleteContract,
   sessionGetContract,
   sessionUpdateContract,
-  stripSurfaceOwnedFields,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import {
@@ -14,44 +12,22 @@ import {
   userRepository,
   organizationRepository,
   fabFileRepository,
-  cacheRepository,
   sessionAgentConfigRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
-import { logEvent } from '@server/utils/analyticsLog';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
+import { readSession } from '@server/sessions/readSession';
 
 // Each verb's auth mode, required scope, and path/body validation come from its contract
 // (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
 // that also drives the OpenAPI spec. `req.validated` / `req.validatedParams` are the parsed body/id.
-const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res) => {
-  const session = await sessionService.getSession(
-    req.user!.id,
-    { id: req.validatedParams.id },
-    { db: { sessions: sessionRepository, users: userRepository } }
-  );
-
-  // The settings that apply, not the stored ones: a workspace-owned field is resolved at read time.
-  const doc = session as typeof session & { toJSON?: () => typeof session };
-  const plain = typeof doc.toJSON === 'function' ? doc.toJSON() : session;
-  try {
-    const effective = await applyWorkspaceSessionSettings(
-      plain,
-      { user: req.user, logger: req.logger },
-      premiumWorkspaceSessionSettings
-    );
-    return res.json(redactSessionForClient(effective));
-  } catch (error) {
-    req.logger.warn('Workspace session settings unavailable for GET; returning without owned fields', error);
-    // User-set provenance can preserve stored values during writes, but cannot make an owned
-    // value authoritative when its workspace resolver is unavailable.
-    const fallback = stripSurfaceOwnedFields(plain, premiumWorkspaceSessionSettings, { surface: plain.surface });
-    return res.json(redactSessionForClient(fallback));
-  }
-});
+const getHandler = nextRouteForContract(sessionGetContract).get(readSession);
 
 const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (req, res) => {
   const { id } = req.validatedParams;
@@ -62,8 +38,9 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
   // session still live. Matches the revokeSharing route, which wraps the sibling cascade for the
   // same reason; the service's own ordering comment already assumes a retry sees an all-or-nothing
   // state. That all-or-nothing is what sessionDeleteContract's 409 promises.
-  const newLastNotebook = await withTransaction(() =>
-    sessionService.deleteSession(
+  const { newLastNotebook, affectedUserIds } = await withTransaction(async () => {
+    const affected = new Set<string>();
+    const newLastNotebook = await sessionService.deleteSession(
       userId,
       { id },
       {
@@ -76,9 +53,27 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
           sessionAgentConfigs: sessionAgentConfigRepository,
         },
         logger: req.logger,
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
       }
-    )
-  );
+    );
+    return { newLastNotebook, affectedUserIds: [...affected] };
+  });
+  await rescopeUserSubscriptions(affectedUserIds, req.logger);
+
+  // Published replies are snapshots that outlive their notebook; take the owner's down with it, as
+  // the bulk DELETE /api/sessions does. After the delete, so a refused or conflicting one keeps them.
+  // The delete is already committed, so a failure is logged rather than failing the request.
+  try {
+    await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds: [id] }, { logger: req.logger });
+  } catch (error) {
+    req.logger.error('Error unpublishing replies after session delete:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      sessionId: id,
+      userId,
+    });
+  }
+
+  await purgeDeletedNotebookMedia([id], { logger: req.logger });
 
   await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 
@@ -94,26 +89,7 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
   const updatedSession = await sessionService.updateSession(
     req.user!,
     { ...req.validated, id },
-    {
-      db: {
-        sessions: sessionRepository,
-        projects: projectRepository,
-        fabFiles: fabFileRepository,
-        caches: cacheRepository,
-      },
-      logger: req.logger,
-      // Lets the lake-tag derivation see lake-membership files: the ownership reader alone cannot,
-      // so attaching a teammate's org-lake file would otherwise derive nothing and leave the
-      // session unscoped. Same resolver the chat tool runs on, so the two cannot drift.
-      // Imported at CALL time - see the create route for why (the resolver's graph reaches the
-      // Mongoose models, and it is only needed when files are actually attached).
-      resolveLakeAccess: async () =>
-        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-      // The attachment door's lake arms, so an added lake file passes the access check.
-      resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user!, req.logger)(),
-      storage: getFilesStorage(),
-    }
+    buildSessionUpdateAdapters(req, req.user!, req.logger)
   );
 
   await logEvent(

@@ -86,7 +86,10 @@ export async function persistGeneratedFileAsFabFile(
  */
 export async function saveGeneratedAssetFromTool(
   context: ToolContext,
-  asset: Pick<SaveGeneratedAssetParams, 'bytes' | 'contentType' | 'generation' | 'generatedCopyKey'>
+  asset: Pick<
+    SaveGeneratedAssetParams,
+    'bytes' | 'contentType' | 'generation' | 'generatedCopyKey' | 'generatedOutputKey' | 'derivedFrom'
+  >
 ): Promise<SaveGeneratedAssetResult> {
   const { sessionId, questId, userId, logger } = context;
   const adapters = toolFileAdapters(context);
@@ -100,7 +103,7 @@ export async function saveGeneratedAssetFromTool(
 
 /**
  * The FabFile adapters a ToolContext supplies, or undefined when the harness lacks any of them. Mirrors the server
- * door (apps/client/server/utils/saveGeneratedAssetToFiles.ts): scopedSettings must ride along, or a per-org/owner/lake
+ * door (packages/server-utils/src/utils/saveGeneratedAssetToFiles.ts): scopedSettings must ride along, or a per-org/owner/lake
  * enforcement override would silently not apply to tool output.
  */
 function toolFileAdapters(context: ToolContext): Pick<SaveGeneratedAssetDeps, 'db' | 'storage'> | undefined {
@@ -117,8 +120,12 @@ function toolFileAdapters(context: ToolContext): Pick<SaveGeneratedAssetDeps, 'd
     },
     storage: {
       upload: (path, content, options) => storage.upload(content, path, options),
-      generateSignedUrl: (path, expireInSeconds, type) =>
-        storage.getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
+      generateSignedUrl: (path, expireInSeconds, type, options) =>
+        storage.getSignedUrl(path, type ?? 'get', {
+          expiresIn: expireInSeconds,
+          ResponseContentDisposition: options?.ResponseContentDisposition,
+          ResponseContentType: options?.ResponseContentType,
+        }),
     },
   };
 }

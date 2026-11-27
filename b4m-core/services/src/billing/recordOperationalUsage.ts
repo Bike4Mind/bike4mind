@@ -1,21 +1,29 @@
 import {
   CreditHolderType,
   IAdminSettingsRepository,
+  ICreditHolder,
+  ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   ICreditTransactionRepository,
   IOrganizationDocument,
   IOrganizationRepository,
-  IUsageEventInput,
+  IAttributedUsageEventInput,
   IUsageEventRepository,
   IUserDocument,
   UsageEventFeature,
+  UsageEventOperation,
   UsagePriceStamp,
   usdToCreditsStochastic,
   type CompletionSource,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { deductCreditsWithOrgSupport } from '../creditService';
-import { isOperationalBillingEnabled, areCreditsEnforced } from './isOperationalBillingEnabled';
+import {
+  isOperationalBillingEnabled,
+  areCreditsEnforced,
+  type ActivePlanResolver,
+  type OperationalBillingCheck,
+} from './isOperationalBillingEnabled';
 import { usageEventStatusForFinish } from '../llm/earlyStopStamp';
 
 /** The non-chat AI spend this helper records: operational-model calls and query embeddings. */
@@ -34,14 +42,19 @@ export interface RecordOperationalUsageParams {
   feature: OperationalUsageFeature;
   /** Provider/backend, e.g. 'openai', 'voyageai'. */
   provider: string;
-  /** Exact model id used for the call. */
+  /** Exact model id used for the call (the requested id on a restricted-tier substitution). */
   model: string;
+  /** The substitute that ran instead of `model` (shadowTier executedModelFields); costUsd prices it. */
+  executedProvider?: string;
+  executedModel?: string;
   inputTokens: number;
   outputTokens?: number;
   cachedInputTokens?: number;
   cacheWriteTokens?: number;
   /** Provider COGS in USD, computed by the caller with the model-appropriate pricing fn. */
   costUsd: number;
+  /** USD the credit debit is priced on; defaults to costUsd. The recorded costUsd stays run-priced. */
+  chargedCostUsd?: number;
   /**
    * Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model.
    * Unset for callers with no ModelInfo or token split (embeddings, run-level judge totals).
@@ -49,8 +62,12 @@ export interface RecordOperationalUsageParams {
   priceStamp?: UsagePriceStamp;
   latencyMs?: number;
   source?: CompletionSource;
+  /** The UserApiKey that authenticated the triggering request, recorded on the debit's ledger row. */
+  apiKeyId?: string;
   /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
   finishReason?: string;
+  /** The background job that made the call, shown on the admin usage receipt. */
+  operation?: UsageEventOperation;
   /**
    * Skip the credit-deduction path entirely, regardless of the billOperationalUsage/
    * enforceCredits admin settings. For spend already governed by its own dedicated
@@ -74,31 +91,57 @@ export interface RecordOperationalUsageParams {
    * `bypassCreditBilling` wins if both are set: an explicit skip is never overridden.
    */
   forceCreditBilling?: boolean;
+  /**
+   * Credits the caller already charged through its own reservation (e.g. a credit hold settled
+   * around the provider call). Recorded as the event's `creditsCharged`; never debited again here.
+   */
+  settledCredits?: number;
 }
+
+type RecordOnlyOperationalUsageParams = Omit<
+  RecordOperationalUsageParams,
+  'user' | 'organization' | 'bypassCreditBilling'
+> & {
+  user: Pick<IUserDocument, 'id'>;
+  organization?: Pick<IOrganizationDocument, 'id'> | null;
+  bypassCreditBilling: true;
+};
+
+/** The repos the deduct path needs, all-or-nothing; a host passes them to let operational spend debit. */
+export type OperationalBillingAdapters = {
+  creditTransactions: ICreditTransactionRepository;
+  /** Debits are floored at zero (decrementCreditsFloored); findById reads the balance for the ledger row. */
+  users: ICreditHolderMethods &
+    ICreditHolderFlooredDebit & { findById(id: string): Promise<ICreditHolder | null | undefined> };
+  organizations: IOrganizationRepository;
+  /** Enables the free-tier carve-out (see isOperationalBillingEnabled); absent, only the toggle bills. */
+  activePlans?: ActivePlanResolver;
+};
 
 export interface RecordOperationalUsageAdapters {
   db: {
     /** Optional so a host without the analytics repo degrades to a no-op rather than throwing. */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
     adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-    // Billing repos are all-or-nothing: the opt-in deduct path runs only when all three
-    // are present. A caller with a narrowed db (e.g. the LLM tool context) omits them and
-    // gets recorded-only regardless of the admin toggle.
-    creditTransactions?: ICreditTransactionRepository;
-    users?: ICreditHolderMethods;
-    organizations?: IOrganizationRepository;
-  };
+    // Billing repos are all-or-nothing: the deduct path runs only when all three are present.
+    // A caller that omits them (a host that does not bill) gets recorded-only.
+  } & Partial<OperationalBillingAdapters>;
+  /** A request- or turn-scoped memo of the billing decision (memoizeOperationalBillingCheck). */
+  billingCheck?: OperationalBillingCheck;
   logger: Logger;
 }
 
 /**
  * Route non-chat AI spend (operational-model calls, query embeddings) through the usage
  * infrastructure so it stops being invisible. Always writes a UsageEvent (analytics COGS);
- * only debits credits when the admin has opted in via `billOperationalUsage` AND credits are
- * enforced - or when the caller passes `forceCreditBilling`, which substitutes `enforceCredits`
+ * debits credits when `isOperationalBillingEnabled` says so for this holder (credits enforced,
+ * and either `billOperationalUsage` is on or the holder is free tier and `db.activePlans` is
+ * wired) - or when the caller passes `forceCreditBilling`, which substitutes `enforceCredits`
  * alone for callers whose spend has its own credit economics (see that flag).
- * Default is recorded-only, so shipping this changes no user-facing pricing for callers that
- * do not opt in.
+ *
+ * The debit never takes a balance below zero (debitFlooredAtZero): what the payer cannot cover is
+ * written off and recorded as the event's writtenOffCredits, so a balance at or below zero is never
+ * pushed further into debt by this spend.
  *
  * Never throws: a billing or analytics failure here must not break the operational call it
  * is measuring. The billing (deduct) path reuses the `text_generation_usage` ledger machinery
@@ -112,73 +155,85 @@ export interface RecordOperationalUsageAdapters {
  * where the cap belongs, not a claim that it is there today: see below for where it is missing.
  *
  * The bound is uneven, so do not read this as "every caller is gated upstream". The LLM-tool and
- * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
- * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
- * debit-capable callers are `apps/workers/src/events/recordSessionOperationalUsage` and
+ * knowledge-base callers debit only on a host that wires `ToolContext.db.operationalBilling`, and
+ * are not gated before the call. `apps/workers/src/queueHandlers/fabFileVectorize` reserves
+ * through its own credit hold and passes `settledCredits`. The other debit-capable callers are
+ * `apps/workers/src/events/recordSessionOperationalUsage` and
  * `pages/api/data-lakes/semantic-search`; both are gated at their entry points, not here.
  * semantic-search runs its own per-member-cap and pool pre-flight before embedding, and the
- * session-event publishers run `server/utils/sessionOperationalCreditPreflight` (#1852) - the
+ * session-event publishers run `packages/server-utils/src/utils/sessionOperationalCreditPreflight` (#1852) - the
  * ungated `SessionEvents` publishers are `POST /api/sessions/[id]/tag`,
  * `POST /api/sessions/[id]/summary`, the project-attach fan-out
- * (`pages/api/projects/[id]/sessions.ts`) and the admin spider; the rest already sit behind gated
- * primary actions. A NEW publisher of those events inherits no gate: add the pre-flight at its
- * entry point, not in this measurement helper.
+ * (`pages/api/projects/[id]/sessions.ts`) and the admin spider. Every session-event handler also
+ * re-checks the payer's balance before its model call (`apps/workers/src/events/
+ * sessionOperationalCreditGate`), because a chat turn settled at the cap leaves the payer at zero.
  */
 export async function recordOperationalUsage(
-  params: RecordOperationalUsageParams,
+  params: RecordOperationalUsageParams | RecordOnlyOperationalUsageParams,
   adapters: RecordOperationalUsageAdapters
 ): Promise<void> {
   const { user, organization, feature } = params;
   const { db, logger } = adapters;
   const outputTokens = params.outputTokens ?? 0;
 
-  let creditsCharged = 0;
+  let creditsCharged = params.settledCredits ?? 0;
+  let writtenOffCredits = 0;
   try {
-    // A narrowed db (the LLM-tool and knowledge-base callers) can only ever record, never debit,
-    // so the flags cannot change the outcome - read them only where the debit path is reachable.
-    // That keeps the fresh read off a path that issues one record per search/tool call.
-    const canDebit = Boolean(db.creditTransactions && db.users && db.organizations);
-    const shouldBill =
+    // A db without billing repos can only ever record, so the flags cannot change the outcome -
+    // read them only where the debit path is reachable, keeping the fresh read off record-only hosts.
+    if (
       !params.bypassCreditBilling &&
-      canDebit &&
-      (params.forceCreditBilling
+      params.settledCredits === undefined &&
+      db.creditTransactions &&
+      db.users &&
+      db.organizations
+    ) {
+      const shouldBill = params.forceCreditBilling
         ? await areCreditsEnforced(db, logger)
-        : await isOperationalBillingEnabled(db, logger));
-
-    if (shouldBill && db.creditTransactions && db.users && db.organizations) {
-      const credits = usdToCreditsStochastic(params.costUsd);
+        : await (adapters.billingCheck ?? (holder => isOperationalBillingEnabled(db, logger, holder)))(
+            db.activePlans
+              ? { user: params.user, organization: params.organization, activePlans: db.activePlans }
+              : undefined
+          );
+      const credits = shouldBill ? usdToCreditsStochastic(params.chargedCostUsd ?? params.costUsd) : 0;
       // Stochastic settlement legitimately rounds a sub-credit cost to 0 (paid in
       // expectation across calls); only touch the ledger when it lands above zero.
       if (credits > 0) {
-        await deductCreditsWithOrgSupport(
+        const settled = await debitFlooredAtZero(
           {
-            type: 'text_generation_usage',
-            user,
-            organization,
             credits,
+            user: params.user,
+            organization: params.organization,
             sessionId: params.sessionId ?? '',
             questId: params.requestId,
             model: params.model,
             inputTokens: params.inputTokens,
             outputTokens,
             source: params.source ?? 'system',
+            apiKeyId: params.apiKeyId,
           },
-          {
-            db: {
-              creditTransactions: db.creditTransactions,
-              users: db.users,
-              organizations: db.organizations,
-            },
-          }
+          { creditTransactions: db.creditTransactions, users: db.users, organizations: db.organizations },
+          logger
         );
         creditsCharged = credits;
+        writtenOffCredits = credits - settled;
+        if (writtenOffCredits > 0) {
+          logger.warn('[OPERATIONAL_SHORTFALL_CLAMP] Operational charge exceeds balance; flooring at zero', {
+            feature,
+            ownerId: organization ? organization.id : user.id,
+            ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
+            charge: credits,
+            debited: settled,
+            writtenOff: writtenOffCredits,
+          });
+        }
       }
     }
   } catch (err) {
     logger.warn(`[recordOperationalUsage] credit deduction failed for ${feature}; recording as unbilled`, err);
   }
 
-  const event: IUsageEventInput = {
+  const event: IAttributedUsageEventInput = {
     requestId: params.requestId,
     userId: user.id,
     ownerId: organization ? organization.id : user.id,
@@ -188,6 +243,7 @@ export async function recordOperationalUsage(
     feature,
     provider: params.provider,
     model: params.model,
+    ...(params.executedModel ? { executedProvider: params.executedProvider, executedModel: params.executedModel } : {}),
     inputTokens: params.inputTokens,
     outputTokens,
     cachedInputTokens: params.cachedInputTokens ?? 0,
@@ -197,15 +253,73 @@ export async function recordOperationalUsage(
     settledBasis: 'local',
     costUsd: params.costUsd,
     creditsCharged,
+    ...(writtenOffCredits > 0 ? { writtenOffCredits } : {}),
     ...params.priceStamp,
     // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
     status: usageEventStatusForFinish(params.finishReason),
     latencyMs: params.latencyMs,
     // Same origin as this call's ledger write above (params.source ?? 'system').
     source: params.source ?? 'system',
+    requestMeta:
+      params.operation || params.finishReason
+        ? { operation: params.operation, stopReason: params.finishReason?.slice(0, 64) }
+        : undefined,
   };
 
   await db.usageEvents
     ?.record(event)
     .catch(err => logger.warn(`[recordOperationalUsage] usage event failed for ${feature}`, err));
+}
+
+type FlooredDebitParams = {
+  credits: number;
+  user: IUserDocument;
+  organization?: IOrganizationDocument | null;
+  sessionId: string;
+  questId: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  source: CompletionSource;
+  apiKeyId?: string;
+};
+
+/**
+ * Debit an operational charge without taking the payer's balance below zero. Operational calls are
+ * metered after the provider call with no hold, so this is the only place their charge can be bounded:
+ * a balance the chat turn's cap already brought to zero must not be pushed into debt by the background
+ * work that follows it (auto-naming, summaries, tags, mementos). The part the balance cannot cover is
+ * written off. Same floor as the voice and CLI settlements (decrementCreditsFloored). Resolves the
+ * credits actually debited; the ledger row records that amount, not the full charge.
+ */
+async function debitFlooredAtZero(
+  params: FlooredDebitParams,
+  db: OperationalBillingAdapters,
+  logger: Logger
+): Promise<number> {
+  const { organization, user } = params;
+  const holderId = organization ? organization.id : user.id;
+  const holderRepository = organization ? db.organizations : db.users;
+
+  const debited = await holderRepository.decrementCreditsFloored(holderId, params.credits);
+  if (debited <= 0) return 0;
+
+  // The balance has already moved, so a failure from here on must not report the charge as unbilled:
+  // resolve `debited` regardless and flag the missing ledger row for reconciliation.
+  try {
+    const holderAfterDebit = await holderRepository.findById(holderId);
+    if (!holderAfterDebit) throw new Error(`Credit holder ${holderId} disappeared after an operational debit`);
+
+    await deductCreditsWithOrgSupport(
+      { type: 'text_generation_usage', ...params, organization: organization ?? null, credits: debited },
+      { db },
+      { skipBalanceUpdate: true, currentCreditHolder: holderAfterDebit }
+    );
+  } catch (err) {
+    logger.error('[OPERATIONAL_LEDGER_WRITE_FAILED] Balance debited but the ledger row was not written', err, {
+      holderId,
+      debited,
+    });
+  }
+  return debited;
 }

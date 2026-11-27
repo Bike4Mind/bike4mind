@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { removeSystemPrompts } from './removeSystemPrompts';
 import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
 import { IProjectDocument, IProjectRepository, IFabFileRepository, IUserDocument } from '@bike4mind/common';
@@ -7,7 +7,14 @@ describe('projectService - removeSystemPrompts', () => {
   const user = { id: 'user-1' } as IUserDocument;
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
-  let adapters: { db: { projects: IProjectRepository; fabFiles: IFabFileRepository } };
+  let adapters: {
+    db: {
+      projects: IProjectRepository;
+      fabFiles: IFabFileRepository;
+      users: { findByIds: Mock };
+      invites: { findAllByDocumentId: Mock };
+    };
+  };
 
   const projectWith = (fileIds: string[]): IProjectDocument =>
     ({
@@ -26,7 +33,15 @@ describe('projectService - removeSystemPrompts', () => {
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
-    adapters = { db: { projects: mockProjectRepo, fabFiles: mockFabFileRepo } };
+    adapters = {
+      db: {
+        projects: mockProjectRepo,
+        fabFiles: mockFabFileRepo,
+        users: { findByIds: vi.fn().mockResolvedValue([]) },
+        invites: { findAllByDocumentId: vi.fn().mockResolvedValue([]) },
+      },
+    };
+    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
     (mockProjectRepo.update as Mock).mockImplementation(async p => p);
   });
 
@@ -69,5 +84,19 @@ describe('projectService - removeSystemPrompts', () => {
       'Project not found'
     );
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('removes a stored uppercase-hex id by its lowercase form', async () => {
+    const upper = 'ABCDEF0123456789ABCDEF01';
+    const project = projectWith([upper, 'b']);
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(project);
+
+    const result = await removeSystemPrompts(
+      user,
+      { projectId: 'project-1', fileIds: [upper.toLowerCase()] },
+      adapters
+    );
+
+    expect(result.systemPrompts).toEqual([{ fileId: 'b', enabled: true }]);
   });
 });

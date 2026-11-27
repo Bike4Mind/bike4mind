@@ -44,7 +44,7 @@ export const DRIVE_KEYS: (keyof IDriveVector)[] = [
 ];
 
 /** A single bounded [0,1] scalar field used for every drive. */
-const driveField: SchemaDefinitionProperty<number> = {
+const driveField: SchemaDefinitionProperty<number, IDriveVector> = {
   type: Number,
   required: true,
   min: 0,
@@ -56,11 +56,11 @@ const driveField: SchemaDefinitionProperty<number> = {
  * `drives: { type: driveVectorSchemaDef, _id: false, required: true }` or
  * embed the object directly as a nested path.
  */
-export const driveVectorSchemaDef = {
+export const driveVectorSchemaDef: Record<keyof IDriveVector, SchemaDefinitionProperty<number, IDriveVector>> = {
   curiosity: driveField,
   progress: driveField,
   social: driveField,
   novelty: driveField,
   caution: driveField,
   aesthetic: driveField,
-} as const;
+};

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { researchFeedFingerprint } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
@@ -8,6 +9,7 @@ const h = vi.hoisted(() => ({
   listResearchConfigs: vi.fn(),
   createResearchConfig: vi.fn(),
   updateResearchConfig: vi.fn(),
+  setResearchSchedulePaused: vi.fn(),
   deleteResearchConfig: vi.fn(),
   countPendingByLakes: vi.fn(),
 }));
@@ -27,11 +29,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
   dataLakeResearchService: {
+    feedFingerprintLevers: (await importOriginal<typeof import('@bike4mind/services')>()).dataLakeResearchService
+      .feedFingerprintLevers,
     listResearchConfigs: h.listResearchConfigs,
     createResearchConfig: h.createResearchConfig,
     updateResearchConfig: h.updateResearchConfig,
+    setResearchSchedulePaused: h.setResearchSchedulePaused,
     deleteResearchConfig: h.deleteResearchConfig,
   },
 }));
@@ -48,13 +53,15 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeProposalRepository: { countPendingByLakes: h.countPendingByLakes },
   lakeConfigChangeEventRepository: {},
+  lakeConfigSnapshotRepository: {},
+  lakeMembershipChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
 
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async () => ({ userId: 'user-1', isAdmin: false })),
 }));
 
@@ -85,6 +92,7 @@ beforeEach(() => {
   h.listResearchConfigs.mockResolvedValue([savedConfig]);
   h.createResearchConfig.mockResolvedValue(savedConfig);
   h.updateResearchConfig.mockResolvedValue(savedConfig);
+  h.setResearchSchedulePaused.mockResolvedValue(savedConfig);
   h.deleteResearchConfig.mockResolvedValue(undefined);
   h.countPendingByLakes.mockResolvedValue({ 'lake-oid-1': 7 });
 });
@@ -93,7 +101,7 @@ describe('/api/data-lakes/[id]/research/configs', () => {
   it('lists a lake configurations for a manager', async () => {
     const { res, json } = makeRes();
     await call(indexHandler, req('GET', { id: 'my-lake' }), res);
-    expect(json).toHaveBeenCalledWith({ data: [savedConfig], pendingProposals: 7 });
+    expect(json).toHaveBeenCalledWith({ data: [{ ...savedConfig, feedStatus: null }], pendingProposals: 7 });
     expect(h.countPendingByLakes).toHaveBeenCalledWith(['lake-oid-1']);
   });
 
@@ -102,7 +110,7 @@ describe('/api/data-lakes/[id]/research/configs', () => {
     h.countPendingByLakes.mockResolvedValue({});
     const { res, json } = makeRes();
     await call(indexHandler, req('GET', { id: 'my-lake' }), res);
-    expect(json).toHaveBeenCalledWith({ data: [savedConfig], pendingProposals: 0 });
+    expect(json).toHaveBeenCalledWith({ data: [{ ...savedConfig, feedStatus: null }], pendingProposals: 0 });
   });
 
   it('carries the schedule through on create and update', async () => {
@@ -114,6 +122,282 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
     expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(schedule);
     expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(schedule);
+  });
+
+  describe('schedule pause', () => {
+    const put = (body: unknown) => {
+      const { res } = makeRes();
+      return call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, body), res);
+    };
+
+    it('sends a body of only schedulePaused to the narrow pause write, inside the transaction', async () => {
+      await put({ schedulePaused: true });
+
+      expect(h.setResearchSchedulePaused).toHaveBeenCalledTimes(1);
+      const args = h.setResearchSchedulePaused.mock.calls[0];
+      expect(args.slice(0, 5)).toEqual(['config-1', LAKE, true, ACTOR, GRANTS]);
+      expect(h.updateResearchConfig).not.toHaveBeenCalled();
+      expect(h.touchIfStable).toHaveBeenCalledWith(LAKE.id);
+    });
+
+    it('sends schedulePaused false to the narrow write as a resume', async () => {
+      await put({ schedulePaused: false });
+      expect(h.setResearchSchedulePaused.mock.calls[0][2]).toBe(false);
+    });
+
+    it('sends a mixed body through the full update, which carries the flag', async () => {
+      await put({ schedulePaused: true, query: 'new question' });
+
+      expect(h.setResearchSchedulePaused).not.toHaveBeenCalled();
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ schedulePaused: true, query: 'new question' });
+    });
+
+    it('keeps a body without schedulePaused on the full update', async () => {
+      await put({ cadence: 'daily' });
+      expect(h.setResearchSchedulePaused).not.toHaveBeenCalled();
+      expect(h.updateResearchConfig).toHaveBeenCalledTimes(1);
+    });
+
+    it('carries schedulePaused through on create and refuses one of the wrong type', async () => {
+      const { res } = makeRes();
+      await call(
+        indexHandler,
+        req('POST', { id: 'l' }, { name: 'n', query: 'q', cadence: 'weekly', schedulePaused: true }),
+        res
+      );
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ schedulePaused: true });
+      await expect(put({ schedulePaused: 'yes' })).rejects.toThrow();
+    });
+
+    it('returns schedulePaused on the response', async () => {
+      h.setResearchSchedulePaused.mockResolvedValue({ ...savedConfig, schedulePaused: true });
+      const { res, json } = makeRes();
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { schedulePaused: true }), res);
+      expect(json).toHaveBeenCalledWith({ data: expect.objectContaining({ schedulePaused: true }) });
+    });
+  });
+
+  describe('source tiers', () => {
+    const tiers = { reviewDomains: ['a.example'], unlistedSources: 'drop', blockedDomains: ['b.example'] };
+
+    it('forwards the review list and unlistedSources on create and update', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...tiers }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, tiers), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(tiers);
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(tiers);
+    });
+
+    it('round-trips trustedDomains, autoAdmitTrusted and maxAutoAdmits to the service', async () => {
+      const auto = { trustedDomains: ['t.example'], autoAdmitTrusted: true, maxAutoAdmits: 4 };
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...auto }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, auto), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(auto);
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(auto);
+    });
+
+    it('returns the auto-admit levers on a listed configuration', async () => {
+      const stored = { ...savedConfig, trustedDomains: ['t.example'], autoAdmitTrusted: true, maxAutoAdmits: 4 };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [{ ...stored, feedStatus: null }], pendingProposals: 7 });
+    });
+
+    it('rejects an auto-admit flag of the wrong type', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', autoAdmitTrusted: 'yes' }), res)
+      ).rejects.toThrow();
+    });
+
+    it('still accepts a legacy allowedDomains body from a tab opened before the tiers', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', allowedDomains: ['a.example'] }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { allowedDomains: ['a.example'] }), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ allowedDomains: ['a.example'] });
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ allowedDomains: ['a.example'] });
+    });
+
+    it('rejects an unknown unlistedSources value', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', unlistedSources: 'maybe' }), res)
+      ).rejects.toThrow();
+    });
+
+    it('returns the tier fields next to the derived legacy allowedDomains', async () => {
+      const stored = {
+        ...savedConfig,
+        trustedDomains: [],
+        reviewDomains: ['a.example'],
+        unlistedSources: 'drop',
+        allowedDomains: ['a.example'],
+      };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [{ ...stored, feedStatus: null }], pendingProposals: 7 });
+    });
+  });
+
+  describe('feed source', () => {
+    const feed = { source: 'feed', feedUrl: 'https://example.com/feed.xml' };
+    const feedLevers = {
+      feedUrl: 'https://example.com/feed.xml',
+      query: 'topic',
+      minRelevance: 0.5,
+      trustedDomains: [],
+      reviewDomains: [],
+      unlistedSources: 'review',
+      allowedDomains: [],
+    };
+    const NEWEST = '2026-11-01T00:00:00.000Z';
+    const withCursor = (fingerprint: string) => ({
+      ...savedConfig,
+      ...feedLevers,
+      source: 'feed',
+      feedCursor: {
+        fingerprint,
+        newestPublishedAt: new Date(NEWEST),
+        seenKeys: ['example.com/secret-key'],
+        retries: [{ key: 'example.com/retry', attempts: 1 }],
+      },
+    });
+    const expected = (current: boolean) => ({
+      ...savedConfig,
+      ...feedLevers,
+      source: 'feed',
+      feedStatus: { newestPublishedAt: new Date(NEWEST), current },
+    });
+
+    it('forwards source and feedUrl on create and update', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', ...feed }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, feed), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject(feed);
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject(feed);
+    });
+
+    it('rejects an unknown source and a non-string feed address', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', source: 'rss' }), res)
+      ).rejects.toThrow();
+      await expect(
+        call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', feedUrl: 5 }), res)
+      ).rejects.toThrow();
+    });
+
+    it('accepts a null feed address, which is how a client clears it', async () => {
+      const { res } = makeRes();
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { source: 'search', feedUrl: null }), res);
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ source: 'search', feedUrl: null });
+    });
+
+    it('reports feedStatus and never the cursor on the list, create and update responses', async () => {
+      const fresh = withCursor(researchFeedFingerprint(feedLevers as never));
+      h.listResearchConfigs.mockResolvedValue([fresh]);
+      h.createResearchConfig.mockResolvedValue(fresh);
+      h.updateResearchConfig.mockResolvedValue(fresh);
+
+      const list = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), list.res);
+      const created = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q' }), created.res);
+      const updated = makeRes();
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, {}), updated.res);
+
+      expect(list.json).toHaveBeenCalledWith({ data: [expected(true)], pendingProposals: 7 });
+      expect(created.json).toHaveBeenCalledWith({ data: expected(true) });
+      expect(updated.json).toHaveBeenCalledWith({ data: expected(true) });
+    });
+
+    it('fingerprints the normalized levers, so an untrimmed query or unsorted domain list still matches', async () => {
+      const written = { ...feedLevers, trustedDomains: ['a.com', 'b.com'] };
+      const stored = {
+        ...withCursor(researchFeedFingerprint(written as never)),
+        query: '  topic ',
+        trustedDomains: ['B.com', 'a.com'],
+      };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json.mock.calls[0][0].data[0].feedStatus).toEqual({ newestPublishedAt: new Date(NEWEST), current: true });
+    });
+
+    it('reports a cursor written under other levers as not current', async () => {
+      h.listResearchConfigs.mockResolvedValue([withCursor('written-under-old-levers')]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [expected(false)], pendingProposals: 7 });
+    });
+
+    it('reports a null feedStatus for a config with no cursor', async () => {
+      h.listResearchConfigs.mockResolvedValue([{ ...savedConfig, ...feedLevers, source: 'feed', feedCursor: null }]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json.mock.calls[0][0].data[0].feedStatus).toBeNull();
+      expect(json.mock.calls[0][0].data[0]).not.toHaveProperty('feedCursor');
+    });
+  });
+
+  describe('item rules', () => {
+    const itemRules = [
+      { condition: 'Published by Acme', action: 'block' },
+      { condition: 'About sports', action: 'review' },
+    ];
+
+    it('round-trips itemRules to the service on create and update', async () => {
+      const { res } = makeRes();
+      await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q', itemRules }), res);
+      await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { itemRules }), res);
+      expect(h.createResearchConfig.mock.calls[0][3]).toMatchObject({ itemRules });
+      expect(h.updateResearchConfig.mock.calls[0][4]).toMatchObject({ itemRules });
+    });
+
+    it('returns itemRules on a listed configuration', async () => {
+      const stored = { ...savedConfig, itemRules };
+      h.listResearchConfigs.mockResolvedValue([stored]);
+      const { res, json } = makeRes();
+      await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+      expect(json).toHaveBeenCalledWith({ data: [{ ...stored, feedStatus: null }], pendingProposals: 7 });
+    });
+
+    it('refuses an action other than block or review', async () => {
+      const { res } = makeRes();
+      await expect(
+        call(
+          indexHandler,
+          req('POST', { id: 'l' }, { name: 'n', query: 'q', itemRules: [{ condition: 'c', action: 'allow' }] }),
+          res
+        )
+      ).rejects.toThrow();
+      expect(h.createResearchConfig).not.toHaveBeenCalled();
+    });
+  });
+
+  it('strips undeclared fields from each listed configuration, keeping pendingProposals', async () => {
+    h.listResearchConfigs.mockResolvedValue([{ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' }]);
+    const { res, json } = makeRes();
+    await call(indexHandler, req('GET', { id: 'my-lake' }), res);
+    expect(json).toHaveBeenCalledWith({ data: [{ ...savedConfig, feedStatus: null }], pendingProposals: 7 });
+  });
+
+  it('strips undeclared fields from the created configuration', async () => {
+    h.createResearchConfig.mockResolvedValue({ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' });
+    const { res, json } = makeRes();
+    await call(indexHandler, req('POST', { id: 'l' }, { name: 'n', query: 'q' }), res);
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(json).toHaveBeenCalledWith({ data: { ...savedConfig, feedStatus: null } });
+  });
+
+  it('strips undeclared fields from the updated configuration', async () => {
+    h.updateResearchConfig.mockResolvedValue({ ...savedConfig, _id: 'raw-object-id', __v: 7, notInSchema: 'secret' });
+    const { res, json } = makeRes();
+    await call(byIdHandler, req('PUT', { id: 'l', configId: 'config-1' }, { name: 'Weekly sweep' }), res);
+    expect(json).toHaveBeenCalledWith({ data: { ...savedConfig, feedStatus: null } });
   });
 
   it('refuses a cadence the scheduler does not know', async () => {

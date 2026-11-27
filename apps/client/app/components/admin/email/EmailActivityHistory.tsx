@@ -3,7 +3,6 @@ import {
   Box,
   Typography,
   Sheet,
-  Table,
   Chip,
   IconButton,
   FormControl,
@@ -12,13 +11,14 @@ import {
   Select,
   Option,
   Checkbox,
-  CircularProgress,
-  Button,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
 import { useEmailJobHistory } from '@client/app/hooks/data/emailMarketing';
 import { EmailSendStatus, IEmailSendAttemptDocument } from '@bike4mind/common';
+import { DATETIME_COLUMN_WIDTH, DataTable, type DataColumn, EmptyState } from '../shared';
 
 interface EmailActivityHistoryProps {
   jobId: string;
@@ -35,6 +35,7 @@ const getStatusColor = (status: EmailSendStatus) => {
     case EmailSendStatus.PENDING:
       return 'warning';
     case EmailSendStatus.PROCESSING:
+    case EmailSendStatus.QUEUED:
       return 'primary';
     case EmailSendStatus.FAILED:
     case EmailSendStatus.BOUNCED:
@@ -46,9 +47,24 @@ const getStatusColor = (status: EmailSendStatus) => {
   }
 };
 
+function EventTime({ at, color }: { at?: Date | string | null; color: 'success' | 'primary' }) {
+  if (!at) {
+    return (
+      <Typography level="body-xs" color="neutral">
+        -
+      </Typography>
+    );
+  }
+  return (
+    <Typography level="body-xs" color={color}>
+      {new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+    </Typography>
+  );
+}
+
 export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActivityHistoryProps) {
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(10);
+  const [limit, setLimit] = useState(25);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -74,6 +90,8 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
   const {
     data: historyData,
     isLoading,
+    isError,
+    isPlaceholderData,
     refetch,
   } = useEmailJobHistory(jobId, {
     page,
@@ -86,13 +104,91 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
   });
 
   const attempts = historyData?.data || [];
-  const meta = historyData?.meta || { currentPage: 1, totalPages: 0, total: 0 };
+  const total = historyData?.meta?.total ?? 0;
+
+  const columns: DataColumn<IEmailSendAttemptDocument>[] = [
+    {
+      id: 'time',
+      label: 'Time',
+      width: DATETIME_COLUMN_WIDTH,
+      render: attempt => <Typography level="body-xs">{new Date(attempt.createdAt).toLocaleString()}</Typography>,
+    },
+    {
+      id: 'status',
+      label: 'Status',
+      width: '9rem',
+      wrap: true,
+      render: attempt => (
+        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+          <Chip color={getStatusColor(attempt.status)} size="sm">
+            {attempt.status.toUpperCase()}
+          </Chip>
+          {attempt.isTestEmail && (
+            <Chip color="warning" size="sm">
+              TEST
+            </Chip>
+          )}
+        </Box>
+      ),
+    },
+    {
+      id: 'recipient',
+      label: 'Recipient',
+      wrap: true,
+      render: attempt => (
+        <>
+          <Typography level="body-xs" sx={{ fontWeight: attempt.isTestEmail ? 'bold' : 'normal' }}>
+            {attempt.recipientEmail}
+          </Typography>
+          {attempt.isTestEmail && attempt.originalRecipient && (
+            <Typography level="body-xs" color="warning">
+              ({attempt.originalRecipient})
+            </Typography>
+          )}
+        </>
+      ),
+    },
+    {
+      id: 'subject',
+      label: 'Subject',
+      render: attempt => (
+        <Typography level="body-xs" color={attempt.renderedSubject ? undefined : 'neutral'}>
+          {attempt.renderedSubject || '-'}
+        </Typography>
+      ),
+    },
+    {
+      id: 'opened',
+      label: 'Opened',
+      width: '8rem',
+      render: attempt => <EventTime at={attempt.openedAt} color="success" />,
+    },
+    {
+      id: 'clicked',
+      label: 'Clicked',
+      width: '8rem',
+      render: attempt => <EventTime at={attempt.clickedAt} color="primary" />,
+    },
+    {
+      id: 'sentBy',
+      label: 'Sent by',
+      width: '7rem',
+      render: attempt => <Typography level="body-xs">{attempt.sentBy || '-'}</Typography>,
+    },
+  ];
 
   return (
     <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography level="title-md">Activity History</Typography>
-        <IconButton size="sm" variant="plain" color="neutral" onClick={() => refetch()}>
+        <IconButton
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={() => refetch()}
+          aria-label="Refresh activity"
+          data-testid="email-activity-refresh-btn"
+        >
           <RefreshIcon fontSize="small" />
         </IconButton>
       </Box>
@@ -117,6 +213,7 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
             <Option value={EmailSendStatus.SENT}>Sent</Option>
             <Option value={EmailSendStatus.PENDING}>Pending</Option>
             <Option value={EmailSendStatus.PROCESSING}>Processing</Option>
+            <Option value={EmailSendStatus.QUEUED}>Queued</Option>
             <Option value={EmailSendStatus.FAILED}>Failed</Option>
             <Option value={EmailSendStatus.CANCELLED}>Cancelled</Option>
             <Option value={EmailSendStatus.OPENED}>Opened</Option>
@@ -125,26 +222,38 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
         </FormControl>
         <FormControl sx={{ minWidth: 150 }}>
           <FormLabel>Start Date</FormLabel>
-          <Input
-            type="date"
+          <OptionalDateInput
+            size="sm"
             value={startDate}
-            onChange={e => {
-              setStartDate(e.target.value);
+            onChange={day => {
+              setStartDate(day);
               setPage(1);
             }}
-            size="sm"
+            emptyLabel="From any date"
+            setLabel="Set start date"
+            clearLabel="Remove start date"
+            initialDate={() => (endDate && endDate < todayUtc() ? endDate : todayUtc())}
+            max={endDate || undefined}
+            aria-label="Start date"
+            testId="email-activity-start-date"
           />
         </FormControl>
         <FormControl sx={{ minWidth: 150 }}>
           <FormLabel>End Date</FormLabel>
-          <Input
-            type="date"
+          <OptionalDateInput
+            size="sm"
             value={endDate}
-            onChange={e => {
-              setEndDate(e.target.value);
+            onChange={day => {
+              setEndDate(day);
               setPage(1);
             }}
-            size="sm"
+            emptyLabel="To any date"
+            setLabel="Set end date"
+            clearLabel="Remove end date"
+            initialDate={() => (startDate && startDate > todayUtc() ? startDate : todayUtc())}
+            min={startDate || undefined}
+            aria-label="End date"
+            testId="email-activity-end-date"
           />
         </FormControl>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 150 }}>
@@ -160,165 +269,47 @@ export default function EmailActivityHistory({ jobId, onViewAttempt }: EmailActi
         </Box>
       </Box>
 
-      {/* Table */}
-      {isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-          <CircularProgress />
-        </Box>
-      ) : attempts.length === 0 ? (
-        <Box sx={{ p: 4, textAlign: 'center' }}>
-          <Typography level="body-lg">No email history found</Typography>
-          <Typography level="body-sm" sx={{ mt: 1, color: 'neutral.500' }}>
-            Send emails to see activity here
-          </Typography>
-        </Box>
-      ) : (
-        <>
-          <Box sx={{ overflowX: 'auto' }}>
-            <Table size="sm">
-              <thead>
-                <tr>
-                  <th style={{ width: '130px' }}>Time</th>
-                  <th style={{ width: '90px' }}>Status</th>
-                  <th style={{ width: '20%' }}>Recipient</th>
-                  <th style={{ width: '25%' }}>Subject</th>
-                  <th style={{ width: '90px' }}>Opened</th>
-                  <th style={{ width: '90px' }}>Clicked</th>
-                  <th style={{ width: '80px' }}>Sent By</th>
-                  <th style={{ width: '50px' }}>View</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attempts.map((attempt: IEmailSendAttemptDocument) => (
-                  <tr key={attempt.id}>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      <Typography level="body-xs">{new Date(attempt.createdAt).toLocaleString()}</Typography>
-                    </td>
-                    <td>
-                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                        <Chip color={getStatusColor(attempt.status)} size="sm">
-                          {attempt.status.toUpperCase()}
-                        </Chip>
-                        {attempt.isTestEmail && (
-                          <Chip color="warning" size="sm">
-                            TEST
-                          </Chip>
-                        )}
-                      </Box>
-                    </td>
-                    <td>
-                      <Typography level="body-xs" sx={{ fontWeight: attempt.isTestEmail ? 'bold' : 'normal' }}>
-                        {attempt.recipientEmail}
-                      </Typography>
-                      {attempt.isTestEmail && attempt.originalRecipient && (
-                        <Typography level="body-xs" color="warning">
-                          ({attempt.originalRecipient})
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      {attempt.renderedSubject ? (
-                        <Typography
-                          level="body-xs"
-                          sx={{
-                            maxWidth: '100%',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            display: 'block',
-                          }}
-                        >
-                          {attempt.renderedSubject}
-                        </Typography>
-                      ) : (
-                        <Typography level="body-xs" color="neutral">
-                          -
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      {attempt.openedAt ? (
-                        <Typography level="body-xs" color="success">
-                          {new Date(attempt.openedAt).toLocaleString([], {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </Typography>
-                      ) : (
-                        <Typography level="body-xs" color="neutral">
-                          -
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      {attempt.clickedAt ? (
-                        <Typography level="body-xs" color="primary">
-                          {new Date(attempt.clickedAt).toLocaleString([], {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </Typography>
-                      ) : (
-                        <Typography level="body-xs" color="neutral">
-                          -
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      <Typography level="body-xs">{attempt.sentBy || '-'}</Typography>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      {onViewAttempt && (
-                        <IconButton size="sm" variant="plain" color="neutral" onClick={() => onViewAttempt(attempt.id)}>
-                          <VisibilityIcon fontSize="small" />
-                        </IconButton>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </Box>
-
-          {/* Pagination */}
-          {meta.totalPages > 1 && (
-            <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2 }}>
-              <Button size="sm" variant="outlined" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
-                Previous
-              </Button>
-              <Typography level="body-sm">
-                Page {meta.currentPage} of {meta.totalPages} ({meta.total} items)
-              </Typography>
-              <Button
-                size="sm"
-                variant="outlined"
-                disabled={page >= meta.totalPages}
-                onClick={() => setPage(p => p + 1)}
-              >
-                Next
-              </Button>
-              <Select
-                value={limit}
-                onChange={(_, value) => {
-                  setLimit(value as number);
-                  setPage(1);
-                }}
-                size="sm"
-                sx={{ minWidth: 80 }}
-              >
-                <Option value={10}>10</Option>
-                <Option value={25}>25</Option>
-                <Option value={50}>50</Option>
-              </Select>
-              <Typography level="body-xs">per page</Typography>
-            </Box>
-          )}
-        </>
-      )}
+      <DataTable<IEmailSendAttemptDocument>
+        label="Email activity"
+        testId="email-activity-table"
+        minWidth="74.5rem"
+        rows={attempts}
+        columns={columns}
+        getRowId={attempt => attempt.id}
+        loading={isLoading || isPlaceholderData}
+        // A failed background refetch keeps the last rows on screen instead of swapping in the error.
+        error={isError && !historyData ? 'Could not load activity.' : undefined}
+        onRetry={() => void refetch()}
+        empty={
+          <EmptyState title="No email history found" description="Send emails to see activity here" action={null} />
+        }
+        pagination={{
+          page,
+          pageSize: limit,
+          total,
+          onPageChange: setPage,
+          onPageSizeChange: size => {
+            setLimit(size);
+            setPage(1);
+          },
+        }}
+        rowActions={
+          onViewAttempt
+            ? attempt => (
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => onViewAttempt(attempt.id)}
+                  aria-label="View email"
+                  data-testid={`email-activity-view-${attempt.id}`}
+                >
+                  <VisibilityIcon fontSize="small" />
+                </IconButton>
+              )
+            : undefined
+        }
+      />
     </Sheet>
   );
 }

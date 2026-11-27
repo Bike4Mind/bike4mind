@@ -18,7 +18,7 @@ import {
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import {
@@ -28,8 +28,10 @@ import {
   getRepository,
   gitHubErrorStatus,
   gitHubRateLimitDelaySeconds,
-} from '@server/integrations/github/dataLake/lakeAppClient';
-import { releaseGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
+import { releaseGitHubLakeConnection } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { connectingUserCanStillManage } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import { runGitHubLakeSlice } from '@workers/queueHandlers/githubLakeSlice';
 import { settleLakeIngestBatch } from '@workers/queueHandlers/lakeIngestShared';
 import { Resource } from 'sst';
@@ -245,6 +247,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn('[githubLakeIngest] connecting user not found; dropping', { connectionId: id });
       await settle(resumeBatchId);
       await releaseUnchanged();
+      return;
+    }
+    await resolveRoleAdminPermissions(user);
+    if (!(await connectingUserCanStillManage(user, lake))) {
+      logger.warn('[githubLakeIngest] connecting user can no longer manage the lake; dropping', { connectionId: id });
+      await settle(resumeBatchId);
+      await release(
+        'The account that connected this repository can no longer manage this data lake. Reconnect the repository.',
+        'error'
+      );
       return;
     }
     const config = getGitHubLakeAppConfig();

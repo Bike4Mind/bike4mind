@@ -13,6 +13,7 @@ import '../index';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
+  baseApiOptions: undefined as Record<string, unknown> | undefined,
   listArgs: undefined as unknown[] | undefined,
   createArgs: undefined as unknown[] | undefined,
   settings: {} as Record<string, boolean | undefined>,
@@ -29,7 +30,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: Record<string, unknown>) => {
+      mockRefs.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -52,7 +58,7 @@ vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
   },
 }));
 
-vi.mock('@server/utils/artifactSourceRefsGuards', () => {
+vi.mock('@bike4mind/server-utils/utils/artifactSourceRefsGuards', () => {
   const sharedGuard = vi.fn();
   return {
     sharedGuard,
@@ -116,6 +122,32 @@ describe('GET /api/artifacts', () => {
   });
 });
 
+describe('GET /api/artifacts identifier filter', () => {
+  beforeEach(() => {
+    mockRefs.listArgs = undefined;
+  });
+
+  it('hands the identifier to the service', async () => {
+    const { req, res } = invokeGet({ sessionId: 's1', type: 'react', identifier: 'todo_app' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.listArgs?.[1]).toMatchObject({ sessionId: 's1', type: 'react', identifier: 'todo_app' });
+  });
+
+  it.each([
+    ['a bracketed operator', { 'identifier[$ne]': 'x' }],
+    ['an operator object', { identifier: { $ne: 'x' } }],
+    ['a repeated param', { identifier: ['a', 'b'] }],
+    ['an empty string', { identifier: '' }],
+  ])('rejects %s before it reaches the query', async (_label, query) => {
+    const { req, res } = invokeGet(query);
+
+    await expect(Promise.resolve(mockRefs.getHandler!(req, res))).rejects.toThrow(/identifier/);
+    expect(mockRefs.listArgs).toBeUndefined();
+  });
+});
+
 /**
  * The artifact opt-out has to hold at the route, not just in the browser: chat mode parses the
  * finished quest client-side and posts the rows itself, so a caller that skips the client check
@@ -146,6 +178,8 @@ describe('POST /api/artifacts artifact gate', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(403);
+    // Released desktop builds match this exact body to tell the opt-out from other 403s.
+    expect(res._getJSONData()).toEqual({ error: 'Artifacts are disabled for this user' });
     expect(mockRefs.createArgs).toBeUndefined();
   });
 
@@ -192,6 +226,22 @@ describe('POST /api/artifacts artifact gate', () => {
   });
 });
 
+describe('POST /api/artifacts identifier', () => {
+  it('keeps the reply identifier on the create', async () => {
+    mockRefs.createArgs = undefined;
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+    const { req, res } = invokePost(
+      { ...aiBody(), sessionId: 's1', identifier: 'todo_app' },
+      { enableArtifacts: true }
+    );
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockRefs.createArgs?.[1]).toMatchObject({ sessionId: 's1', identifier: 'todo_app' });
+  });
+});
+
 describe('POST /api/artifacts organization scope', () => {
   beforeEach(() => {
     mockRefs.createArgs = undefined;
@@ -229,7 +279,7 @@ describe('POST /api/artifacts organization scope', () => {
 describe('POST /api/artifacts reference guard', () => {
   it('hands the service the shared-access guard, not the owner-only one', async () => {
     mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
-    const guards = await import('@server/utils/artifactSourceRefsGuards');
+    const guards = await import('@bike4mind/server-utils/utils/artifactSourceRefsGuards');
     const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
 
     await mockRefs.postHandler!(req, res);
@@ -238,5 +288,59 @@ describe('POST /api/artifacts reference guard', () => {
     expect(guards.createArtifactSourceRefsGuard).toHaveBeenCalledWith((req as any).user);
     expect(adapters.assertSourceRefsAccessible).toBe((guards as any).sharedGuard);
     expect(guards.createOwnedArtifactSourceRefsGuard).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/artifacts API key scope posture', () => {
+  const postWithKey = (apiKeyInfo?: Record<string, unknown>) => {
+    const { req, res } = invokePost({ type: 'html', title: 'Page', content: '<html></html>' });
+    if (apiKeyInfo) Object.assign(req, { apiKeyInfo });
+    return { req, res };
+  };
+
+  beforeEach(() => {
+    mockRefs.createArgs = undefined;
+    mockRefs.settings = { EnableArtifacts: true, EnableArtifactsDefault: true };
+  });
+
+  // The legacy window has no cutoff yet, so every unconfined key is legacy and passes.
+  it.each([
+    ['a notebooks:write key', { scopes: ['notebooks:write'] }],
+    ['an admin key', { scopes: ['admin:*'] }],
+    ['a legacy read-only key', { scopes: ['notebooks:read'], createdAt: new Date('2024-01-01') }],
+    ['a JWT caller', undefined],
+  ])('creates the artifact for %s', async (_label, apiKeyInfo) => {
+    const { req, res } = postWithKey(apiKeyInfo);
+    await mockRefs.postHandler!(req, res);
+    expect(mockRefs.createArgs).toBeDefined();
+  });
+
+  it('declares the notebook scopes and legacy grandfathering on the door', () => {
+    expect(mockRefs.baseApiOptions).toMatchObject({
+      requiredScopes: ['notebooks:read', 'notebooks:write', 'admin:*'],
+      grandfatherLegacyKeys: true,
+    });
+  });
+
+  // Stand-in for a post-cutoff key: the legacy window has no cutoff yet, and a key holding a
+  // confined scope is never grandfathered.
+  it('refuses a non-legacy key holding only notebooks:read and creates nothing', async () => {
+    const { req, res } = postWithKey({ scopes: ['notebooks:read', 'embed:chat'] });
+    await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.createArgs).toBeUndefined();
+  });
+
+  it('creates the artifact for a non-legacy key holding notebooks:write', async () => {
+    const { req, res } = postWithKey({ scopes: ['notebooks:write', 'embed:chat'] });
+    await mockRefs.postHandler!(req, res);
+    expect(mockRefs.createArgs).toBeDefined();
+  });
+
+  it.each([
+    ['an exchange key holding notebooks:read', { scopes: ['notebooks:read'], oauthExchangeClientId: 'client-1' }],
+  ])('refuses %s and creates nothing', async (_label, apiKeyInfo) => {
+    const { req, res } = postWithKey(apiKeyInfo);
+    await expect(Promise.resolve(mockRefs.postHandler!(req, res))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.createArgs).toBeUndefined();
   });
 });

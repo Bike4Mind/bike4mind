@@ -6,7 +6,15 @@ export const DEFAULT_MANIFEST = {
   // --- secret ---
   // Integration secrets are optional: unset disables that integration. Only the
   // core boot secrets (JWT/session/encryption/Mongo) are hard-required.
+  ANTHROPIC_ADMIN_API_KEY: { kind: 'secret', optional: true },
   ANTHROPIC_API_KEY: { kind: 'secret', optional: true },
+  // APNs push delivery for first-party native clients; any one unset disables push.
+  APNS_KEY: { kind: 'secret', optional: true },
+  APNS_KEY_ID: { kind: 'secret', optional: true },
+  APNS_TEAM_ID: { kind: 'secret', optional: true },
+  APNS_TOPIC: { kind: 'secret', optional: true },
+  // FCM (Android push) service account JSON; unset disables Android push.
+  FCM_SERVICE_ACCOUNT: { kind: 'secret', optional: true },
   B4M_ANALYTICS_ENABLED: { kind: 'secret', optional: true },
   // Shared-secret bearer for the frontend -> ChatCompletion /process dispatch. Required:
   // chat dispatch fails closed (401) without it. Distinct from SECRET_ENCRYPTION_KEY.
@@ -15,6 +23,10 @@ export const DEFAULT_MANIFEST = {
   E2E_CLEANUP_SECRET: { kind: 'secret', optional: true },
   EMERGENCY_LOGIN_ENABLED: { kind: 'secret', optional: true },
   GEMINI_API_KEY: { kind: 'secret', optional: true },
+  APPLE_CLIENT_ID: { kind: 'secret', optional: true },
+  APPLE_KEY_ID: { kind: 'secret', optional: true },
+  APPLE_PRIVATE_KEY: { kind: 'secret', optional: true },
+  APPLE_TEAM_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_SECRET: { kind: 'secret', optional: true },
   GITHUB_LAKE_APP_CLIENT_ID: { kind: 'secret', optional: true },
@@ -26,6 +38,8 @@ export const DEFAULT_MANIFEST = {
   GITHUB_ZAP_REF: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_ID: { kind: 'secret', optional: true },
   GOOGLE_CLIENT_SECRET: { kind: 'secret', optional: true },
+  HMAC_SIGNING_SECRET: { kind: 'secret', optional: true },
+  HMAC_SIGNING_SECRET_PREVIOUS: { kind: 'secret', optional: true },
   JWT_SECRET: { kind: 'secret' },
   MAIL_FROM: { kind: 'secret', optional: true },
   MAIL_HOST: { kind: 'secret', optional: true },
@@ -39,6 +53,7 @@ export const DEFAULT_MANIFEST = {
   OKTA_CLIENT_ID: { kind: 'secret', optional: true },
   OKTA_CLIENT_SECRET: { kind: 'secret', optional: true },
   OKTA_USE_ORG_AUTH_SERVER: { kind: 'secret', optional: true },
+  OPENAI_ADMIN_API_KEY: { kind: 'secret', optional: true },
   OPENAI_API_KEY: { kind: 'secret', optional: true },
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
@@ -52,26 +67,27 @@ export const DEFAULT_MANIFEST = {
   QA_ALARM_SLACK_WEBHOOKS: { kind: 'secret', optional: true },
   RATE_LIMIT_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: { kind: 'secret', optional: true },
-  SECOPS_CODE_INGEST_TOKEN: { kind: 'secret', optional: true },
-  SECOPS_PACKAGES_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_PROWLER_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_PROWLER_WORKFLOW_TOKEN: { kind: 'secret', optional: true },
-  SECOPS_SECRETS_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_DISPATCH_TOKEN: { kind: 'secret', optional: true },
   SECOPS_ZAP_INGEST_TOKEN: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY: { kind: 'secret' },
   // Optional here so dev/local/self-host can run keyless; the key provider refuses to MINT a DEK on
   // a deployed stage without it (packages/server-utils/src/memory/factCipher.ts).
   MEMORY_KEY_SECRET: { kind: 'secret', optional: true },
+  MEMORY_KEY_SECRET_PREVIOUS: { kind: 'secret', optional: true },
   SECRET_ENCRYPTION_KEY_PREVIOUS: { kind: 'secret', optional: true },
   SESSION_SECRET: { kind: 'secret' },
+  SLACK_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_COST_ALARMS_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_ERROR_REPORTING_WEBHOOK_URL: { kind: 'secret', optional: true },
   SLACK_WEBHOOK_URL: { kind: 'secret', optional: true },
+  SLACK_FEEDBACK_DESTINATIONS: { kind: 'secret', optional: true },
   STRIPE_PUBLISHABLE_KEY: { kind: 'secret', optional: true },
   STRIPE_SECRET_KEY: { kind: 'secret', optional: true },
   STRIPE_WEBHOOK_SECRET: { kind: 'secret', optional: true },
   SUPPORT_EMAIL: { kind: 'secret', optional: true },
-  WHATS_NEW_DISTRIBUTION_URL: { kind: 'secret', optional: true },
+  TURNSTILE_SECRET_KEY: { kind: 'secret', optional: true },
   XAI_API_KEY: { kind: 'secret', optional: true },
   // --- bucket ---
   appFilesBucket: { kind: 'bucket' },
@@ -97,7 +113,7 @@ export const DEFAULT_MANIFEST = {
   // unregistered key here left a folder reading "Connected" that could never sync, with the
   // claim released only by hand. Not optional: the self-host worker consumes it
   // (apps/workers/src/selfhost/main.ts), and the route has no degrade path - it throws AFTER
-  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.test.ts).
+  // taking a global, cross-org claim, unlike webhookDeliveryQueue's sites (see manifestCoverage.repo.test.ts).
   driveLakeIngestQueue: { kind: 'queue' },
   // Read by the Drive disconnect route (via sourceQueueUrls) and by its consumer's own slice
   // re-enqueue. Optional so an install that upgraded without the env var keeps the worker up; the
@@ -136,15 +152,24 @@ export const DEFAULT_MANIFEST = {
   // an operator needs - with no URL configured the enqueue still fails into those catches and
   // says so, rather than accepting a message into a queue nothing is consuming yet.
   lakeMemoryQueue: { kind: 'queue', optional: true },
+  riskEvidenceQueue: { kind: 'queue', optional: true },
   // Reached from POST /api/data-lakes/:id/inconsistencies?detector=model. `optional` for the same
   // reason as lakeMemoryQueue above: it sits behind an off-by-default admin flag
   // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL
   // configured the route refuses the run outright rather than accepting work nothing will consume.
   lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
-  liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
+  accountDataExportQueue: { kind: 'queue', optional: true },
+  accountErasureQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
+  // Asynchronous function calls; the invoke route refuses mode async on self-host before anything is queued.
+  callableFunctionCallQueue: { kind: 'queue', optional: true },
+  // Leftovers of a notebook or message delete's media purge; with no URL they are logged and dropped.
+  generatedMediaPurgeQueue: { kind: 'queue', optional: true },
+  // Studio render jobs; drained by the optional render-worker compose profile (apps/workers/src/render/main.ts).
+  // With no URL the render submit step throws instead of queueing work nothing consumes.
+  renderJobQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it

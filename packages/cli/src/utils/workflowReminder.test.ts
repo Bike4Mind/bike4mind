@@ -8,8 +8,8 @@ import {
 import type { TodoItem } from '../tools/writeTodosTool.js';
 import type { WorkflowBlocker, WorkflowDecision } from '../storage/types.js';
 
-function todo(description: string, status: TodoItem['status'] = 'pending'): TodoItem {
-  return { description, status };
+function todo(content: string, status: TodoItem['status'] = 'pending'): TodoItem {
+  return { id: content, content, status };
 }
 
 function decision(summary: string, rationale = 'because'): WorkflowDecision {

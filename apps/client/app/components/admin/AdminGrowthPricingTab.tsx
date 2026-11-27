@@ -1,14 +1,44 @@
 import { useMemo } from 'react';
-import { Alert, Card, CardContent, Divider, LinearProgress, Stack, Typography } from '@mui/joy';
+import { Alert, Link, Stack, Typography } from '@mui/joy';
 import WarningIcon from '@mui/icons-material/Warning';
-import { resolveTeamPlanSettings, settingsMap, type SettingKey } from '@bike4mind/common';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import { useNavigate } from '@tanstack/react-router';
+import {
+  API_SERVICE_GROUPS,
+  creditsToUsdAtFloor,
+  formatUsdAmount,
+  formatUsdPerCredit,
+  isEnforceCreditsLocked,
+  MIN_PRICE_PER_CREDIT_USD,
+  parseReferralMilestones,
+  resolveTeamPlanSettings,
+  SETTING_TABS,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import AdminSettingInputField from './AdminSettingInputField';
+import { SettingKeyRow } from './InviteCenter/shared/SettingKeyRow';
+import { SectionHeading } from './InviteCenter/shared/SettingBlocks';
+import { useStoredByKey } from './InviteCenter/shared/useStoredByKey';
+import { CheckoutCatalogPanel } from './CheckoutCatalogPanel';
+import {
+  ADMIN_SETTINGS_SEARCH_PARAM,
+  ADMIN_SETTINGS_SECTION_PARAM,
+  ADMIN_SETTINGS_TAB_SLUG,
+  adminSearchForTab,
+  type AdminSearch,
+} from './adminTabParams';
+import { useOpenSettingHome } from './useOpenSettingHome';
+import { useModelsNavigation } from './Models/modelsNavigation';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
+import { AdminPageHeader, ErrorState, LoadingState, SettingsSection } from './shared';
+import { ADMIN_DETAIL_MAX_WIDTH, ADMIN_REGION_GAP } from './shared/adminStyles';
 
 /**
  * The growth and monetization knobs, grouped on one page so they can be tuned without hunting
- * through Admin Settings. Storage is the ordinary admin-settings collection - every field here is
- * the same setting (and the same editor) that also appears under Admin Settings.
+ * through Admin Settings. Storage is the ordinary admin-settings collection. This tab is the only
+ * editor for these keys (the growth-pricing home in settingHomes.ts; Admin Settings links here).
+ * docs/pricing-settings-inventory.md lists every key in this area; update it when a key moves.
  */
 export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   id: string;
@@ -18,15 +48,32 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
 }> = [
   {
     id: 'signup',
-    title: 'Signup and starter credits',
-    description: 'Who can sign up on their own, and what a new user starts with.',
-    keys: ['allowOpenRegistration', 'defaultFreeCredits', 'ReferralCreditsAmount'],
+    title: 'Signup',
+    description: 'Who can sign up on their own.',
+    keys: ['allowOpenRegistration'],
   },
   {
     id: 'credits',
     title: 'Credits and pricing',
-    description: 'How usage is metered and what credits cost.',
-    keys: ['enforceCredits', 'pricePerCredit', 'lowCreditsThreshold'],
+    description:
+      'How usage is metered and what credits cost. Bill Operational Usage extends background model and embedding charges to paid accounts and organization pools; free accounts are billed whenever credits are enforced.',
+    keys: ['enforceCredits', 'billOperationalUsage', 'pricePerCredit', 'lowCreditsThreshold'],
+  },
+  {
+    id: 'preference-arena',
+    title: 'Preference arena',
+    description:
+      'Verified users compare two blind answers and earn promotional credits for accepted votes. A credits-per-vote of 0 keeps collecting votes with rewards off; low-quality raters are dropped without notice.',
+    keys: [
+      'preferenceArenaEnabled',
+      'preferenceArenaCreditsPerVote',
+      'preferenceArenaDailyVoteCap',
+      'preferenceArenaLifetimeCreditCap',
+      'preferenceArenaMinResponseMs',
+      'preferenceArenaGoldRatePercent',
+      'preferenceArenaMinGoldVotes',
+      'preferenceArenaMinGoldAccuracyPercent',
+    ],
   },
   {
     id: 'team',
@@ -36,20 +83,125 @@ export const GROWTH_PRICING_SECTIONS: ReadonlyArray<{
   },
 ];
 
-const formatValue = (value: unknown): string => {
-  if (value === undefined || value === null || value === '') return 'not set';
-  if (typeof value === 'number') return value.toLocaleString();
-  return String(value);
+/** The settings in the tier rate-limit group, read from the group tags so a new tier is picked up. */
+export const RATE_LIMIT_SETTING_KEYS = (Object.keys(settingsMap) as SettingKey[]).filter(
+  key =>
+    (settingsMap[key] as { group?: string }).group === API_SERVICE_GROUPS.RATE_LIMITING.id &&
+    key.startsWith('apiRateLimit')
+);
+
+// Admin Settings search term that narrows the list to the rate-limit group; it matches on setting
+// keys, so it must stay a substring of every key in RATE_LIMIT_SETTING_KEYS (tested).
+export const RATE_LIMIT_SETTINGS_SEARCH = 'apiRateLimit';
+
+// The Admin Settings section whose categories hold the rate-limit group.
+const RATE_LIMIT_SETTINGS_SECTION_ID = Object.values(SETTING_TABS).find(section =>
+  RATE_LIMIT_SETTING_KEYS.some(key => {
+    const { category } = settingsMap[key];
+    return category !== undefined && section.categories.includes(category);
+  })
+)?.id;
+
+/**
+ * Pricing and limit controls that already have an editor elsewhere. They are linked rather than
+ * rendered here so no setting has two editors.
+ */
+export const GROWTH_PRICING_LINKS = [
+  {
+    id: 'model-pricing',
+    title: 'Model pricing',
+    description: 'Per-model token rates that turn usage into credits. Edited in Models > Prices.',
+    linkLabel: 'Open model prices',
+  },
+  {
+    id: 'rate-limits',
+    title: 'Tier rate limits',
+    description: 'Per-minute request limits for each subscription tier. Edited in Admin Settings.',
+    linkLabel: `Open ${API_SERVICE_GROUPS.RATE_LIMITING.name} settings`,
+  },
+  {
+    id: 'invite-center-rewards',
+    title: 'Referral rewards for inviters',
+    description:
+      'What an inviter earns when an invited friend becomes active or subscribes, plus milestones and the hold, starting-invite, share-link limit and alert settings. Edited in the Invite Center.',
+    linkLabel: 'Open Invite Center rewards',
+  },
+] as const;
+
+type GrowthPricingLinkId = (typeof GROWTH_PRICING_LINKS)[number]['id'];
+
+/**
+ * Unit and derived value shown under a setting's current value, so a bare number reads as money.
+ * Credit grants are valued at the floor rate because that is what credit packs sell at
+ * (apps/client/lib/credits/constants.ts).
+ */
+export const describeDerivedValue = (key: SettingKey, value: unknown): string | null => {
+  // Unset is not zero: Number('') and Number(null) would both read as 0 credits.
+  const amount = value === undefined || value === null || value === '' ? Number.NaN : Number(value);
+  const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
+  switch (key) {
+    case 'ReferralFirstAnswerCredits':
+    case 'ReferralFirstPaymentCredits':
+    case 'ReferralSecondPaymentCredits':
+      if (!Number.isFinite(amount)) return null;
+      return `${amount.toLocaleString('en-US')} credits = ${formatUsdAmount(creditsToUsdAtFloor(amount))} at the ${floor}`;
+    case 'ReferralMilestones': {
+      const milestones = typeof value === 'string' ? parseReferralMilestones(value) : null;
+      if (!milestones || milestones.length === 0) return null;
+      const total = milestones.reduce((sum, milestone) => sum + milestone.credits, 0);
+      const count = milestones.length === 1 ? '1 milestone' : `${milestones.length} milestones`;
+      return `${count}, ${total.toLocaleString('en-US')} credits per inviter in all = ${formatUsdAmount(creditsToUsdAtFloor(total))} at the ${floor}`;
+    }
+    case 'pricePerCredit':
+      return Number.isFinite(amount)
+        ? `${formatUsdPerCredit(amount)} per credit (USD) - ${floor}`
+        : `USD per credit - ${floor}`;
+    default:
+      return null;
+  }
 };
 
 const AdminGrowthPricingTab = () => {
-  const { data, isLoading } = useSettingsFromServer();
+  const { data, isLoading, isError, isFetching, refetch } = useSettingsFromServer();
+  const navigate = useNavigate();
+  const openSettingHome = useOpenSettingHome();
+  const { openPrices } = useModelsNavigation();
 
-  const storedByKey = useMemo(() => {
-    const map = new Map<string, unknown>();
-    for (const row of data ?? []) map.set(row.settingName, row.settingValue);
-    return map;
-  }, [data]);
+  // Already inside /admin, so each link is an in-console navigation.
+  const openLink: Record<GrowthPricingLinkId, () => void> = {
+    'model-pricing': () => {
+      void openPrices();
+    },
+    // Navigate with the tab slug instead of setting the store: the store-to-URL mirror would
+    // rebuild the search and drop the section and filter (see useAdminTabUrlSync).
+    'rate-limits': () =>
+      navigate({
+        to: '/admin',
+        search: (previous: AdminSearch) => ({
+          ...adminSearchForTab(previous, ADMIN_SETTINGS_TAB_SLUG),
+          [ADMIN_SETTINGS_SECTION_PARAM]: RATE_LIMIT_SETTINGS_SECTION_ID,
+          [ADMIN_SETTINGS_SEARCH_PARAM]: RATE_LIMIT_SETTINGS_SEARCH,
+        }),
+        replace: true,
+      }),
+    'invite-center-rewards': () => openSettingHome({ inviteSection: 'rewards' }),
+  };
+
+  const storedByKey = useStoredByKey(data);
+
+  // A failed read renders ErrorState below. No data and no error means the query is paused (offline) or
+  // disabled (no token yet); the catalog then shows the Team grant as unknown rather than defaults.
+  const teamPlan = useMemo(
+    () =>
+      data
+        ? resolveTeamPlanSettings({
+            teamPlanMinSeats: storedByKey.get('teamPlanMinSeats'),
+            teamPlanMaxSeats: storedByKey.get('teamPlanMaxSeats'),
+            teamPlanCreditsPerSeat: storedByKey.get('teamPlanCreditsPerSeat'),
+          })
+        : undefined,
+    [data, storedByKey]
+  );
 
   // Cross-field checks the per-setting schemas cannot express on their own.
   const warnings = useMemo(() => {
@@ -63,29 +215,15 @@ const AdminGrowthPricingTab = () => {
         `Team Plan Minimum Seats (${requestedMin}) is above the maximum (${resolved.maxSeats}); the maximum is used as the minimum until this is fixed.`
       );
     }
-    const openRegistration = settingsMap.allowOpenRegistration.schema.safeParse(
-      storedByKey.get('allowOpenRegistration')
-    );
-    const freeCredits = settingsMap.defaultFreeCredits.schema.safeParse(storedByKey.get('defaultFreeCredits'));
-    if (openRegistration.success && !openRegistration.data && freeCredits.success && freeCredits.data > 0) {
-      out.push(
-        'Default Free Credits only applies to self-serve signups, so it has no effect while Allow Open Registration is off.'
-      );
-    }
     return out;
   }, [storedByKey]);
 
-  if (isLoading) return <LinearProgress data-testid="admin-growth-pricing-loading" />;
-
   return (
-    <Stack spacing={2} sx={{ p: 2, maxWidth: 1100 }} data-testid="admin-growth-pricing-tab">
-      <div>
-        <Typography level="h3">Growth and Pricing</Typography>
-        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-          Starter credits, signup, pricing and team-plan limits in one place. Changes apply without a deploy; server
-          caches pick them up within a few minutes.
-        </Typography>
-      </div>
+    <Stack sx={{ gap: ADMIN_REGION_GAP, maxWidth: ADMIN_DETAIL_MAX_WIDTH }} data-testid="admin-growth-pricing-tab">
+      <AdminPageHeader
+        title="Growth and pricing"
+        description="Signup, referral, credit, team-plan and preference arena settings. Saved changes apply within a few minutes, without a deploy."
+      />
 
       {warnings.map(warning => (
         <Alert
@@ -99,43 +237,89 @@ const AdminGrowthPricingTab = () => {
         </Alert>
       ))}
 
-      {GROWTH_PRICING_SECTIONS.map(section => (
-        <Card key={section.id} variant="outlined" data-testid={`admin-growth-pricing-section-${section.id}`}>
-          <Typography level="title-lg">{section.title}</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            {section.description}
-          </Typography>
-          <Divider inset="none" />
-          <CardContent>
-            <Stack spacing={1}>
-              {section.keys.map((key, index) => {
-                const setting = settingsMap[key];
-                const stored = storedByKey.get(key);
-                const current = stored ?? setting.defaultValue;
-                return (
-                  <div key={key}>
-                    <Typography
-                      level="body-xs"
-                      sx={{ color: 'text.tertiary', mb: 0.5 }}
-                      data-testid={`admin-growth-pricing-current-${key}`}
-                    >
-                      Current: {formatValue(current)}
-                      {stored === undefined ? ' (default)' : ` - default ${formatValue(setting.defaultValue)}`}
+      {isLoading ? (
+        <LoadingState label="Loading growth and pricing settings" testId="admin-growth-pricing-loading" />
+      ) : isError && !data ? (
+        <ErrorState
+          message="Growth and pricing settings could not be loaded."
+          onRetry={() => void refetch()}
+          retrying={isFetching}
+        />
+      ) : (
+        // Inside the provider each field stages its edit for the page's one SaveBar and leave-page guard
+        // instead of rendering its own Save button.
+        <SettingsDraftProvider>
+          <Stack sx={{ gap: 2 }}>
+            {GROWTH_PRICING_SECTIONS.map(section => (
+              <SettingsSection
+                key={section.id}
+                component="section"
+                sx={{ mb: 0 }}
+                data-testid={`admin-growth-pricing-section-${section.id}`}
+              >
+                <SectionHeading title={section.title} description={section.description} />
+                <Stack sx={{ gap: 1 }}>
+                  {section.keys.map((key, index) => {
+                    const stored = storedByKey.get(key);
+                    return (
+                      <SettingKeyRow
+                        key={key}
+                        settingKey={key}
+                        stored={stored}
+                        index={index}
+                        testIdPrefix="admin-growth-pricing"
+                        derived={describeDerivedValue(key, stored ?? settingsMap[key].defaultValue)}
+                        lockedNote={
+                          key === 'enforceCredits' && isEnforceCreditsLocked()
+                            ? 'Always on for hosted deployments'
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </Stack>
+              </SettingsSection>
+            ))}
+
+            <CheckoutCatalogPanel teamPlan={teamPlan} />
+
+            <SettingsSection component="section" sx={{ mb: 0 }} data-testid="admin-growth-pricing-section-related">
+              <SectionHeading
+                title="Related settings"
+                description="Pricing and limits that are edited on other admin pages, so no setting has two editors."
+              />
+              <Stack sx={{ gap: 2 }}>
+                {GROWTH_PRICING_LINKS.map(link => (
+                  <Stack
+                    key={link.id}
+                    component="section"
+                    sx={{ gap: 0.5, alignItems: 'flex-start' }}
+                    data-testid={`admin-growth-pricing-section-${link.id}`}
+                  >
+                    <Typography level="title-md" component="h3" sx={{ color: 'admin.ink' }}>
+                      {link.title}
                     </Typography>
-                    <AdminSettingInputField
-                      // Remount when the stored value changes so the editor never shows a stale draft.
-                      key={`${key}-${JSON.stringify(stored ?? null)}`}
-                      index={index}
-                      setting={setting}
-                      defaultValue={current}
-                    />
-                  </div>
-                );
-              })}
-            </Stack>
-          </CardContent>
-        </Card>
-      ))}
+                    <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+                      {link.description}
+                    </Typography>
+                    {/* component="button": a Joy Link with only an onClick renders an <a> with no href,
+                        which is not focusable. */}
+                    <Link
+                      level="body-sm"
+                      component="button"
+                      startDecorator={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+                      onClick={openLink[link.id]}
+                      data-testid={`admin-growth-pricing-link-${link.id}`}
+                    >
+                      {link.linkLabel}
+                    </Link>
+                  </Stack>
+                ))}
+              </Stack>
+            </SettingsSection>
+          </Stack>
+        </SettingsDraftProvider>
+      )}
     </Stack>
   );
 };

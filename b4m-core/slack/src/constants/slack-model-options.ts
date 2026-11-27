@@ -1,7 +1,8 @@
 import { buildApiKeyTable, getAvailableModels, PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
-import { apiKeyService } from '@bike4mind/services';
-import { getSettingsByNames } from '@bike4mind/utils';
+import { apiKeyService } from '@bike4mind/services-core';
+import { getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { isUnpricedTextModel } from '@bike4mind/services-core/llm/modelAdmission';
 import { Logger } from '@bike4mind/observability';
 import { getSlackDb } from '../di/registry';
 
@@ -30,6 +31,7 @@ export const BACKEND_DISPLAY_NAMES: Readonly<Record<ModelBackend, string>> = {
   [ModelBackend.Kimi]: 'Moonshot (Kimi)',
   [ModelBackend.DeepSeek]: 'DeepSeek',
   [ModelBackend.Ollama]: 'Ollama',
+  [ModelBackend.OpenAICompatible]: 'Local model server',
   [ModelBackend.AWS]: 'AWS',
   [ModelBackend.BFL]: 'Black Forest Labs',
   [ModelBackend.VoyageAI]: 'Voyage AI',
@@ -63,6 +65,13 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
 
     // Filter to text models only (Slack chat uses text models)
     allModels = allModels.filter(m => m.type === 'text');
+
+    // Same rule as the web picker (apps/client/server/utils/callerModelList.ts): with credits enforced, a
+    // text model with no price is refused at call time, so it is not offered either.
+    const settings = await getSettingsMap(dbAdapters.db, { names: ['enforceCredits'] });
+    if (getSettingsValue('enforceCredits', settings)) {
+      allModels = allModels.filter(m => !isUnpricedTextModel(m));
+    }
 
     // Apply admin LLM configurations (enabled/disabled)
     const adminSetting = await (AdminSettings as any).findOne({ settingName: 'llmModelConfigurations' });

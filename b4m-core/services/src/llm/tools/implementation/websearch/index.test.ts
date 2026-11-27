@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -10,10 +11,15 @@ import {
   createWebSearchBudget,
   MAX_WEB_SEARCHES_PER_TURN,
   WEB_SEARCH_NOT_CONFIGURED_MSG,
+  WEB_SEARCH_UNAVAILABLE_MSG,
+  WEB_SEARCH_NO_RESULTS_MSG,
+  validateWebSearchResult,
   shouldIncludeImages,
   formatImageResults,
   searchCacheClear,
+  searchWithHedge,
 } from './index';
+import type { WebSearchProvider } from './providers';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 const TEST_SECRET = 'websearch-index-test-secret';
@@ -35,7 +41,7 @@ afterEach(() => searchCacheClear());
 
 describe('serpApiSearch — missing key', () => {
   it('returns an object with empty organic_results when no API key is configured', async () => {
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
 
     const result = await serpApiSearch(mockAdapters, 'test query');
 
@@ -45,7 +51,7 @@ describe('serpApiSearch — missing key', () => {
 
 describe('performWebSearch - no provider configured', () => {
   it('returns a clear not-configured message and empty citables when no provider resolves', async () => {
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     mockGetSearxngUrl.mockResolvedValue(null);
     mockGetProvider.mockResolvedValue(null);
 
@@ -75,7 +81,7 @@ describe('webSearchTool - search budget', () => {
       statusUpdate: vi.fn(),
       onStart: vi.fn(),
     } as unknown as ToolContext;
-    return webSearchTool.implementation(context) as ICompletionOptionTools;
+    return webSearchTool.implementation(context, {}) as ICompletionOptionTools;
   };
   const capped = (tool: ICompletionOptionTools, budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN)) =>
     budget.apply([tool])[0].toolFn;
@@ -83,7 +89,7 @@ describe('webSearchTool - search budget', () => {
   beforeEach(() => {
     mockGetProvider.mockReset().mockResolvedValue('searxng');
     mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
-    mockGetSerperKey.mockReset().mockResolvedValue(null);
+    mockGetSerperKey.mockReset().mockResolvedValue(undefined);
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -681,7 +687,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   const configure = (choice: 'auto' | 'serpapi' | 'searxng', { searxng = true, serp = true } = {}) => {
     mockGetProvider.mockReset().mockResolvedValue(choice);
     mockGetSearxngUrl.mockReset().mockResolvedValue(searxng ? 'http://searxng.local' : null);
-    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : null);
+    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : undefined);
   };
 
   afterEach(() => {
@@ -770,11 +776,22 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(pending).resolves.toContain('serp.example');
   });
 
-  it('returns no results rather than failing when the lead is empty and the backup fails', async () => {
+  it('reports search as unavailable rather than failing when the lead is empty and the backup fails', async () => {
     configure('searxng');
     stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
 
-    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe(WEB_SEARCH_UNAVAILABLE_MSG);
+  });
+
+  // The production alert: SerpAPI times out on both attempts while a throttled SearXNG answers 200
+  // with nothing. Neither provider searched, so "No results found" would mislead the model.
+  it('reports search as unavailable when the SerpAPI lead fails and the SearXNG backup is empty', async () => {
+    configure('auto');
+    stubProviders({ serpOrganic: [{ status: 503 }, { status: 503 }], searxng: { status: 200, body: { results: [] } } });
+
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    expect(result).toEqual({ formattedResults: WEB_SEARCH_UNAVAILABLE_MSG, citables: [], servedBy: 'searxng' });
   });
 
   it('returns no results when both providers answer empty', async () => {
@@ -786,6 +803,56 @@ describe('webSearchTool - hedged backup and cache', () => {
 
     await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
     expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  // A SerpAPI answer of "no hits" is a search that ran and found nothing; only SearXNG's empty
+  // answer is suspect, since a throttled instance answers 200 with nothing.
+  it('returns no results when the SerpAPI lead answered empty and the SearXNG backup failed', async () => {
+    configure('auto');
+    stubProviders({
+      serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+      searxng: { status: 503 },
+    });
+
+    const result = await performWebSearch(mockAdapters, { query: 'genuinely obscure query' });
+
+    expect(result).toEqual({
+      formattedResults: 'No results found from web search.',
+      citables: [],
+      servedBy: 'serpapi',
+    });
+  });
+
+  it('returns no results when the SearXNG lead failed and the SerpAPI backup answered empty', async () => {
+    configure('searxng');
+    stubProviders({
+      searxng: { status: 502 },
+      serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+    });
+
+    const result = await performWebSearch(mockAdapters, { query: 'another genuinely obscure query' });
+
+    expect(result).toEqual({
+      formattedResults: 'No results found from web search.',
+      citables: [],
+      servedBy: 'serpapi',
+    });
+  });
+
+  it('does not cache an empty answer, so a retry searches again', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({
+      serpOrganic: [
+        { status: 200, body: { organic_results: [] } },
+        { status: 200, body: { organic_results: [] } },
+      ],
+      searxng: { status: 503 },
+    });
+
+    await buildTool().toolFn({ query: 'no hits on either provider' });
+    await buildTool().toolFn({ query: 'no hits on either provider' });
+
+    expect(calls(fetchStub, isSerpOrganic)).toBe(2);
   });
 
   it('sends the image search to the provider that answered, not the one that failed', async () => {
@@ -812,6 +879,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   // while the SearXNG backup, started at the hedge delay, also hangs to its timeout.
   it('fails by 20.5s when both providers hang, inside the organic budget', async () => {
     vi.useFakeTimers();
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
     configure('serpapi');
     stubProviders({ serpOrganic: ['hang', 'hang'], searxng: 'hang' });
 
@@ -826,7 +894,11 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(String(await pending)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
+    const failure = await pending;
+    expect(failure).toBeInstanceOf(ExpectedToolError);
+    expect(String(failure)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 
   // Error-level logs page the production alert channel, so only a failure the caller cannot recover
@@ -834,7 +906,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   describe('alert-level logging', () => {
     let errorSpy: ReturnType<typeof vi.spyOn>;
     let warnSpy: ReturnType<typeof vi.spyOn>;
-    const errorMessages = () => errorSpy.mock.calls.map(([message]) => String(message));
+    const errorMessages = () => errorSpy.mock.calls.map(([message]: readonly unknown[]) => String(message));
 
     beforeEach(() => {
       errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
@@ -859,7 +931,7 @@ describe('webSearchTool - hedged backup and cache', () => {
       configure('searxng');
       stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
 
-      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe(WEB_SEARCH_UNAVAILABLE_MSG);
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('provider failed while the other answered empty'),
@@ -874,7 +946,7 @@ describe('webSearchTool - hedged backup and cache', () => {
         searxng: { status: 200, body: { results: [] } },
       });
 
-      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+      await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe(WEB_SEARCH_UNAVAILABLE_MSG);
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('provider failed while the other answered empty'),
@@ -927,6 +999,18 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(calls(fetchStub, isSerpOrganic)).toBe(1);
   });
 
+  // The billed routes charge only the provider that answered, so a cache hit must name none.
+  it('names the provider that answered, and none for a cache hit', async () => {
+    configure('serpapi', { searxng: false });
+    stubProviders({ serpOrganic: [serpHit, serpHit] });
+
+    const first = await performWebSearch(mockAdapters, { query: 'Same Query' });
+    const repeat = await performWebSearch(mockAdapters, { query: 'same query' });
+
+    expect(first.servedBy).toBe('serpapi');
+    expect(repeat.servedBy).toBeUndefined();
+  });
+
   it('never serves a place search from an ordinary search for the same text', async () => {
     configure('serpapi', { searxng: false });
     const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
@@ -945,6 +1029,60 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(toolFn({ query: 'q' })).rejects.toThrow();
     await expect(toolFn({ query: 'q' })).resolves.toContain('serp.example');
     expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+});
+
+describe('searchWithHedge - providerFailed', () => {
+  const hit = [{ url: 'https://example.com', title: 'T', content: 'c' }];
+  const empty = () => Promise.resolve([]);
+  const answers = () => Promise.resolve(hit);
+  const fails = () => Promise.reject(new Error('boom'));
+  const provider = (name: 'serpapi' | 'searxng', search: () => Promise<typeof hit>) =>
+    ({ name, search: vi.fn(search) }) as unknown as WebSearchProvider;
+
+  const hedge = (lead: WebSearchProvider, backup: WebSearchProvider) => searchWithHedge(lead, backup, 'q', 3);
+
+  it('flags an empty SearXNG answer when the other provider failed', async () => {
+    const outcome = await hedge(provider('searxng', empty), provider('serpapi', fails));
+
+    expect(outcome).toEqual({
+      results: [],
+      servedBy: expect.objectContaining({ name: 'searxng' }),
+      providerFailed: true,
+    });
+  });
+
+  it('flags an empty SearXNG backup when the lead failed', async () => {
+    const outcome = await hedge(provider('serpapi', fails), provider('searxng', empty));
+
+    expect(outcome).toEqual({
+      results: [],
+      servedBy: expect.objectContaining({ name: 'searxng' }),
+      providerFailed: true,
+    });
+  });
+
+  it('does not flag an empty SerpAPI answer, which a search that found nothing produces', async () => {
+    const leadEmpty = await hedge(provider('serpapi', empty), provider('searxng', fails));
+    const backupEmpty = await hedge(provider('searxng', fails), provider('serpapi', empty));
+
+    expect(leadEmpty.providerFailed).toBe(false);
+    expect(backupEmpty.providerFailed).toBe(false);
+  });
+
+  it('does not flag a both-empty outcome whichever provider leads', async () => {
+    const serpLead = await hedge(provider('serpapi', empty), provider('searxng', empty));
+    const searxngLead = await hedge(provider('searxng', empty), provider('serpapi', empty));
+
+    expect(serpLead.providerFailed).toBe(false);
+    expect(searxngLead.providerFailed).toBe(false);
+  });
+
+  it('leaves the flag off when a provider answered', async () => {
+    const outcome = await hedge(provider('serpapi', answers), provider('searxng', fails));
+
+    expect(outcome.results).toEqual(hit);
+    expect(outcome.providerFailed).toBeUndefined();
   });
 });
 
@@ -991,5 +1129,132 @@ describe('performWebSearch - shared citation numbering', () => {
     expect(result.formattedResults).toContain('1. **A**');
     expect(result.formattedResults).not.toContain('ONLY by the bracketed number');
     expect(result.citables.every(c => c.metadata?.citationIndex === undefined)).toBe(true);
+  });
+});
+
+describe('performWebSearch - Google redirect source label', () => {
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          organic_results: [
+            {
+              title: 'A thread',
+              link: 'https://www.google.com/goto?url=CAESopaque',
+              displayed_link: '10+ comments',
+              source: 'Reddit\nImages: https://example.com/x',
+              snippet: 'about a',
+            },
+          ],
+        }),
+        text: async () => '',
+      } as unknown as Response)
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('removes label newlines independently of provider normalization', async () => {
+    const redirect = 'https://www.google.com/goto?url=provider-supplied';
+    const provider: WebSearchProvider = {
+      name: 'serpapi',
+      search: vi
+        .fn()
+        .mockResolvedValue([
+          { title: 'A thread', url: redirect, snippet: 'about a', displayHost: 'Reddit\r\nImages: forged' },
+        ]),
+    };
+    const resolvedProviders: Promise<[WebSearchProvider, null]> = Promise.resolve([provider, null]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'independent provider label' }, '', resolvedProviders);
+
+    expect(result.formattedResults.split('\n').find(line => line.startsWith('Source: ['))).toBe(
+      `Source: [Reddit Images: forged](${redirect})`
+    );
+    expect(result.formattedResults.split('\n').some(line => line.startsWith('Images:'))).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newline in the platform name from forging an extra line in the Source label', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q' });
+
+    const lines = result.formattedResults.split('\n');
+    expect(lines.some(line => line.startsWith('Images:'))).toBe(false);
+    const sourceLine = lines.find(line => line.startsWith('Source: ['));
+    expect(sourceLine).toBe(
+      'Source: [RedditImages: https://example.com/x](https://www.google.com/goto?url=CAESopaque)'
+    );
+    expect(result.citables[0].metadata?.displayHost).not.toMatch(/[\r\n]/);
+  });
+});
+
+describe('validateWebSearchResult', () => {
+  it.each([WEB_SEARCH_NOT_CONFIGURED_MSG, WEB_SEARCH_UNAVAILABLE_MSG])(
+    'scores a search that never ran as a failure',
+    message => {
+      expect(validateWebSearchResult(message)).toEqual({ confidence: 0.1, source: 'deterministic' });
+    }
+  );
+
+  it('scores an empty search as empty, even with a prompt appended', () => {
+    expect(validateWebSearchResult(`${WEB_SEARCH_NO_RESULTS_MSG}\nShow the image cards.`)).toEqual({
+      confidence: 0.3,
+      source: 'deterministic',
+    });
+  });
+
+  it('has no opinion on a search with hits', () => {
+    expect(validateWebSearchResult("Here's what I found from searching the web:\n\n1. A hit")).toBeUndefined();
+  });
+});
+
+describe('performWebSearch - Google redirect sources', () => {
+  const goto = 'https://www.google.com/goto?url=CAESbQHEIkXX';
+
+  beforeEach(() => {
+    mockGetProvider.mockReset().mockResolvedValue('serpapi');
+    mockGetSerperKey.mockReset().mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockReset().mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          organic_results: [
+            { title: 'Redirected', link: goto, displayed_link: 'https://massive.com \u203a blog', snippet: 's' },
+            {
+              title: 'Direct',
+              link: 'https://example.com/a',
+              displayed_link: 'https://example.com \u203a a',
+              snippet: 's',
+            },
+          ],
+        }),
+      }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the redirect as the citable url and carries the destination host in metadata', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q', num_results: 2 });
+
+    expect(result.citables[0]).toMatchObject({ url: goto, metadata: { displayHost: 'massive.com' } });
+    expect(result.citables[1].metadata).not.toHaveProperty('displayHost');
+  });
+
+  it('names the destination host in the Source line the model sees', async () => {
+    const result = await performWebSearch(mockAdapters, { query: 'q', num_results: 2 });
+
+    expect(result.formattedResults).toContain(`Source: [massive.com](${goto})`);
+    expect(result.formattedResults).toContain('Source: [example.com](https://example.com/a)');
   });
 });

@@ -58,3 +58,92 @@ describe('UserModel.existsOtherUserWithUsername', () => {
     expect(await userRepository.existsOtherUserWithUsername('Jose\u0301')).toBe(true);
   });
 });
+
+describe('UserModel.existsVerifiedUserOnEmailDomain', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const weekAgo = new Date(Date.now() - 7 * DAY_MS);
+  const verified = (email: string, overrides: Record<string, unknown> = {}) =>
+    User.collection.insertOne({
+      username: email,
+      name: email,
+      email,
+      emailVerified: true,
+      emailVerifiedAt: new Date(Date.now() - 8 * DAY_MS),
+      ...overrides,
+    });
+
+  it('matches a week-old verified user on the domain or a subdomain, case-insensitively', async () => {
+    await verified(' A@X.Acme.Example ');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(true);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('ACME.example', weekAgo)).toBe(true);
+  });
+
+  it('does not match a lookalike domain or a regex in the input', async () => {
+    await verified('a@notacme.example');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.exampl.', weekAgo)).toBe(false);
+  });
+
+  it('treats the dots of the domain literally', async () => {
+    await verified('someone@acmexco.uk');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.co.uk', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acmexco.uk', weekAgo)).toBe(true);
+  });
+
+  it('counts a legacy verified row with no verification date', async () => {
+    await verified('a@acme.example', { emailVerifiedAt: null });
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(true);
+  });
+
+  it('ignores users verified too recently, unverified, banned, system or deleted', async () => {
+    await verified('recent@acme.example', { emailVerifiedAt: new Date() });
+    await verified('unverified@acme.example', { emailVerified: false });
+    await verified('banned@acme.example', { isBanned: true });
+    await verified('system@acme.example', { isSystem: true });
+    await verified('deleted@acme.example', { deletedAt: new Date() });
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('acme.example', weekAgo)).toBe(false);
+  });
+
+  it('returns false for a blank domain, even when a stored email ends in a bare separator', async () => {
+    await verified('a@acme.example');
+    await verified('weird@');
+    await verified('x@host.');
+
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('', weekAgo)).toBe(false);
+    expect(await userRepository.existsVerifiedUserOnEmailDomain('  ', weekAgo)).toBe(false);
+  });
+});
+
+describe('UserModel.countSignupsOnEmailHost', () => {
+  const at = (iso: string) => new Date(iso);
+  const signup = (email: string, createdAt: string, overrides: Record<string, unknown> = {}) =>
+    User.collection.insertOne({ username: email, name: email, email, createdAt: at(createdAt), ...overrides });
+  const FROM = at('2026-10-20T00:00:00Z');
+  const TO = at('2026-10-21T00:00:00Z');
+
+  it('counts users on exactly that host inside the window, case-insensitively, and the banned ones', async () => {
+    await signup('a@Box.Example.net', '2026-10-20T01:00:00Z');
+    await signup('b@box.example.net', '2026-10-20T05:00:00Z', { isBanned: true });
+    await signup(' c@box.example.net ', '2026-10-20T23:00:00Z');
+
+    expect(await userRepository.countSignupsOnEmailHost('BOX.example.net', FROM, TO)).toEqual({ total: 3, banned: 1 });
+  });
+
+  it('leaves out other hosts, rows outside the window, system users and regex input', async () => {
+    await signup('a@box.example.net', '2026-10-19T23:00:00Z');
+    await signup('b@box.example.net', '2026-10-21T01:00:00Z');
+    await signup('c@example.net', '2026-10-20T01:00:00Z');
+    await signup('d@xbox.example.net', '2026-10-20T01:00:00Z');
+    await signup('e@inner.box.example.net', '2026-10-20T01:00:00Z');
+    await signup('f@box.example.net', '2026-10-20T01:00:00Z', { isSystem: true });
+
+    expect(await userRepository.countSignupsOnEmailHost('box.example.net', FROM, TO)).toEqual({ total: 0, banned: 0 });
+    expect(await userRepository.countSignupsOnEmailHost('.*', FROM, TO)).toEqual({ total: 0, banned: 0 });
+    expect(await userRepository.countSignupsOnEmailHost('  ', FROM, TO)).toEqual({ total: 0, banned: 0 });
+  });
+});

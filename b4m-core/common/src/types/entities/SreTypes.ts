@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { NESTED_SECRET_PLACEHOLDER } from '../../schemas/nestedSettingSecrets';
 
 // ============================================
 // Enums
@@ -279,14 +280,14 @@ export const SRE_DEFAULT_REPO_SLUG = 'MillionOnMars/lumina5';
 
 /** EventBridge detail-type for the Diagnostician -> Surgeon handoff.
  *  Must stay in sync with the rule in infra/eventBus.ts (sreFixDispatch),
- *  the publisher (apps/client/server/utils/eventBus.ts), and the envelope
+ *  the publisher (packages/server-utils/src/utils/eventBus.ts), and the envelope
  *  unwrap in apps/workers/src/queueHandlers/sreFix.ts. */
 export const SRE_ANALYSIS_COMPLETED_EVENT = 'sre.analysis.completed';
 
 /** Placeholder mask for encrypted secrets in the admin UI round-trip.
  *  Used by: settings/fetch.ts (server -> client), settings/update.ts (client -> server),
  *  SreAgentTab.tsx (UI display). Must be identical across all three. */
-export const SRE_SECRET_PLACEHOLDER = '••••••••';
+export const SRE_SECRET_PLACEHOLDER = NESTED_SECRET_PLACEHOLDER;
 
 /** Base allowed patterns - always merged into resolved config.
  *  Keep in sync with scripts/apply-sre-fix.cjs ALLOWED_PATTERNS */
@@ -323,6 +324,8 @@ const SreGateConfigSchema = z
     autoThreshold: z.number().min(0).max(100).default(SRE_GATE_DEFAULTS.autoThreshold),
     askThreshold: z.number().min(0).max(100).default(SRE_GATE_DEFAULTS.askThreshold),
     approvalTimeoutHours: z.number().min(1).default(SRE_GATE_DEFAULTS.approvalTimeoutHours),
+    // Sources allowed to auto-dispatch a fix; any other source needs Slack approval.
+    autoDispatchSources: z.array(z.nativeEnum(SreSourceType)).default([]),
   })
   .refine(data => data.autoThreshold >= data.askThreshold, {
     message: 'autoThreshold must be >= askThreshold',
@@ -377,12 +380,12 @@ export const SreRepoConfigSchema = z.object({
   /** Human-in-the-loop approval gates */
   gates: z
     .object({
-      sentinelToDiagnostician: SreGateConfigSchema.default({ ...SRE_GATE_DEFAULTS }),
-      diagnosticianToSurgeon: SreGateConfigSchema.default({ ...SRE_GATE_DEFAULTS }),
+      sentinelToDiagnostician: SreGateConfigSchema.default({ ...SRE_GATE_DEFAULTS, autoDispatchSources: [] }),
+      diagnosticianToSurgeon: SreGateConfigSchema.default({ ...SRE_GATE_DEFAULTS, autoDispatchSources: [] }),
     })
     .default({
-      sentinelToDiagnostician: { ...SRE_GATE_DEFAULTS },
-      diagnosticianToSurgeon: { ...SRE_GATE_DEFAULTS },
+      sentinelToDiagnostician: { ...SRE_GATE_DEFAULTS, autoDispatchSources: [] },
+      diagnosticianToSurgeon: { ...SRE_GATE_DEFAULTS, autoDispatchSources: [] },
     }),
   /** Circuit breaker */
   circuitBreaker: z

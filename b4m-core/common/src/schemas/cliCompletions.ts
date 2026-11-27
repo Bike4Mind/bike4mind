@@ -1,5 +1,8 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
+import { EndUserIdSchema } from './endUserId';
 import { MAX_THINKING_BUDGET_TOKENS } from '../constants/llmLimits';
+import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../constants/completionRuns';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
@@ -54,8 +57,8 @@ export const CompletionCustomToolSchema = z.object({
       .optional()
       .describe(
         'Keep this definition out of the model context until the tool search server tool (or a `tool_reference`) loads it. ' +
-          'Honoured only on models served by the direct Anthropic API whose `supports_tool_search` is true; on every other ' +
-          'model (including Bedrock-served Claude, for now) it is ignored and the tool is sent as usual. At least one tool, ' +
+          'Honoured only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; on every other ' +
+          'model it is ignored and the tool is sent as usual. At least one tool, ' +
           'or a `serverTool` entry, must stay non-deferred (`errorCode: "all_tools_deferred"`).'
       ),
     cache_control: z
@@ -81,8 +84,8 @@ export type ToolSearchServerTool = z.infer<typeof ToolSearchServerToolSchema>;
 export const CompletionServerToolSchema = z.object({
   serverTool: ToolSearchServerToolSchema.describe(
     'A provider-run tool, sent to the provider as `{ type, name }`. Only the Anthropic tool search tools exist today, and ' +
-      'only on models served by the direct Anthropic API whose `supports_tool_search` is true; any other model, ' +
-      'Bedrock-served Claude included, is refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
+      'only on Claude models (direct Anthropic or Bedrock) whose `supports_tool_search` is true; any other model is ' +
+      'refused with `errorCode: "tool_search_unsupported"` rather than run without it.'
   ),
 });
 
@@ -110,6 +113,8 @@ export const COMPLETION_TOOL_ERROR_CODES = [
   'invalid_tool_change',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionToolErrorCode = (typeof COMPLETION_TOOL_ERROR_CODES)[number];
+
+export const ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE = 'assistant_prefill_unsupported' as const satisfies ApiErrorCode;
 
 export const TOOL_CHANGE_BLOCK_TYPES = ['tool_addition', 'tool_removal'] as const;
 
@@ -165,6 +170,98 @@ export const ResponseFormatSchema = z.discriminatedUnion('type', [
 
 export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
 
+const ImageUrlValueSchema = z.union([z.string(), z.looseObject({ url: z.string(), detail: z.string().optional() })]);
+
+const ImageSourceSchema = z.discriminatedUnion('type', [
+  z.looseObject({ type: z.literal('base64'), media_type: z.string(), data: z.string() }),
+  z.looseObject({ type: z.literal('url'), url: z.string() }),
+  z.looseObject({ type: z.literal('file'), file_id: z.string() }),
+]);
+
+/**
+ * The content blocks a completions caller sends, in every dialect the canonicalizer in
+ * utils/multimodalContent.ts accepts. Each known block checks only the fields a provider needs and keeps
+ * any others (`cache_control`, `signature`, ...) so a caller's extras are not stripped.
+ */
+const KnownCompletionContentBlockSchema = z.discriminatedUnion('type', [
+  z.looseObject({ type: z.enum(['text', 'input_text', 'output_text']), text: z.string() }),
+  // The canonicalizer reads `image_url` or `source` for any of these three types, so a caller may mix
+  // dialects (e.g. an Anthropic `image` carrying `image_url`); require one of the two, not a pairing.
+  z
+    .looseObject({
+      type: z.enum(['image', 'image_url', 'input_image']),
+      image_url: ImageUrlValueSchema.optional(),
+      source: ImageSourceSchema.optional(),
+    })
+    .refine(block => block.image_url !== undefined || block.source !== undefined, {
+      message: 'An image block needs `image_url` or `source`',
+      path: ['image_url'],
+      abort: true,
+    }),
+  z.looseObject({
+    type: z.literal('tool_use'),
+    id: z.string(),
+    name: z.string(),
+    input: z.record(z.string(), z.unknown()),
+  }),
+  z.looseObject({
+    type: z.literal('tool_result'),
+    tool_use_id: z.string(),
+    content: z.union([z.string(), z.array(z.unknown())]).optional(),
+  }),
+  z.looseObject({ type: z.literal('thinking'), thinking: z.string() }),
+  z.looseObject({ type: z.literal('redacted_thinking'), data: z.string() }),
+  // Echoed provider blocks (see TOOL_SEARCH_BLOCK_TYPES).
+  z.looseObject({ type: z.literal('server_tool_use'), id: z.string(), name: z.string() }),
+  z.looseObject({ type: z.literal('tool_search_tool_result'), tool_use_id: z.string() }),
+  // Only the `type` is checked here: services/cliCompletionsToolSearch.ts validates the rest of a tool
+  // change block (ToolChangeBlockSchema) and answers a malformed one with its own errorCode, which a
+  // stricter schema here would pre-empt with a generic 400.
+  z.looseObject({ type: z.enum(TOOL_CHANGE_BLOCK_TYPES) }),
+]);
+
+/** Must list every `type` in KnownCompletionContentBlockSchema; the schema tests assert each one rejects a malformed block. */
+export const KNOWN_COMPLETION_CONTENT_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  'text',
+  'input_text',
+  'output_text',
+  'image_url',
+  'input_image',
+  'image',
+  'tool_use',
+  'tool_result',
+  'thinking',
+  'redacted_thinking',
+  'server_tool_use',
+  'tool_search_tool_result',
+  ...TOOL_CHANGE_BLOCK_TYPES,
+]);
+
+/**
+ * A block of a type we do not model. It passes through untouched, as multimodalContent.ts does: a
+ * provider rejecting an unknown block is a better failure than a silently missing one. A known `type`
+ * is excluded so a malformed known block fails here instead of slipping through as "unknown". The known
+ * schema's own issues are re-emitted because this arm's error is the one a union surfaces, and it should
+ * name the field that is wrong rather than the `type`.
+ */
+const UnknownCompletionContentBlockSchema = z.looseObject({ type: z.string() }).superRefine((block, ctx) => {
+  if (!KNOWN_COMPLETION_CONTENT_BLOCK_TYPES.has(block.type)) return;
+  const known = KnownCompletionContentBlockSchema.safeParse(block);
+  if (known.success) return;
+  for (const issue of known.error.issues) {
+    ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path });
+  }
+});
+
+/** A bare string inside the array is a text part, as the canonicalizer treats it. */
+export const CompletionContentBlockSchema = z.union([
+  z.string(),
+  KnownCompletionContentBlockSchema,
+  UnknownCompletionContentBlockSchema,
+]);
+
+export type CompletionContentBlock = z.infer<typeof CompletionContentBlockSchema>;
+
 /**
  * Wire-format message for /api/ai/v1/completions. The optional `cache: true`
  * flag is honored by Anthropic (translated to `cache_control: { type: 'ephemeral' }`
@@ -173,19 +270,229 @@ export type ResponseFormat = z.infer<typeof ResponseFormatSchema>;
 export const CompletionMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z
-    .union([z.string(), z.array(z.any())])
+    .union([z.string(), z.array(CompletionContentBlockSchema)])
     .describe(
-      'A string, or an array of content blocks. A `system` message may instead hold only `tool_addition` / ' +
+      'A string, or an array of content blocks. Known block types (text, image, `tool_use`, `tool_result`, thinking and ' +
+        'the provider blocks echoed back) are validated; a block of any other `type` is forwarded to the provider unchanged. ' +
+        'A `system` message may instead hold only `tool_addition` / ' +
         '`tool_removal` blocks (`{ type, tool: { type: "tool_reference", name } }`) to load or unload a tool named in ' +
         '`tools` mid-conversation without invalidating the prompt cache. It must follow a user turn or an assistant turn ' +
         'ending in a tool search result, and be the last message or precede an assistant turn. Only on models whose ' +
         '`supports_tool_changes` is true and that are served by the direct Anthropic API; otherwise refused with ' +
-        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed).'
+        '`errorCode: "tool_changes_unsupported"` (or `invalid_tool_change` / `unknown_tool_reference` when malformed). ' +
+        'A final non-blank assistant turn is an assistant prefill, except a server-tool continuation ending in ' +
+        '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. It is accepted only ' +
+        'when the selected model has `supports_assistant_prefill: true`; otherwise the request returns `400` with ' +
+        '`errorCode: "assistant_prefill_unsupported"` without changing the message.'
     ),
   cache: z.boolean().optional(),
 });
 
 export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
+
+/**
+ * The caller's own conversation id. Recorded on the credit ledger row so spend can be traced back
+ * to a conversation; never used for authorization or lookups.
+ */
+export const CompletionSessionIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .describe(
+    "Your own identifier for the conversation this request belongs to. Recorded with the request's credit usage so spend can be grouped by conversation. Not interpreted otherwise."
+  );
+
+export {
+  COMPLETION_RUN_ROLES,
+  COMPLETION_RUN_PURPOSES,
+  type CompletionRunRole,
+  type CompletionRunPurpose,
+} from '../constants/completionRuns';
+
+/** A run id issued by `POST /api/v1/completion-runs`. Knowing one grants nothing; the server checks its owner. */
+/**
+ * The payer a completion or completion-run request names. Every route that takes it resolves it the same
+ * way (apps/client/server/billing/resolveCompletionBillingOrgId.ts), so a run and its completions agree.
+ */
+const BillingOrganizationIdSchema = z.string().trim().min(1);
+const BILLING_ORGANIZATION_RULES =
+  'An organization-billed API key always bills its own organization, and naming any other (null included) gets a 403 (`errorCode: "billing_organization_mismatch"`). A caller who cannot use the named organization gets a 403.';
+const RUN_ORGANIZATION_LOOKUP =
+  "The `organization_id` the run was minted with, so a run bound to an organization is found. Omitted: the run of a signed-in caller's personal credits, or of an organization-billed API key's organization. " +
+  BILLING_ORGANIZATION_RULES;
+
+export const CompletionRunIdSchema = z.uuid().describe('A run id issued by `POST /api/v1/completion-runs`.');
+
+const CompletionRunLabelSchema = z.string().min(1).max(128);
+
+/**
+ * Attributes a completion's spend to a run issued by `POST /api/v1/completion-runs`. The server
+ * rejects a run that the caller (same user, same billing owner) did not create, so a run id can
+ * neither read nor collect another account's charges. Recorded alongside the existing ledger row,
+ * never charged again.
+ */
+export const CompletionRunAttributionSchema = z
+  .object({
+    runId: CompletionRunIdSchema,
+    role: z
+      .enum(COMPLETION_RUN_ROLES)
+      .describe('`root` for the session that started the run, `worker` for one it spawned.'),
+    purpose: z
+      .enum(COMPLETION_RUN_PURPOSES)
+      .optional()
+      .describe('What the request was for. Treated as `turn` when absent.'),
+    taskId: CompletionRunLabelSchema.optional().describe("Your own id for the worker's task within the run."),
+    attemptId: CompletionRunLabelSchema.optional().describe(
+      'Your own id for this attempt at the task; retries get new ids.'
+    ),
+    parentSessionId: CompletionSessionIdSchema.optional().describe(
+      'The `sessionId` of the session that spawned this one, for nested workers.'
+    ),
+  })
+  .describe(
+    'Groups this request\'s spend under a run you created with `POST /api/v1/completion-runs`. A run you did not create is refused with `404` (`errorCode: "run_not_found"`), as is a read of its spend.'
+  );
+
+export type CompletionRunAttribution = z.infer<typeof CompletionRunAttributionSchema>;
+
+/** The largest run budget accepted, in credits; well past any real job, it keeps the counter exact. */
+export const COMPLETION_RUN_MAX_BUDGET_CREDITS = 1_000_000_000;
+
+export const CompletionRunBudgetCreditsSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(COMPLETION_RUN_MAX_BUDGET_CREDITS)
+  .describe(
+    "The most the run's completions may claim together, in credits. Each completion claims its share before the model is called, so concurrent completions cannot together be admitted past it. An estimate miss can take the run slightly over."
+  );
+
+export {
+  CompletionEvaluationLimitsSchema,
+  CompletionEvaluationReceiptSchema,
+  CompletionEvaluationStateSchema,
+} from './completionEvaluation';
+export type {
+  CompletionEvaluationLimits,
+  CompletionEvaluationReceipt,
+  CompletionEvaluationState,
+} from './completionEvaluation';
+import {
+  CompletionEvaluationLimitsSchema,
+  CompletionEvaluationRequestSchema,
+  CompletionEvaluationStateSchema,
+} from './completionEvaluation';
+
+export const CreateCompletionRunRequestSchema = z.object({
+  evaluation: CompletionEvaluationLimitsSchema.optional(),
+  rootSessionId: CompletionSessionIdSchema.optional().describe(
+    'Your own id for the conversation that starts the run. A conversation can start many runs; each gets its own id.'
+  ),
+  budgetCredits: CompletionRunBudgetCreditsSchema.optional().describe(
+    'Caps what its completions may claim, in credits; an estimate miss can take the run slightly over. Omit it and the run draws only on the account balance, as before. A budget can be raised later but never added to a run minted without one.'
+  ),
+  organization_id: BillingOrganizationIdSchema.nullable()
+    .optional()
+    .describe(
+      "Organization whose credit pool the run's completions pay from, or null for personal credits. Omitted: personal credits for a signed-in user. A completion matches the run only when it bills the same account, so send this same `organization_id` on those completions and on the run's budget, usage and evaluation requests. " +
+        BILLING_ORGANIZATION_RULES
+    ),
+});
+
+export const CompletionRunSchema = z.object({
+  evaluation: CompletionEvaluationStateSchema.optional(),
+  runId: CompletionRunIdSchema,
+  rootSessionId: z.string().optional(),
+  budgetCredits: z.number().int().positive().optional().describe('The run budget; absent for a run without one.'),
+  createdAt: z.iso.datetime(),
+});
+
+export const RaiseCompletionRunBudgetRequestSchema = z.object({
+  budgetCredits: CompletionRunBudgetCreditsSchema.describe(
+    "The run's new budget, in credits. Must be above the current one: a budget is only ever raised."
+  ),
+  organization_id: BillingOrganizationIdSchema.nullable().optional().describe(RUN_ORGANIZATION_LOOKUP),
+});
+
+export type RaiseCompletionRunBudgetRequest = z.infer<typeof RaiseCompletionRunBudgetRequestSchema>;
+
+const CreditAmountSchema = z.number().nonnegative();
+
+/** A budgeted run's ceiling and what is held against it. */
+export const CompletionRunBudgetStateSchema = z.object({
+  budgetCredits: z.number().int().positive(),
+  committedCredits: CreditAmountSchema.describe(
+    'Settled charges plus the claims of completions still running: what new completions are admitted against. Can sit above `settled.creditsCharged` until those completions settle.'
+  ),
+  reservedCredits: CreditAmountSchema.describe(
+    'The part of `committedCredits` not yet settled: claims of completions still running, or waiting for the expired-hold sweep.'
+  ),
+  remainingCredits: CreditAmountSchema.describe('`budgetCredits` minus `committedCredits`, never below zero.'),
+});
+
+export type CompletionRunBudgetState = z.infer<typeof CompletionRunBudgetStateSchema>;
+
+export type CompletionRun = z.infer<typeof CompletionRunSchema>;
+
+/** How many attempts a run's usage lists before byAttempt is cut off (byAttemptTruncated). */
+export const COMPLETION_RUN_USAGE_MAX_ATTEMPTS = 500;
+
+export const CompletionRunIdParamSchema = z.object({ runId: CompletionRunIdSchema });
+
+/** Query of the completion-run reads (usage, evaluation): which payer's run to look up. */
+export const CompletionRunOwnerQuerySchema = z.object({
+  organization_id: BillingOrganizationIdSchema.optional().describe(RUN_ORGANIZATION_LOOKUP),
+});
+
+const TokenCountSchema = z.number().int().nonnegative();
+
+/** Settled spend of a set of run-attributed requests, summed from their ledger rows. */
+export const CompletionRunSpendSchema = z.object({
+  creditsCharged: z
+    .number()
+    .nonnegative()
+    .describe('Credits the ledger recorded for these requests: the same amount each `settled` stream event reported.'),
+  requests: z.number().int().nonnegative().describe('Settled requests counted.'),
+  inputTokens: TokenCountSchema,
+  outputTokens: TokenCountSchema,
+  cacheReadTokens: TokenCountSchema,
+  cacheWriteTokens: TokenCountSchema,
+});
+
+export type CompletionRunSpend = z.infer<typeof CompletionRunSpendSchema>;
+
+export const CompletionRunUsageSchema = z.object({
+  runId: CompletionRunIdSchema,
+  rootSessionId: z.string().optional(),
+  createdAt: z.iso.datetime(),
+  settled: CompletionRunSpendSchema.describe('Every settled request attributed to the run, each counted once.'),
+  byRole: z.array(CompletionRunSpendSchema.extend({ role: z.enum(COMPLETION_RUN_ROLES) })),
+  byPurpose: z.array(
+    CompletionRunSpendSchema.extend({
+      purpose: z.enum(COMPLETION_RUN_PURPOSES).describe('`turn` when sent without one.'),
+    })
+  ),
+  byModel: z
+    .array(CompletionRunSpendSchema.extend({ model: z.string() }))
+    .describe('Grouped by the model each request asked for, which is not always the model that ran.'),
+  byAttempt: z
+    .array(
+      CompletionRunSpendSchema.extend({
+        role: z.enum(COMPLETION_RUN_ROLES),
+        taskId: z.string().optional(),
+        attemptId: z.string().optional(),
+      })
+    )
+    .describe(
+      `One entry per distinct role, \`taskId\` and \`attemptId\` sent; absent ids are their own entry. At most ${COMPLETION_RUN_USAGE_MAX_ATTEMPTS}, largest spend first.`
+    ),
+  byAttemptTruncated: z
+    .boolean()
+    .describe('True when the run has more attempts than `byAttempt` lists; `settled` still counts all of them.'),
+  budget: CompletionRunBudgetStateSchema.optional().describe('Present only for a run minted with a budget.'),
+});
+
+export type CompletionRunUsage = z.infer<typeof CompletionRunUsageSchema>;
 
 /**
  * Schema for CLI LLM completion requests
@@ -198,14 +505,24 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
-  model: z.string().max(256),
-  messages: z.array(CompletionMessageSchema),
+  evaluation: CompletionEvaluationRequestSchema.optional(),
+  model: ModelIdSchema,
+  messages: z.array(CompletionMessageSchema).min(1),
   response_format: ResponseFormatSchema.optional(),
   stream: z.boolean().optional(),
   tools: z.array(CompletionToolSchema).optional(),
   temperature: z.number().optional(),
   // OpenAI wire naming; normalizes into options.maxTokens alongside the legacy `maxTokens` alias.
   max_tokens: z.number().optional(),
+  sessionId: CompletionSessionIdSchema.optional(),
+  run: CompletionRunAttributionSchema.optional(),
+  end_user_id: EndUserIdSchema.optional(),
+  organization_id: BillingOrganizationIdSchema.nullable()
+    .optional()
+    .describe(
+      'Organization whose credit pool pays for this call, or null for personal credits. Omitted: personal credits for a signed-in user. With `run`, send the `organization_id` the run was minted with. ' +
+        BILLING_ORGANIZATION_RULES
+    ),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -214,7 +531,7 @@ export const CompletionRequestSchema = z.object({
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
       reasoningEffort: CompletionReasoningEffortSchema.optional().describe(
-        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
+        'Reasoning effort hint. Honoured by the OpenAI (reasoning models only, and not alongside tools on some of them), Kimi (K3 only), DeepSeek and Anthropic Claude (direct and Bedrock) adapters; each maps it onto its own scale. On Claude, `none` turns thinking off where the model allows it (otherwise it runs at the lowest effort), so short `max_tokens` replies stream visible text from the start; `minimal` maps to `low`. When `thinking.enabled` is also set on a Claude model, thinking stays on and this sets its effort instead, with `none` and `minimal` mapping to `low`. Claude models that reason inside `max_tokens` never have that ceiling raised, and on older Claude models any level above `none` turns thinking on (it is off by default there), forces temperature to 1 and drops top_p, and a thinking budget that cannot fit under `max_tokens` is skipped. On the direct Anthropic API, a json_schema `response_format` with no tools is served by a forced tool on models that support forced tool use, and that tool cannot run alongside thinking. When this field names a level above `none` for a model with adaptive thinking, the schema is served by native structured outputs instead and the level is honoured; thinking then counts against `max_tokens`, which is not raised. A schema that native structured outputs cannot express (for example one that declares `additionalProperties` other than false), or a request whose documents ask for citations, keeps the forced tool and only `none` is honoured. Older Claude models that think with a budget keep the forced tool, so there only `none` is honoured; models served by native structured outputs honour every level. Silently ignored by every other adapter (Gemini, xAI, Ollama) and by non-reasoning models, so sending it there is a no-op.'
       ),
       thinking: z
         .object({
@@ -224,7 +541,13 @@ export const CompletionRequestSchema = z.object({
         })
         .optional()
         .describe(
-          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think, and on the direct Anthropic API when a json_schema `response_format` is served by a forced tool, which cannot run alongside thinking.'
+          'Ask a model that can think to think on this turn. On Claude, `reasoningEffort` then sets how much it thinks, and `budget_tokens` (default 16000, minimum 1024, maximum 32000) sizes thinking on older Claude models. Ignored by models that cannot think. With a json_schema `response_format` on the direct Anthropic API, a model with adaptive thinking serves the schema through native structured outputs so thinking can run, within `max_tokens`, unless the schema or a citations document keeps it on the forced tool; older Claude models that think with a budget serve it through a forced tool, which cannot run alongside thinking, and ignore this.'
+        ),
+      cacheTtl: z
+        .enum(['5m', '1h'])
+        .optional()
+        .describe(
+          'Prompt-cache lifetime for this request, where the server places cache breakpoints (Claude on the direct Anthropic API or Bedrock, on requests the server caches: CLI and Desktop always, other callers once the conversation has a prior assistant turn). `5m` (the default) writes at 1.25x the input rate; `1h` writes at 2x and keeps the cached prefix for an hour between requests. Reads cost the same either way. Models without 1-hour caching ignore `1h` and keep `5m`. Every breakpoint in a request must share one TTL: with `1h`, set no `cache_control` of your own unless it also carries `ttl: "1h"`.'
         ),
     })
     .optional(),
@@ -279,6 +602,10 @@ const CompletionUsageSchema = z.object({
     ),
   cacheReadInputTokens: z.number().optional(),
   cacheCreationInputTokens: z.number().optional(),
+  cacheWrite1hInputTokens: z
+    .number()
+    .optional()
+    .describe('The part of cacheCreationInputTokens written with the 1-hour TTL. Absent when there were none.'),
 });
 
 const CompletionMetaEventSchema = z.object({
@@ -307,14 +634,29 @@ const CompletionContentEventSchema = z.object({
 });
 
 /**
+ * Sent once, after the request's credits are committed to the ledger and before `[DONE]`. Unlike
+ * `credits.used` on the terminal content event (computed before settlement), `creditsCharged` is
+ * what the ledger recorded. `requestId` is the idempotency key for counting this charge exactly once.
+ */
+const CompletionSettledEventSchema = z.object({
+  type: z.literal('settled'),
+  requestId: z.string(),
+  creditsCharged: z.number(),
+  usdCost: z.number().optional(),
+  runId: z.string().optional(),
+});
+
+/**
  * Classifiers the completions `error` frame may carry: the persisted quest codes plus the two
- * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests and must not widen.
+ * provider codes. A separate tuple because QUEST_ERROR_CODES is stored on quests, where provider codes never land.
  */
 export const COMPLETION_SSE_ERROR_CODES = [
   ...QUEST_ERROR_CODES,
+  'invalid_request',
   'provider_error',
   'provider_rejected',
   'content_blocked',
+  'output_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number];
 
@@ -324,9 +666,9 @@ export type CompletionSseErrorCode = (typeof COMPLETION_SSE_ERROR_CODES)[number]
  * real status instead; see completions.contract.ts.
  *
  * `code` is the machine-readable classifier: a billing code when settlement runs out mid-generation,
- * `provider_rejected` / `provider_error` when the model provider fails, `content_blocked` when the
- * model's safety classifier declined the request. Optional; callers must never match on the prose
- * `message`.
+ * `invalid_request` when the provider rejects caller-controlled input, `provider_rejected` /
+ * `provider_error` when the model provider fails, `content_blocked` when the model's safety classifier
+ * declined the request, `output_budget_exhausted` when a reasoning model spent the caller's whole `max_tokens` thinking. Optional; callers must never match on the prose `message`.
  *
  * The field is `code` rather than the conventions' `errorCode` because this frame shipped that way
  * and is a published wire shape.
@@ -357,6 +699,7 @@ export const CompletionStreamEventSchema = z.union([
   CompletionMetaEventSchema,
   CompletionContentEventSchema,
   CompletionProviderBlockEventSchema,
+  CompletionSettledEventSchema,
   CompletionSseErrorEventSchema,
 ]);
 

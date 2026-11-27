@@ -10,20 +10,21 @@ import {
   userRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
+  spendFreezeRepository,
 } from '@bike4mind/database';
 import {
   apiKeyService,
   creditService,
   dataLakeService,
-  isOperationalBillingEnabled,
+  memoizeOperationalBillingCheck,
   recordOperationalUsage,
   scopedSettingsService,
 } from '@bike4mind/services';
 import {
-  getProviderFromModel,
-  resolveEmbeddingConfig,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
   resolveEmbeddingWithKeylessFallback,
-} from '@bike4mind/fab-pipeline';
+} from '@bike4mind/services/llm/embeddingProviders';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
   CreditHolderType,
@@ -32,6 +33,7 @@ import {
   ModelBackend,
   isSupportedEmbeddingModel,
   insufficientCreditsError,
+  readableGroupIds,
   usdToCredits,
   type IOrganizationDocument,
   type IUserDocument,
@@ -40,14 +42,21 @@ import {
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
-import type { Logger } from '@bike4mind/observability';
-import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { Logger } from '@bike4mind/observability';
+import type { RetrievalLakeScope } from '@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@bike4mind/server-utils/dataLakes/requestMembership';
-import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
+import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
+import {
+  billedOrganizationIdForFreeze,
+  spendFreezeSubjectForRequest,
+} from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { activePlanResolver } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 
 /**
  * The semantic-search core shared by POST /api/data-lakes/semantic-search (the product UI and the
@@ -61,10 +70,12 @@ import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSour
  * memo that gate populates (see resolveBudgetScope).
  */
 
-// Reused across requests so the tiktoken encoder is resolved once, not per search.
+// Reused across requests so the tiktoken encoder is resolved once, not per search. Its logger is
+// neutral because a request's logger would pin that request's context for the container's life.
 let sharedTokenizer: ITokenizer | undefined;
-function getSharedTokenizer(logger: Logger): ITokenizer {
-  if (!sharedTokenizer) sharedTokenizer = createTokenizer({ logger });
+function getSharedTokenizer(): ITokenizer {
+  if (!sharedTokenizer)
+    sharedTokenizer = createTokenizer({ logger: new Logger({ metadata: { component: 'tokenizer' } }) });
   return sharedTokenizer;
 }
 
@@ -187,7 +198,7 @@ export async function runLakeSemanticSearch(
   // turning a working search into a 500.
   const countQueryTokens = async (model: string = embeddingModel): Promise<number> => {
     try {
-      return await getSharedTokenizer(req.logger).countTokens(query, model);
+      return await getSharedTokenizer().countTokens(query, model);
     } catch (err) {
       req.logger?.warn('[semantic-search] query token count failed; estimating from query length', err);
       return Math.ceil(query.length / 4);
@@ -225,7 +236,9 @@ export async function runLakeSemanticSearch(
   // check and still charges. Here it gates the check AND the charge in this one request
   // (see the `shouldBill &&` guard on the settlement below), so falling back to `false`
   // would hand out an unbilled search. A throw is the safer failure for that shape.
-  const shouldBill = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
+  // Request-scoped, so the pre-flight and every model's settlement below share one set of reads.
+  const billingCheck = memoizeOperationalBillingCheck({ adminSettings: adminSettingsRepository }, req.logger);
+  const billsEveryHolder = await billingCheck();
   const source = resolveRequestUsageSource(req);
 
   // Resolved once and reused by the settlement below, so the pre-flight and the charge
@@ -243,9 +256,15 @@ export async function runLakeSemanticSearch(
     billingOrg = resolvedOrg;
   } catch (billingErr) {
     // A refusal is the key's billing target, not a store failure - only the latter degrades.
-    if (billingErr instanceof BadRequestError && shouldBill) throw billingErr;
+    if (billingErr instanceof BadRequestError && billsEveryHolder) throw billingErr;
     req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
   }
+
+  // The free-tier carve-out needs the holder, with the same plan resolver the settlement uses.
+  const shouldBill =
+    billingUser !== null &&
+    (billsEveryHolder ||
+      (await billingCheck({ user: billingUser, organization: billingOrg, activePlans: activePlanResolver })));
 
   // Gated on billing alone, not on the query having a price: unlike reserveRequestCredits, which
   // skips the check for a free request, a departed holder is refused here even on a zero-cost
@@ -253,6 +272,13 @@ export async function runLakeSemanticSearch(
   if (shouldBill && billingUser) {
     assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) });
   }
+
+  // Not gated on shouldBill: a freeze stops spend whether or not this deployment debits it. The key's
+  // own org stands in when the best-effort holder read above failed, so that failure cannot skip it.
+  await assertSpendNotFrozen(
+    spendFreezeSubjectForRequest(req, billingOrg?.id ?? billedOrganizationIdForFreeze(req.apiKeyInfo)),
+    { db: { spendFreezes: spendFreezeRepository } }
+  );
 
   // --- Get the embedding-provider API keys, for every provider we have one, not just the
   // requested model's own provider ---
@@ -279,7 +305,7 @@ export async function runLakeSemanticSearch(
   //     default should never present as a substitution candidate in the first place.
   const mayFallBack =
     !input.embeddingModelExplicit &&
-    getProviderFromModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
+    embeddingBackendForModel(requestedEmbeddingModel) !== ModelBackend.Ollama &&
     hasKeylessCloudEmbedder();
   const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
     userIdForService,
@@ -309,10 +335,10 @@ export async function runLakeSemanticSearch(
   // Where a fallback IS permitted, the resolver still declines for two states it refuses to
   // read as "this deployment is keyless" - an EXPIRED caller key and `missing: 'ollama'` - so
   // `substituted` tests whether one ACTUALLY happened rather than whether it was allowed.
-  const requestedProvider = getProviderFromModel(requestedEmbeddingModel);
+  const requestedProvider = embeddingBackendForModel(requestedEmbeddingModel);
   const resolution = mayFallBack
     ? resolveEmbeddingWithKeylessFallback(requestedEmbeddingModel, embeddingApiKeyTable)
-    : { ...resolveEmbeddingConfig(requestedProvider, embeddingApiKeyTable), model: requestedEmbeddingModel };
+    : { ...resolveEmbeddingCredentials(requestedProvider, embeddingApiKeyTable), model: requestedEmbeddingModel };
   const substituted = resolution.missing === null && resolution.model !== requestedEmbeddingModel;
   const searchEmbeddingModel = substituted ? resolution.model : requestedEmbeddingModel;
   if (substituted) {
@@ -324,7 +350,7 @@ export async function runLakeSemanticSearch(
   // About the PRIMARY model only - a hard refusal here concerns the model the caller actually asked
   // for, not a downstream alternate model's coverage, which degrades gracefully via
   // semanticDataLakeSearch's own missingCredential skip reason instead. `resolution.missing` is
-  // already scoped that way: it is `getProviderFromModel(requestedEmbeddingModel)`'s credential
+  // already scoped that way: it is `embeddingBackendForModel(requestedEmbeddingModel)`'s credential
   // and nothing else, and a keyless provider reports null because an empty config IS its ready
   // state.
   //
@@ -350,7 +376,7 @@ export async function runLakeSemanticSearch(
     }
   }
 
-  const embeddingProvider = getProviderFromModel(searchEmbeddingModel);
+  const embeddingProvider = embeddingBackendForModel(searchEmbeddingModel);
   // Counted under the model that will actually run, and reused by the settlement below so the
   // pre-flight and the charge can never disagree about the token basis either.
   const searchQueryTokens =
@@ -382,6 +408,12 @@ export async function runLakeSemanticSearch(
     // Cap before pool, mirroring deductCreditsWithOrgSupport: a capped member must be
     // rejected even when the org pool is flush.
     if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, req.user.id, requiredCredits)) {
+      await notifyOrgEvent({
+        type: 'member_cap_check',
+        organizationId: billingOrg.id,
+        userId: req.user.id,
+        refused: true,
+      });
       throw insufficientCreditsError(
         'Your organization member credit limit has been reached for semantic search. Contact your organization administrator.'
       );
@@ -407,7 +439,7 @@ export async function runLakeSemanticSearch(
   const search = await dataLakeService.semanticDataLakeSearch(
     {
       userId: req.user.id,
-      userGroups: req.user.groups ?? [],
+      userGroups: readableGroupIds(req.user),
       query,
       tags,
       topK,
@@ -494,6 +526,7 @@ export async function runLakeSemanticSearch(
               inputTokens: tokens,
               costUsd: getEmbeddingModelCost(model, tokens),
               source,
+              apiKeyId: req.apiKeyInfo?.keyId,
             },
             {
               db: {
@@ -502,7 +535,9 @@ export async function runLakeSemanticSearch(
                 creditTransactions: creditTransactionRepository,
                 users: userRepository,
                 organizations: organizationRepository,
+                activePlans: activePlanResolver,
               },
+              billingCheck,
               logger: req.logger,
             }
           );
@@ -518,7 +553,7 @@ export async function runLakeSemanticSearch(
         // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.
         ...search.alternateModelsEmbedded
           .filter(isSupportedEmbeddingModel)
-          .map(altModel => recordEmbeddingUsage(altModel, getProviderFromModel(altModel))),
+          .map(altModel => recordEmbeddingUsage(altModel, embeddingBackendForModel(altModel))),
       ]);
     }
   } catch (recordErr) {

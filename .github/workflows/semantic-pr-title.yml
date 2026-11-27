@@ -9,12 +9,6 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
     branches: [main]
-  # Also run on the merge queue so the required "validate" check reports there.
-  # A merge_group has no PR title to lint, so the job no-ops and passes; without
-  # this, enabling a merge queue would hang forever waiting on a check that never
-  # runs on merge_group.
-  merge_group:
-    branches: [main]
 
 permissions:
   contents: read
@@ -22,22 +16,18 @@ permissions:
 
 jobs:
   validate:
-    # Runs on the canonical repo for both pull_request and merge_group, so the
-    # required "validate" check always reports (forks are excluded and can't reach
-    # the merge queue anyway). The actual title lint is gated to real PRs below.
     if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
       - name: Validate PR title (Conventional Commits)
-        # Enforce only on real PRs. Skip on merge_group (no title to lint),
-        # dependabot, and Version Packages PRs — a skipped step still succeeds,
+        # Skip dependabot and Version Packages PRs: a skipped step still succeeds,
         # so the required "validate" check stays green in all those cases.
         if: >-
           github.event_name == 'pull_request' &&
           github.actor != 'dependabot[bot]' &&
           !startsWith(github.head_ref, 'changeset-release/')
-        uses: amannn/action-semantic-pull-request@v5
+        uses: amannn/action-semantic-pull-request@e32d7e603df1aa1ba07e981f2a23455dee596825 # v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -62,7 +52,7 @@ jobs:
       # The changeset check runs main's scripts against the PR head, on the read-only token.
       # Its `if:` must stay in sync with the auto-changeset job's `if:` in
       # auto-changeset.yml: the bot and this gate must agree on which PRs need a changeset.
-      # Skipped (and so green) on merge_group, forks, dependabot and Version Packages PRs.
+      # Skipped (and so green) on forks, dependabot and Version Packages PRs.
       - name: Check out PR head
         if: >-
           github.event_name == 'pull_request' &&
@@ -91,13 +81,14 @@ jobs:
           # A head that moved on is decided by its own validate run.
           superseded() {
             local live
-            live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null || true)
+            live=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null) || live=""
             [ -n "$live" ] && [ "$live" != "$HEAD_SHA" ]
           }
 
           # Verify against the live title: a re-run of an old run carries a stale title in
-          # its payload. On an API error, fall back to the payload title.
-          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null || true)
+          # its payload. On an API error, fall back to the payload title; gh prints error
+          # JSON to stdout on failure, so discard it.
+          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null) || PR_TITLE=""
           export PR_TITLE="${PR_TITLE:-$EVENT_TITLE}"
           if superseded; then
             echo "::notice::The PR head has moved past $HEAD_SHA; its own validate run decides."

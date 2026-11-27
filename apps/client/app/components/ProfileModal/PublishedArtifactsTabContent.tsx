@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
   Typography,
   Sheet,
   Chip,
-  Switch,
   IconButton,
   Tooltip,
   Select,
@@ -14,25 +13,21 @@ import {
   Link,
   Input,
   Button,
-  Autocomplete,
+  ToggleButtonGroup,
+  Modal,
+  ModalDialog,
+  ModalClose,
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import LinkIcon from '@mui/icons-material/Link';
-import RestoreIcon from '@mui/icons-material/Restore';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import CodeIcon from '@mui/icons-material/Code';
-import NotesIcon from '@mui/icons-material/Notes';
-import DownloadIcon from '@mui/icons-material/Download';
-import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
-import PublishedWithChangesIcon from '@mui/icons-material/PublishedWithChanges';
 import SearchIcon from '@mui/icons-material/Search';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import LockIcon from '@mui/icons-material/Lock';
-import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
+import ViewListIcon from '@mui/icons-material/ViewList';
+import GridViewIcon from '@mui/icons-material/GridView';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { PublishVisibility } from '@bike4mind/common';
@@ -44,21 +39,28 @@ import {
   restorePreviousVersion,
   toArtifactSharePath,
   fetchPublishedExport,
-  canRefreshFromSource,
   refreshPublishedFromSource,
   type ManagedArtifact,
   type ManagedListFacets,
   type ManagedListPage,
+  type PublishAccessGateRead,
   updatePublishedTags,
   fetchMyTagVocabulary,
 } from '@client/app/utils/publishApi';
-import { ArtifactCover } from '@client/app/components/common/ArtifactCover';
-import { normalizePublishTag, normalizePublishTags, PUBLISH_TAGS_MAX, PUBLISH_TAG_MAX_LENGTH } from '@bike4mind/common';
+import { ArtifactThumbnail } from '@client/app/components/common/ArtifactThumbnail';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
-import { EXPORT_CONTENT_TYPE, exportFilename, supportsExport } from '@client/app/utils/publishExport';
+import { EXPORT_CONTENT_TYPE, exportFilename } from '@client/app/utils/publishExport';
 import { downloadData } from '@client/app/utils/download';
 import { printHtmlForPdf } from '@client/app/utils/printToPdf';
-import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
+import {
+  PublishAccessBadge,
+  PUBLISH_ACCESS_META,
+  isPublishAccess,
+} from '@client/app/components/common/PublishAccessBadge';
+import { PublishedArtifactCard } from './PublishedArtifactCard';
+import { PublishedArtifactSettings } from './PublishedArtifactSettings';
+import { formatViews, shortDate, sourceKindLabel } from './publishedArtifactFormat';
+import { usePublishedArtifactsView } from './usePublishedArtifactsView';
 
 /** Page size. Small enough that the tab opens instantly on a large library, large enough that most
  *  people never page at all. Exported so the paging tests assert against one number rather than a
@@ -92,37 +94,87 @@ function isFiltering(f: Filters, q: string): boolean {
   return Boolean(q.trim() || f.tag || f.kind || f.visibility || f.gate || f.comments);
 }
 
-/** Compact date for the row meta line: same-year dates drop the year. */
-function shortDate(iso?: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
-}
-
 function apiError(err: unknown, fallback: string): string {
   if (isAxiosError(err)) return (err.response?.data as { error?: string })?.error || err.message || fallback;
   return err instanceof Error ? err.message : fallback;
 }
 
-const VISIBILITY_LABEL: Record<PublishVisibility, string> = {
-  public: 'Public',
-  organization: 'Team',
-  project: 'Project',
-  private: 'Private',
-};
+/** Where keyboard focus goes once a delete lands. */
+type DeleteFocusTarget = { kind: 'item'; publicId: string } | { kind: 'search' } | { kind: 'heading' };
 
 /**
- * Visibility choices for a row, valid for its scope tier (a live PATCH cannot move a page to
- * another scope): Public and Private everywhere, plus the tier's own audience for Team/project
- * pages. The row's current value is always listed, so the select never shows an empty choice.
+ * The next row or card after the deleted one, else the one before it. With neither left the page is
+ * empty: the search box is the nearest control that survives, except when the whole library is
+ * emptied, which removes the toolbar - then the tab heading is all that is left to land on.
  */
-function visibilityChoicesFor(a: Pick<ManagedArtifact, 'tier' | 'visibility'>): PublishVisibility[] {
-  const audience: PublishVisibility[] =
-    a.tier === 'organization' ? ['organization'] : a.tier === 'project' ? ['project'] : [];
-  const choices: PublishVisibility[] = ['public', ...audience, 'private'];
-  return choices.includes(a.visibility) ? choices : [...choices, a.visibility];
+function focusTargetAfterDelete(
+  artifacts: ManagedArtifact[],
+  deletedId: string,
+  libraryEmpties: boolean
+): DeleteFocusTarget {
+  const i = artifacts.findIndex(a => a.publicId === deletedId);
+  const neighbour = i < 0 ? undefined : (artifacts[i + 1] ?? artifacts[i - 1]);
+  if (neighbour) return { kind: 'item', publicId: neighbour.publicId };
+  return { kind: libraryEmpties ? 'heading' : 'search' };
+}
+
+/** Column template shared by the header and every row, so each piece of metadata lines up down the
+ *  list: cover, title (takes the slack), access, versions, views, published date, actions. Fixed widths
+ *  are sized for the widest content in each column (a "Passphrase" chip, "12 versions"). */
+const ROW_COLUMNS = '26px minmax(0, 1fr) 128px 92px 64px 80px 68px';
+
+/** Rows pick their layout from the width of the list, not the viewport: with the app sidebar open a
+ *  wide screen can still leave the tab narrow, and a viewport breakpoint would squeeze the title
+ *  column to nothing there. Seven columns need about 720px (the fixed columns above are ~430px, the
+ *  rest is gaps and the title). Every use sits under the list wrapper, which is the size container. */
+const WIDE = '@container (min-width: 720px)';
+
+/** Narrow lists have no room for seven columns: the cover, title and actions keep one line and the
+ *  metadata wraps onto a second line under the title. */
+const ROW_GRID_SX = {
+  display: 'grid',
+  gridTemplateColumns: '26px minmax(0, 1fr) auto',
+  gridTemplateAreas: '"cover title actions" ". meta meta"',
+  [WIDE]: {
+    gridTemplateColumns: ROW_COLUMNS,
+    gridTemplateAreas: '"cover title access versions views date actions"',
+  },
+  columnGap: 1,
+  rowGap: 0.5,
+  alignItems: 'center',
+  minWidth: 0,
+} as const;
+
+/** A numeric cell on its grid column: right-aligned, tabular figures so digits stack in a column. */
+const numericCell = (area: string) =>
+  ({
+    display: 'flex',
+    alignItems: 'center',
+    fontVariantNumeric: 'tabular-nums',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+    [WIDE]: { gridArea: area, justifyContent: 'flex-end' },
+  }) as const;
+
+/** A labelled cluster of facet chips; the muted label lets one run of chips read as separate questions. */
+function FacetGroup({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
+  return (
+    <Box
+      role="group"
+      aria-label={label}
+      data-testid={`published-artifacts-facet-group-${id}`}
+      sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}
+    >
+      <Typography
+        level="body-xs"
+        sx={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, fontWeight: 600, mr: 0.25 }}
+        textColor="text.tertiary"
+      >
+        {label}
+      </Typography>
+      {children}
+    </Box>
+  );
 }
 
 /** Public path for an artifact: bundles use the scope path, snapshots the short id. */
@@ -143,6 +195,25 @@ export default function PublishedArtifactsTabContent() {
   const qc = useQueryClient();
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [skip, setSkip] = useState(0);
+  const view = usePublishedArtifactsView(s => s.view);
+  const setView = usePublishedArtifactsView(s => s.setView);
+  /** Grid view only: the artifact whose settings dialog is open. */
+  const [settingsId, setSettingsId] = useState<string | null>(null);
+  // Focus after a delete. The row or card the user acted on is about to disappear, which would drop
+  // keyboard focus to the page body, so focus moves to a neighbour's title link (found by id through
+  // `titleLinks`) instead. The move is queued in a ref and applied from an effect so it runs after
+  // the settings dialog has closed - see that effect below. `focusTick` only wakes the effect.
+  const titleLinks = useRef(new Map<string, HTMLAnchorElement>());
+  const searchRef = useRef<HTMLInputElement>(null);
+  const headingRef = useRef<HTMLElement>(null);
+  const pendingFocus = useRef<DeleteFocusTarget | null>(null);
+  const settingsSession = useRef(0);
+  const [focusTick, setFocusTick] = useState(0);
+  /** Ref callback for one artifact's title link, in either view. */
+  const titleRef = (publicId: string) => (el: HTMLAnchorElement | null) => {
+    if (el) titleLinks.current.set(publicId, el);
+    else titleLinks.current.delete(publicId);
+  };
   // The hook owns the search text: `q` is what the input shows (never laggy) and `debouncedQ` is
   // what the request uses, so typing does not fire one call per keystroke.
   const { value: q, debouncedValue: debouncedQ, setValue: setQ } = useDebounceValue('', 300);
@@ -219,7 +290,25 @@ export default function PublishedArtifactsTabContent() {
   const toggleFilter = <K extends keyof Filters>(key: K, value: Filters[K]) =>
     setFilter(key, (filters[key] === value ? null : value) as Filters[K]);
 
+  const patchRow = (publicId: string, patch: Partial<ManagedArtifact>) =>
+    qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
+      prev ? { ...prev, artifacts: prev.artifacts.map(a => (a.publicId === publicId ? { ...a, ...patch } : a)) } : prev
+    );
+
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine'] });
+
+  /** A gate edit in the sharing panel: patch the row in place so its access badge is right at once,
+   *  and refresh only the facet counts. A full list refetch could drop the row from a filtered or
+   *  re-sorted page, unmounting the panel and the show-once passphrase it is still displaying. */
+  const onGateChange = async (publicId: string, gate: PublishAccessGateRead) => {
+    // A list response started before the gate save must not overwrite its new badge.
+    await qc.cancelQueries({
+      queryKey: ['published-artifacts', 'mine'],
+      predicate: query => query.queryKey[2] !== 'facets',
+    });
+    patchRow(publicId, { gateKind: gate?.kind });
+    void qc.invalidateQueries({ queryKey: ['published-artifacts', 'mine', 'facets'] });
+  };
 
   // The caller's own tag vocabulary, for autocomplete. Deliberately OUTSIDE the
   // ['published-artifacts','mine'] prefix: under it, every visibility toggle and comment switch
@@ -276,11 +365,7 @@ export default function PublishedArtifactsTabContent() {
     // cache is corrected here rather than by the refetch, `busy` settling on the mutation is now
     // harmless - do not "fix" it back into a dependency on refetch timing.
     onMutate: v => {
-      qc.setQueriesData<ManagedListPage>({ queryKey: ['published-artifacts', 'mine'] }, prev =>
-        prev
-          ? { ...prev, artifacts: prev.artifacts.map(a => (a.publicId === v.publicId ? { ...a, tags: v.tags } : a)) }
-          : prev
-      );
+      patchRow(v.publicId, { tags: v.tags });
     },
     onSuccess: () => {
       toast.success('Tags updated');
@@ -296,8 +381,16 @@ export default function PublishedArtifactsTabContent() {
   });
   const deleteMut = useMutation({
     // `wasLastOnPage` is passed in by the caller, which knows the rendered row count, rather than
-    // read from a ref: it decides whether this delete empties the current page.
-    mutationFn: (v: { publicId: string; wasLastOnPage: boolean }) => deletePublishedArtifact(v.publicId),
+    // read from a ref: it decides whether this delete empties the current page. `focusTarget` is
+    // worked out at click time for the same reason - the list it is derived from is about to change.
+    mutationFn: (v: {
+      publicId: string;
+      wasLastOnPage: boolean;
+      focusTarget: DeleteFocusTarget;
+      settingsSession: number;
+      focusOwner: Element | null;
+      focusCard: Element | null;
+    }) => deletePublishedArtifact(v.publicId),
     onSuccess: (_d, v) => {
       toast.success('Artifact deleted');
       // Step back a page when that was the last row on this one. Otherwise `skip` points past the
@@ -308,12 +401,24 @@ export default function PublishedArtifactsTabContent() {
       // case a beat later from the real response): this fast path just avoids a visible flash of
       // the empty-page copy on the common single-delete click.
       if (v.wasLastOnPage) setSkip(cur => Math.max(0, cur - PAGE_SIZE));
+      // Grid view deletes from inside the settings dialog: close it now rather than leaving it
+      // up, disabled, over an artifact that is gone until the refetch lands.
+      setSettingsId(cur => (cur === v.publicId ? null : cur));
       invalidate();
       // A delete takes that artifact's tags out of the vocabulary counts, so the suggestions have
       // to be refreshed too - otherwise deleting the last artifact carrying a label keeps offering
       // it for up to the staleTime.
       void qc.invalidateQueries({ queryKey: ['publish-tag-vocabulary'] });
+      const stillOwnsFocus =
+        settingsId === v.publicId ||
+        v.focusOwner === document.activeElement ||
+        v.focusCard?.contains(document.activeElement);
+      if (v.settingsSession === settingsSession.current && stillOwnsFocus) {
+        pendingFocus.current = v.focusTarget;
+        setFocusTick(t => t + 1);
+      }
     },
+    // A failed delete moves nothing: the dialog stays open and focus stays on the control used.
     onError: (e: unknown) => toast.error(apiError(e, 'Failed to delete')),
   });
 
@@ -387,6 +492,91 @@ export default function PublishedArtifactsTabContent() {
     }
   };
 
+  const urlFor = (a: ManagedArtifact) => `${window.location.origin}${sharePath(a)}`;
+  const copyLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success('Link copied');
+    } catch {
+      toast.error('Could not copy link');
+    }
+  };
+
+  /** Open a card's dialog with its sharing panel shut, like a freshly expanded row - even when that
+   *  artifact's panel was left open in the list view before switching to the grid. */
+  const openSettings = (publicId: string) => {
+    settingsSession.current += 1;
+    pendingFocus.current = null;
+    setManageOpen(open => (open === publicId ? null : open));
+    setSettingsId(publicId);
+  };
+  const settingsArtifact = settingsId ? artifacts.find(a => a.publicId === settingsId) : undefined;
+  // The artifact can leave the list while its dialog is open (a visibility change under an active
+  // visibility filter). Forget the id then, or clearing the filter later would reopen the dialog.
+  // The sharing panel goes with it, as on any other close.
+  if (settingsId && !settingsArtifact) {
+    setManageOpen(open => (open === settingsId ? null : open));
+    setSettingsId(null);
+  }
+  const closeSettings = () => {
+    pendingFocus.current = null;
+    // Same rule as collapsing a row: a sharing panel never outlives the surface that hosts it.
+    setManageOpen(open => (open === settingsId ? null : open));
+    setSettingsId(null);
+  };
+
+  const dialogOpen = Boolean(settingsArtifact);
+  useEffect(() => {
+    const target = pendingFocus.current;
+    // The settings dialog's focus trap hands focus back to its opener when it unmounts, and that
+    // opener is the card being deleted. The dialog closes in the same commit as this request, and
+    // unmount effects run before mount effects, so moving focus from here lands after that restore
+    // instead of losing to it (focusing straight from onSuccess does lose). The dialogOpen check
+    // holds the move back should the two ever land in separate commits.
+    if (!target || dialogOpen) return;
+    pendingFocus.current = null;
+    const item = target.kind === 'item' ? titleLinks.current.get(target.publicId) : undefined;
+    // The search box still exists at this moment even when emptying the library is about to remove
+    // it, so the heading target skips it rather than focus something that is about to unmount.
+    const search = target.kind === 'heading' ? null : searchRef.current;
+    (item ?? search ?? headingRef.current)?.focus();
+  }, [focusTick, dialogOpen]);
+
+  /** The one settings panel, shared by the list row (inline, when expanded) and the grid card
+   *  (in a dialog), wired to this tab's mutations. */
+  const settingsFor = (a: ManagedArtifact, url: string) => (
+    <PublishedArtifactSettings
+      artifact={a}
+      url={url}
+      tagVocabulary={tagVocabulary.map(t => t.tag)}
+      busy={busy}
+      exporting={exporting}
+      refreshing={refreshMut.isPending && refreshMut.variables?.publicId === a.publicId}
+      sharingOpen={manageOpen === a.publicId}
+      onToggleSharing={() => setManageOpen(cur => (cur === a.publicId ? null : a.publicId))}
+      onGateChange={gate => void onGateChange(a.publicId, gate)}
+      onTagsChange={tags => tagsMut.mutate({ publicId: a.publicId, tags })}
+      onVisibilityChange={visibility => visibilityMut.mutate({ publicId: a.publicId, visibility })}
+      onCommentsChange={on => commentsMut.mutate({ publicId: a.publicId, on })}
+      onExport={(format, action) => void runExport(a, format, action)}
+      onPrint={() => void runPrint(a)}
+      onRefresh={() => refreshMut.mutate(a)}
+      onRestore={() => restoreMut.mutate(a.publicId)}
+      onDelete={() =>
+        deleteMut.mutate({
+          publicId: a.publicId,
+          wasLastOnPage: artifacts.length <= 1,
+          settingsSession: settingsSession.current,
+          focusOwner: document.activeElement,
+          focusCard: titleLinks.current.get(a.publicId)?.closest('li') ?? null,
+          // The whole library goes with this one only when nothing is filtering it, which is also
+          // when the toolbar (and its search box) stops rendering.
+          focusTarget: focusTargetAfterDelete(artifacts, a.publicId, total <= 1 && !filtering),
+        })
+      }
+    />
+  );
+
   if (isLoading) return <LinearProgress data-testid="published-artifacts-loading" />;
   if (isError) {
     return (
@@ -396,12 +586,32 @@ export default function PublishedArtifactsTabContent() {
     );
   }
 
+  // The active tag is merged in when the facet response does not carry it: the counts are capped at
+  // the top 24, but a row chip can select ANY tag the artifact has - and without this there is no
+  // per-facet control to turn that selection back off, only the global Clear.
+  // hasOwn, not `=== undefined`: facets.tag is a plain object built by reduce, so a tag named
+  // `constructor` is never undefined there and the merge would be skipped - and Object.entries would
+  // not list it either, leaving that selection with no chip.
+  const tagFacets = Object.entries(
+    filters.tag && !Object.hasOwn(facets.tag, filters.tag) ? { [filters.tag]: 0, ...facets.tag } : facets.tag
+  );
+  const kindFacets = Object.entries(facets.kind);
+  const visibilityFacets = Object.entries(facets.visibility);
+  const gateFacets = (['passphrase', 'domain'] as const).filter(gate => facets.gate[gate]);
+
   return (
     <Box data-testid="published-artifacts-tab">
-      <Typography level="title-md" sx={{ mb: 0.5 }}>
+      {/* Focusable only from code (tabIndex -1): the landing spot after the last artifact is deleted. */}
+      <Typography
+        ref={headingRef}
+        level="title-md"
+        tabIndex={-1}
+        data-testid="published-artifacts-heading"
+        sx={{ mb: 0.5, '&:focus': { outline: 'none' } }}
+      >
         Live Artifacts
       </Typography>
-      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
+      <Typography level="body-sm" textColor="text.secondary" sx={{ mb: 2 }}>
         Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, export the
         content, refresh a link from its source artifact, restore a previous version, or delete.
       </Typography>
@@ -420,7 +630,7 @@ export default function PublishedArtifactsTabContent() {
               }}
               placeholder="Search titles and descriptions"
               startDecorator={<SearchIcon sx={{ fontSize: 16 }} />}
-              slotProps={{ input: { 'data-testid': 'published-artifacts-search' } }}
+              slotProps={{ input: { ref: searchRef, 'data-testid': 'published-artifacts-search' } }}
               sx={{ flex: '1 1 16rem', minWidth: '12rem' }}
             />
             <Select
@@ -436,6 +646,29 @@ export default function PublishedArtifactsTabContent() {
                 </Option>
               ))}
             </Select>
+            <ToggleButtonGroup
+              size="sm"
+              value={view}
+              // Clicking the pressed button reports null: ignore it, one view is always on.
+              onChange={(_e, next) => next && setView(next)}
+              aria-label="Layout"
+              data-testid="published-artifacts-view"
+            >
+              <Button
+                value="list"
+                startDecorator={<ViewListIcon sx={{ fontSize: 16 }} />}
+                data-testid="published-artifacts-view-list"
+              >
+                List
+              </Button>
+              <Button
+                value="grid"
+                startDecorator={<GridViewIcon sx={{ fontSize: 16 }} />}
+                data-testid="published-artifacts-view-grid"
+              >
+                Grid
+              </Button>
+            </ToggleButtonGroup>
             {filtering && (
               <Button
                 size="sm"
@@ -453,80 +686,101 @@ export default function PublishedArtifactsTabContent() {
             )}
           </Box>
 
-          {/* Facet chips. Counts come from the whole library, not the filtered page, so a chip
-              still tells you how many there are after you have clicked it. */}
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* The active tag is merged in when the facet response does not carry it: the counts are
-                capped at the top 24, but a row chip can select ANY tag the artifact has - and
-                without this there is no per-facet control to turn that selection back off, only the
-                global Clear. */}
-            {/* hasOwn, not `=== undefined`: facets.tag is a plain object built by reduce, so a tag
-                named `constructor` is never undefined there and the merge would be skipped - and
-                Object.entries would not list it either, leaving that selection with no chip. */}
-            {Object.entries(
-              filters.tag && !Object.hasOwn(facets.tag, filters.tag) ? { [filters.tag]: 0, ...facets.tag } : facets.tag
-            ).map(([tag, n]) => (
-              <Chip
-                key={`tag-${tag}`}
-                size="sm"
-                variant={filters.tag === tag ? 'solid' : 'outlined'}
-                color={filters.tag === tag ? 'primary' : 'neutral'}
-                startDecorator={<LocalOfferIcon sx={{ fontSize: 12 }} />}
-                onClick={() => toggleFilter('tag', tag)}
-                slotProps={{ action: { 'data-testid': `published-artifacts-facet-tag-${tag}` } }}
-              >
-                {tag}
-                {n > 0 ? ` ${n}` : ''}
-              </Chip>
-            ))}
-            {Object.entries(facets.kind).map(([kind, n]) => (
-              <Chip
-                key={kind}
-                size="sm"
-                variant={filters.kind === kind ? 'solid' : 'outlined'}
-                color={filters.kind === kind ? 'primary' : 'neutral'}
-                onClick={() => toggleFilter('kind', kind)}
-                slotProps={{ action: { 'data-testid': `published-artifacts-facet-kind-${kind}` } }}
-              >
-                {kind} {n}
-              </Chip>
-            ))}
-            {Object.entries(facets.visibility).map(([vis, n]) => (
-              <Chip
-                key={vis}
-                size="sm"
-                variant={filters.visibility === vis ? 'solid' : 'outlined'}
-                color={filters.visibility === vis ? 'primary' : 'neutral'}
-                onClick={() => toggleFilter('visibility', vis)}
-                slotProps={{ action: { 'data-testid': `published-artifacts-facet-visibility-${vis}` } }}
-              >
-                {vis} {n}
-              </Chip>
-            ))}
-            {(['passphrase', 'domain'] as const).map(gate =>
-              facets.gate[gate] ? (
-                <Chip
-                  key={gate}
-                  size="sm"
-                  variant={filters.gate === gate ? 'solid' : 'outlined'}
-                  color={filters.gate === gate ? 'primary' : 'neutral'}
-                  onClick={() => toggleFilter('gate', gate)}
-                  slotProps={{ action: { 'data-testid': `published-artifacts-facet-gate-${gate}` } }}
-                >
-                  {gate} {facets.gate[gate]}
-                </Chip>
-              ) : null
+          {/* Facet chips, grouped under small labels. Counts come from the whole library, not the
+              filtered page, so a chip still tells you how many there are after you have clicked it. */}
+          <Box sx={{ display: 'flex', columnGap: 2, rowGap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+            {tagFacets.length > 0 && (
+              <FacetGroup id="tags" label="Tags">
+                {tagFacets.map(([tag, n]) => (
+                  <Chip
+                    key={`tag-${tag}`}
+                    size="sm"
+                    variant={filters.tag === tag ? 'solid' : 'outlined'}
+                    color={filters.tag === tag ? 'primary' : 'neutral'}
+                    startDecorator={<LocalOfferIcon sx={{ fontSize: 12 }} />}
+                    onClick={() => toggleFilter('tag', tag)}
+                    slotProps={{ action: { 'data-testid': `published-artifacts-facet-tag-${tag}` } }}
+                  >
+                    {tag}
+                    {n > 0 ? ` ${n}` : ''}
+                  </Chip>
+                ))}
+              </FacetGroup>
+            )}
+            {kindFacets.length > 0 && (
+              <FacetGroup id="type" label="Type">
+                {kindFacets.map(([kind, n]) => (
+                  <Chip
+                    key={kind}
+                    size="sm"
+                    variant={filters.kind === kind ? 'solid' : 'outlined'}
+                    color={filters.kind === kind ? 'primary' : 'neutral'}
+                    onClick={() => toggleFilter('kind', kind)}
+                    slotProps={{ action: { 'data-testid': `published-artifacts-facet-kind-${kind}` } }}
+                  >
+                    {sourceKindLabel(kind)} {n}
+                  </Chip>
+                ))}
+              </FacetGroup>
+            )}
+            {/* Visibility and gate are separate filters on the server but one question to the
+                reader - who can open it - so they share a group and the badge's icons. */}
+            {(visibilityFacets.length > 0 || gateFacets.length > 0) && (
+              <FacetGroup id="access" label="Access">
+                {visibilityFacets.map(([vis, n]) => {
+                  const meta = isPublishAccess(vis) ? PUBLISH_ACCESS_META[vis] : undefined;
+                  return (
+                    <Chip
+                      key={vis}
+                      size="sm"
+                      variant={filters.visibility === vis ? 'solid' : 'outlined'}
+                      color={filters.visibility === vis ? 'primary' : 'neutral'}
+                      startDecorator={meta && <meta.Icon sx={{ fontSize: 12 }} />}
+                      onClick={() => toggleFilter('visibility', vis)}
+                      slotProps={{
+                        action: {
+                          'data-testid': `published-artifacts-facet-visibility-${vis}`,
+                          // The badge calls only ungated links "Public"; this filter counts every
+                          // public page, gated or not.
+                          title:
+                            vis === 'public' ? 'Every public link, including passphrase and domain gated' : undefined,
+                        },
+                      }}
+                    >
+                      {meta?.label ?? vis} {n}
+                    </Chip>
+                  );
+                })}
+                {gateFacets.map(gate => {
+                  const { label, Icon } = PUBLISH_ACCESS_META[gate];
+                  return (
+                    <Chip
+                      key={gate}
+                      size="sm"
+                      variant={filters.gate === gate ? 'solid' : 'outlined'}
+                      color={filters.gate === gate ? 'primary' : 'neutral'}
+                      startDecorator={<Icon sx={{ fontSize: 12 }} />}
+                      onClick={() => toggleFilter('gate', gate)}
+                      slotProps={{ action: { 'data-testid': `published-artifacts-facet-gate-${gate}` } }}
+                    >
+                      {label} {facets.gate[gate]}
+                    </Chip>
+                  );
+                })}
+              </FacetGroup>
             )}
             {facets.comments > 0 && (
-              <Chip
-                size="sm"
-                variant={filters.comments === 'on' ? 'solid' : 'outlined'}
-                color={filters.comments === 'on' ? 'primary' : 'neutral'}
-                onClick={() => toggleFilter('comments', 'on')}
-                slotProps={{ action: { 'data-testid': 'published-artifacts-facet-comments' } }}
-              >
-                comments {facets.comments}
-              </Chip>
+              <FacetGroup id="comments" label="Comments">
+                <Chip
+                  size="sm"
+                  variant={filters.comments === 'on' ? 'solid' : 'outlined'}
+                  color={filters.comments === 'on' ? 'primary' : 'neutral'}
+                  onClick={() => toggleFilter('comments', 'on')}
+                  slotProps={{ action: { 'data-testid': 'published-artifacts-facet-comments' } }}
+                >
+                  On {facets.comments}
+                </Chip>
+              </FacetGroup>
             )}
           </Box>
         </Box>
@@ -534,25 +788,82 @@ export default function PublishedArtifactsTabContent() {
 
       {artifacts.length === 0 ? (
         filtering || total > 0 ? (
-          <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-no-matches">
+          <Typography level="body-sm" textColor="text.secondary" data-testid="published-artifacts-no-matches">
             {filtering
               ? 'Nothing matches those filters. Clear them to see your whole library.'
               : 'This page is empty - returning you to the last page that has results.'}
           </Typography>
         ) : (
-          <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="published-artifacts-empty">
+          <Typography level="body-sm" textColor="text.secondary" data-testid="published-artifacts-empty">
             You haven&apos;t published anything yet. Share an artifact or run the publish-to-bike4mind skill to get
             started.
           </Typography>
         )
-      ) : (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+      ) : view === 'grid' ? (
+        <Box
+          component="ul"
+          // Explicit: Safari drops the implicit list role from a list with `list-style: none`.
+          role="list"
+          data-testid="published-artifacts-grid"
+          sx={{
+            display: 'grid',
+            // min() lets one column shrink below 260px when the tab itself is narrower (a phone, after
+            // the page padding), instead of overflowing sideways.
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
+            gap: 2,
+            listStyle: 'none',
+            m: 0,
+            p: 0,
+          }}
+        >
           {artifacts.map(a => {
-            const path = sharePath(a);
-            const url = `${window.location.origin}${path}`;
+            const url = urlFor(a);
+            return (
+              <PublishedArtifactCard
+                key={a.publicId}
+                artifact={a}
+                url={url}
+                onCopyLink={() => void copyLink(url)}
+                onOpenSettings={() => openSettings(a.publicId)}
+                titleRef={titleRef(a.publicId)}
+              />
+            );
+          })}
+        </Box>
+      ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, containerType: 'inline-size' }}>
+          {/* Column headers, wide lists only: below that the metadata wraps under each title and a
+              header row would label columns that are not there. Borders mirror the row Sheet's so
+              the two share the same inner edges. */}
+          <Box
+            aria-hidden
+            data-testid="published-artifacts-columns"
+            sx={{
+              display: 'none',
+              [WIDE]: { display: 'grid' },
+              gridTemplateColumns: ROW_COLUMNS,
+              columnGap: 1,
+              px: 1,
+              border: '1px solid transparent',
+              fontFamily: 'body',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              fontSize: 10,
+              fontWeight: 600,
+              color: 'text.tertiary',
+            }}
+          >
+            <Box sx={{ gridColumn: '2' }}>Title</Box>
+            <Box sx={{ gridColumn: '3' }}>Access</Box>
+            <Box sx={{ gridColumn: '4', textAlign: 'right' }}>Versions</Box>
+            <Box sx={{ gridColumn: '5', textAlign: 'right' }}>Views</Box>
+            {/* The cell is publishedAt (the last publish), not updatedAt: "Updated" would claim the
+                order of the Recently updated sort, which also moves on a rename or tag edit. */}
+            <Box sx={{ gridColumn: '6', textAlign: 'right' }}>Published</Box>
+          </Box>
+          {artifacts.map(a => {
+            const url = urlFor(a);
             const isBundle = a.source.kind === 'bundle';
-            const canRefresh = canRefreshFromSource(a);
-            const hasPrevious = Boolean(a.previousVersionMeta?.sha256Index);
             const commentsOn = a.commentPolicy === 'open' || a.commentPolicy === 'restricted';
             const isOpen = expanded.has(a.publicId);
 
@@ -567,117 +878,162 @@ export default function PublishedArtifactsTabContent() {
                     be always-on, which made each row ~110px tall and turned a library into a
                     scroll. Copy-link stays out here because it is the verb people actually reach
                     for; the rest is one click away. */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                  {/* Generated cover: costs nothing, always exists, and is stable per artifact so
-                      the eye can find a row it has seen before. Real screenshots replace it later. */}
-                  <ArtifactCover
-                    publicId={a.publicId}
-                    title={a.title}
-                    size={26}
-                    data-testid={`published-artifact-cover-${a.publicId}`}
-                  />
-                  <Tooltip title="Opens in a new tab">
-                    <Link
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      level="title-sm"
-                      endDecorator={<OpenInNewIcon sx={{ fontSize: 13 }} />}
-                      sx={{
-                        minWidth: 0,
-                        flex: '0 1 auto',
-                        // Long titles truncate rather than wrapping the row onto a second line,
-                        // which is what keeps the row height uniform down the list.
-                        '& > span:first-of-type': {
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        },
-                      }}
-                    >
-                      <span>{a.title}</span>
-                    </Link>
-                  </Tooltip>
+                <Box sx={ROW_GRID_SX}>
+                  {/* The rendered thumbnail when the artifact has one, else a generated cover: both are
+                      stable per artifact, so the eye can find a row it has seen before. */}
+                  <Box sx={{ gridArea: 'cover', display: 'flex' }}>
+                    <ArtifactThumbnail
+                      publicId={a.publicId}
+                      title={a.title}
+                      thumbnailUrl={a.thumbnailUrl}
+                      size={26}
+                      data-testid={`published-artifact-cover-${a.publicId}`}
+                    />
+                  </Box>
 
-                  {/* Tags are clickable: seeing a label and wanting everything sharing it is the
-                      same impulse, so the chip filters rather than being decoration. */}
-                  {(a.tags ?? []).length > 0 && (
-                    <Box
-                      sx={{ display: 'flex', gap: 0.25, flexWrap: 'nowrap', overflow: 'hidden', flex: '0 1 auto' }}
-                      data-testid={`published-artifact-tags-${a.publicId}`}
-                    >
-                      {(a.tags ?? []).slice(0, 3).map(tag => (
-                        <Chip
-                          key={tag}
-                          size="sm"
-                          variant="outlined"
-                          color="neutral"
-                          onClick={() => setFilter('tag', tag)}
-                          slotProps={{ action: { 'data-testid': `published-artifact-tag-${a.publicId}-${tag}` } }}
-                        >
-                          {tag}
-                        </Chip>
-                      ))}
-                      {(a.tags ?? []).length > 3 && (
-                        <Chip size="sm" variant="plain" color="neutral">
-                          +{(a.tags ?? []).length - 3}
-                        </Chip>
-                      )}
-                    </Box>
-                  )}
+                  <Box sx={{ gridArea: 'title', display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                    <Tooltip title="Opens in a new tab" describeChild>
+                      <Link
+                        ref={titleRef(a.publicId)}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        level="title-sm"
+                        endDecorator={<OpenInNewIcon sx={{ fontSize: 13 }} />}
+                        sx={{
+                          minWidth: 0,
+                          flex: '0 1 auto',
+                          // Long titles truncate rather than wrapping the row onto a second line,
+                          // which is what keeps the row height uniform down the list.
+                          '& > span:first-of-type': {
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          },
+                        }}
+                      >
+                        <span>{a.title}</span>
+                      </Link>
+                    </Tooltip>
 
-                  <Box
-                    sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', ml: 'auto' }}
-                    data-testid={`published-artifact-meta-${a.publicId}`}
-                  >
-                    {a.gateKind === 'passphrase' && (
-                      <Tooltip title="Passphrase required">
-                        <LockIcon sx={{ fontSize: 14, opacity: 0.7 }} />
-                      </Tooltip>
+                    {/* Tags are clickable: seeing a label and wanting everything sharing it is the
+                        same impulse, so the chip filters rather than being decoration. */}
+                    {(a.tags ?? []).length > 0 && (
+                      <Box
+                        sx={{ display: 'flex', gap: 0.25, flexWrap: 'nowrap', overflow: 'hidden', flex: '0 1 auto' }}
+                        data-testid={`published-artifact-tags-${a.publicId}`}
+                      >
+                        {(a.tags ?? []).slice(0, 3).map(tag => (
+                          <Chip
+                            key={tag}
+                            size="sm"
+                            variant="outlined"
+                            color="neutral"
+                            onClick={() => setFilter('tag', tag)}
+                            slotProps={{ action: { 'data-testid': `published-artifact-tag-${a.publicId}-${tag}` } }}
+                          >
+                            {tag}
+                          </Chip>
+                        ))}
+                        {(a.tags ?? []).length > 3 && (
+                          <Chip size="sm" variant="plain" color="neutral">
+                            +{(a.tags ?? []).length - 3}
+                          </Chip>
+                        )}
+                      </Box>
                     )}
-                    {a.gateKind === 'domain' && (
-                      <Tooltip title="Restricted to an email domain">
-                        <DomainIcon sx={{ fontSize: 14, opacity: 0.7 }} />
-                      </Tooltip>
-                    )}
+
                     {commentsOn && (
                       <Tooltip title="Comments are on">
-                        <ChatBubbleOutlineIcon sx={{ fontSize: 14, opacity: 0.7 }} />
+                        <ChatBubbleOutlineIcon sx={{ fontSize: 14, opacity: 0.7, flex: 'none' }} />
                       </Tooltip>
                     )}
-                    <Typography level="body-xs" sx={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
-                      {shortDate(a.publishedAt)}
-                    </Typography>
-                    {isBundle && (a.versionsCount ?? 0) >= 2 && (
-                      <Chip
-                        size="sm"
-                        variant="soft"
-                        color="primary"
-                        data-testid={`published-artifact-versions-${a.publicId}`}
-                      >
-                        {a.versionsCount} versions
-                      </Chip>
-                    )}
-                    <Chip size="sm" variant="soft" color="neutral">
-                      {a.visibility}
-                    </Chip>
-                    <Chip size="sm" variant="soft" startDecorator={<VisibilityIcon sx={{ fontSize: 13 }} />}>
-                      {a.viewCount ?? 0}
-                    </Chip>
+                  </Box>
 
+                  {/* Metadata cells. On a wide list this wrapper disappears (display: contents) and the
+                      cells sit on the row grid, one fixed column each; on a narrow one it is a
+                      wrapping line under the title. */}
+                  <Box
+                    sx={{
+                      gridArea: 'meta',
+                      display: 'flex',
+                      [WIDE]: { display: 'contents' },
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      columnGap: 1.5,
+                      rowGap: 0.25,
+                      minWidth: 0,
+                    }}
+                    data-testid={`published-artifact-meta-${a.publicId}`}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0, [WIDE]: { gridArea: 'access' } }}>
+                      <PublishAccessBadge
+                        visibility={a.visibility}
+                        gateKind={a.gateKind}
+                        data-testid={`published-artifact-access-${a.publicId}`}
+                      />
+                    </Box>
+
+                    <Box sx={numericCell('versions')}>
+                      {isBundle &&
+                        ((a.versionsCount ?? 0) >= 2 ? (
+                          <Chip
+                            size="sm"
+                            variant="soft"
+                            color="primary"
+                            data-testid={`published-artifact-versions-${a.publicId}`}
+                          >
+                            {a.versionsCount} versions
+                          </Chip>
+                        ) : (
+                          <Typography
+                            level="body-xs"
+                            textColor="text.tertiary"
+                            data-testid={`published-artifact-versions-${a.publicId}`}
+                          >
+                            1 version
+                          </Typography>
+                        ))}
+                    </Box>
+
+                    <Box sx={numericCell('views')}>
+                      <Typography
+                        level="body-xs"
+                        textColor="text.secondary"
+                        startDecorator={<VisibilityIcon sx={{ fontSize: 13 }} />}
+                        title={`${a.viewCount ?? 0} views`}
+                        data-testid={`published-artifact-views-${a.publicId}`}
+                      >
+                        {formatViews(a.viewCount ?? 0)}
+                      </Typography>
+                    </Box>
+
+                    <Box sx={numericCell('date')}>
+                      <Typography
+                        level="body-xs"
+                        textColor="text.tertiary"
+                        data-testid={`published-artifact-date-${a.publicId}`}
+                      >
+                        {shortDate(a.publishedAt)}
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  <Box
+                    sx={{
+                      gridArea: 'actions',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'flex-end',
+                      gap: 0.5,
+                    }}
+                  >
                     <Tooltip title="Copy link">
                       <IconButton
                         size="sm"
                         variant="plain"
                         color="neutral"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(url);
-                            toast.success('Link copied');
-                          } catch {
-                            toast.error('Could not copy link');
-                          }
-                        }}
+                        onClick={() => void copyLink(url)}
                         data-testid={`published-artifact-copy-${a.publicId}`}
                       >
                         <LinkIcon />
@@ -699,259 +1055,7 @@ export default function PublishedArtifactsTabContent() {
                   </Box>
                 </Box>
 
-                {isOpen && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                    <LocalOfferIcon sx={{ fontSize: 15, opacity: 0.6 }} />
-                    {/* freeSolo because tags are freeform: the vocabulary SUGGESTS, it does not
-                        restrict. Suggestions merge published-artifact and AppFile tags so one
-                        label means one thing across the app. */}
-                    <Autocomplete
-                      size="sm"
-                      multiple
-                      freeSolo
-                      disableClearable
-                      placeholder={(a.tags ?? []).length ? '' : 'Add tags'}
-                      options={tagVocabulary.map(t => t.tag)}
-                      value={a.tags ?? []}
-                      disabled={busy}
-                      onChange={(_e, next) => {
-                        // Normalize with the SAME helper the server uses, so the chips the owner
-                        // sees are what gets stored - no surprise re-spelling on reload.
-                        const entered = next as string[];
-                        const tags = normalizePublishTags(entered);
-                        // A REJECTED tag (over-long, or past the cap) is dropped rather than
-                        // rewritten, which made the equality check below see no change: no write, no
-                        // toast, and the chip just disappeared on the next render. Rewrites are
-                        // self-explanatory; drops have to be said out loud or the field reads broken.
-                        //
-                        // The REASON comes from the entries, not from `tags.length < entered.length`
-                        // - that is true of any shortening, dedupe and blank-drop included. MUI
-                        // compares options with ===, so typing `NorthWind` beside an existing `northwind` chip
-                        // appends the variant and the normalizer then dedupes it: the old check
-                        // reported a length problem about a four-character tag. Blanks and duplicates
-                        // stay SILENT, for the same reason a rewrite does - they explain themselves.
-                        const normalizedEach = entered.map(normalizePublishTag);
-                        const tooLong = normalizedEach.some(t => t.length > PUBLISH_TAG_MAX_LENGTH);
-                        const overCap =
-                          new Set(normalizedEach.filter(t => t && t.length <= PUBLISH_TAG_MAX_LENGTH)).size >
-                          PUBLISH_TAGS_MAX;
-                        // Over-long wins when both hold: it points at a specific bad token, where
-                        // the cap message can only restate the limit.
-                        if (tooLong) {
-                          toast.error(`Tags can be at most ${PUBLISH_TAG_MAX_LENGTH} characters`);
-                        } else if (overCap) {
-                          toast.error(`Up to ${PUBLISH_TAGS_MAX} tags per artifact`);
-                        }
-                        const current = a.tags ?? [];
-                        if (tags.length === current.length && tags.every((t, i) => t === current[i])) return;
-                        tagsMut.mutate({ publicId: a.publicId, tags });
-                      }}
-                      slotProps={{ input: { 'data-testid': `published-artifact-tag-input-${a.publicId}` } }}
-                      sx={{ flex: 1, minWidth: 200 }}
-                    />
-                    <Typography level="body-xs" sx={{ opacity: 0.6, whiteSpace: 'nowrap' }}>
-                      {(a.tags ?? []).length}/{PUBLISH_TAGS_MAX}
-                    </Typography>
-                  </Box>
-                )}
-
-                {isOpen && (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-                    <Chip size="sm" variant="soft" color="neutral">
-                      {a.source.kind}
-                    </Chip>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                      <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                        Visibility
-                      </Typography>
-                      <Select
-                        size="sm"
-                        value={a.visibility}
-                        disabled={busy}
-                        onChange={(_e, val) =>
-                          val && val !== a.visibility && visibilityMut.mutate({ publicId: a.publicId, visibility: val })
-                        }
-                        data-testid={`published-artifact-visibility-${a.publicId}`}
-                        sx={{ minWidth: 110 }}
-                      >
-                        {visibilityChoicesFor(a).map(v => (
-                          <Option key={v} value={v} data-testid={`published-artifact-visibility-option-${v}`}>
-                            {VISIBILITY_LABEL[v]}
-                          </Option>
-                        ))}
-                      </Select>
-                    </Box>
-
-                    {isBundle && (
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                        <Typography level="body-xs" sx={{ opacity: 0.7 }}>
-                          Comments
-                        </Typography>
-                        <Switch
-                          size="sm"
-                          checked={commentsOn}
-                          disabled={busy}
-                          onChange={e => commentsMut.mutate({ publicId: a.publicId, on: e.target.checked })}
-                          data-testid={`published-artifact-comments-${a.publicId}`}
-                        />
-                      </Box>
-                    )}
-
-                    <Box sx={{ flex: 1 }} />
-
-                    <Tooltip title="Share, gate & embed">
-                      <IconButton
-                        size="sm"
-                        variant={manageOpen === a.publicId ? 'soft' : 'plain'}
-                        color={manageOpen === a.publicId ? 'primary' : 'neutral'}
-                        onClick={() => setManageOpen(cur => (cur === a.publicId ? null : a.publicId))}
-                        data-testid={`published-artifact-manage-${a.publicId}`}
-                        aria-expanded={manageOpen === a.publicId}
-                      >
-                        <CodeIcon />
-                      </IconButton>
-                    </Tooltip>
-
-                    {/* Markdown is offered only for kinds it converts to faithfully (replies,
-                      whose stored body IS markdown) - see exportFormatsFor. Hidden, not
-                      disabled: a greyed button implies the export exists and is unavailable,
-                      when in fact there is no honest Markdown form of an HTML bundle. */}
-                    {supportsExport(a.source.kind, 'md') && (
-                      <Tooltip title="Copy as Markdown">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="neutral"
-                          loading={exporting === `${a.publicId}:md`}
-                          onClick={() => void runExport(a, 'md', 'copy')}
-                          data-testid={`published-artifact-copy-md-${a.publicId}`}
-                        >
-                          <NotesIcon />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-
-                    <Tooltip title="Save as HTML">
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="neutral"
-                        loading={exporting === `${a.publicId}:html`}
-                        onClick={() => void runExport(a, 'html', 'download')}
-                        data-testid={`published-artifact-save-html-${a.publicId}`}
-                      >
-                        <DownloadIcon />
-                      </IconButton>
-                    </Tooltip>
-
-                    {/* PDF is produced client-side by printing the HTML export from an
-                      isolated frame (printToPdf), not a server export format. Offered
-                      for every kind - the browser renders it visually. */}
-                    <Tooltip title="Save as PDF (opens print dialog)">
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="neutral"
-                        loading={exporting === `${a.publicId}:pdf`}
-                        onClick={() => void runPrint(a)}
-                        data-testid={`published-artifact-save-pdf-${a.publicId}`}
-                      >
-                        <PictureAsPdfIcon />
-                      </IconButton>
-                    </Tooltip>
-
-                    {/* Refresh re-publishes from the source artifact's CURRENT content onto
-                      the same link. Hidden where there is no source to read back (a reply
-                      snapshot, or a bundle published from outside the app). */}
-                    {canRefresh && (
-                      <Tooltip title="Refresh from source (publishes a new version)">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="neutral"
-                          disabled={busy}
-                          loading={refreshMut.isPending && refreshMut.variables?.publicId === a.publicId}
-                          onClick={() => {
-                            // Outward-facing: it replaces what viewers of a live link see.
-                            if (
-                              window.confirm(
-                                `Refresh "${a.title}" from its source artifact? This publishes a new version to the same link.`
-                              )
-                            ) {
-                              refreshMut.mutate(a);
-                            }
-                          }}
-                          data-testid={`published-artifact-refresh-${a.publicId}`}
-                        >
-                          <PublishedWithChangesIcon />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-
-                    {isBundle && (
-                      <Tooltip title={hasPrevious ? 'Restore the previous version' : 'No previous version to restore'}>
-                        <span>
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="neutral"
-                            disabled={busy || !hasPrevious}
-                            onClick={() => restoreMut.mutate(a.publicId)}
-                            data-testid={`published-artifact-restore-${a.publicId}`}
-                          >
-                            <RestoreIcon />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )}
-
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="danger"
-                        disabled={busy}
-                        onClick={() => {
-                          if (window.confirm(`Delete "${a.title}"? The share link will stop working.`)) {
-                            deleteMut.mutate({ publicId: a.publicId, wasLastOnPage: artifacts.length <= 1 });
-                          }
-                        }}
-                        data-testid={`published-artifact-delete-${a.publicId}`}
-                      >
-                        <DeleteOutlineIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                )}
-
-                {/* Lazily mounted so the manage-state fetch (gate + embed list) only
-                    fires for the row the owner actually opens. */}
-                {isOpen && manageOpen === a.publicId && (
-                  <Box sx={{ mt: 0.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
-                    <ManageSharingPanel
-                      publicId={a.publicId}
-                      title={a.title}
-                      shareUrl={url}
-                      visibility={a.visibility}
-                    />
-                  </Box>
-                )}
-
-                {/* Single-version artifacts have no version switcher yet - explain why
-                    and how to create history instead of leaving a silent absence. Shown only in
-                    the expanded row: it was identical on most rows and, repeated down a long
-                    list, was the single largest consumer of vertical space on the page. */}
-                {isOpen && isBundle && (a.versionsCount ?? 0) < 2 && (
-                  <Typography
-                    level="body-xs"
-                    sx={{ opacity: 0.7 }}
-                    data-testid={`published-artifact-single-version-${a.publicId}`}
-                  >
-                    Only one version published -{' '}
-                    {canRefresh ? 'refresh it from source (or use AI Revise)' : 're-publish this artifact'} to create
-                    version history. A version switcher appears on the page once there are 2 or more versions.
-                  </Typography>
-                )}
+                {isOpen && settingsFor(a, url)}
               </Sheet>
             );
           })}
@@ -966,7 +1070,7 @@ export default function PublishedArtifactsTabContent() {
           sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mt: 1.5 }}
           data-testid="published-artifacts-pager"
         >
-          <Typography level="body-xs" sx={{ opacity: 0.7 }}>
+          <Typography level="body-xs" textColor="text.tertiary">
             {skip + 1}-{Math.min(skip + PAGE_SIZE, total)} of {total}
             {filtering ? ' matching' : ''}
           </Typography>
@@ -993,6 +1097,30 @@ export default function PublishedArtifactsTabContent() {
             </Button>
           </Box>
         </Box>
+      )}
+
+      {/* Grid cards have no room for the controls, so More opens the same panel the list row
+          expands inline - in a dialog. */}
+      {settingsArtifact && (
+        <Modal open onClose={closeSettings}>
+          <ModalDialog
+            layout="center"
+            aria-labelledby={`published-artifact-settings-title-${settingsArtifact.publicId}`}
+            data-testid="published-artifact-settings-modal"
+            sx={{ width: 'min(720px, calc(100vw - 32px))', maxHeight: 'calc(100vh - 64px)', overflow: 'auto' }}
+          >
+            <ModalClose data-testid="published-artifact-settings-close" />
+            <Typography
+              id={`published-artifact-settings-title-${settingsArtifact.publicId}`}
+              level="title-md"
+              // A title with no spaces (a pasted URL) wraps instead of pushing the dialog sideways.
+              sx={{ pr: 4, overflowWrap: 'anywhere' }}
+            >
+              {settingsArtifact.title}
+            </Typography>
+            {settingsFor(settingsArtifact, urlFor(settingsArtifact))}
+          </ModalDialog>
+        </Modal>
       )}
     </Box>
   );

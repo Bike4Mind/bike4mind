@@ -30,7 +30,6 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
       "writeOnlyToWorkingDir": true,
       "allowedReadPaths": [
         "$HOME/.gitconfig",
-        "$HOME/.npmrc",
         "$HOME/.node_modules"
       ],
       "deniedPaths": [
@@ -38,6 +37,15 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
         "$HOME/.aws",
         "$HOME/.gnupg",
         "$HOME/.env",
+        "$HOME/.claude",
+        "$HOME/.bike4mind",
+        "$HOME/.npmrc",
+        "$HOME/.netrc",
+        "$HOME/.config/gh",
+        "$HOME/.docker",
+        "$HOME/.kube",
+        "$HOME/.config/gcloud",
+        "$HOME/.azure",
         "/etc/shadow",
         "/etc/passwd"
       ]
@@ -65,6 +73,7 @@ The sandbox is configured through JSON config files with a 3-layer merge system.
     },
     "excludedCommands": ["docker", "watchman", "podman"],
     "allowUnsandboxedCommands": true,
+    "allowContainerSockets": false,
     "platform": {
       "linux": { "runtime": "bubblewrap" },
       "macos": { "runtime": "seatbelt", "profileTemplate": "default" }
@@ -83,26 +92,26 @@ When `true`, the sandbox restricts file writes to:
 - Your current working directory (and subdirectories)
 - `/tmp` and system temp directories
 
-All other write paths are denied at the OS level.
+All other write paths are denied at the OS level. The working directory's `.git` metadata and `.bike4mind` configuration remain read-only even when `writeOnlyToWorkingDir` is `false`. Run Git operations that update metadata, such as staging and committing, as trusted operations outside the sandbox.
 
 ### `allowedReadPaths`
 
-**Type:** `string[]` | **Default:** `["$HOME/.gitconfig", "$HOME/.npmrc", "$HOME/.node_modules"]`
+**Type:** `string[]` | **Default:** `["$HOME/.gitconfig", "$HOME/.node_modules"]`
 
-Paths the sandbox allows reading. These override the default read restrictions to let tools access common configuration files.
+Paths the sandbox allows reading. Explicit `deniedPaths` entries take precedence over `allowedReadPaths`, including when an allowed path is nested inside a denied directory.
 
 Supports [path variable expansion](#path-variable-expansion).
 
 ### `deniedPaths`
 
-**Type:** `string[]` | **Default:** `["$HOME/.ssh", "$HOME/.aws", "$HOME/.gnupg", "$HOME/.env", "/etc/shadow", "/etc/passwd"]`
+**Type:** `string[]` | **Default:** See the `deniedPaths` list in the [full schema](#full-schema).
 
 Paths blocked for both read and write access. These are enforced at the OS level — even if a command tries to read `~/.ssh/id_rsa`, the sandbox runtime will deny it.
 
 Supports [path variable expansion](#path-variable-expansion).
 
 :::tip
-On macOS (Seatbelt), denied paths generate `deny(N)` messages in stderr that the CLI captures as violations. On Linux (Bubblewrap), denied paths are hidden behind empty `tmpfs` mounts.
+On macOS (Seatbelt), access to denied paths is rejected. On Linux (Bubblewrap), denied directories are hidden behind empty `tmpfs` mounts and denied files are replaced by read-only empty files. Linux commands may report missing files or empty content rather than a permission error.
 :::
 
 ## Network Configuration
@@ -111,7 +120,14 @@ On macOS (Seatbelt), denied paths generate `deny(N)` messages in stderr that the
 
 **Type:** `boolean` | **Default:** `false`
 
-Must be `true` for the network proxy to start. When disabled, sandboxed commands have unrestricted network access.
+Must be `true` for the network proxy to start. When disabled, sandboxed commands have no network access.
+
+When enabled, the only connection a sandboxed command can open is to the proxy, which it finds through the `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` environment variables. Direct connections to other hosts, and to other loopback ports on your machine, are blocked, and hostnames resolve only through the proxy. A tool that ignores the proxy variables fails to connect rather than bypassing the allowlist.
+
+- **macOS:** the Seatbelt profile allows outbound loopback traffic to the proxy port only. Seatbelt cannot tell a host service from a server the sandboxed command started itself, so this also blocks connecting to a local server the command runs, such as a test suite that starts an HTTP server on an ephemeral port, or a dev server checked with `curl`. On Linux those connections work, because loopback inside the sandbox's own network namespace is available.
+- **Linux:** the command runs in its own network namespace with no route to the host network. The proxy is exposed to it through a unix socket, and `socat` inside the sandbox relays the proxy port on the sandbox's loopback to that socket. `socat` must be installed; without it, sandboxed commands fail with an error instead of running with network access.
+
+Node's built-in `fetch` honors the proxy only on recent Node releases (24.3 and newer are known to work); on older versions it connects directly and fails inside the sandbox.
 
 ### `allowedDomains`
 
@@ -158,6 +174,26 @@ Controls what happens when an excluded command is executed:
 
 Set to `false` for maximum security when you want to prevent any unsandboxed execution.
 
+### `allowContainerSockets`
+
+**Type:** `boolean` | **Default:** `false`
+
+Sandboxed commands cannot connect to container engine API sockets. The blocked locations are:
+
+- `/var/run/docker.sock` and `/run/docker.sock` (plus whatever file they link to)
+- `/run/podman` and `$TMPDIR/podman`
+- `~/.docker` (including Docker Desktop's `~/.docker/run` and `~/.docker/desktop`) and `~/Library/Containers/com.docker.docker/Data`
+- `~/.colima`, `~/.lima`, `~/.rd`, `~/.orbstack` and `~/.local/share/containers`
+- `$XDG_CONFIG_HOME/colima` (default `~/.config/colima`), `$COLIMA_HOME` and `$LIMA_HOME`
+- `docker.sock` and `podman` under `$XDG_RUNTIME_DIR`
+- the `unix://` socket named by `$DOCKER_HOST` or `$CONTAINER_HOST`
+
+On macOS the Seatbelt profile denies connecting to them; on Linux Bubblewrap hides the ones that exist behind an empty mount. An engine that listens on a loopback TCP port is not reachable either, since sandboxed commands can connect only to the network proxy.
+
+On macOS the profile also denies writes inside the listed directories, even with `writeOnlyToWorkingDir: false`, so sandboxed tools cannot write `~/.docker/config.json` or Podman and buildah storage under `~/.local/share/containers`. It also denies renaming, chmod-ing or changing the timestamps of each parent directory of a listed path (such as `$HOME` or `$TMPDIR`), which stops a socket from being moved out from under the deny. Creating and deleting files inside those parent directories still works.
+
+Set to `true` only if a sandboxed tool genuinely needs to talk to the container engine directly. A repo config can turn this off but never on. The `docker` and `podman` commands themselves are in `excludedCommands` and are not affected.
+
 ## Platform Configuration
 
 ### `platform.macos`
@@ -167,7 +203,7 @@ Set to `false` for maximum security when you want to prevent any unsandboxed exe
 
 ### `platform.linux`
 
-- `runtime`: `"bubblewrap"` — Uses `bwrap` with namespace isolation
+- `runtime`: `"bubblewrap"` - Uses `bwrap` with namespace isolation; network filtering also needs `socat`
 
 Platform config is rarely changed. The sandbox auto-detects your platform and uses the appropriate runtime.
 
@@ -183,6 +219,8 @@ The following variables are expanded in `allowedReadPaths` and `deniedPaths`:
 
 ## Example Configurations
 
+These examples inherit the default read allowlist and denied paths. If you configure `allowedReadPaths`, include every entry you want to retain: the array replaces the defaults. Configured `deniedPaths` extend the built-in denies, which remain enforced.
+
 ### Development (Recommended)
 
 Sandbox enabled, network filtering off. Good for everyday development where you want filesystem protection without network restrictions.
@@ -193,19 +231,7 @@ Sandbox enabled, network filtering off. Good for everyday development where you 
     "enabled": true,
     "mode": "auto-allow",
     "filesystem": {
-      "writeOnlyToWorkingDir": true,
-      "allowedReadPaths": [
-        "$HOME/.gitconfig",
-        "$HOME/.npmrc",
-        "$HOME/.node_modules",
-        "$HOME/.cargo"
-      ],
-      "deniedPaths": [
-        "$HOME/.ssh",
-        "$HOME/.aws",
-        "$HOME/.gnupg",
-        "$HOME/.env"
-      ]
+      "writeOnlyToWorkingDir": true
     },
     "network": {
       "enabled": false
@@ -224,18 +250,7 @@ Full sandbox with network filtering. Permissions mode requires approval for each
     "enabled": true,
     "mode": "permissions",
     "filesystem": {
-      "writeOnlyToWorkingDir": true,
-      "allowedReadPaths": ["$HOME/.gitconfig"],
-      "deniedPaths": [
-        "$HOME/.ssh",
-        "$HOME/.aws",
-        "$HOME/.gnupg",
-        "$HOME/.env",
-        "$HOME/.kube",
-        "$HOME/.docker",
-        "/etc/shadow",
-        "/etc/passwd"
-      ]
+      "writeOnlyToWorkingDir": true
     },
     "network": {
       "enabled": true,
@@ -261,17 +276,7 @@ Shared `.bike4mind/config.json` committed to the repo. Sets baseline sandbox set
     "enabled": true,
     "mode": "auto-allow",
     "filesystem": {
-      "writeOnlyToWorkingDir": true,
-      "allowedReadPaths": [
-        "$HOME/.gitconfig",
-        "$HOME/.npmrc"
-      ],
-      "deniedPaths": [
-        "$HOME/.ssh",
-        "$HOME/.aws",
-        "$HOME/.gnupg",
-        "$HOME/.env"
-      ]
+      "writeOnlyToWorkingDir": true
     },
     "network": {
       "enabled": true,

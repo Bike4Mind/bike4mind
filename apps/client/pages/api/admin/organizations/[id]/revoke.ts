@@ -1,20 +1,15 @@
 import { organizationRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
+import { assertDelegateCanCreditOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { resolveSubscriptionSource } from '@server/services/organizationService';
-import { z } from 'zod';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { resolveSubscriptionSource } from '@bike4mind/server-utils/services/organizationService';
 import { Resource } from 'sst';
-
-const RevokeSchema = z.object({
-  reason: z.string().min(1).max(500).optional(),
-});
 
 interface RequestQuery {
   id: string;
@@ -24,19 +19,16 @@ interface RequestQuery {
 // cron that auto-cancels expired grants based on `periodEndsAt`. Already-
 // granted credits are intentionally NOT reclaimed here - the org keeps any
 // balance it has spent or accrued. Both behaviours are deliberate.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { id } = req.query as RequestQuery;
     if (!id) throw new BadRequestError('Organization id required');
 
-    const { reason } = RevokeSchema.parse(req.body);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     const organization = await organizationRepository.findById(id);
     if (!organization) throw new NotFoundError('Organization not found');
+    await assertDelegateCanCreditOrganization(req.user, organization, 'revoke the grant on');
 
     const activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
       SubscriptionOwnerType.Organization,

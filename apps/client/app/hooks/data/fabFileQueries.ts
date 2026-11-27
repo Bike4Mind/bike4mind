@@ -115,16 +115,37 @@ export function isFabFileProcessingTerminal(
   return !!(file.error || file.chunkStallReason || file.noExtractableTextAt || file.chunkEmbeddingModelStampedAt);
 }
 
-export function useGetFabFile(id: string | null, options: { pollWhileProcessing?: boolean } = {}) {
+const FAB_FILE_SCAN_POLL_MS = 1000;
+
+/** Every file read withholds `fileUrl` until the upload moderation scan clears the file (isImageServeable). */
+export const isFabFileScanInFlight = (file: Pick<IFabFileDocument, 'moderationStatus'>): boolean =>
+  file.moderationStatus === 'pending' || file.moderationStatus === 'scanning';
+
+type FabFilePollOptions = { pollWhileProcessing?: boolean; pollWhileScanning?: boolean };
+
+/** useGetFabFile's refetch cadence (ms) for the file it last read, or false to stop. */
+export function fabFilePollInterval(
+  file: IFabFileDocument | undefined,
+  { pollWhileProcessing = false, pollWhileScanning = false }: FabFilePollOptions
+): number | false {
+  if (!file) return false;
+  if (pollWhileScanning && isFabFileScanInFlight(file)) return FAB_FILE_SCAN_POLL_MS;
+  if (pollWhileProcessing && !isFabFileProcessingTerminal(file)) return FAB_FILE_PROCESSING_POLL_MS;
+  return false;
+}
+
+/**
+ * `pollWhileScanning` re-reads a file whose moderation scan is still running, so a just-saved image gets its URL
+ * about a second later. The caller bounds it by turning the flag off (see ImageJobCard).
+ */
+export function useGetFabFile(id: string | null, options: FabFilePollOptions = {}) {
+  const polls = !!(options.pollWhileProcessing || options.pollWhileScanning);
   return useQuery({
     queryKey: fabFileKeys.doc(id),
     queryFn: () => getFabFileByIdFromServer(id!),
     staleTime: !!id ? undefined : 1000 * 60 * 30, // 30 minutes
     enabled: !!id,
-    refetchInterval: options.pollWhileProcessing
-      ? query =>
-          query.state.data && !isFabFileProcessingTerminal(query.state.data) ? FAB_FILE_PROCESSING_POLL_MS : false
-      : undefined,
+    refetchInterval: polls ? query => fabFilePollInterval(query.state.data, options) : undefined,
   });
 }
 

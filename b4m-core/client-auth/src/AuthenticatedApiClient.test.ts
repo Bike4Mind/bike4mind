@@ -1,6 +1,11 @@
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { describe, expect, it, vi } from 'vitest';
-import { AuthenticatedApiClient, SessionRevokedError } from './AuthenticatedApiClient';
+import { Readable } from 'node:stream';
+import {
+  AuthenticatedApiClient,
+  SessionRevokedError,
+  type AuthenticatedApiClientOptions,
+} from './AuthenticatedApiClient';
 import type { RefreshTokenResponse } from './DeviceFlowClient';
 import type { AuthTokens, TokenStore } from './tokens';
 
@@ -28,13 +33,17 @@ function memoryStore(initial: AuthTokens | null) {
       cached = durable;
       return durable;
     }),
-    setAuthTokens: vi.fn(async (next: AuthTokens) => {
+    setAuthTokens: vi.fn(async (next: AuthTokens, expectedRefreshToken?: string) => {
+      if (expectedRefreshToken !== undefined && durable?.refreshToken !== expectedRefreshToken) return false;
       durable = next;
       cached = next;
+      return true;
     }),
-    clearAuthTokens: vi.fn(async () => {
+    clearAuthTokens: vi.fn(async (expectedRefreshToken?: string) => {
+      if (expectedRefreshToken !== undefined && durable?.refreshToken !== expectedRefreshToken) return false;
       durable = null;
       cached = null;
+      return true;
     }),
     isAuthenticated: vi.fn(async () => cached !== null),
   } satisfies TokenStore;
@@ -67,7 +76,12 @@ function grant(index: number, rotate = true): RefreshTokenResponse {
   } as RefreshTokenResponse;
 }
 
-function build(store: TokenStore, refreshToken: ReturnType<typeof vi.fn>, onTokensCleared = vi.fn()) {
+function build(
+  store: TokenStore,
+  refreshToken: ReturnType<typeof vi.fn>,
+  onTokensCleared = vi.fn(),
+  options: Partial<AuthenticatedApiClientOptions> = {}
+) {
   const client = new AuthenticatedApiClient({
     baseUrl: 'https://b4m.example.com',
     tokenStore: store,
@@ -75,6 +89,7 @@ function build(store: TokenStore, refreshToken: ReturnType<typeof vi.fn>, onToke
     logger: silentLogger,
     reauthMessages: MESSAGES,
     onTokensCleared,
+    ...options,
   });
   // The API accepts only `access-1`; anything else is a 401.
   client.getAxiosInstance().defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
@@ -124,6 +139,67 @@ describe('AuthenticatedApiClient refresh failures', () => {
     expect(err).toBeInstanceOf(SessionRevokedError);
     expect(durable()).toBeNull();
     expect(onTokensCleared).toHaveBeenCalledWith(expect.stringContaining(`HTTP ${status}`));
+  });
+
+  it('clears only the rejected refresh token, so the store can keep a newer one saved meanwhile', async () => {
+    const stored = tokens();
+    const { store } = memoryStore(stored);
+    const { client } = build(store, vi.fn().mockRejectedValue(httpError(401)));
+
+    await rejection(client.get('/api/identify'));
+
+    expect(store.clearAuthTokens).toHaveBeenCalledWith(stored.refreshToken);
+  });
+
+  it('keeps a sign-in saved between the re-read and the clear, without reporting a clear', async () => {
+    const memory = memoryStore(tokens());
+    const newer = tokens({ accessToken: 'access-9', refreshToken: 'refresh-9' });
+    const reload = memory.store.reloadAuthTokens.getMockImplementation()!;
+    let reads = 0;
+    memory.store.reloadAuthTokens.mockImplementation(async () => {
+      const read = await reload();
+      // The second read is the one after the rejection; another process signs in right after it.
+      if (++reads === 2) memory.writeBehind(newer);
+      return read;
+    });
+    const { client, onTokensCleared } = build(memory.store, vi.fn().mockRejectedValue(httpError(401)));
+
+    await expect(client.refreshSession()).resolves.toEqual(newer);
+    expect(memory.durable()).toEqual(newer);
+    expect(onTokensCleared).not.toHaveBeenCalled();
+  });
+
+  it('does not save the rotated tokens over a logout that landed after the post-exchange check', async () => {
+    const memory = memoryStore(tokens());
+    const reload = memory.store.reloadAuthTokens.getMockImplementation()!;
+    let reads = 0;
+    memory.store.reloadAuthTokens.mockImplementation(async () => {
+      const read = await reload();
+      if (++reads === 2) memory.writeBehind(null);
+      return read;
+    });
+    const { client } = build(memory.store, vi.fn().mockResolvedValue(grant(1)));
+
+    await expect(client.refreshSession()).rejects.toThrow(MESSAGES.notLoggedIn);
+    expect(memory.durable()).toBeNull();
+  });
+
+  it('words a rejected refresh and one that could not complete apart when the host says how', async () => {
+    const reauthMessages = { ...MESSAGES, refreshUnavailable: 'Could not reach the server.' };
+    const rejected = build(memoryStore(tokens()).store, vi.fn().mockRejectedValue(httpError(401)), vi.fn(), {
+      reauthMessages,
+    });
+    const unreachable = build(memoryStore(tokens()).store, vi.fn().mockRejectedValue(httpError(503)), vi.fn(), {
+      reauthMessages,
+    });
+
+    const revoked = await rejection(rejected.client.get('/api/identify'));
+    const transient = await rejection(unreachable.client.get('/api/identify'));
+
+    expect(revoked).toBeInstanceOf(SessionRevokedError);
+    expect(revoked.message).toBe(MESSAGES.refreshFailed);
+    expect(transient).not.toBeInstanceOf(SessionRevokedError);
+    expect(transient.message).toBe('Could not reach the server.');
   });
 
   it('does not clear a token that another process rotated in while the rejected exchange was in flight', async () => {
@@ -282,5 +358,143 @@ describe('AuthenticatedApiClient cross-process refresh', () => {
     await expect(client.get('/a')).resolves.toEqual({ ok: true });
     expect(refreshToken).not.toHaveBeenCalled();
     expect(memory.store.reloadAuthTokens).toHaveBeenCalled();
+  });
+
+  function lockedStore(memory: ReturnType<typeof memoryStore>, whileWaiting: () => void = () => {}) {
+    const lock = { held: false };
+    const store: TokenStore = {
+      ...memory.store,
+      async withRefreshLock<T>(work: () => Promise<T>): Promise<T> {
+        whileWaiting();
+        lock.held = true;
+        try {
+          return await work();
+        } finally {
+          lock.held = false;
+        }
+      },
+    };
+    return { store, lock };
+  }
+
+  it('exchanges and saves while holding the store refresh lock', async () => {
+    const memory = memoryStore(tokens());
+    const { store, lock } = lockedStore(memory);
+    const heldDuring: boolean[] = [];
+    memory.store.setAuthTokens.mockImplementationOnce(async (next: AuthTokens) => {
+      heldDuring.push(lock.held);
+      memory.writeBehind(next);
+    });
+    const refreshToken = vi.fn(async () => {
+      heldDuring.push(lock.held);
+      return grant(1);
+    });
+
+    await build(store, refreshToken).client.refreshSession();
+
+    expect(heldDuring).toEqual([true, true]);
+  });
+
+  it('adopts the tokens the previous lock holder rotated in instead of exchanging', async () => {
+    const memory = memoryStore(tokens());
+    const rotated = tokens({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    });
+    const { store } = lockedStore(memory, () => memory.writeBehind(rotated));
+    const refreshToken = vi.fn().mockResolvedValue(grant(2));
+
+    expect(await build(store, refreshToken).client.refreshSession()).toEqual(rotated);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuthenticatedApiClient refreshUnexpiredOn401', () => {
+  const unexpired = (overrides: Partial<AuthTokens> = {}) =>
+    tokens({ expiresAt: new Date(Date.now() + 600_000).toISOString(), ...overrides });
+
+  it('leaves a 401 on an unexpired token alone by default', async () => {
+    const { store } = memoryStore(unexpired());
+    const refreshToken = vi.fn().mockResolvedValue(grant(1));
+    const { client } = build(store, refreshToken);
+
+    const err = await rejection(client.get('/a'));
+
+    expect(err).toBeInstanceOf(AxiosError);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it('refreshes and retries once when the server refuses a token still inside its lifetime', async () => {
+    const { store, durable } = memoryStore(unexpired());
+    const refreshToken = vi.fn().mockResolvedValue(grant(1));
+    const { client } = build(store, refreshToken, vi.fn(), { refreshUnexpiredOn401: true });
+
+    await expect(client.get('/a')).resolves.toEqual({ ok: true });
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(durable()?.accessToken).toBe('access-1');
+  });
+
+  it('shares one refresh between concurrent 401s on an unexpired token', async () => {
+    const { store } = memoryStore(unexpired());
+    let release: (value: RefreshTokenResponse) => void = () => {};
+    const refreshToken = vi.fn(() => new Promise<RefreshTokenResponse>(resolve => (release = resolve)));
+    const { client } = build(store, refreshToken, vi.fn(), { refreshUnexpiredOn401: true });
+
+    const calls = [client.get('/a'), client.get('/b'), client.get('/c')];
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalled());
+    release(grant(1));
+
+    await expect(Promise.all(calls)).resolves.toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('adopts a token another process rotated into storage instead of exchanging', async () => {
+    const memory = memoryStore(unexpired());
+    memory.writeBehind(unexpired({ accessToken: 'access-1', refreshToken: 'refresh-1' }));
+    const refreshToken = vi.fn();
+    const { client } = build(memory.store, refreshToken, vi.fn(), { refreshUnexpiredOn401: true });
+
+    await expect(client.get('/a')).resolves.toEqual({ ok: true });
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it('reports a request that is still refused after the refresh', async () => {
+    const { store, durable } = memoryStore(unexpired());
+    const onStillUnauthorized = vi.fn();
+    const { client, onTokensCleared } = build(store, vi.fn().mockResolvedValue(grant(2)), vi.fn(), {
+      refreshUnexpiredOn401: true,
+      onStillUnauthorized,
+    });
+
+    const err = await rejection(client.get('/a'));
+
+    expect(err).toBeInstanceOf(SessionRevokedError);
+    expect(onStillUnauthorized).toHaveBeenCalledTimes(1);
+    expect(onTokensCleared).not.toHaveBeenCalled();
+    expect(durable()?.refreshToken).toBe('refresh-2');
+  });
+});
+
+describe('AuthenticatedApiClient streamed 401 bodies', () => {
+  it('buffers a streamed 401 body so isPassThrough401 and the caller can both read it', async () => {
+    const { store } = memoryStore(tokens());
+    const refreshToken = vi.fn();
+    const isPassThrough401 = vi.fn((data: unknown) => typeof data === 'string' && data.includes('provider_rejected'));
+    const { client } = build(store, refreshToken, vi.fn(), { isPassThrough401 });
+    client.getAxiosInstance().defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+      throw new AxiosError('HTTP 401', 'ERR_BAD_REQUEST', config, {}, {
+        status: 401,
+        statusText: '401',
+        data: Readable.from([Buffer.from('{"errorCode":"provider_rejected"}')]),
+        headers: {},
+        config,
+      } as AxiosResponse);
+    }) as AxiosAdapter;
+
+    const err = (await rejection(client.get('/a', { responseType: 'stream' }))) as AxiosError;
+
+    expect(refreshToken).not.toHaveBeenCalled();
+    expect(err.response?.data).toBe('{"errorCode":"provider_rejected"}');
   });
 });

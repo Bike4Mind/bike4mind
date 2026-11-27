@@ -4,14 +4,16 @@ import {
   type IChatHistoryItemRepository,
   type IFabFileDocument,
 } from '@bike4mind/common';
+import { runAfterCommit } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
+import type mongoose from 'mongoose';
 
 export type ObjectStorage = { delete: (path: string) => Promise<unknown> };
 
 /** The generated-content bucket, plus the reply lookup that tells whether another notebook still shows a copy. */
 export type GeneratedCopyStore = {
   storage: ObjectStorage;
-  quests: Pick<IChatHistoryItemRepository, 'findSessionIdsByImage'>;
+  quests: Pick<IChatHistoryItemRepository, 'findSessionIdsByMedia'>;
 };
 
 export type StoredObjectBuckets = {
@@ -25,6 +27,11 @@ type StoredFile = Pick<
   'id' | 'filePath' | 'versions' | 'sourceMetadata' | 'moderationStatus' | 'blockReason'
 >;
 type WarnLogger = { warn: (message: string, ...args: unknown[]) => void };
+// Methods optional so an adapter's partial logger (see LakeConfigAuditLogger) is accepted; gaps fall back to the global one.
+type PartialLogger = {
+  warn?: (message: string, ...args: unknown[]) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
+};
 
 /**
  * Removes every stored object a deleted file owns: its own object in the files bucket, the retained revisions an
@@ -41,6 +48,42 @@ export async function deleteStoredObjects(
   logger: WarnLogger = Logger.globalInstance
 ): Promise<void> {
   await Promise.all(files.map(file => deleteFileObjects(file, buckets, logger)));
+}
+
+/**
+ * deleteStoredObjects once the withTransaction owning `session` commits, so a rolled-back or retried transaction
+ * never loses bytes its rows still point at. Without a session it deletes inline and rejects, as deleteStoredObjects
+ * does. Queued work never rejects: a failure is logged at error (nothing sweeps the orphan) and the commit stands.
+ * `key` is latest-wins within one transaction run (see runAfterCommit).
+ */
+export async function deleteStoredObjectsAfterCommit(
+  files: ReadonlyArray<StoredFile>,
+  buckets: StoredObjectBuckets,
+  opts: { session?: mongoose.mongo.ClientSession; key: string; logger?: PartialLogger }
+): Promise<void> {
+  const { session, key } = opts;
+  // Arrow-wrapped: Logger methods read `this`, so they cannot be detached from the instance.
+  const base = opts.logger;
+  const logger = {
+    warn: (message: string, ...rest: unknown[]) =>
+      base?.warn ? base.warn(message, ...rest) : Logger.globalInstance.warn(message, ...(rest as [])),
+    error: (message: string, meta?: Record<string, unknown>) =>
+      base?.error ? base.error(message, meta) : Logger.globalInstance.error(message, meta),
+  };
+  if (!session) return deleteStoredObjects(files, buckets, logger);
+  const work = async () => {
+    try {
+      await deleteStoredObjects(files, buckets, logger);
+    } catch (error) {
+      logger.error('[deleteStoredObjects] post-commit delete failed; object(s) left orphaned', {
+        files: files.map(file => ({ fileId: file.id, filePath: file.filePath })),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  if (runAfterCommit(session, key, work)) return;
+  logger.warn('[deleteStoredObjects] session not owned by withTransaction; deleting inline', { key });
+  await deleteStoredObjects(files, buckets, logger);
 }
 
 async function deleteFileObjects(file: StoredFile, buckets: StoredObjectBuckets, logger: WarnLogger) {
@@ -96,14 +139,14 @@ async function deleteGeneratedCopy(
   await generated.storage.delete(copyKey);
 }
 
-// Clone, fork and snip copy a reply's `quest.images` verbatim, so another notebook can play the same key. Without
-// a notebook link of its own, any reply showing the key counts as another notebook's.
+// Clone, fork and snip copy a reply's `quest.images` and `quest.videos` verbatim, so another notebook can play the
+// same key. Without a notebook link of its own, any reply showing the key counts as another notebook's.
 async function isShownInAnotherNotebook(
   file: StoredFile,
   copyKey: string,
   quests: GeneratedCopyStore['quests']
 ): Promise<boolean> {
   const ownSessionId = file.sourceMetadata?.sessionId;
-  const sessionIds = await quests.findSessionIdsByImage(copyKey);
+  const sessionIds = await quests.findSessionIdsByMedia(copyKey);
   return sessionIds.some(sessionId => sessionId !== ownSessionId);
 }

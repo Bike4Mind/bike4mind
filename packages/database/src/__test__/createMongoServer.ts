@@ -135,12 +135,14 @@ export const createMongoReplSet = async (): Promise<MongoMemoryReplSet> =>
  * nothing about indexes should connect with `{ autoIndex: false }` first, which leaves only the
  * cheap collection creates for this helper to settle.
  *
- * `init()` returns the build already in flight rather than starting another. `allSettled`, because
+ * Waits on `$init`, the build mongoose itself started, rather than asking for one: under
+ * initModelsOnRequest.ts nothing is in flight, and this must not start the full build it exists to
+ * wait out. `allSettled`, because
  * a few schemas declare an index mongod rejects, and a rejected build has released its connection.
  */
 export const settleAutoIndexBuilds = async (odm: {
   modelNames: () => string[];
-  model: (name: string) => { init: () => Promise<unknown> };
+  model: (name: string) => { init: () => Promise<unknown>; $init?: Promise<unknown> };
 }): Promise<void> => {
-  await Promise.allSettled(odm.modelNames().map(name => odm.model(name).init()));
+  await Promise.allSettled(odm.modelNames().map(name => odm.model(name).$init ?? odm.model(name).init()));
 };

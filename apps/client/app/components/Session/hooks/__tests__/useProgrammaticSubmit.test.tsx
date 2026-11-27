@@ -168,6 +168,40 @@ describe('useProgrammaticSubmit › programmaticLaunch', () => {
     expect(options).not.toHaveProperty('systemContext');
   });
 
+  it('passes forceAgent to the send only when the launch sets it', () => {
+    h.store.state.programmaticLaunch = launch({ forceAgent: true });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick.mock.calls[0][1]).toMatchObject({ forceAgent: true });
+  });
+
+  it('adds no forceAgent key to the send options when the launch does not set it', () => {
+    h.store.state.programmaticLaunch = launch();
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick.mock.calls[0][1]).not.toHaveProperty('forceAgent');
+    expect(props.handleSendClick.mock.calls[0][1]).not.toHaveProperty('productionCompositionId');
+  });
+
+  it('passes a launch productionCompositionId to the send options', () => {
+    h.store.state.programmaticLaunch = launch({ forceAgent: true, productionCompositionId: 'comp123' });
+    const props = baseProps();
+
+    renderSubmit(props);
+    act(() => void vi.advanceTimersByTime(150));
+
+    expect(props.handleSendClick.mock.calls[0][1]).toMatchObject({
+      forceAgent: true,
+      productionCompositionId: 'comp123',
+    });
+  });
+
   it('leaves trimming and the cap to the send: an over-cap value is handed over as-is, once', () => {
     // The refusal lives in useSendMessage (resolveSystemContext), so every caller is capped.
     const overCap = 'x'.repeat(PROMPT_TEXT_MAX + 1);

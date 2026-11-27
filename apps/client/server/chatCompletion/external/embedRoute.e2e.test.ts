@@ -16,7 +16,7 @@ import { join } from 'path';
  *     test (running the real batch executor against the real materialized toolFns),
  *     then answers with `ANSWER:: <tool result>` so assertions inspect the actual
  *     bytes that flowed back through the loop;
- *   - the query embedding: EmbeddingFactory returns a fixed vector (cosine ranking
+ *   - the query embedding: the stubbed embedding registry returns a fixed vector (cosine ranking
  *     itself stays real).
  * NOTE: the no-op tool callbacks are NOT the leak boundary here - KB confinement is
  * enforced inside the tools (kbScope); these tests prove that end to end.
@@ -100,11 +100,6 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    EmbeddingFactory: class {
-      createEmbeddingService() {
-        return { generateEmbedding: async () => FIXED_VEC };
-      }
-    },
     createTokenizer: () => ({ countTokens: async () => 4 }),
   };
 });
@@ -112,12 +107,12 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 const auth = vi.hoisted(() => ({
   info: {} as Record<string, unknown>,
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: vi.fn(async () => auth.info),
   verifyEmbedKeyById: vi.fn(async () => auth.info),
 }));
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: vi.fn() }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
   checkApiKeyRateLimit: vi.fn(async () => ({ allowed: true })),
 }));
 vi.mock('@server/utils/embedSessionRateLimit', () => ({
@@ -218,6 +213,8 @@ async function seed(overrides: SeedOverrides = {}) {
   await AdminSettings.create([
     { settingName: 'defaultEmbeddingModel', settingValue: 'text-embedding-3-small' },
     { settingName: 'openaiDemoKey', settingValue: 'demo-openai-key' },
+    // The fixture caller has no paid plan and test-model is not on the free-tier allowlist.
+    { settingName: 'freeTierModelGateEnabled', settingValue: 'false' },
   ]);
 
   const inScopeA = await FabFile.create({
@@ -269,7 +266,7 @@ async function seed(overrides: SeedOverrides = {}) {
   });
 
   auth.info = {
-    keyId: 'key-1',
+    keyId: new mongooseDirect.Types.ObjectId().toString(),
     userId: owner.id,
     scopes: ['embed:chat'],
     rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
@@ -424,3 +421,13 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     expect(events[0].outputTokens).toBe(40);
   });
 });
+
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({ defaultModel: 'text-embedding-ada-002' })),
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 8192,
+    embed: async (inputs: readonly string[]) => ({ vectors: inputs.map(() => FIXED_VEC) }),
+  }),
+}));

@@ -78,10 +78,13 @@ const serializesSession = (src: string): boolean => {
 /**
  * Escape hatch: files that match a raw-session pattern but are VERIFIED not to leak
  * server-owned fields. Each must carry a reason. Adding a file here is a deliberate,
- * reviewable act. Empty today - the narrow patterns above don't flag the known-safe
- * endpoints (favorites' .lean() projection, voice/v2's hand-picked { id, name }).
+ * reviewable act. The narrow patterns above don't flag the other known-safe endpoints
+ * (favorites' .lean() projection, voice/v2's hand-picked { id, name }).
  */
-const VERIFIED_SAFE: Record<string, string> = {};
+const VERIFIED_SAFE: Record<string, string> = {
+  'admin/users/[userId]/sessions.ts':
+    'Lists auth (sign-in) sessions, not chat sessions; toAdminSession whitelists fields and drops the refresh-token hash.',
+};
 
 describe('serializesSession() heuristic', () => {
   it('flags a bare session return', () => {

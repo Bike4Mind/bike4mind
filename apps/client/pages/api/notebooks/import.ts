@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { resolveBrowserNotebookImportUploadUrl } from '@server/utils/browserUploadUrl';
-import { buildNotebookImportKeys } from '@server/utils/notebookImportKeys';
+import { buildNotebookImportKeys } from '@bike4mind/server-utils/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { z } from 'zod';
 

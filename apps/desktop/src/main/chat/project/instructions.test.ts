@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_IMPORT_DEPTH,
@@ -22,7 +23,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe('defaultUserInstructionsRoot', () => {
   it('is ~/.claude, the same folder the skills loader reads', () => {
-    expect(defaultUserInstructionsRoot()).toBe(join(homedir(), '.claude'));
+    expect(defaultUserInstructionsRoot()).toBe(join(sandboxedHome(), '.claude'));
   });
 });
 
@@ -215,9 +216,9 @@ describe('import containment', () => {
   });
 
   it('refuses a credential store reached through a symlink inside the project', async () => {
-    await mkdir(join(homedir(), '.ssh'), { recursive: true });
-    await writeFile(join(homedir(), '.ssh', 'id_rsa.md'), 'SECRET PAYLOAD', 'utf8');
-    await symlink(join(homedir(), '.ssh'), join(project, 'keys'));
+    await mkdir(join(sandboxedHome(), '.ssh'), { recursive: true });
+    await writeFile(join(sandboxedHome(), '.ssh', 'id_rsa.md'), 'SECRET PAYLOAD', 'utf8');
+    await symlink(join(sandboxedHome(), '.ssh'), join(project, 'keys'));
     const text = await refusalFor('@keys/id_rsa.md');
     expect(text).not.toContain('SECRET PAYLOAD');
     expect(text).toContain('refused');
@@ -226,7 +227,7 @@ describe('import containment', () => {
   it('refuses a credential store that lies inside the project tree itself', async () => {
     // Containment alone would allow this one - the home directory is the project - so it is the
     // shared read protection, and nothing else, that has to refuse it.
-    const home = homedir();
+    const home = sandboxedHome();
     await mkdir(join(home, '.ssh'), { recursive: true });
     await writeFile(join(home, '.ssh', 'id_rsa.md'), 'SECRET PAYLOAD', 'utf8');
     await writeFile(join(home, 'CLAUDE.md'), '@.ssh/id_rsa.md', 'utf8');
@@ -239,7 +240,7 @@ describe('import containment', () => {
   it.each(['settings.json', 'settings.local.json', 'Settings.local.json'])(
     'refuses a markdown alias to prefix-protected ~/.claude/%s inside a home project',
     async file => {
-      const home = homedir();
+      const home = sandboxedHome();
       await mkdir(join(home, '.claude'), { recursive: true });
       await writeFile(join(home, '.claude', file), 'SECRET SETTINGS PAYLOAD', 'utf8');
       await symlink(join(home, '.claude', file), join(home, 'alias.md'));

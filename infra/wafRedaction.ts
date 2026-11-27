@@ -20,6 +20,11 @@ export const WAF_REDACTED_HEADERS: readonly string[] = [
   'x-internal-ws-secret',
   'x-rate-limit-ingest-token',
   'x-webhook-token',
+  // Capability tokens moved out of the URL: SKILL_SHARE_TOKEN_HEADER (SkillMarketTypes.ts),
+  // DRAFT_UPLOAD_TOKEN_HEADER (draftUploadUrl.ts) and the unsubscribe route (email/unsubscribe.ts).
+  'x-share-token',
+  'x-upload-token',
+  'x-unsubscribe-token',
   // Request signatures. Not replayable the way a bearer token is, but each is derived from a shared
   // secret and gets the same handling.
   'stripe-signature',

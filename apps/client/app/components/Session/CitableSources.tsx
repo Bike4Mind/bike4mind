@@ -1,13 +1,11 @@
 import { FC, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Stack, Tooltip, Typography } from '@mui/joy';
-import {
-  Language as WebIcon,
-  Description as DocumentIcon,
-  Storage as DatasetIcon,
-  Extension as McpIcon,
-  WarningAmberRounded as TruncatedIcon,
-  CompareArrowsRounded as ConflictIcon,
-} from '@mui/icons-material';
+import WebIcon from '@mui/icons-material/Language';
+import DocumentIcon from '@mui/icons-material/Description';
+import DatasetIcon from '@mui/icons-material/Storage';
+import McpIcon from '@mui/icons-material/Extension';
+import TruncatedIcon from '@mui/icons-material/WarningAmberRounded';
+import ConflictIcon from '@mui/icons-material/CompareArrowsRounded';
 import { CitableSource, CitableSourceType, findCitationMarkers, sourceNamedIn } from '@bike4mind/common';
 import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useCitableSourceClick } from './useCitableSourceClick';
@@ -65,6 +63,14 @@ const getFaviconUrl = (url: string): string | null => {
     return `https://www.google.com/s2/favicons?domain=${parsedUrl.hostname}&sz=32`;
   } catch {
     return null;
+  }
+};
+
+const isBareHostname = (value: string): boolean => {
+  try {
+    return value.includes('.') && new URL(`https://${value}`).hostname === value.toLowerCase();
+  } catch {
+    return false;
   }
 };
 
@@ -215,8 +221,18 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
     try {
       if (source.url) {
         const parsedUrl = new URL(source.url);
-        hostname = parsedUrl.hostname.replace('www.', '');
-        faviconUrl = getFaviconUrl(source.url);
+        // A redirect URL hides the real site, so web_search carries the destination host separately.
+        const displayHost =
+          typeof source.metadata?.displayHost === 'string' && source.metadata.displayHost
+            ? source.metadata.displayHost
+            : undefined;
+        hostname = (displayHost ?? parsedUrl.hostname).replace(/^www\./, '');
+        // Only a bare hostname has a favicon; a platform name ("Reddit", "foo@bar.com") does not.
+        faviconUrl = displayHost
+          ? isBareHostname(displayHost)
+            ? getFaviconUrl(`https://${displayHost}`)
+            : null
+          : getFaviconUrl(source.url);
       }
     } catch {
       hostname = source.url || '';
@@ -339,7 +355,7 @@ const CitableSourceItem: FC<CitableSourceItemProps> = ({
               <Typography
                 component="span"
                 level="body-xs"
-                data-testid={isInternal ? 'citable-source-origin-label' : undefined}
+                data-testid={isInternal ? 'citable-source-origin-label' : 'citable-source-host-label'}
                 sx={{
                   color: 'text.tertiary',
                   ml: 0.5,

@@ -7,11 +7,12 @@
  */
 
 import { createDecisionContract } from '@bike4mind/common';
-import { sendDecisionError } from '@server/decisions/decisionErrors';
-import { runDecision } from '@server/decisions/runDecision';
+import { sendDecisionError } from '@bike4mind/server-utils/decisions/decisionErrors';
+import { runDecision } from '@bike4mind/server-utils/decisions/runDecision';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 
 /**
  * Per-user ceiling, in its own bucket: decision calls are cheap and bursty (routing, triage), so they must not share
@@ -26,6 +27,7 @@ const handler = nextRouteForContract(createDecisionContract, {
   maxBodySize: DECISIONS_MAX_BODY_BYTES,
   rateLimit: rateLimit({ limit: DECISIONS_RATE_LIMIT_PER_MINUTE, windowMs: 60_000, bucket: 'POST /api/v1/decisions' }),
 }).post(async (req, res) => {
+  const quota = await admitRequestCompletion(req, { holdSlot: true });
   try {
     const response = await runDecision({
       caller: {
@@ -43,6 +45,8 @@ const handler = nextRouteForContract(createDecisionContract, {
   } catch (error) {
     if (sendDecisionError(res, error)) return;
     throw error;
+  } finally {
+    await quota.release();
   }
 });
 

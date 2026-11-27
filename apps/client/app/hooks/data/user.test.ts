@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
@@ -6,12 +6,15 @@ import {
   adminReturnValidationError,
   ADMIN_SESSION_EXPIRED,
   ADMIN_SESSION_VALIDATION_FAILED,
+  clearClientSession,
+  tearDownClientSession,
   useGetIdentify,
+  useDeleteUser,
   useUpdateUser,
 } from './user';
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: vi.fn() },
+  api: { get: vi.fn(), delete: vi.fn() },
 }));
 
 vi.mock('sonner', () => ({
@@ -28,6 +31,8 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: vi.fn(),
 }));
 
+vi.mock('@client/app/utils/clearClientCaches', () => ({ clearClientCaches: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('../useAccessToken', () => ({
   useAccessToken: vi.fn(),
 }));
@@ -41,6 +46,7 @@ vi.mock('@client/app/utils/stepUpInterceptor', () => ({
 const { useUser } = await import('@client/app/contexts/UserContext');
 const { useAccessToken } = await import('../useAccessToken');
 const { toast } = await import('sonner');
+const { api } = await import('@client/app/contexts/ApiContext');
 const { updateUserToServer } = await import('@client/app/utils/userAPICalls');
 
 describe('useGetIdentify', () => {
@@ -166,6 +172,14 @@ describe('useUpdateUser', () => {
     expect(invalidatedKeys).toContainEqual(['organizations']);
   });
 
+  it("invalidates the edited user's admin queries so the profile's Recent activity refreshes", async () => {
+    const { invalidateSpy } = await save({ id: 'u1', name: 'New Name' });
+
+    const invalidatedKeys = invalidateSpy.mock.calls.map(call => call[0]?.queryKey);
+    expect(invalidatedKeys).toContainEqual(['admin', 'users', 'u1']);
+    expect(invalidatedKeys).toContainEqual(['admin', 'user-entitlements', 'u1']);
+  });
+
   const fail = async (error: Error) => {
     vi.mocked(updateUserToServer).mockRejectedValue(error);
     const { Wrapper } = createWrapper();
@@ -184,5 +198,85 @@ describe('useUpdateUser', () => {
     await fail(new Error('boom'));
 
     expect(toast.error).toHaveBeenCalledWith('Failed to update Profile.');
+  });
+});
+
+describe('useDeleteUser', () => {
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: new QueryClient() }, children);
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    [true, 'success'],
+    [false, 'warning'],
+  ] as const)('toasts queued=%s as a %s', async (queued, kind) => {
+    vi.mocked(api.delete).mockResolvedValue({ data: { id: 'u1', queued } });
+    const { result } = renderHook(() => useDeleteUser(), { wrapper });
+
+    result.current.mutate({ id: 'u1', reason: 'Confirmed duplicate account' });
+
+    await waitFor(() => expect(toast[kind]).toHaveBeenCalledOnce());
+    expect(toast[kind === 'success' ? 'warning' : 'success']).not.toHaveBeenCalled();
+  });
+
+  it('stays silent when the admin cancels the step-up prompt, and toasts any other failure', async () => {
+    vi.mocked(api.delete).mockRejectedValue(new Error(CANCELLED));
+    const { result } = renderHook(() => useDeleteUser(), { wrapper });
+    result.current.mutate({ id: 'u1', reason: 'Confirmed duplicate account' });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(toast.error).not.toHaveBeenCalled();
+
+    vi.mocked(api.delete).mockRejectedValue(new Error('boom'));
+    result.current.mutate({ id: 'u1', reason: 'Confirmed duplicate account' });
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Failed to delete user'));
+  });
+});
+
+describe('client session teardown', () => {
+  const originalLocation = window.location;
+  const replace = vi.fn();
+
+  const opts = () => ({
+    setCurrentUser: vi.fn(),
+    resetTokens: vi.fn(),
+    queryClient: { removeQueries: vi.fn() } as unknown as QueryClient,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, search: '', replace },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+  });
+
+  it('clearClientSession drops the user, tokens and user-specific queries without navigating', async () => {
+    const o = opts();
+    await clearClientSession(o);
+    expect(o.setCurrentUser).toHaveBeenCalledWith(null);
+    expect(o.resetTokens).toHaveBeenCalled();
+    const { predicate } = (o.queryClient.removeQueries as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(predicate({ queryKey: ['server-config-public'] })).toBe(false);
+    expect(predicate({ queryKey: ['server-config'] })).toBe(true);
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('tearDownClientSession clears the session and reloads to /login, keeping redirectTo', async () => {
+    await tearDownClientSession(opts());
+    expect(replace).toHaveBeenCalledWith('/login');
+
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, search: '?redirectTo=/notebooks/1', replace },
+    });
+    const o = opts();
+    await tearDownClientSession(o);
+    expect(o.setCurrentUser).toHaveBeenCalledWith(null);
+    expect(replace).toHaveBeenLastCalledWith(`/login?redirectTo=${encodeURIComponent('/notebooks/1')}`);
   });
 });

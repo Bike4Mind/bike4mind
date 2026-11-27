@@ -1,55 +1,65 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chatSupportsDeferredToolAddition,
   completionsSupportsToolChanges,
   completionsSupportsToolSearch,
+  inheritApiSurface,
+  refusalFallsBack,
+  resolveApiSurface,
+  seedApiSurface,
+  seedDescribes,
+  supportsAssistantPrefill,
+  supportsForcedToolChoice,
   supportsToolChanges,
   supportsToolSearch,
+  type ApiSurfaceModel,
 } from './claudeToolCapabilities';
-import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend } from './models';
+import { CHAT_MODELS, ChatModels, isClaudeModelId, ModelBackend, REFUSAL_FALLBACK_MODELS } from './models';
 
-// [tool search, tool changes]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
-const EXPECTED: Record<string, [boolean, boolean]> = {
-  [ChatModels.CLAUDE_3_HAIKU_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_5_HAIKU_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_5_SONNET_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_OPUS_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_1_OPUS_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_5_SONNET_V2_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_3_7_SONNET_BEDROCK]: [false, false],
-  [ChatModels.CLAUDE_4_5_SONNET_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_5_OPUS_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_6_SONNET_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_5_SONNET_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_5_5_SONNET_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_4_6_OPUS_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_7_OPUS_BEDROCK]: [true, false],
-  [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_FABLE_5_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_FABLE_5_1_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_5_OPUS_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_5_5_OPUS_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK]: [true, true],
-  [ChatModels.CLAUDE_3_OPUS]: [false, false],
-  [ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC]: [false, false],
-  [ChatModels.CLAUDE_3_5_SONNET_ANTHROPIC]: [false, false],
-  [ChatModels.CLAUDE_3_7_SONNET_ANTHROPIC]: [false, false],
-  [ChatModels.CLAUDE_4_OPUS]: [false, false],
-  [ChatModels.CLAUDE_4_1_OPUS]: [false, false],
-  [ChatModels.CLAUDE_4_SONNET]: [false, false],
-  [ChatModels.CLAUDE_4_5_SONNET]: [true, false],
-  [ChatModels.CLAUDE_4_5_HAIKU]: [true, false],
-  [ChatModels.CLAUDE_4_5_OPUS]: [true, false],
-  [ChatModels.CLAUDE_4_6_SONNET]: [true, false],
-  [ChatModels.CLAUDE_5_SONNET]: [true, false],
-  [ChatModels.CLAUDE_4_6_OPUS]: [true, false],
-  [ChatModels.CLAUDE_4_7_OPUS]: [true, false],
-  [ChatModels.CLAUDE_4_8_OPUS]: [true, true],
-  [ChatModels.CLAUDE_FABLE_5]: [true, true],
-  [ChatModels.CLAUDE_5_OPUS]: [true, true],
-  [ChatModels.CLAUDE_5_5_OPUS]: [true, true],
-  [ChatModels.CLAUDE_5_5_HAIKU]: [true, true],
+// [tool search, tool changes, assistant prefill]. Every Claude id in ChatModels must be listed, so a new one forces a decision.
+const EXPECTED: Record<string, [boolean, boolean, boolean]> = {
+  [ChatModels.CLAUDE_3_HAIKU_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_HAIKU_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_SONNET_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_OPUS_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_1_OPUS_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_SONNET_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_SONNET_V2_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_3_7_SONNET_BEDROCK]: [false, false, true],
+  [ChatModels.CLAUDE_4_5_SONNET_BEDROCK]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_HAIKU_BEDROCK]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_OPUS_BEDROCK]: [true, false, true],
+  [ChatModels.CLAUDE_4_6_SONNET_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_5_SONNET_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_5_5_SONNET_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_4_6_OPUS_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_4_7_OPUS_BEDROCK]: [true, false, false],
+  [ChatModels.CLAUDE_4_8_OPUS_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_FABLE_5_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_FABLE_5_1_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_5_OPUS_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_OPUS_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK]: [true, true, false],
+  [ChatModels.CLAUDE_3_OPUS]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_HAIKU_ANTHROPIC]: [false, false, true],
+  [ChatModels.CLAUDE_3_5_SONNET_ANTHROPIC]: [false, false, true],
+  [ChatModels.CLAUDE_3_7_SONNET_ANTHROPIC]: [false, false, true],
+  [ChatModels.CLAUDE_4_OPUS]: [false, false, true],
+  [ChatModels.CLAUDE_4_1_OPUS]: [false, false, true],
+  [ChatModels.CLAUDE_4_SONNET]: [false, false, true],
+  [ChatModels.CLAUDE_4_5_SONNET]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_HAIKU]: [true, false, true],
+  [ChatModels.CLAUDE_4_5_OPUS]: [true, false, true],
+  [ChatModels.CLAUDE_4_6_SONNET]: [true, false, false],
+  [ChatModels.CLAUDE_5_SONNET]: [true, false, false],
+  [ChatModels.CLAUDE_4_6_OPUS]: [true, false, false],
+  [ChatModels.CLAUDE_4_7_OPUS]: [true, false, false],
+  [ChatModels.CLAUDE_4_8_OPUS]: [true, true, false],
+  [ChatModels.CLAUDE_FABLE_5]: [true, true, false],
+  [ChatModels.CLAUDE_5_OPUS]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_OPUS]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_HAIKU]: [true, true, false],
+  [ChatModels.CLAUDE_5_5_SONNET]: [true, true, false],
 };
 
 const nativeBackend = (id: string) => (id.includes('anthropic.') ? ModelBackend.Bedrock : ModelBackend.Anthropic);
@@ -63,7 +73,9 @@ describe('supportsToolSearch / supportsToolChanges', () => {
     const claudeIds = CHAT_MODELS.filter(isClaudeModelId);
 
     expect(Object.keys(EXPECTED).sort()).toEqual([...claudeIds].sort());
-    for (const id of claudeIds) expect(flags(id), id).toEqual(EXPECTED[id]);
+    for (const id of claudeIds) {
+      expect([...flags(id), supportsAssistantPrefill({ id })], id).toEqual(EXPECTED[id]);
+    }
   });
 
   it.each([
@@ -106,8 +118,83 @@ describe('supportsToolSearch / supportsToolChanges', () => {
   });
 });
 
+describe('chatSupportsDeferredToolAddition', () => {
+  it.each([
+    [ChatModels.CLAUDE_5_5_OPUS, ModelBackend.Anthropic, true],
+    [ChatModels.CLAUDE_4_8_OPUS, ModelBackend.Anthropic, true],
+    ['claude-sonnet-5-5', ModelBackend.Anthropic, true],
+    [ChatModels.CLAUDE_5_5_HAIKU, ModelBackend.Anthropic, true],
+    [ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic, false],
+    [ChatModels.CLAUDE_4_7_OPUS, ModelBackend.Anthropic, false],
+    [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, ModelBackend.Bedrock, true],
+    [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, ModelBackend.Bedrock, true],
+    [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, ModelBackend.Bedrock, false],
+    [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, ModelBackend.Bedrock, false],
+    [ChatModels.CLAUDE_5_5_OPUS, ModelBackend.OpenAI, false],
+    [ChatModels.GPT4o, ModelBackend.OpenAI, false],
+  ])('classifies %s on %s', (id, backend, expected) => {
+    expect(chatSupportsDeferredToolAddition({ id, backend })).toBe(expected);
+  });
+
+  it('only admits models that also support tool changes', () => {
+    for (const id of CHAT_MODELS.filter(isClaudeModelId)) {
+      for (const backend of [ModelBackend.Anthropic, ModelBackend.Bedrock]) {
+        if (chatSupportsDeferredToolAddition({ id, backend })) {
+          expect(supportsToolChanges({ id, backend }), `${id} on ${backend}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('follows the adapter family of a catalog row over its backend', () => {
+    const id = ChatModels.CLAUDE_5_5_OPUS;
+    expect(
+      chatSupportsDeferredToolAddition({ id, backend: ModelBackend.Bedrock, adapterFamily: 'anthropic-messages' })
+    ).toBe(true);
+    expect(
+      chatSupportsDeferredToolAddition({
+        id: 'claude-sonnet-5-5',
+        backend: ModelBackend.Anthropic,
+        adapterFamily: 'bedrock-anthropic',
+      })
+    ).toBe(false);
+  });
+});
+
+describe('supportsAssistantPrefill', () => {
+  it.each([
+    ChatModels.CLAUDE_4_6_OPUS,
+    ChatModels.CLAUDE_4_7_OPUS,
+    ChatModels.CLAUDE_4_8_OPUS,
+    ChatModels.CLAUDE_5_OPUS,
+    ChatModels.CLAUDE_5_5_OPUS,
+    ChatModels.CLAUDE_4_6_SONNET,
+    ChatModels.CLAUDE_5_SONNET,
+    'claude-sonnet-5-5',
+    ChatModels.CLAUDE_5_5_HAIKU,
+    ChatModels.CLAUDE_FABLE_5,
+    'claude-fable-5-1',
+    'claude-mythos-5',
+    'claude-mythos-5-1',
+  ])('is false for documented non-prefill model %s', id => {
+    expect(supportsAssistantPrefill({ id })).toBe(false);
+  });
+
+  it.each([ChatModels.CLAUDE_4_5_OPUS, ChatModels.CLAUDE_4_5_SONNET, ChatModels.CLAUDE_4_5_HAIKU, ChatModels.GPT4o])(
+    'defaults to true for supported or non-Claude model %s',
+    id => {
+      expect(supportsAssistantPrefill({ id })).toBe(true);
+    }
+  );
+
+  it('classifies provider-prefixed and suffixed ids by Claude family version', () => {
+    expect(supportsAssistantPrefill({ id: 'global.anthropic.claude-opus-4-6-v1:0' })).toBe(false);
+    expect(supportsAssistantPrefill({ id: 'claude-opus-5-5[1m]' })).toBe(false);
+  });
+});
+
 describe('completionsSupportsToolSearch', () => {
-  it('is true only where the direct Anthropic adapter serves the model', () => {
+  it('is true where the direct Anthropic adapter serves the model', () => {
     expect(completionsSupportsToolSearch({ id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic })).toBe(
       true
     );
@@ -116,11 +203,23 @@ describe('completionsSupportsToolSearch', () => {
     );
   });
 
-  it('is false for a Bedrock row the model predicate accepts', () => {
+  it('is true for a Bedrock row the model predicate accepts, served by the Bedrock Claude adapter', () => {
     expect(flags(ChatModels.CLAUDE_5_5_OPUS_BEDROCK)).toEqual([true, true]);
     expect(
       completionsSupportsToolSearch({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(true);
+    expect(
+      completionsSupportsToolSearch({ id: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK, backend: ModelBackend.Bedrock })
+    ).toBe(true);
+  });
+
+  it('is false for a Bedrock Claude row the model predicate rejects and for non-Claude Bedrock models', () => {
+    expect(
+      completionsSupportsToolSearch({ id: ChatModels.CLAUDE_4_1_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
     ).toBe(false);
+    expect(completionsSupportsToolSearch({ id: ChatModels.DEEPSEEK_R1_BEDROCK, backend: ModelBackend.Bedrock })).toBe(
+      false
+    );
   });
 
   it('follows adapterFamily over backend, as getLlmByModel dispatches', () => {
@@ -130,10 +229,13 @@ describe('completionsSupportsToolSearch', () => {
     ).toBe(true);
     expect(
       completionsSupportsToolSearch({ id, backend: ModelBackend.Anthropic, adapterFamily: 'bedrock-anthropic' })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       completionsSupportsToolSearch({ id, backend: ModelBackend.Anthropic, adapterFamily: 'anthropic-messages' })
     ).toBe(true);
+    expect(completionsSupportsToolSearch({ id, backend: ModelBackend.Bedrock, adapterFamily: 'bedrock-llama' })).toBe(
+      false
+    );
   });
 
   it('is false for unsupported Claude models and non-Claude models', () => {
@@ -156,6 +258,13 @@ describe('completionsSupportsToolChanges', () => {
     expect(
       completionsSupportsToolChanges({ id: ChatModels.CLAUDE_5_5_OPUS_BEDROCK, backend: ModelBackend.Bedrock })
     ).toBe(false);
+    expect(
+      completionsSupportsToolChanges({
+        id: 'claude-opus-5-5',
+        backend: ModelBackend.Anthropic,
+        adapterFamily: 'bedrock-anthropic',
+      })
+    ).toBe(false);
   });
 
   it('is false for a Claude model without tool changes and for non-Claude models', () => {
@@ -163,5 +272,156 @@ describe('completionsSupportsToolChanges', () => {
       false
     );
     expect(completionsSupportsToolChanges({ id: ChatModels.GPT4o, backend: ModelBackend.OpenAI })).toBe(false);
+  });
+});
+
+describe('resolveApiSurface', () => {
+  // A model only the catalog knows, as toModelInfo renders a discovery row for it.
+  const fable52: ApiSurfaceModel = {
+    id: 'claude-fable-5-2',
+    backend: ModelBackend.Anthropic,
+    adapterFamily: 'anthropic-messages',
+    thinkingStyle: 'adaptive',
+  };
+
+  it('gives an unknown adaptive-thinking model no forced tool_choice, no prefill and no optional features', () => {
+    const fable53 = { ...fable52, id: 'claude-fable-5-3' };
+    expect(seedApiSurface(fable53)).toBeUndefined();
+    expect(resolveApiSurface(fable53)).toEqual({
+      forcedToolChoice: false,
+      assistantPrefill: false,
+      toolSearch: false,
+      toolChanges: false,
+      deferredToolAddition: false,
+      refusalFallback: false,
+    });
+  });
+
+  it('keeps the permissive answer for an unknown model without adaptive thinking', () => {
+    const model: ApiSurfaceModel = { id: 'gpt-9', backend: ModelBackend.OpenAI };
+    expect(supportsForcedToolChoice(model)).toBe(true);
+    expect(supportsAssistantPrefill(model)).toBe(true);
+    expect(supportsToolSearch({ ...model, backend: ModelBackend.OpenAI })).toBe(false);
+  });
+
+  it('reads the flags a catalog row states for a catalog-only Fable 5.2, and its refusal fallback from the seed', () => {
+    const sibling = seedApiSurface({ id: 'claude-fable-5-1', backend: ModelBackend.Anthropic }) ?? {};
+    const inherited = { ...fable52, ...inheritApiSurface(fable52, sibling) };
+
+    expect(inherited).not.toHaveProperty('refusalFallback');
+    expect(supportsForcedToolChoice(inherited)).toBe(false);
+    expect(supportsAssistantPrefill(inherited)).toBe(false);
+    expect(supportsToolSearch(inherited)).toBe(true);
+    expect(completionsSupportsToolSearch(inherited)).toBe(true);
+    expect(supportsToolChanges(inherited)).toBe(true);
+    expect(chatSupportsDeferredToolAddition(inherited)).toBe(true);
+    expect(refusalFallsBack(inherited)).toBe(true);
+  });
+
+  it('lets a stated flag beat the seed tables, one key at a time', () => {
+    const opus55 = { id: ChatModels.CLAUDE_5_5_OPUS, backend: ModelBackend.Anthropic };
+    expect(supportsForcedToolChoice(opus55)).toBe(false);
+    expect(supportsToolSearch(opus55)).toBe(true);
+
+    const overridden = { ...opus55, forcedToolChoice: true, toolSearch: false };
+    expect(supportsForcedToolChoice(overridden)).toBe(true);
+    expect(supportsToolSearch(overridden)).toBe(false);
+    expect(supportsToolChanges(overridden)).toBe(true);
+    expect(supportsAssistantPrefill(overridden)).toBe(false);
+  });
+
+  it('still takes a bare model id, as the pre-catalog signature did', () => {
+    expect(supportsForcedToolChoice(ChatModels.CLAUDE_5_5_OPUS)).toBe(false);
+    expect(supportsForcedToolChoice('claude-mythos-5-1')).toBe(false);
+    expect(supportsForcedToolChoice('anthropic/claude-sonnet-5-5')).toBe(false);
+    expect(supportsForcedToolChoice(ChatModels.CLAUDE_5_5_HAIKU)).toBe(true);
+  });
+
+  it('seeds only forcedToolChoice for an id the deny-list alone matches', () => {
+    for (const id of ['claude-opus-5-5-1', 'anthropic/claude-opus-5-5']) {
+      expect(seedApiSurface({ id }), id).toEqual({ forcedToolChoice: false });
+      expect(seedDescribes({ id }), id).toBe(false);
+      expect(resolveApiSurface({ id, backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' }), id).toMatchObject({
+        forcedToolChoice: false,
+        assistantPrefill: false,
+      });
+      expect(supportsAssistantPrefill({ id }), id).toBe(true);
+    }
+    expect(seedDescribes({ id: 'claude-opus-5-5' })).toBe(true);
+  });
+
+  it('seeds refusalFallback for exactly the listed Fable ids', () => {
+    expect([...REFUSAL_FALLBACK_MODELS].sort()).toEqual(
+      [
+        ChatModels.CLAUDE_FABLE_5,
+        'claude-fable-5-1',
+        'claude-fable-5-2',
+        ChatModels.CLAUDE_FABLE_5_BEDROCK,
+        ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+      ].sort()
+    );
+    for (const id of REFUSAL_FALLBACK_MODELS) {
+      expect(refusalFallsBack({ id, backend: nativeBackend(id) }), id).toBe(true);
+    }
+    for (const id of [
+      ChatModels.CLAUDE_4_8_OPUS,
+      ChatModels.CLAUDE_5_5_OPUS,
+      'claude-fable-5-3',
+      'claude-mythos-5-2',
+    ]) {
+      expect(refusalFallsBack({ id, backend: ModelBackend.Anthropic }), id).toBe(false);
+    }
+    expect(
+      refusalFallsBack({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic, refusalFallback: false })
+    ).toBe(false);
+    expect(refusalFallsBack({ id: 'claude-fable-5-2', backend: ModelBackend.Anthropic, refusalFallback: false })).toBe(
+      false
+    );
+  });
+
+  it('seeds only refusalFallback for a listed id the version tables do not name', () => {
+    expect(seedApiSurface({ id: 'claude-fable-5-2' })).toEqual({ refusalFallback: true });
+    expect(seedDescribes({ id: 'claude-fable-5-2' })).toBe(false);
+    expect(seedDescribes({ id: 'claude-fable-5-1' })).toBe(true);
+    expect(seedApiSurface({ id: 'claude-fable-5-1', backend: ModelBackend.Anthropic })).toMatchObject({
+      forcedToolChoice: false,
+      toolSearch: true,
+      refusalFallback: true,
+    });
+  });
+});
+
+describe('inheritApiSurface', () => {
+  const haiku55 = seedApiSurface({ id: ChatModels.CLAUDE_5_5_HAIKU, backend: ModelBackend.Anthropic }) ?? {};
+  const fable5 = seedApiSurface({ id: ChatModels.CLAUDE_FABLE_5, backend: ModelBackend.Anthropic }) ?? {};
+
+  it('never widens an adaptive model past its default from a permissive older sibling', () => {
+    expect(haiku55).toMatchObject({ forcedToolChoice: true, toolSearch: true });
+    const inherited = inheritApiSurface(
+      { id: 'claude-haiku-6', backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' },
+      haiku55
+    );
+
+    expect(inherited).toMatchObject({ forcedToolChoice: false, assistantPrefill: false, toolSearch: true });
+  });
+
+  it('never copies refusal fallback, which stays a seed or operator decision', () => {
+    expect(fable5.refusalFallback).toBe(true);
+    const inherited = inheritApiSurface(
+      { id: 'claude-fable-5-3', backend: ModelBackend.Anthropic, thinkingStyle: 'adaptive' },
+      fable5
+    );
+
+    expect(inherited).toMatchObject({ forcedToolChoice: false, toolChanges: true });
+    expect(inherited).not.toHaveProperty('refusalFallback');
+  });
+
+  it('takes a restriction from the sibling where the model would otherwise allow it', () => {
+    const inherited = inheritApiSurface(
+      { id: 'claude-fable-5-2', backend: ModelBackend.Anthropic },
+      { forcedToolChoice: false, assistantPrefill: false }
+    );
+
+    expect(inherited).toEqual({ forcedToolChoice: false, assistantPrefill: false });
   });
 });

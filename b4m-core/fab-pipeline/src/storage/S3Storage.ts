@@ -1,13 +1,18 @@
 import { Logger } from '@bike4mind/observability';
 import {
   S3Client,
+  CopyObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   GetObjectCommandOutput,
   HeadObjectCommand,
+  ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  DeleteObjectsCommand,
   PutObjectCommandInput,
   ObjectCannedACL,
+  type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { BaseStorage } from './BaseStorage';
@@ -19,13 +24,27 @@ import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Agent } from 'https';
 import { createS3Client } from './createS3Client';
 
+const isInvalidRangeError = (error: unknown): boolean => {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } } | null;
+  return e?.name === 'InvalidRange' || e?.$metadata?.httpStatusCode === 416;
+};
+
+// Headroom for clock skew between this host and S3 when clamping a link to its credentials.
+const CREDENTIAL_EXPIRY_MARGIN_MS = 60 * 1000;
+
 export class S3Storage extends BaseStorage {
   private s3: S3Client;
   private presignS3: S3Client;
+  /** True when signed links can be handed to a browser (see `browserSigningOrigin`). */
+  private browserPresignable: boolean;
+  private hasPresignEndpoint: boolean;
+  private browserOrigin?: Promise<string>;
 
   constructor(
     private bucketName: string,
-    private region = process.env.AWS_REGION || 'us-east-2'
+    private region = process.env.AWS_REGION || 'us-east-2',
+    /** Credentials other than the process's own, such as an assumed role's; its signed links carry them. */
+    credentials?: S3ClientConfig['credentials']
   ) {
     super();
 
@@ -37,6 +56,7 @@ export class S3Storage extends BaseStorage {
 
     this.s3 = createS3Client({
       region: this.region,
+      ...(credentials && { credentials }),
       ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       maxAttempts: 3,
       retryMode: 'standard',
@@ -59,6 +79,11 @@ export class S3Storage extends BaseStorage {
         throw new Error('S3_PRESIGN_ENDPOINT must be an absolute HTTP or HTTPS URL');
       }
     }
+    // A custom server endpoint (self-host MinIO at `http://minio:9000`) is an address only the
+    // server can resolve. Without a browser-facing S3_PRESIGN_ENDPOINT, a "browser" link
+    // signed against it is useless to the browser it is handed to.
+    this.browserPresignable = !endpoint || !!presignEndpoint;
+    this.hasPresignEndpoint = !!presignEndpoint;
     // Browser signing is opt-in; server consumers keep the private endpoint.
     this.presignS3 = presignEndpoint
       ? createS3Client({
@@ -106,7 +131,34 @@ export class S3Storage extends BaseStorage {
     options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>,
     abortSignal?: AbortSignal
   ): Promise<string> {
-    return this.put(fs.createReadStream(localPath), destination, mime.lookup(destination), options, abortSignal);
+    const content = fs.createReadStream(localPath);
+    try {
+      return await this.put(content, destination, mime.lookup(destination), options, abortSignal);
+    } finally {
+      content.destroy();
+    }
+  }
+
+  /** Streams `content` of exactly `contentLength` bytes to storage without holding it in memory. */
+  async uploadStream(
+    content: Readable,
+    destination: string,
+    contentLength: number,
+    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body' | 'ContentLength'>
+  ): Promise<string> {
+    return this.put(content, destination, false, { ...options, ContentLength: contentLength });
+  }
+
+  /** Copies an object to another key in this bucket, server-side. */
+  async copy(source: string, destination: string): Promise<string> {
+    await this.s3.send(
+      new CopyObjectCommand({
+        Bucket: this.bucketName,
+        CopySource: `${this.bucketName}/${source.split('/').map(encodeURIComponent).join('/')}`,
+        Key: destination,
+      })
+    );
+    return destination;
   }
 
   private async put(
@@ -148,21 +200,27 @@ export class S3Storage extends BaseStorage {
   /**
    * Ranged read of the first `length` bytes of an object - lets a caller
    * byte-sniff a file's real type from magic numbers without downloading the whole object.
-   * S3 clamps an out-of-range `Range` header to the object's actual size, so this is safe
-   * to call on objects smaller than `length` too. Mirrors `getPreview`'s Range-header
+   * S3 clamps a range that starts inside the object to its actual size, so objects smaller
+   * than `length` are fine. A 0-byte object has no byte 0 to start from, so S3 answers 416
+   * InvalidRange; that is returned as an empty `Buffer`. Mirrors `getPreview`'s Range-header
    * pattern but returns the raw `Buffer` instead of a UTF-8 string (binary-safe).
    */
   async downloadRange(path: string, length: number): Promise<Buffer> {
-    const { Body } = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: path,
-        Range: `bytes=0-${length - 1}`,
-      })
-    );
+    try {
+      const { Body } = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: path,
+          Range: `bytes=0-${length - 1}`,
+        })
+      );
 
-    if (!Body) throw new Error('File content is empty or not available');
-    return await this.streamToBuffer(Body as Readable);
+      if (!Body) throw new Error('File content is empty or not available');
+      return await this.streamToBuffer(Body as Readable);
+    } catch (error) {
+      if (isInvalidRangeError(error)) return Buffer.alloc(0);
+      throw error;
+    }
   }
 
   async delete(path: string): Promise<void> {
@@ -172,6 +230,79 @@ export class S3Storage extends BaseStorage {
         Key: path,
       })
     );
+  }
+
+  /** Remove the object, all retained storage versions, and delete markers. */
+  async deletePermanently(path: string): Promise<void> {
+    await this.deletePermanentlyWithCount(path);
+  }
+
+  /** Count observed versions and markers so an empty sweep cannot discharge an ambiguous upload. */
+  async deletePermanentlyWithCount(path: string): Promise<number> {
+    if (!path) throw new Error('Permanent deletion requires an object key');
+    return this.deleteStoredVersions(path, true);
+  }
+
+  /** Permanently erase one entity folder, including versions hidden by delete markers. */
+  async deletePrefixPermanently(prefix: string): Promise<number> {
+    if (!prefix.endsWith('/') || prefix.split('/').filter(Boolean).length < 2) {
+      throw new Error(`Permanent deletion refuses the unscoped prefix "${prefix}"`);
+    }
+    return this.deleteStoredVersions(prefix, false);
+  }
+
+  private async deleteStoredVersions(prefix: string, exactKey: boolean): Promise<number> {
+    let deleted = 0;
+    let previousBatch: string | undefined;
+    for (;;) {
+      // Drain the first page repeatedly: deleting a pagination marker before using it can
+      // invalidate pagination. The purge has already fenced new account writes.
+      const page = await this.s3.send(
+        new ListObjectVersionsCommand({ Bucket: this.bucketName, Prefix: prefix, MaxKeys: 1000 })
+      );
+      const objects = [...(page.Versions ?? []), ...(page.DeleteMarkers ?? [])].flatMap(entry => {
+        if (!entry.Key || (exactKey ? entry.Key !== prefix : !entry.Key.startsWith(prefix))) return [];
+        if (entry.VersionId === undefined) throw new Error('Storage returned an object without its version ID');
+        return [{ Key: entry.Key, VersionId: entry.VersionId }];
+      });
+      if (objects.length === 0) return deleted;
+      const batch = JSON.stringify(objects);
+      if (batch === previousBatch) throw new Error('Storage did not remove the requested object versions');
+      previousBatch = batch;
+      const result = await this.s3.send(
+        new DeleteObjectsCommand({ Bucket: this.bucketName, Delete: { Objects: objects, Quiet: true } })
+      );
+      if (result.Errors?.length) {
+        throw new Error(`Failed to permanently delete ${result.Errors.length} stored object version(s)`);
+      }
+      deleted += objects.length;
+    }
+  }
+
+  /**
+   * Delete every object whose key starts with `prefix` and return how many there were. Meant for
+   * small per-entity prefixes: lists page by page and deletes one key at a time. The prefix must
+   * name a folder at least two levels deep (`a/b/`), so a bad caller cannot sweep a bucket, a
+   * top-level folder, or the siblings that share a name's leading characters.
+   */
+  async deletePrefix(prefix: string): Promise<number> {
+    if (!prefix.endsWith('/') || prefix.split('/').filter(Boolean).length < 2) {
+      throw new Error(`deletePrefix refuses the unscoped prefix "${prefix}"`);
+    }
+    let deleted = 0;
+    let ContinuationToken: string | undefined;
+    do {
+      const page = await this.s3.send(
+        new ListObjectsV2Command({ Bucket: this.bucketName, Prefix: prefix, ContinuationToken })
+      );
+      for (const { Key } of page.Contents ?? []) {
+        if (!Key?.startsWith(prefix)) continue;
+        await this.delete(Key);
+        deleted += 1;
+      }
+      ContinuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+    return deleted;
   }
 
   /**
@@ -186,7 +317,11 @@ export class S3Storage extends BaseStorage {
       ACL,
       ContentType,
       ContentLength,
+      IfNoneMatch,
+      ResponseContentType,
       ResponseContentDisposition,
+      ResponseCacheControl,
+      signingDate,
     }: {
       expiresIn?: number;
       audience?: 'browser';
@@ -197,12 +332,31 @@ export class S3Storage extends BaseStorage {
        * This is what makes a declared upload size, and the size and quota checks run on it, binding.
        */
       ContentLength?: number;
+      /**
+       * PUT only: '*' makes the upload create-only, so S3 refuses (412) a PUT onto a key that already
+       * exists. The presigner always signs this header, so the client must send `If-None-Match: *`.
+       */
+      IfNoneMatch?: '*';
+      /**
+       * GET only: the Content-Type S3 answers with, regardless of the type stored on the object.
+       * Lets a caller pin what a browser may render from a signed link.
+       */
+      ResponseContentType?: string;
       ResponseContentDisposition?: string;
+      /** GET only: the Cache-Control S3 answers with, e.g. 'no-store' to keep the bytes off disk. */
+      ResponseCacheControl?: string;
+      /**
+       * Sign as of this instant instead of now; the link is valid from it for `expiresIn` seconds.
+       * Repeated calls with the same value (and credentials) return the identical URL, so a browser
+       * can cache what it points at.
+       */
+      signingDate?: Date;
     } = {}
   ): Promise<string> {
     const bindLength = method !== 'get' && ContentLength !== undefined;
+    const client = audience === 'browser' ? this.presignS3 : this.s3;
     return await getSignedUrl(
-      audience === 'browser' ? this.presignS3 : this.s3,
+      client,
       method !== 'get'
         ? new PutObjectCommand({
             Bucket: this.bucketName,
@@ -210,17 +364,59 @@ export class S3Storage extends BaseStorage {
             ACL,
             ContentType,
             ContentLength,
+            IfNoneMatch,
           })
         : new GetObjectCommand({
             Bucket: this.bucketName,
             Key: path,
+            ResponseContentType,
             ResponseContentDisposition,
+            ResponseCacheControl,
           }),
       {
-        expiresIn,
+        expiresIn: await this.clampToCredentialLifetime(client, expiresIn, signingDate),
+        ...(signingDate && { signingDate }),
         ...(bindLength && { signableHeaders: new Set(['content-length']) }),
       }
     );
+  }
+
+  /**
+   * A SigV4 link stops working when the temporary credentials that signed it expire, whatever
+   * X-Amz-Expires says, so never sign one that claims to outlive them. Callers that cache a link
+   * read its real lifetime back from X-Amz-Date + X-Amz-Expires (see fabFileService/get.ts).
+   */
+  private async clampToCredentialLifetime(client: S3Client, expiresIn: number, signingDate?: Date) {
+    const { expiration } = await client.config.credentials();
+    if (!expiration) return expiresIn;
+    const signedAt = (signingDate ?? new Date()).getTime();
+    const credentialSeconds = Math.floor((expiration.getTime() - CREDENTIAL_EXPIRY_MARGIN_MS - signedAt) / 1000);
+    return Math.max(1, Math.min(expiresIn, credentialSeconds));
+  }
+
+  /**
+   * Origin of this bucket's browser-audience signed GET links, or '' when they are not
+   * browser-usable: a custom server endpoint with no S3_PRESIGN_ENDPOINT, or a link that is
+   * not on the bucket's OWN virtual host on AWS. The last case matters to callers that admit
+   * this origin in a CSP: a path-style link lives on the shared regional endpoint, which
+   * would admit every bucket in the region. Computed once per instance (signing is local).
+   */
+  browserSigningOrigin(): Promise<string> {
+    this.browserOrigin ??= (async () => {
+      if (!this.browserPresignable) return '';
+      try {
+        const url = new URL(await this.getSignedUrl('__origin__', 'get', { audience: 'browser', expiresIn: 60 }));
+        // Any AWS host must be this bucket's own virtual host - including a browser endpoint
+        // configured as a bare regional `s3.<region>.amazonaws.com`, which path-style signing
+        // would turn into an origin shared by every bucket in the region.
+        const onAws = url.hostname.toLowerCase().endsWith('.amazonaws.com');
+        if (this.hasPresignEndpoint && !onAws) return url.origin;
+        return url.hostname.startsWith(`${this.bucketName}.`) ? url.origin : '';
+      } catch {
+        return '';
+      }
+    })();
+    return this.browserOrigin;
   }
 
   getPublicUrl(path: string): string {
@@ -262,14 +458,19 @@ export class S3Storage extends BaseStorage {
   }
 
   async getPreview(path: string): Promise<string> {
-    const response = await this.s3.send(
-      new GetObjectCommand({
-        Bucket: this.bucketName,
-        Key: path,
-        Range: 'bytes=0-5120', // First 5KB
-      })
-    );
-    return await response.Body!.transformToString('utf-8');
+    try {
+      const response = await this.s3.send(
+        new GetObjectCommand({
+          Bucket: this.bucketName,
+          Key: path,
+          Range: 'bytes=0-5120', // First 5KB
+        })
+      );
+      return await response.Body!.transformToString('utf-8');
+    } catch (error) {
+      if (isInvalidRangeError(error)) return '';
+      throw error;
+    }
   }
 
   async getMetadata(path: string) {

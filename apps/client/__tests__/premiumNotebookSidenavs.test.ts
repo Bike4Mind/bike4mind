@@ -29,7 +29,12 @@ let clientRoot: string;
 // sandbox overlay would never reach the generator at all.
 function writeOverlay(dir: string, contributions: Record<string, unknown>) {
   const name = `@bike4mind/premium-${dir}`;
-  const manifest = JSON.stringify({ name, b4mContributions: contributions });
+  // The LLM tool glue imports a declared export by relative path, so declare the one the fixtures use.
+  const manifest = JSON.stringify({
+    name,
+    exports: { './llm-tools': './src/llm-tools.ts' },
+    b4mContributions: contributions,
+  });
 
   const overlayDir = join(sandbox, 'packages/premium', dir);
   mkdirSync(overlayDir, { recursive: true });
@@ -111,7 +116,9 @@ describe('notebook sidenav codegen', () => {
     const result = runCodegen();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain('deprecated');
-    expect(readFileSync(join(clientRoot, GENERATED), 'utf8')).toContain(`{ path: '${legacyRoute}', component: Sidenav0 }`);
+    expect(readFileSync(join(clientRoot, GENERATED), 'utf8')).toContain(
+      `{ path: '${legacyRoute}', component: Sidenav0 }`
+    );
   });
 
   it('warns when two overlays claim the same route, keeps the first, and emits only that one', () => {

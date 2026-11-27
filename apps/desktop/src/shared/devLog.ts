@@ -27,3 +27,15 @@ export interface DevLogSnapshot {
   /** Records evicted by the ring buffer since the app started. */
   dropped: number;
 }
+
+/**
+ * What the renderer reports when it catches its own failure. Untrusted on arrival: main
+ * re-validates and clips every field (main/devlog/rendererErrors.ts) before it is logged.
+ */
+export interface DevLogErrorReport {
+  kind: 'error' | 'unhandledrejection';
+  message: string;
+  name?: string;
+  /** file:line:col, when the browser gave one. */
+  location?: string;
+}

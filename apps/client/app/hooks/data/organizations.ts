@@ -1,19 +1,25 @@
 import { useMutation, useQuery, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import {
+  AssignableOrgRole,
   IOrganizationDocument,
   WithId,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
+  type IOrgBudgetAlerts,
+  type OrgAlertKind,
+  type OrgAlertKindPrefs,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { AxiosResponse } from 'axios';
 import { updateAllQueryData } from '@client/app/utils/react-query';
-import { useGetOrganizationUsers, useGetPendingOrganizationUsers } from './user';
+import { useGetOrganizationUsers } from './user';
 import { useMemo } from 'react';
 import { getErrorMessage } from '@client/app/utils/error';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
+import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 /**
  * Hook to search organizations with pagination and filtering
@@ -122,9 +128,9 @@ export function useSearchOrganizations(
           totalPages: Math.ceil(response.data.total / params.limit),
           totalOrganizations: response.data.total,
         };
-      } catch (e) {
+      } catch (error) {
         signal.throwIfAborted();
-        return { data: [], totalPages: 0, totalOrganizations: 0 };
+        throw error;
       }
     },
     enabled: options?.enabled ?? true,
@@ -138,12 +144,18 @@ export function useSearchOrganizations(
 export function useGetOrganization(orgId: string | null | undefined) {
   return useQuery({
     queryKey: ['organizations', orgId],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!orgId) return null;
-      const response = await api.get<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`);
+      const response = await api.get<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, { signal });
+      signal.throwIfAborted();
       return response.data;
     },
     enabled: !!orgId,
+    retry: (count, error) => {
+      const status = (error as { response?: { status?: number } }).response?.status;
+      return status !== 400 && status !== 403 && status !== 404 && count < 2;
+    },
+    refetchOnMount: 'always',
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 }
@@ -188,8 +200,8 @@ export function useUpdateOrganization() {
       const response = await api.put<WithId<IOrganizationDocument>>(`/api/organizations/${orgId}`, data);
       return response.data;
     },
-    onSuccess: data => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+    onSuccess: async data => {
+      await queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.setQueryData(['organizations', data.id], data);
       toast.success('Organization updated successfully');
     },
@@ -211,10 +223,28 @@ export function useDeleteOrganization() {
       await api.delete(`/api/organizations/${orgId}`);
       return orgId;
     },
-    onSuccess: orgId => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      queryClient.removeQueries({ queryKey: ['organizations', orgId] });
-      toast.success('Organization deleted successfully');
+    onSuccess: async orgId => {
+      // Org-scoped queries (detail, invites) 401 or 404 once the org is gone, and a 401 is read as an
+      // expired session. Two things can still fire them: the settings page, which stays mounted until the caller
+      // navigates, and the Teams list, whose cards mount per cached org. So the org leaves every cached list
+      // synchronously, before the caller navigates, and its own queries are neither refetched nor removed
+      // (removing a mounted query makes it refetch); they garbage-collect after the page unmounts.
+      await queryClient.cancelQueries({ queryKey: ['organizations', orgId] });
+      updateAllQueryData(
+        queryClient,
+        'organizations',
+        'delete',
+        { id: orgId },
+        {
+          keysAllowedToCreate: [],
+          synchronous: true,
+        }
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ['organizations'],
+        predicate: query => query.queryKey[1] !== orgId,
+      });
+      toast.success('Team deleted successfully');
     },
     onError: (error: unknown) => {
       toast.error(getErrorMessage(error));
@@ -265,7 +295,10 @@ export function useUploadOrganizationLogo() {
   });
 }
 
-export function useGetUserOrganizations(userId: string | undefined | null) {
+export function useGetUserOrganizations(
+  userId: string | undefined | null,
+  { refetchOnMount = false }: { refetchOnMount?: boolean | 'always' } = {}
+) {
   const queryClient = useQueryClient();
   return useQuery({
     queryKey: ['organizations', 'user', userId],
@@ -295,50 +328,143 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
     },
     enabled: !!userId,
     staleTime: 1000 * 60 * 5, // 5 minutes
-    refetchOnMount: false,
+    refetchOnMount,
   });
 }
 
-function keptSharesMessage(kept: number): string {
-  const isSingle = kept === 1;
-  return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
+/**
+ * Success text for one or more removals, given each response's `personalLakeSharesKept`. Notification
+ * is best-effort and already attempted server-side (the route awaits it ahead of res.json), so this
+ * never claims delivery. `null` means the post-departure read failed, so no owner was notified; an
+ * ABSENT field is an API response from before the count existed, which keeps the plain message.
+ */
+export function removedMembersMessage(kept: readonly (number | null | undefined)[]): string {
+  const single = kept.length === 1;
+  const shares = kept.reduce<number>((sum, k) => sum + (k ?? 0), 0);
+  const unchecked = kept.filter(k => k === null).length;
+  if (!shares && !unchecked) return single ? 'Member removed successfully' : `${kept.length} members removed`;
+  const parts = [single ? 'Member removed.' : `${kept.length} members removed.`];
+  if (shares) {
+    const one = shares === 1;
+    parts.push(
+      `${shares} share${one ? '' : 's'} on personal data lakes ${one ? 'was' : 'were'} kept; the lake owners are being notified.`
+    );
+  }
+  if (unchecked) {
+    parts.push(
+      single
+        ? 'Personal data lake shares could not be checked, so the lake owners were not notified.'
+        : `Personal data lake shares could not be checked for ${unchecked} of them, so those lake owners were not notified.`
+    );
+  }
+  return parts.join(' ');
+}
+
+export interface OffboardingInventoryEntry {
+  count: number;
+  sample: { id: string; name: string }[];
+}
+
+/** Mirrors MemberOffboardingInventory in b4m-core/services organizationService/getMemberOffboardingInventory. */
+export interface MemberOffboardingInventory {
+  files: OffboardingInventoryEntry;
+  artifacts: OffboardingInventoryEntry;
+  projects: OffboardingInventoryEntry;
+  notebooks: OffboardingInventoryEntry;
+  agents: OffboardingInventoryEntry;
+  orgBilledApiKeys: { count: number };
+}
+
+const memberOffboardingKey = (organizationId: string, userId: string) =>
+  ['organizations', organizationId, 'members', userId, 'offboarding'] as const;
+
+const removeMemberKey = ['organizations', 'remove-member'] as const;
+
+interface RemoveMemberVariables {
+  /** Bulk callers show one summary rather than a toast for each member. */
+  quiet?: boolean;
+  organizationId: string;
+  userId: string;
+  /** Member who takes over the departing member's org content; omitted keeps it with them. */
+  reassignTo?: string;
+}
+
+export function useMemberOffboardingInventory(
+  organizationId: string,
+  userId: string | null,
+  { enabled }: { enabled: boolean }
+) {
+  // Current membership suppresses post-removal reads and allows a later re-added member to load.
+  return useQuery({
+    queryKey: memberOffboardingKey(organizationId, userId ?? ''),
+    queryFn: async () => {
+      const { data } = await api.get<MemberOffboardingInventory>(
+        `/api/organizations/${organizationId}/members/${userId}/offboarding`
+      );
+      return data;
+    },
+    enabled: !!userId && enabled,
+    staleTime: 0,
+  });
 }
 
 export function useRemoveMemberFromOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string }) => {
-      const response = await api.delete<WithId<IOrganizationDocument> & { personalLakeSharesKept?: number | null }>(
-        `/api/organizations/${organizationId}/members/${userId}`
-      );
-      const { personalLakeSharesKept, ...organization } = response.data;
+    mutationKey: removeMemberKey,
+    mutationFn: async ({ organizationId, userId, reassignTo }: RemoveMemberVariables) => {
+      const response = await api.delete<
+        WithId<IOrganizationDocument> & {
+          personalLakeSharesKept?: number | null;
+          revokedOrgBilledKeys?: number;
+          reassigned?: unknown;
+        }
+      >(`/api/organizations/${organizationId}/members/${userId}`, reassignTo ? { data: { reassignTo } } : undefined);
+      const { personalLakeSharesKept, revokedOrgBilledKeys, reassigned, ...organization } = response.data;
 
-      updateAllQueryData(queryClient, 'organizations', 'write', organization);
+      // A pre-removal roster/search response must not restore the departed member in the cache.
+      await queryClient.cancelQueries({ queryKey: ['organizations'] });
+      updateAllQueryData(queryClient, 'organizations', 'write', organization, {
+        keysAllowedToCreate: [],
+        synchronous: true,
+      });
 
       return personalLakeSharesKept;
     },
     onSuccess: (kept, variables) => {
+      // Drop the removed member's inventory before the ['organizations'] prefix invalidation can refetch it.
+      const offboardingKey = memberOffboardingKey(variables.organizationId, variables.userId);
+      void queryClient.cancelQueries({ queryKey: offboardingKey });
+      queryClient.removeQueries({ queryKey: offboardingKey });
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', variables.organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      // Notification is best-effort and already attempted server-side before this response arrives
-      // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
-      // that it was kept and owners are being told. `null` means the post-departure read itself
-      // failed, so no owner was notified either; an ABSENT field is an API response from before the
-      // count existed, which must keep the plain message.
-      toast.success(
-        kept === null
-          ? 'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
-          : kept
-            ? keptSharesMessage(kept)
-            : 'Member removed successfully'
-      );
+      if (variables.reassignTo) {
+        const contentQueryKeys = [
+          fabFileKeys.all,
+          ['projects'],
+          ['joined-projects'],
+          ['sessions'],
+          ['own-session-count'],
+          ['agents'],
+          ['session-agents'],
+          ['artifact'],
+          ['session-artifacts'],
+        ] as const;
+        for (const queryKey of contentQueryKeys) {
+          void queryClient.invalidateQueries({ queryKey });
+        }
+      }
+
+      if (!variables.quiet) toast.success(removedMembersMessage([kept]));
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, variables) => {
       console.error('Failed to remove member:', error);
-      toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (!variables.quiet) {
+        toast.error(`Failed to remove member: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
     },
   });
 }
@@ -400,6 +526,150 @@ export function useSetMemberCreditOverride() {
   );
 }
 
+const orgAlertSettingsKey = (organizationId: string) => ['organizations', organizationId, 'alert-settings'];
+const myOrgNotificationPrefsKey = (organizationId: string) => [
+  'organizations',
+  organizationId,
+  'my-notification-prefs',
+];
+
+/** The org's budget and low-balance alert thresholds; null when never configured. */
+export function useOrgAlertSettings(organizationId: string | null) {
+  return useQuery({
+    queryKey: orgAlertSettingsKey(organizationId ?? ''),
+    queryFn: async () => {
+      const response = await api.get<{ budgetAlerts: IOrgBudgetAlerts | null }>(
+        `/api/organizations/${organizationId}/alert-settings`
+      );
+      return response.data.budgetAlerts;
+    },
+    enabled: !!organizationId,
+  });
+}
+
+export function useUpdateOrgAlertSettings() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      budgetAlerts,
+    }: {
+      organizationId: string;
+      budgetAlerts: IOrgBudgetAlerts;
+    }) => {
+      const response = await api.put<{ budgetAlerts: IOrgBudgetAlerts }>(
+        `/api/organizations/${organizationId}/alert-settings`,
+        budgetAlerts
+      );
+      return response.data.budgetAlerts;
+    },
+    onSuccess: (budgetAlerts, { organizationId }) => {
+      queryClient.setQueryData(orgAlertSettingsKey(organizationId), budgetAlerts);
+      // budgetAlerts is also on the org document.
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId], exact: true });
+      toast.success('Budget alerts saved');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to save budget alerts: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+export interface MyOrgNotificationPrefs {
+  role: 'owner' | 'manager';
+  kinds: Record<OrgAlertKind, boolean>;
+}
+
+/** The caller's effective alert opt-ins. Enable only for the owner or a current manager (the route 404s others). */
+export function useMyOrgNotificationPrefs(organizationId: string | null) {
+  return useQuery({
+    queryKey: myOrgNotificationPrefsKey(organizationId ?? ''),
+    queryFn: async () => {
+      const response = await api.get<MyOrgNotificationPrefs>(
+        `/api/organizations/${organizationId}/my-notification-prefs`
+      );
+      return response.data;
+    },
+    enabled: !!organizationId,
+  });
+}
+
+export function useUpdateMyOrgNotificationPrefs() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ organizationId, kinds }: { organizationId: string; kinds: OrgAlertKindPrefs }) => {
+      const response = await api.put<MyOrgNotificationPrefs>(
+        `/api/organizations/${organizationId}/my-notification-prefs`,
+        { kinds }
+      );
+      return response.data;
+    },
+    onSuccess: (prefs, { organizationId }) => {
+      queryClient.setQueryData(myOrgNotificationPrefsKey(organizationId), prefs);
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to update alert preferences: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+/** Set a member's team role (Manager, Billing manager or Member); the server enforces who may assign which. */
+export function useSetOrganizationMemberRole() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      userId,
+      role,
+    }: {
+      organizationId: string;
+      userId: string;
+      role: AssignableOrgRole;
+    }) => {
+      const response = await api.put<WithId<IOrganizationDocument>>(
+        `/api/organizations/${organizationId}/members/${userId}/role`,
+        { role }
+      );
+      return response.data;
+    },
+    onSuccess: organization => {
+      updateAllQueryData(queryClient, 'organizations', 'write', organization);
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      toast.success('Role updated');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to update role: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+/** Hand the organization's billing ownership to one of its managers. */
+export function useTransferOrganizationOwnership() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ organizationId, newOwnerId }: { organizationId: string; newOwnerId: string }) => {
+      const response = await api.post<{ organizationId: string; ownerId: string }>(
+        `/api/organizations/${organizationId}/transfer-ownership`,
+        { newOwnerId }
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      // The owner gates every org tab and the roster rows, so refetch rather than patch.
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      queryClient.invalidateQueries({ queryKey: ['users', 'organization'] });
+      toast.success('Ownership transferred');
+    },
+    onError: (error: unknown) => {
+      toast.error(`Failed to transfer ownership: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
 export function useLeaveOrganization() {
   const queryClient = useQueryClient();
 
@@ -426,27 +696,163 @@ export function useLeaveOrganization() {
 interface OrganizationSeatsInfo {
   maxSeats: number;
   pendingSeats: number;
+  /** Members who have joined; currentSeats adds the pending invitations. */
+  activeSeats: number;
   currentSeats: number;
   availableSeats: number;
+}
+
+export function useOrganizationInvites(organizationId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['organizations', organizationId, 'invites'],
+    queryFn: async () => {
+      const response = await api.get<ISharerInviteView[]>(`/api/organizations/${organizationId}/invites`);
+      return response.data;
+    },
+    select: invites =>
+      invites.filter(invite => invite.remaining > 0 && (!invite.expiresAt || new Date(invite.expiresAt) > new Date())),
+    enabled: !!organizationId,
+  });
 }
 
 export const useOrganizationSeats = (organizationId?: string): OrganizationSeatsInfo => {
   const { data: organization } = useGetOrganization(organizationId);
   const { data: users } = useGetOrganizationUsers(organizationId);
-  const { data: pendingUsers } = useGetPendingOrganizationUsers(organizationId);
+  const { data: pendingInvites } = useOrganizationInvites(organizationId);
 
   const maxSeats = organization?.seats ?? 0;
-  const pendingSeats = pendingUsers?.length ?? 0;
-  const currentSeats = (users?.length ?? 0) + pendingSeats;
+  const pendingSeats =
+    pendingInvites?.reduce((count, invite) => count + (invite.recipients?.pending?.length ?? 0), 0) ?? 0;
+  const activeSeats = users?.length ?? 0;
+  const currentSeats = activeSeats + pendingSeats;
   const availableSeats = Math.max(0, maxSeats - currentSeats);
 
   return useMemo(
     () => ({
       maxSeats,
       pendingSeats,
+      activeSeats,
       currentSeats,
       availableSeats,
     }),
-    [maxSeats, pendingSeats, currentSeats, availableSeats]
+    [maxSeats, pendingSeats, activeSeats, currentSeats, availableSeats]
   );
 };
+
+// Mirrors OrgInviteRow in b4m-core/services/src/sharingService/classifyOrgInviteRows.ts.
+export type BulkInviteRowStatus =
+  'invite' | 'already_member' | 'already_pending' | 'invalid' | 'duplicate' | 'seat_limit';
+
+export interface BulkInviteRow {
+  email: string;
+  raw: string;
+  status: BulkInviteRowStatus;
+}
+
+export interface BulkInviteResult {
+  rows: BulkInviteRow[];
+  invitedCount: number;
+  inviteId: string | null;
+}
+
+export function useBulkInviteOrganization() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      organizationId,
+      emails,
+      permissions,
+    }: {
+      organizationId: string;
+      emails: string[];
+      permissions: string[];
+    }) => {
+      const response = await api.post<BulkInviteResult>(`/api/organizations/${organizationId}/bulk-invite`, {
+        emails,
+        permissions,
+      });
+      return response.data;
+    },
+    onSuccess: (_result, { organizationId }) => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'invites'] });
+      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId] });
+    },
+  });
+}
+
+// Mirrors OrgInviteLinkView in apps/client/server/organizations/orgInviteLinks.ts.
+export interface OrgInviteLink {
+  id: string;
+  link: string | null;
+  permissions: string[];
+  expiresAt: string | null;
+  remaining: number;
+  accepted: number;
+  allowedDomains: string[];
+  revokedAt: string | null;
+}
+
+const inviteLinksKey = (organizationId: string) => ['organizations', organizationId, 'invite-links'];
+
+export function useOrganizationInviteLinks(organizationId: string, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: inviteLinksKey(organizationId),
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const response = await api.get<OrgInviteLink[]>(`/api/organizations/${organizationId}/invite-links`, {
+        params: pageParam ? { after: pageParam } : undefined,
+      });
+      const nextCursor: unknown = response.headers['x-next-cursor'];
+      return { links: response.data, nextCursor: typeof nextCursor === 'string' ? nextCursor : undefined };
+    },
+    getNextPageParam: page => page.nextCursor,
+    select: data => data.pages.flatMap(page => page.links),
+    enabled: enabled && !!organizationId,
+  });
+}
+
+export function useCreateOrganizationInviteLink(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      permissions: string[];
+      expiresAt: string;
+      available?: number;
+      allowedDomains?: string[];
+    }) => (await api.post<{ link: string }>(`/api/organizations/${organizationId}/invite-links`, body)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: inviteLinksKey(organizationId) }),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}
+
+export function useRevokeOrganizationInviteLink(organizationId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (inviteId: string) =>
+      (await api.delete<OrgInviteLink>(`/api/organizations/${organizationId}/invite-links/${inviteId}`)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: inviteLinksKey(organizationId) }),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}
+
+export function useResendOrganizationInvite(organizationId: string) {
+  return useMutation({
+    mutationFn: async (recipient: { email: string } | { userId: string }) =>
+      (await api.post<{ resent: boolean }>(`/api/organizations/${organizationId}/invite-resend`, recipient)).data,
+    onSuccess: () => toast.success('Invitation resent'),
+    onError: error => toast.error(getErrorMessage(error)),
+  });
+}
+
+/** The user that holds the organization's org-owned API keys; null until one has been minted. */
+export const useAdminOrgServiceAccountId = (orgId: string) =>
+  useQuery({
+    queryKey: ['admin', 'organizations', orgId, 'service-account'],
+    queryFn: async (): Promise<string | null> => {
+      const response = await api.get<{ serviceAccountId: string | null }>(
+        `/api/admin/organizations/${encodeURIComponent(orgId)}/service-account`
+      );
+      return response.data.serviceAccountId;
+    },
+  });

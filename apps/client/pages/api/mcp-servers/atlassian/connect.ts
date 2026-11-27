@@ -7,7 +7,7 @@ import {
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { issueStateNonce } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user.id;
@@ -21,14 +21,12 @@ const handler = baseApi().get(async (req, res) => {
 
     // If expired OR no expiration set (legacy), clear the pending state
     if (!expiresAt || expiresAt < new Date()) {
-      console.log(`[Atlassian Connect] Clearing expired pending site selection for user ${userId}`);
       await userRepository.update({
         id: userId,
         atlassianConnect: null,
       });
     } else {
       // Pending selection is still valid - return redirect URL for frontend to handle
-      console.log(`[Atlassian Connect] User ${userId} has active pending site selection, returning redirect URL`);
       return res.json({ redirectTo: '/integrations/atlassian/select-site' });
     }
   }
@@ -81,13 +79,6 @@ const handler = baseApi().get(async (req, res) => {
   authUrl.searchParams.set('state', state);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('prompt', 'consent');
-
-  console.log('🔗 Atlassian OAuth Authorization URL Generated');
-  console.log('clientId:', clientId);
-  console.log('redirectUri:', redirectUri);
-  console.log('baseUrl:', process.env.APP_URL);
-  console.log('scopes:', scopes.split(' ').length, 'scopes');
-  console.log('Full authUrl:', authUrl.toString());
 
   return res.json({ authUrl: authUrl.toString(), state });
 });

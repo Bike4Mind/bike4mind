@@ -33,6 +33,8 @@ export function hearthSessionFromStore(): HearthSession | undefined {
  */
 export function createBuiltinModules(config: CliConfig, apiClient: ApiClient): ICliFeatureModule[] {
   const modules: ICliFeatureModule[] = [];
+  // Both built-ins are Bike4Mind cloud features.
+  if (apiClient.signedOut) return modules;
   if (config.features?.tavern) {
     modules.push(
       new TavernModule(

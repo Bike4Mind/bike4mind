@@ -1,0 +1,156 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
+import { SubscriptionDetailHeader } from './SubscriptionDetailHeader';
+import { NO_ACTING_USER_REASON, REMOVE_LIVE_STRIPE_REASON } from './subscriptionDetailModel';
+import { OWNER_ID, STRIPE_ROW, SubscriptionTestWrapper, buildDetail } from './subscriptionDetailTestUtils';
+
+const user = vi.hoisted(() => ({
+  currentUser: { isAdmin: true } as { isAdmin: boolean; adminPermissions?: string[] },
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.currentUser }) }));
+
+beforeEach(() => {
+  user.currentUser = { isAdmin: true };
+});
+
+const setup = (detail: AdminSubscriptionDetail) => {
+  const onAction = vi.fn();
+  const onOpenOwner = vi.fn();
+  render(<SubscriptionDetailHeader detail={detail} onAction={onAction} onOpenOwner={onOpenOwner} />, {
+    wrapper: SubscriptionTestWrapper,
+  });
+  fireEvent.click(screen.getByTestId('subscription-detail-more-btn'));
+  return { onAction, onOpenOwner };
+};
+
+const menuItem = (name: 'credits' | 'remove') => screen.queryByTestId(`subscription-detail-menu-${name}-item`);
+
+describe('SubscriptionDetailHeader', () => {
+  it('disables every action, explained, for a delegate without credits:adjust', () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['support:read'] };
+    setup(buildDetail());
+
+    expect(screen.getByTestId('subscription-detail-extend-btn')).toBeDisabled();
+    expect(screen.getByTestId('subscription-detail-end-btn')).toBeDisabled();
+    expect(menuItem('credits')).toHaveAttribute('aria-disabled', 'true');
+    expect(menuItem('remove')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('subscription-detail-menu-remove-item-reason')).toHaveTextContent(
+      'Missing permission: credits:adjust'
+    );
+  });
+
+  it('enables the actions for a credits:adjust delegate', () => {
+    user.currentUser = { isAdmin: false, adminPermissions: ['credits:adjust'] };
+    const { onAction } = setup(buildDetail());
+
+    fireEvent.click(screen.getByTestId('subscription-detail-extend-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('extend');
+    expect(menuItem('credits')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('shows a live comp with Extend, End and both menu items', () => {
+    const { onAction } = setup(buildDetail());
+
+    expect(screen.getByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-detail-status-chip')).toHaveTextContent('Active');
+    expect(screen.getByTestId('subscription-detail-comped-chip')).toHaveTextContent('Comped');
+
+    fireEvent.click(screen.getByTestId('subscription-detail-extend-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('extend');
+    fireEvent.click(screen.getByTestId('subscription-detail-end-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('end');
+
+    expect(menuItem('credits')).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(menuItem('remove') as HTMLElement);
+    expect(onAction).toHaveBeenLastCalledWith('remove');
+  });
+
+  it('gives a live Stripe row only the More menu, with Remove disabled and explained', () => {
+    const { onAction } = setup(buildDetail({ subscription: STRIPE_ROW }));
+
+    expect(screen.queryByTestId('subscription-detail-extend-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-detail-end-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-detail-comped-chip')).not.toBeInTheDocument();
+    expect(menuItem('credits')).toBeInTheDocument();
+    expect(menuItem('remove')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('subscription-detail-menu-remove-item-reason')).toHaveTextContent(
+      REMOVE_LIVE_STRIPE_REASON
+    );
+    fireEvent.click(menuItem('remove') as HTMLElement);
+    expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it('shows Cancel and no Resume on a live Stripe row with nothing scheduled', () => {
+    const { onAction } = setup(buildDetail({ subscription: STRIPE_ROW }));
+    expect(screen.queryByTestId('subscription-detail-resume-btn')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('subscription-detail-cancel-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('cancel');
+  });
+
+  it('swaps Cancel for Resume while a cancellation is scheduled', () => {
+    const future = new Date(Date.now() + 10 * 86_400_000).toISOString();
+    const { onAction } = setup(
+      buildDetail({ subscription: { ...STRIPE_ROW, periodEndsAt: future, cancelAt: future } })
+    );
+    expect(screen.queryByTestId('subscription-detail-cancel-btn')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('subscription-detail-resume-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('resume');
+  });
+
+  it('offers no Stripe actions on a comp', () => {
+    setup(buildDetail());
+    expect(screen.queryByTestId('subscription-detail-cancel-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-detail-resume-btn')).not.toBeInTheDocument();
+  });
+
+  it('gives an ended row Remove only, with no comp actions or credits', () => {
+    setup(buildDetail({ subscription: { status: 'canceled' } }));
+
+    expect(screen.getByTestId('subscription-detail-status-chip')).toHaveTextContent('Canceled');
+    // An ended comp keeps its Comped chip, so it does not read as a lost payer.
+    expect(screen.getByTestId('subscription-detail-comped-chip')).toHaveTextContent('Comped');
+    expect(screen.queryByTestId('subscription-detail-extend-btn')).not.toBeInTheDocument();
+    expect(menuItem('credits')).not.toBeInTheDocument();
+    expect(menuItem('remove')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('disables credits and remove in place when no account can act for the owner', () => {
+    setup(buildDetail({ actingUserId: null }));
+
+    expect(screen.getByTestId('subscription-detail-extend-btn')).toBeEnabled();
+    expect(menuItem('credits')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('subscription-detail-menu-credits-item-reason')).toHaveTextContent(NO_ACTING_USER_REASON);
+    expect(menuItem('remove')).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('links the owner to their profile', () => {
+    const { onOpenOwner } = setup(buildDetail());
+    fireEvent.click(screen.getByTestId('subscription-detail-owner-link'));
+    expect(onOpenOwner).toHaveBeenCalledWith({ kind: 'user', userId: OWNER_ID });
+  });
+
+  it('offers Sync from Stripe on a Stripe row only, and flags an open mismatch', () => {
+    const { onAction } = setup(
+      buildDetail({
+        subscription: STRIPE_ROW,
+        mismatch: {
+          kind: 'drift',
+          fields: [],
+          firstSeenAt: '2026-10-01T00:00:00.000Z',
+          lastSeenAt: '2026-10-02T00:00:00.000Z',
+        },
+      })
+    );
+
+    expect(screen.getByTestId('subscription-detail-mismatch-chip')).toHaveTextContent('Mismatch');
+    fireEvent.click(screen.getByTestId('subscription-detail-menu-sync-item'));
+    expect(onAction).toHaveBeenLastCalledWith('sync');
+  });
+
+  it('hides Sync from Stripe on a comp', () => {
+    setup(buildDetail());
+    expect(screen.queryByTestId('subscription-detail-menu-sync-item')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-detail-mismatch-chip')).not.toBeInTheDocument();
+  });
+});

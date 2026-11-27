@@ -1,7 +1,9 @@
 import { FC, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Box, Button, Dropdown, IconButton, Menu, MenuButton, Tooltip, Typography } from '@mui/joy';
-import { Close, InfoOutlined, InsertDriveFileOutlined } from '@mui/icons-material';
+import Close from '@mui/icons-material/Close';
+import InfoOutlined from '@mui/icons-material/InfoOutlined';
+import InsertDriveFileOutlined from '@mui/icons-material/InsertDriveFileOutlined';
 import FilesSection from '@client/app/components/Session/AISettings/FilesSection';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';

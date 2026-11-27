@@ -1,0 +1,14 @@
+appId: com.bike4mind.app
+name: Start a chat and receive a completion
+tags:
+  - live
+---
+- runFlow: ../subflows/sign-in.yaml
+- runFlow: ../subflows/start-chat.yaml
+# The reply is a real model completion on staging: give it room, and assert on presence, never on wording.
+- extendedWaitUntil:
+    visible:
+      id: message-assistant
+    timeout: 90000
+- assertVisible:
+    id: message-user

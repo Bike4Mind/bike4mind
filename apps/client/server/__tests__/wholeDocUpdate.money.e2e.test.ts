@@ -111,6 +111,7 @@ describe('org: removing a member keeps concurrent roster and credit writes', () 
             upsertGrant: async () => undefined,
           },
           lakeConfigChangeEvents: { record: async () => undefined },
+          userApiKeys: { revokeLiveOrgBilledByUserId: async () => [] },
         },
       } as never
     );

@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 // reply.ts wires an Express-style handler at module load and imports server-only deps; stub them
 // so we can drive the handler (default export) and the pure deriveTitle helper in isolation.
@@ -12,19 +16,31 @@ const dbMocks = vi.hoisted(() => ({
   restrictDuplicatePublications: vi.fn(),
   checkPublishQuota: vi.fn(),
   findOneAndUpdate: vi.fn(),
+  refund: vi.fn(() => Promise.resolve()),
+  consumePublishAction: vi.fn(),
+  unpublish: vi.fn(),
+  questFindOne: vi.fn(),
 }));
+dbMocks.consumePublishAction.mockImplementation(() => Promise.resolve({ refund: dbMocks.refund }));
 
 // baseApi().post(fn) returns fn, so `export default handler` IS the handler function.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
-    Object.assign(chain, { use: () => chain, post: (fn: unknown) => fn });
+    Object.assign(chain, { use: () => chain, post: (...fns: unknown[]) => fns[fns.length - 1] });
     return chain;
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  Quest: { findOne: () => ({ select: () => ({ lean: dbMocks.questLean }) }) },
+  projectRepository: { findAllBySessionId: async () => [] },
+  Quest: {
+    findOne: (filter: unknown) => {
+      dbMocks.questFindOne(filter);
+      return { select: () => ({ lean: dbMocks.questLean }) };
+    },
+  },
   Session: { findById: () => ({ select: () => ({ lean: dbMocks.sessionLean }) }) },
+  sessionRepository: { findById: () => dbMocks.sessionLean() },
   PublishedArtifact: {
     findOne: (filter: unknown) => {
       dbMocks.publishedFindOne(filter);
@@ -39,12 +55,16 @@ vi.mock('@server/services/publish', () => ({
 }));
 // The real settlePublication runs; its own collaborators are stubbed here.
 vi.mock('@server/services/publish/checkPublishQuota', () => ({ checkPublishQuota: dbMocks.checkPublishQuota }));
-vi.mock('@server/services/publish/invalidatePublishCdn', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', () => ({
   invalidatePublishCdn: dbMocks.invalidatePublishCdn,
   toCacheTarget: (a: { publicId: string }) => ({ publicId: a.publicId }),
 }));
 vi.mock('@server/services/publish/restrictDuplicatePublications', () => ({
   restrictDuplicatePublications: dbMocks.restrictDuplicatePublications,
+}));
+vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: dbMocks.consumePublishAction }));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: dbMocks.unpublish,
 }));
 
 import handler, { deriveTitle, truncateAtWord } from '../reply';
@@ -136,8 +156,8 @@ describe('POST /api/publish/reply - ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     dbMocks.checkPublishQuota.mockResolvedValue({ ok: true });
-    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
-    dbMocks.sessionLean.mockResolvedValue({ userId: OWNER });
+    dbMocks.questLean.mockResolvedValue({ _id: 'msg1', reply: 'Hello world' });
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: OWNER });
     dbMocks.publishedFindOneLean.mockResolvedValue(null);
     dbMocks.findOneAndUpdate.mockResolvedValue({ publicId: 'abc123', slug: 'r-abc123' });
   });
@@ -149,23 +169,90 @@ describe('POST /api/publish/reply - ownership', () => {
   });
 
   it('returns 403 when a non-admin is not the session owner', async () => {
-    dbMocks.sessionLean.mockResolvedValue({ userId: 'someone-else' });
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: 'someone-else' });
     const res = await run(makeReq({ id: OWNER, isAdmin: false }));
     expect(res.statusCode).toBe(403);
     expect(res.body).toEqual({ error: 'You can only publish your own replies' });
   });
 
   it('lets an admin publish a reply they do not own', async () => {
-    dbMocks.sessionLean.mockResolvedValue({ userId: 'someone-else' });
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: 'someone-else' });
     const res = await run(makeReq({ id: OWNER, isAdmin: true }));
     expect(res.statusCode).toBe(200);
     expect(res.body).toMatchObject({ publicId: 'abc123' });
+  });
+
+  it('stores the ids as the database spells them, not as the request cased them', async () => {
+    const ID = '65a1b2c3d4e5f60718293a4b';
+    dbMocks.questLean.mockResolvedValue({ _id: ID, reply: 'Hello world' });
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: OWNER });
+    const req = makeReq({ id: OWNER });
+    req.body = { sessionId: 'sess1', messageId: ID.toUpperCase() };
+    const res = await run(req);
+    expect(res.statusCode).toBe(200);
+    expect(dbMocks.findOneAndUpdate).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        $set: expect.objectContaining({ source: { kind: 'reply', sessionId: 'sess1', messageId: ID } }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('takes the page back down when the message was deleted while the publish was in flight', async () => {
+    dbMocks.questLean.mockResolvedValueOnce({ _id: 'msg1', reply: 'Hello world' }).mockResolvedValueOnce(null);
+    const req = makeReq({ id: OWNER });
+    const res = await run(req);
+    expect(dbMocks.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(dbMocks.unpublish).toHaveBeenCalledWith(
+      OWNER,
+      { kind: 'replyMessage', sessionId: 'sess1', messageIds: ['msg1'] },
+      { logger: req.logger }
+    );
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('re-checks the message with the same session id the lookup matched, not the stored session id', async () => {
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: OWNER });
+    const req = makeReq({ id: OWNER });
+    req.body = { sessionId: 'SESS1', messageId: 'msg1' };
+    const res = await run(req);
+    expect(res.statusCode).toBe(200);
+    expect(dbMocks.questFindOne).toHaveBeenCalledTimes(2);
+    expect(dbMocks.questFindOne).toHaveBeenNthCalledWith(1, { _id: 'msg1', sessionId: 'SESS1' });
+    expect(dbMocks.questFindOne).toHaveBeenNthCalledWith(2, { _id: 'msg1', sessionId: 'SESS1' });
+  });
+
+  it('leaves the page up when the message is still live after the write', async () => {
+    const res = await run(makeReq({ id: OWNER }));
+    expect(res.statusCode).toBe(200);
+    expect(dbMocks.unpublish).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the parent session is missing', async () => {
     dbMocks.sessionLean.mockResolvedValue(null);
     const res = await run(makeReq({ id: OWNER, isAdmin: false }));
     expect(res.statusCode).toBe(404);
+  });
+
+  it("counts the publish against the caller's daily allowance, by their account age", async () => {
+    const createdAt = new Date('2026-10-20T00:00:00.000Z');
+    const req = makeReq({ id: OWNER, isAdmin: false });
+    await run({ ...req, user: { ...req.user, createdAt } });
+    expect(dbMocks.consumePublishAction).toHaveBeenCalledTimes(1);
+    expect(dbMocks.consumePublishAction).toHaveBeenCalledWith({ id: OWNER, isAdmin: false, createdAt });
+  });
+
+  it('counts an API-key caller against the key owner, the same allowance a browser session uses', async () => {
+    const req = makeReq({ id: OWNER, isAdmin: false });
+    await run({ ...req, apiKeyInfo: { keyId: 'key1', scopes: [] } });
+    expect(dbMocks.consumePublishAction).toHaveBeenCalledWith(expect.objectContaining({ id: OWNER }));
+  });
+
+  it('does not count a publish that was refused before it could be written', async () => {
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: 'someone-else' });
+    await run(makeReq({ id: OWNER, isAdmin: false }));
+    expect(dbMocks.consumePublishAction).not.toHaveBeenCalled();
   });
 
   // A b4m_map fence in `renderedBody` refers to places by id only - it must resolve against a
@@ -175,7 +262,7 @@ describe('POST /api/publish/reply - ownership', () => {
     const citables = [
       { id: 'place:1', type: 'web_url', title: 'Barr', metadata: { place: { id: '1', name: 'Barr' } } },
     ];
-    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world', promptMeta: { citables } });
+    dbMocks.questLean.mockResolvedValue({ _id: 'msg1', reply: 'Hello world', promptMeta: { citables } });
     await run(makeReq({ id: OWNER, isAdmin: false }));
     expect(dbMocks.findOneAndUpdate).toHaveBeenCalledWith(
       expect.anything(),
@@ -185,7 +272,7 @@ describe('POST /api/publish/reply - ownership', () => {
   });
 
   it('stores no citables when the reply has none', async () => {
-    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
+    dbMocks.questLean.mockResolvedValue({ _id: 'msg1', reply: 'Hello world' });
     await run(makeReq({ id: OWNER, isAdmin: false }));
     expect(dbMocks.findOneAndUpdate).toHaveBeenCalledWith(
       expect.anything(),
@@ -229,8 +316,8 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
   beforeEach(() => {
     vi.clearAllMocks();
     dbMocks.checkPublishQuota.mockResolvedValue({ ok: true });
-    dbMocks.questLean.mockResolvedValue({ reply: 'Hello world' });
-    dbMocks.sessionLean.mockResolvedValue({ userId: OWNER });
+    dbMocks.questLean.mockResolvedValue({ _id: 'msg1', reply: 'Hello world' });
+    dbMocks.sessionLean.mockResolvedValue({ _id: 'sess1', userId: OWNER });
     // Only the owner has a publication of this reply.
     dbMocks.publishedFindOne.mockImplementation(() => undefined);
     dbMocks.publishedFindOneLean.mockImplementation(async () => {
@@ -277,6 +364,8 @@ describe('POST /api/publish/reply - re-publish updates the owner record in place
     const res = await run({ id: OWNER }, { visibility: 'private' });
     expect(res.statusCode).toBe(409);
     expect(dbMocks.restrictDuplicatePublications).not.toHaveBeenCalled();
+    // Nothing was published, so the counted action is handed back.
+    expect(dbMocks.refund).toHaveBeenCalledTimes(1);
   });
 
   it('does not purge when nothing public was or is being served', async () => {

@@ -9,19 +9,33 @@ import {
   postSreFixFailureMessage,
   postSreAlreadyFixedMessage,
   postSreFixLoopMessage,
-} from '../../../server/integrations/slack/sreSlackApproval';
+  postSreScopeBlockedMessage,
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 const mockGetSettingsValue = vi.fn();
 const mockFindFullById = vi.fn();
 const mockFindByIdWithToken = vi.fn();
 const mockAtomicTransition = vi.fn();
 const mockPostMessage = vi.fn().mockResolvedValue({ ok: true });
+const mockWebClientToken = vi.fn();
+const encryptionKey = vi.hoisted(() => 'a'.repeat(64));
+
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: { SECRET_ENCRYPTION_KEY: encryptionKey },
+}));
 
 vi.mock('@slack/web-api', () => ({
   // Use a class so `new WebClient(token)` works - arrow functions are not constructors.
   // Class field initializers run at `new` time (not class-definition time), so
   // mockPostMessage is accessible even though vi.mock factories are hoisted.
   WebClient: class MockWebClient {
+    constructor(token: string) {
+      mockWebClientToken(token);
+    }
     chat = { postMessage: mockPostMessage };
   },
 }));
@@ -98,6 +112,22 @@ describe('postSreAnalysisFailureMessage', () => {
         {} // no workspaceId/channelId
       )
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('Slack workspace token', () => {
+  it('constructs the client with the decrypted stored bot token', async () => {
+    const token = 'xoxb-test-token';
+    mockFindByIdWithToken.mockResolvedValue({ slackBotToken: encryptSecret(token, encryptionKey) });
+    mockWebClientToken.mockClear();
+
+    await postSreAnalysisFailureMessage('tracking-1', 'fingerprint', 'Error', 'Failure', 'source', {
+      workspaceId: 'ws-1',
+      channelId: 'C123',
+    });
+
+    expect(mockWebClientToken).toHaveBeenCalledWith(token);
+    expect(mockPostMessage).toHaveBeenCalled();
   });
 });
 
@@ -543,5 +573,28 @@ describe('postSreFixLoopMessage — block building', () => {
     const actionsBlock = blocks.find(b => b.type === 'actions');
     expect(actionsBlock).toBeDefined();
     expect(actionsBlock?.elements?.[0]?.url).toContain('/issues/777');
+  });
+});
+
+describe('postSreScopeBlockedMessage - block building', () => {
+  beforeEach(() => {
+    mockFindByIdWithToken.mockResolvedValue({ slackBotToken: 'xoxb-test', _id: 'ws-1' });
+    mockPostMessage.mockClear();
+  });
+
+  it('escapes blocked file paths inside their code spans', async () => {
+    await postSreScopeBlockedMessage(
+      'tracking-1',
+      { rootCause: 'bad config', confidence: 90 },
+      'Error',
+      'fp-abc123',
+      ['src/a.ts` <!channel> `x', 'src/b.ts'],
+      { workspaceId: 'ws-1', channelId: 'C123' }
+    );
+
+    const blocks = mockPostMessage.mock.calls[0][0].blocks as Array<{ type: string; text?: { text: string } }>;
+    const filesBlock = blocks.find(b => b.type === 'section' && b.text?.text.includes('*Blocked Files:*'));
+    expect(filesBlock?.text?.text).toContain('`src/a.ts\u02CB &lt;!channel&gt; \u02CBx`');
+    expect(filesBlock?.text?.text).not.toContain('<!channel>');
   });
 });

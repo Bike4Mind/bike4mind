@@ -1,27 +1,32 @@
 import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
-import { entitlementsForPriceIds } from '@client/lib/entitlements/registry';
-import { SubscriptionOwnerType, ISubscription } from '@client/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
+import {
+  SubscriptionOwnerType,
+  ISubscription,
+  isLiveStripeBilledSubscription,
+  LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { assertDelegateCanChangeSubscription } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 interface RequestQuery {
   userId: string;
   subscriptionId: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
+const handler = adminApi({
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { DELETE: 'credits:adjust' },
+}).delete(
   asyncHandler(async (req, res) => {
-    // Check admin authorization
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId, subscriptionId } = req.query as RequestQuery;
 
     if (typeof userId !== 'string' || !userId) {
@@ -31,6 +36,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
     if (typeof subscriptionId !== 'string' || !subscriptionId) {
       throw new BadRequestError('Invalid subscription ID');
     }
+
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
     const user = await userRepository.findById(userId);
     if (!user) {
@@ -44,6 +51,29 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
     if (!subscription) {
       throw new NotFoundError('Subscription not found');
     }
+    await assertDelegateCanChangeSubscription(req.user, subscription, 'remove the subscription of');
+
+    // The delete never reaches Stripe, so a live Stripe row would keep invoicing with no credits granted.
+    if (isLiveStripeBilledSubscription(subscription)) {
+      throw new ConflictError(LIVE_STRIPE_SUBSCRIPTION_REMOVE_MESSAGE);
+    }
+
+    const recordRemoval = (organizationId?: string) =>
+      recordAdminActionFromRequest(req, {
+        action: 'user.subscription.removed',
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        organizationId,
+        summary: `removed ${organizationId ? 'team' : 'individual'} subscription ${subscriptionId}`,
+        reason,
+        details: {
+          subscriptionId,
+          ownerType: subscription.ownerType,
+          priceId: subscription.priceId,
+          status: subscription.status,
+          source: subscription.source,
+          quantity: subscription.quantity,
+        },
+      });
 
     // Handle individual (user) subscription
     if (subscription.ownerType === SubscriptionOwnerType.User) {
@@ -59,6 +89,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       await withTransaction(async () => {
         // Delete the subscription using the repository's delete method
         await subscriptionRepository.delete(subscription.id);
+        await recordRemoval();
 
         req.logger.info(`Admin ${req.user.id} removed individual subscription ${subscriptionId} from user ${userId}`, {
           subscriptionId,
@@ -81,7 +112,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       // must wake the gate from here. (Individual admin-grant rows carry no
       // subscriptionId and are not reachable via this route's Stripe-id
       // lookup - pre-existing behavior.)
-      if (entitlementsForPriceIds([subscription.priceId]).size > 0) {
+      if (priceAffectsEntitlements(subscription.priceId)) {
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'invalidate_query',
           queryKey: ['entitlements'],
@@ -109,6 +140,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       await withTransaction(async () => {
         // Delete the subscription using the repository's delete method
         await subscriptionRepository.delete(subscription.id);
+        await recordRemoval(organization.id);
 
         req.logger.info(
           `Admin ${req.user.id} removed team subscription ${subscriptionId} from organization ${organization.id}`,

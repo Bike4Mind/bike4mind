@@ -11,7 +11,7 @@ const { connection, connect, ping, logger } = vi.hoisted(() => {
 });
 
 vi.mock('mongoose', () => ({ default: { connection, connect } }));
-vi.mock('@bike4mind/observability', () => ({ Logger: { withMetadata: () => logger } }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { withMetadata: () => logger, info: vi.fn() } }));
 vi.mock('../certs/documentdb-cert-manager', () => ({
   isDocumentDBConnection: (url: string) => url.includes('docdb'),
   getDocumentDBCertificate: () => ({ certPath: '/tmp/test-ca.pem', certExists: true }),
@@ -31,7 +31,13 @@ describe('connectDB connection lifecycle', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01'));
-    for (const key of ['AWS_LAMBDA_FUNCTION_NAME', 'VERCEL', 'MONGODB_MAX_IDLE_TIME_MS', 'MONGODB_MAX_POOL_SIZE']) {
+    for (const key of [
+      'AWS_LAMBDA_FUNCTION_NAME',
+      'VERCEL',
+      'MONGODB_MAX_IDLE_TIME_MS',
+      'MONGODB_MAX_POOL_SIZE',
+      'USE_DOCUMENTDB_COMPATIBILITY',
+    ]) {
       vi.stubEnv(key, undefined);
     }
     vi.stubEnv('MONGODB_MAX_RETRIES', '0');
@@ -79,6 +85,27 @@ describe('connectDB connection lifecycle', () => {
       'mongodb://docdb.example/test?tlsCAFile=/tmp/test-ca.pem',
       expect.objectContaining({ maxIdleTimeMS: 30_000, retryWrites: false })
     );
+  });
+
+  it('warns once per process that DocumentDB is deprecated', async () => {
+    const { connectDB, DOCUMENTDB_DEPRECATION_WARNING } = await import('./mongo');
+    await connectDB('mongodb://docdb.example/test');
+    connection.readyState = 0;
+    await connectDB('mongodb://docdb.example/test');
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(DOCUMENTDB_DEPRECATION_WARNING);
+  });
+
+  it('warns that DocumentDB is deprecated when the compatibility flag is on', async () => {
+    vi.stubEnv('USE_DOCUMENTDB_COMPATIBILITY', 'true');
+    const { connectDB, DOCUMENTDB_DEPRECATION_WARNING } = await import('./mongo');
+    await connectDB(atlasUrl);
+    expect(logger.warn).toHaveBeenCalledWith(DOCUMENTDB_DEPRECATION_WARNING);
+  });
+
+  it('does not warn about DocumentDB on a MongoDB connection', async () => {
+    const { connectDB, DOCUMENTDB_DEPRECATION_WARNING } = await import('./mongo');
+    await connectDB(atlasUrl);
+    expect(logger.warn).not.toHaveBeenCalledWith(DOCUMENTDB_DEPRECATION_WARNING);
   });
 
   it.each(['0', '15000'])('honors the idle-time environment override %s', async idleTime => {

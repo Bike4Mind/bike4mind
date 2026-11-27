@@ -31,7 +31,6 @@ MESSAGES = {
 }
 
 
-# Mirrors the canonical PLACEHOLDER_VALUE_PATTERNS in scripts/secrets-scan-summarize-and-ingest.mjs.
 PLACEHOLDER_VALUES = {
     'selfhost', 'minioadmin', 'not-configured', 'not_configured', 'changeme',
     'your-secret-here', 'your_secret_here', 'your-api-key', 'your_api_key',
@@ -126,7 +125,7 @@ def check_config(model):
     if (any(placeholder(env.get(key)) for key in ('JWT_SECRET', 'SESSION_SECRET'))
             or placeholder(env.get('MEMORY_KEY_SECRET'))
             or not re.fullmatch(r'[0-9a-fA-F]{64}', env.get('SECRET_ENCRYPTION_KEY') or '')
-            or (env.get('SECRET_ENCRYPTION_KEY_PREVIOUS')
+            or (env.get('SECRET_ENCRYPTION_KEY_PREVIOUS') not in (None, '', 'not-configured')
                 and not re.fullmatch(r'[0-9a-fA-F]{64}', env['SECRET_ENCRYPTION_KEY_PREVIOUS']))):
         failures.add('app.secrets')
 
@@ -205,7 +204,7 @@ def check_config(model):
     for name in ('worker', 'chatcompletion', 'agentexecutor'):
         if name in services:
             worker_env = services[name].get('environment') or {}
-            if any(worker_env.get(key) != env.get(key) for key in ('JWT_SECRET', 'SESSION_SECRET', 'SECRET_ENCRYPTION_KEY', 'MEMORY_KEY_SECRET')):
+            if any(worker_env.get(key) != env.get(key) for key in ('JWT_SECRET', 'SESSION_SECRET', 'SECRET_ENCRYPTION_KEY', 'MEMORY_KEY_SECRET', 'MEMORY_KEY_SECRET_PREVIOUS')):
                 failures.add('internal.shared-secrets')
     minio_env = (services.get('minio', {}).get('environment') or {})
     if minio_env.get('MINIO_NOTIFY_WEBHOOK_ENABLE_primary') == 'on':
@@ -244,7 +243,7 @@ def main(argv=None):
         print(f'FAIL {failure}: {MESSAGES[failure]}')
     if failures:
         return 1
-    print('preflight checks passed; live TLS/mail/auth/restore not proven')
+    print('preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)')
     return 0
 
 

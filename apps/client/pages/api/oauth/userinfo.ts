@@ -5,12 +5,21 @@
  * Requires a valid B4M Bearer access token.
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { refuseExchangeKey } from '@server/auth/refuseExchangeKey';
 import { releasedIdentityClaims } from '@server/auth/oauthServer';
 
 // OIDC identity endpoint: the one route a relying-party OAuth token is meant to reach. Requires
 // the openid scope; every other JWT-authed route stays first-party-only by default (oauthRouteGate).
-const handler = baseApi({ auth: true, oauthScopes: ['openid'] }).get(async (req, res) => {
+const handler = baseApi({
+  auth: true,
+  oauthScopes: ['openid'],
+  requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
+  // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (refuseExchangeKey(req, res)) return;
   const user = (req as any).user;
 
   if (!user) {

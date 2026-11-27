@@ -14,15 +14,15 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { GitHubService } from '@server/services/githubService';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { logTestExecuted } from '@server/integrations/github/githubConnectionAuditLog';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 
 const logger = new Logger({ metadata: { component: 'org-github-test' } });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // P1: Rate limit to prevent abuse (30 tests/hour - makes real API calls)
   .use(
     rateLimit({
@@ -34,7 +34,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const connection = await orgGitHubConnectionRepository.findByOrganizationId(orgId);
     if (!connection) {

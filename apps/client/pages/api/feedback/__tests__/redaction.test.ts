@@ -15,9 +15,13 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: (fn: unknown) => {
       mockRefs.getHandler = fn as (req: unknown, res: unknown) => unknown;
       return chain;
@@ -71,15 +75,17 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
 
 const mockEmailPublish = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: (...args: unknown[]) => mockEmailPublish(...args) } },
 }));
 
@@ -115,7 +121,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', async () => {
 import '../index';
 
 /**
- * Built inline rather than imported from server/auth/ability.ts, which pulls an unresolvable
+ * Built inline rather than imported from packages/server-utils/src/auth/ability.ts, which pulls an unresolvable
  * `tldts` transitive dependency under this vitest setup. MUST STAY IN SYNC with the admin feedback
  * rules there: an unconditional read grant is what makes accessibleBy narrow to {}.
  */

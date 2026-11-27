@@ -4,7 +4,7 @@ import { RequestHandler } from 'express';
 /**
  * Server-side gate for a USER-only experimental flag - one with no admin
  * `SettingKey` behind it (the `{}` entries in `useFeatureEnabled`, e.g.
- * `enableQuestMasterV5`, `enableMementosV2`).
+ * `enableMementosV2`).
  *
  * `requireFeatureEnabled` cannot express these: it resolves the flag through
  * `settingsMap`, so a flag with no key there reads as permanently disabled and

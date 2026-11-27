@@ -11,10 +11,15 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   buildApiKeyTable: (keys: unknown) => keys,
   getAvailableModels: (...args: unknown[]) => getAvailableModels(...args),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services-core', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({ openai: 'sk-openai' })) },
 }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+const settings = vi.hoisted(() => ({ enforceCredits: false }));
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsByNames: vi.fn(),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: () => settings.enforceCredits,
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../di/registry', () => ({
   getSlackDb: () => ({ apiKeyRepository: {}, adminSettingsRepository: {}, AdminSettings: { findOne } }),
@@ -29,6 +34,7 @@ describe('buildSlackModelOptionsFromDashboard', () => {
   beforeEach(() => {
     getAvailableModels.mockReset();
     findOne.mockReset().mockResolvedValue(null);
+    settings.enforceCredits = false;
   });
 
   it('lists through the shared fan-out with the picker listing options', async () => {
@@ -59,6 +65,7 @@ describe('buildSlackModelOptionsFromDashboard', () => {
       'Moonshot (Kimi)',
       'DeepSeek',
       'Ollama',
+      'Local model server',
       'AWS',
       'Black Forest Labs',
       'Voyage AI',
@@ -78,6 +85,17 @@ describe('buildSlackModelOptionsFromDashboard', () => {
     const { flat } = await buildSlackModelOptionsFromDashboard();
 
     expect(flat.map(o => o.value)).toEqual(['keep']);
+  });
+
+  it('drops an unpriced text model only while credits are enforced', async () => {
+    const priced = model({ id: 'priced', pricing: { 200_000: { input: 1e-6, output: 2e-6 } } });
+    const unpriced = model({ id: 'unpriced', pricing: {} });
+    getAvailableModels.mockResolvedValue([priced, unpriced]);
+
+    settings.enforceCredits = true;
+    expect((await buildSlackModelOptionsFromDashboard()).flat.map(o => o.value)).toEqual(['priced']);
+    settings.enforceCredits = false;
+    expect((await buildSlackModelOptionsFromDashboard()).flat.map(o => o.value)).toEqual(['priced', 'unpriced']);
   });
 
   it('returns an empty dropdown rather than throwing when listing fails', async () => {

@@ -28,9 +28,9 @@ import {
   type SreRevisionRequest,
   SreClassification,
 } from '@bike4mind/common';
-import { SreAgentService } from '@bike4mind/services/sreAgentService';
+import { SreAgentService, SreAccountingError, type SreAccountingContext } from '@bike4mind/services/sreAgentService';
 import { RATE_LIMITED_SENTINEL } from '@bike4mind/services/sreAgentService/tools';
-import { GitHubService, GitHubRateLimitError } from '@server/services/githubService';
+import { GitHubService, GitHubRateLimitError } from '@bike4mind/server-utils/services/githubService';
 import { apiKeyService } from '@bike4mind/services';
 import {
   postSreRevisionStartedMessage,
@@ -38,8 +38,9 @@ import {
   postSreAnalysisFailureMessage,
   postSreRateLimitedMessage,
   postSreNoFixNeededMessage,
-} from '@server/integrations/slack/sreSlackApproval';
+} from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 import { buildWontFixCommentBody, WONT_FIX_COMMENT_MARKER } from '@workers/integrations/sre/wontFixComment';
+import { recoverSreQueueAccounting } from './sreQueueAccounting';
 
 /** HTML marker so the self-heal escalation comment is posted at most once per PR/issue. */
 const SRE_SELFHEAL_ESCALATION_MARKER = '<!-- sre-selfheal-escalation -->';
@@ -107,7 +108,31 @@ async function clearRevisionDedup(repoSlug: string, prNumber: number) {
  * by the merged sreJobQueue handler (sreJob.dispatch) for jobType: 'revision'.
  * Receives an already-validated request.
  */
-export async function runSreRevision(revisionRequest: SreRevisionRequest, logger: Logger): Promise<void> {
+export async function runSreRevision(
+  revisionRequest: SreRevisionRequest,
+  logger: Logger,
+  accounting: SreAccountingContext
+): Promise<void> {
+  await recoverSreQueueAccounting(accounting);
+  const repoSlug = revisionRequest.repoSlug ?? SRE_DEFAULT_REPO_SLUG;
+  const executionId = accounting.attribution.executionId;
+  if (
+    await sreErrorTrackingRepository.hasCompletedRevisionAccounting(revisionRequest.trackingId, repoSlug, executionId)
+  )
+    return;
+  await runSreRevisionOnce(revisionRequest, logger, accounting);
+  try {
+    await sreErrorTrackingRepository.completeRevisionAccounting(revisionRequest.trackingId, repoSlug, executionId);
+  } catch (error) {
+    throw new SreAccountingError('revision_completion_pending', undefined, { cause: error });
+  }
+}
+
+async function runSreRevisionOnce(
+  revisionRequest: SreRevisionRequest,
+  logger: Logger,
+  accounting: SreAccountingContext
+): Promise<void> {
   logger.updateMetadata({ handler: 'sreRevision' });
 
   const repoSlug = revisionRequest.repoSlug ?? SRE_DEFAULT_REPO_SLUG;
@@ -345,7 +370,7 @@ export async function runSreRevision(revisionRequest: SreRevisionRequest, logger
   };
 
   // Run the Diagnostician in revision mode
-  const service = new SreAgentService(logger);
+  const service = new SreAgentService(logger, accounting);
   const result = await service.revise(
     payload,
     repoConfig,

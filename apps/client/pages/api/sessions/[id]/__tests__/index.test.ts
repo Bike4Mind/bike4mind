@@ -20,6 +20,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
+const mockRescope = vi.hoisted(() => vi.fn());
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
+
 const {
   mockValidate,
   mockFindById,
@@ -31,6 +34,8 @@ const {
   mockWithTransaction,
   mockCreateLakeAccess,
   mockResolveWorkspaceSettings,
+  mockUnpublish,
+  mockPurgeMedia,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -42,6 +47,15 @@ const {
   mockWithTransaction: vi.fn(),
   mockCreateLakeAccess: vi.fn(),
   mockResolveWorkspaceSettings: vi.fn(async () => ({ enabledTools: ['tool_w'] })),
+  mockUnpublish: vi.fn(),
+  mockPurgeMedia: vi.fn(),
+}));
+
+vi.mock('@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia', () => ({
+  purgeDeletedNotebookMedia: (...a: unknown[]) => mockPurgeMedia(...a),
+}));
+vi.mock('@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts', () => ({
+  unpublishUserArtifactsBySource: (...a: unknown[]) => mockUnpublish(...a),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -53,12 +67,18 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: (...a: unknown[]) => mockLogEvent(...a) }));
 
 // Avoids constructing a real S3Storage (which reads an SST-bound bucket resource
 // unavailable in a test process) - only PUT's adapters touch this.
@@ -96,11 +116,11 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: (...a: unknown[]) => mockCreateLakeAccess(...a),
 }));
 
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'example-workspace': {
       ownedFields: ['enabledTools', 'temperature'],
@@ -110,6 +130,7 @@ vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', (
 }));
 
 import handler from '../index';
+import versionedHandler from '../../../v1/sessions/[id]/index';
 import { ApiKeyScope, ConcurrencyConflictError, NotFoundError, SessionEvents } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -175,7 +196,15 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
     keyWithScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
   });
 
-  describe('GET', () => {
+  describe.each([
+    ['legacy', handler],
+    ['v1', versionedHandler],
+  ])('GET %s', (_version, getHandler) => {
+    const sessionId = '507f1f77bcf86cd799439011';
+    const runGet: typeof handler = (req, res) => {
+      req.query.id = sessionId;
+      return getHandler(req, res);
+    };
     it('reads the session by the id in the path and redacts systemPromptText', async () => {
       mockGetSession.mockResolvedValue({
         id: 'sess-1',
@@ -184,9 +213,9 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         systemPromptText: 'top secret prompt',
       });
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: 'sess-1' }, expect.anything());
+      expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: sessionId }, expect.anything());
       expect(res._getJSONData()).not.toHaveProperty('systemPromptText');
     });
 
@@ -201,7 +230,7 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         maxToolCalls: 4,
       });
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(200);
       const body = res._getJSONData();
       expect(body.enabledTools).toEqual(['tool_w']);
@@ -224,7 +253,7 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
           maxToolCalls: 4,
         });
         const { req, res } = fire({ method: 'GET' });
-        await handler(req, res);
+        await runGet(req, res);
         expect(res._getStatusCode()).toBe(200);
         const body = res._getJSONData();
         expect(body).not.toHaveProperty('enabledTools');
@@ -239,7 +268,7 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         keyWithScopes([scope]);
         mockGetSession.mockResolvedValue({ id: 'sess-1', name: 'Untitled', userId: 'user-1' });
         const { req, res } = fire({ method: 'GET' });
-        await handler(req, res);
+        await runGet(req, res);
         expect(res._getStatusCode()).toBe(200);
       }
     );
@@ -247,22 +276,33 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
     it('404s a session not visible to the caller', async () => {
       mockGetSession.mockRejectedValue(new NotFoundError('Session not found'));
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toMatchObject({ error: 'Session not found' });
     });
 
     it('403s a key with neither notebooks scope before the handler runs', async () => {
       keyWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ method: 'GET' });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData()).toHaveProperty('error', expect.any(String));
       expect(mockGetSession).not.toHaveBeenCalled();
     });
 
     it('401s an unauthenticated GET before the handler runs', async () => {
       const { req, res } = fire({ method: 'GET', apiKey: null });
-      await handler(req, res);
+      await runGet(req, res);
       expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData()).toHaveProperty('error', expect.any(String));
+      expect(mockGetSession).not.toHaveBeenCalled();
+    });
+
+    it('returns a standard 404 for malformed v1 ids without reading a session', async () => {
+      const { req, res } = fire({ method: 'GET' });
+      await versionedHandler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toMatchObject({ error: 'Session not found' });
       expect(mockGetSession).not.toHaveBeenCalled();
     });
   });
@@ -441,6 +481,28 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       expect(cascadeSawTransaction).toBe(true);
     });
 
+    it('fences committed recipients before unpublishing or media cleanup', async () => {
+      mockDeleteSession.mockImplementationOnce(
+        async (
+          _user: unknown,
+          _params: unknown,
+          adapters: {
+            onAccessRemoved: (ids: string[]) => void;
+          }
+        ) => {
+          expect(mockRescope).not.toHaveBeenCalled();
+          adapters.onAccessRemoved(['actual-recipient']);
+          return { id: 'other-session' };
+        }
+      );
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRescope).toHaveBeenCalledWith(['actual-recipient'], expect.anything());
+      expect(mockRescope.mock.invocationCallOrder[0]).toBeLessThan(mockUnpublish.mock.invocationCallOrder[0]);
+      expect(mockRescope.mock.invocationCallOrder[0]).toBeLessThan(mockPurgeMedia.mock.invocationCallOrder[0]);
+    });
+
     it('deletes the session by the path id and returns the new last-notebook id', async () => {
       mockDeleteSession.mockResolvedValue({ id: 'other-session' });
       const { req, res } = fire({ method: 'DELETE' });
@@ -452,6 +514,66 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         expect.objectContaining({ type: SessionEvents.DELETE_SESSION, metadata: { sessionId: 'sess-1' } }),
         expect.anything()
       );
+    });
+
+    it("takes down the owner's pages published from the deleted notebook", async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockUnpublish).toHaveBeenCalledWith(
+        'user-1',
+        { kind: 'reply', sessionIds: ['sess-1'] },
+        expect.anything()
+      );
+    });
+
+    it('still returns 200 with the new last-notebook id when the unpublish fails', async () => {
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      mockUnpublish.mockRejectedValue(new Error('publish db down'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ newLastNotebookId: 'other-session' });
+      expect(mockLogEvent).toHaveBeenCalled();
+    });
+
+    it("purges the deleted notebook's generated media after the delete commits", async () => {
+      let committed = false;
+      mockWithTransaction.mockImplementation(async (fn: (s: unknown) => unknown) => {
+        const result = await fn(undefined);
+        committed = true;
+        return result;
+      });
+      mockPurgeMedia.mockImplementation(async () => {
+        expect(committed).toBe(true);
+      });
+      mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockPurgeMedia).toHaveBeenCalledTimes(1);
+      expect(mockPurgeMedia).toHaveBeenCalledWith(['sess-1'], expect.anything());
+    });
+
+    it('purges no media when the delete is refused or conflicts', async () => {
+      mockDeleteSession.mockRejectedValueOnce(new NotFoundError('Session not found'));
+      const first = fire({ method: 'DELETE' });
+      await handler(first.req, first.res);
+      expect(first.res._getStatusCode()).toBe(404);
+      mockDeleteSession.mockRejectedValueOnce(new ConcurrencyConflictError('FabFile'));
+      const second = fire({ method: 'DELETE' });
+      await handler(second.req, second.res);
+      expect(second.res._getStatusCode()).toBe(409);
+      expect(mockPurgeMedia).not.toHaveBeenCalled();
+    });
+
+    it('unpublishes nothing when the delete is refused', async () => {
+      mockDeleteSession.mockRejectedValue(new NotFoundError('Session not found'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(mockUnpublish).not.toHaveBeenCalled();
     });
 
     it('returns a null newLastNotebookId when no session remains', async () => {

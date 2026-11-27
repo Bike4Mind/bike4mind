@@ -3,7 +3,7 @@ import { Box, Button, Typography } from '@mui/joy';
 import type { ModelInfo } from '@bike4mind/common';
 import { findAffordableModelOffer } from '@client/app/utils/creditEstimate';
 import { ComposerNote } from './ComposerNote';
-import { CreditOfferActions } from './CreditOfferActions';
+import { CREDIT_OFFER_SURFACES, CreditOfferActions } from './CreditOfferActions';
 
 interface AffordableModelOfferProps {
   enabled: boolean;
@@ -63,7 +63,7 @@ export const AffordableModelOffer = ({
         default model stays the same. Actual credits depend on your next message, attachments and tools.
       </Typography>
       <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-        <CreditOfferActions moment="low" />
+        <CreditOfferActions moment="low" surface={CREDIT_OFFER_SURFACES.affordableModelOffer} />
         <Button
           size="sm"
           variant="plain"

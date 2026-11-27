@@ -1,6 +1,9 @@
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { emailSuspensionNoticeIfEnabled } from '@server/users/suspensionNoticeEmail';
 import {
+  adminSettingsRepository,
   Organization,
   User,
   userRepository,
@@ -14,27 +17,63 @@ import { userService } from '@bike4mind/services';
 import { commitWithSessionEnd, type SessionEndReason } from '@server/auth/endUserSessions';
 import {
   ApiKeyScope,
+  BadRequestError,
   ForbiddenError,
+  assertCanActOnAdminTarget,
+  hasAdminPermission,
+  isFullAdmin,
   redactUserSecretsForSelf,
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
+import { normalizeTelemetryUserId } from '@server/utils/telemetryIdentity';
 import { getClientIp, truncateIp } from '@bike4mind/server-utils/utils/ip';
 import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
+import { propagateAccountRisk } from '@bike4mind/server-utils/billing/linkedAccounts';
 import {
-  denySelfAdminAction,
+  cancelAccountSubscriptions,
+  SINGLE_USER_CANCEL_BUDGET_MS,
+  subscriptionCancellationAudit,
+  subscriptionCancellationResponse,
+  type AccountSubscriptionCancellation,
+} from '@bike4mind/server-utils/billing/cancelAccountSubscriptions';
+import {
+  diffProfileFields,
+  profileFieldsSent,
+  readProfileSnapshot,
+  recordProfileUpdate,
+} from '@server/users/profileUpdateAudit';
+import {
   isSameUserId,
   isSelfOrImpersonator,
   parseAdminActionReason,
+  readAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+  requestAuditWriter,
+} from '@bike4mind/server-utils/utils/adminAudit';
+import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
+import { requestApproval } from '@server/admin/approvals/service';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import type { Request } from 'express';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'userUpdate' } });
 
 const idParamSchema = z.object({ id: z.string() });
 
 const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
+  appliedCreditDelta: z.number().int().optional(),
   ignoredFields: z.array(z.string()).optional(),
+  subscriptionCancellation: z
+    .object({
+      canceled: z.array(z.string()),
+      failed: z.array(z.object({ customerId: z.string(), subscriptionId: z.string().nullable(), reason: z.string() })),
+    })
+    .optional(),
+  // Present only when this request ran the telemetry opt-out deletion.
+  telemetryDeletion: z.object({ verified: z.boolean(), remainingCount: z.number().int().optional() }).optional(),
 });
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
@@ -79,54 +118,44 @@ function logConsentToggle(
     outcome: 'success',
     durationMs: 0,
     metadata: { previousLevel, newLevel, source: 'user_preferences' },
-  }).catch(err =>
-    console.warn('[TelemetryAudit] Failed to log consent toggle:', err instanceof Error ? err.message : 'Unknown error')
-  );
+  }).catch(err => logger.warn('Failed to log consent toggle', { error: err }));
 }
 
 /**
- * Handle telemetry consent changes: log the toggle and trigger deletion if opted out.
- * Deletion is awaited (GDPR Article 17 requires verified deletion).
- * On failure, preference is still set to 'none' (stops future collection) and failure is audited.
+ * Handle telemetry consent changes: log the toggle and run the opt-out deletion.
+ * The deletion runs when the level moves to 'none', and again on request (`rerunDeletion`) while it
+ * already is 'none', so an incomplete run can be repeated without leaving the tier.
+ * The preference is saved before this runs, so collection stops whatever the deletion outcome.
+ * Returns what the response reports, or undefined when no deletion ran.
  */
 async function handleTelemetryConsentChange(
   userId: string,
   previousLevel: string | undefined,
   newLevel: string,
-  req: { ip?: string; headers: Record<string, unknown> }
-) {
-  if (!previousLevel || previousLevel === newLevel) return;
-  logConsentToggle(userId, previousLevel, newLevel, req);
-  if (newLevel === 'none') {
-    try {
-      await triggerTelemetryDeletion(userId, req);
-    } catch (err) {
-      console.error(
-        '[Telemetry] Deletion failed, user preference still set to none:',
-        err instanceof Error ? err.message : 'Unknown error'
-      );
-      // Audit the failure so admins can monitor and manually retry
-      await TelemetryAuditLogModel.create({
-        action: 'delete',
-        userId,
-        questId: 'bulk-opt-out',
-        sourceIp: truncateIp(getClientIp(req as Parameters<typeof getClientIp>[0])),
-        userAgent: (req.headers['user-agent'] as string) ?? 'unknown',
-        outcome: 'failure',
-        durationMs: 0,
-        metadata: { error: err instanceof Error ? err.message : 'Unknown error', reason: 'user_opt_out' },
-      }).catch(() => {}); // Audit failure is truly non-blocking
-    }
-  }
+  req: { ip?: string; headers: Record<string, unknown> },
+  rerunDeletion: boolean
+): Promise<{ verified: boolean; remainingCount?: number } | undefined> {
+  if (!previousLevel) return undefined;
+  const changed = previousLevel !== newLevel;
+  if (changed) logConsentToggle(userId, previousLevel, newLevel, req);
+  if (newLevel !== 'none' || (!changed && !rerunDeletion)) return undefined;
+  const { verified, remainingCount } = await triggerTelemetryDeletion(userId, req);
+  return { verified, ...(remainingCount !== undefined && { remainingCount }) };
 }
 
 type AccountStateSnapshot = Parameters<typeof userService.entersBlockedState>[0] & {
-  isAdmin?: boolean;
+  suspensionReasonCategory?: string | null;
+  isModerated?: boolean;
   email?: string | null;
+  moderation?: { status?: string | null; throttledUntil?: Date | string | null } | null;
 };
 
 type AuditTargetSnapshot = {
   isAdmin?: boolean;
+  adminPermissions?: string[];
+  adminRoleIds?: unknown[];
+  isBanned?: boolean;
+  isModerated?: boolean;
   currentCredits?: number;
   name?: string;
   username?: string;
@@ -138,6 +167,36 @@ const userAuditTarget = (userId: string, user: AuditTargetSnapshot | null) => ({
   id: userId,
   displayName: user?.name || user?.username || user?.email || userId,
 });
+
+/** The status flags an admin update can flip, each with its own audit action pair. */
+const STATUS_FLAGS = [
+  {
+    field: 'isBanned',
+    on: { action: 'user.suspended', summary: 'suspended the account' },
+    off: { action: 'user.reinstated', summary: 'reinstated the account' },
+  },
+  {
+    field: 'isModerated',
+    on: { action: 'user.restricted', summary: 'restricted the account' },
+    off: { action: 'user.restriction_lifted', summary: 'lifted the restriction' },
+  },
+] as const;
+
+const toIsoOrNull = (value: Date | string | null | undefined) => (value ? new Date(value).toISOString() : null);
+
+/**
+ * The flags this body actually flips. Generic edits resend the whole user, so a flag sent with its
+ * current value is not a change and needs no reason.
+ */
+const statusFlagChanges = (body: userService.AdminUpdateUserParameters, before: AuditTargetSnapshot | null) =>
+  STATUS_FLAGS.filter(({ field }) => body[field] !== undefined && body[field] !== !!before?.[field]);
+
+/** The signed balance move an admin update body asks for, before adminUpdateUser clamps a deduction at zero. */
+const requestedCreditDelta = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
+  body.creditDelta ?? (body.currentCredits !== undefined ? body.currentCredits - (currentCredits ?? 0) : 0);
+
+/** The fields a held self-grant may carry: anything else would be applied without the credits it came with. */
+const SELF_GRANT_FIELDS: ReadonlySet<string> = new Set(['id', 'currentCredits', 'creditDelta', 'creditReason']);
 
 /** Whether an admin update body asks to move the balance; mirrors adminUpdateUser's delta rule. */
 const requestsCreditChange = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
@@ -163,25 +222,32 @@ function adminEditSessionEndReason(
 
 const handler = baseApi().put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
-    const { id: userId } = idParamSchema.parse(req.query);
+    const { id: rawUserId } = idParamSchema.parse(req.query);
+    const userId = normalizeTelemetryUserId(rawUserId);
     const currentUser = req.user;
 
     const isSelf = isSameUserId(currentUser.id, userId);
+    // An admin editing someone else, or any edit made while impersonating, is mirrored as user.profile.updated.
+    const mirrorsProfileUpdate = !isSelf || !!currentUser.impersonatedBy;
+
+    const fullAdmin = isFullAdmin(currentUser);
+    // A delegate editing their own profile takes the self-service branch like any user.
+    const moderator = !fullAdmin && !isSelf && hasAdminPermission(currentUser, 'users:moderate');
 
     // Non-admin users can only update their own profile
-    if (!currentUser.isAdmin && !isSelf) {
+    if (!fullAdmin && !moderator && !isSelf) {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
     // Changing your OWN sign-in credentials needs a browser session that recently re-verified, so
     // an API key can never do it. Only the admin schema accepts `email`. An admin writing ANOTHER
-    // user's credentials or granting the admin role is held to the same bar in the admin branch.
+    // user's credentials is held to the same bar in the admin branch.
     if (isSelf && writesCredentialFields(req.body)) {
       if (req.apiKeyInfo) throw new ForbiddenError('Password and email cannot be changed with an API key.');
       await requireStepUp(req);
     }
 
-    if (currentUser.isAdmin) {
+    if (fullAdmin || moderator) {
       // The admin branch writes credits, roles and email, so it needs the ADMIN
       // scope - but this route cannot declare `requiredScopes`, because it is also
       // every ordinary user's own profile update. The gate therefore lives on the
@@ -194,85 +260,109 @@ const handler = baseApi().put(
         throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
       }
 
-      // Another user's credentials and the admin role are session-only changes: an API key is
-      // refused, a browser session must have recently re-verified. Both run before any write.
-      // Revoking the role, bans and every other field stay ungated.
-      if (!isSelf) {
-        const grantsAdminRole =
-          (req.body as Record<string, unknown> | undefined)?.isAdmin === true &&
-          !((await User.findById(userId).select('isAdmin').lean()) as { isAdmin?: boolean } | null)?.isAdmin;
-        if (writesCredentialFields(req.body) || grantsAdminRole) {
-          if (req.apiKeyInfo) {
-            throw new ForbiddenError('Credential and admin-role changes require a signed-in session.');
-          }
-          await requireStepUp(req);
-        }
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // The Super Admin role has its own route (PUT /api/admin/users/[userId]/role) with step-up, a
+      // reason and the last-admin guard. Refuse it here, even unchanged, so this route never writes it.
+      if ('isAdmin' in rawBody || 'roleChangeReason' in rawBody) {
+        throw new BadRequestError('Change the Super Admin role with PUT /api/admin/users/:userId/role.');
       }
 
-      // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
-      // Zod strips unknown keys, so a misnamed admin field (the `adminNote` vs
-      // `creditReason` mix-up in useUpdateUserCredits was exactly this) parses away
+      // Another user's credentials are a session-only change: an API key is refused, a browser
+      // session must have recently re-verified, before any write. Bans and every other field stay ungated.
+      if (!isSelf && writesCredentialFields(req.body)) {
+        if (req.apiKeyInfo) throw new ForbiddenError('Credential changes require a signed-in session.');
+        await requireStepUp(req);
+      }
+
+      // Parse with the admin schema -- includes email, tags, credits, etc.
+      // Request flags, not user fields: deferLinkPropagation (see linked-suspend-propagation.ts),
+      // undoSuspension (an Undo of the admin's own suspend; see gradeDetectionsForStatusChange) and
+      // rerunTelemetryDeletion (see handleTelemetryConsentChange).
+      const { deferLinkPropagation, undoSuspension, rerunTelemetryDeletion, ...adminBody } = rawBody;
+      // Zod strips unknown keys, so a misnamed admin field (e.g. `adminNote` instead of
+      // `creditReason`) parses away
       // and the 200 reads as "fully applied" when a credit grant, tag, or role
       // change never happened. Report them instead. Mirrors the self-service branch.
       const adminKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
-      const ignoredFields = Object.keys(rawBody).filter(key => !adminKeys.has(key));
-
-      // id comes from the route param; the spread ensures it wins over any id in the body.
-      const body = userService.adminUpdateUserSchema.parse({ ...rawBody, id: userId });
-
-      const targetBefore = (await User.findById(userId)
-        .select('isAdmin currentCredits name username email')
-        .lean()) as AuditTargetSnapshot | null;
-      const auditTarget = userAuditTarget(userId, targetBefore);
-      const changesRole = body.isAdmin !== undefined && body.isAdmin !== !!targetBefore?.isAdmin;
-      const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
-
-      // No self-service privilege: an admin cannot move their own balance or change their own
-      // admin flag. The attempt is recorded as a critical denied entry and answered with a 403.
-      const deniesSelf = isSelfOrImpersonator(currentUser, userId);
-      if (deniesSelf && changesRole) {
-        await denySelfAdminAction(req, {
-          action: 'user.role.denied',
-          attempted: body.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
-          target: auditTarget,
-        });
-      }
-      if (deniesSelf && changesCredits) {
-        await denySelfAdminAction(req, {
-          action: 'user.credits.denied',
-          attempted: 'user.credits.adjusted',
-          target: auditTarget,
-        });
-      }
-
-      // Validated before any write so a missing reason never leaves a half-applied update.
-      const roleChangeReason = changesRole ? parseAdminActionReason(body.roleChangeReason) : undefined;
-      const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
-
-      // Lockout guard: an explicit demote must not remove the ONLY remaining Super Admin.
-      if (changesRole && body.isAdmin === false) {
-        const adminCount = await userRepository.count({ isAdmin: true });
-        if (adminCount <= 1) {
-          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
+      const ignoredFields = Object.keys(adminBody).filter(key => !adminKeys.has(key));
+      if (moderator) {
+        const fullAdminFields = Object.keys(adminBody).filter(
+          key => adminKeys.has(key) && !userService.MODERATION_UPDATE_FIELDS.has(key)
+        );
+        if (fullAdminFields.length > 0) {
+          throw new ForbiddenError(`Only full administrators can change: ${fullAdminFields.join(', ')}`, {
+            full_admin_fields: fullAdminFields,
+          });
         }
       }
+
+      // id comes from the route param; the spread ensures it wins over any id in the body.
+      const body = userService.adminUpdateUserSchema.parse({ ...adminBody, id: userId });
+
+      const targetBefore = (await User.findById(userId)
+        .select('isAdmin adminPermissions adminRoleIds isBanned isModerated currentCredits name username email')
+        .lean()) as AuditTargetSnapshot | null;
+      if (!targetBefore) return res.status(404).json({ error: 'User not found' });
+      if (moderator) assertCanActOnAdminTarget(currentUser, targetBefore, 'suspend or restrict');
+      const auditTarget = userAuditTarget(userId, targetBefore);
+      const statusChanges = statusFlagChanges(body, targetBefore);
+      const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
+
+      // Self credit adjustments are flagged in their audit entry; an increase waits for a second admin
+      // unless the admin holds credits:self_grant (isHeldSelfGrant).
+      const targetsSelf = isSelfOrImpersonator(currentUser, userId);
+
+      // Validated before any write so a missing reason never leaves a half-applied update.
+      const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+
+      const selfGrantCredits = targetsSelf ? requestedCreditDelta(body, targetBefore.currentCredits) : 0;
+      if (creditReason && selfGrantCredits > 0 && isHeldSelfGrant(currentUser, true)) {
+        const otherFields = Object.entries(body)
+          .filter(([field, value]) => value !== undefined && !SELF_GRANT_FIELDS.has(field))
+          .map(([field]) => field);
+        if (otherFields.length > 0) {
+          throw new BadRequestError(
+            `A credit grant to your own account waits for another admin's approval, so send it on its own. Also sent: ${otherFields.join(', ')}`
+          );
+        }
+        const pending = await requestApproval(req as unknown as Request, {
+          action: 'user.credits.self_grant',
+          params: { userId, creditDelta: selfGrantCredits, creditReason },
+          summary: `Grant ${selfGrantCredits} credits to their own account`,
+          reason: creditReason,
+          ...SELF_GRANT_APPROVAL,
+        });
+        return res.status(202).json(pending);
+      }
+      const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
+      const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
 
       const incomingTelemetryLevel = body.preferences?.contextTelemetryLevel;
       const previousTelemetryLevel = incomingTelemetryLevel
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
+      const profileFields = mirrorsProfileUpdate ? profileFieldsSent(body) : [];
+      const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
+
       req.logger.updateMetadata({ updatedFields: Object.keys(body) });
-      await commitWithSessionEnd(
+      const {
+        snapshot: blockSnapshot,
+        updated: blockUpdated,
+        appliedCreditDelta,
+      } = await commitWithSessionEnd(
         req,
         async () => {
           // Read inside the transaction so the reason sees the state the write saw; an
           // outside read can be stale by the time the write commits.
           const snapshot = (await User.findById(userId)
-            .select('isAdmin email isBanned disputePending moderation')
+            .select('email isBanned suspensionReasonCategory isModerated disputePending moderation')
             .lean()) as AccountStateSnapshot | null;
-          const { user: updated, creditAdjustment } = await userService.adminUpdateUser(
+          const {
+            user: updated,
+            creditAdjustment,
+            bannedRiskReviewFrom,
+          } = await userService.adminUpdateUser(
             currentUser.id,
             changesCredits ? { ...body, creditReason } : { ...body, currentCredits: undefined, creditReason },
             {
@@ -284,32 +374,91 @@ const handler = baseApi().put(
                 realtimeConnections: realtimeConnectionRepository,
                 creditTransactions: creditTransactionRepository,
               },
+              resolveAdminRoles: resolveRoleAdminPermissions,
             }
           );
 
-          // Both entries are strict: a failed audit write aborts this transaction, so neither the
-          // role change nor the balance change can commit without its record.
-          if (changesRole && snapshot?.isAdmin !== updated?.isAdmin) {
+          // These entries are strict: a failed audit write aborts this transaction, so no balance,
+          // suspension or restriction change can commit without its record. Status entries follow
+          // what this write flipped, not the pre-read: a concurrent edit can make the pre-read stale,
+          // and a flip it missed still needs its reason, or the 400 rolls it back. No written user
+          // (the row vanished) means nothing flipped.
+          for (const { field, on, off } of updated ? STATUS_FLAGS : []) {
+            const before = !!snapshot?.[field];
+            const after = !!updated?.[field];
+            if (before === after) continue;
             await recordAdminActionFromRequest(req, {
-              action: updated?.isAdmin ? 'user.role.admin_granted' : 'user.role.admin_revoked',
+              ...(after ? on : off),
               target: auditTarget,
-              summary: updated?.isAdmin ? 'granted the admin role' : 'revoked the admin role',
-              reason: roleChangeReason,
-              changes: [{ field: 'isAdmin', before: !!snapshot?.isAdmin, after: !!updated?.isAdmin }],
+              reason: statusChangeReason ?? parseAdminActionReason(body.statusChangeReason),
+              changes: [
+                { field, before, after },
+                ...(field === 'isBanned' && bannedRiskReviewFrom
+                  ? [{ field: 'riskScore.reviewState', before: bannedRiskReviewFrom, after: 'banned' }]
+                  : []),
+                ...(field === 'isBanned' &&
+                (snapshot?.suspensionReasonCategory ?? null) !== (updated?.suspensionReasonCategory ?? null)
+                  ? [
+                      {
+                        field: 'suspensionReasonCategory',
+                        before: snapshot?.suspensionReasonCategory ?? null,
+                        after: updated?.suspensionReasonCategory ?? null,
+                      },
+                    ]
+                  : []),
+              ],
+            });
+          }
+          const moderationBefore = snapshot?.moderation?.status ?? 'active';
+          const moderationAfter = updated?.moderation?.status ?? 'active';
+          // Every moderation decision is recorded, including one that keeps the status: it re-arms the
+          // throttle and marks the account reviewed.
+          if (body.moderationStatus && updated) {
+            const throttledBefore = toIsoOrNull(snapshot?.moderation?.throttledUntil);
+            const throttledAfter = toIsoOrNull(updated.moderation?.throttledUntil);
+            await recordAdminActionFromRequest(req, {
+              action: 'user.moderation_status.changed',
+              target: auditTarget,
+              summary: `set the moderation status to ${moderationAfter}`,
+              reason: readAdminActionReason(body.statusChangeReason),
+              changes: [
+                { field: 'moderation.status', before: moderationBefore, after: moderationAfter },
+                ...(throttledBefore !== throttledAfter
+                  ? [{ field: 'moderation.throttledUntil', before: throttledBefore, after: throttledAfter }]
+                  : []),
+              ],
             });
           }
           if (creditAdjustment) {
-            const { credits, previousBalance, resultingBalance } = creditAdjustment;
+            const { credits, previousBalance, resultingBalance, creditTransactionId } = creditAdjustment;
             await recordAdminActionFromRequest(req, {
               action: 'user.credits.adjusted',
               target: auditTarget,
               summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
               reason: creditAdjustment.note,
               changes: [{ field: 'currentCredits', before: previousBalance, after: resultingBalance }],
-              details: { credits },
+              details: { credits, selfGrant: targetsSelf },
+              related: creditTransactionId ? { creditTransactionId } : undefined,
             });
           }
-          return { snapshot, updated };
+          if (body.throttleTier && throttleReason) {
+            const tierChange = await userService.setThrottleTier(
+              userId,
+              body.throttleTier,
+              { reason: throttleReason, source: 'admin', changedBy: currentUser.id },
+              { db: { users: userRepository } }
+            );
+            if (tierChange.changed) {
+              await recordAdminActionFromRequest(req, {
+                action: 'user.throttle_tier.changed',
+                target: auditTarget,
+                summary: `set the restricted tier to ${tierChange.after} (source: admin, reason: ${throttleReason})`,
+                reason: throttleReason,
+                changes: [{ field: 'throttle.tier', before: tierChange.before, after: tierChange.after }],
+              });
+            }
+          }
+          return { snapshot, updated, appliedCreditDelta: creditAdjustment?.credits };
         },
         // adminUpdateUser returns the user as written, read inside the same transaction.
         ({ snapshot, updated }) => {
@@ -318,29 +467,107 @@ const handler = baseApi().put(
         }
       );
 
-      // Log consent change only after successful update
-      if (incomingTelemetryLevel) {
-        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
+      // A ban, suspension or dispute flag reaches accounts linked by card or network. After commit
+      // and never throws, so it cannot undo the admin's change.
+      // A suspend that is one of several in an admin action defers this: the action propagates once for
+      // all of its accounts afterwards (pages/api/admin/users/linked-suspend-propagation.ts).
+      if (
+        !(deferLinkPropagation === true && !req.apiKeyInfo) &&
+        blockSnapshot &&
+        blockUpdated &&
+        userService.entersBlockedState(blockSnapshot, blockUpdated)
+      ) {
+        await propagateAccountRisk(
+          { sourceUserId: userId, trigger: 'blocked by an admin', key: `admin-block:${userId}:${Date.now()}` },
+          req.logger
+        );
       }
+
+      // A suspension for abuse, or a reinstatement, settles the account's open shadow detections.
+      // After commit and never throws.
+      if (blockSnapshot && blockUpdated) {
+        await gradeDetectionsForStatusChange(
+          {
+            userId,
+            adminId: currentUser.id,
+            wasSuspended: !!blockSnapshot.isBanned,
+            isSuspended: !!blockUpdated.isBanned,
+            reason: statusChangeReason,
+            undo: undoSuspension === true,
+          },
+          { writeAudit: requestAuditWriter(req), logger: req.logger }
+        );
+      }
+
+      // Only the admin suspension (isBanned), not a moderation auto-suspension, which has its own notice.
+      if (blockSnapshot && blockUpdated && !blockSnapshot.isBanned && blockUpdated.isBanned) {
+        await emailSuspensionNoticeIfEnabled(userId, blockUpdated.suspensionReasonCategory, req.logger);
+      }
+
+      let cancellation: AccountSubscriptionCancellation | null = null;
+      // A banned or suspended account must not renew. Stripe failures are logged and audited, never
+      // undo the block.
+      if (blockSnapshot && blockUpdated && userService.entersSuspension(blockSnapshot, blockUpdated)) {
+        cancellation = await cancelAccountSubscriptions(
+          { userId, reason: 'suspended', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+          req.logger
+        );
+        const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
+        if (cancellationEntry) {
+          await recordAdminActionFromRequest(req, {
+            ...cancellationEntry,
+            target: auditTarget,
+            // A moderation-only suspension carries no status reason; this runs after the commit and
+            // the Stripe cancel, so it must not throw.
+            reason: statusChangeReason ?? readAdminActionReason(body.statusChangeReason),
+          });
+        }
+      }
+
+      if (profileFields.length > 0) {
+        await recordProfileUpdate(req, {
+          target: auditTarget,
+          changes: diffProfileFields(profileFields, profileBefore, await readProfileSnapshot(userId, profileFields)),
+        });
+      }
+
+      // Log consent change only after successful update
+      const telemetryDeletion = incomingTelemetryLevel
+        ? await handleTelemetryConsentChange(
+            userId,
+            previousTelemetryLevel,
+            incomingTelemetryLevel,
+            req,
+            rerunTelemetryDeletion === true
+          )
+        : undefined;
+
+      const subscriptionCancellationBody = subscriptionCancellationResponse(cancellation);
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
       // Admin branch: symmetric with the admin view of GET /users/[id].
       const safeUser = redactUserSecretsForSelf(finalUser, {
         keep: ['securityQuestions'],
-        keepAdminOnly: ['userNotes'],
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals'],
       });
       // safeUser is null when the row vanished mid-request; spreading null there would
       // turn the response into a bare { ignoredFields } that reads as a user document.
-      return respond(
-        res,
-        updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
-      );
+      const responseBody = safeUser
+        ? {
+            ...safeUser,
+            ...(appliedCreditDelta !== undefined && { appliedCreditDelta }),
+            ...(ignoredFields.length > 0 && { ignoredFields }),
+            ...subscriptionCancellationBody,
+            ...(telemetryDeletion && { telemetryDeletion }),
+          }
+        : null;
+      return respond(res, updateUserResponseSchema.nullable(), responseBody);
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.
       // secureParameters inside the service strips any keys not in this allowlist.
-      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      // rerunTelemetryDeletion is a request flag, not a user field (see handleTelemetryConsentChange).
+      const { rerunTelemetryDeletion, ...rawBody } = (req.body ?? {}) as Record<string, unknown>;
       // A non-admin key here (creditDelta, tags, isAdmin, ...) parses away silently
       // below -- surface it in the response so a 200 can't read as "fully applied"
       // when part of the request was discarded.
@@ -354,10 +581,14 @@ const handler = baseApi().put(
         ? await getPreviousConsentLevel(userId, incomingTelemetryLevel, body.preferences)
         : undefined;
 
+      const profileFields = mirrorsProfileUpdate ? profileFieldsSent(body) : [];
+      const profileBefore = profileFields.length > 0 ? await readProfileSnapshot(userId, profileFields) : null;
+
       const update = () =>
         userService.updateUser(userId, body, {
           db: {
             users: userRepository,
+            adminSettings: adminSettingsRepository,
           },
         });
       // Only a password change needs the transaction; ordinary profile and preference saves skip it.
@@ -370,10 +601,26 @@ const handler = baseApi().put(
         await update();
       }
 
-      // Log consent change only after successful update
-      if (incomingTelemetryLevel) {
-        await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
+      if (profileFields.length > 0) {
+        const targetSnapshot = (await User.findById(userId)
+          .select('name username email')
+          .lean()) as AuditTargetSnapshot | null;
+        await recordProfileUpdate(req, {
+          target: userAuditTarget(userId, targetSnapshot),
+          changes: diffProfileFields(profileFields, profileBefore, await readProfileSnapshot(userId, profileFields)),
+        });
       }
+
+      // Log consent change only after successful update
+      const telemetryDeletion = incomingTelemetryLevel
+        ? await handleTelemetryConsentChange(
+            userId,
+            previousTelemetryLevel,
+            incomingTelemetryLevel,
+            req,
+            rerunTelemetryDeletion === true
+          )
+        : undefined;
 
       // Non-admin self-update: symmetric with the self view of GET /users/[id], which means
       // no userNotes. This branch's own schema cannot write them either, so nothing is lost.
@@ -384,7 +631,11 @@ const handler = baseApi().put(
       return respond(
         res,
         updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+        safeUser && {
+          ...safeUser,
+          ...(ignoredFields.length > 0 && { ignoredFields }),
+          ...(telemetryDeletion && { telemetryDeletion }),
+        }
       );
     }
   })

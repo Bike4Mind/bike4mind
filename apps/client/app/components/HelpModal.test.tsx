@@ -94,6 +94,21 @@ describe('HelpModal', () => {
     expect(toast.warning).not.toHaveBeenCalled();
   });
 
+  it('sends the web client context with the report', async () => {
+    h.createFeedbackOnServer.mockResolvedValue({ id: 'fb1', delivery: { delivered: true, channels: {} } });
+    queryClient.setQueryData(['appVersion'], { version: '3.2.1' });
+    renderModal();
+
+    submitFeedback('great app');
+
+    await waitFor(() => expect(h.createFeedbackOnServer).toHaveBeenCalled());
+    expect(h.createFeedbackOnServer.mock.calls[0][0].clientContext).toMatchObject({
+      platform: 'web',
+      appVersion: '3.2.1',
+      path: window.location.pathname,
+    });
+  });
+
   it('shows a success toast and logs the event once delivery succeeds', async () => {
     h.createFeedbackOnServer.mockResolvedValue({
       id: 'fb1',

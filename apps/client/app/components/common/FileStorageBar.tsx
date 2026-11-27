@@ -1,5 +1,5 @@
 import { LinearProgress, Typography } from '@mui/joy';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { FC } from 'react';
 
 type FileStorageBarProps = {

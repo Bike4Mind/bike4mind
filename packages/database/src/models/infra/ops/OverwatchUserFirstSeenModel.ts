@@ -1,4 +1,5 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
+import { OVERWATCH_LANE_VALUES, type OverwatchLane } from '@bike4mind/common';
 
 const ModelName = 'OverwatchUserFirstSeen';
 
@@ -17,6 +18,10 @@ export interface IOverwatchUserFirstSeenDoc {
   userId: string;
   /** YYYY-MM-DD format */
   firstSeenDate: string;
+  /** 'synthetic' once any of the user's events carried that lane; sticky. Absent means unmarked. */
+  lane?: OverwatchLane;
+  /** true once any of the user's events carried `metadata.internal: true`; sticky. Absent means unmarked. */
+  internal?: boolean;
   createdAt: Date;
 }
 
@@ -27,6 +32,9 @@ const OverwatchUserFirstSeenSchema = new Schema<IOverwatchUserFirstSeenDoc>(
     productId: { type: String, required: true },
     userId: { type: String, required: true },
     firstSeenDate: { type: String, required: true },
+    // No default: an old record must keep reading as unmarked.
+    lane: { type: String, enum: OVERWATCH_LANE_VALUES },
+    internal: { type: Boolean },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

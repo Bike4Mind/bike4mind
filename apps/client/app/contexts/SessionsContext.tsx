@@ -357,9 +357,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
   const { initializeSession, setWorkBenchFiles, setWorkBenchHydrated } = useWorkBenchActions();
 
   // Auto-disable expensive tools when switching notebooks
-  const { setLLM, tools, isQuestMasterEnabled } = useLLM(
-    useShallow(s => ({ setLLM: s.setLLM, tools: s.tools, isQuestMasterEnabled: s.isQuestMasterEnabled }))
-  );
+  const { setLLM, tools } = useLLM(useShallow(s => ({ setLLM: s.setLLM, tools: s.tools })));
   const previousSessionIdRef = useRef<string | null>(null);
   // Generation counter for workbench hydration; see the fetchFiles effect below.
   const hydrationSeqRef = useRef(0);
@@ -704,10 +702,10 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     knowledgeFieldTrustworthy,
   ]);
 
-  // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research and QuestMaster when SWITCHING notebooks (A->B)
+  // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research when SWITCHING notebooks (A->B)
   // This prevents accidental expensive operations when users change context
   // Note: We do NOT auto-disable when CREATING a new session (null->A), as the user may have
-  // explicitly enabled these tools (e.g., New Quest from /quests page)
+  // explicitly enabled the tool for it
   useEffect(() => {
     const previousSessionId = previousSessionIdRef.current;
 
@@ -722,35 +720,22 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
     // This is a real session switch - check if we need to disable tools
     const hasDeepResearch = tools.includes('deep_research');
-    const hasQuestMaster = isQuestMasterEnabled;
 
-    if (hasDeepResearch || hasQuestMaster) {
+    if (hasDeepResearch) {
       console.log('🔒 Auto-disabling expensive tools due to notebook switch', {
         from: previousSessionId,
         to: currentSessionId,
         disablingDeepResearch: hasDeepResearch,
-        disablingQuestMaster: hasQuestMaster,
       });
 
-      // Create updated tools array without deep_research
-      const updatedTools = hasDeepResearch ? tools.filter(tool => tool !== 'deep_research') : tools;
+      setLLM({ tools: tools.filter(tool => tool !== 'deep_research') });
 
-      // Update LLM state
-      setLLM({
-        tools: updatedTools,
-        isQuestMasterEnabled: false, // Always disable QuestMaster on session switch
-      });
-
-      // Show user notification if any tools were disabled
+      // Show user notification that the tool was disabled
       setTimeout(() => {
         if (typeof window !== 'undefined') {
-          const disabledTools = [];
-          if (hasDeepResearch) disabledTools.push('Deep Research');
-          if (hasQuestMaster) disabledTools.push('QuestMaster');
-
           const event = new CustomEvent('show-toast', {
             detail: {
-              message: `${disabledTools.join(' and ')} disabled when switching notebooks. Re-enable in tools if needed.`,
+              message: 'Deep Research disabled when switching notebooks. Re-enable in tools if needed.',
               type: 'info',
             },
           });
@@ -761,7 +746,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
     // Update the ref to track this session ID for the next change
     previousSessionIdRef.current = currentSessionId;
-  }, [currentSessionId, tools, isQuestMasterEnabled, setLLM]); // Include dependencies but logic prevents unnecessary disabling
+  }, [currentSessionId, tools, setLLM]); // Include dependencies but logic prevents unnecessary disabling
 
   // Initialize sessions
   useEffect(() => {

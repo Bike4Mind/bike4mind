@@ -1,0 +1,1283 @@
+/**
+ * Slack rendering for CloudWatch alarm notifications, shared by the alarm relay Lambdas.
+ * Pure: no sst or AWS SDK import, so it is testable without mocking resources.
+ *
+ * Layout: a top-level header carries stage and level at a glance; the details sit in a
+ * colour-barred attachment (red page / amber warn / blue info on production, grey on any other
+ * stage, green when resolved). Mentions only ever apply to production alarms, at page level
+ * unless the setting widens them to warn (see parseMentionSetting). Stages other than production
+ * post page-level alarms only; their warnings are dropped. A resolved line is posted only for an
+ * alarm that was in ALARM; a new alarm settling from INSUFFICIENT_DATA to OK is not news.
+ *
+ * Every catalog entry carries a category, shown in the footer. Cost alarms can route to their own
+ * channel through SLACK_COST_ALARMS_WEBHOOK_URL (see resolveAlarmWebhookUrl). The ledger spend
+ * alarms are abuse, not cost: a credit farm is what they catch, and they stay with the other
+ * abuse signals in the alarms channel. Cost is for money the provider or Stripe reports.
+ */
+
+import { ADMIN_MODERATION_INCIDENTS_TAB_SLUG, adminDlqReplayPath, classifyStage } from '@bike4mind/common';
+import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
+
+export type AlarmLevel = 'page' | 'warn' | 'info';
+
+/**
+ * What kind of alarm it is, shown in the footer and used to pick the Slack channel.
+ * cost: spend reported by a provider or a payment that granted nothing. abuse: farming and
+ * runaway ledger spend.
+ * jobs: background work failing or stalled. security: edge and sign-in protections.
+ * infra: everything else about the platform being up.
+ */
+export type AlarmCategory = 'cost' | 'abuse' | 'jobs' | 'infra' | 'security';
+
+export const ALARM_CATEGORIES: readonly AlarmCategory[] = ['cost', 'abuse', 'jobs', 'infra', 'security'];
+
+/**
+ * Extra data the relay loads before posting; see youngAccountSpendDetail.ts, providerSpendDetail.ts
+ * and refusedRequestBurstDetail.ts.
+ */
+export type AlarmDetailKind = 'young-account-spend' | 'provider-spend' | 'refused-request-burst';
+
+export type AlarmLinkKey =
+  | 'ai-advisory'
+  | 'campaign-evidence'
+  | 'api-key-accounts'
+  | 'signup-activity'
+  | 'waf-block-list'
+  | 'dlq-replay'
+  | 'agent-executions'
+  | 'integration-health'
+  | 'system-secrets'
+  | 'rate-limits'
+  | 'spend-monitor'
+  | 'moderation-review'
+  | 'moderation-settings'
+  | 'model-prices';
+
+export interface AlarmCatalogEntry {
+  title: string;
+  level: AlarmLevel;
+  category: AlarmCategory;
+  meaning: string;
+  action: string;
+  /** Short noun for the metric count, used in the "what happened" sentence. */
+  unit?: string;
+  measurement?: 'hourly-census';
+  coverage?: string;
+  handoff?: string;
+  /** Admin pages the "what to do" text points at; rendered as buttons when the app URL is known. */
+  links?: AlarmLinkKey[];
+  /** Per-alarm path for a link key, replacing its ADMIN_LINKS path (a deep link to one queue or record). */
+  linkPaths?: Partial<Record<AlarmLinkKey, string>>;
+  /** Data the relay fetches for the breaching window and passes in as FormatOptions.details. */
+  detail?: AlarmDetailKind;
+  /** Who triages it and what the other on-call does; defaults to CATEGORY_OWNER for the category. */
+  owner?: string;
+}
+
+export interface FormatOptions {
+  /** Origin of the app (https://app.example.com). Admin buttons are omitted when unset. */
+  appUrl?: string;
+  /** Mention setting, as parseMentionSetting reads it; applied to production alarms only. */
+  mention?: string;
+  /** Escaped mrkdwn sections placed between "why it matters" and "what to do". */
+  details?: string[];
+}
+
+export interface SlackAttachment {
+  color: string;
+  blocks: unknown[];
+}
+
+export interface SlackAlarmMessage {
+  text: string;
+  blocks: unknown[];
+  attachments?: SlackAttachment[];
+}
+
+/** Admin console pages, by key. Paths are relative to the app origin. */
+export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> = {
+  'ai-advisory': { label: 'AI-flagged accounts', path: '/admin?tab=users&aiVerdict=abuse' },
+  'campaign-evidence': { label: 'Campaign evidence', path: '/admin?tab=shadow-detections' },
+  'api-key-accounts': { label: 'Accounts with API keys', path: '/admin?tab=users&keys=yes' },
+  'signup-activity': { label: 'Signup activity', path: '/admin?tab=users&signedUp=hour' },
+  'waf-block-list': { label: 'WAF block list', path: '/admin?tab=security-dashboard' },
+  'dlq-replay': { label: 'DLQ replay', path: adminDlqReplayPath() },
+  'agent-executions': { label: 'Agent executions', path: '/admin?tab=agent-executions' },
+  'integration-health': { label: 'Integration health', path: '/admin?tab=integration-health' },
+  'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
+  'rate-limits': { label: 'Rate limits', path: '/admin?tab=rate-limits' },
+  'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
+  'moderation-review': { label: 'Moderation review', path: `/admin?tab=${ADMIN_MODERATION_INCIDENTS_TAB_SLUG}` },
+  'moderation-settings': { label: 'Moderation settings', path: '/admin?tab=admin-settings&section=security' },
+  'model-prices': { label: 'Model prices', path: '/admin?tab=models&modelsSection=prices' },
+};
+
+const SIGNUP_ACTION =
+  'Check the admin signup activity for the last hour and the WAF block list. If the senders are bots, block their IPs or email domains.';
+const SIGNUP_LINKS: AlarmLinkKey[] = ['signup-activity', 'waf-block-list'];
+const BLOCKER_LOG_ACTION = 'Check the blocker Lambda log and its dead-letter queue.';
+/** One rule for the ledger spend alarms, read against the breakdown the provider-spend detail adds. */
+const LEDGER_SPEND_DECISION =
+  'Read the breakdown above. If accounts under 7 days old carry little of it, the young-account spend alarm is quiet, and the spend sits with established, paying or internal accounts, it is heavy use: acknowledge in this thread and move on. Escalate to the abuse owner, and suspend suspicious accounts from their admin pages, when new accounts carry a third or more of it, the young-account spend alarm is red too, or this stays red for 2 hours or more. One account with many calls on one model is often a runaway agent: check Agent executions.';
+
+export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
+  'signup-code-send-rate': {
+    title: 'Sign-in code emails above the hourly ceiling',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'sign-in code emails',
+    meaning:
+      'More sign-in code emails went out in one hour than we expect from normal signups and logins. This usually means automated signups.',
+    action: SIGNUP_ACTION,
+    links: SIGNUP_LINKS,
+  },
+  'signup-code-send-burst': {
+    title: 'Sign-in code emails spiking',
+    level: 'page',
+    category: 'abuse',
+    unit: 'sign-in code emails',
+    meaning:
+      'A burst of sign-in code emails went out in five minutes, far above normal. Automated signups are the usual cause.',
+    action: SIGNUP_ACTION,
+    links: SIGNUP_LINKS,
+  },
+  'api-key-create-burst': {
+    title: 'API keys being created unusually fast',
+    level: 'page',
+    category: 'abuse',
+    unit: 'API keys',
+    meaning: 'Many user API keys were created in five minutes. Normal users create one occasionally.',
+    action:
+      'Check which accounts created the keys and whether they are new accounts. Revoke keys from accounts that look automated.',
+    links: ['signup-activity'],
+  },
+  'side-app-mint-our-fault': {
+    title: 'Connected apps cannot get tokens',
+    level: 'warn',
+    category: 'infra',
+    unit: 'failed token exchanges',
+    meaning:
+      'Token exchanges for connected apps are failing on our side at a sustained rate. Users of those apps cannot start AI requests until it clears.',
+    action:
+      'Check the Next.js server log for the side-app-mint-our-fault lines and the errors just above them. A database outage shows up in the hourly health alert queue as well.',
+  },
+  'turnstile-policy-inactive': {
+    title: 'The sign-in bot challenge is switched off',
+    level: 'page',
+    category: 'security',
+    unit: 'reports',
+    meaning:
+      'The server says the Turnstile challenge is not active on this stage, so sign-ins and signups are not being challenged. The log line names the reason: the secret is not provisioned, the admin toggle is off, or the site key is empty.',
+    action:
+      'Open the Turnstile settings in the admin console and turn the toggle on with a site key, or provision the secret for the stage. The alarm clears an hour after the server stops reporting it.',
+  },
+  'turnstile-misconfigured': {
+    title: 'The sign-in bot challenge is rejecting everyone',
+    level: 'page',
+    category: 'security',
+    unit: 'rejections',
+    meaning:
+      'Turnstile is on, but the server cannot verify any challenge: Cloudflare rejected the secret, or the stage has no hostname allowlist. Every challenged sign-in and signup is answered 503 until it is fixed. The log line lists the error codes.',
+    action:
+      'Check the Turnstile secret provisioned for the stage against the Cloudflare widget, and that APP_URL or TURNSTILE_ALLOWED_HOSTNAMES is set. The alarm clears an hour after the server stops reporting it.',
+  },
+  'ungranted-credit-purchases': {
+    title: 'Customer paid but got no credits',
+    level: 'page',
+    category: 'cost',
+    unit: 'purchases',
+    meaning: 'Stripe took a payment and the credits were not added to the account.',
+    action:
+      'Find the purchase in Stripe and the credit ledger, grant the credits by hand, then check the webhook handler logs.',
+  },
+  'account-deletion-deadline': {
+    title: 'Account deletion needs attention',
+    level: 'page',
+    category: 'jobs',
+    unit: 'overdue requests or missing reports',
+    meaning:
+      'An account deletion request is at least 25 days old and still open, or the sweep has not reported in its two-day window.',
+    action:
+      'Check accountDeletionSweep logs and its dead-letter queue, then distinguish overdue requests from missing OverdueDeletionRequests datapoints. Follow infra/account-deletion-deadline-alarm.md; recovery can take about two days after the count returns to zero.',
+  },
+  'billing-event-ingest-failures': {
+    title: 'Billing events not reaching Overwatch',
+    level: 'page',
+    category: 'jobs',
+    unit: 'billing events',
+    meaning:
+      'Usage and billing events are being dropped before they reach the billing system, so spend is under-counted.',
+    action: 'Check the ingest endpoint and the worker logs, then replay the dropped events.',
+  },
+  'anthropic-rate-limit-errors': {
+    title: 'Anthropic is rate limiting us',
+    level: 'page',
+    category: 'infra',
+    unit: 'rate limit errors',
+    meaning:
+      'Requests to Anthropic are being refused for exceeding our quota, even after retries. Users see failed chats.',
+    action: 'Check current Anthropic usage against the quota. Reduce traffic or ask Anthropic for a higher limit.',
+  },
+  'agent-checkpoint-depth-warning': {
+    title: 'An agent run is looping',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'runs',
+    meaning:
+      'An agent has handed off to itself more times than expected, which can mean it is stuck in a loop and burning credits.',
+    action: 'Find the session in the agent executor logs and stop it if it is not making progress.',
+    links: ['agent-executions'],
+  },
+  'agent-checkpoint-depth-exceeded': {
+    title: 'An agent run was stopped for looping',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'runs',
+    meaning: 'An agent hit the hard limit on self-handoffs and was stopped.',
+    action: 'Review the session to see why it never finished.',
+    links: ['agent-executions'],
+  },
+  'ecs-task-failed-to-start': {
+    title: 'A background service cannot start',
+    level: 'page',
+    category: 'infra',
+    unit: 'services',
+    meaning:
+      'A long-running service has no running copies, so whatever it does (for example real-time updates) is down.',
+    action: 'Check the service events in ECS for the reason it cannot start.',
+  },
+  'dlq-alarm-handler-dlq-messages': {
+    title: 'Alarm delivery to Slack is failing',
+    level: 'page',
+    category: 'infra',
+    unit: 'messages',
+    meaning: 'Alarms could not be posted to Slack, so other alarms may be going unseen.',
+    action: 'Check the Slack webhook secrets and the alarm relay Lambda errors.',
+    links: ['system-secrets'],
+  },
+  'waf-alarm-slack-handler-dlq-messages': {
+    title: 'WAF alert delivery to Slack is failing',
+    level: 'page',
+    category: 'infra',
+    unit: 'messages',
+    meaning: 'WAF alerts could not be posted to Slack, so abuse alerts may be going unseen.',
+    action: 'Check the Slack webhook secrets and the WAF alarm relay Lambda errors.',
+    links: ['system-secrets'],
+  },
+  'waf-otc-edge-signal-rate': {
+    title: 'WAF is flagging many sign-in code requests',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'requests',
+    meaning:
+      'Many sign-in code requests in five minutes came from hosting providers or clients the WAF labels as bots. This usually means automated signups.',
+    action: SIGNUP_ACTION,
+    links: SIGNUP_LINKS,
+  },
+  'rate-limit-hit': {
+    title: 'Integration API rate limit reached',
+    level: 'warn',
+    category: 'infra',
+    unit: 'rejected requests',
+    meaning: 'An integration is making more calls than its limit allows and is getting rejected.',
+    action: 'Identify the integration from the logs and slow it down or raise its limit.',
+    links: ['rate-limits'],
+  },
+  'circuit-breaker-open': {
+    title: 'An integration was cut off',
+    level: 'page',
+    category: 'infra',
+    unit: 'integrations',
+    meaning: 'An external integration failed repeatedly, so we stopped calling it to protect the app.',
+    action: 'Check which integration opened the breaker and whether the provider is down.',
+    links: ['integration-health'],
+  },
+  'model-discovery-no-successful-run': {
+    title: 'Model discovery has not completed a successful run',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'runs',
+    meaning: 'The model catalog is not being refreshed, so new or changed models will not show up.',
+    action: 'Check the model discovery job logs for the failure.',
+  },
+  'no-successful-run': {
+    title: 'The WAF auto-blocker has stopped running',
+    level: 'page',
+    category: 'security',
+    unit: 'runs',
+    meaning:
+      'The scheduled job that blocks abusive IPs has not completed a run in 30 minutes. New abusers are not being blocked automatically.',
+    action: BLOCKER_LOG_ACTION,
+  },
+  'slow-no-successful-run': {
+    title: "The WAF auto-blocker's daily sweep has stopped",
+    level: 'warn',
+    category: 'security',
+    unit: 'runs',
+    meaning: 'The long-window sweep of the auto-blocker has not completed in 7 hours.',
+    action: BLOCKER_LOG_ACTION,
+  },
+  'cap-exceeded': {
+    title: 'The WAF auto-blocker found more abusers than it is allowed to block',
+    level: 'warn',
+    category: 'security',
+    unit: 'IPs',
+    meaning:
+      'One run found more new abusive IPs than its safety cap, so it held back rather than blocking a large batch blindly.',
+    action: 'Review the IP list in the blocker log. Raise the cap if they are genuine.',
+  },
+  'query-failure': {
+    title: 'The WAF auto-blocker cannot read the logs',
+    level: 'warn',
+    category: 'security',
+    unit: 'failed runs',
+    meaning: 'Two runs in a row failed to query the WAF logs. The block list is unchanged.',
+    action: 'Check the blocker Lambda log for the query error.',
+  },
+  'set-size': {
+    title: 'The WAF block list is very large',
+    level: 'warn',
+    category: 'security',
+    unit: 'blocked IPs',
+    meaning: 'The auto-blocker holds more entries than expected.',
+    action: 'Review the entries for mistakes before they expire on their own.',
+    links: ['waf-block-list'],
+  },
+  'slow-errors': {
+    title: 'A WAF auto-blocker daily sweep failed',
+    level: 'warn',
+    category: 'security',
+    unit: 'failed runs',
+    meaning: 'A long-window run failed. The block list is unchanged.',
+    action: 'Check the blocker Lambda log.',
+  },
+  SuccessfulSignups: {
+    title: 'More new accounts than usual',
+    level: 'page',
+    category: 'abuse',
+    unit: 'new accounts',
+    meaning:
+      'The hourly census counted more new accounts in one hour than the ceiling. It notifies once per episode and stays on while each following hour also breaches.',
+    action: SIGNUP_ACTION,
+    links: SIGNUP_LINKS,
+  },
+  NewAccountApiKeys: {
+    title: 'Review new-account API key volume',
+    level: 'page',
+    category: 'abuse',
+    unit: 'API keys',
+    measurement: 'hourly-census',
+    meaning:
+      'The key count reached the configured threshold. Owners were under 24 hours old when keys were created. This is a volume signal, not confirmed harmful use. Shared campaign evidence may suggest coordination; review behavior before deciding on enforcement.',
+    coverage:
+      'The census counts persisted keys in a complete UTC hour, not distinct accounts or requests. CloudWatch evaluation times shown above are not the census creation interval. Deleted keys/accounts can be absent. AI-flagged accounts is a live queue of unreviewed detections from the last 24h, excluding suspended accounts; it is not matched to this metric. Check assessment timestamps and truncation in the evidence view. Empty results do not establish safety. Model scores are uncalibrated.',
+    action:
+      'Read-only review: start with AI-flagged accounts and Campaign evidence, then open individual profiles. Use Accounts with API keys as a broader discovery view. Read key creation times, sign-ins, available request outcomes, credits and ledger activity for the relevant UTC interval. Record coverage gaps; missing events or zero displayed spend do not establish inactivity. Do not revoke keys or block accounts on this threshold or an AI score alone.',
+    handoff:
+      'The responding operator owns triage: acknowledge in this Slack thread with an owner and next review time, or hand off to the backup responder. Escalate to the responsible abuse/security owner for attributable unauthorized activity, material spend or service impact. A metric recovery does not close the investigation.',
+    links: ['ai-advisory', 'campaign-evidence', 'api-key-accounts'],
+  },
+  'account-creation-metrics-missing': {
+    title: 'The signup census did not run',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'missed hours',
+    meaning: 'No hourly new-account count was published, so the new-account alarms are blind until it runs again.',
+    action: 'Check the account creation metrics Lambda log and its dead-letter queue.',
+  },
+  'account-creation-metrics-failed': {
+    title: 'The signup census is failing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'failed runs',
+    meaning: 'The hourly new-account count failed and its event is parked in the failure queue.',
+    action: 'Check the account creation metrics Lambda log, fix the cause, then replay the failed hour.',
+    links: ['dlq-replay'],
+  },
+  'young-account-spend-rate': {
+    title: 'New accounts are spending a lot on AI',
+    level: 'page',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in one hour than the ceiling. Credit farms spend their free credits fast.',
+    action:
+      'Open the top accounts listed above on the admin users page and suspend any that look like abuse, then check the signup activity and the WAF block list.',
+    links: SIGNUP_LINKS,
+    detail: 'young-account-spend',
+  },
+  'young-account-spend-rate-warn': {
+    title: 'New accounts are spending more than usual on AI',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in one hour than the warn line. This is the heads-up tier; the page tier is the young-account-spend-rate alarm.',
+    action: 'Glance at the top accounts listed above; nothing to do unless one looks like abuse.',
+    links: SIGNUP_LINKS,
+    detail: 'young-account-spend',
+  },
+  'llm-spend-young-accounts': {
+    title: 'Young-account LLM spend is spiking',
+    level: 'page',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in five minutes than the ceiling. New accounts rarely spend this fast on their own.',
+    action: 'Open the top accounts listed above on the admin users page and suspend any that look like abuse.',
+    links: ['signup-activity'],
+    detail: 'young-account-spend',
+  },
+  'completion-credit-overdraft': {
+    title: 'A completion cost more than its account could pay',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'completions',
+    meaning:
+      'A completion cost more credits than its account held. On the CLI the balance was charged down to zero and the rest went uncollected; in web chat the balance was left negative until the account tops up.',
+    action:
+      'Find the account in the ChatCompletion log line, check its credit ledger and recent purchases on the admin users page, and review how the reservation let it through.',
+    links: ['signup-activity'],
+  },
+  'llm-spend-rate': {
+    title: 'AI spend at {provider} is spiking',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at {provider} in five minutes is at or above the burst ceiling. A runaway agent, a credit farm or one heavy user are the usual causes.',
+    action: LEDGER_SPEND_DECISION,
+    links: ['agent-executions', 'signup-activity'],
+    detail: 'provider-spend',
+  },
+  'llm-spend-hourly-warn': {
+    title: 'AI spend at {provider} is higher than usual',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at {provider} over one hour is at or above the warn line. This is the heads-up tier; the page tier is the llm-spend-hourly alarm at a higher line. Heavy use by an established account crosses this now and then.',
+    action: `${LEDGER_SPEND_DECISION} This tier only pages when spend reaches the higher line.`,
+    links: ['agent-executions', 'signup-activity'],
+    detail: 'provider-spend',
+  },
+  'llm-spend-hourly': {
+    title: 'AI spend at {provider} is running hot',
+    level: 'page',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Estimated spend at {provider} over one hour is at or above the page line, well past the warn line. A credit farm, a stolen card, a runaway agent or an unusually heavy paying account are the usual causes.',
+    action: LEDGER_SPEND_DECISION,
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+    detail: 'provider-spend',
+  },
+  'provider-reported-spend-hourly': {
+    title: 'Unusual AI spend reported by {provider}',
+    level: 'page',
+    category: 'cost',
+    unit: 'USD',
+    meaning:
+      "{provider}'s own usage report for the last hour, priced with our model rates, is at or above the ceiling. This counts every call billed to the organization, including ones that never reached our ledger.",
+    action:
+      'Compare with the ledger alarms for {provider} (AI spend at {provider} is running hot, or higher than usual). If one of them is red too, the spend went through the app: follow that alarm and its breakdown. If only this one is red, the spend did not pass through our ledger: open the provider console usage page, group by API key, and if a key you do not recognise is spending, rotate it. A one-hour blip that clears on the next report is usually a report lag; acknowledge it.',
+    owner:
+      'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action unless the provider console shows an unknown key spending, which is a key rotation.',
+    links: ['agent-executions', 'signup-activity', 'waf-block-list'],
+  },
+  'provider-unpriced-tokens-hourly': {
+    title: 'AI spend at {provider} is partly unpriced',
+    level: 'warn',
+    category: 'cost',
+    unit: 'unpriced hours',
+    meaning:
+      "The last hour's {provider} usage report includes output tokens from models our poller has no price for, above both the volume floor and the share floor, so the provider-reported spend alarm reads low.",
+    action:
+      'Open the usage poller Lambda log and find the WARN line "no price for <ids>". Add a price for each id on the admin model prices page (or as a ModelPrice row); it reaches the poller at the next model discovery run, within 6 hours. If the price snapshot is unavailable, the adapter table or USAGE_ONLY_PRICING in b4m-core/services/src/spendReconciliation/providerUsagePricing.ts is the fallback. Meanwhile, check the {provider} console usage for that hour by hand.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-age': {
+    title: 'The model price snapshot is out of date',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'stale hours',
+    meaning:
+      'The model price snapshot the usage poller reads has not been refreshed for 48 hours or more. Usage is still priced from the stale and static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot: look at the model discovery Lambda log for the snapshot write, and at its schedule. Once it writes a fresh snapshot the next hourly poll clears this alarm.',
+    links: ['model-prices'],
+  },
+  'model-price-snapshot-missing': {
+    title: 'The model price snapshot is missing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'missing hours',
+    meaning:
+      'The usage poller could not use the model price snapshot on 48 hourly polls in a row (it was absent, unreadable or invalid). Usage is still priced from the static prices, so reported spend may drift from the provider bill.',
+    action:
+      'Check whether model discovery ran and wrote the price snapshot. Then check the poller can read the snapshot object: the bucket setting on the poller Lambda, its read permission, and the poller log line "model price snapshot unavailable".',
+    links: ['model-prices'],
+  },
+  'provider-usage-poll-errors': {
+    title: 'The provider usage poller is failing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'failed runs',
+    meaning:
+      'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
+    action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
+  },
+  'spend-reconciliation-drift': {
+    title: 'Provider billing and our credit costs disagree',
+    level: 'page',
+    category: 'cost',
+    unit: 'drifting provider-months',
+    meaning:
+      "The nightly reconciliation found a provider's billed spend for last month differing from our internal cost estimate by more than the error band. Either we under-bill usage the provider charges for, or our model rates are wrong.",
+    action:
+      'Open the reconciliation banner on the credit analytics page for the provider and the size of the gap, then compare the provider console usage by model against our model rates.',
+    links: ['spend-monitor'],
+  },
+  'spend-reconciliation-nothing-reconciled': {
+    title: 'The nightly spend reconciliation checked nothing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'empty runs',
+    meaning:
+      'Every provider was skipped or failed in the nightly reconciliation, so credits were not compared against provider billing and a drift would go unnoticed.',
+    action:
+      'Check the reconciliation Lambda log. A missing or rotated provider admin key shows as skipped; a provider API error shows as failed.',
+  },
+  'spend-reconciliation-errors': {
+    title: 'The nightly spend reconciliation is failing',
+    level: 'warn',
+    category: 'jobs',
+    unit: 'failed runs',
+    meaning:
+      'The nightly job that compares provider billing with our credit costs failed before it could report, so the drift and nothing-reconciled alarms are blind until it recovers.',
+    action: 'Check the reconciliation Lambda log for the error. A database or provider API outage is the usual cause.',
+  },
+  'image-moderation-incident-unalerted': {
+    title: 'A moderation incident has no reviewer alert',
+    level: 'page',
+    category: 'security',
+    unit: 'minutes',
+    meaning:
+      'An image moderation incident has waited over 30 minutes without an alert reaching a reviewer, even though the scheduled sweep keeps retrying. Either the email keeps failing or no reviewer is configured.',
+    action:
+      'Open the admin settings and check the image moderation reviewer list, then check the sweep Lambda log for send failures. Review the incident in the admin console in the meantime.',
+    links: ['moderation-settings', 'moderation-review'],
+  },
+  'image-moderation-incident-unreviewed': {
+    title: 'A moderation incident has waited a day for review',
+    level: 'page',
+    category: 'security',
+    unit: 'minutes',
+    meaning:
+      'An image moderation incident has been waiting over 24 hours for a review verdict. Reviewers are reminded once a day, and this clears only when a verdict is recorded.',
+    action: 'Open the moderation incidents in the admin console and record a verdict, or ask a reviewer to.',
+    links: ['moderation-review'],
+  },
+  'image-moderation-no-reviewers': {
+    title: 'Moderation incidents are waiting and nobody is set to review them',
+    level: 'page',
+    category: 'security',
+    unit: 'checks',
+    meaning:
+      'Image moderation incidents are waiting for review, but the reviewer list in admin settings has no valid email address, so no alert can be sent.',
+    action:
+      'Add at least one valid address to the image moderation reviewer list in admin settings. The next sweep, within 15 minutes, alerts for everything waiting.',
+    links: ['moderation-settings'],
+  },
+  'mail-send-failures': {
+    title: 'Emails are failing to send',
+    level: 'page',
+    category: 'infra',
+    unit: 'failed sends',
+    meaning:
+      'The mail transport rejected outbound emails in the last hour. Sign-in codes go through the same path, so people may be unable to sign in.',
+    action: 'Check the email-send worker log for the transport error and the mail provider status.',
+  },
+  'oauth-signups-refused-burst': {
+    title: 'Refused OAuth sign-ups spiking',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'refused sign-ups',
+    meaning:
+      'Many Google or other OAuth sign-ups were refused in five minutes because registration is closed to them. The refusing IPs are blocked automatically.',
+    action: 'Check the WAF block list. Nothing else is needed unless real users report being refused.',
+    links: ['waf-block-list'],
+  },
+  'refused-request-burst': {
+    title: 'One IP is collecting refused API requests',
+    level: 'warn',
+    category: 'security',
+    unit: 'refused requests from the top IP',
+    meaning:
+      'A single client IP sent many API requests in 15 minutes that were refused (401 to 405) and that carried no resolved user. Volume only: the API probe detector scores what was probed. Normal clients send a handful; a steady stream usually means a scripted client walking the API. Nothing is blocked automatically.',
+    action:
+      'Look at the top IP, its paths and any accounts listed above. A client polling one or two session paths is a stale tab: acknowledge and move on. Paths shown as /api/:unmatchedApiPath or /api/:type/:id are collapsed 404s, so a few of those can be many different guesses and count as probing. Many distinct paths, admin or internal routes, or a burst that repeats across windows is probing: hand the IP to the WAF owner and suspend any listed account that is clearly abusive.',
+    links: ['waf-block-list'],
+    detail: 'refused-request-burst',
+  },
+  'stream-idle-timeouts': {
+    title: 'AI replies are being cut off by our idle watchdog',
+    level: 'warn',
+    category: 'infra',
+    unit: 'cut streams',
+    meaning:
+      'Our idle watchdog cut at least ten model streams in an hour. Each cut attempt is still billed by the provider and then retried or sent to a fallback model, so users see slow or repeated answers.',
+    action:
+      'Search the ChatCompletion logs for "Stream idle timeout". keepalive: true means the model was still generating, so the timeout is too short for that model.',
+  },
+};
+
+/**
+ * Dead-letter queue alarms are one per queue and one per signal, so they are generated from the
+ * name rather than listed: dlq-<queue>-messages (a job failed) and dlq-<queue>-age (its failure has
+ * waited over an hour). Exact catalog keys such as the alarm relay's own DLQ take precedence.
+ */
+export function dlqCatalogEntry(suffix: string): AlarmCatalogEntry | undefined {
+  const match = /^dlq-(.+)-(messages|age)$/.exec(suffix);
+  if (!match) return undefined;
+  const queue = match[1].replace(/-/g, ' ');
+  const action = 'Open DLQ replay, read the error on the message, fix the cause, then replay it.';
+  // The alarm's queue label is the DLQ registry label (infra/dlqAlarms.ts), so the page opens on it.
+  const linkPaths = { 'dlq-replay': adminDlqReplayPath(match[1]) };
+  if (match[2] === 'messages') {
+    return {
+      title: `Background job failed: ${queue}`,
+      level: 'warn',
+      category: 'jobs',
+      unit: 'failed messages',
+      meaning: `A message for the ${queue} job could not be processed after retries and is parked in its dead-letter queue. Whatever that job does for the affected item did not happen.`,
+      action,
+      links: ['dlq-replay'],
+      linkPaths,
+    };
+  }
+  return {
+    title: `Unhandled failure for over an hour: ${queue}`,
+    level: 'warn',
+    category: 'jobs',
+    unit: 'waiting messages',
+    meaning: `A failed message for the ${queue} job has sat in its dead-letter queue for more than an hour without being replayed or dropped.`,
+    action,
+    links: ['dlq-replay'],
+    linkPaths,
+  };
+}
+
+/** Level and category for alarms the catalog does not know. */
+export const DEFAULT_ALARM_LEVEL: AlarmLevel = 'warn';
+export const DEFAULT_ALARM_CATEGORY: AlarmCategory = 'infra';
+
+/**
+ * Who a category's alarms belong to, so whoever the page reaches can tell whether it is theirs.
+ * An entry's own owner (or handoff) replaces it.
+ */
+export const CATEGORY_OWNER: Partial<Record<AlarmCategory, string>> = {
+  abuse:
+    'Owner: the abuse/LiveOps owner triages this in the thread. Devops: no infrastructure action is needed; leave it to them unless they ask, or it stays red for 2 hours or more with nobody on it.',
+};
+
+/** Must stay in sync with LLM_SPEND_PROVIDERS in infra/llmSpend.ts and the provider-reported alarms. */
+export const ALARM_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'google', 'other'] as const;
+export type AlarmProvider = (typeof ALARM_PROVIDERS)[number];
+
+const PROVIDER_LABELS: Record<AlarmProvider, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  bedrock: 'Bedrock',
+  google: 'Google',
+  other: 'other providers',
+};
+const UNKNOWN_PROVIDER_LABEL = 'an AI provider';
+
+const isAlarmProvider = (value: string | undefined): value is AlarmProvider =>
+  (ALARM_PROVIDERS as readonly string[]).includes(value ?? '');
+
+/** The provider a per-provider alarm watches: its Provider dimension, else the name's last segment. */
+export function alarmProvider(alarm: CloudWatchAlarmPayload): AlarmProvider | undefined {
+  const dimension = alarm.Trigger?.Dimensions?.find(d => d.name === 'Provider')?.value;
+  if (isAlarmProvider(dimension)) return dimension;
+  const last = /-([a-z]+)$/.exec(alarm.AlarmName ?? '')?.[1];
+  return isAlarmProvider(last) ? last : undefined;
+}
+
+/** Fills the {provider} placeholder; a sentence that now opens with the fallback is capitalised. */
+function fillProvider(text: string, label: string): string {
+  if (!text.includes('{provider}')) return text;
+  const filled = text.replace(/\{provider\}/g, label);
+  return filled.charAt(0).toUpperCase() + filled.slice(1);
+}
+
+const COLOR = {
+  page: '#E01E5A',
+  warn: '#ECB22E',
+  info: '#36C5F0',
+  nonprod: '#9AA5B1',
+  resolved: '#2EB67D',
+} as const;
+
+const PRODUCTION_PREFIX: Record<AlarmLevel, string> = {
+  page: ':rotating_light: PRODUCTION ALARM',
+  warn: ':warning: Production warning',
+  info: ':information_source: Production notice',
+};
+
+const STAGE_ALIASES = ['prod', 'production', 'dev', 'staging'];
+/** Staging deploys as SST stage `dev`; the channel shows the name the team uses. Alarm names stay raw. */
+const STAGE_LABELS: Record<string, string> = { dev: 'staging' };
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SEPARATOR = '  |  ';
+
+export function isCloudWatchAlarm(payload: unknown): payload is CloudWatchAlarmPayload {
+  return typeof (payload as CloudWatchAlarmPayload | null)?.NewStateValue === 'string';
+}
+
+export const isProductionStage = (stage: string) => classifyStage(stage) === 'production';
+export const stageLabel = (stage: string) => STAGE_LABELS[stage] ?? stage;
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Strips the leading `<app>-<stage>-` from an alarm name; returns the whole name when none matches. */
+export function alarmSuffix(alarmName: string, stage: string): string {
+  const stages = [stage, ...STAGE_ALIASES].map(escapeRegExp).join('|');
+  const match = new RegExp(`^(.*?)-(?:${stages})-(.+)$`).exec(alarmName);
+  return match ? match[2] : alarmName;
+}
+
+/** Exact match first, then the generated DLQ entries, then the longest catalog key the suffix starts or ends with. */
+export function lookupCatalog(suffix: string): AlarmCatalogEntry | undefined {
+  if (Object.prototype.hasOwnProperty.call(ALARM_CATALOG, suffix)) return ALARM_CATALOG[suffix];
+  const dlq = dlqCatalogEntry(suffix);
+  if (dlq) return dlq;
+  let best: string | undefined;
+  for (const key of Object.keys(ALARM_CATALOG)) {
+    if (suffix.startsWith(key) || suffix.endsWith(key)) {
+      if (best === undefined || key.length > best.length) best = key;
+    }
+  }
+  return best === undefined ? undefined : ALARM_CATALOG[best];
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const formatClock = (d: Date) => `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+
+export function parseStateChangeTime(value: string): Date | undefined {
+  const d = new Date((value ?? '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+function periodPhrase(periodSeconds: number): string {
+  if (periodSeconds === 3600) return 'hour';
+  if (periodSeconds === 86400) return 'day';
+  const minutes = Math.round(periodSeconds / 60);
+  return minutes === 1 ? 'minute' : `${minutes} minutes`;
+}
+
+/** "5 min", "1 h 10 min"; under a minute rounds up so a fresh breach never reads as zero. */
+export function formatDuration(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes} min`;
+  const rest = minutes % 60;
+  return rest === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${rest} min`;
+}
+
+/** Slack mrkdwn treats &, < and > as control characters; escape them in interpolated text. */
+export const escapeMrkdwn = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+const formatNumber = (raw: string) => {
+  const n = Number(raw);
+  return Number.isFinite(n) ? String(n) : raw;
+};
+
+/** USD keeps cents, or 4 decimals below a cent so a tiny nonzero spend does not read as 0.00. */
+export function formatAlarmNumber(value: number, unit?: string): string {
+  if (unit === 'USD') {
+    const rounded = value.toFixed(value === 0 || Math.abs(value) >= 0.01 ? 2 : 4);
+    return value !== 0 && Number(rounded) === 0 ? String(Number(value.toPrecision(6))) : rounded;
+  }
+  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
+}
+
+const displayNumber = (raw: string, unit?: string) => {
+  const n = Number(raw);
+  return Number.isFinite(n) ? formatAlarmNumber(n, unit) : raw;
+};
+
+const DATAPOINT_RE = /([-+\d.eE]+) \((\d{2})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})\)/g;
+
+export type ParsedReason =
+  | {
+      kind: 'threshold';
+      value: string;
+      threshold?: string;
+      limit: 'ceiling' | 'floor';
+      /** The datapoint breaches AT the threshold (`>=`/`<=`), not only past it. */
+      inclusive: boolean;
+      /** Epoch ms of the newest and oldest breaching datapoint windows. */
+      latestStart: number;
+      earliestStart: number;
+      /** Breaching datapoints the reason lists. */
+      datapoints: number;
+      period?: number;
+    }
+  | { kind: 'missing'; minutes?: number }
+  | { kind: 'raw'; reason: string };
+
+type ThresholdReason = Extract<ParsedReason, { kind: 'threshold' }>;
+
+/** Pulls the numbers out of CloudWatch's NewStateReason prose. */
+export function parseReason(alarm: CloudWatchAlarmPayload): ParsedReason {
+  const reason = alarm.NewStateReason ?? '';
+  const trigger = alarm.Trigger;
+
+  // A reason can list real datapoints and missing ones together ("1 out of the last 3 datapoints
+  // [...] ... and 2 missing datapoints were treated as [Breaching]"); the real value wins then.
+  const points = /^Threshold Crossed/i.test(reason)
+    ? [...reason.matchAll(DATAPOINT_RE)].map(([, rawValue, dd, mm, yy, hh, mi, ss]) => ({
+        rawValue,
+        start: Date.UTC(2000 + Number(yy), Number(mm) - 1, Number(dd), Number(hh), Number(mi), Number(ss)),
+      }))
+    : [];
+
+  if (points.length > 0) {
+    // Pick by timestamp, not position: CloudWatch lists the newest datapoint first.
+    const latest = points.reduce((a, b) => (b.start > a.start ? b : a));
+    const earliest = points.reduce((a, b) => (b.start < a.start ? b : a));
+    const thresholdMatch = /threshold \(([^)]+)\)/i.exec(reason);
+    return {
+      kind: 'threshold',
+      value: formatNumber(latest.rawValue),
+      threshold: thresholdMatch ? formatNumber(thresholdMatch[1]) : undefined,
+      limit: /less than/i.test(reason) ? 'floor' : 'ceiling',
+      inclusive: /or equal to/i.test(reason),
+      latestStart: latest.start,
+      earliestStart: earliest.start,
+      datapoints: points.length,
+      period: trigger?.Period,
+    };
+  }
+
+  if (/missing datapoint|datapoints? (?:was|were) missing|no datapoints were received/i.test(reason)) {
+    const minutes =
+      trigger?.EvaluationPeriods && trigger.Period
+        ? Math.round((trigger.EvaluationPeriods * trigger.Period) / 60)
+        : undefined;
+    return { kind: 'missing', minutes };
+  }
+
+  return { kind: 'raw', reason };
+}
+
+export function describeReason(
+  alarm: CloudWatchAlarmPayload,
+  unit?: string,
+  measurement?: AlarmCatalogEntry['measurement']
+): string {
+  const parsed = parseReason(alarm);
+  if (parsed.kind === 'missing') {
+    return parsed.minutes === undefined
+      ? 'No data arrived for a while.'
+      : `No data arrived for ${parsed.minutes} minutes, which counts as a failure for this alarm.`;
+  }
+  if (parsed.kind === 'raw') return parsed.reason;
+
+  const value = displayNumber(parsed.value, unit);
+  const what = unit ? `${value} ${unit}` : `The value was ${value}`;
+  if (measurement === 'hourly-census') {
+    const threshold = parsed.threshold ? `; configured threshold ${displayNumber(parsed.threshold, unit)}` : '';
+    return `${what} in the latest breaching CloudWatch datapoint${threshold}.`;
+  }
+  const when = parsed.period
+    ? ` in the ${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
+    : ` at ${formatClock(new Date(parsed.latestStart))} UTC`;
+  const threshold = parsed.threshold ? `; ${thresholdPhrase(parsed, displayNumber(parsed.threshold, unit))}` : '';
+  return `${what}${when}${threshold}.`;
+}
+
+/**
+ * A `>=` alarm with threshold 1 fires on a value of 1, so calling 1 its "ceiling" reads as if the
+ * value had to pass it: an inclusive comparison is worded as the value it fires at instead.
+ */
+function thresholdPhrase(parsed: ThresholdReason, threshold: string): string {
+  return parsed.inclusive
+    ? `the alarm fires at ${inclusiveBound(parsed, threshold)}`
+    : `the ${parsed.limit} is ${threshold}`;
+}
+
+const inclusiveBound = (parsed: ThresholdReason, threshold: string) =>
+  `${threshold} or ${parsed.limit === 'floor' ? 'less' : 'more'}`;
+
+/** Periods from an hour up are sums over the whole window, so no crossing time can be read from them. */
+const LONG_PERIOD_SECONDS = 3600;
+
+function describeBreachingWindows(count: number, periodSeconds: number): string {
+  const phrase = periodPhrase(periodSeconds);
+  if (count <= 1) return `just crossed (${phrase === 'hour' ? 'an' : 'a'} ${phrase}-long sum, so no exact start time)`;
+  return `${count} consecutive ${phrase === 'hour' ? 'hours' : phrase === 'day' ? 'days' : `${phrase} windows`}`;
+}
+
+/** Field cells for the numbers-at-a-glance block; empty when the reason carries no numbers. */
+export function describeFields(
+  alarm: CloudWatchAlarmPayload,
+  unit?: string,
+  changedAt?: Date,
+  measurement?: AlarmCatalogEntry['measurement']
+): string[] {
+  const parsed = parseReason(alarm);
+  const fields: string[] = [];
+  let sinceMs: number | undefined;
+
+  if (parsed.kind === 'threshold') {
+    fields.push(`*Measured*\n${displayNumber(parsed.value, unit)}${unit ? ` ${unit}` : ''}`);
+    if (parsed.threshold) {
+      const threshold = displayNumber(parsed.threshold, unit);
+      if (measurement === 'hourly-census') fields.push(`*Threshold*\n${threshold}`);
+      else if (parsed.inclusive) fields.push(`*Fires at*\n${inclusiveBound(parsed, threshold)}`);
+      else fields.push(`*${parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${threshold}`);
+    }
+    if (measurement === 'hourly-census') {
+      const start = new Date(parsed.latestStart).toISOString();
+      const end = parsed.period ? new Date(parsed.latestStart + parsed.period * 1000).toISOString() : undefined;
+      fields.push(`*CloudWatch evaluation window*\n${start}${end ? ` to ${end} (end exclusive)` : ''}`);
+      fields.push(`*Earliest breaching datapoint shown*\n${new Date(parsed.earliestStart).toISOString()}`);
+      return fields;
+    }
+    fields.push(
+      parsed.period
+        ? `*Window*\n${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
+        : `*At*\n${formatClock(new Date(parsed.latestStart))} UTC`
+    );
+    if (parsed.period && parsed.period >= LONG_PERIOD_SECONDS) {
+      // A datapoint this long is a sum over its whole window; its start is not when the line was
+      // crossed, so a start time plus duration would read as an hour-long breach.
+      fields.push(`*Breaching for*\n${describeBreachingWindows(parsed.datapoints, parsed.period)}`);
+      return fields;
+    }
+    sinceMs = parsed.earliestStart;
+  } else if (parsed.kind === 'missing') {
+    if (parsed.minutes !== undefined) {
+      fields.push(`*Missing data for*\n${parsed.minutes} min`);
+      if (changedAt) sinceMs = changedAt.getTime() - parsed.minutes * 60_000;
+    }
+  }
+
+  if (sinceMs !== undefined) {
+    const since = new Date(sinceMs);
+    const duration =
+      changedAt && changedAt.getTime() > sinceMs ? ` (${formatDuration(changedAt.getTime() - sinceMs)})` : '';
+    fields.push(`*Breaching since*\n${formatClock(since)} UTC${duration}`);
+  }
+  return fields;
+}
+
+function resolveEntry(alarm: CloudWatchAlarmPayload, stage: string) {
+  const suffix = alarmSuffix(alarm.AlarmName, stage);
+  const found = lookupCatalog(suffix);
+  if (found) {
+    const provider = alarmProvider(alarm);
+    const label = provider ? PROVIDER_LABELS[provider] : UNKNOWN_PROVIDER_LABEL;
+    const entry: AlarmCatalogEntry = {
+      ...found,
+      title: fillProvider(found.title, label),
+      meaning: fillProvider(found.meaning, label),
+      action: fillProvider(found.action, label),
+    };
+    return { entry, title: entry.title, level: entry.level, category: entry.category };
+  }
+  const words = suffix.replace(/-/g, ' ');
+  return {
+    entry: undefined,
+    title: words.charAt(0).toUpperCase() + words.slice(1),
+    level: DEFAULT_ALARM_LEVEL,
+    category: DEFAULT_ALARM_CATEGORY,
+  };
+}
+
+/** The catalog entry an alarm resolves to, so the relay knows what else to load before posting. */
+export function alarmCatalogEntry(alarm: CloudWatchAlarmPayload, stage: string): AlarmCatalogEntry | undefined {
+  return resolveEntry(alarm, stage).entry;
+}
+
+/** The category an alarm resolves to; unknown alarms are infra. Drives channel routing in the relays. */
+export function alarmCategory(alarm: CloudWatchAlarmPayload, stage: string): AlarmCategory {
+  return resolveEntry(alarm, stage).category;
+}
+
+export function consoleUrl(alarm: CloudWatchAlarmPayload): string | undefined {
+  if (!alarm.Region || !alarm.AlarmName) return undefined;
+  const name = encodeURIComponent(alarm.AlarmName);
+  return `https://${alarm.Region}.console.aws.amazon.com/cloudwatch/home?region=${alarm.Region}#alarmsV2:alarm/${name}`;
+}
+
+/**
+ * Turns an operator-supplied mention setting into a Slack mention token, or undefined when it
+ * is off or unusable. Accepts the raw token (<!channel>, <!subteam^S123>, <@U123>), the words
+ * channel / here / everyone, or a bare user (U...), bot (W...) or user-group (S...) id.
+ */
+export function normalizeMentionToken(raw: string | undefined): string | undefined {
+  const value = (raw ?? '').trim();
+  if (!value || ['off', 'none', 'false', '0', 'not-configured'].includes(value.toLowerCase())) return undefined;
+  const word = value.replace(/^@/, '').toLowerCase();
+  if (word === 'channel' || word === 'here' || word === 'everyone') return `<!${word}>`;
+  if (/^<[!@][^<>\s]+>$/.test(value)) return value;
+  if (/^[UW][A-Z0-9]{2,}$/.test(value)) return `<@${value}>`;
+  if (/^S[A-Z0-9]{2,}$/.test(value)) return `<!subteam^${value}>`;
+  return undefined;
+}
+
+export interface MentionSetting {
+  token: string;
+  /** Least urgent level that still gets the mention: page (the default) or warn. */
+  level: Extract<AlarmLevel, 'page' | 'warn'>;
+}
+
+/** Lower is more urgent; a mention applies to every level at or above the setting's. */
+const LEVEL_RANK: Record<AlarmLevel, number> = { page: 0, warn: 1, info: 2 };
+
+const MENTION_LINE: Record<AlarmLevel, string> = {
+  page: 'production is paging',
+  warn: 'production needs attention',
+  info: 'production notice',
+};
+
+/**
+ * Parses the operator-supplied setting: a mention target (see normalizeMentionToken), optionally
+ * followed by a space and the level the mention extends down to. `here` mentions on page-level
+ * alarms only; `here warn` also mentions on warnings. Any other level word is ignored rather than
+ * silencing the page mention, since a typo in the parameter gives no feedback.
+ */
+export function parseMentionSetting(raw: string | undefined): MentionSetting | undefined {
+  const [target, levelWord] = (raw ?? '').trim().split(/\s+/, 2);
+  const token = normalizeMentionToken(target);
+  if (!token) return undefined;
+  return { token, level: levelWord?.toLowerCase() === 'warn' ? 'warn' : 'page' };
+}
+
+export interface ComposeParams {
+  stage: string;
+  level: AlarmLevel;
+  /** Raw text: it goes into a plain_text header, and is escaped for the mrkdwn fallback. */
+  title: string;
+  /** Mention setting; only honoured on production messages at or above its level. */
+  mention?: string;
+  /** mrkdwn field cells (two per row). */
+  fields?: string[];
+  /** mrkdwn sections, already escaped. */
+  sections: string[];
+  buttons?: { label: string; url: string }[];
+  /** Footer fragments, already escaped. */
+  context: string[];
+  /** The notification/fallback body, appended to the header text. */
+  summary: string;
+}
+
+/** Assembles the header + colour-barred attachment shape every alarm-style message uses. */
+export function composeAlarmMessage(params: ComposeParams): SlackAlarmMessage {
+  const production = isProductionStage(params.stage);
+  const prefix = production
+    ? PRODUCTION_PREFIX[params.level]
+    : `:small_blue_diamond: ${stageLabel(params.stage)} alarm`;
+  const color = production ? COLOR[params.level] : COLOR.nonprod;
+  const headerText = `${prefix}: ${params.title}`;
+  const setting = production ? parseMentionSetting(params.mention) : undefined;
+  const mention = setting && LEVEL_RANK[params.level] <= LEVEL_RANK[setting.level] ? setting.token : undefined;
+
+  const blocks: unknown[] = [];
+  if (mention) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `${mention} ${MENTION_LINE[params.level]}` } });
+  }
+  blocks.push({ type: 'header', text: { type: 'plain_text', text: headerText.slice(0, 150), emoji: true } });
+
+  const body: unknown[] = [];
+  if (params.fields && params.fields.length > 0) {
+    body.push({
+      type: 'section',
+      fields: params.fields.slice(0, 10).map(text => ({ type: 'mrkdwn', text })),
+    });
+  }
+  for (const text of params.sections) body.push({ type: 'section', text: { type: 'mrkdwn', text } });
+  if (params.buttons && params.buttons.length > 0) {
+    body.push({
+      type: 'actions',
+      elements: params.buttons.slice(0, 5).map((button, index) => ({
+        type: 'button',
+        text: { type: 'plain_text', text: button.label.slice(0, 75), emoji: true },
+        url: button.url,
+        action_id: `alarm-link-${index}`,
+      })),
+    });
+  }
+  body.push({ type: 'context', elements: [{ type: 'mrkdwn', text: params.context.join(SEPARATOR) }] });
+
+  return {
+    text: `${mention ? `${mention} ` : ''}${escapeMrkdwn(headerText)}: ${escapeMrkdwn(params.summary)}`,
+    blocks,
+    attachments: [{ color, blocks: body }],
+  };
+}
+
+/**
+ * Returns null for INSUFFICIENT_DATA, and for an OK that does not follow an ALARM: a freshly
+ * created alarm goes INSUFFICIENT_DATA to OK once it has data, which is not a recovery.
+ */
+export function formatAlarmSlackMessage(
+  alarm: CloudWatchAlarmPayload,
+  stage: string,
+  options: FormatOptions = {}
+): SlackAlarmMessage | null {
+  if (alarm.NewStateValue !== 'ALARM' && alarm.NewStateValue !== 'OK') return null;
+  if (alarm.NewStateValue === 'OK' && alarm.OldStateValue !== 'ALARM') return null;
+
+  const { entry, title, level, category } = resolveEntry(alarm, stage);
+  // Other stages run the production ceilings against QA traffic, so only their pages are worth a post.
+  if (!isProductionStage(stage) && level !== 'page') return null;
+  const when = parseStateChangeTime(alarm.StateChangeTime);
+  const url = consoleUrl(alarm);
+  const link = url ? `<${url}|Open in CloudWatch>` : undefined;
+
+  if (alarm.NewStateValue === 'OK') {
+    const back = when ? `back to normal at ${formatClock(when)} UTC` : 'back to normal';
+    const text = `:white_check_mark: Resolved: ${escapeMrkdwn(title)}`;
+    const context = [`category ${category}`, escapeMrkdwn(alarm.AlarmName), link].filter(Boolean) as string[];
+    return {
+      text,
+      blocks: [],
+      attachments: [
+        {
+          color: COLOR.resolved,
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `:white_check_mark: *Resolved: ${escapeMrkdwn(title)}*\n${escapeMrkdwn(stageLabel(stage))}${SEPARATOR}${back}`,
+              },
+            },
+            { type: 'context', elements: [{ type: 'mrkdwn', text: context.join(SEPARATOR) }] },
+          ],
+        },
+      ],
+    };
+  }
+
+  const happened = describeReason(alarm, entry?.unit, entry?.measurement);
+  const why = entry?.meaning ?? alarm.AlarmDescription;
+  const sections = [`*What happened*\n${escapeMrkdwn(happened)}`];
+  const owner = entry?.owner ?? (entry?.handoff ? undefined : CATEGORY_OWNER[category]);
+  if (owner) sections.push(`*Whose it is*\n${escapeMrkdwn(owner)}`);
+  if (why) sections.push(`*Why it matters*\n${escapeMrkdwn(why)}`);
+  sections.push(...(options.details ?? []));
+  if (entry?.coverage) sections.push(`*Scope and freshness*\n${escapeMrkdwn(entry.coverage)}`);
+  if (entry?.action) sections.push(`*What to do*\n${escapeMrkdwn(entry.action)}`);
+  if (entry?.handoff) sections.push(`*Ownership and escalation*\n${escapeMrkdwn(entry.handoff)}`);
+
+  const buttons: { label: string; url: string }[] = [];
+  if (url) buttons.push({ label: 'Open in CloudWatch', url });
+  const appUrl = options.appUrl?.replace(/\/+$/, '');
+  if (appUrl) {
+    for (const key of entry?.links ?? []) {
+      const path = entry?.linkPaths?.[key] ?? ADMIN_LINKS[key].path;
+      buttons.push({ label: ADMIN_LINKS[key].label, url: `${appUrl}${path}` });
+    }
+  }
+
+  const stamp = when ? `${formatClock(when)} UTC, ${when.getUTCDate()} ${MONTHS[when.getUTCMonth()]}` : undefined;
+  const context = [
+    escapeMrkdwn(stageLabel(stage)),
+    `level ${level}`,
+    `category ${category}`,
+    escapeMrkdwn(alarm.AlarmName),
+    stamp,
+  ].filter(Boolean) as string[];
+
+  return composeAlarmMessage({
+    stage,
+    level,
+    title,
+    mention: options.mention,
+    fields: describeFields(alarm, entry?.unit, when, entry?.measurement),
+    sections,
+    buttons,
+    context,
+    summary: happened,
+  });
+}
+
+export interface AlarmWebhookResources {
+  SLACK_ALARMS_WEBHOOK_URL?: { value?: string };
+  SLACK_COST_ALARMS_WEBHOOK_URL?: { value?: string };
+  SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: string };
+}
+
+export const SECRET_PLACEHOLDER = 'not-configured';
+
+/**
+ * Reads an optional linked secret. sst's Resource proxy throws for a name the function never
+ * linked, and relays outside this repo subscribe to the same handler, so an unlinked optional
+ * secret must read as unset rather than fail the post.
+ */
+function optionalSecret(
+  resource: AlarmWebhookResources,
+  name: 'SLACK_ALARMS_WEBHOOK_URL' | 'SLACK_COST_ALARMS_WEBHOOK_URL'
+): string | undefined {
+  try {
+    const value = resource[name]?.value;
+    return value && value !== SECRET_PLACEHOLDER ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Cost alarms go to the cost channel when its secret is configured. Everything else, and cost
+ * alarms on a stage without that secret, go to the alarms channel when configured, otherwise the
+ * error-reporting channel.
+ */
+export function resolveAlarmWebhookUrl(resource: AlarmWebhookResources, category?: AlarmCategory): string {
+  if (category === 'cost') {
+    const cost = optionalSecret(resource, 'SLACK_COST_ALARMS_WEBHOOK_URL');
+    if (cost) return cost;
+  }
+  return optionalSecret(resource, 'SLACK_ALARMS_WEBHOOK_URL') ?? resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value;
+}
+
+/** App origin for admin buttons, derived the same way the rest of the server does (app.<apex>). */
+export function appUrlFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const domain = env.SERVER_DOMAIN?.trim();
+  return domain ? `https://app.${domain}` : undefined;
+}
+
+export function postAlarmToSlack(webhookUrl: string, message: SlackAlarmMessage): Promise<void>;
+export function postAlarmToSlack(
+  webhookUrl: string,
+  message: SlackAlarmMessage,
+  options: { atMostOnce: boolean }
+): Promise<{ state: 'delivered' | 'unconfirmed' }>;
+export async function postAlarmToSlack(
+  webhookUrl: string,
+  message: SlackAlarmMessage,
+  options?: { atMostOnce: boolean }
+): Promise<void | { state: 'delivered' | 'unconfirmed' }> {
+  const body: Record<string, unknown> = { text: message.text };
+  if (message.blocks.length > 0) body.blocks = message.blocks;
+  if (message.attachments && message.attachments.length > 0) body.attachments = message.attachments;
+  try {
+    const resp = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) {
+      throw new Error(`Slack webhook failed: ${resp.status} ${resp.statusText}`);
+    }
+    if (options) return { state: 'delivered' };
+  } catch (error) {
+    if (!options?.atMostOnce) throw error;
+    return { state: 'unconfirmed' };
+  }
+}

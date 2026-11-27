@@ -1,0 +1,15 @@
+// Copy to Local.xcconfig (gitignored) to build to a personal device with a free Apple ID.
+//   cp Config/Local.xcconfig.example Config/Local.xcconfig
+// Then set the three values below. See DEVICE_TESTING.md.
+
+// 1. Your personal team id (Xcode > Settings > Accounts > your team, or the OU of your signing certificate).
+DEVELOPMENT_TEAM = YOURTEAMID
+
+// 2. A bundle id no one else uses. The widgets and share extension ids derive from it.
+B4M_APP_BUNDLE_ID = com.example.yourname.bike4mind
+
+// 3. Entitlements without the capabilities a free team cannot sign
+//    (Push, Associated Domains, App Groups, Keychain Sharing).
+B4M_APP_ENTITLEMENTS = Config/Entitlements/Bike4Mind.personal.entitlements
+B4M_WIDGETS_ENTITLEMENTS = Config/Entitlements/Widgets.personal.entitlements
+B4M_SHARE_ENTITLEMENTS = Config/Entitlements/ShareExtension.personal.entitlements

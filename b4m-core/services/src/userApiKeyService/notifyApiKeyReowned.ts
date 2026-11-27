@@ -1,5 +1,6 @@
 import type { IUserRepository } from '@bike4mind/common';
 import { escapeHtml, wrapEmail } from '../notificationEmail';
+import { Logger } from '@bike4mind/observability';
 
 export interface ApiKeyReownedNotifyDeps {
   db: { users: Pick<IUserRepository, 'findActiveEmailsByIds'> };
@@ -32,7 +33,7 @@ export async function notifyApiKeyReowned(
   deps: ApiKeyReownedNotifyDeps
 ): Promise<void> {
   const warn = (msg: string, meta: unknown) =>
-    deps.logger?.warn ? deps.logger.warn(msg, meta) : console.warn(msg, meta);
+    deps.logger?.warn ? deps.logger.warn(msg, meta) : Logger.warn(msg, meta);
   try {
     const emailRows = await deps.db.users.findActiveEmailsByIds([context.previousOwnerUserId]);
     if (emailRows.length === 0) {

@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { NOTEBOOK_EXPORT_IMPORTER_KEY, SKILLS_MEMBER_KEY } from '../constants';
+import {
+  NOTEBOOK_EXPORT_IMPORTER_KEY,
+  SKILLS_MEMBER_KEY,
+  TEAMS_INVITEE_KEY,
+  TEAMS_MANAGER_KEY,
+  TEAMS_MEMBER_KEY,
+} from '../constants';
 
 export interface TestUser {
   userId: string;
@@ -29,7 +35,7 @@ interface TestUsers {
   inviteCode?: TestInviteCode;
 }
 
-const AUTH_DIR = path.resolve(__dirname, '../.auth');
+export const AUTH_DIR = path.resolve(__dirname, '../.auth');
 const CORE_DATA_PATH = path.resolve(AUTH_DIR, 'core-data.json');
 const TEST_RUN_ID_PATH = path.resolve(AUTH_DIR, 'test-run-id');
 
@@ -52,6 +58,12 @@ const SPEC_KEYS = [
   NOTEBOOK_EXPORT_IMPORTER_KEY,
   // The skills suite's non-admin user, same arrangement as the importer above.
   SKILLS_MEMBER_KEY,
+  'teams',
+  // The teams suite's member, manager and invitee, same arrangement as the importer above.
+  TEAMS_MEMBER_KEY,
+  TEAMS_MANAGER_KEY,
+  TEAMS_INVITEE_KEY,
+  'studio',
   // AI-latency suites (only seeded when AI_LATENCY_RUN=true; getTestUsers skips absent files).
   // Listed here so getTestUsers loads their spec users, which lets specAuthForProject resolve
   // real auth and route their navigations through /auth/success like every other authed suite -
@@ -89,14 +101,20 @@ export function getTestRunId(): string {
   return fs.readFileSync(TEST_RUN_ID_PATH, 'utf-8').trim();
 }
 
-export function saveCoreData(data: CoreData): void {
+// Write-then-rename so parallel projects reading these files never see a truncated file.
+function writeJsonAtomic(filePath: string, data: unknown): void {
   ensureAuthDir();
-  fs.writeFileSync(CORE_DATA_PATH, JSON.stringify(data, null, 2));
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
+export function saveCoreData(data: CoreData): void {
+  writeJsonAtomic(CORE_DATA_PATH, data);
 }
 
 export function saveSpecUser(key: string, user: TestUser): void {
-  ensureAuthDir();
-  fs.writeFileSync(path.resolve(AUTH_DIR, `${key}-data.json`), JSON.stringify(user, null, 2));
+  writeJsonAtomic(path.resolve(AUTH_DIR, `${key}-data.json`), user);
 }
 
 export function getTestUsers(): TestUsers {

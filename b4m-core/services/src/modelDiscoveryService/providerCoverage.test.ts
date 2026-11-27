@@ -28,7 +28,7 @@ const ALL_BACKENDS = Object.values(ModelBackend);
  * that an addition to the enum is a decision recorded in this file rather than a
  * silent omission somewhere else.
  */
-const NO_TEXT_DISPATCH: ReadonlySet<string> = new Set<string>([ModelBackend.VoyageAI]);
+const NO_TEXT_DISPATCH: ReadonlySet<string> = new Set<string>([ModelBackend.VoyageAI, ModelBackend.OpenAICompatible]);
 
 describe('every backend can be credentialed by discovery', () => {
   it.each(ALL_BACKENDS)('%s has a credential predicate', backend => {

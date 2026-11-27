@@ -1,3 +1,4 @@
+import { ForbiddenError } from '@bike4mind/utils';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
 import { readFileSync } from 'node:fs';
@@ -32,13 +33,18 @@ import {
   assertCanWriteDataLakeTags,
 } from './authorizeLakeWrite';
 import type { LakeGrant } from './manageRule';
-import { createDataLake } from './createDataLake';
+import { createDataLake, DATA_LAKE_SLUG_UNAVAILABLE_CODE } from './createDataLake';
+
+// The cap has its own unit tests (assertLakeCountWithinCap.test.ts); these mocks keep it out of
+// the way, and one test below pins that createDataLake calls it before inserting.
+vi.mock('./assertLakeCountWithinCap', () => ({ assertLakeCountWithinCap: vi.fn(async () => undefined) }));
 import { TAG_PREFIX_UNAVAILABLE_CODE } from './tagPrefixCollision';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
 import type { RetrievalIndexRemoval } from './ports';
 import { unarchiveDataLake } from './unarchiveDataLake';
 import { restoreDeletedDataLake } from './restoreDeletedDataLake';
+import { assertLakeCountWithinCap } from './assertLakeCountWithinCap';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
 import { acceptDataLakePurge } from './acceptDataLakePurge';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
@@ -372,8 +378,8 @@ describe('assertLakeAccess - hardcoded fallback lakes (no backing document)', ()
   });
 
   // #2510: the grant arm must NOT be skipped just because the slug matches a registry id.
-  // disambiguateSlug only reserves the org-less meta-tag (datalake:<slug>), so an ORG-SCOPED lake
-  // may legitimately carry a registry slug; skipping the query for it hands back the synthetic
+  // An ORG-SCOPED lake created before disambiguateSlug reserved registry keys may still carry a
+  // registry slug; skipping the query for it hands back the synthetic
   // registry lake in place of the caller's own grant-held lake - a wrong lake, not a denial.
   it('an org-scoped DB lake carrying a registry slug still resolves via a foreign-org grant', async () => {
     const shadow = lake({
@@ -2898,9 +2904,8 @@ describe('createDataLake', () => {
   });
 
   it('does not mislabel a duplicate-key collision on a DIFFERENT index as a prefix overlap', async () => {
-    // This collection also has unique indexes on datalakeTag and { organizationId, slug } -
-    // disambiguateSlug's 50-attempt pre-check makes hitting either here vanishingly rare, but
-    // a rare hit must still surface as itself, not get relabeled "prefix overlaps".
+    // This collection also has unique indexes on datalakeTag and { organizationId, slug }; a hit
+    // on either is a slug conflict (409), never relabeled "prefix overlaps".
     const create = vi.fn().mockRejectedValue(
       Object.assign(new Error('E11000 duplicate key error'), {
         code: 11000,
@@ -2910,7 +2915,11 @@ describe('createDataLake', () => {
     const find = vi.fn().mockResolvedValue([]);
     await expect(
       createDataLake('owner', { name: 'X', slug: 'xy', fileTagPrefix: 'xy:' }, { db: { dataLakes: { create, find } } })
-    ).rejects.toThrow('E11000 duplicate key error');
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.not.stringMatching(/overlaps an existing data lake/i),
+      additionalInfo: { code: DATA_LAKE_SLUG_UNAVAILABLE_CODE },
+    });
   });
 
   it('names the clashing lake only when the caller created it', async () => {
@@ -3001,15 +3010,16 @@ describe('createDataLake', () => {
     });
   });
 
-  it('still allows a registry slug inside an org, where the minted tag cannot collide', async () => {
-    // An org lake mints `datalake:<org>:<slug>`, which no registry entry can equal.
+  it('suffixes a registry slug inside an org too, though the minted tag cannot collide', async () => {
+    // The tag is safe, but the slug is not: a later move out of the org would leave an org-less
+    // lake holding a registry key.
     const registrySlug = DATA_LAKES[0].slug;
     const create = vi.fn().mockImplementation(async (d: IDataLakeDocument) => d);
     const db = { dataLakes: { create, find: vi.fn().mockResolvedValue([]) } };
 
     await createDataLake('owner', { name: 'X', slug: registrySlug, fileTagPrefix: 'mine:' }, { db }, 'orgA');
 
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: registrySlug }));
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ slug: `${registrySlug}-1` }));
   });
 });
 
@@ -3448,6 +3458,21 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
     await expect(
       restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } })
     ).rejects.toThrow(/'active' status/i);
+  });
+
+  it('checks the per-user lake cap for the creator and restores nothing when it refuses', async () => {
+    const refusal = new ForbiddenError('limit reached', { code: 'DATA_LAKE_LIMIT_REACHED' });
+    vi.mocked(assertLakeCountWithinCap).mockRejectedValueOnce(refusal);
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      claimRestoring: vi.fn(),
+    };
+    const db = { dataLakes, fabFiles: {} };
+    await expect(restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db } as never)).rejects.toBe(
+      refusal
+    );
+    expect(assertLakeCountWithinCap).toHaveBeenCalledWith(db, lake().createdByUserId);
+    expect(dataLakes.claimRestoring).not.toHaveBeenCalled();
   });
 
   it('un-deletes non-duplicates and excludes live-re-upload duplicates', async () => {

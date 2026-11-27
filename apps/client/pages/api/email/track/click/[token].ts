@@ -33,7 +33,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   try {
     await emailJobRepository.incrementCounts(attempt.jobId, 'clickedCount');
   } catch (error) {
-    console.error('Failed to count verified email click:', error);
+    req.logger.error('Failed to count verified email click', { error });
   }
 
   // Redirect to the original URL

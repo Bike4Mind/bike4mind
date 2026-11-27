@@ -24,6 +24,10 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   agentExecutionRepository: {
     findById: (...args: unknown[]) => mockFindById(...args),
+    setAbortFlag: vi.fn().mockResolvedValue(undefined),
+    markAborted: vi.fn().mockResolvedValue(undefined),
+    markComplete: vi.fn().mockResolvedValue(undefined),
+    findBackgroundChildrenOf: vi.fn().mockResolvedValue([]),
     updatePermissionState: (...args: unknown[]) => mockUpdatePermissionState(...args),
     markFailed: (...args: unknown[]) => mockMarkFailed(...args),
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
@@ -39,7 +43,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
@@ -48,22 +52,24 @@ vi.mock('@server/websocket/utils', () => ({
 vi.mock('@server/utils/childExecutionSnapshot', () => ({
   buildChildExecutionSnapshots: vi.fn().mockResolvedValue([]),
 }));
-vi.mock('@server/utils/persistRunAsQuest', () => ({
+vi.mock('@bike4mind/server-utils/utils/liveActivityPush', () => ({ endAgentRunLiveActivity: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/persistRunAsQuest', () => ({
   persistRunAsQuest: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/extractFinalAnswer', () => ({
-  extractFinalAnswer: vi.fn(),
+vi.mock('@bike4mind/server-utils/briefs/eventBriefTrigger', () => ({
+  startEventBriefForCompletedRun: vi.fn(),
 }));
 vi.mock('@server/utils/startAgentExecution', () => ({
   startAgentExecution: vi.fn(),
 }));
-vi.mock('@server/utils/publishMementoCompletion', () => ({
-  resolveAndPublishMementoCompletion: vi.fn(),
+vi.mock('@bike4mind/server-utils/agentExecution/gateResponse', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/agentExecution/gateResponse')>()),
+  handleGateResponse: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@server/websocket/reconnectBudget', () => ({
   decideInlineBudgets: vi.fn().mockReturnValue({ includeStepsInline: true, includeChildrenInline: true }),
 }));
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyJwtToken: vi.fn(),
   checkRateLimit: vi.fn(),
   verifyApiKey: vi.fn(),
@@ -98,13 +104,24 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { ApiKeyScope, PROMPT_TEXT_MAX } from '@bike4mind/common';
-import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import { ApiKeyScope, PROMPT_TEXT_MAX, TooManyRequestsError } from '@bike4mind/common';
+import {
+  verifyApiKey,
+  verifyJwtToken,
+  checkApiKeyRateLimitOrThrow,
+  checkRateLimit,
+} from '@bike4mind/server-utils/cli/auth';
+import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
-import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
+import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+const mockRecordUserActivity = vi.hoisted(() => vi.fn());
+vi.mock('@server/users/recordUserActivity', () => ({ recordUserActivity: mockRecordUserActivity }));
+
+import { handleGateResponse } from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { func, handlePermissionResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -205,6 +222,11 @@ describe('handlePermissionResponse', () => {
       errorMessage: 'Execution stopped: you denied "web_search".',
     });
     expect(persistRunAsQuest).toHaveBeenCalledWith('exec-1', 'Execution stopped: you denied "web_search".', noopLogger);
+    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(
+      baseExecution,
+      { status: 'failed', errored: true },
+      noopLogger
+    );
     expect(mockMarkFailed).not.toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();
     const [sentCommand] = mockApiGwSend.mock.calls[0];
@@ -560,39 +582,6 @@ describe('container resume rejection', () => {
   });
 });
 
-describe('container confidence resume', () => {
-  it('routes through HTTP and atomically restores a rejected gate', async () => {
-    const pendingGate = { iteration: 1, confidence: 0.1, reason: 'test', requestedAt: new Date() };
-    mockFindById.mockResolvedValue({ ...baseExecution, status: 'paused', pendingGate });
-    mockClearPendingGate.mockResolvedValue(true);
-    mockRestoreRejectedResume.mockClear();
-    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
-    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
-    try {
-      await expect(
-        handleGateResponse(
-          {
-            accessToken: 'token',
-            action: 'agent_execute',
-            command: 'gate_response',
-            executionId: 'exec-1',
-            decision: 'continue',
-          },
-          'user-1',
-          'conn-1',
-          'http://ws',
-          noopLogger as never
-        )
-      ).rejects.toThrow('401');
-      expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', { status: 'paused', pendingGate });
-    } finally {
-      vi.unstubAllEnvs();
-      vi.unstubAllGlobals();
-    }
-  });
-});
-
 describe('concurrent permission approvals', () => {
   it('allows only the approval that won the CAS to dispatch or roll back', async () => {
     mockFindById.mockResolvedValue(baseExecution);
@@ -670,6 +659,42 @@ describe('start command credential threading', () => {
 
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
     expect(input.apiKeyInfo).toBe(key);
+  });
+
+  it('stamps the user active and counts the key as used when a run starts', async () => {
+    mockRecordUserActivity.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({ keyId: 'key-1', userId: 'user-1', scopes: [] } as never);
+
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+    await invoke(startEvent('b4m_live_x'), {}, noopLogger);
+
+    expect(verifyApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: true });
+    expect(mockRecordUserActivity).toHaveBeenCalledWith('user-1', noopLogger);
+  });
+
+  it('relays quota error metadata to the websocket caller', async () => {
+    mockApiGwSend.mockClear();
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: true,
+    } as never);
+    vi.mocked(startAgentExecution).mockRejectedValueOnce(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 7 })
+    );
+    await (func as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>)(
+      startEvent('b4m_live_x'),
+      {},
+      noopLogger
+    );
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(JSON.parse(sent.input.Data.toString())).toEqual({
+      action: 'agent_error',
+      message: 'Token rate limit exceeded',
+      errorCode: 'token_rate_limit_exceeded',
+      retryAfter: 7,
+    });
   });
 
   it('reports a billing refusal as a message-only error frame', async () => {
@@ -817,6 +842,16 @@ describe('reconnect command', () => {
     expect(sentPayloads()[0]).toMatchObject({ requestId: 'request-123', found });
   });
 
+  it('neither stamps the user active nor counts the key as used: reattaching is not an action', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce(null);
+
+    const invoke = func as unknown as (...arguments_: unknown[]) => Promise<unknown>;
+    await invoke(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(verifyApiKey).toHaveBeenCalledWith(expect.anything(), { recordUse: false });
+    expect(mockRecordUserActivity).not.toHaveBeenCalled();
+  });
+
   it('echoes the execution sessionId on a found run, so the client never has to correlate', async () => {
     mockFindActiveBySessionId.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
 
@@ -831,6 +866,15 @@ describe('reconnect command', () => {
         sessionId: 'session-1',
       }),
     ]);
+  });
+
+  it('builds child snapshots unredacted: reconnect is gated on the caller having started the run', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(buildChildExecutionSnapshots).toHaveBeenCalledWith('exec-1', { isOwner: true });
   });
 
   it('echoes the stored sessionId when asked by executionId alone', async () => {
@@ -904,6 +948,22 @@ describe('agent_execute API-key check outcome', () => {
     expect(startAgentExecution).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['subscription refusal', new ForbiddenError('The CLI and desktop app require an active paid subscription')],
+    ['session lookup outage', databaseUnreachable()],
+  ])('relays the JWT %s without dispatching an execution', async (_label, error) => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
+    vi.mocked(verifyJwtToken).mockRejectedValueOnce(error);
+    await (func as unknown as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>)(
+      event,
+      {},
+      noopLogger
+    );
+    expect(sentFrames()).toEqual([{ action: 'agent_error', message: error.message }]);
+    expectNoDriverLeak(sentFrames());
+    expect(startAgentExecution).not.toHaveBeenCalled();
+  });
+
   it('keeps the auth-failed error for an unknown key that the JWT check also rejects', async () => {
     vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('Invalid or expired API key'));
     vi.mocked(verifyJwtToken).mockRejectedValueOnce(new Error('bad token'));
@@ -913,5 +973,62 @@ describe('agent_execute API-key check outcome', () => {
 
     expect(sentFrames()).toEqual([{ action: 'agent_error', message: 'Authentication failed' }]);
     expect(verifyJwtToken).toHaveBeenCalled();
+  });
+});
+
+describe('WebSocket live activity settlement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApiGwSend.mockResolvedValue(undefined);
+  });
+
+  it('ends the activity when a paused run is aborted', async () => {
+    const execution = { ...baseExecution, status: 'paused' };
+    mockFindById.mockResolvedValue(execution);
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('JWT required'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const handle = func as unknown as (event: unknown, context: unknown, logger: typeof noopLogger) => Promise<unknown>;
+    await handle(
+      {
+        body: JSON.stringify({
+          accessToken: 'token',
+          action: 'agent_execute',
+          command: 'abort',
+          executionId: 'exec-1',
+        }),
+        requestContext: { connectionId: 'conn-1', domainName: 'example.test', stage: 'test' },
+      } as never,
+      {} as never,
+      noopLogger as never
+    );
+    expect(endAgentRunLiveActivity).toHaveBeenCalledWith(execution, { status: 'stopped' }, noopLogger);
+  });
+
+  it('routes a gate_response message to handleGateResponse', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new UnauthorizedError('JWT required'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const handle = func as unknown as (event: unknown, context: unknown, logger: typeof noopLogger) => Promise<unknown>;
+    await handle(
+      {
+        body: JSON.stringify({
+          accessToken: 'token',
+          action: 'agent_execute',
+          command: 'gate_response',
+          executionId: 'exec-1',
+          decision: 'stop',
+        }),
+        requestContext: { connectionId: 'conn-1', domainName: 'example.test', stage: 'test' },
+      } as never,
+      {} as never,
+      noopLogger as never
+    );
+    expect(handleGateResponse).toHaveBeenCalledTimes(1);
+    expect(handleGateResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ executionId: 'exec-1', decision: 'stop' }),
+      'user-1',
+      'conn-1',
+      'https://example.test/test',
+      noopLogger
+    );
   });
 });

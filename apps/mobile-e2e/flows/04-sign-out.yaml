@@ -1,0 +1,28 @@
+appId: com.bike4mind.app
+name: Sign out returns to the sign-in screen
+tags:
+  - live
+---
+- runFlow: ../subflows/sign-in.yaml
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          id: home-profile-btn
+      - tapOn:
+          id: settings-signout-btn
+      # Confirmation dialog; its destructive action has the same title as the row.
+      - tapOn:
+          text: "Sign Out"
+          index: 1
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - tapOn:
+          id: settings-signout-btn
+- extendedWaitUntil:
+    visible:
+      id: signin-submit-btn
+    timeout: 30000

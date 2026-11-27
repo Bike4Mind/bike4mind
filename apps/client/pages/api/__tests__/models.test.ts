@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ChatModels, ImageModels, ModelBackend, type ImageModelCapabilities } from '@bike4mind/common';
+import {
+  ChatModels,
+  CreditHolderType,
+  ForbiddenError,
+  ImageModels,
+  ModelBackend,
+  type ImageModelCapabilities,
+} from '@bike4mind/common';
 
 /**
  * T9, the /api/models parity suite. The route delegates its fan-out to
@@ -11,21 +18,46 @@ import { ChatModels, ImageModels, ModelBackend, type ImageModelCapabilities } fr
  */
 
 const mockGetEffectiveLLMApiKeys = vi.fn();
-const mockCacheFindOne = vi.fn();
+const mockCacheFind = vi.fn();
 const mockCacheCreateOrUpdate = vi.fn();
+const mockFindOrg = vi.fn();
+const mockResolveActiveOrg = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: {},
+  organizationRepository: { findById: (...a: unknown[]) => mockFindOrg(...a) },
   cacheRepository: {
-    findOne: (...a: unknown[]) => mockCacheFindOne(...a),
+    find: (...a: unknown[]) => mockCacheFind(...a),
     createOrUpdate: (...a: unknown[]) => mockCacheCreateOrUpdate(...a),
   },
+}));
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({
+  resolveActiveOrg: (...a: unknown[]) => mockResolveActiveOrg(...a),
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => mockGetEffectiveLLMApiKeys(...a) },
 }));
-vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
+// Credits off, so every listed model reaches the parity rows; the unpriced-text filter is
+// covered in server/utils/callerModelList.test.ts.
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsByNames: vi.fn(),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: vi.fn(() => false),
+}));
+
+// The free-tier gate is off here (no admin setting), so entitlements are never read; the mock only
+// keeps the Mongoose model chain out. The gate itself is covered in server/utils/callerModelList.test.ts.
+const mockLoadFreeTierAllowedModels = vi.fn();
+vi.mock('@bike4mind/services/llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: (...a: unknown[]) => mockLoadFreeTierAllowedModels(...a),
+}));
+
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
+  getUserEntitlements: vi.fn(async () => []),
+  toEntitlementUser: (user: unknown) => user,
+}));
 
 // Strip the middleware chain (DB connect, auth, logging) so the test exercises
 // the route body, matching the other pages/api suites.
@@ -74,8 +106,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   hangOllama = false;
   mockGetEffectiveLLMApiKeys.mockResolvedValue(noKeys);
-  mockCacheFindOne.mockResolvedValue(null);
+  mockCacheFind.mockResolvedValue([]);
   mockCacheCreateOrUpdate.mockResolvedValue(undefined);
+  mockLoadFreeTierAllowedModels.mockResolvedValue(undefined);
+  mockFindOrg.mockResolvedValue(null);
+  mockResolveActiveOrg.mockImplementation(async (_req: unknown, orgId?: string) => orgId);
   delete process.env.B4M_SELF_HOST;
   // Also clears the llm-adapters module-level model cache, so each case re-runs
   // the fan-out instead of reusing the previous case's list.
@@ -103,10 +138,11 @@ afterEach(() => {
   else process.env.B4M_SELF_HOST = savedSelfHost;
 });
 
-async function callRoute(userId?: string) {
-  const { req, res } = createMocks({ method: 'GET' });
+async function callRouteBody(userId?: string, extra: { query?: Record<string, string>; apiKeyInfo?: object } = {}) {
+  const { req, res } = createMocks({ method: 'GET', query: extra.query ?? {} });
   Object.assign(req, {
     user: userId ? { id: userId } : undefined,
+    apiKeyInfo: extra.apiKeyInfo,
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() },
   });
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
@@ -119,8 +155,15 @@ async function callRoute(userId?: string) {
       disabled?: boolean;
       image?: ImageModelCapabilities;
     }>;
+    lockedModels: Array<{ id: string; access?: { locked: boolean; reason: string } }>;
+    modelListRevision: string | null;
+    catalogUnavailable: boolean;
   };
-  return body.models;
+  return body;
+}
+
+async function callRoute(userId?: string) {
+  return (await callRouteBody(userId)).models;
 }
 
 describe('/api/models provider coverage', () => {
@@ -232,24 +275,117 @@ describe('/api/models cache identity', () => {
   it('caches an authenticated caller under its own user id', async () => {
     await callRoute('user-1');
 
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:user-1' });
-    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:user-1' }));
+    expect(mockCacheFind).toHaveBeenCalledWith({
+      key: { $in: ['model-list:user-1:credits-off', 'model-list-revision'] },
+    });
+    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'model-list:user-1:credits-off' })
+    );
   });
 
   it('passes null down for an unauthenticated caller and keys it away from "system"', async () => {
     await callRoute();
 
     expect(mockGetEffectiveLLMApiKeys).toHaveBeenCalledWith(null, expect.anything());
-    expect(mockCacheFindOne).toHaveBeenCalledWith({ key: 'model-list:anonymous' });
+    expect(mockCacheFind).toHaveBeenCalledWith({
+      key: { $in: ['model-list:anonymous:credits-off', 'model-list-revision'] },
+    });
     expect(mockCacheCreateOrUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ key: 'model-list:system' }));
   });
 
+  it('reports the model-list revision the list was built under', async () => {
+    mockCacheFind.mockResolvedValue([{ key: 'model-list-revision', result: { revision: 'rev-9' } }]);
+
+    const body = await callRouteBody('user-1');
+
+    expect(body.modelListRevision).toBe('rev-9');
+    expect(body.catalogUnavailable).toBe(false);
+    expect(mockCacheCreateOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ result: expect.objectContaining({ modelListRevision: 'rev-9' }) })
+    );
+  });
+
   it('serves a cache hit without rebuilding the model list', async () => {
-    mockCacheFindOne.mockResolvedValue({ result: { models: [{ id: 'cached-model' }] } });
+    mockCacheFind.mockResolvedValue([
+      { key: 'model-list:user-1:credits-off', result: { models: [{ id: 'cached-model' }] } },
+    ]);
 
     const models = await callRoute('user-1');
 
     expect(models).toEqual([{ id: 'cached-model' }]);
     expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/models locked models', () => {
+  it('serves paid-only models in lockedModels, apart from models, for a free caller', async () => {
+    mockCacheFind.mockResolvedValue([
+      {
+        key: 'model-list:user-1:credits-off',
+        result: { models: [{ id: 'free-model' }, { id: 'paid-model' }], supersededModels: [] },
+      },
+    ]);
+    mockLoadFreeTierAllowedModels.mockResolvedValue(new Set(['free-model']));
+
+    const body = await callRouteBody('user-1');
+
+    expect(body.models.map(m => m.id)).toEqual(['free-model']);
+    expect(body.lockedModels).toEqual([{ id: 'paid-model', access: { locked: true, reason: 'requires_paid_plan' } }]);
+  });
+});
+
+describe('/api/models org model policy', () => {
+  const cachedList = () =>
+    mockCacheFind.mockResolvedValue([
+      {
+        key: 'model-list:user-1:credits-off',
+        result: { models: [{ id: 'allowed-model' }, { id: 'other-model' }], supersededModels: [] },
+      },
+    ]);
+  const policyRow = {
+    modelPolicy: { allowedProviders: null, allowedModels: ['allowed-model'], allowedTools: null },
+  };
+
+  it('locks models the active org does not allow, after validating membership', async () => {
+    cachedList();
+    mockFindOrg.mockResolvedValue(policyRow);
+
+    const body = await callRouteBody('user-1', { query: { organizationId: 'org-1' } });
+
+    expect(mockResolveActiveOrg).toHaveBeenCalledWith(expect.anything(), 'org-1');
+    expect(mockFindOrg).toHaveBeenCalledWith('org-1');
+    expect(body.models.map(m => m.id)).toEqual(['allowed-model']);
+    expect(body.lockedModels).toEqual([{ id: 'other-model', access: { locked: true, reason: 'org_policy' } }]);
+  });
+
+  it('refuses an org the caller does not belong to', async () => {
+    cachedList();
+    mockResolveActiveOrg.mockRejectedValue(new ForbiddenError('Not a member'));
+
+    await expect(callRouteBody('user-1', { query: { organizationId: 'org-x' } })).rejects.toThrow('Not a member');
+    expect(mockFindOrg).not.toHaveBeenCalled();
+  });
+
+  it("lists an org-billed key under its own org, ignoring the query's", async () => {
+    cachedList();
+    mockFindOrg.mockResolvedValue(policyRow);
+
+    const body = await callRouteBody('user-1', {
+      query: { organizationId: 'org-1' },
+      apiKeyInfo: { billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' },
+    });
+
+    expect(mockResolveActiveOrg).not.toHaveBeenCalled();
+    expect(mockFindOrg).toHaveBeenCalledWith('key-org');
+    expect(body.models.map(m => m.id)).toEqual(['allowed-model']);
+  });
+
+  it('applies no policy in the Personal context', async () => {
+    cachedList();
+
+    const body = await callRouteBody('user-1');
+
+    expect(mockFindOrg).not.toHaveBeenCalled();
+    expect(body.models.map(m => m.id)).toEqual(['allowed-model', 'other-model']);
   });
 });

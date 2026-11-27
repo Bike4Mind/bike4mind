@@ -16,6 +16,16 @@ import {
   GENERATION_CALLBACK_REJECTED_DESCRIPTION,
 } from '../../schemas/generationCallback';
 
+/**
+ * Shared by generateImage and editImage. Both run on the quest image path, which the image job resource
+ * (imageJob.contract.ts) replaces; they are served until the sunset, then removed with that path.
+ */
+export const IMAGE_QUEST_ROUTES_DEPRECATION = {
+  since: '2026-11-17',
+  sunset: '2027-02-17',
+  successor: '/api/v1/image-jobs',
+} as const;
+
 /** Shared by generateImage and editImage: both hand off to the same quest poll. */
 export const imageQuestPollResult = {
   schema: ImageQuestSchema,
@@ -24,7 +34,8 @@ export const imageQuestPollResult = {
     '`"done"`: on success `images` holds the rendered images; a render that FAILED is `type: "error"` with ' +
     'the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: ' +
     '"insufficient_credits"`, the same vocabulary as the synchronous 422s on the audio endpoints), a ' +
-    'provider error, and a reference image that is missing, not an image, or still in moderation. Check ' +
+    'provider error, a reference image that is missing, not an image, or still in moderation, and the ' +
+    'combined FLUX.2 or FLUX 3 input-image limit after attachments are resolved. Check ' +
     '`type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does ' +
     'not mean success.',
   example: {
@@ -55,16 +66,27 @@ export const generateImageContract = defineEndpoint({
     '`prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart ' +
     "from truncation to the model's prompt limit). " +
     '`referenceImageFabFileIds` passes up to 15 already-uploaded images as style anchors, after the input ' +
-    'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
-    'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +
+    'image taken from `fabFileIds`. GPT-image accepts 15 references; FLUX.2 accepts 8 total input images ' +
+    '(4 for Klein) and FLUX 3 accepts 10. For FLUX.2 and FLUX 3 the distinct ids across `fabFileIds` and ' +
+    '`referenceImageFabFileIds` are counted together when `referenceImageFabFileIds` is set, and a request over the limit is rejected with a 400. ' +
+    'A request over the limit with only `fabFileIds`, or with a primary picked from session history, is ' +
+    'checked when the render runs and fails on the polled quest. ' +
+    'Unsupported models are also rejected with a 400. FLUX 3 receives its inputs as `ref_image_1` to ' +
+    '`ref_image_N`, in this order: the first `fabFileIds` image (so `ref_image_1` when one is attached), ' +
+    'the remaining `fabFileIds` images, then `referenceImageFabFileIds` as listed. A repeated id, or an image ' +
+    'with identical content, keeps only its first position, which shifts the later tags. Refer to them in the prompt, e.g. ' +
+    '"the jacket from ref_image_2". Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
     'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
-    'insufficient credits arrive on the polled quest rather than as a 422. ' +
+    'insufficient credits arrive on the polled quest rather than as a 422. A `run` budget is checked ' +
+    'before queueing as well, so a run with too little left is usually a synchronous 422 ' +
+    '(`errorCode: "run_budget_exhausted"`). ' +
     '`organization_id` is accepted as an alias of `organizationId`, for callers used to the snake_case ' +
     'video and music bodies; `null` bills the personal account. `POST /api/ai/generate-image` ' +
     'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,
   tags: ['Images'],
+  deprecated: IMAGE_QUEST_ROUTES_DEPRECATION,
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: GenerateImageRequestBodySchema,
@@ -79,19 +101,22 @@ export const generateImageContract = defineEndpoint({
     },
     400: {
       description:
-        `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
+        `\`referenceImageFabFileIds\` is set for an unsupported model or the distinct input images exceed the model's limit, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ` +
         BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
       schema: ApiErrorSchema,
     },
     403: {
-      description: `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+      description:
+        `The API key lacks the \`ai:generate\` scope, or ${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ` +
+        'Naming a billing organization other than the account the `run` bills is also a `403` with that errorCode.',
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
       description:
         'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +
         'nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an ' +
-        'invalid or inaccessible `organizationId` is `403` instead.',
+        'invalid or inaccessible `organizationId` is `403` instead. A `run` that does not exist or that ' +
+        'another user or billing owner minted is `404` (`errorCode: "run_not_found"`).',
       schema: ApiErrorSchema,
     },
     422: {
@@ -100,7 +125,8 @@ export const generateImageContract = defineEndpoint({
         '`organization_id` sent with different values is a `422`; so is an empty or blank value for either ' +
         '(a blank is never treated as an omission, which would bill a different payer), and so is any other ' +
         'billing-org-shaped key such as `billing_org_id` or `payerOrgId`, which would otherwise be stripped ' +
-        "and silently bill the caller's home organization.",
+        "and silently bill the caller's home organization. A `run` whose budget cannot cover the " +
+        'render is `422` with `errorCode: "run_budget_exhausted"`.',
       schema: ApiErrorSchema,
     },
   },

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.bike4mind.com/schemas/export-v2/artifact.schema.json",
+  "title": "Artifact v2 record",
+  "type": "object",
+  "required": ["notebookId", "id", "name", "type", "createdAt", "updatedAt"],
+  "properties": {
+    "notebookId": { "type": "string", "minLength": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string" },
+    "type": { "type": "string" },
+    "content": { "type": "string" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object" }
+  },
+  "additionalProperties": true
+}

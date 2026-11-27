@@ -1,4 +1,5 @@
 import {
+  musicModelProfile,
   isMusicModelEnabled,
   usdToCredits,
   MUSIC_MODEL_CATALOG,
@@ -19,11 +20,14 @@ const toPublicDuration = (duration: MusicModelCapabilities['duration']): PublicM
 
 export const toPublicMusicModel = (id: MusicModelId): PublicMusicModel => {
   const caps = MUSIC_MODEL_CATALOG[id];
+  const profile = musicModelProfile(id);
   return {
     id,
     object: 'music_model',
     display_name: caps.displayName,
     provider: caps.provider,
+    provider_label: profile.providerLabel,
+    blurb: profile.blurb,
     vocals: caps.vocals,
     lyrics: caps.lyrics ? { max_chars: caps.lyrics.maxChars, max_line_chars: caps.lyrics.maxLineChars ?? null } : null,
     duration: toPublicDuration(caps.duration),

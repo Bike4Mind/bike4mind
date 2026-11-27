@@ -1,11 +1,10 @@
 import { Logger } from '@bike4mind/observability';
-import dotenv from 'dotenv';
 import fs, { existsSync } from 'fs';
 import path from 'path';
 import { connectDB } from '@bike4mind/database';
 import { Resource } from 'sst';
 
-dotenv.config();
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 class SyncTranslation {
   /**
@@ -144,7 +143,7 @@ class SyncTranslation {
     // The translation model + API keys are resolved from the database (system
     // keys) by OperationsModelService below - not from a process.env key - so
     // there's no upfront env-key/model availability gate here.
-    const { OperationsModelService } = await import('../../apps/client/services/operationsModelService');
+    const { OperationsModelService } = await import('@bike4mind/server-utils/services/operationsModelService');
 
     let translation = '';
 

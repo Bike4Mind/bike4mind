@@ -1,6 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { ClaudeChatImportSummary, ClaudeCodeImportSettings } from '@shared/claudeImport';
+import type {
+  ClaudeChatImportSummary,
+  ClaudeCodeImportSettings,
+  SyncHintId,
+  WebSyncSettings,
+} from '@shared/claudeImport';
+import { isSyncHintId } from '@shared/claudeImport';
 import { assertScopeKey } from '../chat/sessionScope';
 import type { CodeMapState } from './claudeCodeMapper';
 
@@ -9,12 +15,14 @@ export interface ClaudeImportSettings {
   chatWatchFolder: string | null;
   /** When the folder was chosen (ms). Exports older than this were already there, in every account. */
   chatWatchSince: number;
+  web: WebSyncSettings;
 }
 
 export const DEFAULT_SETTINGS: ClaudeImportSettings = {
   code: { enabled: false, sourceFolder: null, projects: 'all', includeSubagents: false },
   chatWatchFolder: null,
   chatWatchSince: 0,
+  web: { enabled: false },
 };
 
 /** 'pending' is indexed but not read yet; 'removed' was deleted by the user and stays gone. */
@@ -37,6 +45,17 @@ export interface FileCursor {
   error?: string;
 }
 
+/** Where one web notebook's import stands. */
+export interface WebNotebookCursor {
+  sessionId: string;
+  /** The notebook's timestamps when last read; '' while a reply was still running, so it is read again. */
+  version: string;
+  status: Exclude<FileStatus, 'pending'>;
+  /** Retained after a failed refresh so a local deletion still wins over a retry. */
+  wasImported?: boolean;
+  error?: string;
+}
+
 /** Per account: imports land in that account's sessions, so their bookkeeping does too. */
 export interface ScopeImportState {
   version: 1;
@@ -48,6 +67,19 @@ export interface ScopeImportState {
   lastChatImport: ClaudeChatImportSummary | null;
   /** Export zips already seen in the watched folder, path -> mtimeMs. */
   watchedSeen: Record<string, number>;
+  /** Web notebook id -> its cursor. */
+  webNotebooks: Record<string, WebNotebookCursor>;
+  webLastSyncAt: string | null;
+  webLastSyncMs: number | null;
+  /**
+   * The web change feed's high-water mark: the latest notebook `updatedAt` this account has read
+   * through. Null until a complete full list, or against a server without the feed.
+   */
+  webChangeMark: string | null;
+  /** When the last complete full list ran (ms), the reconciliation that also catches hard deletes. */
+  webFullListAt: number | null;
+  /** Sidebar sync hints this account closed; they never come back. */
+  dismissedHints: SyncHintId[];
 }
 
 function emptyScopeState(): ScopeImportState {
@@ -59,6 +91,12 @@ function emptyScopeState(): ScopeImportState {
     conversations: {},
     lastChatImport: null,
     watchedSeen: {},
+    webNotebooks: {},
+    webLastSyncAt: null,
+    webLastSyncMs: null,
+    webChangeMark: null,
+    webFullListAt: null,
+    dismissedHints: [],
   };
 }
 
@@ -81,6 +119,7 @@ export function sanitizeSettings(raw: unknown): ClaudeImportSettings {
     chatWatchFolder: absoluteOrNull(value.chatWatchFolder),
     chatWatchSince:
       typeof value.chatWatchSince === 'number' && Number.isFinite(value.chatWatchSince) ? value.chatWatchSince : 0,
+    web: { enabled: !!value.web && typeof value.web === 'object' && value.web.enabled === true },
   };
 }
 
@@ -111,7 +150,10 @@ export class ImportStateStore {
   ) {}
 
   async readSettings(): Promise<ClaudeImportSettings> {
-    this.settings ??= sanitizeSettings(await readJson(this.settingsPath));
+    if (this.settings) return this.settings;
+    const loaded = sanitizeSettings(await readJson(this.settingsPath));
+    // A write that landed while the file was being read is newer than what was read.
+    this.settings ??= loaded;
     return this.settings;
   }
 
@@ -128,6 +170,14 @@ export class ImportStateStore {
       loading = readJson(this.scopePath(scopeKey)).then(raw => {
         const parsed = raw as Partial<ScopeImportState> | null;
         const state = parsed?.version === 1 ? { ...emptyScopeState(), ...parsed } : emptyScopeState();
+        state.dismissedHints = Array.isArray(state.dismissedHints) ? state.dismissedHints.filter(isSyncHintId) : [];
+        // A mark the server would reject only costs one full list to replace.
+        if (typeof state.webChangeMark !== 'string' || Number.isNaN(Date.parse(state.webChangeMark))) {
+          state.webChangeMark = null;
+        }
+        if (typeof state.webFullListAt !== 'number' || !Number.isFinite(state.webFullListAt)) {
+          state.webFullListAt = null;
+        }
         this.loaded.set(scopeKey, state);
         return state;
       });
@@ -141,6 +191,13 @@ export class ImportStateStore {
     if (!state) return;
     const snapshot = JSON.stringify(state);
     await this.queue(() => atomicWrite(this.scopePath(scopeKey), snapshot));
+  }
+
+  async dismissHint(scopeKey: string, id: SyncHintId): Promise<void> {
+    const state = await this.scope(scopeKey);
+    if (state.dismissedHints.includes(id)) return;
+    state.dismissedHints.push(id);
+    await this.saveScope(scopeKey);
   }
 
   private scopePath(scopeKey: string): string {

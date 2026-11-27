@@ -17,23 +17,11 @@ const handler = baseApi().delete(async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // Fetch current Notion connection info for logging
-    const user = await userRepository.findById(userId);
-    const notionConnect = user?.notionConnect;
-
-    if (notionConnect) {
-      console.log(
-        `[Notion Disconnect] Disconnecting workspace: ${notionConnect.workspaceName} (${notionConnect.workspaceId})`
-      );
-    }
-
     await userRepository.update({
       id: userId,
       notionConnect: null,
       pendingNotionOAuthNonce: null,
     });
-
-    console.log(`[Notion Disconnect] Removed notionConnect for user ${userId}`);
 
     // Remove Notion MCP server using Mongoose's findOneAndDelete (hard delete)
     try {
@@ -42,14 +30,10 @@ const handler = baseApi().delete(async (req, res) => {
         userId,
       });
 
-      if (deletedMcpServer) {
-        console.log('[Notion Disconnect] MCP server permanently deleted.');
-      } else {
-        console.log('[Notion Disconnect] No Notion MCP server found - nothing to delete');
-      }
+      req.logger.info('Notion disconnect MCP server cleanup', { userId, deleted: Boolean(deletedMcpServer) });
     } catch (mcpError) {
       // Log the MCP error but don't fail the disconnect operation
-      console.error('[Notion Disconnect] Failed to delete Notion MCP server:', mcpError);
+      req.logger.error('Notion disconnect MCP server delete failed', { userId, error: mcpError });
     }
 
     res.status(200).json({
@@ -59,7 +43,7 @@ const handler = baseApi().delete(async (req, res) => {
         'at notion.so > Settings & members > My connections.',
     });
   } catch (error) {
-    console.error('[Notion Disconnect] Fatal error during disconnect:', error);
+    req.logger.error('Notion disconnect failed', { userId: req.user.id, error });
     const detail = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({
       error: `Failed to disconnect Notion: ${detail}. Please try again or contact support.`,

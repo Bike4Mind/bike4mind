@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@server/queueHandlers/utils', () => ({
-  dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
+  dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => (event: unknown, context: unknown) =>
+    fn(event, context, h.logger),
 }));
 
 const h = vi.hoisted(() => ({
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() },
   getSettingsByNames: vi.fn(),
   emitModalGenerationMetrics: vi.fn(),
   upsertGenerated: vi.fn(),
@@ -13,6 +15,11 @@ const h = vi.hoisted(() => ({
   triageReleaseNotes: vi.fn(),
   createCompleter: vi.fn(),
   fetch: vi.fn(),
+  config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } as Record<string, string | undefined>,
+}));
+// Real encryptToken/decryptToken run against this key.
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: new Proxy({}, { get: (_, key: string) => h.config[key] }),
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: h.getSettingsByNames }));
 vi.mock('@bike4mind/database', () => ({
@@ -28,16 +35,17 @@ vi.mock('./releaseNotes/generate', () => ({
   writeReleaseNotes: h.writeReleaseNotes,
   createReleaseNotesCompleter: h.createCompleter,
 }));
+vi.mock('./whatsNewHighlights', () => ({ runHighlightsJob: vi.fn() }));
 vi.stubGlobal('fetch', h.fetch);
 
-import { dispatch, GENERATION_BUDGET_MS } from './releaseNotes';
+import { dispatch } from './whatsNewJob';
+import { GENERATION_BUDGET_MS } from './releaseNotes';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
-const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never as {
-  warn: ReturnType<typeof vi.fn>;
-  info: ReturnType<typeof vi.fn>;
-};
+const logger = h.logger;
 const run = (...bodies: string[]) =>
-  dispatch({ Records: bodies.map((body, i) => ({ body, messageId: `m${i}` })) } as never, {} as never, logger as never);
+  dispatch({ Records: bodies.map((body, i) => ({ body, messageId: `m${i}` })) } as never, {} as never);
 
 const validPayload = {
   kind: 'release-notes',
@@ -72,9 +80,11 @@ describe('releaseNotes queue handler', () => {
     vi.clearAllMocks();
     setConfig({ enabled: false });
     h.createCompleter.mockResolvedValue({ complete: vi.fn(), modelId: 'gpt-4o-mini' });
-    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), usage });
+    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), omitted: [], usage });
     h.writeReleaseNotes.mockResolvedValue(draft());
     h.upsertGenerated.mockImplementation(async (note: unknown) => ({ note, preserved: false }));
+    h.config.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    configureSecretsAtRest('a'.repeat(64));
     h.findWorkspace.mockResolvedValue({ slackBotToken: 'xoxb-test' });
     h.fetch.mockResolvedValue({ json: async () => ({ ok: true }) });
   });
@@ -160,6 +170,42 @@ describe('releaseNotes queue handler', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Slack announcement failed'), expect.anything());
   });
 
+  it('sends the decrypted bot token when the stored value is ciphertext', async () => {
+    setConfig(enabledConfig);
+    const stored = encryptToken('xoxb-plain')!;
+    expect(stored).not.toContain('xoxb-plain');
+    h.findWorkspace.mockResolvedValue({ slackBotToken: stored });
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(slackPosts()).toHaveLength(1);
+    expect(slackPosts()[0][1].headers.Authorization).toBe('Bearer xoxb-plain');
+  });
+
+  it('still sends a legacy plaintext bot token unchanged', async () => {
+    setConfig(enabledConfig);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(slackPosts()[0][1].headers.Authorization).toBe('Bearer xoxb-test');
+  });
+
+  it('skips the post and logs no token value when the stored token cannot be decrypted', async () => {
+    setConfig(enabledConfig);
+    h.config.SECRET_ENCRYPTION_KEY = 'b'.repeat(64);
+    configureSecretsAtRest('b'.repeat(64));
+    const stored = encryptToken('xoxb-plain')!;
+    h.config.SECRET_ENCRYPTION_KEY = 'a'.repeat(64);
+    configureSecretsAtRest('a'.repeat(64));
+    h.findWorkspace.mockResolvedValue({ slackBotToken: stored });
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(slackPosts()).toHaveLength(0);
+    expect(h.upsertGenerated).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Slack announcement failed'),
+      expect.objectContaining({ error: expect.stringMatching(/Token decryption failed/) })
+    );
+    const logged = JSON.stringify(logger.warn.mock.calls);
+    expect(logged).not.toContain(stored);
+    expect(logged).not.toContain('xoxb-plain');
+  });
+
   it('does not post when no Slack target is configured', async () => {
     setConfig({ enabled: true });
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
@@ -174,15 +220,38 @@ describe('releaseNotes queue handler', () => {
     expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
     expect(h.writeReleaseNotes.mock.calls[1][3].editorialFeedback).toEqual([expect.stringContaining('acme')]);
     expect(h.triageReleaseNotes).toHaveBeenCalledTimes(1);
+    expect(h.triageReleaseNotes).toHaveBeenCalledWith(validPayload.prs, expect.any(Function), { logger });
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
 
-  it('throws and emits a failure metric when the rewrite still hits the denylist', async () => {
+  it('builds the headline from the items when the rewrite still hits the denylist', async () => {
     setConfig(enabledConfig);
     h.writeReleaseNotes.mockResolvedValue(draft('Built for Acme'));
-    await expect(run(JSON.stringify(validPayload))).rejects.toThrow(/denylist/);
-    expect(h.upsertGenerated).not.toHaveBeenCalled();
-    expect(metricNames()).toEqual(['Failure']);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Search is faster', summary: '', status: 'scheduled' })
+    );
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('Goes live in');
+    expect(text).not.toMatch(/acme/i);
+    expect(metricNames()).not.toContain('Failure');
+  });
+
+  it('stores the note hidden for review when no item survives the denylist either', async () => {
+    setConfig(enabledConfig);
+    const blocked = draft('Built for Acme');
+    blocked.draft.items = [{ category: 'improved', text: 'Exports for Acme', importance: 1, sourcePrs: [1] }];
+    h.writeReleaseNotes.mockResolvedValue(blocked);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: '', summary: '', items: [], status: 'hidden' })
+    );
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('admin Release Notes tab');
+    expect(text).not.toMatch(/acme/i);
+    expect(metricNames()).toContain('Success');
+    expect(metricNames()).not.toContain('Failure');
   });
 
   it('rewrites once when the headline is generic, feeding the reason back', async () => {
@@ -209,14 +278,16 @@ describe('releaseNotes queue handler', () => {
     expect(metricNames()).not.toContain('Failure');
   });
 
-  it('names both drafts denylist hits when the rewrite and the earlier draft both fail', async () => {
+  it('rebuilds the rewrite from its items when the rewrite and the earlier draft both hit the denylist', async () => {
     setConfig({ ...enabledConfig, denylist: ['acme', 'globex'] });
-    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft('Built for Globex'));
-    await expect(run(JSON.stringify(validPayload))).rejects.toThrow(
-      /the headline must not mention "globex"; the headline must not mention "acme"/
+    const rewrite = draft('Built for Globex');
+    rewrite.draft.items = [{ category: 'new', text: 'Exports are quicker', importance: 1, sourcePrs: [1] }];
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(rewrite);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(h.upsertGenerated).toHaveBeenCalledTimes(1);
+    expect(h.upsertGenerated).toHaveBeenCalledWith(
+      expect.objectContaining({ headline: 'Exports are quicker', status: 'scheduled' })
     );
-    expect(h.upsertGenerated).not.toHaveBeenCalled();
-    expect(metricNames()).toEqual(['Failure']);
   });
 
   it('keeps the earlier generic draft when the rewrite introduces a denylist hit', async () => {
@@ -242,6 +313,21 @@ describe('releaseNotes queue handler', () => {
     const { text } = JSON.parse(slackPosts()[0][1].body);
     expect(text).toContain('Hi &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;');
     expect(text).not.toContain('<!channel>');
+  });
+
+  it('names the PRs triage could not classify in the Slack post', async () => {
+    setConfig(enabledConfig);
+    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), omitted: [5788, 5806], usage });
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('Triage could not classify PRs #5788, #5806');
+  });
+
+  it('says nothing about omitted PRs when triage classified every PR', async () => {
+    setConfig(enabledConfig);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).not.toContain('could not classify');
   });
 
   it('escapes Slack control characters in the headline', async () => {

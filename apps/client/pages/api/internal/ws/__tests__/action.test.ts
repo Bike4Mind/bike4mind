@@ -62,6 +62,14 @@ beforeEach(() => {
 });
 
 describe('self-host ws bridge: connect', () => {
+  it('forwards live destination metadata with the authenticated ticket', async () => {
+    await callBridge('connect', { connectionId: 'c1', ticket: 't', handoffPlatform: 'desktop', handoffName: 'Mac' });
+    expect(connectFunc.mock.calls[0][0].queryStringParameters).toEqual({
+      ticket: 't',
+      handoffPlatform: 'desktop',
+      handoffName: 'Mac',
+    });
+  });
   it('forwards the browser ticket as queryStringParameters.ticket (not token)', async () => {
     await callBridge('connect', { connectionId: 'c1', ticket: 'single-use-ticket' });
 
@@ -92,6 +100,20 @@ describe('self-host ws bridge: connect', () => {
       query: { action: 'connect' },
       headers: { 'x-internal-ws-secret': 'wrong-length-secret-xxxxxx' },
       body: { connectionId: 'c3', ticket: 't' },
+    };
+    const res = makeRes();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
+    expect(res.statusCode).toBe(401);
+    expect(connectFunc).not.toHaveBeenCalled();
+  });
+
+  it('rejects every request while the internal secret is the example placeholder', async () => {
+    const placeholder = 'change-me-openssl-rand-hex-32';
+    process.env.INTERNAL_WS_SECRET = placeholder;
+    const req = {
+      query: { action: 'connect' },
+      headers: { 'x-internal-ws-secret': placeholder },
+      body: { connectionId: 'c4', ticket: 't' },
     };
     const res = makeRes();
     await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);

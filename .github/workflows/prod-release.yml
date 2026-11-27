@@ -42,7 +42,7 @@ env:
 jobs:
   create-release:
     name: Create Production Release
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
     permissions:
@@ -119,7 +119,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Get pnpm store directory
         id: pnpm-cache
@@ -142,7 +142,7 @@ jobs:
         run: pnpm core:build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ steps.config.outputs.aws_role_arn }}
           aws-region: ${{ env.AWS_REGION }}
@@ -174,7 +174,7 @@ jobs:
         id: release-notes-creds
         if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != ''
         continue-on-error: true
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ secrets.AWS_RELEASE_NOTES_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -210,8 +210,10 @@ jobs:
         continue-on-error: true
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ secrets.RELEASE_VIDEO_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_VIDEO_APP_KEY }}
+          # The release App, installed on the video repo; the token is narrowed to that repo and to contents.
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
           owner: ${{ steps.video-repo.outputs.owner }}
           repositories: ${{ steps.video-repo.outputs.name }}
 

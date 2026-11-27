@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { InviteType, Permission } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { NotFoundError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Invite, Project, User, inviteRepository, projectRepository, userRepository } from '@bike4mind/database';
@@ -106,7 +106,7 @@ describe('project-invite authorization (end-to-end, real repos + Mongo)', () => 
   it('rejects a collaborator who holds update but not share permission', async () => {
     const project = await seedProject();
 
-    await expect(createProjectInvite(updateOnlyMemberUser, String(project._id))).rejects.toThrow(BadRequestError);
+    await expect(createProjectInvite(updateOnlyMemberUser, String(project._id))).rejects.toThrow(NotFoundError);
     expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
   });
 
@@ -114,18 +114,18 @@ describe('project-invite authorization (end-to-end, real repos + Mongo)', () => 
     const project = await seedProject();
 
     // Capture both rejections and compare them: asserting only a class for one and only a message
-    // for the other would let `BadRequestError('No share access to <name>')` keep this green while
+    // for the other would let `NotFoundError('No share access to <name>')` keep this green while
     // reintroducing the existence oracle the test is named for.
     const denied = await createProjectInvite(outsiderUser, String(project._id)).catch((e: Error) => e);
     const missing = await createProjectInvite(outsiderUser, '507f1f77bcf86cd799439011').catch((e: Error) => e);
 
-    expect(denied).toBeInstanceOf(BadRequestError);
-    expect(missing).toBeInstanceOf(BadRequestError);
+    expect(denied).toBeInstanceOf(NotFoundError);
+    expect(missing).toBeInstanceOf(NotFoundError);
     expect(denied.message).toBe(missing.message);
     expect(denied.message).not.toContain(PROJECT_NAME);
     // errorHandler spreads `additionalInfo` verbatim into the response body, so it is a second
     // channel the message assertions above do not cover.
-    expect((denied as BadRequestError).additionalInfo).toEqual((missing as BadRequestError).additionalInfo);
+    expect((denied as NotFoundError).additionalInfo).toEqual((missing as NotFoundError).additionalInfo);
 
     expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
   });

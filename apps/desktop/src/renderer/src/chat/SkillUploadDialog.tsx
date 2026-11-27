@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -83,6 +83,28 @@ function fieldErrors(fields: SkillUploadFields): Partial<Record<keyof SkillUploa
   };
 }
 
+const MAX_HOLD_CAUSES = 3;
+
+function heldBody(tier: string | undefined, findings: { severity: string; message: string }[]): string {
+  const severity = tier === 'high' ? 'high' : 'medium';
+  const messages = [
+    ...new Set(findings.filter(f => f.severity === severity).map(f => f.message.replace(/[.\s]+$/, ''))),
+  ];
+  const extra = messages.length - MAX_HOLD_CAUSES;
+  const causes =
+    messages.length === 0
+      ? ''
+      : `${messages.slice(0, MAX_HOLD_CAUSES).join('; ')}${extra > 0 ? `; and ${extra} more` : ''}`;
+  if (tier === 'high') {
+    return causes
+      ? `A reviewer must approve it first because of: ${causes}.`
+      : 'It has high-risk findings, so a reviewer must approve it first.';
+  }
+  return causes
+    ? `A person checks it before it goes live because of: ${causes}.`
+    : 'Listings with findings are checked by a person before they go live.';
+}
+
 /** A version's scan and review state in plain words; mirrors the web's ScanResult versionOutcome. */
 export function versionOutcome(
   version: SkillSubmittedVersion,
@@ -119,10 +141,7 @@ export function versionOutcome(
       return {
         color: 'warning',
         title: 'Waiting for a human reviewer',
-        body:
-          version.riskTier === 'high'
-            ? 'It declares tools that act outside the conversation, so a reviewer must approve it first.'
-            : 'Listings with findings are checked by a person before they go live.',
+        body: heldBody(version.riskTier, version.findings),
       };
     case 'rejected':
       return {
@@ -235,12 +254,13 @@ function SubmitResultView({ result, onClose }: { result: Submitted; onClose: () 
         </Typography>
       )}
       <DialogActions>
-        <Button variant="plain" color="neutral" onClick={onClose}>
+        <Button variant="outlined" color="neutral" onClick={onClose}>
           Close
         </Button>
         {result.listing.hasShareLink && (
           <Button
             variant="outlined"
+            color="neutral"
             onClick={() =>
               void window.b4m.skillMarket
                 .copyShareLink(result.listing.id)
@@ -253,6 +273,7 @@ function SubmitResultView({ result, onClose }: { result: Submitted; onClose: () 
         )}
         <Button
           variant="outlined"
+          color="neutral"
           endDecorator={<ExternalLinkIcon />}
           onClick={() => void window.b4m.skillMarket.openOnWeb({ kind: 'listing', id: result.listing.id })}
           data-testid="skill-publish-open-web-btn"
@@ -271,6 +292,12 @@ type Step =
   | { kind: 'publish'; skillId: string; message: string }
   | { kind: 'version'; listingId: string; message: string }
   | { kind: 'result'; result: Submitted };
+
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};
 
 /**
  * Upload a local SKILL.md: preview and edit what main parsed, save it to the account, and
@@ -446,6 +473,7 @@ export function SkillUploadDialog({
             />
             <Button
               variant="outlined"
+              color="neutral"
               disabled={busy || !NAME_PATTERN.test(rename) || rename.length > NAME_MAX}
               onClick={() => {
                 set('name', rename);
@@ -520,7 +548,7 @@ export function SkillUploadDialog({
           >
             Scan and publish
           </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>
+          <Button variant="outlined" color="neutral" onClick={onClose}>
             Not now
           </Button>
         </DialogActions>
@@ -540,7 +568,7 @@ export function SkillUploadDialog({
           >
             Submit as new version
           </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>
+          <Button variant="outlined" color="neutral" onClick={onClose}>
             Not now
           </Button>
         </DialogActions>
@@ -557,7 +585,8 @@ export function SkillUploadDialog({
             endDecorator={
               <Button
                 size="sm"
-                variant="plain"
+                variant="outlined"
+                color="neutral"
                 endDecorator={<ExternalLinkIcon />}
                 onClick={() => void window.b4m.skillMarket.openSource(preview.source!.url)}
                 data-testid="skill-upload-source-link"
@@ -576,10 +605,20 @@ export function SkillUploadDialog({
             Ignored (not supported in Bike4Mind skills): {preview.dropped.join(', ')}
           </Alert>
         )}
+        {fields.files?.length ? (
+          <Alert color="neutral" variant="soft" data-testid="skill-upload-files">
+            Also uploads {fields.files.length} supporting {fields.files.length === 1 ? 'file' : 'files'}:{' '}
+            {fields.files.map(f => f.path).join(', ')}
+            {fields.files.some(f => f.path.startsWith('scripts/'))
+              ? '. Scripts run on the user\u2019s machine, so a person reviews them before the skill is shared.'
+              : ''}
+          </Alert>
+        ) : null}
         {preview.extraFileCount > 0 && (
           <Alert color="warning" variant="soft" data-testid="skill-upload-extra-files">
-            Only SKILL.md is uploaded; {preview.extraFileCount} other {preview.extraFileCount === 1 ? 'file' : 'files'}{' '}
-            in this folder {preview.extraFileCount === 1 ? 'is' : 'are'} not: {preview.extraFiles.join(', ')}
+            Only SKILL.md, scripts/ and references/ are uploaded; {preview.extraFileCount} other{' '}
+            {preview.extraFileCount === 1 ? 'file' : 'files'} in this folder{' '}
+            {preview.extraFileCount === 1 ? 'is' : 'are'} not: {preview.extraFiles.join(', ')}
             {preview.extraFileCount > preview.extraFiles.length ? ', ...' : ''}
           </Alert>
         )}
@@ -663,6 +702,7 @@ export function SkillUploadDialog({
               </Button>
               <Button
                 variant="outlined"
+                color="neutral"
                 disabled={!valid || busy}
                 onClick={() => guarded(() => save('done'))}
                 data-testid="skill-upload-save-btn"
@@ -671,7 +711,7 @@ export function SkillUploadDialog({
               </Button>
             </>
           )}
-          <Button variant="plain" color="neutral" onClick={onClose}>
+          <Button variant="outlined" color="neutral" onClick={onClose}>
             Cancel
           </Button>
         </DialogActions>
@@ -681,7 +721,13 @@ export function SkillUploadDialog({
 
   return (
     <>
-      <Modal open onClose={onClose}>
+      <Modal
+        open
+        onClose={(event, reason) => {
+          if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+          onClose();
+        }}
+      >
         <ModalDialog
           sx={{ width: 620, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}
           data-testid="skill-upload-dialog"
@@ -723,7 +769,7 @@ export function SkillUploadDialog({
             >
               Continue
             </Button>
-            <Button variant="plain" color="neutral" onClick={() => setPending(null)}>
+            <Button variant="outlined" color="neutral" onClick={() => setPending(null)}>
               Cancel
             </Button>
           </DialogActions>
@@ -741,12 +787,12 @@ export function useSkillUpload(onSaved?: () => void, sessionId?: string | null) 
   const [open, setOpen] = useState<{ preview: Preview; listing?: { id: string; name: string } } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const start = async (load: () => Promise<SkillUploadPreview>, listing?: { id: string; name: string }) => {
+  const start = useCallback(async (load: () => Promise<SkillUploadPreview>, listing?: { id: string; name: string }) => {
     setError(null);
     const preview = await load();
     if (preview.ok) setOpen({ preview, ...(listing ? { listing } : {}) });
     else if (!preview.canceled) setError(preview.error);
-  };
+  }, []);
 
   const dialog = open ? (
     <SkillUploadDialog

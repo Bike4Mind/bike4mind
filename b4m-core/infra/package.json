@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/infra",
-  "version": "4.2.0",
+  "version": "7.4.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -33,16 +33,16 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@tsconfig/node24": "*",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

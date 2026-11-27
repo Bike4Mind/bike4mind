@@ -13,7 +13,8 @@ import {
   Tooltip,
 } from '@mui/joy';
 import { brand } from '@client/app/utils/themes/colors';
-import { Edit as EditMuiIcon, DeleteOutline } from '@mui/icons-material';
+import EditMuiIcon from '@mui/icons-material/Edit';
+import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';

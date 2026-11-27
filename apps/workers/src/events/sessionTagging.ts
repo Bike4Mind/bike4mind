@@ -1,10 +1,12 @@
 import { questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { IMessage } from '@bike4mind/common';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { withEventContext } from '@workers/utils/eventContext';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 // A name that is blank after trim is not a usable tag: keeping it would let one blank element make
 // an otherwise-unusable completion look like a success. Shared by both parse paths so they cannot
@@ -115,6 +117,12 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
+  const accessDenial = aiAccessDeniedMessage(writer) ?? aiAccessDeniedMessage(payer);
+  if (accessDenial) {
+    logger.warn(`Skipping tagging for session ${sessionId}: ${accessDenial}`);
+    return;
+  }
+
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
   // Skip if session already has tags, unless it's been a while (duplicate-processing guard)
@@ -150,7 +158,10 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  // Below the cheap exits above: the spider re-dispatches no-quest notebooks on every pass.
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session tagging', logger }))) return;
+
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
   logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
 
   // Ask an LLM to tag the user's first Quest
@@ -188,15 +199,20 @@ export const handler = withEventContext(async (event, logger) => {
     if (completionInfo) lastCompletionInfo = completionInfo;
   });
 
-  await recordSessionOperationalUsage({
+  const completionEndTime = Date.now();
+  // Billed after the session write, not before: a write that throws retries the event with a fresh
+  // model call, which would otherwise bill twice.
+  const usageArgs = {
+    operation: 'notebook_tagging',
     user: payer,
     sessionId,
     modelId,
     modelInfo,
     completionInfo: lastCompletionInfo,
     startTime: completionStartTime,
+    endTime: completionEndTime,
     logger,
-  });
+  } as const;
 
   const tagsText = completionBuffers
     .map(text => text?.trim())
@@ -208,7 +224,7 @@ export const handler = withEventContext(async (event, logger) => {
   if (parsedTags && parsedTags.length > 0) {
     session.tags = parsedTags;
     session.taggedAt = new Date();
-    logger.info(`Tags: ${JSON.stringify(session.tags)}`);
+    logger.info('Tags generated', { sessionId, tagCount: parsedTags.length });
     // Persist ONLY the tag fields. The read-to-write window spans a full LLM
     // completion; a whole-session write would revert any share revocation,
     // visibility change or soft-delete the owner made during it.
@@ -226,14 +242,15 @@ export const handler = withEventContext(async (event, logger) => {
       },
       writeOpts
     );
+    await recordSessionOperationalUsage(usageArgs);
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping tag write`);
   } else {
     // Records that a completion was spent and yielded nothing - NOT that the notebook is tagged.
-    // `recordSessionOperationalUsage` above has already billed, so writing nothing here is what
-    // made a notebook the model can never tag cost a call on every run. `taggedAt` and `tags` stay
-    // untouched: a stamp would turn one bad completion into a permanent "already tagged" and a
-    // wipe would destroy tags a clone or an import carried in. The backoff bounds the spend and
-    // still reopens, so nothing is abandoned (see TAG_RETRY_BACKOFF_MS).
+    // The attempt is billed after this write, landed or not. Without the stamp, a notebook the
+    // model can never tag would cost a call on every run. `taggedAt` and `tags` stay untouched:
+    // a stamp would turn one bad completion into a permanent "already tagged" and a wipe would
+    // destroy tags a clone or an import carried in. The backoff bounds the spend and still
+    // reopens, so nothing is abandoned (see TAG_RETRY_BACKOFF_MS).
     session.tagLastAttemptAt = new Date();
     const written = await sessionRepository.updateWithUpdateAccess(
       writer,
@@ -243,6 +260,7 @@ export const handler = withEventContext(async (event, logger) => {
       },
       writeOpts
     );
+    await recordSessionOperationalUsage(usageArgs);
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping attempt stamp`);
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug('Tagging response could not be parsed', { responseLength: tagsText?.length ?? 0 });

@@ -16,29 +16,35 @@ import {
   videoJob,
 } from '@server/generations/__test__/routeHarness';
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
-vi.mock('@server/utils/userRateTier', async () =>
+vi.mock('@bike4mind/server-utils/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
-vi.mock('@server/utils/orgAccess', async orig =>
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
   (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
 vi.mock('@bike4mind/database', async orig =>
   (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
-vi.mock('@server/generationJobs/wiring', async () =>
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', async () =>
   (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
-vi.mock('@server/generations/signOutputUrl', async () =>
+vi.mock('@bike4mind/server-utils/generations/signOutputUrl', async () =>
   (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));

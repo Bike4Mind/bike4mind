@@ -116,7 +116,7 @@ export interface ExportedKnowledgeFile {
   type?: KnowledgeType;
   uploadedAt: string; // ISO timestamp
   content?: string; // Base64 encoded content for small files
-  contentUrl?: string; // Reference URL for large files
+  contentUrl?: string; // Storage key (filePath) of the file when content is not inlined; not a URL
   metadata?: Record<string, unknown>;
 }
 
@@ -195,6 +195,9 @@ export interface NotebookExportOptions {
   // Content options
   includeImages: boolean; // Embed images as base64
   maxFileSize: number; // Max size for embedded files (bytes)
+  // Keep each image as its storage key instead of reading and embedding it. The moderation check
+  // still runs, so held or blocked uploaded images are dropped either way.
+  imagesAsKeys?: boolean;
 
   // Date range filtering. Either a full ISO timestamp or a bare "2026-01-15"; a bare date at
   // `toDate` covers that whole day, so the two forms are ~24h apart at the top of the range.
@@ -226,7 +229,7 @@ export interface ImportResult {
   /**
    * S3 keys of the knowledge files this import wrote, one per FabFile. Every imported file is
    * stamped `pending`; the caller scans them out of band after the import transaction commits (see
-   * server/s3/moderateImportedKnowledgeFiles.ts), because the natural upload-time scan cannot see a
+   * packages/server-utils/src/s3/moderateImportedKnowledgeFiles.ts), because the natural upload-time scan cannot see a
    * row still inside the open import transaction.
    */
   importedKnowledgeFilePaths?: string[];

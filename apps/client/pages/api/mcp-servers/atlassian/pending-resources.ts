@@ -49,7 +49,6 @@ const handler = baseApi().get(async (req, res) => {
   if (user.atlassianConnect.pendingSelectionExpiresAt) {
     const expiresAt = new Date(user.atlassianConnect.pendingSelectionExpiresAt);
     if (expiresAt < new Date()) {
-      console.log(`[Atlassian Pending Resources] Pending selection expired for user ${userId}`);
       await userRepository.update({
         id: userId,
         atlassianConnect: null,
@@ -70,8 +69,6 @@ const handler = baseApi().get(async (req, res) => {
   if (resources.length === 0) {
     throw new BadRequestError('No Atlassian resources available. Please reconnect your Atlassian account.');
   }
-
-  console.log(`[Atlassian Pending Resources] Returning ${resources.length} resources for user ${userId}`);
 
   res.status(200).json({
     resources,

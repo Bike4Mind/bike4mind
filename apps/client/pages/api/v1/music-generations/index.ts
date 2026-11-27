@@ -3,7 +3,7 @@
  * GET  /api/v1/music-generations - list the caller's jobs.
  *
  * Auth, scope and body validation come from the contracts; the job lifecycle lives in createMusicJob and the
- * generation-job engine. Every response renders through toPublicMusicGeneration.
+ * generation-job engine. Every response renders through toPublicGenerationJob.
  */
 import {
   createMusicGenerationContract,
@@ -20,13 +20,16 @@ import { createMusicJob, type CreateMusicJobResult } from '@bike4mind/services/m
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { getCreateMusicJobDeps } from '@server/generationJobs/wiring';
+import { getCreateMusicJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
-import { toPublicMusicGeneration } from '@server/musicGenerations/toPublicMusicGeneration';
+import { MUSIC_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.music-generations';
 
@@ -56,23 +59,31 @@ const toHttpError = (refusal: Extract<CreateMusicJobResult, { ok: false }>) => {
 const createRouter = nextRouteForContract(createMusicGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/music-generations'),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
   // As in video-generations: 'studio' is any first-party session, and idempotency keys are scoped per source.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
+  const paidRun = await resolvePaidCallRun(req, req.validated.run, req.validated.organization_id);
+  const organizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveMediaBillingOrgId(req, req.validated.organization_id);
   const result = await createMusicJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
+      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      ...(paidRun && { run: paidRun.attribution }),
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
     },
     getCreateMusicJobDeps()
   );
   if (!result.ok) throw toHttpError(result);
-  return res.status(202).json(await toPublicMusicGeneration(result.job, mapperDeps));
+  return res.status(202).json(await toPublicGenerationJob(result.job, mapperDeps, MUSIC_GENERATION_PROJECTION));
 });
 
 const listRouter = nextRouteForContract(listMusicGenerationsContract, {
@@ -85,7 +96,7 @@ const listRouter = nextRouteForContract(listMusicGenerationsContract, {
     kind: 'music',
     cursorScope: CURSOR_SCOPE,
   });
-  const data = await Promise.all(jobs.map(job => toPublicMusicGeneration(job, mapperDeps)));
+  const data = await Promise.all(jobs.map(job => toPublicGenerationJob(job, mapperDeps, MUSIC_GENERATION_PROJECTION)));
   return res.json({ data, next_cursor: nextCursor });
 });
 

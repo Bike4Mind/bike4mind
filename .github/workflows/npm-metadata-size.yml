@@ -1,0 +1,41 @@
+name: npm Metadata Size
+
+# Measures the npm metadata document of every published package (logic in
+# scripts/check-npm-metadata-size.mjs). The registry rejects a publish once that
+# document passes 100 MB and the versions in it cannot be removed afterwards, so
+# this warns at 70 MB and fails at 90 MB while there is still room to act.
+#
+# Needs the NPM_READ_TOKEN secret: a read-only npm token that can read the
+# restricted packages. Trusted publishing covers publishes only, not reads.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch: {}
+
+concurrency:
+  group: npm-metadata-size
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure npm metadata
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Measure metadata size
+        env:
+          NPM_READ_TOKEN: ${{ secrets.NPM_READ_TOKEN }}
+        run: node scripts/check-npm-metadata-size.mjs

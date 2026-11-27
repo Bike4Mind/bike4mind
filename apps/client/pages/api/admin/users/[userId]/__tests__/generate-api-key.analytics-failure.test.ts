@@ -29,6 +29,9 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+// Only reached for a contributed scope, which this suite never requests.
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ toEntitlementUser: vi.fn() }));
+vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({ resolveApiKeyScopeAccessForUser: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   agentRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -48,6 +51,11 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { createUserApiKey },
   dataLakeService: {},
   counterService: { incrementUserCounter },
+}));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
 }));
 
 import '@pages/api/admin/users/[userId]/generate-api-key';

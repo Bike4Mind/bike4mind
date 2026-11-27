@@ -30,6 +30,7 @@ const createArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.string().optional(),
+  identifier: z.string().optional(),
   permissions: z
     .object({
       canRead: z.array(z.string()).prefault([]),
@@ -73,7 +74,7 @@ interface CreateArtifactAdapters {
 // payload -- the datastore-generated _id and timestamps, plus the caller-owned
 // id (supplied separately). Cast to the repo's create() param at the call site,
 // since IBaseRepository.create still lists _id as required.
-type CreateInput<T> = Omit<T, '_id' | 'id' | 'createdAt' | 'updatedAt'>;
+export type CreateInput<T> = Omit<T, '_id' | 'id' | 'createdAt' | 'updatedAt'>;
 
 /**
  * Creates a new artifact with content and initial version
@@ -98,6 +99,7 @@ export const create = async (
     sourceQuestId,
     sessionId,
     parentArtifactId,
+    identifier,
     permissions,
     metadata,
   } = secureParameters(parameters, createArtifactSchema);
@@ -158,6 +160,7 @@ export const create = async (
     sourceQuestId,
     sessionId,
     parentArtifactId,
+    identifier,
     status: 'draft',
     tags,
     contentHash,

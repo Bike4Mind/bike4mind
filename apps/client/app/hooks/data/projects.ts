@@ -2,10 +2,17 @@ import { IProject, IProjectDocument, ISessionDocument } from '@bike4mind/common'
 import { api } from '@client/app/contexts/ApiContext';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AxiosError, isAxiosError } from 'axios';
+import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { generateMockProjects } from '@client/app/mocks/mockProjects';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { useUser } from '@client/app/contexts/UserContext';
+
+/** The server's own refusal text (e.g. a 403 naming what could not be attached), else `fallback`. */
+const serverErrorMessage = (error: unknown, fallback: string): string => {
+  const message: unknown = isAxiosError(error) ? error.response?.data?.error : undefined;
+  return typeof message === 'string' && message.length > 0 ? message : fallback;
+};
 
 // Set true to use mock projects for UI testing
 const USE_MOCK_PROJECTS = false;
@@ -45,11 +52,15 @@ export const useCreateProject = (callback?: {
   silentSuccess?: boolean;
 }) => {
   const queryClient = useQueryClient();
+  const { currentUser } = useUser();
   return useMutation({
     mutationFn: async (
       project: Pick<IProject, 'name' | 'description'> & { sessionIds?: string[]; fileIds?: string[] }
     ) => {
-      const response = await api.post<IProjectDocument>('/api/projects', project);
+      const response = await api.post<IProjectDocument>('/api/projects', {
+        ...project,
+        organizationId: currentUser?.organizationId ?? undefined,
+      });
       return response.data;
     },
     onSuccess: (project: IProjectDocument, variables) => {
@@ -63,11 +74,7 @@ export const useCreateProject = (callback?: {
       callback?.onSuccess?.(project);
     },
     onError: error => {
-      if (error instanceof AxiosError) {
-        toast.error(error.response?.data?.error ?? 'Failed to create project');
-      } else {
-        toast.error('Failed to create project');
-      }
+      toast.error(serverErrorMessage(error, 'Failed to create project'));
       callback?.onError?.(error);
     },
   });
@@ -77,12 +84,16 @@ export const useSearchProjects = (
   search: string,
   filters: { favorite?: boolean },
   orderBy: { by: 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' },
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; propagateErrors?: boolean }
 ) => {
   const queryClient = useQueryClient();
 
   return useInfiniteQuery({
-    queryKey: ['projects', 'search', { search, filters, orderBy }],
+    queryKey: [
+      'projects',
+      'search',
+      { search, filters, orderBy, ...(options?.propagateErrors ? { propagateErrors: true } : {}) },
+    ],
     initialPageParam: { page: 1 },
     queryFn: async params => {
       const { page = 1 } = params.pageParam || {};
@@ -107,7 +118,8 @@ export const useSearchProjects = (
         });
 
         return response.data;
-      } catch (e) {
+      } catch (error) {
+        if (options?.propagateErrors) throw error;
         return { data: [], hasMore: false };
       }
     },
@@ -145,8 +157,8 @@ export const useAddSessionsToProject = (callbacks?: {
       if (!callbacks?.silent) toast.success('Sessions added to project successfully');
       callbacks?.onSuccess?.();
     },
-    onError: () => {
-      if (!callbacks?.silent) toast.error('Failed to add sessions to project');
+    onError: error => {
+      if (!callbacks?.silent) toast.error(serverErrorMessage(error, 'Failed to add sessions to project'));
       callbacks?.onError?.();
     },
   });
@@ -169,8 +181,8 @@ export const useAddFilesToProject = (callbacks?: { onSuccess?: () => void; onErr
       toast.success('Files added to project successfully');
       callbacks?.onSuccess?.();
     },
-    onError: () => {
-      toast.error('Failed to add files to project');
+    onError: error => {
+      toast.error(serverErrorMessage(error, 'Failed to add files to project'));
       callbacks?.onError?.();
     },
   });
@@ -346,8 +358,8 @@ export const useAddSystemPromptsToProject = (callbacks?: { onSuccess?: () => voi
       toast.success('System prompts added successfully');
       callbacks?.onSuccess?.();
     },
-    onError: () => {
-      toast.error('Failed to add system prompts');
+    onError: error => {
+      toast.error(serverErrorMessage(error, 'Failed to add system prompts'));
       callbacks?.onError?.();
     },
   });

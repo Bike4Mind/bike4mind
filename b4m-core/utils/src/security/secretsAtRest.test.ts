@@ -1,9 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { encryptSecret, generateEncryptionKey, isEncrypted } from './secretEncryption';
+import { KeyringNotLoadedError, resetKeyringForTests } from './keyring';
 import { configureSecretsAtRest, decryptAtRest, encryptAtRest, isSecretsAtRestConfigured } from './secretsAtRest';
 
 const KEY = generateEncryptionKey();
 const PREVIOUS_KEY = generateEncryptionKey();
+
+describe('secretsAtRest before the keyring loads', () => {
+  it('throws instead of degrading to plaintext', () => {
+    resetKeyringForTests();
+    expect(() => encryptAtRest('secret')).toThrow(KeyringNotLoadedError);
+    expect(() => decryptAtRest(encryptSecret('secret', KEY))).toThrow(KeyringNotLoadedError);
+  });
+});
 
 describe('secretsAtRest', () => {
   beforeEach(() => {

@@ -1,28 +1,14 @@
-import {
-  FileEvents,
-  KnowledgeType,
-  Permission,
-  SupportedFabFileMimeTypes,
-  extensionFromMimeType,
-  isImageServeable,
-} from '@bike4mind/common';
-import {
-  FabFile,
-  User,
-  organizationRepository,
-  withTransaction,
-  adminSettingsRepository,
-  dataLakeRepository,
-  scopedSettingsRepository,
-} from '@bike4mind/database';
-import { fabFilesService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { Permission, isImageServeable, fabFileResponseSchema, type IFabFileDocument } from '@bike4mind/common';
+import { FabFile, fabFileRepository } from '@bike4mind/database';
+import { fileUrlSigningDate, FILE_URL_TTL_SECONDS, signedUrlExpiresAt } from '@bike4mind/utils';
+import { storageReadOverrides } from '@bike4mind/utils/contentDisposition';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { respond } from '@server/utils/respond';
+import { BadRequestError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
+import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
+import { copyGeneratedImageToFiles } from '@server/files/copyGeneratedImage';
 import { z } from 'zod';
 
 const copyGeneratedImageSchema = z.object({
@@ -31,6 +17,9 @@ const copyGeneratedImageSchema = z.object({
 });
 
 type CopyGeneratedImageInput = z.infer<typeof copyGeneratedImageSchema>;
+
+// `created` tells the caller whether this call made the file, so it never deletes the caller's earlier copy.
+const copiedImageResponseSchema = fabFileResponseSchema.extend({ created: z.boolean() });
 
 const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
@@ -41,110 +30,39 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   })
   .post(
     asyncHandler<unknown, unknown, CopyGeneratedImageInput>(async (req, res) => {
-      const { user } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
-
-      // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
-      // any user's image into their own files by supplying its key. Only copy an image the caller
-      // created (or one shared with them via the source chat).
-      if (!(await userCanAccessGeneratedImage(imageS3Key, user))) {
-        throw new ForbiddenError('You do not have access to this image');
-      }
-
-      const imageBuffer = await getGeneratedImageStorage().download(imageS3Key);
-
-      const metadata = await getGeneratedImageStorage().getMetadata(imageS3Key);
-      const storedType = metadata.contentType;
-      // An octet-stream (what S3 reports for objects written without an explicit ContentType)
-      // carries no type at all, and claim-first would then fall through to the caller-supplied
-      // fileName - storing PNG bytes as whatever "notes.txt" claims. Treat it as absent. This
-      // single substring match is deliberately broader than the two-spelling check in
-      // b4m-core/fab-pipeline/src/ingest.ts, so it also catches cased and parameterised variants
-      // (e.g. "; charset=binary").
-      const contentType =
-        !storedType || storedType.trim().toLowerCase().includes('octet-stream')
-          ? SupportedFabFileMimeTypes.PNG
-          : storedType;
-
-      // Derive the extension via the shared reverse lookup so structured types (e.g. Excel's
-      // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".
-      const extension = extensionFromMimeType(contentType) || 'png';
-      const finalFileName = fileName || `image_${Date.now()}.${extension}`;
-
-      const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(
-          user.id,
-          {
-            type: KnowledgeType.FILE,
-            fileName: finalFileName,
-            mimeType: contentType,
-            fileSize: imageBuffer.length,
-            content: imageBuffer, // Pass the buffer as content to trigger upload
-          },
-          {
-            // The contentType comes off the stored S3 object, not the request body, so it outranks
-            // a caller-supplied fileName (an "image.txt" carrying image/png bytes stays image/png).
-            mimeTypePrecedence: 'claim-first',
-            db: {
-              adminSettings: adminSettingsRepository,
-              // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
-              // enforcement override would silently not apply on this door.
-              scopedSettings: scopedSettingsRepository,
-              fabFiles: FabFile,
-              users: User,
-              organizations: organizationRepository,
-              dataLakes: dataLakeRepository,
-            },
-            storage: {
-              upload: async (filepath, _content, option) => {
-                try {
-                  console.log(`[copy-generated-image] Uploading to S3: ${filepath}, size: ${imageBuffer.length}`);
-                  // S3Storage.upload signature: (content, destination, options)
-                  await getFilesStorage().upload(imageBuffer, filepath, {
-                    ContentType: option?.ContentType || contentType,
-                  });
-                  console.log(`[copy-generated-image] Upload successful: ${filepath}`);
-                  return filepath;
-                } catch (error) {
-                  console.error('[copy-generated-image] Upload failed:', error);
-                  throw error;
-                }
-              },
-              generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
-                getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
-                  expiresIn: expireInSeconds,
-                }),
-            },
-          }
-        );
-      });
-
-      await logEvent(
-        { userId: user.id, type: FileEvents.CREATE_FILE, metadata: { fileId: result.id } },
-        { ability: req.ability }
-      );
+      const { fileId, created } = await copyGeneratedImageToFiles(req, { imageS3Key, fileName });
+      const result = await fabFileRepository.findById(fileId);
+      if (!result) throw new InternalServerError('Failed to save the image to your files');
 
       // The generated image is already moderated, but the new FabFile row starts 'pending' until
       // the async objectCreated scan clears it - only return a working URL once serveable;
       // otherwise return the record with no fileUrl so the client can show a placeholder.
       const responseFile =
         typeof (result as { toJSON?: unknown }).toJSON === 'function'
-          ? (result as unknown as { toJSON: () => typeof result }).toJSON()
+          ? (result as unknown as { toJSON: () => IFabFileDocument }).toJSON()
           : result;
       if (responseFile.filePath && isImageServeable(responseFile)) {
         const presignedUrl = await getFilesStorage().getSignedUrl(responseFile.filePath, 'get', {
-          expiresIn: 3600,
+          expiresIn: FILE_URL_TTL_SECONDS,
           audience: 'browser',
+          signingDate: fileUrlSigningDate(),
+          ...storageReadOverrides({
+            mimeType: responseFile.mimeType,
+            fileName: responseFile.fileName,
+            key: responseFile.filePath,
+          }),
         });
 
-        return res.json({
+        return respond(res, copiedImageResponseSchema, {
           ...responseFile,
           fileUrl: presignedUrl,
-          fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
+          fileUrlExpireAt: signedUrlExpiresAt(presignedUrl, FILE_URL_TTL_SECONDS),
+          created,
         });
       }
 
-      return res.json(responseFile);
+      return respond(res, copiedImageResponseSchema, { ...responseFile, created });
     })
   );
 

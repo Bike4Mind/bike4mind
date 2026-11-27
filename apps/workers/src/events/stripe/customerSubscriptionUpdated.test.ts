@@ -1,13 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { organizationRepository } from '@bike4mind/database';
-import { setSeats } from '@server/services/organizationService';
+import { setSeats } from '@bike4mind/server-utils/services/organizationService';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { stripe } from '@server/integrations/stripe/stripe';
-import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
-import { sendToClient } from '@server/websocket/utils';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { handler } from './customerSubscriptionUpdated';
-import { BadRequestError } from '@bike4mind/utils';
+import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
+import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { handler as wrappedHandler } from './customerSubscriptionUpdated';
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
@@ -21,33 +20,58 @@ vi.mock('@bike4mind/database', async () => {
   };
 });
 
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
-    updateByStripeSubscriptionId: vi.fn().mockResolvedValue({}),
+    updateByStripeSubscriptionIdReturningBefore: vi.fn().mockResolvedValue({}),
   },
 }));
 
-vi.mock('@server/services/organizationService', () => ({
+// The lifecycle events' own rules are covered in signupEvents.test.ts and
+// billingEventDetails.test.ts; here only which events this handler sends.
+const { mockEmitBillingEvent, mockSubscriptionEventUser } = vi.hoisted(() => ({
+  mockEmitBillingEvent: vi.fn(),
+  mockSubscriptionEventUser: vi.fn(),
+}));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({ emitBillingEvent: mockEmitBillingEvent }));
+// Which transitions post, and their wording, are covered in subscriptionLifecycle.test.ts.
+const { mockPostSubscriptionChangesToSlack } = vi.hoisted(() => ({ mockPostSubscriptionChangesToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/subscriptionLifecycle', () => ({
+  postSubscriptionChangesToSlack: mockPostSubscriptionChangesToSlack,
+}));
+vi.mock('@bike4mind/server-utils/analytics/billingEventDetails', () => ({
+  planDetails: (priceId: string) => ({ plan: `plan:${priceId}`, interval: 'monthly' }),
+  planChangeDirection: () => 'upgrade',
+  rowTimestamps: (row: { updatedAt?: Date }) => ({ updatedAt: row.updatedAt }),
+  subscriptionEventUser: mockSubscriptionEventUser,
+}));
+
+// Metadata parsing and the write are covered in applyPlanStorageLimit.test.ts; here only when it runs.
+const { mockApplyPlanStorageLimit } = vi.hoisted(() => ({ mockApplyPlanStorageLimit: vi.fn() }));
+vi.mock('@workers/lib/userSubscriptions/applyPlanStorageLimit', () => ({
+  applyPlanStorageLimit: mockApplyPlanStorageLimit,
+}));
+
+vi.mock('@bike4mind/server-utils/services/organizationService', () => ({
   setSeats: vi.fn(),
 }));
 
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     subscriptions: { retrieve: vi.fn() },
   },
 }));
 
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: vi.fn().mockResolvedValue({ voided: [], failed: [] }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   StripeEvents: {
     CustomerSubscriptionUpdated: { schema: { parse: (x: unknown) => x } },
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -61,10 +85,10 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 
-// Fixture mapping: the real registry rows are covered by their own tests;
-// here we only need "mapped" vs "unmapped" prices.
-vi.mock('@client/lib/entitlements/registry', () => ({
-  entitlementsForPriceIds: (priceIds: string[]) => new Set(priceIds.includes('price_pro') ? ['someproduct:pro'] : []),
+// Fixture mapping: the real registry rows and plan ladder are covered by their own tests;
+// here we only need "affects entitlements" (a registry-mapped price or a paid plan) vs "unmapped" prices.
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({
+  priceAffectsEntitlements: (priceId: string) => priceId === 'price_pro' || priceId === 'price_paid_plan',
 }));
 
 vi.mock('sst', () => ({
@@ -72,7 +96,7 @@ vi.mock('sst', () => ({
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({
-  withEventContext: (h: any) => h,
+  withEventContext: (handler: unknown) => handler,
 }));
 
 const logger = {
@@ -81,6 +105,12 @@ const logger = {
   error: vi.fn(),
   debug: vi.fn(),
 };
+
+// The mock exposes the inner handler without the EventBridge logging/DB wrapper.
+const handler = wrappedHandler as unknown as (
+  event: { properties: { subscriptionId: string } },
+  eventLogger: typeof logger
+) => Promise<void>;
 
 const buildStripeSub = (quantity: number) => ({
   id: 'sub_stripe_a',
@@ -110,31 +140,24 @@ describe('customerSubscriptionUpdated — resilient seat sync', () => {
     vi.clearAllMocks();
   });
 
-  it('force-syncs org.seats when setSeats validation rejects, to avoid Stripe/DB drift', async () => {
-    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildStripeSub(3));
-    const org = { id: 'org-a', seats: 5, users: [] };
-    (organizationRepository.findByStripeCustomerId as any).mockResolvedValue(org);
-
-    // Simulate setSeats throwing because team-size floor / platform min fails.
-    (setSeats as any).mockRejectedValue(new BadRequestError('Minimum required seats: 4'));
-
-    await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
-
-    // Despite the validation failure, we must reflect Stripe's quantity locally.
-    expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org-a', seats: 3 });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Force-syncing'));
-  });
-
-  it('does not force-write when setSeats succeeds', async () => {
+  it('writes Stripe quantity to org.seats directly, never through the nested-transaction setSeats', async () => {
     (stripe.subscriptions.retrieve as any).mockResolvedValue(buildStripeSub(6));
     const org = { id: 'org-a', seats: 4, users: [] };
     (organizationRepository.findByStripeCustomerId as any).mockResolvedValue(org);
-    (setSeats as any).mockResolvedValue(org);
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
+
+    expect(organizationRepository.update).toHaveBeenCalledWith({ id: 'org-a', seats: 6 });
+    expect(setSeats).not.toHaveBeenCalled();
+  });
+
+  it('leaves org.seats alone when the subscription is not billing', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue({ ...buildStripeSub(6), status: 'unpaid' });
+    (organizationRepository.findByStripeCustomerId as any).mockResolvedValue({ id: 'org-a', seats: 4, users: [] });
 
     await handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
 
     expect(organizationRepository.update).not.toHaveBeenCalled();
-    expect(setSeats).toHaveBeenCalledWith('org-a', 6, { type: 'stripe' });
   });
 });
 
@@ -195,6 +218,14 @@ describe('customerSubscriptionUpdated — entitlement reconcile', () => {
       1,
       expect.objectContaining({ priceId: 'price_pro', status: 'active' })
     );
+  });
+
+  it('pushes an entitlements invalidation for a paid plan that has no registry price row', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ priceId: 'price_paid_plan' }));
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(sendToClient).toHaveBeenCalledWith(...entitlementsPush('u1'));
   });
 
   it('also fires on a revoking transition (canceled) — gates must learn about access loss', async () => {
@@ -275,7 +306,7 @@ describe('customerSubscriptionUpdated — stage guard', () => {
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
-    expect(subscriptionRepository.updateByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).not.toHaveBeenCalled();
     expect(sendToClient).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('does not match current stage'));
     expect(emitMetric).toHaveBeenCalledWith(
@@ -293,8 +324,49 @@ describe('customerSubscriptionUpdated — stage guard', () => {
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
-    expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalled();
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalled();
     expect(sendToClient).toHaveBeenCalledWith(...entitlementsPush('u1'));
+  });
+
+  it('mirrors price, currency, interval, cancel state, trial end and customer onto the row', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue({
+      ...buildUserSub({ cancelAtPeriodEnd: true }),
+      cancel_at: 1702592000,
+      currency: 'usd',
+      trial_end: 1700604800,
+      items: {
+        data: [
+          {
+            ...buildUserSub().items.data[0],
+            price: {
+              id: 'price_pro',
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'month', interval_count: 1 },
+            },
+          },
+        ],
+      },
+    });
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalledWith(
+      'sub_stripe_u',
+      expect.objectContaining({
+        priceId: 'price_pro',
+        unitAmount: 2000,
+        currency: 'usd',
+        interval: 'month',
+        intervalCount: 1,
+        cancelAtPeriodEnd: true,
+        cancelAt: new Date(1702592000 * 1000),
+        trialEndsAt: new Date(1700604800 * 1000),
+        stripeCustomerId: 'cus_u',
+        lastSyncedAt: expect.any(Date),
+      }),
+      undefined
+    );
   });
 });
 
@@ -348,7 +420,7 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
     (stripe.subscriptions.retrieve as any).mockResolvedValue(
       buildUserSub({ status: 'canceled', canceledAt: 1700000000 })
     );
-    (subscriptionRepository.updateByStripeSubscriptionId as any).mockResolvedValueOnce(null);
+    (subscriptionRepository.updateByStripeSubscriptionIdReturningBefore as any).mockResolvedValueOnce(null);
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
@@ -362,7 +434,7 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
-    expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalled();
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalled();
     expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
       reason: 'void_failed',
@@ -375,9 +447,289 @@ describe('customerSubscriptionUpdated - stops dunning on a cancel Stripe recorde
 
     await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
 
-    expect(subscriptionRepository.updateByStripeSubscriptionId).toHaveBeenCalled();
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalled();
     expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
       reason: 'void_failed',
     });
+  });
+});
+
+describe('customerSubscriptionUpdated - lifecycle events', () => {
+  const payer = { id: 'u1', acquisition: { firstTouch: { source: 'widgets' } } };
+  const rowBefore = (over: Record<string, unknown> = {}) => ({
+    ownerType: 'User',
+    ownerId: 'u1',
+    status: 'active',
+    priceId: 'price_basic',
+    canceledAt: null,
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+    ...over,
+  });
+  const userSub = (over: Record<string, unknown> = {}) => ({
+    ...buildStripeSub(1),
+    metadata: { userId: 'u1', stage: 'test', ownerType: 'User' },
+    items: {
+      data: [
+        { quantity: 1, price: { id: 'price_basic' }, current_period_start: 1700000000, current_period_end: 1702592000 },
+      ],
+    },
+    ...over,
+  });
+  const run = () => handler({ properties: { subscriptionId: 'sub_stripe_a' } } as any, logger as any);
+  const sentEvents = () => mockEmitBillingEvent.mock.calls.map(([c]) => c.event);
+
+  // The row the handler's own write replaced, which is what it compares Stripe's state against.
+  const writeFinds = (row: Record<string, unknown> | null) =>
+    (subscriptionRepository.updateByStripeSubscriptionIdReturningBefore as any).mockResolvedValue(row);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (voidOpenSubscriptionInvoices as any).mockResolvedValue({ voided: [], failed: [] });
+    writeFinds(rowBefore());
+    mockSubscriptionEventUser.mockResolvedValue(payer);
+  });
+
+  it('sends plan_changed when the price moves, naming both plans and keyed on the row version', async () => {
+    writeFinds(rowBefore());
+    const sub = userSub();
+    sub.items.data[0].price.id = 'price_pro';
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(sub);
+
+    await run();
+
+    expect(mockEmitBillingEvent).toHaveBeenCalledTimes(1);
+    expect(mockEmitBillingEvent).toHaveBeenCalledWith({
+      user: payer,
+      event: 'plan_changed',
+      occurrence: 'sub_stripe_a:plan:2026-10-01T00:00:00.000Z',
+      metadata: {
+        fromPlan: 'plan:price_basic',
+        toPlan: 'plan:price_pro',
+        fromInterval: 'monthly',
+        toInterval: 'monthly',
+        direction: 'upgrade',
+      },
+    });
+  });
+
+  it('sends subscription_cancel_scheduled when a period-end cancel is set', async () => {
+    writeFinds(rowBefore());
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    await run();
+
+    expect(sentEvents()).toEqual(['subscription_cancel_scheduled']);
+    expect(mockEmitBillingEvent.mock.calls[0][0]).toMatchObject({
+      occurrence: 'sub_stripe_a:cancel:2026-10-01T00:00:00.000Z',
+      metadata: { plan: 'plan:price_basic', interval: 'monthly' },
+    });
+  });
+
+  it('sends subscription_cancel_reverted when that cancel is withdrawn', async () => {
+    writeFinds(rowBefore({ canceledAt: new Date('2026-09-30T00:00:00Z') }));
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: false, canceled_at: null })
+    );
+
+    await run();
+
+    expect(sentEvents()).toEqual(['subscription_cancel_reverted']);
+  });
+
+  it('sends nothing on an update that repeats the state it had (a renewal)', async () => {
+    writeFinds(rowBefore({ canceledAt: new Date('2026-09-30T00:00:00Z') }));
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    await run();
+
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('leaves a subscription that is over to the deleted webhook', async () => {
+    writeFinds(rowBefore());
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(userSub({ status: 'canceled', canceled_at: 1700500000 }));
+
+    await run();
+
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a subscription with no user to attribute, an organization one', async () => {
+    writeFinds(rowBefore({ ownerType: 'Organization' }));
+    mockSubscriptionEventUser.mockResolvedValue(null);
+    const sub = userSub();
+    sub.items.data[0].price.id = 'price_pro';
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(sub);
+
+    await run();
+
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for a row this stage does not own', async () => {
+    writeFinds(null);
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(userSub({ canceled_at: 1700500000 }));
+
+    await run();
+
+    expect(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).toHaveBeenCalledTimes(1);
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('reports one transition between two updates that race, each comparing against what the other wrote', async () => {
+    // A stand-in for the atomic write: each call swaps the row and hands back the one it replaced.
+    // With a read before the write, both updates would read the original row, and both report
+    // the same cancel as newly scheduled.
+    let row: Record<string, unknown> = rowBefore();
+    let version = 0;
+    (subscriptionRepository.updateByStripeSubscriptionIdReturningBefore as any).mockImplementation(
+      async (_id: string, data: Record<string, unknown>) => {
+        const replaced = row;
+        row = { ...row, ...data, updatedAt: new Date(Date.UTC(2026, 9, 2, 0, 0, ++version)) };
+        return replaced;
+      }
+    );
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    await Promise.all([run(), run()]);
+
+    expect(sentEvents()).toEqual(['subscription_cancel_scheduled']);
+    expect(mockEmitBillingEvent.mock.calls[0][0].occurrence).toBe('sub_stripe_a:cancel:2026-10-01T00:00:00.000Z');
+  });
+
+  it('voids the open invoices before the report, so a report that never settles cannot hold them up', async () => {
+    mockEmitBillingEvent.mockReturnValueOnce(new Promise(() => {}));
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    // Not awaited: the handler waits on the report, which here never settles.
+    void run();
+    await vi.waitFor(() => expect(mockEmitBillingEvent).toHaveBeenCalled());
+
+    expect(voidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_stripe_a', { createdBefore: 1700500000 });
+  });
+
+  it('finishes the delivery when the report rejects', async () => {
+    mockEmitBillingEvent.mockRejectedValueOnce(new Error('ingest down'));
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      userSub({ cancel_at_period_end: true, canceled_at: 1700500000 })
+    );
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(voidOpenSubscriptionInvoices).toHaveBeenCalled();
+    expect(sendToClient).toHaveBeenCalledWith('u1', 'ws://test', {
+      action: 'invalidate_query',
+      queryKey: ['subscriptions'],
+    });
+  });
+
+  it('hands the replaced row and Stripe state to the Slack post, organization-owned included', async () => {
+    const before = rowBefore({ ownerType: 'Organization' });
+    writeFinds(before);
+    mockSubscriptionEventUser.mockResolvedValue(null);
+    const sub = userSub();
+    sub.items.data[0].price.id = 'price_pro';
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    await run();
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledWith(before, sub);
+  });
+
+  it('hands a sync into canceled to the Slack post, which reports the end, with no analytics event', async () => {
+    const before = rowBefore({ canceledAt: new Date('2026-10-01T00:00:00Z') });
+    writeFinds(before);
+    const sub = userSub({
+      status: 'canceled',
+      canceled_at: 1700500000,
+      cancellation_details: { reason: 'cancellation_requested' },
+    });
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    await run();
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledWith(before, sub);
+    expect(mockEmitBillingEvent).not.toHaveBeenCalled();
+  });
+
+  it('posts to Slack before the invoice cleanup, so a delivery that times out in it has still posted', async () => {
+    vi.mocked(voidOpenSubscriptionInvoices).mockReturnValueOnce(new Promise(() => {}));
+    const sub = userSub({ status: 'canceled', canceled_at: 1700500000 });
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(sub as never);
+
+    // Not awaited: the handler waits on the cleanup, which here never settles.
+    void run();
+    await vi.waitFor(() => expect(voidOpenSubscriptionInvoices).toHaveBeenCalled());
+
+    expect(mockPostSubscriptionChangesToSlack).toHaveBeenCalledOnce();
+  });
+
+  it('posts nothing to Slack for a row this stage does not own', async () => {
+    writeFinds(null);
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(userSub({ canceled_at: 1700500000 }) as never);
+
+    await run();
+
+    expect(mockPostSubscriptionChangesToSlack).not.toHaveBeenCalled();
+  });
+});
+
+describe('customerSubscriptionUpdated - plan storage limit', () => {
+  const run = () => handler({ properties: { subscriptionId: 'sub_stripe_u' } } as never, logger as never);
+  const stripeReturns = (subscription: ReturnType<typeof buildUserSub>) =>
+    vi.mocked(stripe.subscriptions.retrieve).mockResolvedValue(subscription as never);
+  const rowFound = (row: { ownerType: string; ownerId: string } | null) =>
+    vi.mocked(subscriptionRepository.updateByStripeSubscriptionIdReturningBefore).mockResolvedValue(row as never);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rowFound({ ownerType: 'User', ownerId: 'u1' });
+  });
+
+  it("applies the price storage limit to the stored row's owner", async () => {
+    const subscription = buildUserSub();
+    stripeReturns(subscription);
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(subscription, 'u1', logger);
+  });
+
+  it('takes the owner from the row, not from legacy metadata', async () => {
+    const subscription = buildUserSub({ metadata: { userId: 'someone-else', stage: 'test', ownerType: 'bogus' } });
+    stripeReturns(subscription);
+    rowFound({ ownerType: 'User', ownerId: 'row-owner' });
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(subscription, 'row-owner', logger);
+  });
+
+  it('skips a subscription this stage has no row for', async () => {
+    stripeReturns(buildUserSub());
+    rowFound(null);
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+
+  it('applies the organization pool using the row even when metadata lost its ownerType', async () => {
+    stripeReturns(buildUserSub({ metadata: { userId: 'u1', stage: 'test', ownerType: 'bogus' } }));
+    rowFound({ ownerType: 'Organization', ownerId: 'org-a' });
+
+    await run();
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(expect.anything(), 'org-a', logger, 'Organization');
   });
 });

@@ -2,6 +2,7 @@ export * from './types';
 export * from './text';
 export * from './activation';
 export * from './ledger';
+export * from './exportVerification';
 export * from './recall';
 export * from './subject';
 export * from './conflict';

@@ -1,7 +1,10 @@
+import { ApiKeyScope } from '@bike4mind/common';
+import { ARTIFACT_DB } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
@@ -11,7 +14,7 @@ const CreateVersionSchema = z.object({
   content: z.string().min(1).optional(), // Optional because we might just be creating a version marker
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * GET /api/artifacts/[id]/versions
    * Get all versions for an artifact
@@ -35,9 +38,9 @@ const handler = baseApi()
         { id: artifactId, includeContent: false, includeVersions: false },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -46,8 +49,11 @@ const handler = baseApi()
         throw new NotFoundError('Artifact not found');
       }
 
-      const versions = await artifactVersionRepository.findByArtifactId(artifactId);
+      const found = await artifactVersionRepository.findByArtifactId(artifactId);
+      // A reader with no grant (public only) must not see who authored each version
+      const versions = artifact.access === 'public' ? found.map(artifactService.toArtifactViewerVersion) : found;
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.json({
         success: true,
         data: versions,
@@ -61,6 +67,12 @@ const handler = baseApi()
    */
   .post(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
+      // Gated per verb: the route-level scopes above admit read keys for the GET.
+      assertApiKeyScope(
+        req,
+        [ApiKeyScope.WRITE_NOTEBOOKS],
+        'This API key is read-only for notebooks; notebooks:write is required'
+      );
       const userId = req.user?.id;
       const artifactId = req.query.id;
 
@@ -80,9 +92,9 @@ const handler = baseApi()
         { id: artifactId, includeContent: true, includeVersions: false },
         {
           db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
+            artifacts: artifactRepository,
+            artifactContents: artifactContentRepository,
+            artifactVersions: artifactVersionRepository,
           },
         }
       );
@@ -92,29 +104,20 @@ const handler = baseApi()
       }
 
       // Create new version by updating the artifact
-      const updateData: any = {
-        versionTag: validatedData.versionTag,
-        // If content is provided, use it; otherwise keep existing content
-        ...(validatedData.content && { content: validatedData.content }),
-      };
-
       const updatedArtifact = await artifactService.update(
         userId,
         {
           id: artifactId,
-          ...updateData,
+          versionTag: validatedData.versionTag,
+          // If content is provided, use it; otherwise keep existing content
+          ...(validatedData.content && { content: validatedData.content }),
           createNewVersion: true,
-          versionMessage: validatedData.changeDescription || `Version ${artifact.artifact.version + 1}`,
+          ...(validatedData.changeDescription && { versionMessage: validatedData.changeDescription }),
         },
-        {
-          db: {
-            artifacts: artifactRepository as any,
-            artifactContents: artifactContentRepository as any,
-            artifactVersions: artifactVersionRepository as any,
-          },
-        }
+        { db: ARTIFACT_DB }
       );
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.status(201).json({
         success: true,
         data: updatedArtifact,

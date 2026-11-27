@@ -17,7 +17,7 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: { getState: () => llmState },
 }));
 
-vi.mock('../../utils/artifactParser', () => ({
+vi.mock('@bike4mind/server-utils/app/utils/artifactParser', () => ({
   parseArtifactsWithFallback: (...args: unknown[]) => parseArtifactsWithFallback(...args),
   getArtifactTimestamp: () => 1000,
   generateCompleteArtifactId: (type: string, identifier: string, _ts: number, index: number) =>
@@ -57,6 +57,24 @@ describe('useStreamingArtifactPersistence', () => {
     expect(sessionArg).toBe('s1');
     expect(artifactsArg).toEqual([
       expect.objectContaining({ id: 'code-foo-0', type: 'code', title: 'Foo', content: 'console.log(1)' }),
+    ]);
+  });
+
+  it('hands persistence each identifier, in document order, without renumbering the ids', async () => {
+    // The parser returns artifacts last-to-first, so the block written second comes back first.
+    const later = { ...codeArtifact, type: 'react', identifier: 'app', title: 'App v2' };
+    const earlier = { ...codeArtifact, type: 'react', identifier: 'app', title: 'App v1' };
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [later, earlier], cleanedContent: '' });
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+
+    act(() => {
+      result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['r'] });
+    });
+
+    await waitFor(() => expect(persistArtifacts).toHaveBeenCalledTimes(1));
+    expect(persistArtifacts.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ id: 'react-app-1', title: 'App v1', identifier: 'app' }),
+      expect.objectContaining({ id: 'react-app-0', title: 'App v2', identifier: 'app' }),
     ]);
   });
 

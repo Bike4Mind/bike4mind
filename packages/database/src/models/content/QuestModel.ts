@@ -12,8 +12,10 @@ import {
   QuestCallbackStateSchema,
   ChatToolModeSchema,
   type GenerationJobRef,
-  type GenerationJobKind,
-  GENERATION_JOB_KINDS,
+  type AgentGenerationSlotKind,
+  QUEST_GENERATION_JOB_KINDS,
+  PENDING_ACTION_OUTCOMES,
+  type IPendingActionResolution,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -48,6 +50,10 @@ const CORRECTION_LINK_PROJECTION = {
   structuredReplies: 1,
   timestamp: 1,
 } as const;
+
+// The conversation fields a session's turn listing returns; shared by the page-numbered and keyset reads.
+const SESSION_PAGE_FIELDS =
+  'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned';
 
 // PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
 // short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
@@ -322,7 +328,7 @@ const NarratedToolCallSchema = subSchema({
   toolNames: { type: [String], required: false, default: undefined },
 });
 
-export const PromptMetaSchema = new Schema<PromptMeta>(
+export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
   {
     model: {
       name: { type: String, required: false },
@@ -382,6 +388,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       // expensive component of a cold turn. Must stay declared alongside the Zod field or
       // strict mode strips it and the write rate becomes unmeasurable again.
       cacheCreationInputTokens: { type: Number, required: false },
+      cacheWrite1hInputTokens: { type: Number, required: false },
+      promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
       settledBasis: { type: String, enum: ['provider', 'local'], required: false },
@@ -559,7 +567,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
   { _id: false }
 );
 
-export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
+export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
     conversationItemId: { type: String, required: false },
@@ -633,7 +641,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
         {
           _id: false,
           id: { type: String, required: true },
-          kind: { type: String, enum: GENERATION_JOB_KINDS, required: true },
+          kind: { type: String, enum: QUEST_GENERATION_JOB_KINDS, required: true },
         },
       ],
       default: undefined,
@@ -641,6 +649,11 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // Agent-mode jobs claimed by this run, one per-run cap counter per kind (see claimAgentGenerationSlot).
     agentVideoClipsClaimed: { type: Number, required: false },
     agentMusicTracksClaimed: { type: Number, required: false },
+    agentImagesClaimed: { type: Number, required: false },
+    agentSpeechClipsClaimed: { type: Number, required: false },
+    agentSoundEffectsClaimed: { type: Number, required: false },
+    // Data lake saves claimed by this turn (see claimLakeSaveSlot). Declared so strict mode keeps the $inc.
+    lakeSaveCount: { type: Number, required: false },
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
@@ -648,6 +661,9 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // set server-side so the client can render a targeted error state. Declared so Mongoose
     // strict mode persists it (otherwise the error UI would not survive a reload).
     errorCode: { type: String, required: false },
+    // Set only for a quest created by a federated exchange key, so per-app outcomes can be counted.
+    apiKeyId: { type: String, required: false, select: false },
+    oauthClientId: { type: String, required: false, select: false },
     // Completion callback for an API-key generation job (see IQuestCallback). select: false keeps
     // the caller's endpoint and key id out of every quest payload and out of the whole-doc
     // update() writes the generation services make, so a stale in-memory quest can never
@@ -765,8 +781,29 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
         tool: { type: String, required: true },
         params: { type: Schema.Types.Mixed, required: true },
         ts: { type: Number, required: true },
+        customConnector: {
+          type: {
+            connectionId: { type: String, required: true },
+            slug: { type: String, required: true },
+            displayName: { type: String, required: true },
+            urlHost: { type: String, required: true },
+          },
+          required: false,
+          _id: false,
+        },
       },
       required: false,
+    },
+    // What became of the last pending action taken off this quest; written by claimPendingAction
+    // (packages/server-utils/src/utils/pendingActionExecutor.ts) and read by the brief serializer.
+    pendingActionResolution: {
+      type: {
+        ts: { type: Number, required: true },
+        outcome: { type: String, enum: PENDING_ACTION_OUTCOMES, required: true },
+        at: { type: Date, required: true },
+      },
+      required: false,
+      _id: false,
     },
     // Slack notification info for async message editing
     // Used by Quest Processor to edit status message with final response
@@ -927,10 +964,31 @@ function staleCallbackDispatchFilter({
   };
 }
 
+/**
+ * The filter findPageAfterBySessionId runs. Exported so its index test explains this filter
+ * rather than a hand-written copy that could drift from it.
+ * @internal
+ */
+export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date; id: string }) {
+  const filter: Record<string, unknown> = { sessionId, deletedAt: null };
+  if (after) {
+    // The $gte bound is implied by the $or but lets the planner range-scan sessionId_timestamp_id.
+    filter.timestamp = { $gte: after.timestamp };
+    filter.$or = [
+      { timestamp: { $gt: after.timestamp } },
+      { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
+    ];
+  }
+  return filter;
+}
+
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
-} as const satisfies Record<GenerationJobKind, keyof IChatHistoryItem>;
+  image: 'agentImagesClaimed',
+  speech: 'agentSpeechClipsClaimed',
+  sound_effect: 'agentSoundEffectsClaimed',
+} as const satisfies Record<AgentGenerationSlotKind, keyof IChatHistoryItem>;
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1043,9 +1101,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const { limit, page, sort = 'asc' } = options;
     const result = await this.model
       .find({ sessionId, deletedAt: null })
-      .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery turnTiming suggestedChoices pinned'
-      )
+      .select(SESSION_PAGE_FIELDS)
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
       .limit(limit + 1);
@@ -1056,6 +1112,24 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       data: rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument),
       hasMore,
     };
+  }
+
+  /**
+   * Keyset twin of findPageBySessionId, oldest first by (timestamp, _id): pass the last row of the
+   * previous page as `after` to continue strictly past it. Same filter and projection (plus the
+   * fields the public listing needs), so the two cannot disagree on which turns a session holds.
+   */
+  async findPageAfterBySessionId(
+    sessionId: string,
+    options: { limit: number; after?: { timestamp: Date; id: string } }
+  ): Promise<IChatHistoryItemDocument[]> {
+    const { limit, after } = options;
+    const rows = await this.model
+      .find(sessionKeysetFilter(sessionId, after))
+      .select(`${SESSION_PAGE_FIELDS} createdAt pendingAction`)
+      .sort({ timestamp: 1, _id: 1 })
+      .limit(limit);
+    return rows.map(d => ({ ...d.toJSON() }) as IChatHistoryItemDocument);
   }
 
   async findAllBySessionIdAndLessThanOrEqualToTimestamp(sessionId: string, timestamp: Date) {
@@ -1098,8 +1172,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
       // Include status so history can skip a prompt stopped before any reply (see isStoppedBeforeReply
       // in @bike4mind/utils).
+      // Include generationJobs so the recent-images note can see job-made images (recentImageJobs in
+      // @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned status generationJobs _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)
@@ -1239,7 +1315,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo' | 'errorCode'>> & {
       finishReason?: string;
     }
   ): Promise<boolean> {
@@ -1308,6 +1384,162 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   /**
+   * Approvals still waiting on the user in the given sessions: a `pendingAction` raised after
+   * `raisedAfterTs` (ms epoch; older ones have lapsed). Served by the partial `sessionId_pendingActionTs` index.
+   */
+  async findPendingActionsBySessionIds(sessionIds: string[], raisedAfterTs: number, limit: number) {
+    if (sessionIds.length === 0) return [];
+    const quests = await this.model
+      .find({ sessionId: { $in: sessionIds }, 'pendingAction.ts': { $gt: raisedAfterTs } })
+      .select('_id sessionId pendingAction.tool pendingAction.ts pendingAction.params')
+      .sort({ 'pendingAction.ts': -1 })
+      .limit(limit)
+      .lean<
+        Array<{
+          _id: { toString(): string };
+          sessionId: string;
+          pendingAction: { tool: string; ts: number; params: Record<string, unknown> };
+        }>
+      >();
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      sessionId: quest.sessionId,
+      tool: quest.pendingAction.tool,
+      ts: quest.pendingAction.ts,
+      params: quest.pendingAction.params,
+    }));
+  }
+
+  /**
+   * Questions an agent left open in the given sessions: the latest turn of each session when it ends on
+   * suggested choices the user has not picked, carries no pending action, and was asked at or after
+   * `since`. Newest first.
+   */
+  async findOpenQuestionsBySessionIds(sessionIds: string[], since: Date, limit: number) {
+    if (sessionIds.length === 0) return [];
+    const latest = await Promise.all(
+      sessionIds.map(sessionId =>
+        this.model
+          .findOne({ sessionId, deletedAt: null })
+          .sort({ timestamp: -1 })
+          .select('_id sessionId timestamp reply suggestedChoices pendingAction.ts')
+          .lean<{
+            _id: { toString(): string };
+            sessionId: string;
+            timestamp: Date;
+            reply?: string;
+            suggestedChoices?: { options: Array<{ label: string }>; selectedIndex?: number | null };
+            pendingAction?: { ts: number };
+          }>()
+      )
+    );
+    return latest
+      .filter((quest): quest is NonNullable<typeof quest> => quest !== null)
+      .filter(
+        quest =>
+          (quest.suggestedChoices?.options?.length ?? 0) > 0 &&
+          quest.suggestedChoices?.selectedIndex == null &&
+          quest.pendingAction == null &&
+          quest.timestamp >= since
+      )
+      .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+      .slice(0, limit)
+      .map(quest => ({
+        questId: quest._id.toString(),
+        sessionId: quest.sessionId,
+        reply: quest.reply ?? '',
+        options: (quest.suggestedChoices?.options ?? []).map(option => option.label),
+      }));
+  }
+
+  /**
+   * What has become of each cited question: whether its choice was picked and whether it is still the
+   * latest turn of its session. A quest that no longer exists is absent from the result.
+   */
+  async findQuestionStates(questIds: string[]) {
+    const ids = questIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (ids.length === 0) return [];
+    const quests = await this.model
+      .find({ _id: { $in: ids } })
+      .select('_id sessionId suggestedChoices.selectedIndex')
+      .lean<
+        Array<{ _id: { toString(): string }; sessionId: string; suggestedChoices?: { selectedIndex?: number | null } }>
+      >();
+    const sessionIds = [...new Set(quests.map(quest => quest.sessionId))];
+    const latest = await Promise.all(
+      sessionIds.map(async sessionId => {
+        const newest = await this.model
+          .findOne({ sessionId, deletedAt: null })
+          .sort({ timestamp: -1 })
+          .select('_id')
+          .lean<{ _id: { toString(): string } }>();
+        return { sessionId, questId: newest?._id.toString() };
+      })
+    );
+    const latestBySession = new Map(latest.map(row => [row.sessionId, row.questId]));
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      selected: quest.suggestedChoices?.selectedIndex != null,
+      isLatest: latestBySession.get(quest.sessionId) === quest._id.toString(),
+    }));
+  }
+
+  /** Records which suggested choice a reply picked, once and only within range. */
+  async selectSuggestedChoice(questId: string, index: number): Promise<boolean> {
+    if (!mongoose.Types.ObjectId.isValid(questId)) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: questId,
+        'suggestedChoices.selectedIndex': null,
+        [`suggestedChoices.options.${index}`]: { $exists: true },
+      },
+      { $set: { 'suggestedChoices.selectedIndex': index } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * The current pending action and the last resolution of each quest, for reporting what became of an
+   * approval a brief cited. A quest that no longer exists is absent from the result.
+   */
+  async findPendingActionStates(questIds: string[]) {
+    const ids = questIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (ids.length === 0) return [];
+    const quests = await this.model
+      .find({ _id: { $in: ids } })
+      .select('_id pendingAction.ts pendingActionResolution')
+      .lean<
+        Array<{
+          _id: { toString(): string };
+          pendingAction?: { ts: number };
+          pendingActionResolution?: IPendingActionResolution;
+        }>
+      >();
+    return quests.map(quest => ({
+      questId: quest._id.toString(),
+      pendingActionTs: quest.pendingAction?.ts,
+      resolution: quest.pendingActionResolution
+        ? { ts: quest.pendingActionResolution.ts, outcome: quest.pendingActionResolution.outcome }
+        : undefined,
+    }));
+  }
+
+  /**
+   * How many approvals in the given sessions can still be answered: raised at or after `raisedSinceTs` (ms
+   * epoch), the bound the pending-actions endpoints accept. Served by the partial `sessionId_pendingActionTs` index.
+   */
+  async countPendingActionsBySessionIds(sessionIds: string[], raisedSinceTs: number): Promise<number> {
+    if (sessionIds.length === 0) return 0;
+    // countDocuments skips the soft-delete plugin's find hooks, so the tombstone filter is explicit.
+    return this.model.countDocuments({
+      sessionId: { $in: sessionIds },
+      'pendingAction.ts': { $gte: raisedSinceTs },
+      deletedAt: null,
+    });
+  }
+
+  /**
    * Stores the MCP write preview a Confirm card renders from, for runs that have no in-memory quest
    * to assign it to (Agent mode). Replaces any earlier action, as classic chat does. No-op if no
    * Quest matches.
@@ -1334,7 +1566,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * checkpoint continuations share this Quest and can claim concurrently, so the check and the increment must be one atomic update.
    * Returns false when the cap is reached or no Quest matches.
    */
-  async claimAgentGenerationSlot(questId: string, kind: GenerationJobKind, limit: number): Promise<boolean> {
+  async claimAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind, limit: number): Promise<boolean> {
     if (limit <= 0) return false;
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     const result = await this.model.updateOne(
@@ -1347,8 +1579,36 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return result.modifiedCount === 1;
   }
 
+  /**
+   * Refuses once the voice turn is stopped; the counter doubles as the marker the voice retry guard reads.
+   */
+  async claimVoiceVideoStart(questId: string): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: convertId(questId), status: { $ne: 'stopped' } },
+      { $inc: { agentVideoClipsClaimed: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Claim one of a turn's `limit` save_content_to_data_lake saves. Every tool build in the turn (the chat loop, research mode,
+   * subagents, agent continuations) shares this Quest, so the check and the increment are one atomic update.
+   */
+  async claimLakeSaveSlot(questId: string, limit: number): Promise<boolean> {
+    if (limit <= 0) return false;
+    const result = await this.model.updateOne(
+      {
+        _id: convertId(questId),
+        $or: [{ lakeSaveCount: { $exists: false } }, { lakeSaveCount: { $lt: limit } }],
+      },
+      { $inc: { lakeSaveCount: 1 } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /** Give back a slot from claimAgentGenerationSlot whose call started no new job. */
-  async releaseAgentGenerationSlot(questId: string, kind: GenerationJobKind): Promise<void> {
+  async releaseAgentGenerationSlot(questId: string, kind: AgentGenerationSlotKind): Promise<void> {
     const field = AGENT_GENERATION_SLOT_FIELDS[kind];
     await this.model.updateOne({ _id: convertId(questId), [field]: { $gt: 0 } }, { $inc: { [field]: -1 } });
   }
@@ -1370,6 +1630,83 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     if (!image) return [];
     const docs = await this.model.find({ images: image }, { sessionId: 1 }).setOptions({ includeDeleted: true });
     return [...new Set(docs.map(d => d.sessionId))];
+  }
+
+  // Session ids of every quest whose `images` or `videos` references this generated key, soft-deleted
+  // quests included. The video-aware sibling of findSessionIdsByImage, for deciding whether the
+  // bytes still have an owner before they are deleted.
+  async findSessionIdsByMedia(key: string): Promise<string[]> {
+    if (!key) return [];
+    const docs = await this.model
+      .find({ $or: [{ images: key }, { videos: key }] }, { sessionId: 1 })
+      .setOptions({ includeDeleted: true });
+    return [...new Set(docs.map(d => d.sessionId))];
+  }
+
+  // Batched findSessionIdsByMedia: key -> session ids of every quest (soft-deleted included) whose
+  // `images` or `videos` holds it. Keys nothing references are absent from the map.
+  async findSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string[]>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const byKey = new Map<string, Set<string>>();
+    if (wanted.size === 0) return new Map();
+    const list = [...wanted];
+    const docs = await this.model
+      .find({ $or: [{ images: { $in: list } }, { videos: { $in: list } }] }, { sessionId: 1, images: 1, videos: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (!wanted.has(key)) continue;
+        const ids = byKey.get(key) ?? new Set<string>();
+        ids.add(String(doc.sessionId));
+        byKey.set(key, ids);
+      }
+    }
+    return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
+  }
+
+  // key -> session id of the earliest-created quest (soft-deleted included) whose `images` or `videos`
+  // holds it: where the key was produced, since import, fork and clone copy keys into newer quests.
+  // createdAt, not _id, orders them: a notebook import may keep the exported message ids.
+  async findOriginSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const origin = new Map<string, string>();
+    if (wanted.size === 0) return origin;
+    const list = [...wanted];
+    const docs = await this.model
+      .find({ $or: [{ images: { $in: list } }, { videos: { $in: list } }] }, { sessionId: 1, images: 1, videos: 1 })
+      .sort({ createdAt: 1, _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (wanted.has(key) && !origin.has(key)) origin.set(key, String(doc.sessionId));
+      }
+    }
+    return origin;
+  }
+
+  // findSessionIdsByMediaKeys over live quests only: when one message is deleted its notebook is
+  // still live, so only another live quest's reference may retain a key.
+  async findLiveSessionIdsByMediaKeys(keys: string[]): Promise<Map<string, string[]>> {
+    const wanted = new Set(keys.filter(Boolean));
+    const byKey = new Map<string, Set<string>>();
+    if (wanted.size === 0) return new Map();
+    const list = [...wanted];
+    const filter: Record<string, unknown> = {
+      $or: [{ images: { $in: list } }, { videos: { $in: list } }],
+      deletedAt: null,
+    };
+    const docs = await this.model.find(filter, { sessionId: 1, images: 1, videos: 1 }).lean();
+    for (const doc of docs) {
+      for (const key of [...(doc.images ?? []), ...(doc.videos ?? [])]) {
+        if (!wanted.has(key)) continue;
+        const ids = byKey.get(key) ?? new Set<string>();
+        ids.add(String(doc.sessionId));
+        byKey.set(key, ids);
+      }
+    }
+    return new Map([...byKey].map(([key, ids]) => [key, [...ids]]));
   }
 
   // Every organization a user's quests were recorded under, soft-deleted ones included: a DSAR
@@ -1664,6 +2001,11 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Keyset order of findPageAfterBySessionId (GET /api/v1/sessions/{id}/quests). Built in
+    // production by migration 20260921237700_ensure-quest-session-keyset-index; keep in sync.
+    ChatHistoryItemSchema.index({ sessionId: 1, timestamp: 1, _id: 1 }, { name: 'sessionId_timestamp_id' });
+    // Retired, untyped field kept unselected while stored quests may still carry it (self-host never clears it).
+    ChatHistoryItemSchema.path('signupActivity', { type: Schema.Types.Mixed, select: false });
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
@@ -1672,9 +2014,15 @@ function initializeQuestModel() {
     // serve/copy of a generated image, so this key -> session resolution must not be a collection
     // scan. Sparse: most quests carry no images.
     ChatHistoryItemSchema.index({ images: 1 }, { name: 'images', sparse: true });
+    // Pairs with `images` so the `$or` in findSessionIdsByMedia(Keys) is index-backed on both branches.
+    ChatHistoryItemSchema.index({ videos: 1 }, { name: 'videos', sparse: true });
 
     // Index for deletedAt and timestamp queries
     ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1 }, { name: 'deletedAt_timestamp_desc' });
+
+    // Model Logs pages need an _id tie-break when timestamps match. Keep the full sort in the
+    // index so even the first page does not fetch and sort every log in the selected date range.
+    ChatHistoryItemSchema.index({ deletedAt: 1, timestamp: -1, _id: -1 }, { name: 'deletedAt_timestamp_id_desc' });
 
     // Index for finding messages without embeddings (for Zen Garden grooming)
     ChatHistoryItemSchema.index(
@@ -1725,13 +2073,13 @@ function initializeQuestModel() {
     // this the sweep collection-scans the largest collection every 5 minutes.
     // Dense on purpose: both fields exist on every quest. Pre-built by
     // 20260826000000_ensure-quest-status-updatedat-index rather than left to
-    // autoIndex, because prod runs DocumentDB where the build takes a foreground
-    // collection lock and would otherwise land on a request path.
+    // autoIndex, whose build is fire-and-forget (a failure is silent) and would
+    // otherwise start on whichever request path cold-boots onto quests first.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
 
     // Serves findUndispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
     // the handful of quests whose callback is armed but not yet claimed. Pre-built by
-    // 20260921235900_ensure-quest-callback-pending-index for the same DocumentDB reason as above.
+    // 20260921235900_ensure-quest-callback-pending-index for the same reason as above.
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
@@ -1742,6 +2090,28 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, 'callback.dispatchedAt': 1 },
       { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
+    );
+
+    // Serves the telemetry opt-out delete (telemetryDeletion.ts) and the user/admin telemetry
+    // exports, which match a user's regenerated per-day hashes with $in. Sparse, so only quests
+    // that carry context telemetry are indexed. Pre-built by 20260921235969_ensure-advisor-indexes.
+    ChatHistoryItemSchema.index(
+      { 'promptMeta.contextTelemetry.anonymousSessionId.hash': 1 },
+      { name: 'contextTelemetry_anonymousSessionHash', sparse: true }
+    );
+
+    // Serves per-app quest outcome counts. Partial, so it holds only exchange-key quests.
+    // Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+    ChatHistoryItemSchema.index(
+      { oauthClientId: 1, timestamp: -1 },
+      { name: 'oauthClient_timestamp', partialFilterExpression: { oauthClientId: { $exists: true } } }
+    );
+
+    // Serves countPendingActionsBySessionIds and findPendingActionsBySessionIds. Partial, so it holds only
+    // quests parked on an approval. Pre-built by 20261120072518_ensure-quest-session-pending-action-index.
+    ChatHistoryItemSchema.index(
+      { sessionId: 1, 'pendingAction.ts': -1 },
+      { name: 'sessionId_pendingActionTs', partialFilterExpression: { 'pendingAction.ts': { $exists: true } } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

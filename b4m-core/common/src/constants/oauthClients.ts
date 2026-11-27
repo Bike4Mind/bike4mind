@@ -9,9 +9,16 @@
  * own id as OAuthDeviceClientId so a rename here fails its build; clients kept
  * outside this repo have no such check, so removing an id here locks them out.
  */
-export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop'] as const;
+export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop', 'b4m-host'] as const;
 
 export type OAuthDeviceClientId = (typeof OAUTH_DEVICE_CLIENT_IDS)[number];
+
+/**
+ * The headless remote host (apps/desktop/src/host). It signs in on its own machine with the
+ * device flow, under its own id so a host session can be told apart from a Desktop app and
+ * revoked separately.
+ */
+export const HOST_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-host';
 
 /**
  * How a DeviceAuthorization row created before `clientId` was persisted must be
@@ -23,6 +30,7 @@ export const LEGACY_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-cli';
 const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
   'b4m-cli': 'B4M CLI',
   'b4m-desktop': 'B4M Desktop',
+  'b4m-host': 'B4M Host',
 };
 
 /**
@@ -33,6 +41,33 @@ const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
 export function oauthClientDisplayName(clientId: string): string {
   return DISPLAY_NAMES[clientId as OAuthDeviceClientId] ?? clientId;
 }
+
+/**
+ * The first-party native app's client id. It uses the authorization-code + PKCE flow, not the
+ * device flow above, so it is deliberately not a member of OAUTH_DEVICE_CLIENT_IDS. The same
+ * sync rule applies: the native app lives outside this repo and has no build-time check, so this
+ * must stay equal to the id it actually sends. The row itself is seeded by
+ * packages/scripts/migrate/migrations/20260921236950_ensure-first-party-native-oauth-client.ts.
+ */
+export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
+
+/**
+ * The native app's development client: same app, a private-use scheme redirect
+ * (`com.bike4mind.app://auth-callback`, RFC 8252) instead of the claimed https link, so unsigned
+ * development builds can sign in. Any app can claim a custom scheme, and first-party clients skip
+ * consent, so this client exists on non-production stages only. Seeded by
+ * packages/scripts/migrate/migrations/20260921236951_ensure-native-dev-oauth-client.ts.
+ */
+export const NATIVE_DEV_OAUTH_CLIENT_ID = 'b4m-ios-app-dev';
+
+/**
+ * The Android app's release client: authorization-code + PKCE like NATIVE_OAUTH_CLIENT_ID, with a
+ * verified App Link redirect (https://app.bike4mind.com/android/auth-callback) backed by
+ * /.well-known/assetlinks.json. Android debug builds reuse NATIVE_DEV_OAUTH_CLIENT_ID. Same sync
+ * rule: the app lives in apps/android with no build-time check against this value. Seeded by
+ * packages/scripts/migrate/migrations/20260921236952_ensure-android-oauth-client.ts.
+ */
+export const ANDROID_OAUTH_CLIENT_ID = 'b4m-android-app';
 
 const MAX_SOURCE_SLUG_LENGTH = 64;
 const OAUTH_CLIENT_ID_SHAPE = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -96,12 +131,30 @@ export function clientIdFromAuthorizeRedirect(redirectTo: unknown): string | und
 /** Lets a federated app's server ask /api/oauth/federated-admin whether its user is a B4M admin. */
 export const FEDERATED_ADMIN_STATUS_SCOPE = 'federated:admin-status';
 
-// Never part of a registration's default allowedScopes (oauthClientAdmin.ts FEDERATED_SCOPES):
-// each is granted to a client deliberately, one client at a time.
-export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE] as const;
+// Default allowedScopes at registration (createOAuthClient); a federated client also gets the federated defaults.
+export const OAUTH_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
+export const OAUTH_FEDERATED_DEFAULT_SCOPES = ['ai:generate', 'me:read'] as const;
+
+// ApiKeyScope.FUNCTIONS_INVOKE and FUNCTIONS_AUTHOR, which the AI-token exchange (pages/api/oauth/ai-token.ts)
+// mints beside the chat scopes on its key.
+export const OAUTH_FUNCTIONS_SCOPES = ['functions:invoke', 'functions:author'] as const;
+
+// Never part of a registration's default allowedScopes: each is granted to a client deliberately,
+// one client at a time.
+export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE, ...OAUTH_FUNCTIONS_SCOPES] as const;
+
+// Scopes an admin can grant to a client; shared by the admin edit form and updateOAuthClient.
+export const OAUTH_CLIENT_SCOPES = [
+  ...OAUTH_IDENTITY_SCOPES,
+  ...OAUTH_FEDERATED_DEFAULT_SCOPES,
+  ...OAUTH_OPT_IN_SCOPES,
+] as const;
+
+export const isOAuthClientScope = (scope: string): boolean =>
+  (OAUTH_CLIENT_SCOPES as readonly string[]).includes(scope);
+export const isOptInScope = (scope: string): boolean => (OAUTH_OPT_IN_SCOPES as readonly string[]).includes(scope);
 
 /** Entries of `scopes` that are not opt-in scopes; empty when every one may be granted. */
 export function nonOptInScopes(scopes: readonly string[]): string[] {
-  const allowed: readonly string[] = OAUTH_OPT_IN_SCOPES;
-  return scopes.filter(s => !allowed.includes(s));
+  return scopes.filter(s => !isOptInScope(s));
 }

@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   sendJsonMessage: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
-  accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
+  accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false, impersonating: false },
 }));
 
 // Capture the url + options react-use-websocket is called with on every render (esp.
@@ -80,6 +80,24 @@ import {
 import { WS_CHUNK_TTL_MS } from '@client/app/utils/wsChunkReassembler';
 
 const base = { openedThisAttempt: false, accessToken: 'tok', mfaPending: false, pathname: '/new' };
+
+describe('WebsocketProvider - impersonation', () => {
+  afterEach(() => {
+    h.accessTokenState.impersonating = false;
+  });
+
+  it('disconnects while impersonating and resumes on return to the admin', () => {
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.impersonating = true;
+    const element = React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'));
+    const rendered = render(element);
+    expect(h.capturedUrl.current).toBeNull();
+
+    h.accessTokenState.impersonating = false;
+    rendered.rerender(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    expect(typeof h.capturedUrl.current).toBe('function');
+  });
+});
 
 const stubVisibility = (state: DocumentVisibilityState) =>
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: state });
@@ -477,7 +495,14 @@ describe('WebsocketProvider - connect URL carries a single-use ticket, never the
     const getUrl = mountAndGetUrlGetter() as () => Promise<string>;
     const resolved = await getUrl();
     expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket', undefined, { timeout: 10_000 });
-    expect(resolved).toBe('wss://example/ws?ticket=ticket-abc');
+    const url = new URL(resolved);
+    expect(url.origin + url.pathname).toBe('wss://example/ws');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      ticket: 'ticket-abc',
+      handoffPlatform: 'web',
+      handoffName: 'Web browser',
+      handoffClientId: expect.stringMatching(/^[a-f0-9]{8}$/),
+    });
     expect(resolved).not.toContain('token=');
   });
 });
@@ -822,9 +847,14 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
   it('re-sends tracked subscriptions with the current token on resubscribe_required', async () => {
     const rendered = render(element());
     const subscribe = (subscriptionId: string) =>
-      ({ action: 'subscribe_query', subscriptionId, collectionName: 'quests', query: {} }) as unknown as Parameters<
-        typeof send
-      >[0];
+      ({
+        action: 'subscribe_query',
+        subscriptionId,
+        collectionName: 'organizations',
+        query: { _id: 'org-a' },
+        fetchInitialData: true,
+        initialDataAfterSubscribe: true,
+      }) as unknown as Parameters<typeof send>[0];
     act(() => {
       send(subscribe('s1'));
       send(subscribe('s2'));
@@ -839,7 +869,15 @@ describe('WebsocketProvider - reauth after a token refresh', () => {
 
     expect(h.sendJsonMessage).toHaveBeenCalledTimes(1);
     expect(h.sendJsonMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'subscribe_query', subscriptionId: 's1', accessToken: 'tok-2' })
+      expect.objectContaining({
+        action: 'subscribe_query',
+        subscriptionId: 's1',
+        accessToken: 'tok-2',
+        collectionName: 'organizations',
+        query: { _id: 'org-a' },
+        fetchInitialData: true,
+        initialDataAfterSubscribe: true,
+      })
     );
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
     expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['invites'] });

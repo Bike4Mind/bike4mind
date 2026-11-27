@@ -68,6 +68,9 @@ describe('organizationService - leave', () => {
           update: vi.fn().mockResolvedValue(undefined),
           removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
         },
+        userApiKeys: {
+          revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]),
+        },
         // No org groups by default, so the group purge is a no-op unless a test sets some.
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
@@ -114,6 +117,16 @@ describe('organizationService - leave', () => {
     );
     // leave must NOT mutate the caller-supplied user (retry-safety, see below).
     expect(memberWithSelectedOrg.organizationId?.toString()).toBe('org1');
+  });
+
+  it('clears organizationId when the route id is spelled differently from the stored id', async () => {
+    const member = { ...mockMemberUser, organizationId: orgPointer('org1') } as IUserDocument;
+
+    await leave(member, { id: 'ORG1' }, mockAdapters);
+
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user1', organizationId: null })
+    );
   });
 
   it("does NOT clear organizationId when the user's selected org is a different org", async () => {
@@ -182,6 +195,16 @@ describe('organizationService - leave', () => {
     expect(result).toEqual(expect.objectContaining({ adminUserIds: ['other-admin'] }));
   });
 
+  it('drops the departing user from the org billingManagerUserIds', async () => {
+    mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(
+      freshOrg({ billingManagerUserIds: ['user1', 'other-biller'] })
+    );
+
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(result.billingManagerUserIds).toEqual(['other-biller']);
+  });
+
   // Load-bearing: without it this file merely mocks the lake repos away, and the departure-side
   // trigger could be deleted from leave.ts with every test here still green.
   it('lapses the departing user lake grants and passes on a lake they created', async () => {
@@ -203,6 +226,15 @@ describe('organizationService - leave', () => {
     expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
       expect.objectContaining({ dataLakeId: 'lake1', principalId: 'owner1', role: 'owner', expiresAt: null })
     );
+  });
+
+  it('revokes the leaver org-billed API keys, attributed to the leaver', async () => {
+    await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(mockAdapters.db.userApiKeys.revokeLiveOrgBilledByUserId).toHaveBeenCalledWith(mockMemberUser.id, 'org1', {
+      revokedBy: mockMemberUser.id,
+      revokedReason: 'org-membership-ended',
+    });
   });
 
   it('throws NotFoundError when organization is not found', async () => {

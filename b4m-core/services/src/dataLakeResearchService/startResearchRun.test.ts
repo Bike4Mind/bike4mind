@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IDataLakeDocument, IDataLakeResearchConfigDocument } from '@bike4mind/common';
 import { getQuestErrorCode, usdToCredits } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import type { LakeGrant, ManageActor } from '../dataLakeService/manageRule';
 
 // The pre-flight keys off `enforceCredits` alone; pin it rather than standing up the settings cache.
@@ -44,6 +44,9 @@ const storedConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {}) 
     query: 'coastal erosion',
     maxResults: 10,
     maxProposals: 5,
+    trustedDomains: [],
+    reviewDomains: [],
+    unlistedSources: 'review',
     allowedDomains: [],
     blockedDomains: [],
     minRelevance: 0.6,
@@ -57,8 +60,15 @@ const makeAdapters = (
     config?: IDataLakeResearchConfigDocument | null;
     active?: number;
     startedToday?: number;
-    owner?: { id: string; currentCredits?: number; organizationId?: string | null } | null;
+    owner?: {
+      id: string;
+      currentCredits?: number;
+      organizationId?: string | null;
+      isBanned?: boolean;
+      disputePending?: boolean;
+    } | null;
     organization?: { id: string; currentCredits?: number } | null;
+    freeze?: { scopeType: 'User' | 'Organization' | 'apiKey'; frozenAt: Date } | null;
   } = {}
 ) => {
   const configs = {
@@ -75,6 +85,7 @@ const makeAdapters = (
   const organizations = {
     findById: vi.fn(async () => (overrides.organization === undefined ? null : overrides.organization)),
   };
+  const spendFreezes = { findActiveForSubject: vi.fn(async () => overrides.freeze ?? null) };
   const adapters = {
     db: {
       dataLakeResearchConfigs: configs,
@@ -83,10 +94,11 @@ const makeAdapters = (
       adminSettings: {},
       users,
       organizations,
+      spendFreezes,
     },
     now: () => NOW,
   } as unknown as StartResearchRunAdapters;
-  return { adapters, configs, runs, record, users, organizations };
+  return { adapters, configs, runs, record, users, organizations, spendFreezes };
 };
 
 /** Comfortably more than the default $0.05 ceiling is worth, so the pre-flight passes. */
@@ -149,6 +161,17 @@ describe('startResearchRun', () => {
     const { adapters, runs } = makeAdapters({ config: null });
     await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toThrow(/not found/);
     expect(runs.createRun).not.toHaveBeenCalled();
+  });
+
+  it('refuses a periodic start on a paused config, but still runs it on demand', async () => {
+    const { adapters, runs } = makeAdapters({ config: storedConfig({ schedulePaused: true }) });
+
+    await expect(startResearchRun('config-1', lake(), { trigger: 'periodic' }, adapters)).rejects.toMatchObject({
+      reason: 'schedule_paused',
+    });
+    expect(runs.createRun).not.toHaveBeenCalled();
+
+    await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).resolves.toMatchObject({ id: 'run-1' });
   });
 
   it('refuses a second concurrent run for the same lake', async () => {
@@ -261,8 +284,42 @@ describe('startResearchRun', () => {
       await startResearchRun('config-1', lake(), onDemand(), adapters);
 
       expect(runs.createRun).toHaveBeenCalled();
-      // Short-circuited before the holder read - nothing to check against.
-      expect(users.findById).not.toHaveBeenCalled();
+      // Read only for the account-state gate; no organization pool is consulted.
+      expect(users.findById).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ['banned', { isBanned: true }],
+      ['dispute-pending', { disputePending: true }],
+    ])('refuses a %s owner before a run row exists, even with credits off', async (_label, state) => {
+      areCreditsEnforcedMock.mockResolvedValue(false);
+      const { adapters, runs } = makeAdapters({ owner: fundedOwner(state) });
+
+      await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses a frozen owner with 403 spend_frozen before a run row exists, even with credits off', async () => {
+      areCreditsEnforcedMock.mockResolvedValue(false);
+      const { adapters, runs, spendFreezes } = makeAdapters({
+        owner: fundedOwner({ organizationId: 'org-1' }),
+        freeze: { scopeType: 'Organization', frozenAt: NOW },
+      });
+
+      const refusal = await startResearchRun('config-1', lake(), PERIODIC, adapters).catch(e => e);
+
+      expect(refusal).toBeInstanceOf(ForbiddenError);
+      expect(getQuestErrorCode(refusal)).toBe('spend_frozen');
+      expect(spendFreezes.findActiveForSubject).toHaveBeenCalledWith({ userId: ACTOR, organizationId: 'org-1' });
+      expect(runs.createRun).not.toHaveBeenCalled();
+    });
+
+    it('propagates a freeze read error rather than starting the run', async () => {
+      const { adapters, runs, spendFreezes } = makeAdapters();
+      spendFreezes.findActiveForSubject.mockRejectedValue(new Error('db down'));
+
+      await expect(startResearchRun('config-1', lake(), onDemand(), adapters)).rejects.toThrow('db down');
+      expect(runs.createRun).not.toHaveBeenCalled();
     });
 
     // No owner means nothing can be billed, the same reason assertOwnerHasCredits throws on a null

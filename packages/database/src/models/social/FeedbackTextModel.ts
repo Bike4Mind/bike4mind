@@ -15,6 +15,7 @@ const feedbackTextSchema = new Schema<IFeedbackTextDocument>(
     // No explicit `_id` path - the create handler supplies it (see the shared-`_id` note above);
     // declaring it here would conflict with Schema<T>'s definition type.
     content: { type: String, required: true },
+    revision: { type: Number, default: 0 },
     contentTruncated: { type: Boolean, default: false },
     // immutable so an admin edit (apps/client/pages/api/feedback/[id]/update.ts) can extend
     // this row's content but never its retention window - swept text cannot be resurrected by
@@ -31,7 +32,7 @@ const feedbackTextSchema = new Schema<IFeedbackTextDocument>(
 
 feedbackTextSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, name: 'feedback_text_ttl' });
 
-export const FeedbackTextModel =
+export const FeedbackTextModel: mongoose.Model<IFeedbackTextDocument> =
   (mongoose.models[ModelName] as unknown as mongoose.Model<IFeedbackTextDocument>) ||
   mongoose.model<IFeedbackTextDocument>(ModelName, feedbackTextSchema);
 

@@ -94,37 +94,15 @@ export async function getAutoUpdatePreference(): Promise<AutoUpdatePreference> {
 }
 
 /**
- * Persist the user's `autoUpdate` choice (`true` = always, `false` = never).
- *
- * Writes the **global** config file directly - the mirror of how
- * `getAutoUpdatePreference()` reads it - rather than routing through
- * `ConfigStore.save()`. `ConfigStore.load()` merges global -> project -> local,
- * and `ConfigStore.save()` writes that merged result back to the global path;
- * answering "Always"/"Never" inside a project would therefore bake the
- * project's other overrides (model, theme, temperature, ...) into the user's
- * global config as a silent side effect. This call fires during the bin
- * bootstrap any time an update is available, so that blast radius is
- * unacceptable. A direct read-merge-write of only `preferences.autoUpdate`
- * avoids it. If the on-disk file is schema-incomplete, the next
- * `ConfigStore.load()` backfills defaults harmlessly - exactly as
- * `getAutoUpdatePreference` already tolerates a partial file. Best-effort:
- * a failure is swallowed (we simply ask again next launch rather than blocking).
+ * Persist the user's `autoUpdate` choice (`true` = always, `false` = never) through
+ * ConfigStore.saveAutoUpdatePreference, which sets only that key in the global file under the config write lock,
+ * and rejects rather than writing over a file it could not read. Best-effort: a failure is swallowed (we simply ask
+ * again next launch rather than blocking). ConfigStore is imported lazily to keep the bin bootstrap light.
  */
-export async function setAutoUpdatePreference(value: boolean): Promise<void> {
+export async function setAutoUpdatePreference(value: boolean, configPath?: string): Promise<void> {
   try {
-    let raw: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf-8'));
-      if (parsed && typeof parsed === 'object') raw = parsed as Record<string, unknown>;
-    } catch {
-      // ENOENT / unreadable / invalid JSON - start from an empty object.
-    }
-    const prefs =
-      raw.preferences && typeof raw.preferences === 'object' ? (raw.preferences as Record<string, unknown>) : {};
-    raw.preferences = { ...prefs, autoUpdate: value };
-    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
-    await fs.writeFile(CONFIG_FILE, JSON.stringify(raw, null, 2), 'utf-8');
-    await fs.chmod(CONFIG_FILE, 0o600);
+    const { ConfigStore } = await import('../storage/ConfigStore.js');
+    await new ConfigStore(configPath).saveAutoUpdatePreference(value);
   } catch {
     // Best-effort - persisting the preference is non-critical.
   }

@@ -1,7 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
-import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
+import {
+  IUserApiKeyDocument,
+  IUserApiKeyListItem,
+  ApiKeyScopeValue,
+  IEmbedBranding,
+  API_KEY_TRUST_REQUIRED_ERROR_CODE,
+  type ApiKeyRateLimitUsage,
+  type AdminApiKeyAccess,
+  type AdminApiKeyModerationException,
+  type AdminApiKeyRequestCounts,
+} from '@bike4mind/common';
+import type { ApiKeyEligibilityResponse } from '@client/pages/api/user-api-keys/eligibility';
+import type { CounterLockoutState } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
 function parseValidationError(error: any): string {
@@ -31,9 +42,27 @@ function parseValidationError(error: any): string {
   return errorMessage || error.message || 'An error occurred';
 }
 
+type TrustRequiredError = {
+  response: { data: { errorCode: typeof API_KEY_TRUST_REQUIRED_ERROR_CODE; error: string } };
+};
+
+function isTrustRequiredError(error: unknown): error is TrustRequiredError {
+  if (typeof error !== 'object' || error === null || !('response' in error)) return false;
+  const { response } = error;
+  if (typeof response !== 'object' || response === null || !('data' in response)) return false;
+  const { data } = response;
+  if (typeof data !== 'object' || data === null) return false;
+  return (
+    'errorCode' in data &&
+    data.errorCode === API_KEY_TRUST_REQUIRED_ERROR_CODE &&
+    'error' in data &&
+    typeof data.error === 'string'
+  );
+}
+
 export interface CreateUserApiKeyRequest {
   name: string;
-  scopes: ApiKeyScope[];
+  scopes: ApiKeyScopeValue[];
   expiresAt?: Date;
   rateLimit?: {
     requestsPerMinute: number;
@@ -54,6 +83,8 @@ export interface CreateUserApiKeyRequest {
  */
 export interface AdminCreateUserApiKeyRequest extends CreateUserApiKeyRequest {
   preauthorizedLakeIds?: string[];
+  /** Audit reason; the route requires it when any scope is admin-provisioned. */
+  reason?: string;
 }
 
 /** Configure an existing embed key - only the provided fields change. */
@@ -109,7 +140,7 @@ export interface RotateCallbackSigningSecretResponse {
  * one key would clobber each other's cache.
  */
 export function useGetUserApiKeys() {
-  return useQuery<IUserApiKeyDocument[]>({
+  return useQuery<IUserApiKeyListItem[]>({
     queryKey: ['user-api-keys'],
     queryFn: async () => {
       const response = await api.get('/api/user-api-keys', { params: { includeDisabled: true } });
@@ -128,6 +159,17 @@ export function useBillingOrganizations() {
   });
 }
 
+/** Whether the user may mint a personal (user-billed) key, and whether an org-billed one can still pass. */
+export function useApiKeyEligibility() {
+  return useQuery<ApiKeyEligibilityResponse>({
+    queryKey: ['user-api-keys', 'eligibility'],
+    queryFn: async () => {
+      const response = await api.get('/api/user-api-keys/eligibility');
+      return response.data;
+    },
+  });
+}
+
 export function useCreateUserApiKey({ onSuccess }: { onSuccess?: (result: CreateUserApiKeyResponse) => void } = {}) {
   const queryClient = useQueryClient();
 
@@ -141,7 +183,8 @@ export function useCreateUserApiKey({ onSuccess }: { onSuccess?: (result: Create
       if (onSuccess) onSuccess(result);
     },
     onError: (error: Error) => {
-      toast.error(parseValidationError(error));
+      // Shown verbatim: parseValidationError reshapes any message containing ':' as Zod output.
+      toast.error(isTrustRequiredError(error) ? error.response.data.error : parseValidationError(error));
     },
   });
 }
@@ -224,11 +267,16 @@ export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: Cre
 
 /** Response of GET /api/admin/users/[userId]/user-api-keys: the user's keys plus
  * each key's live minute/day rate-limit counters (keyed by key id) - the
- * usage fields on the key doc itself are not maintained. Reset timestamps are
- * epoch seconds and mirror the server's `RateLimitUsage`. */
+ * usage fields on the key doc itself are not maintained. */
 export interface AdminUserApiKeysResponse {
   apiKeys: IUserApiKeyDocument[];
-  liveUsage: Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>;
+  liveUsage: Record<string, ApiKeyRateLimitUsage>;
+  /** Requests per key from the usage log; a key with none is absent. */
+  requests: Record<string, AdminApiKeyRequestCounts>;
+  /** Where the user stands with the API key subscription gate. */
+  access: AdminApiKeyAccess;
+  /** Keys with a moderation exception, by key id; absent keys have none. */
+  moderationExceptions?: Record<string, AdminApiKeyModerationException>;
 }
 
 export function useAdminGetUserApiKeys(userId: string | undefined, options?: { refetchInterval?: number }) {
@@ -260,9 +308,9 @@ export interface ApiKeyRateLimitResetResponse {
 export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<ApiKeyRateLimitResetResponse, Error, string>({
-    mutationFn: async keyId => {
-      const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`);
+  return useMutation<ApiKeyRateLimitResetResponse, Error, { keyId: string; reason: string }>({
+    mutationFn: async ({ keyId, reason }) => {
+      const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`, { reason });
       return response.data;
     },
     onSuccess: () => {

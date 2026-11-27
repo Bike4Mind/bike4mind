@@ -1,0 +1,103 @@
+name: Post-merge failure triage
+
+on:
+  workflow_run:
+    workflows: [CI, E2E Tests (Manual)]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Failed full main CI run ID'
+        required: true
+      reproduction_run_id:
+        description: 'Independent failed full main CI run on the same SHA'
+        required: false
+      parent_run_id:
+        description: 'Successful full main CI run on the direct parent'
+        required: false
+      confirmed_last_change:
+        description: 'I verified the same test fails on head and passes on parent, and reverting is safe'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Plan only; do not create issues, branches or PRs'
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: post-merge-triage
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: >-
+      github.repository == 'Bike4Mind/bike4mind' &&
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Read-only plan
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { triage } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/post-merge-triage.mjs`);
+            await triage({ github, context, core, inputs: { ...context.payload.inputs, dry_run: 'true' } });
+  triage:
+    if: >-
+      github.repository == 'Bike4Mind/bike4mind' &&
+      vars.POST_MERGE_TRIAGE_ENABLED == 'true' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.dry_run &&
+        (!inputs.confirmed_last_change || vars.POST_MERGE_REMEDIATION_ENABLED == 'true')) ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == 'main' &&
+        (github.event.workflow_run.conclusion == 'failure' ||
+         (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.run_attempt > 1))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Generate draft remediation token
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.confirmed_last_change && !inputs.dry_run &&
+          vars.POST_MERGE_TRIAGE_ENABLED == 'true' && vars.POST_MERGE_REMEDIATION_ENABLED == 'true'
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Validate, plan and track
+        uses: actions/github-script@v8
+        env:
+          REMEDIATION_TOKEN: ${{ steps.app.outputs.token }}
+          TRACKING_ENABLED: ${{ vars.POST_MERGE_TRIAGE_ENABLED }}
+          REMEDIATION_ENABLED: ${{ vars.POST_MERGE_REMEDIATION_ENABLED }}
+        with:
+          script: |
+            const { triage } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/post-merge-triage.mjs`);
+            const inputs = context.payload.inputs || {};
+            const remediation = process.env.REMEDIATION_TOKEN
+              ? new github.constructor({ auth: process.env.REMEDIATION_TOKEN }) : null;
+            await triage({ github, remediation, context, core, inputs,
+              rollout: { tracking: process.env.TRACKING_ENABLED, remediation: process.env.REMEDIATION_ENABLED } });

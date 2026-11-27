@@ -19,7 +19,8 @@ import type {
  * A message relayed from another conversation (session_send) is the exception, and the reason
  * the list is a list. It never merges: merging would put another agent's words inside a message
  * the user is composing, and the two then go out as one turn with no way to tell which half
- * came from where. Each relay is its own entry and becomes its own turn, in arrival order.
+ * came from where. Each relay is its own entry and reaches the model as its own message, in arrival
+ * order: at a running turn's next round boundary (see ChatService.takeArrivals) or as a turn.
  *
  * Every TYPED message that leaves without being sent is handed BACK rather than dropped:
  * cancelling, a stopped reply, a failed reply and a refused turn all take the same exit, so

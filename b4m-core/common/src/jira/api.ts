@@ -35,9 +35,12 @@ import {
   type FormattedJiraIssueLinkType,
   type FormattedJiraIssueLink,
   type FormattedJiraIssueType,
+  type FormattedJiraWatchers,
+  type AdfNode,
 } from './format';
 import { AgileApi } from './agile/api';
 import { apiPath, assertSafeApiPath } from '../atlassian/apiPath';
+import { stderrLogger, type CommonLogger } from '../logging/stderrLogger';
 
 // --- Types & Interfaces ---
 
@@ -62,7 +65,7 @@ export interface JiraIssue {
   self: string;
   fields: {
     summary: string;
-    description?: any;
+    description?: AdfNode | string | null;
     status: {
       name: string;
       id: string;
@@ -87,7 +90,9 @@ export interface JiraIssue {
     };
     created: string;
     updated: string;
-    [key: string]: any;
+    labels?: string[];
+    resolutiondate?: string | null;
+    [key: string]: unknown;
   };
 }
 
@@ -147,7 +152,7 @@ export interface JiraSearchResult {
 
 export interface JiraComment {
   id: string;
-  body: any;
+  body: AdfNode | string;
   author: {
     displayName: string;
     accountId: string;
@@ -441,7 +446,14 @@ export function containsWikiTable(text: string): boolean {
 // --- Jira API Client ---
 
 export class JiraApi {
-  constructor(private readonly config: JiraConfig) {}
+  private readonly logger: CommonLogger;
+
+  constructor(
+    private readonly config: JiraConfig,
+    opts: { logger?: CommonLogger } = {}
+  ) {
+    this.logger = opts.logger ?? stderrLogger;
+  }
 
   /**
    * Build URL with query parameters
@@ -490,14 +502,13 @@ export class JiraApi {
     });
 
     // Parse rate limit headers from every response.
-    // MUST use console.error (stderr) - MCP uses stdout for JSON-RPC protocol,
-    // so console.log would corrupt the transport channel.
+    // The default logger writes to stderr: MCP uses stdout for JSON-RPC, so stdout logging would corrupt the transport.
     const rateLimitInfo = parseRateLimitHeaders(response.headers);
     if (hasRateLimitInfo(rateLimitInfo)) {
       const logEntry = buildRateLimitLogEntry('jira', path, rateLimitInfo);
-      console.error(JSON.stringify(logEntry));
+      this.logger.info('[Jira] Rate limit info', logEntry);
       if (isNearLimit(rateLimitInfo)) {
-        console.error(
+        this.logger.warn(
           `[Jira] Rate limit warning: ${rateLimitInfo.usagePercent}% used (${rateLimitInfo.remaining}/${rateLimitInfo.limit} remaining)`
         );
       }
@@ -514,8 +525,7 @@ export class JiraApi {
       const jitterMs = Math.floor(Math.random() * 1000);
       const delayMs = Math.min(retryAfterMs + jitterMs, 10000); // Cap at 10s for Lambda budget
       const logEntry = buildRateLimitLogEntry('jira', path, rateLimitInfo, true);
-      console.error(JSON.stringify(logEntry));
-      console.error(`[Jira] Rate limited on ${path}, retrying after ${delayMs}ms`);
+      this.logger.warn(`[Jira] Rate limited on ${path}, retrying after ${delayMs}ms`, logEntry);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       return this.request<T>(method, path, {
         ...options,
@@ -563,7 +573,7 @@ export class JiraApi {
     assignee?: string;
     labels?: string[];
     parentKey?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   }): Promise<{ id: string; key: string; link: string }> {
     const { projectKey, summary, description, issueTypeName, assignee, labels, parentKey, ...customFields } = params;
 
@@ -577,7 +587,7 @@ export class JiraApi {
     if (description) {
       // Convert wiki markup tables to ADF format for proper rendering
       if (containsWikiTable(description)) {
-        console.log('[JIRA-ADF] Converting wiki table to ADF', { length: description.length });
+        this.logger.debug('[JIRA-ADF] Converting wiki table to ADF', { length: description.length });
         fields.description = wikiMarkupToAdf(description);
       } else {
         fields.description = {
@@ -620,7 +630,7 @@ export class JiraApi {
     summary?: string;
     description?: string;
     labels?: string[];
-    [key: string]: any;
+    [key: string]: unknown;
   }): Promise<void> {
     const { issueKey, summary, description, labels, ...customFields } = params;
 
@@ -633,7 +643,7 @@ export class JiraApi {
     if (description) {
       // Convert wiki markup tables to ADF format for proper rendering
       if (containsWikiTable(description)) {
-        console.log('[JIRA-ADF] Converting wiki table to ADF (update)', { length: description.length });
+        this.logger.debug('[JIRA-ADF] Converting wiki table to ADF (update)', { length: description.length });
         fields.description = wikiMarkupToAdf(description);
       } else {
         fields.description = {
@@ -668,7 +678,7 @@ export class JiraApi {
    * AI-facing formatter drops or transforms - e.g. time-tracking
    * (`timespent`/`timeoriginalestimate`), `resolutiondate`, or the original
    * description body (the formatter flattens ADF and strips HTML, which would
-   * destroy embedded markers such as the liveops `<!-- fingerprint:... -->` comment).
+   * destroy embedded markers such as a `<!-- fingerprint:... -->` comment).
    * Prefer {@link searchIssues} for anything user/LLM-facing.
    */
   async searchIssuesRaw(params: {
@@ -949,7 +959,7 @@ export class JiraApi {
       if (description) {
         // Convert wiki markup tables to ADF format for proper rendering
         if (containsWikiTable(description)) {
-          console.log('[JIRA-ADF] Converting wiki table to ADF (bulk)', { length: description.length });
+          this.logger.debug('[JIRA-ADF] Converting wiki table to ADF (bulk)', { length: description.length });
           fields.description = wikiMarkupToAdf(description);
         } else {
           fields.description = {
@@ -1022,15 +1032,15 @@ export class JiraApi {
   }> {
     const { issues } = params;
 
-    console.error(`[Jira] bulkTransitionIssues called with ${issues.length} issue(s)`);
+    this.logger.info('[Jira] bulkTransitionIssues called', { issueCount: issues.length });
 
     if (issues.length === 0) {
-      console.error('[Jira] bulkTransitionIssues: No issues provided, returning early');
+      this.logger.info('[Jira] bulkTransitionIssues: No issues provided, returning early');
       return { taskId: '', message: 'No issues to transition', issueCount: 0 };
     }
 
     if (issues.length > 1000) {
-      console.error(`[Jira] bulkTransitionIssues: Exceeded 1000 issue limit (${issues.length})`);
+      this.logger.warn('[Jira] bulkTransitionIssues: Exceeded 1000 issue limit', { issueCount: issues.length });
       throw new Error('Bulk transition is limited to 1000 issues per request. Please split your request.');
     }
 
@@ -1050,7 +1060,7 @@ export class JiraApi {
       transitionId,
     }));
 
-    console.error(`[Jira] bulkTransitionIssues: Grouped into ${bulkTransitionInputs.length} transition group(s)`);
+    this.logger.info('[Jira] bulkTransitionIssues: Grouped transitions', { groups: bulkTransitionInputs.length });
 
     const result = await this.request<{
       taskId: string;
@@ -1058,7 +1068,7 @@ export class JiraApi {
       body: { bulkTransitionInputs },
     });
 
-    console.error(`[Jira] bulkTransitionIssues: Task created with ID ${result.taskId}`);
+    this.logger.info('[Jira] bulkTransitionIssues: Task created', { taskId: result.taskId });
 
     return {
       taskId: result.taskId,
@@ -1093,15 +1103,15 @@ export class JiraApi {
   }> {
     const { issueIdsOrKeys, labels } = params;
 
-    console.error(`[Jira] bulkUpdateIssues called with ${issueIdsOrKeys.length} issue(s), action: ${labels.action}`);
+    this.logger.info('[Jira] bulkUpdateIssues called', { issueCount: issueIdsOrKeys.length, action: labels.action });
 
     if (issueIdsOrKeys.length === 0) {
-      console.error('[Jira] bulkUpdateIssues: No issues provided, returning early');
+      this.logger.info('[Jira] bulkUpdateIssues: No issues provided, returning early');
       return { taskId: '', message: 'No issues to update', issueCount: 0 };
     }
 
     if (issueIdsOrKeys.length > 1000) {
-      console.error(`[Jira] bulkUpdateIssues: Exceeded 1000 issue limit (${issueIdsOrKeys.length})`);
+      this.logger.warn('[Jira] bulkUpdateIssues: Exceeded 1000 issue limit', { issueCount: issueIdsOrKeys.length });
       throw new Error('Bulk update is limited to 1000 issues per request. Please split your request.');
     }
 
@@ -1118,9 +1128,7 @@ export class JiraApi {
       ],
     };
 
-    console.error(
-      `[Jira] bulkUpdateIssues: Updating labels [${labels.values.join(', ')}] with action ${labels.action}`
-    );
+    this.logger.info('[Jira] bulkUpdateIssues: Updating labels', { labels: labels.values, action: labels.action });
 
     const result = await this.request<{
       taskId: string;
@@ -1132,7 +1140,7 @@ export class JiraApi {
       },
     });
 
-    console.error(`[Jira] bulkUpdateIssues: Task created with ID ${result.taskId}`);
+    this.logger.info('[Jira] bulkUpdateIssues: Task created', { taskId: result.taskId });
 
     return {
       taskId: result.taskId,
@@ -1144,7 +1152,7 @@ export class JiraApi {
   /**
    * Get watchers for an issue
    */
-  async getWatchers(params: { issueKey: string }): Promise<any> {
+  async getWatchers(params: { issueKey: string }): Promise<FormattedJiraWatchers> {
     const { issueKey } = params;
     const result = await this.request<JiraWatchersResponse>('GET', apiPath`/issue/${issueKey}/watchers`);
     return formatWatchers(result);

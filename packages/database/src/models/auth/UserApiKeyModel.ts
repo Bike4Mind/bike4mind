@@ -2,14 +2,22 @@ import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
   ApiKeyCapPool,
+  type ApiKeyScopeValue,
   ApiKeyStoredSecret,
   ApiKeyStatus,
-  ApiKeyScope,
+  isWellFormedApiKeyScope,
   CreditHolderType,
   IEmbedBranding,
   IUserApiKeyDocument,
+  IUserApiKeyModerationException,
   IUserApiKeyRateLimit,
   IUserApiKeyRepository,
+  LegacyApiKeyCandidatePage,
+  LegacyApiKeyCandidateQuery,
+  MODERATION_EXCEPTION_CATEGORIES,
+  NotFoundError,
+  OrgApiKeyGrant,
+  PAYER_STANDINGS,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
@@ -27,6 +35,86 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
 
   findByUserId(userId: string) {
     return this.model.find({ userId }).sort({ createdAt: -1 }).exec();
+  }
+
+  async findFirstCreatedAtByUserId(userId: string): Promise<Date | null> {
+    const [first] = await this.model
+      .find({ userId }, { createdAt: 1 })
+      .setOptions({ includeDeleted: true })
+      .sort({ createdAt: 1 })
+      .limit(1)
+      .lean<{ createdAt?: Date }[]>()
+      .exec();
+    return first?.createdAt ?? null;
+  }
+
+  async countCreatedByUserIds(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // aggregate skips the soft-delete filter, so deleted keys count as created.
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  /** Unexpired active keys per user, across every pool; users with none are absent. */
+  async countActiveByUserIds(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    const rows = await this.model.aggregate<{ _id: string; count: number }>([
+      {
+        $match: {
+          userId: { $in: userIds },
+          status: ApiKeyStatus.ACTIVE,
+          // aggregate skips the soft-delete filter, so it is repeated here.
+          deletedAt: null,
+          $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+        },
+      },
+      { $group: { _id: '$userId', count: { $sum: 1 } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.count]));
+  }
+
+  async findLegacyCandidatesPage({
+    createdBefore,
+    usedSince,
+    excludeScopes,
+    skip,
+    limit,
+  }: LegacyApiKeyCandidateQuery): Promise<LegacyApiKeyCandidatePage> {
+    const now = new Date();
+    const filter = {
+      status: ApiKeyStatus.ACTIVE,
+      // Explicit because countDocuments and aggregate skip the soft-delete filter.
+      deletedAt: null,
+      lastUsedAt: { $gte: usedSince },
+      ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
+      scopes: { $nin: [...excludeScopes] },
+      'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }],
+    };
+    const [keys, total, owners] = await Promise.all([
+      this.model.find(filter).sort({ lastUsedAt: -1, _id: -1 }).skip(skip).limit(limit).exec(),
+      this.model.countDocuments(filter).exec(),
+      this.model.aggregate<{ count: number }>([
+        { $match: filter },
+        { $group: { _id: '$userId' } },
+        { $count: 'count' },
+      ]),
+    ]);
+    return { keys, total, ownerCount: owners[0]?.count ?? 0 };
+  }
+
+  /** When each user created their first key, deleted keys included; users with no key are absent. */
+  async findFirstCreatedAtByUserIds(userIds: string[]): Promise<Record<string, Date>> {
+    if (userIds.length === 0) return {};
+    // aggregate skips the soft-delete filter, so a deleted first key still counts.
+    const rows = await this.model.aggregate<{ _id: string; firstCreatedAt: Date }>([
+      { $match: { userId: { $in: userIds } } },
+      { $group: { _id: '$userId', firstCreatedAt: { $min: '$createdAt' } } },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.firstCreatedAt]));
   }
 
   findByUserIdAndId(userId: string, id: string) {
@@ -64,6 +152,30 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     await this.model.updateOne({ _id: id }, spendCap === null ? { $unset: { spendCap: 1 } } : { $set: { spendCap } });
   }
 
+  async setModerationException(id: string, exception: IUserApiKeyModerationException | null) {
+    const result = await this.model.updateOne(
+      { _id: id, deletedAt: null },
+      exception === null ? { $unset: { moderationException: 1 } } : { $set: { moderationException: exception } },
+      { runValidators: true }
+    );
+    if (result.matchedCount === 0) throw new NotFoundError('API key not found');
+  }
+
+  async findModerationException(id: string) {
+    const key = await this.model
+      .findById(id)
+      .select('+moderationException userId status expiresAt')
+      .lean<Pick<IUserApiKeyDocument, 'moderationException' | 'userId' | 'status' | 'expiresAt'>>()
+      .exec();
+    if (!key?.moderationException) return null;
+    return {
+      userId: key.userId,
+      status: key.status,
+      expiresAt: key.expiresAt,
+      moderationException: key.moderationException,
+    };
+  }
+
   // Per-path $set (not a whole-subdoc $set) to stay consistent with updateUsage
   // and to leave any future sibling under rateLimit untouched.
   async setRateLimit(id: string, rateLimit: IUserApiKeyRateLimit) {
@@ -76,6 +188,11 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+  }
+
+  /** Add or remove one scope in place. Admin flows only: it bypasses the mint-time scope rules. */
+  async setScopeHeld(id: string, scope: ApiKeyScopeValue, held: boolean) {
+    await this.model.updateOne({ _id: id }, held ? { $addToSet: { scopes: scope } } : { $pull: { scopes: scope } });
   }
 
   async resetSpend(id: string) {
@@ -119,6 +236,14 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
+  // Only keys disabled in bulk. Capped because this runs after auth fails and prefix collisions are rare.
+  findDisabledByKeyPrefix(keyPrefix: string) {
+    return this.model
+      .find({ keyPrefix, status: ApiKeyStatus.DISABLED, revokedBy: { $exists: false } })
+      .limit(5)
+      .exec();
+  }
+
   // Bulk deactivation has no human actor, so it stamps revokedAt without revokedBy.
   // Scoped to keys actually transitioning: re-running must not reset an existing
   // timestamp, and keys disabled before this field existed must not get a fabricated one.
@@ -132,9 +257,10 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
   }
 
   // Status-filtered in the same write, not checked on a prior read, so a re-revoke or a revoke
-  // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it.
-  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string) {
-    await this.model.updateOne(
+  // racing deactivateAllByUserId keeps the first audit stamp instead of overwriting it. True when
+  // this call revoked it.
+  async revokeIfNotDisabled(id: string, revokedBy: string, revokedReason?: string): Promise<boolean> {
+    const result = await this.model.updateOne(
       { _id: id, status: { $ne: ApiKeyStatus.DISABLED } },
       {
         $set: {
@@ -145,6 +271,106 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Undoes a revoke: ACTIVE again and the revoke stamps cleared, only while the key is still
+   * DISABLED by `revokedBy` at or after `revokedSince` and has not expired. The conditions ride the
+   * same write, so two concurrent restores cannot both succeed. True when this call restored it.
+   */
+  async restoreRevoked(id: string, revokedBy: string, revokedSince: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        status: ApiKeyStatus.DISABLED,
+        revokedBy,
+        revokedAt: { $gte: revokedSince },
+        $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      },
+      { $set: { status: ApiKeyStatus.ACTIVE }, $unset: { revokedAt: 1, revokedBy: 1, revokedReason: 1 } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
+   * Disables every key of the user that is not already DISABLED, stamping the actor and the bulk batch,
+   * and returns the keys it flipped with their prior status so `reactivateByIds` can put them back.
+   */
+  async revokeLiveByUserId(
+    userId: string,
+    { revokedBy, revokedReason, batchId }: { revokedBy: string; revokedReason: string; batchId: string }
+  ): Promise<{ id: string; status: ApiKeyStatus }[]> {
+    const live = await this.model
+      .find({ userId, status: { $ne: ApiKeyStatus.DISABLED } })
+      .select('_id status')
+      .lean<{ _id: unknown; status: ApiKeyStatus }[]>();
+    if (live.length === 0) return [];
+    await this.model.updateMany(
+      { _id: { $in: live.map(key => key._id) }, status: { $ne: ApiKeyStatus.DISABLED } },
+      {
+        $set: {
+          status: ApiKeyStatus.DISABLED,
+          revokedAt: new Date(),
+          revokedBy,
+          revokedReason,
+          revokedBatchId: batchId,
+        },
+      }
+    );
+    return live.map(key => ({ id: String(key._id), status: key.status }));
+  }
+
+  /**
+   * Disables the member's live keys billed to this org when their membership ends. Personal
+   * (User-billed) keys, legacy rows with no billingOwnerType, and embed keys (bound to an agent;
+   * they serve the org's embedded widget, not the member) are left alone. No batch id: a
+   * removal is not undoable, so these must not be restorable through `reactivateByIds`.
+   * Returns the selected live ids. Call within withTransaction when these ids are used as an
+   * exact audit receipt, so a concurrent revocation retries the read and write together.
+   */
+  // Keep the selection in sync with orgBilledKeyFilter in b4m-core/services/src/organizationService/offboardingScope.ts.
+  async revokeLiveOrgBilledByUserId(
+    userId: string,
+    organizationId: string,
+    { revokedBy, revokedReason }: { revokedBy: string; revokedReason: string }
+  ): Promise<string[]> {
+    const filter = {
+      userId,
+      organizationId,
+      billingOwnerType: CreditHolderType.Organization,
+      status: { $ne: ApiKeyStatus.DISABLED },
+      agentId: null,
+    };
+    const live = await this.model.find(filter).select('_id').lean<{ _id: unknown }[]>();
+    if (live.length === 0) return [];
+    const ids = live.map(key => key._id);
+    await this.model.updateMany(
+      { ...filter, _id: { $in: ids } },
+      { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedBy, revokedReason } }
+    );
+    return ids.map(String);
+  }
+
+  /**
+   * Undo of `revokeLiveByUserId`: restores each key's prior status, but only for keys of this user still
+   * DISABLED by that same batch, so a key revoked again since (by anyone) stays revoked.
+   */
+  async reactivateByIds(
+    userId: string,
+    keys: { id: string; status: ApiKeyStatus }[],
+    batchId: string
+  ): Promise<number> {
+    let restored = 0;
+    for (const status of new Set(keys.map(key => key.status))) {
+      const ids = keys.filter(key => key.status === status).map(key => key.id);
+      const result = await this.model.updateMany(
+        { _id: { $in: ids }, userId, status: ApiKeyStatus.DISABLED, revokedBatchId: batchId },
+        { $set: { status }, $unset: { revokedAt: 1, revokedBy: 1, revokedReason: 1, revokedBatchId: 1 } }
+      );
+      restored += result.modifiedCount;
+    }
+    return restored;
   }
 
   findExpiredKeys() {
@@ -165,6 +391,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
       'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
+      // `$ne` keeps legacy rows with no billingOwnerType (user-billed by default) in the pool.
+      ...(pool === 'personal' && { billingOwnerType: { $ne: CreditHolderType.Organization } }),
     };
   }
 
@@ -279,7 +507,15 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     keyHash: { type: String },
     keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
-    scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
+    // Shape only: which values are offered is the app's merged catalog, which a cron or other process
+    // without contributions loaded cannot see, and an enum here would fail its re-save of a stored key.
+    scopes: [
+      {
+        type: String,
+        required: true,
+        validate: { validator: isWellFormedApiKeyScope, message: 'Malformed API key scope: {VALUE}' },
+      },
+    ],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
     expiresAt: { type: Date },
     lastUsedAt: { type: Date },
@@ -288,6 +524,8 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     revokedAt: { type: Date },
     revokedBy: { type: String },
     revokedReason: { type: String },
+    // Set only by an admin users-list bulk revoke, so that batch's undo restores its own keys and no others.
+    revokedBatchId: { type: String },
     // Encrypted at rest; select: false keeps it out of every read (and out of the whole-doc
     // update() writes rotate/revoke do) except findCallbackSigningSecret. See IUserApiKey.
     callbackSigningSecret: { type: String, select: false },
@@ -335,6 +573,30 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by
     // lake. `default: undefined` so an ordinary key does not materialize an empty array.
     preauthorizedLakeIds: { type: [String], default: undefined },
+    // Org-owned key (see IUserApiKey.orgOwned). `createdByUserId` is set on insert only; `grants`
+    // is the key's reach, edited by pages/api/organizations/[id]/api-keys/[keyId]/index.ts.
+    orgOwned: {
+      type: new mongoose.Schema<{ createdByUserId: string; grants?: OrgApiKeyGrant[] }>(
+        {
+          createdByUserId: { type: String, required: true },
+          grants: {
+            type: [
+              new mongoose.Schema<OrgApiKeyGrant>(
+                {
+                  resourceType: { type: String, enum: ['organization', 'group'], required: true },
+                  resourceId: { type: String, required: true },
+                  permission: { type: String, enum: ['read'], required: true },
+                },
+                { _id: false }
+              ),
+            ],
+            default: undefined,
+          },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     branding: {
       type: new mongoose.Schema<IEmbedBranding>(
         {
@@ -352,6 +614,28 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // blocks all spend - enforcement must guard with `spendCap !== undefined`,
     // never a truthy check.
     spendCap: { type: Number, default: undefined },
+    // Admin-set prompt moderation exception; see IUserApiKey. select: false keeps the reason and
+    // the acting admin out of every key payload, the owner's own listing included.
+    moderationException: {
+      type: new mongoose.Schema(
+        {
+          categories: {
+            type: [{ type: String, enum: [...MODERATION_EXCEPTION_CATEGORIES] }],
+            required: true,
+            validate: {
+              validator: (categories: string[]) => categories.length > 0,
+              message: 'A moderation exception needs at least one category',
+            },
+          },
+          reason: { type: String, required: true },
+          setBy: { type: String, required: true },
+          setAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+      select: false,
+    },
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },
@@ -364,6 +648,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       createdByUserId: { type: String },
       // OAuth client that minted this key via the federated AI-token exchange. See IUserApiKeyMetadata.
       oauthClientId: { type: String },
+      payerStanding: { type: String, enum: [...PAYER_STANDINGS] },
       baseline: {
         avgRequestsPerHour: { type: Number },
         avgRequestsPerDay: { type: Number },
@@ -384,6 +669,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
         delete ret.keyHash;
         delete ret.keyDigest;
         delete ret.callbackSigningSecret;
+        delete ret.moderationException;
         return ret;
       },
     },
@@ -396,6 +682,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
 UserApiKeySchema.index({ userId: 1, status: 1 });
 UserApiKeySchema.index({ keyPrefix: 1, status: 1 });
 UserApiKeySchema.index({ expiresAt: 1 });
+UserApiKeySchema.index({ createdAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ agentId: 1, status: 1 }, { sparse: true });

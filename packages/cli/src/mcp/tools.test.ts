@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
@@ -26,7 +27,16 @@ import {
   generateImage,
   textToSpeech,
   publishArtifact,
+  uploadFile,
 } from './tools';
+
+const mockOpen = vi.fn();
+vi.mock('node:fs/promises', async importOriginal => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+  open: (...a: unknown[]) => mockOpen(...a),
+  realpath: (p: string) => mockRealpath(p),
+}));
+const mockRealpath = vi.fn(async (p: string) => p);
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
@@ -48,6 +58,7 @@ describe('TOOL_NAMES', () => {
       'list_lakes',
       'list_files',
       'get_file',
+      'upload_file',
       'generate_sound_effect',
       'text_to_speech',
       'generate_image',
@@ -60,6 +71,19 @@ describe('TOOL_NAMES', () => {
       'get_bob_comparison',
       'list_bob_reports',
       'bob_runs_left',
+      'list_research_configs',
+      'create_research_config',
+      'update_research_config',
+      'delete_research_config',
+      'run_research',
+      'get_research_run',
+      'list_research_runs',
+      'list_research_proposals',
+      'decide_research_proposal',
+      'get_lake_config_history',
+      'undo_lake_change',
+      'list_functions',
+      'call_function',
     ]);
   });
 });
@@ -129,6 +153,276 @@ describe('tool handlers', () => {
     await listFiles(client, { limit: 25, page: 3 });
 
     expect(list).toHaveBeenCalledWith({ limit: 25, page: 3 });
+  });
+
+  it('upload_file sends bytes to the presign and returns pending ingestion', async () => {
+    const requestFileUpload = vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    const uploadFileBytes = vi.fn().mockResolvedValue(undefined);
+    const attachFileToProject = vi.fn().mockResolvedValue(undefined);
+    const result = await uploadFile(
+      mockClient({
+        requestFileUpload,
+        uploadFileBytes,
+        attachFileToProject,
+        getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+      }),
+      { base64: 'YWJj', name: 'note.txt', projectId: 'p1' }
+    );
+    expect(requestFileUpload).toHaveBeenCalledWith({ fileName: 'note.txt', fileSize: 3, mimeType: 'text/plain' });
+    expect(uploadFileBytes).toHaveBeenCalledWith('https://s3.example/put', Buffer.from('abc'), 'text/plain');
+    expect(attachFileToProject).toHaveBeenCalledWith('f1', 'p1');
+    expect(result).toEqual({ fileId: 'f1', ingestionState: 'pending' });
+  });
+
+  it('upload_file rejects ambiguous or empty bytes before presigning', async () => {
+    const requestFileUpload = vi.fn();
+    const client = mockClient({ requestFileUpload });
+    await expect(uploadFile(client, { path: 'a.txt', base64: 'YWJj' })).rejects.toThrow('exactly one');
+    await expect(uploadFile(client, { base64: '!!!', name: 'a.txt' })).rejects.toThrow('valid base64');
+    expect(requestFileUpload).not.toHaveBeenCalled();
+  });
+
+  it('upload_file reports the file id when an association fails after upload', async () => {
+    const client = mockClient({
+      requestFileUpload: vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] }),
+      uploadFileBytes: vi.fn().mockResolvedValue(undefined),
+      attachFileToProject: vi.fn().mockRejectedValue(new Error('not permitted')),
+      getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+    });
+    await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+      'File f1 was uploaded but association failed: not permitted'
+    );
+  });
+
+  describe('upload_file edge cases', () => {
+    const fileHandle = (isFile: boolean, size: number, contents = Buffer.from('abc')) => {
+      const handle = {
+        stat: vi.fn().mockResolvedValue({ isFile: () => isFile, size }),
+        readFile: vi.fn().mockResolvedValue(contents),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      mockOpen.mockResolvedValue(handle);
+      return handle;
+    };
+    const presign = () => vi.fn().mockResolvedValue({ files: [{ fileId: 'f1', url: 'https://s3.example/put' }] });
+    const uploadClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>> = {}) =>
+      mockClient({
+        requestFileUpload: presign(),
+        uploadFileBytes: vi.fn().mockResolvedValue(undefined),
+        deleteFile: vi.fn().mockResolvedValue(undefined),
+        getOwnKeyScopes: vi.fn().mockResolvedValue(undefined),
+        ...overrides,
+      });
+
+    it('reads a local path and infers the name from its basename', async () => {
+      const handle = fileHandle(true, 3);
+      const client = uploadClient();
+      await uploadFile(client, { path: '/some/dir/report.txt' });
+      expect(mockOpen).toHaveBeenCalledWith('/some/dir/report.txt', constants.O_RDONLY | constants.O_NONBLOCK);
+      expect(handle.readFile).toHaveBeenCalledOnce();
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'report.txt',
+        fileSize: 3,
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('refuses hidden files, hidden directories and links into them without opening them', async () => {
+      mockOpen.mockClear();
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/home/u/.env' })).rejects.toThrow('hidden');
+      await expect(uploadFile(client, { path: '/home/u/.ssh/id_rsa' })).rejects.toThrow('hidden');
+      mockRealpath.mockResolvedValueOnce('/home/u/.ssh/id_rsa');
+      await expect(uploadFile(client, { path: '/home/u/key.txt' })).rejects.toThrow('hidden');
+      expect(mockOpen).not.toHaveBeenCalled();
+    });
+
+    it('rejects a path that is not a regular file without reading it', async () => {
+      const handle = fileHandle(false, 0);
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/some/dir' })).rejects.toThrow('not a regular file');
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('rejects an oversize file without reading it', async () => {
+      const handle = fileHandle(true, 100 * 1024 * 1024 + 1);
+      await expect(uploadFile(uploadClient(), { path: '/big.bin' })).rejects.toThrow('upload limit');
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledOnce();
+    });
+
+    it('rejects bytes that grew past the cap after stat and closes the handle', async () => {
+      const handle = fileHandle(true, 3, Buffer.alloc(100 * 1024 * 1024 + 1));
+      const client = uploadClient();
+      await expect(uploadFile(client, { path: '/growing.txt' })).rejects.toThrow('upload limit');
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('deletes the pending file and names its id when the byte upload fails', async () => {
+      const client = uploadClient({ uploadFileBytes: vi.fn().mockRejectedValue(new Error('boom')) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow(
+        'Upload for file f1 failed: boom'
+      );
+      expect(client.deleteFile).toHaveBeenCalledWith('f1');
+    });
+
+    it('does not delete the file when association fails', async () => {
+      const client = uploadClient({ attachFileToProject: vi.fn().mockRejectedValue(new Error('nope')) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'association failed'
+      );
+      expect(client.deleteFile).not.toHaveBeenCalled();
+    });
+
+    it('keeps the scope hint when association is forbidden', async () => {
+      const forbidden = new B4mApiError(403, { error: 'forbidden' }, new Headers());
+      const client = uploadClient({ attachFileToProject: vi.fn().mockRejectedValue(forbidden) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'association failed: API key forbidden'
+      );
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'recommended scope: projects:write'
+      );
+    });
+
+    it('still reports the upload failure when the cleanup delete fails', async () => {
+      const client = uploadClient({
+        uploadFileBytes: vi.fn().mockRejectedValue(new Error('boom')),
+        deleteFile: vi.fn().mockRejectedValue(new Error('gone')),
+      });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow(
+        'Upload for file f1 failed: boom'
+      );
+    });
+
+    it('refuses an unsupported type before presigning', async () => {
+      const client = uploadClient();
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'blob.zzunknown' })).rejects.toThrow(
+        'Unsupported file type for blob.zzunknown'
+      );
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'README' })).rejects.toThrow('pass contentType');
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('uses contentType for an extensionless name and ignores it when the extension is known', async () => {
+      const client = uploadClient();
+      await uploadFile(client, { base64: 'YWJj', name: 'README', contentType: 'text/plain' });
+      await uploadFile(client, { base64: 'YWJj', name: 'a.txt', contentType: 'image/png' });
+      expect(client.requestFileUpload).toHaveBeenNthCalledWith(1, {
+        fileName: 'README',
+        fileSize: 3,
+        mimeType: 'text/plain',
+      });
+      expect(client.requestFileUpload).toHaveBeenNthCalledWith(2, {
+        fileName: 'a.txt',
+        fileSize: 3,
+        mimeType: 'text/plain',
+      });
+    });
+
+    it('accepts wrapped, unpadded and url-safe base64', async () => {
+      const client = uploadClient();
+      await uploadFile(client, { base64: 'YW\nJj', name: 'a.txt' });
+      await uploadFile(client, { base64: '-_8', name: 'a.png' });
+      expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
+        1,
+        'https://s3.example/put',
+        Buffer.from('abc'),
+        'text/plain'
+      );
+      expect(client.uploadFileBytes).toHaveBeenNthCalledWith(
+        2,
+        'https://s3.example/put',
+        Buffer.from([0xfb, 0xff]),
+        'image/png'
+      );
+      await expect(uploadFile(client, { base64: 'YWJjZ', name: 'a.txt' })).rejects.toThrow('valid base64');
+    });
+
+    it('accepts a valid 10 MiB base64 upload without exhausting the regex stack', async () => {
+      const contents = Buffer.alloc(10 * 1024 * 1024, 97);
+      const client = uploadClient();
+      await uploadFile(client, { base64: contents.toString('base64'), name: 'large.txt' });
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'large.txt',
+        fileSize: contents.length,
+        mimeType: 'text/plain',
+      });
+      const [uploadUrl, uploadedBytes, mimeType] = vi.mocked(client.uploadFileBytes).mock.calls[0];
+      expect(uploadUrl).toBe('https://s3.example/put');
+      expect(uploadedBytes.equals(contents)).toBe(true);
+      expect(mimeType).toBe('text/plain');
+    });
+
+    it('accepts exactly 100 MiB with padding and rejects one additional byte before presigning', async () => {
+      const limit = 100 * 1024 * 1024;
+      const client = uploadClient();
+      await uploadFile(client, { base64: Buffer.alloc(limit).toString('base64'), name: 'limit.txt' });
+      expect(client.requestFileUpload).toHaveBeenCalledWith({
+        fileName: 'limit.txt',
+        fileSize: limit,
+        mimeType: 'text/plain',
+      });
+      vi.mocked(client.requestFileUpload).mockClear();
+      await expect(
+        uploadFile(client, {
+          base64: Buffer.alloc(limit + 1).toString('base64'),
+          name: 'over-limit.txt',
+        })
+      ).rejects.toThrow('upload limit');
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it.each(['YQ==', 'YQ=', 'YQ', 'YWI=', 'YWI', 'YWJj', 'YR==', '-_8', 'Y W\nJj'])(
+      'retains accepted base64 normalization for %s',
+      async base64 => {
+        const client = uploadClient();
+        await uploadFile(client, { base64, name: 'note.txt' });
+        expect(client.uploadFileBytes).toHaveBeenCalledWith(
+          'https://s3.example/put',
+          Buffer.from(base64, 'base64'),
+          'text/plain'
+        );
+      }
+    );
+
+    it.each([' ', 'Y', 'YWJjZ', 'Y===', '====', 'Y=Q=', 'YQ===', 'Y!Q='])(
+      'rejects malformed or empty base64 %s before presigning',
+      async base64 => {
+        const client = uploadClient();
+        await expect(uploadFile(client, { base64, name: 'note.txt' })).rejects.toThrow('valid base64');
+        expect(client.requestFileUpload).not.toHaveBeenCalled();
+      }
+    );
+
+    it('rejects projectId before presigning when the key lacks projects:write', async () => {
+      const client = uploadClient({ getOwnKeyScopes: vi.fn().mockResolvedValue(['files:write']) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).rejects.toThrow(
+        'projects:write'
+      );
+      expect(client.requestFileUpload).not.toHaveBeenCalled();
+    });
+
+    it('proceeds when the scope lookup fails', async () => {
+      const client = uploadClient({
+        getOwnKeyScopes: vi.fn().mockRejectedValue(new Error('network')),
+        attachFileToProject: vi.fn().mockResolvedValue(undefined),
+      });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).resolves.toEqual({
+        fileId: 'f1',
+        ingestionState: 'pending',
+      });
+    });
+
+    it('fails when the presign returns no upload URL', async () => {
+      const client = uploadClient({ requestFileUpload: vi.fn().mockResolvedValue({ files: [{ fileId: 'f1' }] }) });
+      await expect(uploadFile(client, { base64: 'YWJj', name: 'a.txt' })).rejects.toThrow('no upload URL');
+      expect(client.uploadFileBytes).not.toHaveBeenCalled();
+    });
   });
 
   it('create_notebook defaults the name to "New Notebook" when omitted', async () => {
@@ -202,9 +496,11 @@ describe('tool handlers', () => {
           built_in: false,
           status: 'ready',
           file_count: 3,
+          can_manage: true,
           organization_id: 'o1',
           total_size_bytes: 99,
         },
+        { id: 'l2', name: 'Other', slug: 'other', built_in: false, status: 'ready', file_count: 0, can_manage: false },
       ],
       nextCursor: 'c2',
     });
@@ -223,6 +519,17 @@ describe('tool handlers', () => {
           builtIn: false,
           status: 'ready',
           fileCount: 3,
+          canManage: true,
+        },
+        {
+          id: 'l2',
+          name: 'Other',
+          slug: 'other',
+          description: undefined,
+          builtIn: false,
+          status: 'ready',
+          fileCount: 0,
+          canManage: false,
         },
       ],
       nextCursor: 'c2',
@@ -833,119 +1140,119 @@ describe('sendMessage', () => {
 
 describe('generateImage', () => {
   const noSleep = { sleep: vi.fn().mockResolvedValue(undefined) };
-  const doneQuest = {
-    id: 'q1',
-    status: 'done',
-    type: 'message',
-    sessionId: 'nb1',
-    images: ['img1.png'],
-    files: [{ name: 'img1.png', url: 'https://cdn/generated/img1.png', isImage: true, isAudio: false }],
+  const pendingJob = {
+    id: 'job1',
+    object: 'image_generation',
+    state: 'pending',
+    model: 'gpt-image-1',
+    mode: 'generate',
+    prompt: 'p',
+    group_id: 'grp1',
+    source: 'api',
+    error: null,
+    output: null,
+    credits: { reserved: null, settled: null },
+    created_at: 'x',
+    updated_at: 'x',
   };
+  const doneJob = {
+    ...pendingJob,
+    state: 'succeeded',
+    output: {
+      availability: 'ready',
+      url: 'https://cdn/signed/img1.png',
+      expires_at: 'x',
+      content_type: 'image/png',
+      file_id: 'f1',
+    },
+  };
+  const imageClient = (getImageJob: ReturnType<typeof vi.fn>, createImageJob = vi.fn().mockResolvedValue(pendingJob)) =>
+    mockClient({ createImageJob, getImageJob });
 
-  it('polls the quest until done and returns each image as fileName + fileUrl', async () => {
-    const getQuest = vi
+  it('polls the job until it succeeds and returns the file id and url', async () => {
+    const getImageJob = vi
       .fn()
-      .mockResolvedValueOnce({ id: 'q1', status: 'running', sessionId: 'nb1' })
-      .mockResolvedValueOnce(doneQuest);
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' }, enhancedPrompt: 'enh' }),
-      getQuest,
-    });
+      .mockResolvedValueOnce({ ...pendingJob, state: 'running' })
+      .mockResolvedValueOnce(doneJob);
+    const result = await generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, noSleep);
 
-    const result = await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep);
-
-    expect(getQuest).toHaveBeenCalledTimes(2);
-    expect(getQuest).toHaveBeenCalledWith('q1');
+    expect(getImageJob).toHaveBeenCalledWith('job1');
     expect(result).toEqual({
-      notebookId: 'nb1',
-      questId: 'q1',
+      jobId: 'job1',
       model: 'gpt-image-1',
-      enhancedPrompt: 'enh',
-      images: [{ fileName: 'img1.png', fileUrl: 'https://cdn/generated/img1.png' }],
+      fileId: 'f1',
+      url: 'https://cdn/signed/img1.png',
+      contentType: 'image/png',
     });
   });
 
-  it('forwards prompt, model, size, and notebook/project association to the client', async () => {
-    const generate = vi.fn().mockResolvedValue({ quest: { id: 'q1' } });
-    const client = mockClient({ generateImage: generate, getQuest: vi.fn().mockResolvedValue(doneQuest) });
-    const args = { prompt: 'p', model: 'gpt-image-1', size: '512x512', notebookId: 'nb1', projectId: 'pr1' };
+  it('forwards prompt, model and size with an idempotency key', async () => {
+    const create = vi.fn().mockResolvedValue(pendingJob);
+    const args = { prompt: 'p', model: 'gpt-image-1', size: '512x512' };
 
-    await generateImage(client, args, noSleep);
+    await generateImage(imageClient(vi.fn().mockResolvedValue(doneJob), create), args, noSleep);
 
-    expect(generate).toHaveBeenCalledWith(args);
+    expect(create).toHaveBeenCalledWith(args, expect.stringMatching(/^[0-9a-f-]{36}$/));
   });
 
-  it('throws the quest reply when the render failed', async () => {
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }),
-      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'done', type: 'error', reply: 'insufficient credits' }),
-    });
+  it('keeps polling a succeeded job whose file is pending scan', async () => {
+    const scanning = { ...doneJob, output: { ...doneJob.output, availability: 'pending_scan', url: null } };
+    const getImageJob = vi.fn().mockResolvedValueOnce(scanning).mockResolvedValueOnce(doneJob);
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      'insufficient credits'
-    );
+    const result = await generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, noSleep);
+
+    expect(getImageJob).toHaveBeenCalledTimes(2);
+    expect(result.url).toBe('https://cdn/signed/img1.png');
   });
 
-  it('rejects a failed dispatch, which leaves the quest running with type error', async () => {
-    // The second read only arrives if the first did not settle, so a regression fails here, not by spinning.
-    const getQuest = vi
-      .fn()
-      .mockResolvedValueOnce({ id: 'q1', status: 'running', type: 'error', reply: 'ChatCompletion dispatch failed' })
-      .mockResolvedValue(doneQuest);
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+  it('stops on an unavailable output', async () => {
+    const gone = { ...doneJob, output: { ...doneJob.output, availability: 'unavailable', url: null } };
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      'ChatCompletion dispatch failed'
-    );
-    expect(getQuest).toHaveBeenCalledTimes(1);
+    await expect(
+      generateImage(imageClient(vi.fn().mockResolvedValue(gone)), { prompt: 'p', model: 'gpt-image-1' }, noSleep)
+    ).rejects.toThrow('not available to download (image job job1)');
   });
 
-  it('reports a stopped quest as stopped rather than echoing its reply', async () => {
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }),
-      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'stopped', type: 'message', reply: 'enhanced prose' }),
-    });
+  it.each(['failed', 'blocked', 'cancelled'])('throws the error code and message when the job is %s', async state => {
+    const job = { ...pendingJob, state, error: { code: 'content_blocked', message: 'Prompt refused' } };
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      'image generation was stopped (quest q1)'
-    );
+    await expect(
+      generateImage(imageClient(vi.fn().mockResolvedValue(job)), { prompt: 'p', model: 'gpt-image-1' }, noSleep)
+    ).rejects.toThrow('content_blocked: Prompt refused (image job job1)');
   });
 
   it('keeps polling through a transient poll failure', async () => {
-    const getQuest = vi.fn().mockRejectedValueOnce(apiError(502)).mockResolvedValueOnce(doneQuest);
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+    const getImageJob = vi.fn().mockRejectedValueOnce(apiError(502)).mockResolvedValueOnce(doneJob);
 
-    const result = await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep);
+    const result = await generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, noSleep);
 
-    expect(result.images).toHaveLength(1);
+    expect(result.fileId).toBe('f1');
   });
 
   it('gives up after repeated poll failures', async () => {
-    const getQuest = vi.fn().mockRejectedValue(apiError(502));
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+    const getImageJob = vi.fn().mockRejectedValue(apiError(502));
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      /\(quest q1; the image generation may still complete\)/
-    );
-    expect(getQuest).toHaveBeenCalledTimes(3);
+    await expect(
+      generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, noSleep)
+    ).rejects.toThrow(/\(image job job1; the image generation may still complete\)/);
+    expect(getImageJob).toHaveBeenCalledTimes(3);
   });
 
   it('does not count a 429 toward the failure limit and honors Retry-After', async () => {
     const limited = apiError(429, { headers: { 'retry-after': '7' } });
-    const getQuest = vi
+    const getImageJob = vi
       .fn()
       .mockRejectedValueOnce(limited)
       .mockRejectedValueOnce(limited)
       .mockRejectedValueOnce(limited)
       .mockRejectedValueOnce(limited)
-      .mockResolvedValueOnce(doneQuest);
+      .mockResolvedValueOnce(doneJob);
     const sleep = vi.fn().mockResolvedValue(undefined);
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
 
-    const result = await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, { sleep });
+    const result = await generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, { sleep });
 
-    expect(result.images).toHaveLength(1);
-    expect(getQuest).toHaveBeenCalledTimes(5);
+    expect(result.fileId).toBe('f1');
+    expect(getImageJob).toHaveBeenCalledTimes(5);
     expect(sleep).toHaveBeenCalledWith(7000);
   });
 
@@ -955,15 +1262,11 @@ describe('generateImage', () => {
       const sleep = vi.fn(async (ms: number) => {
         vi.setSystemTime(Date.now() + ms);
       });
-      const getQuest = vi.fn();
-      for (let i = 0; i < 17; i++) getQuest.mockResolvedValueOnce({ id: 'q1', status: 'running' });
-      getQuest.mockResolvedValueOnce(doneQuest);
-      const client = mockClient({
-        generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' } }),
-        getQuest,
-      });
+      const getImageJob = vi.fn();
+      for (let i = 0; i < 17; i++) getImageJob.mockResolvedValueOnce({ ...pendingJob, state: 'running' });
+      getImageJob.mockResolvedValueOnce(doneJob);
 
-      await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, { sleep });
+      await generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, { sleep });
 
       // Fixed interval: unlike chat, the image poll never backs off past the fast window.
       expect(sleep.mock.calls.map(([ms]) => ms)).toEqual(Array(17).fill(2000));
@@ -972,89 +1275,103 @@ describe('generateImage', () => {
     }
   });
 
-  it('includes the error code and quest ids when the render fails', async () => {
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' } }),
-      getQuest: vi.fn().mockResolvedValue({
-        id: 'q1',
-        status: 'done',
-        type: 'error',
-        errorCode: 'insufficient_credits',
-        reply: 'Out of credits',
-      }),
-    });
-
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      'insufficient_credits: Out of credits (quest q1, notebook nb1)'
-    );
-  });
-
   it('fails immediately on a permanent poll error', async () => {
-    const getQuest = vi.fn().mockRejectedValue(apiError(403));
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+    const getImageJob = vi.fn().mockRejectedValue(apiError(403));
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      /recommended scope: ai:generate\) \(quest q1;/
-    );
-    expect(getQuest).toHaveBeenCalledTimes(1);
-  });
-
-  it('treats a status-less quest that already has images as finished', async () => {
-    const getQuest = vi.fn().mockResolvedValue({ ...doneQuest, status: undefined });
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
-
-    await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep);
-
-    expect(getQuest).toHaveBeenCalledTimes(1);
-  });
-
-  it('returns only image files and omits fileUrl when the server resolved none', async () => {
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }),
-      getQuest: vi.fn().mockResolvedValue({ ...doneQuest, images: ['song.mp3', 'img2.webp'], files: [] }),
-    });
-
-    const result = await generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep);
-
-    expect(result.images).toEqual([{ fileName: 'img2.webp', fileUrl: undefined }]);
+    await expect(
+      generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, noSleep)
+    ).rejects.toThrow(/recommended scope: ai:generate\) \(image job job1;/);
+    expect(getImageJob).toHaveBeenCalledTimes(1);
   });
 
   it('reports progress while the render runs and stops when the call is aborted', async () => {
     const controller = new AbortController();
     const onProgress = vi.fn(() => controller.abort());
-    const getQuest = vi.fn().mockResolvedValue({ id: 'q1', status: 'running' });
-    const client = mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }), getQuest });
+    const getImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'running' });
 
     await expect(
       generateImage(
-        client,
+        imageClient(getImageJob),
         { prompt: 'p', model: 'gpt-image-1' },
         { ...noSleep, signal: controller.signal, onProgress }
       )
     ).rejects.toThrow();
     expect(onProgress).toHaveBeenCalledTimes(1);
-    expect(getQuest).toHaveBeenCalledTimes(1);
+    expect(getImageJob).toHaveBeenCalledTimes(1);
   });
 
-  it('throws when the quest finishes without an image', async () => {
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }),
-      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'done', type: 'message', images: [] }),
+  it('cancels the job when the call is aborted, and still rethrows the abort', async () => {
+    const controller = new AbortController();
+    const getImageJob = vi.fn(async () => {
+      controller.abort(new Error('cancelled by client'));
+      return { ...pendingJob, state: 'running' };
     });
+    const cancelImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'cancelled' });
 
-    await expect(generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, noSleep)).rejects.toThrow(
-      'without producing an image'
+    await expect(
+      generateImage(
+        mockClient({ createImageJob: vi.fn().mockResolvedValue(pendingJob), getImageJob, cancelImageJob }),
+        { prompt: 'p', model: 'gpt-image-1' },
+        { ...noSleep, signal: controller.signal }
+      )
+    ).rejects.toThrow('cancelled by client');
+    expect(cancelImageJob).toHaveBeenCalledTimes(1);
+    expect(cancelImageJob).toHaveBeenCalledWith('job1');
+  });
+
+  const abortWithCancelFailure = async (cancelError: unknown) => {
+    const controller = new AbortController();
+    const getImageJob = vi.fn(async () => {
+      controller.abort(new Error('cancelled by client'));
+      return { ...pendingJob, state: 'running' };
+    });
+    const cancelImageJob = vi.fn().mockRejectedValue(cancelError);
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+
+    await expect(
+      generateImage(
+        mockClient({ createImageJob: vi.fn().mockResolvedValue(pendingJob), getImageJob, cancelImageJob }),
+        { prompt: 'p', model: 'gpt-image-1' },
+        { ...noSleep, signal: controller.signal }
+      )
+    ).rejects.toThrow('cancelled by client');
+    expect(cancelImageJob).toHaveBeenCalledWith('job1');
+    return warn;
+  };
+
+  it('quietly accepts a refused cancel (409) and still rethrows the abort', async () => {
+    const warn = await abortWithCancelFailure(
+      new B4mApiError(409, { error: 'running', errorCode: 'not_cancellable' }, new Headers())
     );
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('logs any other cancel failure, since the aborted job keeps running', async () => {
+    const warn = await abortWithCancelFailure(new B4mApiError(500, { error: 'boom' }, new Headers()));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('cancelling the aborted image job failed'));
+    warn.mockRestore();
+  });
+
+  it('does not cancel when the poll merely times out', async () => {
+    const cancelImageJob = vi.fn();
+    const getImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'running' });
+
+    await expect(
+      generateImage(
+        mockClient({ createImageJob: vi.fn().mockResolvedValue(pendingJob), getImageJob, cancelImageJob }),
+        { prompt: 'p', model: 'gpt-image-1' },
+        { ...noSleep, timeoutMs: 0 }
+      )
+    ).rejects.toThrow('did not finish');
+    expect(cancelImageJob).not.toHaveBeenCalled();
   });
 
   it('gives up once the poll timeout elapses', async () => {
-    const client = mockClient({
-      generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1' } }),
-      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'running' }),
-    });
+    const getImageJob = vi.fn().mockResolvedValue({ ...pendingJob, state: 'running' });
 
     await expect(
-      generateImage(client, { prompt: 'p', model: 'gpt-image-1' }, { ...noSleep, timeoutMs: 0 })
+      generateImage(imageClient(getImageJob), { prompt: 'p', model: 'gpt-image-1' }, { ...noSleep, timeoutMs: 0 })
     ).rejects.toThrow('did not finish');
   });
 });
@@ -1096,6 +1413,35 @@ describe('registerTools', () => {
   it('rename_notebook input schema rejects an empty name', () => {
     const schema = z.object(collectTools(mockClient({})).schemas.get('rename_notebook')!);
     expect(schema.safeParse({ notebookId: NB_ID, name: '' }).success).toBe(false);
+  });
+
+  it('generate_sound_effect input schema accepts 450 characters and rejects 451', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('generate_sound_effect')!);
+    expect(schema.safeParse({ text: 'x'.repeat(450) }).success).toBe(true);
+    expect(schema.safeParse({ text: 'x'.repeat(451) }).success).toBe(false);
+  });
+
+  it('upload_file registers inputs and maps scope errors', async () => {
+    const requestFileUpload = vi.fn().mockRejectedValue(
+      new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+        status: 403,
+        statusText: '',
+        data: {},
+        headers: {},
+        config: {} as InternalAxiosRequestConfig,
+      } as AxiosResponse)
+    );
+    const tools = collectTools(mockClient({ requestFileUpload }));
+    const schema = z.object(tools.schemas.get('upload_file')!);
+    expect(Object.keys(schema.shape)).not.toContain('notebookId');
+    expect(schema.parse({ base64: 'YWJj', name: 'a.txt', projectId: 'p1' })).toEqual({
+      base64: 'YWJj',
+      name: 'a.txt',
+      projectId: 'p1',
+    });
+    const result = await tools.get('upload_file')!({ base64: 'YWJj', name: 'a.txt' });
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('recommended scope: files:write');
   });
 
   // An empty or dot-segment id collapses the URL onto /api/sessions, whose DELETE wipes every notebook.
@@ -1456,7 +1802,7 @@ describe('registerTools', () => {
       headers: {},
       config: {} as InternalAxiosRequestConfig,
     } as AxiosResponse);
-    const tools = collectTools(mockClient({ generateImage: vi.fn().mockRejectedValue(forbidden) }));
+    const tools = collectTools(mockClient({ createImageJob: vi.fn().mockRejectedValue(forbidden) }));
 
     const result = await (tools.get('generate_image') as (a: unknown, e: unknown) => Promise<CallToolResult>)(
       { prompt: 'p', model: 'gpt-image-1' },
@@ -1545,23 +1891,44 @@ describe('registerTools', () => {
 
   describe('generate_image progress and cancellation', () => {
     type ImageHandler = (a: unknown, e: unknown) => Promise<CallToolResult>;
-    const doneQuest = {
-      id: 'q1',
-      status: 'done',
-      type: 'message',
-      sessionId: 'nb1',
-      images: ['img1.png'],
-      files: [{ name: 'img1.png', url: 'https://cdn/generated/img1.png', isImage: true, isAudio: false }],
+    const job = {
+      id: 'job1',
+      object: 'image_generation',
+      state: 'pending',
+      model: 'gpt-image-2',
+      mode: 'generate',
+      prompt: 'p',
+      group_id: 'grp1',
+      source: 'api',
+      error: null,
+      output: null,
+      credits: { reserved: null, settled: null },
+      created_at: 'x',
+      updated_at: 'x',
     };
-    const imageClient = (getQuest: ReturnType<typeof vi.fn>) =>
-      mockClient({ generateImage: vi.fn().mockResolvedValue({ quest: { id: 'q1', sessionId: 'nb1' } }), getQuest });
+    const doneJob = {
+      ...job,
+      state: 'succeeded',
+      output: {
+        availability: 'ready',
+        url: 'https://cdn/signed/img1.png',
+        expires_at: 'x',
+        content_type: 'image/png',
+        file_id: 'f1',
+      },
+    };
+    const imageClient = (getImageJob: ReturnType<typeof vi.fn>) =>
+      mockClient({ createImageJob: vi.fn().mockResolvedValue(job), getImageJob });
 
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
 
     it('sends notifications/progress while a token is supplied and returns the images', async () => {
-      const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
-      const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
+      const getImageJob = vi
+        .fn()
+        .mockResolvedValueOnce({ ...job, state: 'running' })
+        .mockResolvedValueOnce(doneJob);
+      const handler = collectTools(imageClient(getImageJob)).get('generate_image') as ImageHandler;
       const sendNotification = vi.fn().mockResolvedValue(undefined);
 
       const pending = handler(
@@ -1577,12 +1944,15 @@ describe('registerTools', () => {
         params: { progressToken: 'tok', progress: expect.any(Number), message: 'rendering image' },
       });
       expect(result.isError).toBeUndefined();
-      expect(result.structuredContent).toMatchObject({ images: [{ fileName: 'img1.png' }] });
+      expect(result.structuredContent).toMatchObject({ jobId: 'job1', fileId: 'f1' });
     });
 
     it('sends no notification without a progress token', async () => {
-      const getQuest = vi.fn().mockResolvedValueOnce({ id: 'q1', status: 'running' }).mockResolvedValueOnce(doneQuest);
-      const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
+      const getImageJob = vi
+        .fn()
+        .mockResolvedValueOnce({ ...job, state: 'running' })
+        .mockResolvedValueOnce(doneJob);
+      const handler = collectTools(imageClient(getImageJob)).get('generate_image') as ImageHandler;
       const sendNotification = vi.fn();
 
       const pending = handler(
@@ -1597,11 +1967,11 @@ describe('registerTools', () => {
 
     it('stops polling and returns isError when the client cancels the call', async () => {
       const controller = new AbortController();
-      const getQuest = vi.fn().mockImplementation(async () => {
+      const getImageJob = vi.fn().mockImplementation(async () => {
         controller.abort();
-        return { id: 'q1', status: 'running' };
+        return { ...job, state: 'running' };
       });
-      const handler = collectTools(imageClient(getQuest)).get('generate_image') as ImageHandler;
+      const handler = collectTools(imageClient(getImageJob)).get('generate_image') as ImageHandler;
 
       const sendNotification = vi.fn();
       const pending = handler(
@@ -1612,7 +1982,7 @@ describe('registerTools', () => {
       const result = await pending;
 
       expect(result.isError).toBe(true);
-      expect(getQuest).toHaveBeenCalledTimes(1);
+      expect(getImageJob).toHaveBeenCalledTimes(1);
       expect(sendNotification).not.toHaveBeenCalled();
     });
   });
@@ -1671,7 +2041,11 @@ describe('publishArtifact', () => {
       // UTF-8 byte length, not string length: the e-acute is two bytes.
       files: [{ path: 'index.html', size: 14, mimeType: 'text/html' }],
     });
-    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith('https://s3/put', BODY, 'text/html');
+    expect(fns.uploadPublishDraftFile).toHaveBeenCalledWith(
+      { path: 'index.html', url: 'https://s3/put', expiresAt: '2026-10-15T00:10:00Z' },
+      BODY,
+      'text/html'
+    );
     expect(fns.finalizePublish).toHaveBeenCalledWith('draft1');
     expect(result).toEqual({
       publicId: 'pub1',
@@ -1791,6 +2165,30 @@ describe('publishArtifact', () => {
 
     await expect(publishArtifact(client, { artifactId: ARTIFACT_ID, visibility: 'public' })).rejects.toThrow(
       'has no content to publish'
+    );
+    expect(fns.requestPublishUpload).not.toHaveBeenCalled();
+  });
+
+  it('republishes at the existing scope when the reader has no owner id', async () => {
+    const { userId: _omit, ...viewerShaped } = record.artifact;
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: viewerShaped }),
+      findPublishedArtifact: vi.fn().mockResolvedValue(existingPage),
+    });
+
+    await publishArtifact(client, { artifactId: ARTIFACT_ID });
+
+    expect(fns.requestPublishUpload).toHaveBeenCalledWith(expect.objectContaining({ scopeId: 'org1' }));
+  });
+
+  it('refuses to publish for the first time when the reader has no owner id', async () => {
+    const { userId: _omit, ...viewerShaped } = record.artifact;
+    const { client, fns } = publishClient({
+      getArtifact: vi.fn().mockResolvedValue({ ...record, artifact: viewerShaped }),
+    });
+
+    await expect(publishArtifact(client, { artifactId: ARTIFACT_ID })).rejects.toThrow(
+      'only be published by its owner'
     );
     expect(fns.requestPublishUpload).not.toHaveBeenCalled();
   });

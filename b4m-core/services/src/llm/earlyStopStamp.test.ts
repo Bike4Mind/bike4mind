@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CLEAN_FINISH_REASONS,
+  CONTENT_FILTER_FINISH_REASON,
   DEGENERATE_FINISH_REASON,
   EARLY_STOP_FINISH_REASONS,
   REFUSAL_FINISH_REASON,
@@ -11,6 +12,7 @@ import {
   buildIncompleteAnswerNotice,
   DEGENERATE_WARNING,
   INCOMPLETE_ANSWER_NOTICE,
+  TOOL_FAILED_NOTICE_MAX_CHARS,
   TRUNCATED_ANSWER_NOTICE,
   TRUNCATION_WARNING,
   usageEventStatusForFinish,
@@ -62,6 +64,11 @@ describe('usageEventStatusForFinish', () => {
   it('records a model refusal as a refusal, with no early-stop warning', () => {
     expect(usageEventStatusForFinish(REFUSAL_FINISH_REASON)).toBe('refusal');
     expect(buildEarlyStopStamp(REFUSAL_FINISH_REASON)).toBeNull();
+  });
+
+  it('records a provider content-filter block as a refusal, with no early-stop warning', () => {
+    expect(usageEventStatusForFinish(CONTENT_FILTER_FINISH_REASON)).toBe('refusal');
+    expect(buildEarlyStopStamp(CONTENT_FILTER_FINISH_REASON)).toBeNull();
   });
 
   it('defers to the early-stop stamp for degenerate and truncated replies', () => {
@@ -117,5 +124,49 @@ describe('buildIncompleteAnswerNotice', () => {
         stopReason: TRUNCATED_FINISH_REASON,
       })
     ).toBeNull();
+  });
+
+  describe('when the last tool failed', () => {
+    const PREFIX = 'Error processing image_generation tool: ';
+    const failed = (message: string) => ({
+      ...unanswered,
+      lastToolError: { name: 'image_generation', message },
+    });
+
+    it("shows the last tool's error when no answer was written", () => {
+      expect(buildIncompleteAnswerNotice(failed(`${PREFIX}flux-pro-1.1-ultra requires a paid plan`))).toBe(
+        'The image_generation tool failed: flux-pro-1.1-ultra requires a paid plan'
+      );
+    });
+
+    it('keeps the generic notice when no tool error is given', () => {
+      expect(buildIncompleteAnswerNotice(unanswered)).toBe(INCOMPLETE_ANSWER_NOTICE);
+    });
+
+    it('shows an unprefixed error as-is', () => {
+      expect(buildIncompleteAnswerNotice(failed('Error: Tool arguments were malformed and could not be parsed.'))).toBe(
+        'The image_generation tool failed: Error: Tool arguments were malformed and could not be parsed.'
+      );
+    });
+
+    it('caps a long tool error', () => {
+      const notice = buildIncompleteAnswerNotice(failed(`${PREFIX}${'x'.repeat(2000)}`));
+      expect(notice).toBe(`The image_generation tool failed: ${'x'.repeat(TOOL_FAILED_NOTICE_MAX_CHARS)}...`);
+    });
+
+    it('falls back to the generic notice for an empty error', () => {
+      expect(buildIncompleteAnswerNotice(failed(`${PREFIX}   `))).toBe(INCOMPLETE_ANSWER_NOTICE);
+    });
+
+    it('leaves truncated, stopped, deliverable, answered and answer-tool cases unchanged', () => {
+      const withError = failed(`${PREFIX}boom`);
+      expect(buildIncompleteAnswerNotice({ ...withError, stopReason: TRUNCATED_FINISH_REASON })).toBe(
+        TRUNCATED_ANSWER_NOTICE
+      );
+      expect(buildIncompleteAnswerNotice({ ...withError, stopped: true })).toBeNull();
+      expect(buildIncompleteAnswerNotice({ ...withError, producedNonTextDeliverable: true })).toBeNull();
+      expect(buildIncompleteAnswerNotice({ ...withError, visibleCharsAfterLastToolCall: 12 })).toBeNull();
+      expect(buildIncompleteAnswerNotice({ ...withError, stopReason: 'tool_use', endedOnAnswerTool: true })).toBeNull();
+    });
   });
 });

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BadRequestError } from '@bike4mind/common';
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value: string) => `enc:${Buffer.from(value).toString('base64')}`,
 }));
 

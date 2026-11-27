@@ -8,51 +8,48 @@ import {
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import qs from 'qs';
 import { Request } from 'express';
 import { sessionService } from '@bike4mind/services';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
-import { logEvent } from '@server/utils/analyticsLog';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { decodeOwnSessionListCursor, encodeOwnSessionListCursor } from '@server/sessions/ownSessionListCursor';
 
-const handler = baseApi()
+// Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
+// The door admits legacy keys until the legacy window ends, since GET was open to every key before.
+// DELETE never grandfathers: it already required notebooks:write before the door existed.
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   /**
    * Get all sessions
    */
   .get<Request<unknown, unknown, unknown, Record<string, string>>>(
     asyncHandler(async (req, res) => {
-      const { search, surface, pagination, orderBy, origin, excludeOrigin, hasImages } = sessionSearchSchema.parse(
-        qs.parse(req.query)
-      );
+      const { search, surface, pagination, orderBy, origin, excludeOrigin, hasImages, cursor } =
+        sessionSearchSchema.parse(qs.parse(req.query));
+      if (!req.user) return res.json([]);
 
-      const result = req.user
-        ? await sessionService.searchOwnSessions(
-            req.user.id,
-            {
-              search,
-              surface,
-              pagination,
-              orderBy,
-              origin,
-              excludeOrigin,
-              hasImages,
-            },
-            {
-              db: {
-                sessions: sessionRepository,
-              },
-            }
-          )
-        : [];
-      // Redact server-owned fields (e.g. systemPromptText) from the listed sessions.
-      // Redact in both shapes ({ data, hasMore } and the bare-array fallback) so the redaction
-      // can't be bypassed if the service is ever refactored to return a populated array.
-      return res.json(
-        Array.isArray(result)
-          ? redactSessionsForClient(result)
-          : { ...result, data: redactSessionsForClient(result.data) }
+      // Same defaults as searchOwnSessions, so the cursor scope names the order actually served.
+      const order = { field: orderBy?.field ?? 'lastUpdated', direction: orderBy?.direction ?? 'desc' } as const;
+      const after = cursor === undefined ? undefined : decodeOwnSessionListCursor(cursor, order);
+
+      const result = await sessionService.searchOwnSessions(
+        req.user.id,
+        { search, surface, pagination, orderBy: order, origin, excludeOrigin, hasImages },
+        { db: { sessions: sessionRepository } },
+        { after }
       );
+      // Redact server-owned fields (e.g. systemPromptText) from the listed sessions.
+      return res.json({
+        data: redactSessionsForClient(result.data),
+        hasMore: result.hasMore,
+        nextCursor: encodeOwnSessionListCursor(result.last, order),
+      });
     })
   )
   /**
@@ -60,11 +57,9 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler(async (req, res) => {
-      // Gated per verb, not at the door: GET above is the notebook list that notebooks:read and
-      // unscoped keys rely on, so a route-level requiredScopes would newly deny them.
       assertApiKeyScope(
         req,
-        [ApiKeyScope.WRITE_NOTEBOOKS],
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
         'This API key is read-only for notebooks; notebooks:write is required'
       );
       const userId = req.user?.id;
@@ -80,6 +75,7 @@ const handler = baseApi()
       const sessionIds = (await SessionModel.find(ownedFilter).select('_id').lean()).map(s => String(s._id));
       await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds }, { logger: req.logger });
       const deleteResult = await SessionModel.deleteMany(ownedFilter);
+      await purgeDeletedNotebookMedia(sessionIds, { logger: req.logger });
 
       await logEvent({
         userId,

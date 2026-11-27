@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CorruptedFileError, type IFabFileDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  CorruptedFileError,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
+  PasswordProtectedFileError,
+  type IFabFileDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { BadRequestError } from '../errors';
 
 const mockGetFileContent = vi.fn();
@@ -27,10 +33,9 @@ const imageFile = (id: string): IFabFileDocument =>
 const modelInfo = { id: 'm', supportsVision: false, backend: 'openai' } as unknown as ModelInfo;
 
 const embeddingFactory = {
-  getDefaultEmbeddingModel: () => 'text-embedding-3-small',
-  createEmbeddingService: () => ({
-    getModelInfo: () => ({ model: 'text-embedding-3-small', contextWindow: 8191 }),
-    generateEmbedding: async () => [0.1, 0.2],
+  defaultModel: 'text-embedding-3-small',
+  get: () => ({
+    embed: async () => ({ vectors: [[0.1, 0.2]] }),
   }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
 } as any;
@@ -38,10 +43,9 @@ const embeddingFactory = {
 // Models an embedding outage: the provider rejects every embed call (e.g. a 401 on a revoked or
 // endpoint-scoped key). The query embedding must degrade to raw content, not abort the whole turn.
 const throwingEmbeddingFactory = {
-  getDefaultEmbeddingModel: () => 'text-embedding-3-small',
-  createEmbeddingService: () => ({
-    getModelInfo: () => ({ model: 'text-embedding-3-small', contextWindow: 8191 }),
-    generateEmbedding: async () => {
+  defaultModel: 'text-embedding-3-small',
+  get: () => ({
+    embed: async () => {
       throw new Error('OpenAI rejected the embedding request (401 Unauthorized)');
     },
   }),
@@ -487,6 +491,57 @@ describe('processFabFilesServer file notices', () => {
     expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false })]);
   });
 
+  describe.each([
+    ['mapped by getFileContent', () => new PasswordProtectedFileError()],
+    // The shape pdf.js (through unpdf) throws, in case it reaches here unmapped.
+    [
+      'raw pdf.js PasswordException',
+      () => Object.assign(new Error('No password given'), { name: 'PasswordException', code: 1 }),
+    ],
+  ])('a password-protected PDF (%s)', (_label, makeError) => {
+    it('records the user-facing error and a notice, logs at warn, and does not throw', async () => {
+      mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+        if (file.id === 'locked') throw makeError();
+        return 'hello world';
+      });
+      const dependencies = deps();
+
+      const { fileNotices, deliveredFileIds } = await processFabFilesServer(
+        embeddingFactory,
+        [textFile('good'), textFile('locked')],
+        'prompt',
+        4000,
+        modelInfo,
+        async () => {},
+        dependencies
+      );
+
+      expect(deliveredFileIds).toEqual(['good']);
+      expect(dependencies.db.fabfiles.update).toHaveBeenCalledWith({
+        id: 'locked',
+        error: PASSWORD_PROTECTED_PDF_MESSAGE,
+      });
+      expect(fileNotices).toEqual([
+        expect.objectContaining({ fabFileId: 'locked', band: 'read_failed', delivered: false }),
+      ]);
+      expect(fileNotices[0].message).toContain(PASSWORD_PROTECTED_PDF_MESSAGE);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('password-protected'), { fileId: 'locked' });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+  });
+
+  it('still logs an unrelated read error at error level', async () => {
+    mockGetFileContent.mockRejectedValue(new Error('Cannot transfer object of unsupported type.'));
+
+    await run([textFile('bad')]);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('[processFabFilesServer] Error processing file'),
+      expect.any(Error),
+      expect.objectContaining({ fileId: 'bad' })
+    );
+  });
+
   it('contains an unclassified read error to its own file instead of rejecting the batch', async () => {
     // The shape of a pdf.js DataCloneError: not corrupted, not a 404, not a known type error.
     mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
@@ -546,6 +601,46 @@ describe('processFabFilesServer file notices', () => {
     expect(fileNotices).toEqual([
       expect.objectContaining({ fabFileId: 'img', band: 'unsupported_backend', delivered: false }),
     ]);
+  });
+
+  it.each([
+    { id: 'us.amazon.nova-pro-v1:0' },
+    { id: 'vendor.catalog-only-vision', adapterFamily: 'bedrock-converse' as const },
+  ])('delivers image attachments to Converse model $id', async dispatch => {
+    const imageBytes = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=',
+      'base64'
+    );
+    const storage = {
+      download: vi.fn().mockResolvedValue(imageBytes),
+      getSignedUrl: vi.fn().mockResolvedValue('https://signed'),
+    };
+    const visionModel = { ...dispatch, supportsVision: true, backend: 'bedrock' } as ModelInfo;
+    const dependencies = deps();
+    const { userMessages, fileNotices, deliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [{ ...imageFile('img'), filePath: 'uploads/img.png', fileSize: imageBytes.length } as IFabFileDocument],
+      'describe this image',
+      4000,
+      visionModel,
+      async () => {},
+      {
+        ...dependencies,
+        storage: storage as unknown as typeof dependencies.storage,
+        db: {
+          ...dependencies.db,
+          caches: { findByKey: vi.fn(), createOrUpdate: vi.fn() },
+        },
+      }
+    );
+
+    expect(storage.download).toHaveBeenCalledWith('uploads/img.png');
+    expect(deliveredFileIds).toEqual(['img']);
+    expect(fileNotices).toEqual([]);
+    expect(userMessages.flatMap(message => (Array.isArray(message.content) ? message.content : []))).toContainEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: imageBytes.toString('base64') },
+    });
   });
 
   it('leaves no input file both undelivered and unreported, whatever mix is attached', async () => {

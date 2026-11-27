@@ -1,11 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { Select, Option, CircularProgress } from '@mui/joy';
-import {
-  FileUploadOutlined as FileUploadOutlinedIcon,
-  InsertLink as InsertLinkIcon,
-  AutoFixHigh as AutoFixHighIcon,
-  KeyboardArrowDown as KeyboardArrowDownIcon,
-} from '@mui/icons-material';
+import FileUploadOutlinedIcon from '@mui/icons-material/FileUploadOutlined';
+import InsertLinkIcon from '@mui/icons-material/InsertLink';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 
@@ -206,6 +204,7 @@ export const UploadActionsSelect: React.FC<UploadActionsSelectProps> = ({
       {/* Hidden file input */}
       <input
         type="file"
+        data-testid="upload-actions-file-input"
         ref={fileInputRef}
         style={{ display: 'none' }}
         onChange={handleFileSelect}

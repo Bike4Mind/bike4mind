@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { formatToolExecution } from '../voiceToolExecutor';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { AxiosError, type AxiosResponse } from 'axios';
+
+const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: postMock } }));
+
+import { executeVoiceTool, formatToolExecution } from '../voiceToolExecutor';
 
 describe('formatToolExecution', () => {
   it('formats web_search with the query', () => {
@@ -30,5 +35,98 @@ describe('formatToolExecution', () => {
 
   it('formats unknown tools with the tool name', () => {
     expect(formatToolExecution('some_future_tool', {})).toBe('Using some_future_tool...');
+  });
+});
+
+describe('executeVoiceTool error reporting', () => {
+  beforeEach(() => {
+    postMock.mockReset();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('surfaces the server message when the account-trust gate refuses the tool', async () => {
+    const message = 'Your account is too new to use this tool.';
+    const response = {
+      status: 403,
+      data: { error: message, errorCode: 'account_trust_required' },
+    } as AxiosResponse;
+    postMock.mockRejectedValue(
+      new AxiosError('Request failed with status code 403', 'ERR_BAD_REQUEST', undefined, {}, response)
+    );
+
+    await expect(executeVoiceTool('web_search', { query: 'x' })).resolves.toEqual({ success: false, error: message });
+  });
+
+  it.each(['web_search', 'web_fetch'])(
+    'tells the model %s did not run when the account is out of credits',
+    async tool => {
+      const response = {
+        status: 422,
+        data: { error: 'You do not have enough credits for web search.', errorCode: 'insufficient_credits' },
+      } as AxiosResponse;
+      postMock.mockRejectedValue(
+        new AxiosError('Request failed with status code 422', 'ERR_BAD_REQUEST', undefined, {}, response)
+      );
+
+      const result = await executeVoiceTool(tool, { query: 'x', url: 'https://example.com' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/not run because the account is out of credits/);
+      expect(result.error).toContain('You do not have enough credits for web search.');
+    }
+  );
+
+  it('keeps the plain error message for other failures', async () => {
+    postMock.mockRejectedValue(new Error('boom'));
+
+    await expect(executeVoiceTool('web_search', { query: 'x' })).resolves.toEqual({ success: false, error: 'boom' });
+  });
+});
+
+describe('executeVoiceTool web_search result count', () => {
+  beforeEach(() => {
+    postMock.mockReset();
+    postMock.mockResolvedValue({ data: { result: 'ok' } });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it.each([
+    [15, 10],
+    [0, 1],
+    [-4, 1],
+    [2.6, 3],
+    [Number.NaN, 3],
+    [Number.POSITIVE_INFINITY, 3],
+    [5, 5],
+  ])('posts num_results %s as %s', async (input, expected) => {
+    await executeVoiceTool('web_search', { query: 'x', num_results: input });
+    expect(postMock).toHaveBeenCalledWith('/api/tools/web-search', { query: 'x', num_results: expected });
+  });
+
+  it('defaults to 3 when num_results is omitted', async () => {
+    await executeVoiceTool('web_search', { query: 'x' });
+    expect(postMock).toHaveBeenCalledWith('/api/tools/web-search', { query: 'x', num_results: 3 });
+  });
+});
+
+describe('executeVoiceTool agent_request body', () => {
+  beforeEach(() => {
+    postMock.mockReset();
+    // No quest id in the ack, so the call returns without waiting on a reply.
+    postMock.mockResolvedValue({ status: 200, data: {} });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('posts the chat turn without any QuestMaster flag', async () => {
+    await executeVoiceTool('agent_request', { message: 'summarize my week' }, 'session-1');
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(postMock.mock.calls[0]).toStrictEqual([
+      '/api/chat',
+      { sessionId: 'session-1', message: 'summarize my week', wait: false, stream: false, enableTools: true },
+    ]);
   });
 });

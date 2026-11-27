@@ -10,11 +10,13 @@ vi.mock('@google/genai', () => ({
 }));
 
 import { GeminiImageService } from './GeminiImageService';
+import { ImageInputRejectedError, ImageModerationBlockedError } from './imageGenerationErrors';
+import { classifyImageProviderError } from '../imageProviders/shared';
 
-function makeService(generateContent: ReturnType<typeof vi.fn>) {
+function makeService(generateContent: ReturnType<typeof vi.fn>, generateImages?: ReturnType<typeof vi.fn>) {
   const svc = new GeminiImageService('test-key', new Logger());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (svc as any).genAI = { models: { generateContent } };
+  (svc as any).genAI = { models: { generateContent, generateImages } };
   return svc;
 }
 
@@ -127,5 +129,125 @@ describe('GeminiImageService.buildGenerationConfig (enhancePrompt/seed omission)
   it('still forwards output_format/aspect_ratio, which Gemini does accept', () => {
     const config = buildConfig({ output_format: 'jpeg', aspect_ratio: '16:9' });
     expect(config).toMatchObject({ outputMimeType: 'image/jpeg', aspectRatio: '16:9' });
+  });
+});
+
+describe('GeminiImageService - policy blocks', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('maps promptFeedback.blockReason to ImageModerationBlockedError instead of "No content parts"', async () => {
+    const generateContent = vi.fn().mockResolvedValue({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } });
+    const svc = makeService(generateContent);
+
+    const thrown = await svc
+      .edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+    expect((thrown as Error).message).toMatch(/blocked by Google Gemini's safety filters \(PROHIBITED_CONTENT\)/);
+  });
+
+  it('maps an IMAGE_SAFETY finish reason on an empty candidate to ImageModerationBlockedError', async () => {
+    const generateContent = vi
+      .fn()
+      .mockResolvedValue({ responseId: 'resp-1', candidates: [{ finishReason: 'IMAGE_SAFETY' }] });
+    const svc = makeService(generateContent);
+
+    const thrown = await svc
+      .edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+    expect((thrown as ImageModerationBlockedError).logContext).toEqual({
+      provider: 'gemini',
+      requestId: 'resp-1',
+      reason: 'IMAGE_SAFETY',
+    });
+  });
+
+  it('reports a safety block rather than a clarification when the blocked candidate carries text', async () => {
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [{ finishReason: 'SAFETY', content: { parts: [{ text: 'I cannot help with that.' }] } }],
+    });
+    const svc = makeService(generateContent);
+
+    await expect(
+      svc.edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE })
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+  });
+
+  it('applies the same check on the generateContent generation path', async () => {
+    const generateContent = vi.fn().mockResolvedValue({ promptFeedback: { blockReason: 'SAFETY' } });
+    const svc = makeService(generateContent);
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (svc as any).generateImageViaContent('a prompt', ImageModels.GEMINI_2_5_FLASH_IMAGE)
+    ).rejects.toBeInstanceOf(ImageModerationBlockedError);
+  });
+
+  it('leaves a normal STOP response with text as a clarification', async () => {
+    const generateContent = vi.fn().mockResolvedValue({
+      candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Which part should change?' }] } }],
+    });
+    const svc = makeService(generateContent);
+
+    const result = await svc.edit('data:image/png;base64,SOURCE', 'edit it', {
+      model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    });
+
+    expect(result.type).toBe('clarification');
+  });
+});
+
+describe('GeminiImageService - SDK error classification', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const sdkError = (status: number, message = 'sdk failure') => Object.assign(new Error(message), { status });
+  const callers = {
+    generate: (svc: GeminiImageService) =>
+      svc.generate('a prompt', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE, n: 1 }),
+    edit: (svc: GeminiImageService) =>
+      svc.edit('data:image/png;base64,SOURCE', 'edit it', { model: ImageModels.GEMINI_2_5_FLASH_IMAGE }),
+  };
+
+  describe.each(Object.entries(callers))('%s', (_name, call) => {
+    it.each([
+      [400, false],
+      [429, true],
+    ])('keeps the SDK status %i so the failure classifies as retryable=%s', async (status, retryable) => {
+      const original = sdkError(status);
+      const failing = vi.fn().mockRejectedValue(original);
+      const svc = makeService(failing, failing);
+
+      const thrown = await call(svc).catch((e: unknown) => e);
+
+      expect((thrown as Error).cause).toBe(original);
+      expect(classifyImageProviderError(thrown)).toMatchObject({ status: 'failed', retryable });
+    });
+
+    it('keeps the cause when the message matches a friendly-message branch', async () => {
+      const original = sdkError(429, 'RATE_LIMIT: quota exceeded');
+      const failing = vi.fn().mockRejectedValue(original);
+      const svc = makeService(failing, failing);
+
+      const thrown = await call(svc).catch((e: unknown) => e);
+
+      expect((thrown as Error).cause).toBe(original);
+    });
+  });
+
+  it('reports a text-only generate reply as a rejected input, not an unknown error', async () => {
+    const svc = makeService(
+      vi.fn().mockResolvedValue({
+        candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Would you like me to draw it?' }] } }],
+      }),
+      vi.fn().mockRejectedValue(new Error('generateImages is not supported for this model'))
+    );
+
+    const thrown = await callers.generate(svc).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageInputRejectedError);
+    expect(classifyImageProviderError(thrown)).toMatchObject({ status: 'failed', retryable: false });
   });
 });

@@ -8,6 +8,7 @@ import {
 } from './LakeConnectorClaimModel';
 import { OrgGitHubLakeConnection, orgGitHubLakeConnectionRepository } from './OrgGitHubLakeConnectionModel';
 import { OrgGoogleDriveConnection, orgGoogleDriveConnectionRepository } from './OrgGoogleDriveConnectionModel';
+import { Logger } from '@bike4mind/observability';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -179,12 +180,11 @@ describe('releaseLakeClaimBestEffort', () => {
     const connectionId = oid();
     const failure = new Error('mongo unavailable');
     const releaseSpy = vi.spyOn(lakeConnectorClaimRepository, 'releaseByConnectionId').mockRejectedValueOnce(failure);
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     try {
       await expect(releaseLakeClaimBestEffort(connectionId)).resolves.toBeUndefined();
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0][0]).toContain(connectionId);
-      expect(warnSpy.mock.calls[0][1]).toBe(failure);
+      expect(warnSpy.mock.calls[0][1]).toEqual({ connectionId, error: failure });
     } finally {
       releaseSpy.mockRestore();
       warnSpy.mockRestore();
@@ -192,7 +192,7 @@ describe('releaseLakeClaimBestEffort', () => {
   });
 
   it('stays silent when the release succeeds', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => {});
     try {
       await releaseLakeClaimBestEffort(oid());
       expect(warnSpy).not.toHaveBeenCalled();

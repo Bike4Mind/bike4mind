@@ -21,6 +21,7 @@ import {
   dataLakeResearchConfigRepository,
   dataLakeResearchRunRepository,
   organizationRepository,
+  spendFreezeRepository,
   userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -28,7 +29,7 @@ import { dataLakeResearchService } from '@bike4mind/services';
 import { getSettingByName } from '@bike4mind/utils';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
+import { queueResearchRun } from '@bike4mind/server-utils/dataLakes/queueResearchRun';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
@@ -62,6 +63,7 @@ export async function runResearchScheduleTick(
       // refused exactly like a Run-now one when the owner cannot cover the ceiling.
       users: userRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
       ...lakeConfigAuditDb,
     },
     enqueue: (run, lake) => queueResearchRun(run, lake, queueUrl, runLogger),

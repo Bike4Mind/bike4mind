@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import { CSV_BOM, toCsvFromRecords } from '@client/app/utils/csv';
+import { downloadData } from '@client/app/utils/download';
 import { ModelMetric } from '../types';
 
 export const exportToCSV = (data: ModelMetric[], filename: string) => {
@@ -19,35 +21,24 @@ export const exportToCSV = (data: ModelMetric[], filename: string) => {
     'Status',
   ];
 
-  const csvContent = [
-    headers.join(','),
-    ...data.map(metric =>
-      [
-        `"${dayjs(metric.timestamp).format('YYYY-MM-DD HH:mm:ss')}"`,
-        `"${metric.model?.name || ''}"`,
-        `"${metric.model?.backend || ''}"`,
-        metric.tokenUsage?.inputTokens || 0,
-        metric.tokenUsage?.outputTokens || 0,
-        metric.tokenUsage?.totalTokens || 0,
-        metric.tokenUsage?.creditsUsed || 0,
-        metric.performance?.totalResponseTime || 0,
-        metric.performance?.contextRetrievalTime || 0,
-        metric.performance?.modelInferenceTime || 0,
-        `"${metric.session?.userId || ''}"`,
-        `"${metric.session?.organizationId || ''}"`,
-        `"${metric.session?.projectId || ''}"`,
-        `"${metric.status}"`,
-      ].join(',')
-    ),
-  ].join('\n');
+  const rows = data.map(metric => ({
+    Timestamp: dayjs(metric.timestamp),
+    'Model Name': metric.model?.name || '',
+    'Model Backend': metric.model?.backend || '',
+    'Input Tokens': metric.tokenUsage?.inputTokens || 0,
+    'Output Tokens': metric.tokenUsage?.outputTokens || 0,
+    'Total Tokens': metric.tokenUsage?.totalTokens || 0,
+    'Credits Used': metric.tokenUsage?.creditsUsed || 0,
+    'Total Response Time (ms)': metric.performance?.totalResponseTime || 0,
+    'Context Retrieval Time (ms)': metric.performance?.contextRetrievalTime || 0,
+    'Model Inference Time (ms)': metric.performance?.modelInferenceTime || 0,
+    'User ID': metric.session?.userId || '',
+    'Organization ID': metric.session?.organizationId || '',
+    'Project ID': metric.session?.projectId || '',
+    Status: metric.status,
+  }));
 
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const url = URL.createObjectURL(blob);
-  link.setAttribute('href', url);
-  link.setAttribute('download', filename);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  const csvContent = toCsvFromRecords(rows, headers, 'YYYY-MM-DD HH:mm:ss');
+
+  downloadData(CSV_BOM + csvContent, filename, 'text/csv;charset=utf-8;');
 };

@@ -1,5 +1,6 @@
+import { type BoundEmbeddingModel } from '@bike4mind/utils/embeddingProviders';
 import { generateSafeEmbedding } from '@bike4mind/utils';
-import { EmbeddingService } from '@bike4mind/fab-pipeline';
+
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 
@@ -79,7 +80,7 @@ Return ONLY valid JSON with this structure:
 }
 
 export const getVector = async (
-  embeddingProvider: EmbeddingService,
+  embeddingProvider: BoundEmbeddingModel,
   text: string,
   logger: Logger
 ): Promise<number[]> => {

@@ -23,7 +23,10 @@
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
+    "src/host/**/*.ts",
     "electron.vite.config.ts",
+    "vite.host.config.ts",
+    "buildShared.ts",
     "vitest.config.ts"
   ]
 }

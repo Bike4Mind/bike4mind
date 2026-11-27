@@ -1,17 +1,22 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { readSignInOrigin } from '@server/auth/signInSecondFactor';
 import { isFreshSignIn, stepUpGate } from '@server/auth/stepUp';
+import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
+import { MfaEnrollmentEvents } from '@bike4mind/common';
+import { recordForcedEnrollmentStep } from '@server/auth/mfaEnrollmentFunnel';
 
 // Sign-in enrollment has just proved the first factor, so it skips step-up: an mfaPending token
 // (email-code sign-in) or a session an interactive sign-in minted moments ago (SSO under forced
 // enrollment; see isFreshSignIn for which origins count).
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(stepUpGate({ skip: async req => !!req.user?.mfaPending || (!!req.user && (await isFreshSignIn(req.user))) }))
-  .use(rateLimit({ limit: 3, windowMs: 15 * 60 * 1000 })) // 3 setups per 15 minutes
+  // Repeat calls re-serve the pending secret (see setupMFA), and the enforcement screen calls
+  // this on every page load, so a tight limit locks out users who reload mid-enrollment.
+  .use(rateLimit({ limit: 10, windowMs: 15 * 60 * 1000 }))
   .post(
     asyncHandler(async (req, res) => {
       const user = req.user;
@@ -25,7 +30,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       try {
         // Get fresh user data from database to ensure we have latest MFA state
-        const freshUser = await userRepository.findById(user.id);
+        const freshUser = await userRepository.findByIdWithMfaSecrets(user.id);
         if (!freshUser) {
           return res.status(404).json({ error: 'User not found in database' });
         }
@@ -38,14 +43,20 @@ const handler = baseApi({ auth: 'jwtOnly' })
           return res.status(409).json({ error: 'MFA is already enabled for this account.' });
         }
 
+        if (refuseAppEnrollmentBeforeSecondFactor(req.user, freshUser)) {
+          return res.status(403).json({ error: APP_ENROLLMENT_REFUSAL });
+        }
+
         const result = await mfaService.setupMFA(
           { user: freshUser, appName: process.env.APP_NAME || '' },
           userRepository
         );
+        // Funnel only: the enrollment screen has its secret and is on screen. Never throws.
+        await recordForcedEnrollmentStep(req, freshUser, MfaEnrollmentEvents.SHOWN);
 
         res.json(result);
       } catch (error: any) {
-        console.error('Error setting up MFA:', error);
+        req.logger.error('Error setting up MFA', { error });
         res.status(400).json({ error: error.message || 'Failed to setup MFA' });
       }
     })

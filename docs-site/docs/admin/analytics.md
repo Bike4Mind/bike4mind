@@ -1,194 +1,129 @@
 ---
 title: Analytics
-description: Platform analytics, user activity tracking, and reporting in the Bike4Mind admin panel
+description: Track active users, stickiness, real versus suspected signups, AI usage and the heaviest accounts over time in the Bike4Mind admin panel
 sidebar_position: 6
-tags: [admin, analytics, reports]
+tags: [admin, analytics]
 ---
 
 # Analytics
 
-The Analytics tab provides administrators with tools to monitor platform usage, review user activity, and generate daily and weekly reports. It is organized into three sub-tabs, each offering a different perspective on platform data.
+The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-## Sub-Tabs
+All days are UTC days, and every chart says so. By default, counts exclude internal accounts: admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted. The activation funnel and its user lists follow the same rule, so banned or held accounts do not appear in any step.
 
-The Analytics tab uses a horizontal tab bar with three sections:
+## Toolbar
 
-| Sub-Tab | Icon | Description |
-|---------|------|-------------|
-| **User Activity** | People | Raw activity log data with advanced filtering and export |
-| **Daily Report** | Description | AI-generated daily activity summaries |
-| **Weekly Report** | Analytics | AI-generated weekly activity summaries |
+| Control      | Options                           | Default         |
+| ------------ | --------------------------------- | --------------- |
+| **Range**    | 7d, 28d, 90d, 12m, Custom         | 28d             |
+| **Compare**  | Previous period, Off              | Previous period |
+| **Signups**  | Real only, All                    | Real only       |
+| **Accounts** | External only, Internal only, All | External only   |
 
-The active sub-tab is persisted in a Zustand store, so navigating away and returning preserves the last selected sub-tab.
+**Custom** shows two date inputs. Both days are included, and the range can cover at most 366 days.
 
-## User Activity Tab
+The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signups`, `accounts`), so a copied link opens the same view.
 
-The User Activity tab displays raw activity log entries in a paginated, filterable table. Each entry represents a tracked action on the platform.
+**Accounts** chooses whose activity the active-user tiles and the Active users section count. **Internal only** counts just the internal accounts the default view leaves out, and **All** counts everyone. A user whose account changed between internal and external during a week or month is counted once in **All**'s weekly and monthly numbers. Signups, the Usage cards and the Top organizations and users tables always exclude internal accounts, whichever option is selected.
 
-### Data Columns
+**Last updated** shows when the nightly rollup last ran. A **Stale** chip appears when it is more than 30 hours old.
 
-| Column | Description |
-|--------|-------------|
-| **Date** | The date the activity occurred |
-| **Action** | The counter name identifying the type of action (e.g., login, message sent, file uploaded) |
-| **User Email** | The email of the user who performed the action, or "N/A" if unavailable |
-| **Metadata** | Additional context for the action, displayed as a summary with expandable JSON details |
-| **Count** | The number of times this action occurred |
+## Key numbers
 
-### Metadata Display
+| Tile                   | What it shows                                                                                                                                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range                                                                                                                                                                        |
+| **Daily active (avg)** | The average number of users active per day                                                                                                                                                                                                      |
+| **Stickiness**         | Average daily active users as a share of MAU                                                                                                                                                                                                    |
+| **New signups**        | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath                                                                                                                               |
+| **Activation rate**    | The share of judged signups that came back, per the [activation funnel](#activation-funnel), with a points comparison against the previous period. Shows a dash when the range is longer than 93 days or every signup in it is too new to judge |
 
-Each activity entry can include metadata -- key-value pairs providing additional context. The metadata column shows a summary view by default:
+A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop or an agent run. Requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
 
-- If there is no metadata, it displays "No metadata"
-- If there is a single key, it displays the key and value inline
-- If there are multiple keys, it displays the key names as a comma-separated list
+The tiles cover complete days only. When the range ends today, today is still counting, so it is left out of the tiles and comparisons. With **Compare** on, each tile compares against the same number of days right before the range.
 
-Clicking the expand/collapse icon reveals the full metadata as formatted JSON in a monospaced, scrollable container.
+## Active users
 
-### Organization Filter
+A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished. A separate **External API users (not counted)** line shows how many external accounts used the public API each day. This series always shows external accounts regardless of **Accounts**, and is never part of the active user numbers.
 
-A multi-select dropdown filters activity by organization:
+Hover over any day to see its external and internal daily, weekly and monthly active users, whichever **Accounts** option is selected.
 
-- **All** - Shows activity from all organizations (default)
-- Individual organizations loaded from the API
+Switch to **By surface** to see AI requests per day stacked by surface as bars. Internal system traffic is not shown.
 
-### Exclude Organizations
+## Signups: real vs suspected
 
-When "All" organizations are selected, additional checkboxes allow excluding specific internal organizations from the view:
+Stacked bars of real and suspected signups. A signup is real when the account has a verified email, is not banned or held, and made a successful AI request within 7 days of signing up (system traffic does not count). Every other signup is suspected, so there is no unclassified bucket; a signup moves from suspected to real when its first request lands inside the 7 days, which the nightly job re-checks for 14 days. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
-| Exclusion | Default | Description |
-|-----------|---------|-------------|
-| **Million On Mars** | Checked | Excludes internal team activity |
-| **Unknown** | Checked | Excludes activity with no organization |
-| **Personal** | Checked | Excludes personal (non-organizational) activity |
+Click a Real or Suspected bar to open the Users list filtered to that verdict and the accounts created in that bar's window. In the table, click a date to list all accounts created in its window. Below the chart, the signals that marked accounts in the range are listed with their counts.
 
-These exclusion checkboxes are disabled when a specific organization (not "All") is selected.
+## Activation funnel
 
-### Advanced Filters
+Four steps, each needing the one before it:
 
-Clicking the **Show Advanced Filters** button reveals additional filtering options:
+1. **Signed up**: the account was created in the range.
+2. **First AI action**: a successful AI request on the signup day or in the 7 days after it.
+3. **Came back**: AI activity on a later day within those 7 days.
+4. **Paid**: a completed credit purchase, or a Stripe-billed subscription (on the user's own account or an organization they own), on the signup day or within the 30 UTC days after it. Subscriptions granted by an admin do not count.
 
-#### Date Filtering
+Each bar shows how many signups reached that step and what percent that is of the step before. Under each bar, **N stopped here** is the number of signups whose furthest step is that one. Click it to open the Users list with exactly those accounts. The list is judged when you open it, so a signup that turned 7 days old after the funnel loaded can also appear in it.
 
-| Control | Description |
-|---------|-------------|
-| **Start Date** | Date picker, defaults to 7 days ago |
-| **End Date** | Date picker, defaults to today |
-| **Today** | Quick-select button for today only |
-| **Last 7 Days** | Quick-select button for the past week |
-| **Last 30 Days** | Quick-select button for the past month |
+Signups less than 7 days old are too new to judge, so they are left out of every step and counted separately in the caption. When every signup in the range is that new, as on 7d, the section says so instead of showing bars, and the Activation rate tile shows a dash. While some signups in the range are within the paid window, the **Paid** step shows a **Pending** chip because it can still grow.
 
-The active quick-select button is highlighted with a solid style. Start date cannot exceed end date, and end date cannot be in the future.
+The funnel follows the **Signups** toggle: with **Real only**, suspected signups are left out of every step, and the drill-down is filtered the same way.
 
-#### Search Filters
+The funnel covers ranges of up to 93 days. For a longer range, such as 12m, it explains the limit and offers **Show last 90 days**. A range with more than 20,000 signups is not charted either; the section says so, and a shorter range will load.
 
-| Filter | Description |
-|--------|-------------|
-| **Counter Name Search** | Text search to filter by action/counter name |
-| **User Email Search** | Text search to filter by user email |
+## Retention cohorts
 
-#### Metadata Filters
+A table of how many people come back. Each row is a signup week (weeks start on Monday, UTC) and shows the cohort size, then the share of that cohort who were active in week 0 (the signup week itself) through week 8. The percent is printed in every cell, and a darker shade means a higher share. Hover a cell to see the head count.
 
-A metadata filter panel allows filtering based on specific metadata field values. Available metadata fields are dynamically extracted from the raw data.
+- **Last 12 weeks.** Only signup weeks that are over appear, so a cohort never grows after you see it. The table is read through the last complete day and ignores the **Range** and **Compare** controls.
+- **Blank cells are gaps, not zero.** A cell is blank when its week is not over yet, when the nightly rollup is missing for a day it depends on, or when the cohort is empty. A real zero is printed as 0.0%.
+- **Signups toggle.** With **Real only**, the cohort leaves out suspected signups; new accounts remain suspected until they meet the real-signup definition. With **All**, it counts every signup. The size and the active counts follow the same rule.
+- **Active** uses the same definition as the rest of the page: at least one successful first-party AI request that UTC day.
 
-### Pagination
+## Usage
 
-| Setting | Values |
-|---------|--------|
-| Items per page | 5, 10 (default), 20 |
-| Navigation | Previous / Next buttons with page counter |
-| Total count | "Total Items: N" reflecting the filtered result count |
+Three cards show what people use. Rankings and totals cover the complete days in the range, so they add up to the nightly rollup; the daily charts also show today so far, drawn faded.
 
-### Export
+- **Usage by feature**: AI requests per day, stacked by feature. The six busiest features in the range get their own color, and everything else is grouped as **Other**.
+- **Requests by model**: the ten models with the most requests, with each model's share of all requests. **Open in Models** goes to **AI > Models** for latency, tokens and errors.
+- **Credits consumed**: credits charged per day. **Open in Credits** goes to the Credits page for spend by account and model. Analytics never shows a currency amount.
 
-The **Export CSV** button exports all filtered activity data (not just the current page) to a CSV file named `user_activity_YYYY-MM-DD.csv`. Exported columns include: date, counterName, userEmail, metadata (as JSON string), and count.
+## Top organizations and users
 
-### Refresh
+Two tables list the 10 heaviest users and the 10 heaviest organizations over the complete days of the range. Rows are ranked by active days, then by AI requests. Each row shows the plan, active days, AI requests, credits consumed and its share of all requests. Click a column header to sort, or a row to open the user's profile or the organization. A user or organization that has since been deleted is listed by its id and does not open.
 
-The **Refresh** button reloads activity data from the server.
+Active days require first-party AI requests. API requests and credits still contribute to the usage totals. For an organization to have an active day, a first-party request must be billed to that organization; personal activity does not make an API-only organization active.
 
-## Daily Report Tab
+Suspected signups and suspended users are left out of both tables, and their usage is not added to any organization. The line under each table says how many accounts were left out.
 
-The Daily Report tab displays AI-generated summaries of platform activity for each day within a selected date range.
+An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it. Days rolled up before per-organization usage was recorded still credit a member's whole day to their most-used organization until you re-run the day with `--force`. Re-running also fills the per-organization active-day flags on older rows.
 
-### Date Range Selection
+Both tables cover the complete days that have a nightly rollup. A day still waiting for its rollup is left out, and the line under each table says how many. The **Usage** cards say the same in their captions.
 
-The same date filter component used in User Activity is available here:
+## Export
 
-- **Start Date** and **End Date** pickers
-- **Quick select** buttons: Today, Last 7 Days (default), Last 30 Days
+**Export CSV** downloads a zip file with one CSV per section for the range on screen: active users, requests by surface, signups, signup signals, usage by feature, requests by model, credits consumed, top users and top organizations. Days are UTC `YYYY-MM-DD`, units are in the column headers, and a day with no rollup is an empty cell rather than 0. The files open directly in Excel, Numbers or Google Sheets.
 
-### Report Display
+## Tables and accessibility
 
-Each daily report is displayed as a card with:
+Each chart has a **View as table** button that shows the same numbers as a table you can read with a screen reader or copy.
 
-- A header showing "Report for YYYY-MM-DD"
-- The report content rendered in a monospaced, pre-formatted text block
-- Days without activity are marked with "(No Activity)" and displayed with reduced opacity
+## Gaps, empty ranges and errors
 
-Reports are sorted by date in descending order (most recent first).
+- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them. With **Accounts** set to Internal only or All, a second line lists days whose internal counts are missing or incomplete: days rolled up before internal counts were recorded, and days whose 28-day window includes one. They show as gaps, today included, until the rollup is run again for them.
+- **No activity**: a section with nothing to show offers **Show last 90 days**.
+- **Errors**: a section that fails to load shows **Try again**.
 
-An informational alert notes: "Reports are shown for all dates in the selected range. Dates without activity will be marked accordingly."
+## Per-user activity
 
-### Pagination
-
-| Setting | Values |
-|---------|--------|
-| Items per page | 5 (default), 10, 20 |
-| Navigation | Previous / Next buttons with page counter |
-| Total count | "Total Reports: N" |
-
-## Weekly Report Tab
-
-The Weekly Report tab displays AI-generated summaries of platform activity for selected weeks.
-
-### Week Selection
-
-A **Week Picker** component allows selecting one or more weeks:
-
-- Up to **4 weeks** can be selected simultaneously
-- Each week is represented by its start and end dates
-
-An informational alert notes: "Select one or more weeks to view reports. You can select up to 4 weeks at a time."
-
-### Report Display
-
-Each weekly report is displayed as a card with:
-
-- A header showing "Week of YYYY-MM-DD to YYYY-MM-DD"
-- The report content in monospaced, pre-formatted text
-- If an error occurred generating the report, a red alert is shown instead of the report content
-
-When no weeks are selected, a message prompts: "Select one or more weeks to view reports."
-
-## State Management
-
-The Analytics tab uses a centralized Zustand store to persist filter state across sub-tab switches:
-
-| State | Default | Description |
-|-------|---------|-------------|
-| Active sub-tab | User Activity | The currently selected sub-tab |
-| Selected organizations | All | Organization filter selection |
-| Excluded orgs | MoM, Unknown, Personal excluded | Organization exclusion toggles |
-| Date filters | Last 7 days | Start and end date range |
-| User activity filters | Empty strings | Counter name and email search terms |
-| Advanced filters visibility | Hidden | Whether advanced filters are shown |
-
-This means that switching between sub-tabs preserves your filter selections, and returning to the Analytics tab from another admin tab maintains your previous state.
-
-## Best Practices
-
-- Start with the **Daily Report** tab for a quick overview of platform health, then drill into **User Activity** for specific details.
-- Use the organization exclusion checkboxes to filter out internal team activity when analyzing customer behavior.
-- Leverage the **Advanced Filters** for targeted investigations -- combine date ranges with counter name and email searches.
-- Export user activity data regularly for compliance or offline analysis purposes.
-- When reviewing weekly reports, select consecutive weeks to identify trends over time.
-- Use the **Last 30 Days** quick-select for monthly review cycles.
+The raw per-user activity log (a row per day, action and user, with organization, date, search and metadata filters and CSV export) is on **Overview > Event metrics**, in the **By user** view. See [Metrics](./metrics.md).
 
 ---
 
 ## Related Articles
 
 - [Admin Dashboard Overview](./overview.md) - Overall admin panel navigation
+- [Metrics](./metrics.md) - Event metrics and the per-user activity log
 - [User Management](./user-management.md) - Managing user accounts
-- [Feedback](./feedback.md) - User feedback management

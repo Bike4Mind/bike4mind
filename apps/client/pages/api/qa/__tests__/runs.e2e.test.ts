@@ -91,7 +91,7 @@ describe('POST /api/qa/runs alarm (real ingest)', () => {
     expect(mockSlackPost).toHaveBeenCalledWith(
       'https://hooks.example.com/a',
       {
-        text: `Core . staging failing: 1 test (Notebook &gt; saves) <https://app.example.com/status/runs/${first.json.run_id}|view run>`,
+        text: `Core . staging failing: 1 test (Notebook &gt; saves) <https://app.example.com/admin/qa/runs/${first.json.run_id}|view run>`,
       },
       { timeout: 5000 }
     );

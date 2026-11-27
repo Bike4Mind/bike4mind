@@ -19,6 +19,7 @@ import {
   dataLakeAccessGrantRepository,
   userRepository,
   lakeConfigChangeEventRepository,
+  lakeConfigSnapshotRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeResearchService, dataLakeService } from '@bike4mind/services';
@@ -187,6 +188,7 @@ const createConfigAsCurator = (
         db: {
           dataLakeResearchConfigs: dataLakeResearchConfigRepository,
           lakeConfigChangeEvents: lakeConfigChangeEventRepository,
+          lakeConfigSnapshots: lakeConfigSnapshotRepository,
         },
       }
     );

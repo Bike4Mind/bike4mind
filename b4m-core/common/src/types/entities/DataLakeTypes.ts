@@ -3,6 +3,7 @@ import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
 import type { LakeManageRung } from './LakeConfigChangeEventTypes';
+import type { ApiKeyCompletionSource } from '../analytics';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -231,6 +232,30 @@ export const LAKE_INGESTABLE_STATUSES = ['draft', 'active'] as const satisfies r
  */
 export const LAKE_ATTACHABLE_STATUSES = ['draft', 'active'] as const satisfies readonly DataLakeStatus[];
 
+/**
+ * Statuses a lake leaves the per-user lake count in: it is on its way out or already gone. Every
+ * other status counts, archived included, because an archived lake still holds its files.
+ */
+export const LAKE_UNCOUNTED_STATUSES = ['deleting', 'deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
+
+/**
+ * `code` on the 403 a lake create gets when its creator is at the per-user lake cap. Clients key
+ * on it to show the refusal as final (no retry), since retrying cannot succeed until a lake goes.
+ */
+export const DATA_LAKE_LIMIT_REACHED_CODE = 'DATA_LAKE_LIMIT_REACHED';
+
+/**
+ * `code` on the 403 a lake create or connector connect gets when the plan gate is on and the caller
+ * holds no paid standing (apps/client/server/entitlements/lakePlanGate.ts).
+ */
+export const DATA_LAKE_PLAN_REQUIRED_CODE = 'DATA_LAKE_PLAN_REQUIRED';
+
+/** Refusal codes that a retry cannot clear: the user has to change something first. */
+export const DATA_LAKE_ENTITLEMENT_REFUSAL_CODES: readonly string[] = [
+  DATA_LAKE_LIMIT_REACHED_CODE,
+  DATA_LAKE_PLAN_REQUIRED_CODE,
+];
+
 type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
 
 /**
@@ -309,7 +334,7 @@ export interface AccessContext {
    */
   organizationIds: string[];
   /**
-   * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
+   * Orgs the caller holds admin RIGHTS in (billing owner / manager with a users[] row), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
    * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
    * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from
@@ -832,6 +857,11 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findIdsCreatedBy(userId: string): Promise<string[]>;
   /**
+   * How many lakes the given user created that still count toward the per-user lake cap: every
+   * status except {@link LAKE_UNCOUNTED_STATUSES}. 0 for a blank id.
+   */
+  countCountedCreatedBy(userId: string): Promise<number>;
+  /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
    * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
    * `findAccessible`'s public arm, so a lake that acquired a `requiredUserTag`/
@@ -1277,6 +1307,12 @@ export interface IDataLakeBatch {
 
   /** Opted into background AI tag suggestion at batch-create time. Never true in append mode. */
   wantsTaxonomy?: boolean;
+  /** Payer captured at upload admission; absent on legacy/server-created batches. Null bills the user. */
+  taxonomyBilling?: {
+    organizationId: string | null;
+    apiKeyId?: string;
+    source?: ApiKeyCompletionSource;
+  };
   /** Background AI-tagging phase; see `TaxonomyStatus`. */
   taxonomyStatus?: TaxonomyStatus;
   /** When the current 'queued'/'analyzing'/'applying' phase started - the stuck-job reconciler's cutoff clock. */

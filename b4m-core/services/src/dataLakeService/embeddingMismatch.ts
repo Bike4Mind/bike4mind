@@ -201,7 +201,8 @@ export interface EmbeddingLabeledFile {
  * Retrieval path - divergence drops content from results, silently:
  *  - the corpus defer gate (b4m-core/services/src/llm/ChatCompletionProcess.ts),
  *  - isFabFileCitable (packages/server-utils/src/memory/lakeSourceReachability.ts),
- *  - the Atlas `$vectorSearch` filter clause (packages/database/src/models/content/FabFileModel.ts),
+ *  - the Atlas `$vectorSearch` filter clause, in vectorSearch and the warmVectorIndex keep-warm probe
+ *    (packages/database/src/models/content/FabFileModel.ts),
  *  - the self-host OpenSearch `term` clause, the same rule on the other backend
  *    (b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts).
  *
@@ -216,7 +217,7 @@ export interface EmbeddingLabeledFile {
  *
  * The first two retrieval sites are deliberately STRICTER than this predicate (they count an
  * unlabeled file as unreachable where this one scores it), and their own comments explain why they
- * must not be consolidated onto it. packages/scripts/src/checkEmbeddingModelComparisonSites.test.ts
+ * must not be consolidated onto it. packages/scripts/src/checkEmbeddingModelComparisonSites.repo.test.ts
  * fails when a site appears that is on neither list, so keep the two in step.
  */
 export function isForeignEmbeddingModel(parentModel: string | null | undefined, queryModel: string): boolean {
@@ -316,7 +317,7 @@ export function resolveMajorityEmbeddingModel(
   for (const file of files) {
     const label = file.embeddingModel?.trim();
     // An unrecognized label is treated as unlabeled rather than tallied. Letting a corrupt value
-    // win the vote would hand it to createEmbeddingService, which throws on an unknown provider,
+    // win the vote would hand it to createBoundEmbeddingModel, which throws on an unknown provider,
     // and the callers swallow that into an empty result: the silent partial this module removes.
     const model = label && isSupportedEmbeddingModel(label) ? label : fallbackModel;
     tally.set(model, (tally.get(model) ?? 0) + 1);

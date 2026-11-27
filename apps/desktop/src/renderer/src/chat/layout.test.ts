@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { publishScrollGutterWidth, SCROLL_GUTTER_VAR, scrollingColumnHostSx, thinScrollbarSx } from './layout';
+import {
+  chatShellRootSx,
+  publishScrollGutterWidth,
+  SCROLL_GUTTER_VAR,
+  scrollingColumnHostSx,
+  thinScrollbarSx,
+} from './layout';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -45,5 +51,16 @@ describe('thinScrollbarSx', () => {
 
     const restated = Object.keys(sources).filter(file => /scrollbar(Width|Color)\s*:/.test(sources[file]));
     expect(restated).toEqual([]);
+  });
+});
+
+// The rendered half of this is ChatShell.sessionPanel.test.tsx's 'the shell layout'.
+describe('document scroll', () => {
+  it('pins the shell to the viewport and clips it, so only the regions inside it scroll', () => {
+    expect(chatShellRootSx).toMatchObject({ height: '100vh', overflow: 'clip' });
+  });
+
+  it('makes the column host the containing block of what it scrolls', () => {
+    expect(scrollingColumnHostSx).toMatchObject({ position: 'relative', overflowY: 'auto' });
   });
 });

@@ -1,12 +1,1437 @@
 {
+  "packages/database/src/models/billing/SpendFreezeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/ai-operations.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/context-telemetry/[id]/analyze.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/email/jobs/[id]/check-status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/feedback/[id]/ai.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/feedback/[id]/status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/generate-highlights.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/organizations/[id]/convert-to-paid.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/published-artifacts/[id]/takedown.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/pages/api/admin/release-notes/config.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/signup-domain-holds.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/subscriptions/[id]/comp.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/users/[userId]/role.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/admin/whats-new-highlights-config.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/auth/impersonation.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/auth/okta/callback.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/auth/unlink.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/business-links/import.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/cc-bridge/redeem.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/feedback/[id]/update.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/google-drive/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/google-drive/disconnect.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/google-drive/token.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/help/chat-feedback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/help/feedback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/integrations/[integration]/rotate-token.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/jupyter/execute.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/jupyter/progress.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/mcp-servers/[id]/webhooks/github/secret.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/mcp-servers/[id]/webhooks/github.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/mcp-servers/notion/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/oauth/device/verify.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/feedback-summary.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/github/connection.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/integrations/slack/feedback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/integrations/slack/index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/library.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/mfa-policy.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/organizations/[id]/upload-logo.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/publish/[publicId]/restore.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/pages/api/publish/[publicId]/revise.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "apps/client/pages/api/publish/[publicId]/share-token.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/publish/artifact/finalize.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/publish/artifacts/[id]/report.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/publish/serve/[...path].ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/publish/view.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/skills/market/[id]/moderate.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "apps/client/pages/api/skills/market/[id]/rating.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/skills/market/[id]/report.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/skills/market/versions/[vid]/review.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/slack/feedback/status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/slack/interactive.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/slack/oauth/org-connect/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/slack/oauth/user-link/callback.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/stripe/portal.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/pages/api/test/admin-approval.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/test/expire-account-deletion.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/usage/fleet-export.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/users/[id]/confirm-photo.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/users/[id]/docx-template.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "apps/client/pages/api/v1/personas/index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/pages/api/v1/sessions/index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/adminRoles/adapters.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/ai/feedbackTriage.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/admin/campaignWatches.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/admin/stripeWrite/adminStripeWrite.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/agents/deleteAgent.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/analytics/funnel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/analytics/oauthSignupCredit.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/auth/networkMeta.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/auth/samlRequestCache.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/auth/withAccountNotPurging.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/credits/orgInviteBonus.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/credits/recordActiveSession.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/dataSubject/subjectErasureExecutor.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/feedback/bulk.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/integrations/slack/reactionFeedback.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/integrations/stripe/attachOrgStripeCustomer.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/memory/reembedMementos.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/middlewares/clientUsage.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/modelAccess/modelAccessStore.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/personas/personaAccounts.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/qa/evaluateAlarm.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/services/publish/restrictDuplicatePublications.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/services/publish/settlePublication.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/skillMarket/author.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/skillMarket/bundles.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/skillMarket/importListing.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/skillMarket/submitVersion.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "apps/client/server/users/accountDeletion.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/client/server/users/recordUserActivity.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/utils/auth/oauthSourceTag.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/utils/feedbackText.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/utils/helpFeedbackRouting.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/server/utils/telemetryDeletion.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/websocket/dataUnsubscribeRequest.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/websocket/disconnect.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/client/server/websocket/jupyterNotebookProgress.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/cron/businessMetrics/deliver.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "apps/workers/src/cron/organizationRetention.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/cron/telemetryCleanup.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/events/createMemento.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/events/spider.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/jobs/dataSyncerHandler.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/queueHandlers/accountExportLease.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/workers/src/queueHandlers/fabFileChunk.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "apps/workers/src/queueHandlers/orgFeedbackSummary.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "apps/workers/src/queueHandlers/whatsNewHighlights.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/s3/moderationRescueSweep.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/s3/objectCreated.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "apps/workers/src/skillMarket/reviewSla.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "b4m-core/services/src/llm/questHeartbeat.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "b4m-core/services/src/organizationService/reassignMemberContent.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "b4m-core/slack/src/handlers/globalShortcutHandlers.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "b4m-core/slack/src/handlers/modelConfigHandlers.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "b4m-core/slack/src/handlers/notebook-manager.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "b4m-core/slack/src/imageGeneration.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/ActiveCodeAgentModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/AgentModel.ts": { "b4m/require-update-validators": { "count": 18 } },
+  "packages/database/src/models/ai/DataLakeAccessGrantModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/DataLakeFindingModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/DataLakeHealthSnapshotModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/DataLakeModel.ts": { "b4m/require-update-validators": { "count": 42 } },
+  "packages/database/src/models/ai/DataLakeOwnershipOfferModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/DataLakeProposalModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/DataLakeResearchConfigModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/ai/DataLakeResearchRunModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/DataLakeSpendNotificationModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/DeepAgentCharterModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/DeepAgentEpisodeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/DeepAgentHandoffModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/EmbedConversationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/EmbeddingCacheModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/GenerationJobModel.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/database/src/models/ai/LakeMembershipRemovalModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/LatticeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/McpConnectionModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/ai/McpOAuthClientRegistrationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/McpOAuthPendingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/McpServerModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/MemoryLedgerEventModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/ai/MemoryPrincipalKeyModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/ModelDiscoveryStateModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/ai/PlatformEndUserModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/ai/RapidReplyMappingModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/RapidReplyPromptModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/ai/RapidReplyResultModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/RepoHistoricalInsightsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/ResearchTaskModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/SessionAgentConfigModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/SessionToolApprovalModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/SkillListingModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/ai/SkillListingVersionModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/ai/ToolDefinitionOverrideModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/TransformBatchModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/ai/WorkItemModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/analytics/AnalyticsDailyModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/analytics/AnalyticsHopModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/AccountDeletionNoticeModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/ApiKeyAlertModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/ApiKeyModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/ApiKeyUsageLogModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/AuthSessionModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/auth/BlockedIPModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/auth/CcBridgeDeviceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/CcBridgePairingTokenModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/DeviceAuthorizationModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/DisposableDomainModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/ErasureRecordModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/IdentityProviderModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/OAuthAuthorizationCodeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/OAuthGrantModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/auth/OAuthRefreshTokenModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/auth/PasskeyChallengeModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/PasskeyCredentialModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/PendingOtcTokenModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/auth/RegistrationInviteModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/auth/SessionModel.ts": { "b4m/require-update-validators": { "count": 16 } },
+  "packages/database/src/models/auth/SideAppRefusalCounterModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/SignupGrantBudgetModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/auth/SignupGrantReleaseBatchModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/SignupProtectionModel.ts": { "b4m/require-update-validators": { "count": 9 } },
+  "packages/database/src/models/auth/SubscriberModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/TrustedDeviceModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/UserModel.ts": { "b4m/require-update-validators": { "count": 48 } },
+  "packages/database/src/models/auth/UserUsagePatternSignalsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/auth/WsConnectTicketModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/auth/oauthClientAdmin.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/billing/AgentExecutionModel.ts": { "b4m/require-update-validators": { "count": 39 } },
+  "packages/database/src/models/billing/BillingEventModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/billing/BillingMismatchModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/billing/CreditTransactionModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/GrantPackageModel.ts": { "b4m/require-update-validators": { "count": 9 } },
+  "packages/database/src/models/billing/HeldCreditRewardModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/billing/PaymentAttemptModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/PaymentRiskActionModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/ReferralSubscriptionRewardModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/billing/SpendAlertModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/billing/StripeDisputeModel.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/database/src/models/billing/UserLimitEventModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/AnnotationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/BriefcasePromptModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/content/DungeonInstanceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/GearStampModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/ImageGenerationTemplateModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/ImageModerationIncidentModel.ts": { "b4m/require-update-validators": { "count": 11 } },
+  "packages/database/src/models/content/ImportHistoryJobModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/ProjectModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/content/PublishedArtifactModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/QuestMasterPlanModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/content/QuestModel.ts": { "b4m/require-update-validators": { "count": 19 } },
+  "packages/database/src/models/content/QuestNodeModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/ReportModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/content/SharableDocumentModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/StockPortfolioModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/SystemPromptHistoryModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/SystemPromptModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/TavernMapModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/content/TavernQuestModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/content/TavernWorldModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/content/purgeOwnerPublishedArtifacts.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/hearth/MongoHearthStore.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/admin/AdminAccessReviewModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/AdminApprovalModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/AdminAuditAlertStateModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/AdminMorningBriefModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/admin/OrgAdminNotificationPrefModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/OrgAlertNotificationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/admin/OrgDomainClaimModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/admin/OrganizationModel.ts": { "b4m/require-update-validators": { "count": 14 } },
+  "packages/database/src/models/infra/admin/SpaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/email/EmailJobModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/email/EmailPreferencesModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/email/EmailSendAttemptModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/email/IngestedEmailModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/GitHubLakeAuthGrantModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/IntegrationHealthCheckModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/IntegrationRequestModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/integrations/JiraWebhookConfigModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/JiraWebhookSubscriptionModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/infra/integrations/LakeConnectorClaimModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/OrgGitHubConnectionModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/infra/integrations/OrgGitHubLakeConnectionModel.ts": { "b4m/require-update-validators": { "count": 14 } },
+  "packages/database/src/models/infra/integrations/OrgGoogleDriveConnectionModel.ts": { "b4m/require-update-validators": { "count": 11 } },
+  "packages/database/src/models/infra/integrations/OrgWebhookConfigModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/integrations/SlackChannelConfigModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/infra/integrations/SlackDevWorkspaceModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/integrations/SlackExportJobModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/infra/ops/AdminSettingsModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/ops/CacheModel.ts": { "b4m/require-update-validators": { "count": 16 } },
+  "packages/database/src/models/infra/ops/FallbackLakeSettingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/OverwatchProductModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/ScopedSettingModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/SreErrorPatternModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/ops/SreErrorTrackingModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/infra/ops/TaskScheduleModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/ops/TeamMetricsCacheModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/security/AbuseAssessmentModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/security/AbuseEvalSetModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/infra/security/AutoContainmentDecisionModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/security/CampaignWatchModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/security/SecretRotationModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/security/SecurityFindingModel.ts": { "b4m/require-update-validators": { "count": 5 } },
+  "packages/database/src/models/infra/security/SecurityScanScheduleModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/infra/security/ShadowDetectionModel.ts": { "b4m/require-update-validators": { "count": 10 } },
+  "packages/database/src/models/infra/webhooks/DlqFailureModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/DlqReplayLogModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/DlqTriageDeliveryModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/WebhookAuditLogModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/infra/webhooks/WebhookSubscriptionModel.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/database/src/models/social/ArenaPairModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/social/ArenaVoteModel.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/models/social/FriendshipModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/social/InboxModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/social/InviteModel.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/database/src/models/social/OverwatchAmplifyPostModel.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/models/social/OverwatchSocialConnectionModel.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/database/src/models/social/realtimeConnectionRepository.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/database/src/seeds/runSeedOnce.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/seeds/seedSignupGrantPools.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/utils/feedbackNotes.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/database/src/utils/orgAlertUsers.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/database/src/utils/organizationRetention.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/datalake/documentDateBackfill.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/datalake/seed-stranded-lake-member.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/encrypt-admin-settings-and-apikeys.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/encrypt-tokens-at-rest.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/feedbackTriageNoise.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/legacyQuestPlanConversion.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20240312000000_add_mementos_to_users.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/2024052201905_demo_to_paid.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20240524172716_create-and-populate-quests.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20240909152817_migrate-counters-to-useractivitycounter-collection.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20241211100000_rename_counter_names.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250108000000_add_session_and_file_ids_to_projects.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20250108123000_add_system_prompts_to_projects.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250123223300_add-clonedsourceid-and-forkedsourceid-to-sessionmodels.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20250128133728_add-photourl-to-collection.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250210183952_change-ids-to-strings-in-quests.ts": { "b4m/require-update-validators": { "count": 12 } },
+  "packages/scripts/migrate/migrations/20250313152624_add-lastusedmodel-to-sessionmodels.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250325153205_fix-existing-organization-data.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250422132525_add-api-key-expiration.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250630185100_fix_filesize.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250704005300-add-filename-lowercase.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20250906000000-create-rapid-reply-collections.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20250917124558_migrate-old-credits-txn-history.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20251009000000-add-email-integration-fields.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20251014000000_enhance-questmaster-plans.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20251023130000_add-token-used-flags.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/migrations/20251107195534_convert-admin-logo-values-to-filepath.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260210000000_set-agents-ispublic-false.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260518120000_backfill-subscription-source.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/migrations/20260529120000_backfill-credit-transaction-source.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260602000000_briefcase-indexes-and-seed.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260702010000_backfill-policy-acceptance-grandfather.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260709120000_add-hasusablepassword-to-users.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20260709130000_base-entitlement-on-default-models.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260710120000_null-shell-account-passwords.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260710160000_base-entitlement-cover-drifted-seed-configs.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260731000000_reactivate-collateral-deactivated-api-keys.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260731100000_fix-systemprompt-live-unique-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260803000000_backfill-datalake-content-prefix-tag.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260804000000_drop-filetag-filecount.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260813000000_fix-project-live-unique-name-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260814000000_pr-report-webhook-settings.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260825000000_feedback-derived-keys-and-text-split.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/migrate/migrations/20260828000000_split-chunk-stall-markers-off-notes.ts": { "b4m/require-update-validators": { "count": 6 } },
+  "packages/scripts/migrate/migrations/20260904000000_encrypt-identity-provider-secrets.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260906000000_backfill-lakememoryenabled-from-ledger.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260915120000_delete-near-empty-vectorized-fabfilechunks.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921000002_modal-image-url-to-key.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921000100_backfill-data-lake-origin.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921120000_ensure-data-lake-inconsistency-scan-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921130000_backfill-share-tokens.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921140000_drop-share-token-scalar.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921235945_clear-suspension-mirrored-ismoderated.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235946_restore-legacy-xls-mime-type.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235955_encrypt-sensitive-admin-settings.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235964_backfill-storage-limit-overrides.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235965_backfill-free-credit-claim-email.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235967_seed-staged-signup-settings.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235975_redrop-share-token-scalar-index.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921235983_fold-organization-manager-into-admin-user-ids.ts": { "b4m/require-update-validators": { "count": 7 } },
+  "packages/scripts/migrate/migrations/20260921235987_move-quest-answeredby-to-redirectedfrom.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921236950_ensure-first-party-native-oauth-client.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921236951_ensure-native-dev-oauth-client.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921236952_ensure-android-oauth-client.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921237300_queue-held-signup-grants-for-risk-review.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921237400_seed-signup-grant-schedule.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921237450_pin-signup-grant-initial-and-cap.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921237480_pin-signup-grant-schedule-keys.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/scripts/migrate/migrations/20260921237490_drop-quest-signup-activity.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921238100_backfill-user-lane-flags.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921238400_grant-packages-from-invites.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921239850_backfill-analytics-user-day-active.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921239996_drop-retired-grant-settings.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921239998_stamp-model-access-entries.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921240020_encrypt-oauth-provider-tokens.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921240090_unset-fabfile-signed-urls.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20260921240100_research-config-source-tiers.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260921245000_drop-referral-credits-amount.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/migrate/migrations/20260922000001_backfill-oauthclient-token-endpoint-auth-method.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/migrations/20261116081402_revoke-project-invites-without-inviter.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/migrate/protect-stored-credentials-backfill.ts": { "b4m/require-update-validators": { "count": 7 } },
+  "packages/scripts/retrieval/answerability-replay.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/retrieval/recall-probe.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/retrieval/supersession-probe.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/scripts/src/auditPartialCreditPurchases.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/src/backfill-fabfile-moderation-status.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/backfillShowCreditsUsed.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/backfillSubscriptionStripeMirror.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/clear-resume-tokens.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/scripts/src/clearStaleOrganizationPointers.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/migrateSignupGrantSchedule.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/scripts/src/trimAiEditVersions.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/admin/ai/runAdminAi.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/admin/blockedEmailDomains.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/admin/usersBulk/adapters.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/analytics/analyticsRollup.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/auth/impersonation.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/auth/revokeAppleTokens.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/integrations/google/drive/common.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/managers/sessionCrud.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/managers/sessionOperations.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/modelDiscovery/modelAccessRevision.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/modelDiscovery/modelListRevision.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/organizations/clearDeletedOrganizationReferences.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/organizations/retentionPolicy.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/s3/knowledgeModerationDeps.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/s3/moderationScan.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/s3/storageCharge.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/s3/uploadSizeGate.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/skillMarket/market.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/tutorials/drafts/store.ts": { "b4m/require-update-validators": { "count": 3 } },
+  "packages/server-utils/src/tutorials/effectiveModules.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/tutorials/progressStore.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/tutorials/routes/overridesRoute.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/tutorials/routes/settingsRoute.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/tutorials/sheet.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/users/accountFilePurgeLease.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/users/completeAccountDeletion.ts": { "b4m/require-update-validators": { "count": 4 } },
+  "packages/server-utils/src/users/purgeAccountContent.ts": { "b4m/require-update-validators": { "count": 8 } },
+  "packages/server-utils/src/utils/generatedFileCleanup.ts": { "b4m/require-update-validators": { "count": 2 } },
+  "packages/server-utils/src/utils/importHistoryProgress.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/utils/pendingActionExecutor.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/utils/persistRunAsQuest.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "packages/server-utils/src/utils/telemetryAnalysisCache.ts": { "b4m/require-update-validators": { "count": 1 } },
+  "scripts/migrate-sre-v2.mjs": { "b4m/require-update-validators": { "count": 2 } },
+  "apps/client/__tests__/api-unit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/__tests__/api/auth/refreshToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 38
+    }
+  },
+  "apps/client/__tests__/api/files-delete-all.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/__tests__/api/integrations/rotate-token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 53
+    }
+  },
+  "apps/client/__tests__/api/oauth/ai-token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 90
+    }
+  },
+  "apps/client/__tests__/api/oauth/federated-admin.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/__tests__/api/user/accept-policies.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/__tests__/channel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/__tests__/chat-demo.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/__tests__/chat-e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/__tests__/chat.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 22
+    }
+  },
+  "apps/client/__tests__/execute.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/__tests__/integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/__tests__/organizations-create-dev.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/__tests__/otc-verify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/__tests__/ping.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/__tests__/sessions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/__tests__/team-manager.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/__tests__/tool-definitions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 63
+    }
+  },
+  "apps/client/__tests__/users.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/AdminToolModals/AdminModalPreview.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/AdminToolModals/AdminToolIndicator.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/AdminToolModals/ModalListPopup.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/AdminToolModals/ModalListRenderer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Agent/AgentAvatar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/components/Agent/AgentCreditManagement.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Agent/AgentForm.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Agent/AgentPageHeader.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Agent/CapabilitiesSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Agent/MainInformationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Charts/RechartsRenderer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Files/Browser/Item.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Files/Browser/ItemActions.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/CreateKnowledge.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/CreateKnowledgeFromUrl.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/KnowledgeChunkControls.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/KnowledgeViewer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Knowledge/PythonArtifactViewer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Knowledge/ReactArtifactViewer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/ProfileModal/ImportHistoryJobsList.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/ProfileModal/NotebookCurationModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ProfileModal/NotebookExportModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/NotebookImportModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/ApprovedAppsSection.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/BlogIntegrationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/GitHubIntegrationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/ProfileModal/SettingsTabContent/SlackIntegrationSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Project/AddMembersModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Project/CreateModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Project/EditModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Register.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ResearchTasks/Detail/Info.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/ResearchTasks/Form.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/ResearchTasks/PopularTargetsModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/AISettings/FilesSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Session/AISettings/InspectableSettingsButton.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/AISettings/ToolsSection.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/AttachFileButton.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/CodeBlockPlugin.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/FallbackModelBadge.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/FilePond.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/GoogleDoc.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Session/ImageContainer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/ImageTemplateControls.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/ImageTemplatePanel.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/settingsSnapshot.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/ImageTemplates/useRecordImageTemplateUse.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/LayoutControl.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/NotebookSplashFeed/index.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/PromptMetaInspector.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ResearchModeResponseDisplay.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SearchBar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionBottom.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionBottomModals.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionFilePond.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/SessionToolbar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/useModalState.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/useSendMessage.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Session/SessionBottom/useSessionFiles.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/Session/SessionContainer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/SessionMiddle.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/ThoughtBubbles.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/UserPrompt.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/Session/VideoContainer.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Session/__tests__/codeBlockUtils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/components/Session/hooks/useStreamingMessageMerge.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/Session/types/UserPromptTypes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/Tag/Form.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/TimeOut.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/VerifyEmail.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/VerifyEmailChange.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/AdminModalTabNew.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/admin/AdminSettingsTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/EventMetrics/hooks/useEventMetricsState.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/EventMetrics/types.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/FilesTab/index.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/IdentityProvidersTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/components/RawDataTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/hooks/useModelMetricsState.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/utils/chartDataProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/ModelMetrics/utils/formatters.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/SlackWorkspacesTab.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/admin/Users/CreateUserModal.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/admin/email/EmailJobsPanel.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/admin/email/EmailTemplateEditor.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/admin/email/EmailTemplatesPanel.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactCreator.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactEditor.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactGallery.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/app/components/artifacts/ArtifactGallery.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/components/auth/MFAEnforcementWrapper.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/commands/CreateAgentCommand.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/commands/LLMCommand.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/commands/SetKeyCommand.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/common/FileStorageBar.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/common/MFAModal.passkey.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/common/MFAModal.rememberDevice.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/common/MFAModal.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/inbox/InboxTabs.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/inbox/Invites.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/inbox/Messages.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/app/components/layouts/Notebook/Sidenav/NotebookRow.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/components/layouts/Notebook/Sidenav/NotebookRow.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/layouts/Notebook/Sidenav/types.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/modals/__tests__/WhatsNewSliderModal.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/organizations/Member.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/svgs/icons/FileViewerIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/svgs/icons/ImageGenerationIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/components/svgs/icons/MessageIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/components/svgs/icons/WebSearchIcon.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/contexts/LLMContext.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/contexts/SessionsContext.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/__tests__/useBlogImageGeneration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/__tests__/useStreamingQueryUpdates.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/hooks/agent/useAgentGeneration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/agent/useAvatarGeneration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/agent/useFormHandlers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/agent/useFormSections.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/__tests__/invites.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/data/agentProactiveMessaging.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/data/artifacts.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/data/auth.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/data/fabFileMutations.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/importHistoryJobs.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/inbox.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/data/mfa.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/data/researchTasks.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/data/user.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/data/userApiKeys.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useAdminTools.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/hooks/useAudioAnalyzer.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useBlogContentEnhancement.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/useIsPWA.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useModalListRestore.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useModelLogs.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/useSelectedArtifactContentSync.test.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/hooks/useStreamingArtifactPersistence.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useStreamingMetrics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/hooks/useStreamingQueryUpdates.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/hooks/useSubscribeChatCompletion.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/mocks/largeScaleNotebooks.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/mocks/mockProjects.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/activate.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/admin-emergency.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/auth/$strategy/callback.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/routes/integrations/atlassian/select-site.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/routes/subscribe.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/services/adminTools/AdminToolService.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/types/agentForm.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/utils/agentFormUtils.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/app/utils/artifactPersistence.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/utils/commands.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/disableServiceWorker.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/utils/fabFileUtils.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/app/utils/filesAPICalls.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/form.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/utils/invitesAPICalls.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/utils/knowledgeViewerSorting.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/app/utils/promise.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/react-query.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/app/utils/suppressSerwistWarnings.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/app/utils/themes/customizations/input.tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/app/utils/toolMapping.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 22
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/revokeSharing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/revokeSharing.zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/__tests__/updateSharing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/[type]/[id]/invites/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 39
+    }
+  },
   "apps/client/pages/api/[type]/[id]/revokeSharing.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
+  "apps/client/pages/api/__tests__/chat.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/__tests__/external-image.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/__tests__/identify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/__tests__/logout.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/__tests__/object-authz.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/__tests__/resourceIdCastGuards.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 16
+    }
+  },
+  "apps/client/pages/api/__tests__/search-image.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/__tests__/unmatchedApiPath.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/__tests__/updateBodyCastGuards.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/account/__tests__/deletion.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/__tests__/emergency-login.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
+    }
+  },
+  "apps/client/pages/api/admin/__tests__/help-analytics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
   "apps/client/pages/api/admin/agent-ops-settings.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 4
+    }
+  },
+  "apps/client/pages/api/admin/agent-ops-settings/repair.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
+    "b4m/no-raw-entity-response": {
+      "count": 1
     }
   },
   "apps/client/pages/api/admin/agent-ops-settings/seed.ts": {
@@ -19,9 +1444,35 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/analytics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/admin/api-keys/__tests__/scope-preflight.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/admin/bulk-create-users.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/admin/context-telemetry/[id].ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/create-user.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/admin/email/__tests__/whats-new-content.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
     }
   },
   "apps/client/pages/api/admin/email/attempts/[id].ts": {
@@ -59,12 +1510,23 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/email/templates/[id]/test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/admin/email/templates/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/event-metrics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/admin/gears/index.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -74,32 +1536,23 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/admin/identity-providers/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/identity-providers/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
   "apps/client/pages/api/admin/integration-audit-logs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
-  "apps/client/pages/api/admin/liveops-triage-configs/[id].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
+  "apps/client/pages/api/admin/mementos/__tests__/reembed-ledger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
     }
   },
-  "apps/client/pages/api/admin/liveops-triage-configs/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
+  "apps/client/pages/api/admin/mementos/__tests__/reembed.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 25
     }
   },
   "apps/client/pages/api/admin/modals/variants.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 3
     }
@@ -109,9 +1562,19 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/model-metrics.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
   "apps/client/pages/api/admin/model-prices.ts": {
     "b4m/no-raw-entity-response": {
-      "count": 2
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/admin/overwatch/__tests__/backfill-first-seen.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
     }
   },
   "apps/client/pages/api/admin/partner-signup-rules/[id].ts": {
@@ -140,8 +1603,16 @@
     }
   },
   "apps/client/pages/api/admin/rapid-reply/mappings/[id].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/rapid-reply/mappings/bulk.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
     }
   },
   "apps/client/pages/api/admin/rapid-reply/mappings/index.ts": {
@@ -150,6 +1621,9 @@
     }
   },
   "apps/client/pages/api/admin/rapid-reply/prompts/[id].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    },
     "b4m/no-raw-entity-response": {
       "count": 3
     }
@@ -160,6 +1634,9 @@
     }
   },
   "apps/client/pages/api/admin/rapid-reply/prompts/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 2
     }
@@ -194,41 +1671,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/admin/security-dashboard/code-semgrep-ingest.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/code.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/packages-ingest.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/packages.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/secrets-ingest.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/secrets.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/admin/security-dashboard/waf.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/security-dashboard/web-owasp-ingest.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -244,6 +1686,16 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/security-scan-schedule/__tests__/scanType.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/admin/slack-app/__tests__/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
   "apps/client/pages/api/admin/slack-audit-logs/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -254,23 +1706,69 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/admin/system-health/__tests__/audit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
   "apps/client/pages/api/admin/system-prompts/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
-  "apps/client/pages/api/admin/team-members.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/admin/tools/execute.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/upload-logo.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/user-api-keys/[id]/__tests__/analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "apps/client/pages/api/admin/user-api-keys/[id]/__tests__/rate-limit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/admin/user-api-keys/[id]/__tests__/reset-rate-limit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/__tests__/generate-api-key.analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/__tests__/generate-api-key.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/subscriptions/[subscriptionId]/credits.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/users/[userId]/subscriptions/[subscriptionId]/remove.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/admin/users/__tests__/email-verification.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 3
     }
   },
-  "apps/client/pages/api/admin/users/[userId]/user-api-keys.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/admin/users/email-verification.ts": {
-    "b4m/no-raw-entity-response": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -294,19 +1792,82 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/agents/create-from-context.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/agents/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
-  "apps/client/pages/api/ai/llm.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/ai/__tests__/audio-providers.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/elevenlabs-voices.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/llm.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/refineText.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 26
+    }
+  },
+  "apps/client/pages/api/ai/__tests__/spaOnlyAiRoutes.jwtOnly.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/ai/barkeep-chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/optimize-input.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/tavern-conversation.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ai/test-realtime-voice.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/ai/voice-sessions/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/analytics/aggregate.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/api-keys/[id]/__tests__/analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/api-keys/__tests__/create.analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
     }
   },
   "apps/client/pages/api/api-keys/create.ts": {
@@ -319,14 +1880,180 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/app-files/__tests__/get-file-url.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
   "apps/client/pages/api/app-files/update-tags.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
-  "apps/client/pages/api/artifacts/[id]/versions.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/artifacts/[id]/versions/[version].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/artifacts/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/artifacts/__tests__/version-content.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/artifacts/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/artifacts/search.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/[strategy]/__tests__/callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/auth/[strategy]/callback.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/__tests__/refreshToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/__tests__/returnToAdmin.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 37
+    }
+  },
+  "apps/client/pages/api/auth/__tests__/unlink.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/github/__tests__/disconnect.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/auth/github/__tests__/mcp-callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/github/mcp-callback.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/disable.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/regenerateBackupCodes.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/setup.emergency.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/status.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/trustedDeviceRevocation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/verify-setup.signIn.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/verify.respondBoundary.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/mfa/__tests__/verifySetup.respondBoundary.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/auth/mfa/cancel-setup.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/disable.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/regenerate-backup-codes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/setup.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/mfa/status.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/auth/okta/__tests__/callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/pages/api/auth/saml/callback.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/blog/__tests__/presign-image-upload.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/blog/__tests__/publish.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/blog/generate-featured-image.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/blog/publish.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/briefcase/__tests__/prompts.api.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
     }
   },
   "apps/client/pages/api/briefcase/prompts/[id].ts": {
@@ -344,9 +2071,24 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/business-links/__tests__/[id].test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/business-links/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
   "apps/client/pages/api/business-links/category/[id].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/business-links/category/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
     }
   },
   "apps/client/pages/api/business-links/category/index.ts": {
@@ -355,72 +2097,16 @@
     }
   },
   "apps/client/pages/api/business-links/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
-  "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/articles.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/findings/[findingId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/findings/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/proposals/[proposalId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 3
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/proposals/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/research/configs/[configId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/research/configs/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/research/runs/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/[id]/transfer-ownership.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/data-lakes/batches/[batchId].ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/batches/[batchId]/reanalyze-taxonomy.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/data-lakes/batches/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/chat.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -430,18 +2116,46 @@
     }
   },
   "apps/client/pages/api/elabs/voice/[id]/set-active.ts": {
+    "b4m/require-update-validators": { "count": 2 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
   "apps/client/pages/api/elabs/voice/index.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 2
     }
   },
+  "apps/client/pages/api/email/__tests__/verify-change.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/email/__tests__/verify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
   "apps/client/pages/api/fabfiles/[id]/apply-auto-rename.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/fabfiles/[id]/edit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/feedback/[id]/__tests__/update.content.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/feedback/[id]/__tests__/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
     }
   },
   "apps/client/pages/api/feedback/index.ts": {
@@ -449,33 +2163,79 @@
       "count": 2
     }
   },
-  "apps/client/pages/api/files/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/files/__tests__/getFabFileNameById.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/files/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "apps/client/pages/api/files/__tests__/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/files/byIds.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
-  "apps/client/pages/api/files/copy-generated-image.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
-    }
-  },
-  "apps/client/pages/api/files/createFabFile.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/files/index.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
-  "apps/client/pages/api/files/createFabFileURL.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/files/search.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
-  "apps/client/pages/api/files/tags/toggle.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
+  "apps/client/pages/api/files/tags/__tests__/counts.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/files/tags/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/pages/api/files/tags/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
     }
   },
   "apps/client/pages/api/friends/by-user/[id].ts": {
     "b4m/no-raw-entity-response": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/callback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 38
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/estimate-folder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/list-folder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/google-drive/__tests__/token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/help/chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
@@ -489,12 +2249,30 @@
       "count": 2
     }
   },
+  "apps/client/pages/api/image-templates/__tests__/routes.api.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
   "apps/client/pages/api/image-templates/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 2
     }
   },
+  "apps/client/pages/api/import-history-jobs/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/import-history-jobs/[id]/retry.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
   "apps/client/pages/api/import-history-jobs/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -509,7 +2287,67 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/invites/[id]/__tests__/accept.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "apps/client/pages/api/invites/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "apps/client/pages/api/invites/[id]/__tests__/refuse.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/invites/__tests__/batch.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/invites/__tests__/bulk.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/invites/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/lattice/chat.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/lattice/models/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp-servers/atlassian/finalize.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp/delete-attachment.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/mcp/download-attachment.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/mementos/[id]/update.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -529,9 +2367,34 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/modals/[id]/__tests__/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/modals/[id]/__tests__/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
   "apps/client/pages/api/modals/[id]/delete.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/modals/__tests__/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/modals/__tests__/delegateAccess.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/modals/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
     }
   },
   "apps/client/pages/api/modals/create.ts": {
@@ -539,59 +2402,289 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/projects/[id]/files.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/notebooks/export.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/oauth/__tests__/nativeClientPkceFlow.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/oauth/code.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/oauth/device/__tests__/initiate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/oauth/device/__tests__/token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/oauth/grants/__tests__/[clientId].test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/oauth/grants/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/oauth/userinfo.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/ollama/__tests__/models.auth.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/ollama/models.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/addUser.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/admins.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/feedback-report.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/member-credit-budget.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/members.zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/feedback-report/__tests__/drilldown.authz.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/[groupId]/members/[userId]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/[groupId]/members/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/groups/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/[userId]/__tests__/credit-budget.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/[userId]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/[userId]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/members/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/organizations/[id]/webhooks/__tests__/github.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/organizations/__tests__/stats.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/__tests__/users.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/organizations/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/otc/__tests__/form-token.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 3
     }
   },
-  "apps/client/pages/api/projects/[id]/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
+  "apps/client/pages/api/otc/__tests__/send.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
     }
   },
-  "apps/client/pages/api/projects/[id]/members.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
+  "apps/client/pages/api/otc/__tests__/verify.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 50
     }
   },
-  "apps/client/pages/api/projects/[id]/sessions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
+  "apps/client/pages/api/otc/__tests__/verify.trustedDevice.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
     }
   },
-  "apps/client/pages/api/projects/[id]/systemPrompts/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/overwatch/v1/__tests__/events.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
   },
-  "apps/client/pages/api/projects/[id]/systemPrompts/toggle.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/overwatch/v1/__tests__/events.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/partners/__tests__/bedrocknews-claims.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/partners/__tests__/rewards-grant.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/files.zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/invites.outboundGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/invites.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/projects/[id]/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/projects/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/projects/[id]/invites.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
+  "apps/client/pages/api/projects/[id]/systemPrompts/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/projects/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
   "apps/client/pages/api/projects/index.ts": {
-    "b4m/no-raw-entity-response": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
   "apps/client/pages/api/projects/removeNonExistintFiles.ts": {
-    "b4m/no-raw-entity-response": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
-  "apps/client/pages/api/prompts/[id]/update.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/prompts/get-by-name.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
-  "apps/client/pages/api/prompts/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/publish/__tests__/reply.outboundGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 6
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/check-timeout.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/client-timing.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/context.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/quests/[id]/__tests__/files.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/reg-invites/__tests__/refer.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 36
     }
   },
   "apps/client/pages/api/reg-invites/create.ts": {
@@ -610,8 +2703,61 @@
     }
   },
   "apps/client/pages/api/research/agents/[id]/files.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
     "b4m/no-raw-entity-response": {
       "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/__tests__/zod-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/data/[dataId].tsx": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/data/__tests__/[dataId].test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/[taskId]/retry.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/research/agents/[id]/tasks/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/research/agents/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/research/data/__tests__/files.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
     }
   },
   "apps/client/pages/api/research/data/files.ts": {
@@ -624,17 +2770,73 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/security/__tests__/user-recent.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
   "apps/client/pages/api/security/blocked-ips.ts": {
     "b4m/no-raw-entity-response": {
       "count": 3
     }
   },
-  "apps/client/pages/api/security/user-summary.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/sessions/[id]/__tests__/correction-pairs.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/files.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/__tests__/tool-approvals.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/[messageId]/__tests__/index.choices.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/[messageId]/__tests__/index.redaction.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/sessions/[id]/chat/__tests__/stop-reply.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/sessions/__tests__/auth-behavior.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/sessions/__tests__/bulk.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/sessions/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/pages/api/settings/logo.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
   "apps/client/pages/api/settings/update.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 4
     }
@@ -654,12 +2856,47 @@
       "count": 1
     }
   },
+  "apps/client/pages/api/slack/commands.ts": {
+    "b4m/require-update-validators": { "count": 2 }
+  },
+  "apps/client/pages/api/slack/events.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/slack/export/async.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/export/channel-info.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/export/channel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/slack/oauth/user-link/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/slack/oauth/user-link/initiate.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "apps/client/pages/api/slack/workspace/[workspaceId].ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
     }
   },
   "apps/client/pages/api/subscribers/[id]/delete.ts": {
+    "b4m/require-update-validators": { "count": 1 },
     "b4m/no-raw-entity-response": {
       "count": 1
     }
@@ -674,24 +2911,169 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/users/[id]/activities/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/tools/__tests__/billing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/tools/__tests__/tools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/transforms/__tests__/batchSubmit.cacheControl.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/client/pages/api/transforms/batch/__tests__/batchPoll.tokenUsage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/callback-secret.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/rate-limit.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/revoke.analytics-failure.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/user-api-keys/[id]/__tests__/rotate-revoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/pages/api/user-api-keys/__tests__/contributedScopes.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "apps/client/pages/api/user-api-keys/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/user-api-keys/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
-  "apps/client/pages/api/users/[id]/projects.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/users/[id]/__tests__/friends.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/loginAs.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/organization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/projects.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/users/[id]/__tests__/userInvites.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/[id]/collections/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/users/[id]/organizations/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/pages/api/users/__tests__/counterLogs.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },
-  "apps/client/pages/api/users/activities/recent.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
+  "apps/client/pages/api/users/__tests__/index.organization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
     }
   },
-  "apps/client/pages/api/users/index.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 2
+  "apps/client/pages/api/users/__tests__/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 21
+    }
+  },
+  "apps/client/pages/api/users/__tests__/report.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/me/__tests__/sessions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/pages/api/users/me/sessions/__tests__/revoke-others.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/__tests__/image-edits.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/__tests__/image-generations.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/agents/[id]/__tests__/authoring.scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/agents/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/artifacts/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/files/__tests__/index.storageLimit.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/files/__tests__/operations.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/files/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
     }
   },
   "apps/client/pages/api/v1/image-edits.ts": {
@@ -699,24 +3081,1872 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/webhooks/github/subscriptions/[id].ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/pages/api/v1/projects/[id]/__tests__/projectContent.scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/projects/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/quests/[id]/__tests__/files.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/quests/[id]/__tests__/index.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/sessions/__tests__/index.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/pages/api/v1/skills/market/__tests__/listings.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/v1/skills/market/__tests__/review.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/pages/api/v1/transcriptions/__tests__/scopes.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/pages/api/webhooks/github.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/webhooks/jira/[token].ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/websocket/__tests__/ticket.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/pages/api/work-items/__tests__/workItems.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/scripts/test-slack-search.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/server/admin/creditGrants/grantSubscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/agents/authoring/generateAgentAvatar.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/analytics/userActivityQuery.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/api/jupyter/__tests__/execute.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "apps/client/server/auth/__tests__/requireNonSystemUser.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/appleStrategy.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/auth.deletionPending.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/auth.mfaEnrollment.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/auth.mfaPending.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/server/auth/auth.samlDomainBind.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/auth/auth.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/auth.unauthenticated.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/completeMfaLogin.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/endUserSessions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/endUserSessions.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/auth/githubStrategy.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
   },
-  "apps/client/pages/api/webhooks/github/subscriptions/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/server/auth/oktaOidcClient.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 36
+    }
+  },
+  "apps/client/server/auth/refreshAccountGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/signInSecondFactor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/server/auth/trustedDevice.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/server/auth/verifyFederatedIdToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/auth/verifyJwtPayload.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/server/dataLakes/queryDataLakeArticles.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 15
+    }
+  },
+  "apps/client/server/dataLakes/queryDataLakeTagCounts.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
   },
-  "apps/client/pages/api/webhooks/jira/subscriptions/[id].ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/server/edgeLamdas/removeServerHeader.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/generations/__test__/routeHarness.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/managers/countersManager.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 2
     }
   },
-  "apps/client/pages/api/webhooks/jira/subscriptions/index.ts": {
-    "b4m/no-raw-entity-response": {
+  "apps/client/server/managers/inviteManager.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/server/managers/regInviteManager.ts": {
+    "@typescript-eslint/no-explicit-any": {
       "count": 2
+    }
+  },
+  "apps/client/server/mcp/resolveMcpPendingAction.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/middlewares/__tests__/requireStripeWebhook.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 26
+    }
+  },
+  "apps/client/server/middlewares/baseApi.ipBlock.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/baseApi.oauthGate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/baseApi.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "apps/client/server/middlewares/errorHandler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/middlewares/idempotency.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/middlewares/logging.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/server-utils/src/models/UserSubscription.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/queueHandlers/questProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/services/acceptGroupInvite.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/server/services/deleteOrganizationTransaction.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "apps/client/server/services/groupInviteAuth.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/client/server/services/prefixArmLakeMembership.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "apps/client/server/services/projectInviteAuth.e2e.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/server/services/publish/reactArtifact.dom.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 22
+    }
+  },
+  "apps/client/server/tools/modalManagement.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/tools/modalOperations.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "apps/client/server/utils/auth/verifyCallback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/client/server/utils/auth/verifyCallback.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/utils/authAudit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/client/server/utils/cacheExternalImage.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/client/server/websocket/__tests__/dataSubscribeRequest.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 48
+    }
+  },
+  "apps/client/server/websocket/__tests__/dataUnsubscribeRequest.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 18
+    }
+  },
+  "apps/client/server/websocket/__tests__/jupyterNotebookProgress.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "apps/client/server/websocket/agentExecute.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "apps/client/server/websocket/connect.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/client/services/MementoGroomingService.ts": {
+    "b4m/require-update-validators": { "count": 2 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/client/types/api.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cli/tools.handler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/cli/tools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "apps/workers/src/events/sessionSummarization.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/sessionTagging.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/events/spider.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "apps/workers/src/events/stripe/customerSubscriptionUpdated.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 80
+    }
+  },
+  "apps/workers/src/events/stripe/invoicePaymentSucceeded.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "apps/workers/src/integrations/sre/escalation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "apps/workers/src/lib/userSubscriptions/serverUtils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 37
+    }
+  },
+  "apps/workers/src/lib/userSubscriptions/serverUtils.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/media/imageProcessor.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/organizations/retentionCleanup.ts": {
+    "b4m/require-update-validators": { "count": 7 }
+  },
+  "apps/workers/src/queueHandlers/emailJobOrchestrator.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/notebookCuration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "apps/workers/src/queueHandlers/notebookCuration.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/researchEngineQueue.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/queueHandlers/slackExport.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/slackQuestProcessor.ts": {
+    "b4m/require-update-validators": { "count": 2 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/queueHandlers/whatsNewHighlights.model.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "apps/workers/src/queueHandlers/whatsNewHighlights.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "apps/workers/src/utils/eventContext.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "apps/workers/src/utils/loadAgentMcpTools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "b4m-core/agents/src/ReActAgent.parallel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "b4m-core/agents/src/rlm/replSandboxMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/common/src/confluence/__tests__/deletePage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/common/src/confluence/__tests__/format.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 19
+    }
+  },
+  "b4m-core/common/src/confluence/__tests__/formatErrors.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/jira/__tests__/bulkOperations.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/common/src/jira/__tests__/deleteIssue.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/common/src/jira/__tests__/projectMembers.format.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/common/src/jira/api.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/common/src/modelHub/curatedV2.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/openapi/deployment.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/retry.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/schemas/modelHubV3.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/common/src/utils/artifactHelpers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/db-core/src/models/BaseModel.ts": {
+    "b4m/require-update-validators": { "count": 3 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/db-core/src/utils/mongo.ts": {
+    "b4m/require-update-validators": { "count": 3 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/fab-pipeline/src/chunk.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 43
+    }
+  },
+  "b4m-core/fab-pipeline/src/chunk.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/BaseSearchIndex.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/atlasSearchIndex.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/config.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/fab-pipeline/src/dataLake/opensearchClient.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/fab-pipeline/src/storage/BaseStorage.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/hearth/src/log.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/anthropicBackend.toolsOffStripsBlocks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/anthropicBatchService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/llm-adapters/src/bedrockBackend/base.toolsOffStripsBlocks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/endUserIdAttachment.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/llm-adapters/src/geminiBackend.imageUrl.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/llm-adapters/src/geminiBackend.replayedToolHistory.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "b4m-core/llm-adapters/src/geminiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/llm-adapters/src/getLlmByModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 33
+    }
+  },
+  "b4m-core/llm-adapters/src/kimiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/llm-adapters/src/modelSunsetMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/ollamaBackend.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 20
+    }
+  },
+  "b4m-core/llm-adapters/src/ollamaBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/llm-adapters/src/openaiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/llm-adapters/src/responseFormat.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/llm-adapters/src/syncModelDescriptions.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/llm-adapters/src/xaiBackend.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/mcp/src/github/__tests__/tools/labels.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/artifactService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/artifactService/delete.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/artifactService/list.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/artifactService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/artifactService/update.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/briefcaseService/briefcaseService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/cliCompletions.abortedOutput.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliCompletions.admission.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/cliCompletions.caching.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/cliCompletions.creditCap.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/cliCompletions.creditEvents.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliCompletions.effort.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/cliCompletions.ledgerRow.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliCompletions.maxTokens.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/cliCompletions.modelAlias.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/cliCompletions.multimodal.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/cliCompletions.orgBilling.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/cliCompletions.reservation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/cliCompletions.serverTools.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/cliCompletions.shadowTier.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/cliCompletions.thinking.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/cliCompletions.turnUsage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/cliTools/executeServerTool.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/countersService/agnosticAiInsights.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/dataLakeService/applyTaxonomySuggestions.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 24
+    }
+  },
+  "b4m-core/services/src/dataLakeService/dataLakeSearchMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/dataLakeService/dataLakeService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 71
+    }
+  },
+  "b4m-core/services/src/dataLakeService/dismissTaxonomySuggestion.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/dataLakeService/scanTruncationMetrics.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/emailAnalysisService/analyzeEmail.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 23
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processAttachments.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processAttachments.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processEmailBody.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/processIngestedEmail.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/emailIngestionService/validateSender.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 44
+    }
+  },
+  "b4m-core/services/src/fabFileService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/fabFileService/get.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/fabFileService/reconcileLakeTags.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/fabFileService/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/fabFileService/toggleTags.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/fabFileService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/imageTemplateService/imageTemplateService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/jupyterExecutionService/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/ChatCompletion.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 619
+    }
+  },
+  "b4m-core/services/src/llm/ChatCompletionInvoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 75
+    }
+  },
+  "b4m-core/services/src/llm/ChatCompletionInvoke.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/ImageGeneration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 51
+    }
+  },
+  "b4m-core/services/src/llm/ResearchModeService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 14
+    }
+  },
+  "b4m-core/services/src/llm/ResearchModeService.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/llm/features/AgentDetectionFeature.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/llm/intentClassifier.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/llm/modelAdmission.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/tools/ToolValidator.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/blogEdit/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/excelGeneration/index.characterization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/excelGeneration/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/recharts/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/websearch/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/implementation/wikipediaOnThisDay/index.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/llm/tools/toolGenerators.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/notebookCurationService/index.cache.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/notebookCurationService/llmMarkdownGenerator.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/addMember.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/applyPartnerRuleMembership.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/clearActiveOrganization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/organizationService/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/getUsers.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/services/src/organizationService/groupMembership.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/leave.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/revokeAccess.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/organizationService/setOrganizationGroupTypes.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/organizationService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/projectService/addFiles.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/projectService/addSessions.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/projectService/addSystemPrompts.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/services/src/projectService/listInvites.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/projectService/removeFiles.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/projectService/removeSystemPrompts.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/projectService/toggleSystemPrompt.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/promptService/promptService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/researchAgentService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchAgentService/get.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchAgentService/list.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchAgentService/remove.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchAgentService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchData/remove.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/researchTaskService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/researchTaskService/downloadRelevantLinks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/researchTaskService/get.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/researchTaskService/process.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "b4m-core/services/src/researchTaskService/process.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchTaskService/processDiscoveredLinks.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "b4m-core/services/src/researchTaskService/search.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchTaskService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/researchTaskService/utils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/sessionService/delete.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/sharingService/accept.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 28
+    }
+  },
+  "b4m-core/services/src/sharingService/authorizeByInviteType.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 27
+    }
+  },
+  "b4m-core/services/src/sharingService/cancel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/sharingService/cancelInviteById.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 13
+    }
+  },
+  "b4m-core/services/src/sharingService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 49
+    }
+  },
+  "b4m-core/services/src/sharingService/listForDocument.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/sharingService/listOwnPending.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/sharingService/refuse.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/sharingService/refuseWholeInvite.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 16
+    }
+  },
+  "b4m-core/services/src/sharingService/revoke.authorization.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/sharingService/revoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "b4m-core/services/src/sharingService/updateDocumentSharing.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "b4m-core/services/src/sreAgentService/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 114
+    }
+  },
+  "b4m-core/services/src/telemetry/contextBreakdown.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/callbackSigningSecret.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 35
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/revoke.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/rotate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/__tests__/validate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 10
+    }
+  },
+  "b4m-core/services/src/userApiKeyService/updateEmbedKey.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userService/adminEmailManagement.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/adminUpdate.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/services/src/userService/cancelEmailChange.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/create.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/userService/emailChange.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/emailVerification.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/recalculateUserStorage.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userService/recordPolicyAcceptance.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/services/src/userService/register.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "b4m-core/services/src/userService/requestEmailChange.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/resendEmailVerification.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/sendEmailVerification.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/update.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "b4m-core/services/src/userService/updateLogoutTime.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/services/src/userService/verifyEmailChange.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/userService/verifyEmailToken.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/services/src/voiceService/getVoiceId.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/SlackEvent.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/SlackMessageEnricher.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/__tests__/channel-manager.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/__tests__/globalShortcutHandlers.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 8
+    }
+  },
+  "b4m-core/slack/src/__tests__/search-handler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/__tests__/workflowErrors.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/commands/configCommands.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/constants/slack-model-options.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/github/GitHubSlackNotifier.ts": {
+    "b4m/require-update-validators": { "count": 2 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/slack/src/handlers/WorkflowStepHandler.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/slack/src/handlers/__tests__/WorkflowStepHandler.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "b4m-core/slack/src/handlers/channel-manager.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "b4m-core/slack/src/handlers/notebook-messaging.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/slack/src/handlers/slack-github-mapper.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/handlers/user-lookup.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/installer.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/manifestComparator.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/slack/src/resources/ConfluenceResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/resources/GitHubResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/slack/src/resources/InternalResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/resources/JiraResource.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/services/AppHomeDataService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/services/SlackAuditLogger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 17
+    }
+  },
+  "b4m-core/slack/src/services/SlackAuditLogger.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/stateNonceBinding.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/slack/src/user-link-helpers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "b4m-core/slack/src/views/AppHomeBuilder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 38
+    }
+  },
+  "b4m-core/slack/src/workflowErrors.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "b4m-core/utils/src/adminSettings/fallback.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/utils/src/llm/audioAttachmentGuard.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "b4m-core/utils/src/llm/upstreamTruncation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 36
+    }
+  },
+  "b4m-core/utils/src/llm/utils.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 119
+    }
+  },
+  "b4m-core/utils/src/llm/utils.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 4
+    }
+  },
+  "b4m-core/utils/src/promptModeration/index.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "b4m-core/utils/src/slack.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "infra/__tests__/wafPolicy.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 40
+    }
+  },
+  "packages/cli/src/session/turnController.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/cli/src/storage/ImageStore.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/cli/src/tools/gateway/gateway.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 12
+    }
+  },
+  "packages/cli/src/utils/StreamLogger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
+    }
+  },
+  "packages/cli/src/utils/formatStep.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/cli/src/utils/tokenCounter.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/__test__/artifactModels.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/__tests__/UserApiKeyAuditLogModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/__tests__/collation-compatibility.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/__tests__/fabFilePullTags.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/__tests__/facet-compatibility.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 7
+    }
+  },
+  "packages/database/src/__tests__/flag-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 11
+    }
+  },
+  "packages/database/src/__tests__/lookup-compatibility.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/database/src/__tests__/mfa-secret-select.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/database/src/__tests__/real-world-validation.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/ai/RapidReplyAuditLogModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/auth/PartnerSignupRuleModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/auth/UserApiKeyModel.ts": {
+    "b4m/require-update-validators": { "count": 17 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/auth/VoiceIdModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/billing/UsageEventModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ActivityModel.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ArtifactContentModel.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ArtifactModel.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/database/src/models/content/ArtifactVersionModel.ts": {
+    "b4m/require-update-validators": { "count": 3 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/content/FabFileModel.countDataLakeUniqueFilesByPrefix.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/database/src/models/content/FabFileModel.ts": {
+    "b4m/require-update-validators": { "count": 36 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/content/ImageGenerationTemplateModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/content/TagModel.ts": {
+    "b4m/require-update-validators": { "count": 4 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/infra/email/EmailSendAttemptModel.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/database/src/models/social/FeedbackReportQueries.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/generateUserActivity.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/generateWeeklyUserActivity.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/listUsers.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20251008130737_delete-deprecated-chunks.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/migrate/migrations/20251023120000_add-email-verification-indexes.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20260120142227_migrate-usersubscription-to-subscription.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20260702000000_hash-mfa-backup-codes.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/scripts/migrate/migrations/20260709130000_base-entitlement-on-default-models.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/scripts/migrate/migrations/20260710160000_base-entitlement-cover-drifted-seed-configs.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 6
+    }
+  },
+  "packages/scripts/migrate/migrations/20260921235970_ensure-fabfile-owner-organization-index.integration.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/seeders/AgentSeeder.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/scripts/src/curatedCatalog/curatedSchema.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/src/curatedCatalog/curatedV2.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/scripts/syncTranslations.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/artifacts/artifactAccess.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/server-utils/src/auth/ability.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/cli/toolsHandler.shared.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/server-utils/src/entitlements/partnerRules.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/integrations/integrationAuditLogger.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 43
+    }
+  },
+  "packages/server-utils/src/integrations/slack/slackPackageInit.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/managers/sessionCrud.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/models/Subscription.ts": {
+    "b4m/require-update-validators": { "count": 9 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/s3/historyUploadComplete.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/s3/moderateUploadedFile.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/server-utils/src/services/operationsModelService.ts": {
+    "b4m/require-update-validators": { "count": 2 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/services/organizationService.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 30
+    }
+  },
+  "packages/server-utils/src/utils/analyticsLog.ts": {
+    "b4m/require-update-validators": { "count": 1 },
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/auditLog.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/chatCompletionDefaults.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 5
+    }
+  },
+  "packages/server-utils/src/utils/cloudwatch.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 2
+    }
+  },
+  "packages/server-utils/src/utils/getMcpClientAdapter.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/mcpCall.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
+  "packages/server-utils/src/utils/persistAgentArtifacts.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 3
+    }
+  },
+  "packages/server-utils/src/utils/sessionAccess.test.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 9
     }
   }
 }

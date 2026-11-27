@@ -1,4 +1,5 @@
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { isProviderRefusalStopReason } from '@bike4mind/common';
 import type { Credits, StreamEvent, ToolUse, Usage } from './streamEvents';
 import type { CompletionCallback } from './streamTransport';
 import { VisibleTextFilter } from './visibleTextFilter';
@@ -33,10 +34,9 @@ function extractUsageInfo(parsed: { usage?: Usage; credits?: Credits }): Complet
  * add up to exactly the text a buffered turn would carry, which is what
  * ReActAgent's delta-concatenating callback expects.
  *
- * Both backends - `ServerLlmBackend` (SSE) and `WebSocketLlmBackend` (WebSocket
- * frames) - decode their wire payloads into the shared event union and feed
- * each event to {@link apply}, so accumulation logic lives in exactly one
- * place and is transport-agnostic.
+ * A transport (`ServerLlmBackend` over SSE) decodes its wire payloads into the
+ * shared event union and feeds each event to {@link apply}, so accumulation
+ * logic lives in one place and is transport-agnostic.
  */
 export class StreamAccumulator {
   private accumulatedText = '';
@@ -141,7 +141,7 @@ export class StreamAccumulator {
         stopReason: this.stopReason,
       };
       await callback([remainingText], info);
-    } else if (remainingText || this.textDelivered) {
+    } else if (remainingText || this.textDelivered || isProviderRefusalStopReason(this.stopReason)) {
       await callback([remainingText], { ...this.lastUsageInfo, stopReason: this.stopReason });
     }
   }

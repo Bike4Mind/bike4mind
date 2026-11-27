@@ -26,6 +26,7 @@ const findModel = async (id: ChatModels): Promise<ModelInfo> => {
 // (https://web.archive.org/web/20261001232750/https://ai.google.dev/gemini-api/docs/pricing) and on
 // https://cloud.google.com/vertex-ai/generative-ai/pricing.
 const PUBLISHED_CACHE_READ: Partial<Record<ChatModels, Record<number, number>>> = {
+  [ChatModels.GEMINI_4_NEON]: { 1048576: 0.15 },
   [ChatModels.GEMINI_3_5_FLASH]: { 1048576: 0.15 },
   [ChatModels.GEMINI_3_1_PRO_PREVIEW]: { 200000: 0.2, 2097152: 0.4 },
   [ChatModels.GEMINI_3_1_FLASH_LITE]: { 1048576: 0.025 },

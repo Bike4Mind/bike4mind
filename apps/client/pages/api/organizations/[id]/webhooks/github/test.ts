@@ -15,13 +15,12 @@ import crypto from 'crypto';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
+import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { cacheRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError, TooManyRequestsError } from '@bike4mind/utils';
-import { v4 as uuidv4 } from 'uuid';
 
 interface TestRequest {
   targetUrl?: string;
@@ -42,7 +41,7 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 
 const isRedirectStatus = (status: number) => status >= 300 && status < 400;
 
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, TestResponse, TestRequest, { id?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;
@@ -61,7 +60,7 @@ const handler = baseApi().post(
       );
     }
 
-    const org = await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
     if (!webhookConfig) {
@@ -80,7 +79,7 @@ const handler = baseApi().post(
       throw new Error('SECRET_ENCRYPTION_KEY not configured');
     }
 
-    const secret = decryptSecret(webhookConfig.secret, encryptionKey);
+    const secret = decryptStoredSecret(webhookConfig.secret);
 
     const testPayload = {
       action: 'ping',
@@ -102,8 +101,8 @@ const handler = baseApi().post(
     const signedPayload = `${timestamp}.${payloadString}`;
     const signature = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
 
-    const eventId = uuidv4();
-    const deliveryId = uuidv4();
+    const eventId = crypto.randomUUID();
+    const deliveryId = crypto.randomUUID();
 
     // If no target URL, return a mock success (test the signature generation)
     if (!targetUrl) {
@@ -121,25 +120,30 @@ const handler = baseApi().post(
     const startTime = Date.now();
 
     try {
-      const response = await fetch(targetUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Webhook-Event-ID': eventId,
-          'X-Webhook-Delivery-ID': deliveryId,
-          'X-Webhook-Timestamp': String(timestamp),
-          'X-Webhook-Signature-256': `sha256=${signature}`,
-          'X-Event-Type': 'ping',
-          'X-GitHub-Event': 'ping',
-          'User-Agent': 'Lumina5-Webhook/1.0 (Test)',
+      const response = await fetchPinned(
+        targetUrl,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Webhook-Event-ID': eventId,
+            'X-Webhook-Delivery-ID': deliveryId,
+            'X-Webhook-Timestamp': String(timestamp),
+            'X-Webhook-Signature-256': `sha256=${signature}`,
+            'X-Event-Type': 'ping',
+            'X-GitHub-Event': 'ping',
+            'User-Agent': 'Lumina5-Webhook/1.0 (Test)',
+          },
+          body: payloadString,
+          signal: controller.signal,
+          // validateTargetUrl only vetted targetUrl itself; following a redirect would let a public host
+          // bounce this signed POST to an address it never checked.
+          redirect: 'manual',
         },
-        body: payloadString,
-        signal: controller.signal,
-        // validateTargetUrl only vetted targetUrl itself; following a redirect would let a public host
-        // bounce this signed POST to an address it never checked.
-        redirect: 'manual',
-      });
+        { allowHttp: true, discardBody: true }
+      );
       clearTimeout(timeoutId);
+      await response.body?.cancel().catch(() => undefined);
 
       const latencyMs = Date.now() - startTime;
 
@@ -163,6 +167,10 @@ const handler = baseApi().post(
     } catch (error) {
       clearTimeout(timeoutId);
       const latencyMs = Date.now() - startTime;
+
+      if (error instanceof SsrfError) {
+        throw new BadRequestError(error.message);
+      }
 
       if (error instanceof Error && error.name === 'AbortError') {
         return res.status(200).json({

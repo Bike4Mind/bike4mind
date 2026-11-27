@@ -10,7 +10,7 @@ This document provides a complete reference for all agent-related API endpoints 
 
 ## Authentication
 
-All agent API endpoints require authentication via JWT tokens. Include the token in the Authorization header:
+Agent API endpoints accept a JWT or a scoped API key. Include the token in the Authorization header:
 
 ```
 Authorization: Bearer <your-jwt-token>
@@ -24,6 +24,8 @@ https://app.bike4mind.com/api
 
 ## Agent Management Endpoints
 
+`GET /api/agents` requires `agents:read` for API keys; create, update, delete and description generation require `agents:write`. JWT calls use the signed-in user's permissions. Session attachment endpoints below use the platform session API.
+
 ### List Agents
 
 Get all agents accessible to the authenticated user.
@@ -36,43 +38,41 @@ GET /agents
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `search` | string | Search query for agent names | - |
-| `owned` | boolean | Only return user-owned agents | false |
-| `public` | boolean | Include public agents | true |
+| `query` | string | Search query for agent names | empty |
 | `page` | number | Page number for pagination | 1 |
-| `limit` | number | Number of agents per page | 20 |
+| `limit` | number | Number of agents per page | 10 |
+| `orderBy` | string | `createdAt`, `updatedAt` or `name` | `updatedAt` |
+| `orderDirection` | string | `asc` or `desc` | `desc` |
 
 #### Response
 
 ```json
 {
-  "agents": [
+  "data": [
     {
-      "id": "agent_123",
+      "_id": "665f1c2e9b1d4a0012ab34cd",
+      "id": "665f1c2e9b1d4a0012ab34cd",
       "name": "Marketing Assistant",
       "description": "Helps with marketing content creation",
-      "avatarUrl": "https://...",
+      "userId": "665f1c2e9b1d4a0012ab0001",
       "personality": {
         "majorMotivation": "Builder",
         "minorMotivation": "Helper",
-        "characterFlaw": "Perfectionist",
-        "uniqueQuirk": "Loves Puns"
+        "flaw": "None",
+        "quirk": "None"
       },
-      "capabilities": ["content_creation", "social_media"],
-      "triggerWords": ["@marketing", "@content"],
-      "isPublic": true,
-      "ownerId": "user_456",
-      "createdAt": "2024-01-15T10:30:00Z"
+      "capabilities": ["{\"triggerWords\":[\"@marketing\"],\"responseStyle\":\"friendly\",\"specialBehaviors\":[]}"],
+      "triggerWords": ["@marketing"],
+      "isPublic": false,
+      "createdAt": "2025-01-15T10:30:00.000Z"
     }
   ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 1,
-    "totalPages": 1
-  }
+  "hasMore": false,
+  "total": 1
 }
 ```
+
+Agents you own include more fields than shown, such as `systemPrompt`, `visual`, `identity` and credit settings. Agents you do not own, including shared, organization and system agents, use a reduced response that omits `systemPrompt`, ownership fields and credit balances. The list is paged with `page` and `limit`; `hasMore` tells you whether another page exists and `total` is the number of matching agents.
 
 ### Create Agent
 
@@ -84,6 +84,22 @@ POST /agents
 
 #### Request Body
 
+Only `name` is required. The API accepts these fields:
+
+| Field | Notes |
+|-------|-------|
+| `name` | Required. |
+| `description` | Optional. Defaults to `No description provided`. |
+| `personality` | Object with `majorMotivation`, `minorMotivation`, `flaw`, `quirk` and `description`, plus further optional dimensions. Missing `flaw` and `quirk` default to `"None"`. |
+| `triggerWords` | Array of strings. Defaults to `["@help"]`. |
+| `capabilities` | Array holding one JSON string with `triggerWords`, `responseStyle` and `specialBehaviors`. See below. |
+| `isPublic` | Boolean. Defaults to `false`. |
+| `systemPrompt`, `preferredModel`, `temperature`, `maxTokens` | Optional model settings. |
+
+`characterFlaw`, `uniqueQuirk` and a `personality.responseStyle` field are not read; send `flaw` and `quirk`, and set the response style inside `capabilities`.
+
+`capabilities` is stored as a one-element array whose single entry is a JSON string, and the create call expects that same form. The string's `responseStyle` defaults to `"friendly"`.
+
 ```json
 {
   "name": "My Custom Agent",
@@ -91,39 +107,40 @@ POST /agents
   "personality": {
     "majorMotivation": "Explorer",
     "minorMotivation": "Analyzer",
-    "characterFlaw": "Impatient",
-    "uniqueQuirk": "Quotes Movies",
-    "responseStyle": "casual"
+    "flaw": "Impatient",
+    "quirk": "Quotes Movies"
   },
-  "capabilities": ["research", "analysis"],
+  "capabilities": ["{\"triggerWords\":[\"@research\"],\"responseStyle\":\"casual\",\"specialBehaviors\":[]}"],
   "triggerWords": ["@research", "@analyze"],
-  "isPublic": false,
-  "avatarUrl": "https://example.com/avatar.png"
+  "isPublic": false
 }
 ```
 
 #### Response
 
+Status `201`. The body is the created agent plus `userCredits`.
+
 ```json
 {
-  "id": "agent_789",
+  "_id": "665f1c2e9b1d4a0012ab34ce",
+  "id": "665f1c2e9b1d4a0012ab34ce",
   "name": "My Custom Agent",
   "description": "A specialized agent for my use case",
-  "avatarUrl": "https://example.com/avatar.png",
+  "userId": "665f1c2e9b1d4a0012ab0001",
   "personality": {
     "majorMotivation": "Explorer",
     "minorMotivation": "Analyzer",
-    "characterFlaw": "Impatient",
-    "uniqueQuirk": "Quotes Movies",
-    "responseStyle": "casual"
+    "flaw": "Impatient",
+    "quirk": "Quotes Movies"
   },
-  "capabilities": ["research", "analysis"],
+  "capabilities": ["{\"triggerWords\":[\"@research\"],\"responseStyle\":\"casual\",\"specialBehaviors\":[]}"],
   "triggerWords": ["@research", "@analyze"],
   "isPublic": false,
-  "ownerId": "user_current",
-  "createdAt": "2024-01-15T10:30:00Z"
+  "userCredits": 1000
 }
 ```
+
+The object includes more fields than shown.
 
 ### Get Agent Details
 
@@ -137,25 +154,26 @@ GET /agents/{agentId}
 
 ```json
 {
-  "id": "agent_123",
+  "_id": "665f1c2e9b1d4a0012ab34cd",
+  "id": "665f1c2e9b1d4a0012ab34cd",
   "name": "Marketing Assistant",
   "description": "Helps with marketing content creation",
-  "avatarUrl": "https://...",
+  "userId": "665f1c2e9b1d4a0012ab0001",
   "personality": {
     "majorMotivation": "Builder",
     "minorMotivation": "Helper",
-    "characterFlaw": "Perfectionist",
-    "uniqueQuirk": "Loves Puns",
-    "responseStyle": "friendly"
+    "flaw": "None",
+    "quirk": "None"
   },
-  "capabilities": ["content_creation", "social_media"],
-  "triggerWords": ["@marketing", "@content"],
-  "isPublic": true,
-  "ownerId": "user_456",
-  "createdAt": "2024-01-15T10:30:00Z",
-  "updatedAt": "2024-01-16T14:22:00Z"
+  "capabilities": ["{\"triggerWords\":[\"@marketing\"],\"responseStyle\":\"friendly\",\"specialBehaviors\":[]}"],
+  "triggerWords": ["@marketing"],
+  "isPublic": false,
+  "createdAt": "2025-01-15T10:30:00.000Z",
+  "updatedAt": "2025-01-16T14:22:00.000Z"
 }
 ```
+
+The object includes more fields than shown.
 
 ### Update Agent
 
@@ -167,6 +185,8 @@ PUT /agents/{agentId}
 
 #### Request Body
 
+Send the fields you want to change. Field names match the create request. Nested objects such as `personality` and `visual` replace the stored object rather than merging with it; include every nested field you want to preserve.
+
 ```json
 {
   "name": "Updated Marketing Assistant",
@@ -174,11 +194,9 @@ PUT /agents/{agentId}
   "personality": {
     "majorMotivation": "Builder",
     "minorMotivation": "Helper",
-    "characterFlaw": "Perfectionist", 
-    "uniqueQuirk": "Loves Puns",
-    "responseStyle": "professional"
+    "flaw": "Perfectionist",
+    "quirk": "Loves Puns"
   },
-  "capabilities": ["content_creation", "social_media", "seo"],
   "triggerWords": ["@marketing", "@content", "@seo"],
   "isPublic": true
 }
@@ -189,17 +207,12 @@ PUT /agents/{agentId}
 Delete an agent (only owner can delete).
 
 ```http
-DELETE /agents/{agentId}/delete
+DELETE /agents/{agentId}
 ```
 
 #### Response
 
-```json
-{
-  "message": "Agent deleted successfully",
-  "deletedAt": "2024-01-15T10:30:00Z"
-}
-```
+Status `204` with an empty body. A later `GET /agents/{agentId}` returns `404`.
 
 ### Generate Agent Description
 
@@ -213,8 +226,7 @@ POST /agents/{agentId}/generate-description
 
 ```json
 {
-  "description": "A creative and helpful marketing assistant who loves to build engaging content. Known for their perfectionist tendencies and love of puns, they bring both professionalism and humor to every project.",
-  "generatedAt": "2024-01-15T10:30:00Z"
+  "description": "A creative and helpful marketing assistant who loves to build engaging content."
 }
 ```
 
@@ -236,8 +248,8 @@ GET /sessions/{sessionId}/agents
     {
       "id": "agent_123",
       "name": "Marketing Assistant",
-      "avatarUrl": "https://...",
-      "attachedAt": "2024-01-15T10:30:00Z"
+      "description": "Helps with marketing content creation",
+      "visual": { "portraitUrl": "https://example.com/avatar.png" }
     }
   ]
 }
@@ -262,16 +274,10 @@ POST /sessions/{sessionId}/agents
 #### Response
 
 ```json
-{
-  "message": "Agent attached successfully",
-  "agent": {
-    "id": "agent_123",
-    "name": "Marketing Assistant",
-    "avatarUrl": "https://..."
-  },
-  "attachedAt": "2024-01-15T10:30:00Z"
-}
+{ "session": { "id": "665f1c2e9b1d4a0012ab34ef", "agentIds": ["665f1c2e9b1d4a0012ab34cd"] } }
 ```
+
+The response contains the updated session, with more fields than shown.
 
 ### Detach Agent from Session
 
@@ -281,20 +287,17 @@ Remove an agent from a conversation session.
 DELETE /sessions/{sessionId}/agents
 ```
 
-#### Query Parameters
+#### Request Body
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agentId` | string | Yes | ID of the agent to detach |
+Send `agentId` in a JSON body, rather than the query string:
+
+```json
+{ "agentId": "665f1c2e9b1d4a0012ab34cd" }
+```
 
 #### Response
 
-```json
-{
-  "message": "Agent detached successfully",
-  "detachedAt": "2024-01-15T10:30:00Z"
-}
-```
+Both attach and detach return `{ "session": { ... } }`, containing the updated session. Getting session agents returns `{ "agents": [...] }` with full agent objects, in the same shape as the agent detail endpoint.
 
 ## WebSocket Events
 
@@ -382,75 +385,30 @@ All endpoints use standard HTTP status codes and return errors in this format:
 
 ## Rate Limits
 
-Agent API endpoints are subject to rate limiting:
-
-| Endpoint Pattern | Limit | Window |
-|------------------|-------|--------|
-| `GET /agents` | 100 requests | 1 minute |
-| `POST /agents` | 10 requests | 1 minute |
-| `PUT /agents/*` | 30 requests | 1 minute |
-| `DELETE /agents/*` | 10 requests | 1 minute |
-| `*/sessions/*/agents` | 60 requests | 1 minute |
-
-Rate limit information is included in response headers:
-
-```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 95
-X-RateLimit-Reset: 1642284600
-```
+Agent API requests made with an API key use the standard per-key limits. Each key has a per-minute and a per-day limit, and exceeding either returns `429` with a `Retry-After` header in seconds. See [Rate limits and size](../../api/completions/reference.md#rate-limits-and-size).
 
 ## SDKs and Examples
 
 ### JavaScript/TypeScript
 
 ```typescript
-import { BikeForMindClient } from '@bike4mind/sdk';
+import { createClient } from '@bike4mind/sdk';
 
-const client = new BikeForMindClient({
-  apiKey: 'your-api-key',
-  baseUrl: 'https://app.bike4mind.com'
+const b4m = createClient({
+  baseUrl: 'https://app.bike4mind.com',
+  apiKey: process.env.B4M_API_KEY,
 });
 
-// Create an agent
-const agent = await client.agents.create({
-  name: 'My Assistant',
-  description: 'A helpful assistant',
-  personality: {
-    majorMotivation: 'Helper',
-    responseStyle: 'friendly'
-  },
-  capabilities: ['general_assistance']
-});
-
-// Attach to session
-await client.sessions.attachAgent(sessionId, agent.id);
+// List your agents (any spec operation is callable by its operationId)
+const agents = await b4m.call('listAgents');
+// the key needs the agents:read scope
 ```
+
+The SDK calls `GET /api/v1/agents`, which uses API-key authentication, `limit`/`cursor` pagination, and a `{ data, next_cursor }` response. This differs from the `/api/agents` route documented above; use the [in-app API reference](https://app.bike4mind.com/api/v1/docs) for the versioned contract.
 
 ### Python
 
-```python
-from bike4mind import BikeForMindClient
-
-client = BikeForMindClient(
-    api_key='your-api-key',
-    base_url='https://app.bike4mind.com'
-)
-
-# Create an agent
-agent = client.agents.create(
-    name='My Assistant',
-    description='A helpful assistant',
-    personality={
-        'major_motivation': 'Helper',
-        'response_style': 'friendly'
-    },
-    capabilities=['general_assistance']
-)
-
-# Attach to session
-client.sessions.attach_agent(session_id, agent['id'])
-```
+Use the [plain HTTP Python client](../../api/examples.md#python) with your JWT. No Python SDK is required.
 
 ### cURL Examples
 
@@ -463,10 +421,9 @@ curl -X POST https://app.bike4mind.com/api/agents \
     "name": "Research Assistant",
     "description": "Helps with research tasks",
     "personality": {
-      "majorMotivation": "Explorer",
-      "responseStyle": "analytical"
+      "majorMotivation": "Explorer"
     },
-    "capabilities": ["research", "analysis"]
+    "triggerWords": ["@research"]
   }'
 
 # Attach agent to session
@@ -503,4 +460,4 @@ curl -X POST https://app.bike4mind.com/api/sessions/session_123/agents \
 
 ---
 
-For more examples and detailed integration guides, see the [Integration section](../integration/). 
+For more examples and detailed integration guides, see the [Integration section](../integration/).

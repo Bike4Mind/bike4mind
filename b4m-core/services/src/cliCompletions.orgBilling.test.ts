@@ -1,8 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType, ForbiddenError, ORG_MODEL_NOT_ALLOWED_ERROR_CODE } from '@bike4mind/common';
 
 // Isolate the billing routing: stub the LLM layer, settings, and credit math so
 // the test asserts *which pool* is reserved/settled, not token accounting.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 // Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
 vi.mock('./creditService', async importOriginal => ({
@@ -10,6 +22,7 @@ vi.mock('./creditService', async importOriginal => ({
   subtractCredits: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({
+  resolveSuccessorChain: (id: string) => id,
   buildApiKeyTable: (keys: object) => keys,
   reasonsWithinOutputBudget: vi.fn(() => false),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
@@ -17,7 +30,14 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([
+    {
+      id: 'test-model',
+      type: 'text',
+      backend: 'anthropic',
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
+  ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
@@ -79,6 +99,7 @@ function buildDb(overrides: { org?: any } = {}) {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: usageEvents as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: organizations as any,
     },
     users,
@@ -224,6 +245,49 @@ describe('executeCompletion - org billing routing', () => {
     expect(mockSubtractCredits).not.toHaveBeenCalled();
   });
 
+  it('refuses a model the billing organization does not allow, before reserving', async () => {
+    const modelPolicy = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const { db, users, organizations } = buildDb({ org: buildOrg({ modelPolicy }) });
+
+    const err = await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' }).catch(e => e);
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err.additionalInfo?.errorCode).toBe(ORG_MODEL_NOT_ALLOWED_ERROR_CODE);
+    expect(organizations.incrementCredits).not.toHaveBeenCalled();
+    expect(users.incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('runs a model the billing organization allows, and ignores org policy for personal billing', async () => {
+    const modelPolicy = { allowedProviders: null, allowedModels: ['test-model'], allowedTools: null };
+    const allowed = buildDb({ org: buildOrg({ modelPolicy }) });
+    await executeCompletion({ ...baseParams, db: allowed.db, billingOrganizationId: 'org1' });
+    expect(allowed.organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+
+    const blocked = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const personal = buildDb({ org: buildOrg({ modelPolicy: blocked }) });
+    await executeCompletion({ ...baseParams, db: personal.db });
+    expect(personal.users.incrementCredits).toHaveBeenCalledWith('user1', -10);
+  });
+
+  it('applies a governing org policy to a personally billed turn, and lets the billing org win', async () => {
+    const blocked = { allowedProviders: null, allowedModels: ['other-model'], allowedTools: null };
+    const governed = buildDb();
+    const err = await executeCompletion({ ...baseParams, db: governed.db, governingOrgModelPolicy: blocked }).catch(
+      e => e
+    );
+    expect(err.additionalInfo?.errorCode).toBe(ORG_MODEL_NOT_ALLOWED_ERROR_CODE);
+    expect(governed.users.incrementCredits).not.toHaveBeenCalled();
+
+    const allows = { allowedProviders: null, allowedModels: ['test-model'], allowedTools: null };
+    const billed = buildDb({ org: buildOrg({ modelPolicy: allows }) });
+    await executeCompletion({
+      ...baseParams,
+      db: billed.db,
+      billingOrganizationId: 'org1',
+      governingOrgModelPolicy: blocked,
+    });
+    expect(billed.organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+  });
+
   it('bills the org for a platform admin, who is on no org roster', async () => {
     // The mint route lets a platform admin create an org-billed key for a customer org, so a
     // roster-only gate would break that key on its very first call, not just after someone left.
@@ -233,6 +297,30 @@ describe('executeCompletion - org billing routing', () => {
     await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
 
     expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+  });
+
+  it("admits the org's own service account without a roster row and seeds no member row", async () => {
+    const { db, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+    db.users.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'user1', currentCredits: 100, isSystem: true, serviceAccountOrganizationId: 'org1' });
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    expect(organizations.incrementCredits).toHaveBeenCalledWith('org1', -10);
+    expect(organizations.ensureUserDetails).not.toHaveBeenCalled();
+  });
+
+  it("still refuses another org's service account that is on no roster", async () => {
+    const { db, organizations } = buildDb({ org: buildOrg({ users: [{ userId: 'someone-else' }] }) });
+    db.users.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'user1', currentCredits: 100, isSystem: true, serviceAccountOrganizationId: 'org2' });
+
+    await expect(executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' })).rejects.toThrow(
+      /no longer a member of/i
+    );
+    expect(organizations.incrementCredits).not.toHaveBeenCalled();
   });
 
   it('bills the org for its billing owner, who holds no users[] row', async () => {
@@ -278,7 +366,8 @@ describe('executeCompletion durable credit lifecycle', () => {
           userId: 'user1',
           reservedCredits: 10,
         }),
-        expect.any(Function)
+        expect.any(Function),
+        undefined
       );
       expect(creditHolds.settle).toHaveBeenCalledWith(10, expect.any(Function));
       expect(mockSubtractCredits).toHaveBeenCalledTimes(1);

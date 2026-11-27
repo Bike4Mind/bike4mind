@@ -148,6 +148,18 @@ dig app.yourdomain.com +short
 
 ## Deployment Issues
 
+### Public Site Sends a Noindex Header
+
+**Cause:** Your SST stage is named something other than `production`. The CDN viewer-response function adds `X-Robots-Tag: noindex, nofollow` on those stages.
+
+**Check:** Inspect a successful page response:
+
+```bash
+curl -I https://app.example.com/
+```
+
+**Fix:** Use the `production` stage for your public deployment. Changing the stage name creates a separate SST stack; plan the migration before moving an existing site. See [Stage Name and Search Indexing](./index.md#stage-name-and-search-indexing). Keep robots.txt crawlable so crawlers can read the header, and allow time for a recrawl after changing the policy.
+
 ### "Hosted zone not found"
 
 **Cause:** Route53 hosted zone not accessible or misconfigured

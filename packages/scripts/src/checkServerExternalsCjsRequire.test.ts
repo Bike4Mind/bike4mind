@@ -27,7 +27,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const NEXT_CONFIG = path.join(REPO_ROOT, 'apps/client/next.config.mjs');
 
 /**
- * sanitize-html sits in transpilePackages (pinned by checkSanitizeHtmlTranspile.test.ts), not in
+ * sanitize-html sits in transpilePackages (pinned by checkSanitizeHtmlTranspile.repo.test.ts), not in
  * serverExternalPackages, so the imported list below does not cover it. It is held here because
  * its require('htmlparser2') reached Node in the deployed stack trace, which makes this probe the
  * only require()-level pin on the htmlparser2 override at root package.json: drop that override

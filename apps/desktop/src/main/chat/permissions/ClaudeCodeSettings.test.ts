@@ -7,7 +7,9 @@ import { ClaudeCodeSettings } from './ClaudeCodeSettings';
 
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>();
-  return { ...actual, watch: vi.fn(actual.watch), unwatchFile: vi.fn(actual.unwatchFile) };
+  const watchFile = (path: string, options: { persistent?: boolean }, listener: () => void) =>
+    actual.watchFile(path, { ...options, interval: 20 }, listener);
+  return { ...actual, watch: vi.fn(actual.watch), unwatchFile: vi.fn(actual.unwatchFile), watchFile };
 });
 
 describe('ClaudeCodeSettings failure and replacement handling', () => {
@@ -124,12 +126,16 @@ describe('ClaudeCodeSettings failure and replacement handling', () => {
     await mkdir(folder);
     await writeFile(path, '{"permissions":{"deny":["Bash(curl:*)"]}}');
     await vi.waitFor(
-      () => expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual(['Bash(curl:*)']),
+      () =>
+        expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual(['Bash(curl:*)']),
       { timeout: 5000 }
     );
     await writeFile(path, '{"permissions":{"deny":["Bash(git push:*)"]}}');
     await vi.waitFor(
-      () => expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual(['Bash(git push:*)']),
+      () =>
+        expect(settings.filesFor(null).find(file => file.id === 'cc-managed')?.lists.deny).toEqual([
+          'Bash(git push:*)',
+        ]),
       { timeout: 5000 }
     );
   });

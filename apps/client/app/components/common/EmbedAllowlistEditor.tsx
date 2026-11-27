@@ -138,7 +138,7 @@ export function EmbedAllowlistEditor({
         <CodeIcon fontSize="small" />
         <FormLabel sx={{ mb: 0 }}>Show on your website</FormLabel>
       </Box>
-      <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 1 }}>
         Let specific websites show this artifact inside their pages. Add the site address (up to {EMBED_ORIGINS_MAX})
         where you&apos;ll paste the embed code.
       </Typography>
@@ -192,7 +192,7 @@ export function EmbedAllowlistEditor({
       )}
       {origins.length > 0 && (
         <>
-          <Typography level="body-xs" sx={{ opacity: 0.75, mb: 0.5 }}>
+          <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 0.5 }}>
             Paste this where you want the artifact to appear:
           </Typography>
           <Box sx={{ display: 'flex', gap: 1 }}>

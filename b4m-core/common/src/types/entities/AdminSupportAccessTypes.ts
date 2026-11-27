@@ -22,6 +22,14 @@ export enum AdminSupportAccessAction {
    * conversation-derived session fields (summaries, remembered entities).
    */
   SessionQuestsRead = 'session.quests.read',
+  /** GET /api/admin/model-logs/[id] - one quest's full promptMeta (prompt text, tool arguments). */
+  ModelLogRead = 'model_log.read',
+  /**
+   * GET /api/admin/model-logs?search= - a text search that matches the users' own prompt text,
+   * cross-user. Records the search term and the returned quest ids in `details`, not owner ids:
+   * a user id in `details` would escape data-subject erasure, which anonymizes `targetUserId` only.
+   */
+  ModelLogsSearch = 'model_logs.search',
 }
 
 /**
@@ -33,9 +41,13 @@ export interface IAdminSupportAccessAuditLog {
   action: AdminSupportAccessAction;
   /** Platform admin who performed the read. */
   actorUserId: string;
-  /** Owner of the session that was read. */
-  targetUserId: string;
-  sessionId: string;
+  /**
+   * Owner of the content that was read. Always set for the session reads; absent for a cross-user
+   * search, or a model log whose owner can no longer be resolved.
+   */
+  targetUserId?: string;
+  /** The session the content belongs to, when the read is scoped to one. */
+  sessionId?: string;
   /**
    * Support-case reference supplied by the caller (required by the endpoints),
    * so the log says *why* the read happened without a second system.

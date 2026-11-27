@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   disconnectDrive: vi.fn(),
   connectDrive: vi.fn(),
   disconnectAtlassian: vi.fn(),
+  connectAtlassian: vi.fn(),
+  disconnectNotion: vi.fn(),
   refreshUser: vi.fn(),
   confirm: vi.fn(),
   toastWarning: vi.fn(),
@@ -39,10 +41,10 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useDisconnectGoogleDrive: () => ({ mutate: h.disconnectDrive, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
-  useConnectAtlassian: () => ({ mutate: vi.fn(), isPending: false }),
+  useConnectAtlassian: () => ({ mutate: h.connectAtlassian, isPending: false }),
   useDisconnectAtlassian: () => ({ mutate: h.disconnectAtlassian, isPending: false }),
   useConnectNotion: () => ({ mutate: vi.fn(), isPending: false }),
-  useDisconnectNotion: () => ({ mutate: vi.fn(), isPending: false }),
+  useDisconnectNotion: () => ({ mutate: h.disconnectNotion, isPending: false }),
   useUpdateNotionSettings: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -225,5 +227,43 @@ describe('ConnectedAppsSection - Google Drive disconnect gate', () => {
     await acceptConfirm();
 
     await waitFor(() => expect(h.toastError).toHaveBeenCalled());
+  });
+});
+
+describe('ConnectedAppsSection - expired grants', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps Unlink reachable beside Reconnect when an Atlassian grant expired', async () => {
+    const user = userEvent.setup();
+    currentUser = { id: 'u1', atlassianConnect: { status: 'needs_reconnect', siteName: 'acme' } };
+    renderSection();
+
+    const atlassian = card('Atlassian (Jira, Confluence)');
+    expect(within(atlassian).getByRole('button', { name: /reconnect/i })).toBeInTheDocument();
+    await user.click(within(atlassian).getByTestId('connected-app-unlink-expired-btn'));
+
+    expect(h.disconnectAtlassian).toHaveBeenCalledTimes(1);
+    expect(h.connectAtlassian).not.toHaveBeenCalled();
+  });
+
+  it('keeps Unlink reachable when a Notion grant expired', async () => {
+    const user = userEvent.setup();
+    currentUser = { id: 'u1', notionConnect: { status: 'needs_reconnect', workspaceName: 'acme' } };
+    renderSection();
+
+    await user.click(
+      within(screen.getByTestId('notion-app-container')).getByTestId('connected-app-unlink-expired-btn')
+    );
+
+    expect(h.disconnectNotion).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no second Unlink while a grant is healthy', () => {
+    currentUser = { id: 'u1', atlassianConnect: { status: 'connected', siteName: 'acme' } };
+    renderSection();
+
+    expect(within(card('Atlassian (Jira, Confluence)')).queryByTestId('connected-app-unlink-expired-btn')).toBeNull();
   });
 });

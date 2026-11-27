@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 
 const { mockFindByOwner, mockUserFind } = vi.hoisted(() => ({
   mockFindByOwner: vi.fn(),
@@ -10,8 +10,8 @@ const { mockFindByOwner, mockUserFind } = vi.hoisted(() => ({
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
@@ -67,12 +67,7 @@ describe('GET /api/admin/users/[userId]/credit-transactions', () => {
     // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
     // and disable this gate while leaving requiredScopes untouched.
     const config = (handler as unknown as { _config?: unknown })._config;
-    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-
-  it('rejects non-admin callers', async () => {
-    const { promise } = run({ user: { id: 'u2', isAdmin: false } });
-    await expect(promise).rejects.toThrow(/Admin access required/);
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: CREDITS_PAGE_READ } });
   });
 
   it('queries only manual-adjustment transaction types for the target user', async () => {

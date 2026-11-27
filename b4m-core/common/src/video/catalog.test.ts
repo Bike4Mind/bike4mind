@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { VIDEO_MODEL_CATALOG, VIDEO_MODEL_IDS } from './catalog';
+import {
+  isVideoModelRetired,
+  retiredVideoModelMessage,
+  VIDEO_MODEL_CATALOG,
+  VIDEO_MODEL_IDS,
+  VideoModelIdSchema,
+} from './catalog';
 import type { VideoGenerationRequest } from './request';
 import type { DurationCapability } from './types';
 import { validateAgainstCapabilities } from './validate';
@@ -22,6 +28,11 @@ describe.each(VIDEO_MODEL_IDS)('catalog entry %s', id => {
       caps.modes.includes('text_to_video') ? caps : { ...caps, modes: [...caps.modes, 'text_to_video'] }
     );
     expect(result.ok).toBe(true);
+  });
+
+  // Otherwise the model would offer a mode no valid request can reach (or a first frame it can never use).
+  it('accepts a first_frame exactly when it offers image_to_video', () => {
+    expect(Boolean(caps.inputs.first_frame)).toBe(caps.modes.includes('image_to_video'));
   });
 
   it('prices every declared duration at every declared resolution', () => {
@@ -57,7 +68,11 @@ describe('gemini-omni-1.1-flash', () => {
     expect(caps).toEqual({
       provider: 'gemini-omni',
       displayName: 'Gemini Omni Flash',
+      tier: 'fast',
+      releasedAt: '2026-08-27',
+      preview: false,
       modes: ['text_to_video', 'image_to_video'],
+      inputs: { first_frame: { max: 1 } },
       duration: { kind: 'range', min: 3, max: 10, step: 1 },
       aspectRatios: ['16:9', '9:16'],
       resolutions: ['720p'],
@@ -106,7 +121,11 @@ describe('grok-imagine-video-1.5', () => {
     expect(caps).toEqual({
       provider: 'xai',
       displayName: 'Grok Imagine Video 1.5',
+      tier: 'flagship',
+      releasedAt: '2026-06-16',
+      preview: false,
       modes: ['text_to_video', 'image_to_video'],
+      inputs: { first_frame: { max: 1 } },
       duration: { kind: 'range', min: 1, max: 15, step: 1 },
       aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'],
       resolutions: ['480p', '720p'],
@@ -153,6 +172,19 @@ describe('grok-imagine-video-1.5', () => {
   });
 });
 
+describe('retired models', () => {
+  it.each(VIDEO_MODEL_IDS.filter(isVideoModelRetired))('%s points at a live, default-enabled replacement', id => {
+    const { replacement } = VIDEO_MODEL_CATALOG[id].retired!;
+    expect(isVideoModelRetired(replacement)).toBe(false);
+    expect(VIDEO_MODEL_CATALOG[replacement].defaultEnabled).toBe(true);
+    expect(VIDEO_MODEL_CATALOG[id].defaultEnabled).toBe(false);
+  });
+
+  it('leaves live models without a refusal', () => {
+    expect(retiredVideoModelMessage('gemini-omni-1.1-flash')).toBeNull();
+  });
+});
+
 describe('veo-3.1-fast-generate-preview', () => {
   const caps = VIDEO_MODEL_CATALOG['veo-3.1-fast-generate-preview'];
   const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
@@ -169,7 +201,11 @@ describe('veo-3.1-fast-generate-preview', () => {
     expect(caps).toEqual({
       provider: 'veo',
       displayName: 'Veo 3.1 Fast',
+      tier: 'fast',
+      releasedAt: '2025-10-15',
+      preview: true,
       modes: ['text_to_video', 'image_to_video'],
+      inputs: { first_frame: { max: 1 } },
       duration: { kind: 'discrete', values: [4, 6, 8] },
       aspectRatios: ['16:9', '9:16'],
       resolutions: ['720p'],
@@ -177,8 +213,21 @@ describe('veo-3.1-fast-generate-preview', () => {
       typicalRenderSeconds: 90,
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
-      defaultEnabled: true,
+      defaultEnabled: false,
+      retired: { date: '2026-10-22', replacement: 'gemini-omni-1.1-flash' },
     });
+  });
+
+  it('still parses as a model id, so stored jobs and usage records keep reading', () => {
+    expect(VideoModelIdSchema.safeParse('veo-3.1-fast-generate-preview').success).toBe(true);
+  });
+
+  it('is retired, with a refusal that names the working replacement', () => {
+    expect(isVideoModelRetired('veo-3.1-fast-generate-preview')).toBe(true);
+    expect(retiredVideoModelMessage('veo-3.1-fast-generate-preview')).toBe(
+      'Veo 3.1 Fast (veo-3.1-fast-generate-preview) was retired by its provider on 2026-10-22; ' +
+        'use gemini-omni-1.1-flash (Gemini Omni Flash) instead'
+    );
   });
 
   it('prices an 8s clip at the per-second rate', () => {
@@ -208,4 +257,44 @@ it('gives every model a positive typical render time', () => {
   for (const id of VIDEO_MODEL_IDS) {
     expect(VIDEO_MODEL_CATALOG[id].typicalRenderSeconds).toBeGreaterThan(0);
   }
+});
+
+describe('flux-3-video', () => {
+  const caps = VIDEO_MODEL_CATALOG['flux-3-video'];
+  const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
+    model: 'flux-3-video',
+    mode: 'text_to_video',
+    prompt: 'a lighthouse',
+    ...caps.defaults,
+    ...overrides,
+  });
+
+  it.each([
+    ['720p', 0.75],
+    ['1080p', 1.2],
+  ] as const)('prices a 5s %s full render at the published rate', (resolution, usd) => {
+    expect(estimateVideoCostUsd(caps, request({ resolution }))).toBeCloseTo(usd, 6);
+  });
+
+  it.each([2, 4, 4.5, 21])('rejects unsupported duration %s', durationSeconds => {
+    expect(validateAgainstCapabilities(request({ durationSeconds }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_duration',
+    });
+  });
+
+  it.each([5, 10, 20])('accepts duration %s', durationSeconds => {
+    expect(validateAgainstCapabilities(request({ durationSeconds }), caps).ok).toBe(true);
+  });
+
+  it('rejects 480p', () => {
+    expect(validateAgainstCapabilities(request({ resolution: '480p' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_resolution',
+    });
+  });
+
+  it.each([false, true])('accepts audio=%s', audio => {
+    expect(validateAgainstCapabilities(request({ audio }), caps).ok).toBe(true);
+  });
 });

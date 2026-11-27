@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
  * GET /api/subscriptions/Organization/:ownerId previously resolved the caller-supplied ownerId
@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const verifyOrgMemberOrManager = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgMemberOrManager }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgMemberOrManager }));
 
 // A regression to the bare repository lookup would make the gate assertions below silently
 // vacuous - the mocked gate simply would not be reached - so the old path is mocked to throw.
@@ -45,7 +45,7 @@ const findActiveSubscriptionsByOwner = vi.hoisted(() =>
     throw new Error('the org route must read non-terminal rows; the active-only predicate hides past_due');
   })
 );
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { findNonTerminalSubscriptionsByOwner, findActiveSubscriptionsByOwner },
 }));
 
@@ -113,6 +113,33 @@ describe('GET /api/subscriptions/Organization/:ownerId - member and manager gate
 
     expect(findNonTerminalSubscriptionsByOwner).toHaveBeenCalledWith(SubscriptionOwnerType.Organization, 'org1');
     expect(res._getJSONData()).toEqual(subscriptions);
+  });
+
+  it('returns only customer-facing fields, not grant, billing-notice or Stripe customer fields', async () => {
+    verifyOrgMemberOrManager.mockResolvedValueOnce({ id: 'org1' });
+    findNonTerminalSubscriptionsByOwner.mockResolvedValueOnce([
+      {
+        id: 'sub1',
+        ownerType: SubscriptionOwnerType.Organization,
+        ownerId: 'org1',
+        priceId: 'price_team',
+        status: 'active',
+        quantity: 5,
+        grantedBy: 'admin1',
+        grantedReason: 'comp',
+        stripeCustomerId: 'cus_1',
+        billingNoticeKeys: ['unpaid:sub_1'],
+        paymentFailureNotifiedInvoiceIds: ['in_1'],
+        acquisition: { first: { source: 'ad' } },
+      },
+    ]);
+
+    const { req, res } = mocks({ id: 'u1' }, { ownerType: SubscriptionOwnerType.Organization, ownerId: 'org1' });
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getJSONData()).toEqual([
+      { id: 'sub1', ownerType: 'Organization', ownerId: 'org1', priceId: 'price_team', status: 'active', quantity: 5 },
+    ]);
   });
 
   it('returns a delinquent row instead of hiding it, so the org keeps its billing portal', async () => {

@@ -12,12 +12,25 @@ const RETENTION_DAYS = 730;
 
 interface IAdminSupportAccessAuditLogModel extends Model<IAdminSupportAccessAuditLogDocument> {}
 
+/**
+ * Reads of one notebook must name the session and its owner. Other reads name what they can resolve:
+ * a model log whose session is gone has no resolvable owner, and a cross-user search has none.
+ */
+const SESSION_SCOPED_ACTIONS: ReadonlySet<AdminSupportAccessAction> = new Set([
+  AdminSupportAccessAction.SessionRead,
+  AdminSupportAccessAction.SessionQuestsRead,
+]);
+
+function isSessionScoped(this: IAdminSupportAccessAuditLog): boolean {
+  return SESSION_SCOPED_ACTIONS.has(this.action);
+}
+
 const AdminSupportAccessAuditLogSchema = new Schema<IAdminSupportAccessAuditLogDocument>(
   {
     action: { type: String, enum: Object.values(AdminSupportAccessAction), required: true },
     actorUserId: { type: String, required: true },
-    targetUserId: { type: String, required: true },
-    sessionId: { type: String, required: true },
+    targetUserId: { type: String, required: isSessionScoped },
+    sessionId: { type: String, required: isSessionScoped },
     supportCase: { type: String, required: true },
     actorIp: { type: String },
     actorUserAgent: { type: String },

@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   adminSettingsRepository: {},
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     listArchivedDataLakes: h.listArchivedDataLakes,

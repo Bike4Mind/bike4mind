@@ -32,18 +32,31 @@ describe('todo_write', () => {
     expect(result).toContain('More than one is in progress');
   });
 
+  it('counts cancelled items and offers activeForm and cancelled in its schema', async () => {
+    const result = await todoWrite.run(
+      { todos: [{ content: 'a', status: 'cancelled', activeForm: 'Doing a' }] },
+      context
+    );
+    expect(result).toBe('Plan updated: 0 done, 0 in progress, 0 pending, 1 cancelled.');
+    const item = (
+      todoWrite.schema.parameters as unknown as { properties: { todos: { items: { properties: object } } } }
+    ).properties.todos.items.properties;
+    expect(Object.keys(item)).toEqual(expect.arrayContaining(['activeForm', 'status']));
+    expect(JSON.stringify(item)).toContain('cancelled');
+  });
+
   it('refuses a malformed list so the model corrects it', async () => {
     await expect(todoWrite.run({ todos: [{ content: 'a', status: 'soon' }] }, context)).rejects.toThrow(
       /status "soon"/
     );
   });
 
-  it('needs no approval and is offered with the local tools only', () => {
+  it('needs no approval and is offered with or without a granted folder', () => {
     expect(todoWrite.approval).toBeUndefined();
     expect(findTool('todo_write')).toBe(todoWrite);
     const names = (roots: string[]) =>
       toolsForRequest({ roots, media: false, host: false }).map(tool => tool.toolSchema.name);
     expect(names(['/tmp'])).toContain('todo_write');
-    expect(names([])).not.toContain('todo_write');
+    expect(names([])).toContain('todo_write');
   });
 });

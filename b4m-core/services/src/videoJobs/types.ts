@@ -1,4 +1,7 @@
 import type {
+  ApiKeyBillingOwnerType,
+  CompletionRunAttribution,
+  GeneratedAssetLineageEntry,
   GeneratedAssetMetadata,
   GenerationJobDelivery,
   GenerationJobSource,
@@ -14,6 +17,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 export { isUsableApiKey } from '../generationJobs/apiKey';
@@ -38,6 +42,7 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     generation: GeneratedAssetMetadata & { jobId: string };
+    derivedFrom?: GeneratedAssetLineageEntry[];
     /** A chat-made job's quest; the save links the file to its notebook, which scopes the grants that notebook mints. */
     questId?: string;
     signal: AbortSignal;
@@ -58,22 +63,40 @@ export type VideoJobDeps = {
     /** `refusal` for a block the provider billed: spend with no video delivered. */
     status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
   now(): Date;
   logger: Logger;
 };
 
 export type CreateVideoJobDeps = VideoJobDeps & {
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 
 export type CreateVideoJobInput = {
-  user: { id: string; organizationId: string | null };
+  user: { id: string; organizationId: string | null; adminRoleWithheld?: boolean };
   /** Untrusted: parsed and validated by createVideoJob. */
   request: unknown;
   source: GenerationJobSource;
+  /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
+  apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   idempotencyKey?: string;
   questId?: string;
   delivery?: GenerationJobDelivery;
+  /** The completion run the job is made for: its hold is claimed against the run's budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateVideoJobErrorCode =
@@ -85,7 +108,9 @@ export type CreateVideoJobErrorCode =
   | 'input_image_not_found'
   | 'idempotency_key_reused'
   // Never returned by createVideoJob itself: the agent-mode per-run cap (agentExecutor.videoToolConfig.ts).
-  | 'clip_limit_reached';
+  | 'clip_limit_reached'
+  // Never returned by createVideoJob itself: the voice turn was stopped before the job started (voiceVideoToolConfig.ts).
+  | 'turn_cancelled';
 
 export type CreateVideoJobResult =
   | { ok: true; job: IGenerationJobDocumentOf<'video'>; created: boolean }

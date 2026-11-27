@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { buildVideoToolSchema } from './buildSchema';
 
 describe('buildVideoToolSchema', () => {
+  it('offers an audio toggle when FLUX is usable', () => {
+    const { schema, description } = buildVideoToolSchema(['flux-3-video']);
+    expect(schema.parse({ model: 'flux-3-video', prompt: 'a cat', audio: false }).audio).toBe(false);
+    expect(description).toContain('audio optional (default on)');
+  });
+
   it('only accepts usable models', () => {
     const { schema } = buildVideoToolSchema(['test-video']);
     expect(schema.safeParse({ model: 'test-video', prompt: 'a cat' }).success).toBe(true);

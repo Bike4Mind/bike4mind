@@ -428,3 +428,29 @@ describe('OpenAIBackend per-round tool timing log (Responses + chat synthesis)',
     for (const r of rounds) expect(r.modelMs).toBeLessThanOrEqual(r.roundMs);
   });
 });
+
+describe('OpenAIBackend /v1/responses pre-tool text replay', () => {
+  it('sends the text streamed ahead of a function call back on the follow-up assistant message', async () => {
+    const plan = 'Plan: formulate it, then answer.';
+    const { backend, chatCreate } = buildBackend({
+      responses: [
+        {
+          output: [
+            { type: 'message', content: [{ type: 'output_text', text: plan }] },
+            { type: 'function_call', call_id: 'call_1', name: 'optihashi_formulate', arguments: '{"description":"x"}' },
+          ],
+          usage: { input_tokens: 20, output_tokens: 8 },
+        },
+      ],
+    });
+    const tool: ICompletionOptionTools = { ...sampleTool, toolFn: async () => 'formulated' };
+
+    await run(backend, ChatModels.GPT5, { tools: [tool], executeTools: true, stream: true });
+
+    expect(chatCreate).toHaveBeenCalledTimes(1);
+    const messages = (chatCreate.mock.calls[0][0] as AnyRecord).messages as Array<AnyRecord>;
+    const toolTurns = messages.filter(m => m.role === 'assistant' && Array.isArray(m.tool_calls));
+    expect(toolTurns).toHaveLength(1);
+    expect(toolTurns[0].content).toBe(plan);
+  });
+});

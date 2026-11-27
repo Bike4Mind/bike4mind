@@ -1,10 +1,13 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { SessionEvents } from '@server/utils/eventBus';
-import { questRepository, Session, sessionRepository } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { fabFileRepository, questRepository, Session, sessionRepository, userRepository } from '@bike4mind/database';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { sessionService } from '@bike4mind/services';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { hasAutoNamePlaceholderName } from '@bike4mind/common';
 
 export const handler = withEventContext(async (event, logger) => {
   const { sessionId, userId } = SessionEvents.AutoName.schema.parse(event.properties);
@@ -30,15 +33,9 @@ export const handler = withEventContext(async (event, logger) => {
   }
 
   // Additional check: If session name was recently updated, skip
-  // Exclude placeholder names that should still be auto-renamed: the core
-  // defaults, plus whatever placeholder a product surface stamped at create
-  // (session.autoNamePlaceholder). A session the user has RENAMED no longer
-  // matches its placeholder, so it keeps the recent-update protection below.
-  const defaultNames = ['Untitled', 'New Notebook'];
-  const hasPlaceholderName =
-    defaultNames.includes(session.name) ||
-    (session.autoNamePlaceholder != null && session.name === session.autoNamePlaceholder);
-  if (session.updatedAt && session.name && !hasPlaceholderName) {
+  // Placeholder names (see hasAutoNamePlaceholderName) are exempt so they still get named. A
+  // session the user has RENAMED no longer matches its placeholder, so it keeps this protection.
+  if (session.updatedAt && session.name && !hasAutoNamePlaceholderName(session)) {
     const timeSinceLastUpdate = Date.now() - new Date(session.updatedAt).getTime();
     if (timeSinceLastUpdate < 10000) {
       // 10 seconds
@@ -53,13 +50,21 @@ export const handler = withEventContext(async (event, logger) => {
     }
   }
 
+  const user = await userRepository.findById(userId ?? session.userId);
+  if (!user || aiAccessDeniedMessage(user)) {
+    logger.warn(`Skipping auto-naming for session ${sessionId}: user missing or AI access held`);
+    return;
+  }
+
+  if (!(await payerCanFundSessionOperation({ payerId: user.id, operation: 'session auto-naming', logger }))) return;
+
   // Wrap in try/catch: auto-naming is a non-critical UX feature. LLM failures
   // (e.g. OpenAI 500s) must not cause a Lambda Invoke Error, so swallow and warn.
   let updatedSession;
   let lastCompletionInfo: CompletionInfo | undefined;
   const startTime = Date.now();
   try {
-    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
     logger.info(`Using operations model for auto-naming: ${modelId}`);
 
     updatedSession = await sessionService.autoName(
@@ -68,6 +73,8 @@ export const handler = withEventContext(async (event, logger) => {
         db: {
           sessions: sessionRepository,
           quests: questRepository,
+          files: fabFileRepository,
+          fileAccess: { userId: user.id, userGroups: user.groups ?? undefined },
         },
         createCompletion: async (prompt: string) => {
           let result = '';
@@ -90,6 +97,7 @@ export const handler = withEventContext(async (event, logger) => {
     );
 
     await recordSessionOperationalUsage({
+      operation: 'notebook_naming',
       userId,
       sessionId,
       modelId,
@@ -103,5 +111,5 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  logger.info(`Successfully auto-named session ${sessionId} to "${updatedSession?.name}"`);
+  logger.info(`Successfully auto-named session ${sessionId}`, { renamed: Boolean(updatedSession?.name) });
 });

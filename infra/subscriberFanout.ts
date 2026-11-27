@@ -1,5 +1,7 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { chatCompletionCapacity } from './chatCompletionCapacity';
+import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage, PRODUCTION_STAGES, STAGE_LOG_RETENTION } from './constants';
+import { ecsResourceSecrets, ecsSecretsVersion } from './ecsSecrets';
 import { allSecrets, secrets } from './secrets';
 import { cluster, lambdaVpc } from './vpc';
 import { websocketApi } from './websocket';
@@ -30,23 +32,25 @@ if (isCI && !fanoutImage) {
   );
 }
 
+const fanoutSecrets = $dev ? undefined : ecsResourceSecrets('subscriberFanoutV2', { MONGODB_URI: secrets.MONGODB_URI });
+
 export const subscriberFanout = new sst.aws.Service('subscriberFanoutV2', {
   cluster,
-  link: [secrets.MONGODB_URI, websocketApi],
+  link: $dev ? [secrets.MONGODB_URI, websocketApi] : [websocketApi],
+  ssm: fanoutSecrets?.ssm,
   image: fanoutImage,
   cpu: '0.25 vCPU',
   memory: PRODUCTION_STAGES.includes($app.stage) ? '2 GB' : '0.5 GB',
-  permissions: [
-    {
-      actions: ['*'],
-      resources: ['*'],
-    },
-  ],
+  capacity: chatCompletionCapacity(isPreviewStage),
+  // No extra permissions: the only AWS call the image makes is PostToConnection, which the
+  // websocketApi link grants (execute-api:ManageConnections on this stage's API). MONGODB_URI
+  // reaches the container as an ECS secret, read by the execution role rather than the task role.
   logging: {
-    retention: $app.stage === 'production' ? '1 month' : '1 week',
+    retention: STAGE_LOG_RETENTION,
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...(fanoutSecrets ? { ECS_SECRETS_VERSION: ecsSecretsVersion(fanoutSecrets) } : {}),
   },
 });
 

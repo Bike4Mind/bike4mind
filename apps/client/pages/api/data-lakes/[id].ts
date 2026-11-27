@@ -1,5 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import {
+  DATA_LAKE_READ_SCOPES,
+  assertDataLakeShareScope,
+  assertDataLakeWriteScope,
+} from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -17,13 +21,13 @@ import { UpdateDataLakeRequestInput, dataLakeResponseSchema } from '@bike4mind/c
 import { BadRequestError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Request } from 'express';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { respond } from '@server/utils/respond';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@bike4mind/server-utils/utils/sessionActivatablePrompts';
-import { disableDriveConnectionForLake } from '@server/integrations/google/drive/common';
-import { disableGitHubConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { disableDriveConnectionForLake } from '@bike4mind/server-utils/integrations/google/drive/common';
+import { disableGitHubConnectionForLake } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
 // call is wired with the settings repo + a logger, so a persisted reader grant resolves into the
@@ -106,6 +110,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const params = UpdateDataLakeRequestInput.parse(req.body);
+    // Setting or clearing a gate field changes who can read the lake, as the visibility route does.
+    if (params.requiredUserTag !== undefined || params.requiredEntitlement !== undefined) {
+      assertDataLakeShareScope(req);
+    }
     // This is the write boundary for a DB LAKE's preferred prompt, and one of two places that owns
     // the session-activatable allowlist - the other is PUT /api/data-lakes/:id/settings, the sibling
     // write path for a STATIC (registry) lake's overlay. Reject a non-activatable id here (fail loud,

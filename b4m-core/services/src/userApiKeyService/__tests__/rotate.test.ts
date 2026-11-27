@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createHash } from 'crypto';
 import { createUserApiKey } from '../create';
 import { rotateUserApiKey } from '../rotate';
+import { NotFoundError } from '@bike4mind/utils';
 import { validateUserApiKey } from '../validate';
 import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
@@ -239,6 +240,56 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(repo.setCallbackSigningSecret).not.toHaveBeenCalled();
     });
 
+    it('treats an org-owned key as not found without the org routes opt-in', async () => {
+      const stored = {
+        id: 'key-1',
+        name: 'Org-owned key',
+        userId: 'org-service-account',
+        keyPrefix: 'b4m_live_orig000',
+        orgOwned: { createdByUserId: 'creator' },
+      } as unknown as IUserApiKeyDocument;
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
+        update: vi.fn().mockResolvedValue(undefined),
+        setCallbackSigningSecret: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      await expect(rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters)).rejects.toThrow(NotFoundError);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+
+    it('never re-owns an org-owned key, even when an opted-in caller is not its holder', async () => {
+      const stored = {
+        id: 'key-1',
+        name: 'Org-owned key',
+        userId: 'org-service-account',
+        keyPrefix: 'b4m_live_orig000',
+        orgOwned: { createdByUserId: 'creator' },
+      } as unknown as IUserApiKeyDocument;
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
+        update: vi.fn().mockResolvedValue(undefined),
+        setCallbackSigningSecret: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any }, includeOrgOwned: true };
+
+      const result = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
+
+      expect(stored.userId).toBe('org-service-account');
+      expect(result.previousOwnerUserId).toBeUndefined();
+      expect(repo.update).toHaveBeenCalledWith(
+        { id: 'key-1', keyDigest: expect.any(String), keyPrefix: expect.any(String) },
+        { unset: ['keyHash'] }
+      );
+    });
+
     it('throws NotFound when the caller neither minted nor administers the key', async () => {
       const repo = {
         findByUserIdAndId: vi.fn().mockResolvedValue(null),
@@ -340,6 +391,41 @@ describe('rotateUserApiKey - no escalation by rotation', () => {
       /scopes the calling key does not have/i
     );
     expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('rotateUserApiKey - no outliving the calling key', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const callerExpiresAt = new Date('2027-01-01T00:00:00Z');
+  const withExpiry = (stored: Record<string, unknown>) => ({
+    ...makeAdapters(stored, [ApiKeyScope.READ_NOTEBOOKS]),
+    callerExpiresAt,
+  });
+
+  it('refuses an expiring caller rotating a key with no expiry', async () => {
+    const adapters = withExpiry(key());
+
+    await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
+      /outlives the calling key/i
+    );
+    expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an expiring caller rotating a key that expires later', async () => {
+    const adapters = withExpiry(key({ expiresAt: new Date('2027-06-01T00:00:00Z') }));
+
+    await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
+      /outlives the calling key/i
+    );
+    expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
+
+  it('allows an expiring caller rotating a key that expires no later than it', async () => {
+    const adapters = withExpiry(key({ expiresAt: callerExpiresAt }));
+
+    const result = await rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never);
+
+    expect(result.key).toMatch(/^b4m_live_/);
   });
 });
 

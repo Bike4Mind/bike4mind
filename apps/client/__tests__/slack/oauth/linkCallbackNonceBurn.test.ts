@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: vi.fn(function () {
     return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -14,8 +17,9 @@ vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: {},
 }));
 vi.mock('@bike4mind/database/auth', () => ({ User: {}, userRepository: {} }));
-vi.mock('@server/security/tokenEncryption', () => ({ encryptToken: vi.fn() }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ encryptToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionForActor: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn() }) },
 }));
 vi.mock('@bike4mind/slack', () => ({

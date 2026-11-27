@@ -2,11 +2,14 @@ import { ISessionDocument } from '@bike4mind/common';
 import { useShallow } from 'zustand/react/shallow';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useComposerMcpConnections } from '@client/app/hooks/useComposerMcpConnections';
+import { isComposerConnectionOn } from '@client/app/components/integrations/customMcp/customMcpModel';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { filterToolsForDisplay } from '@client/app/utils/toolMapping';
 import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
+import { isThinkingShownActive } from '@client/app/utils/thinkingPayload';
 import { AGENT_ONLY_MCP_SERVERS, ICONED_MCP_SERVERS } from '../../common/ToolIndicators';
 
 const PRIMARY_TOOLS = ['web_search', 'web_fetch', 'image_generation'] as const;
@@ -18,15 +21,12 @@ const PRIMARY_TOOLS = ['web_search', 'web_fetch', 'image_generation'] as const;
 export function useActiveTools(currentSession: ISessionDocument | null) {
   const { isFeatureEnabled } = useFeatureEnabled();
   const isAgentsFeatureEnabled = isFeatureEnabled('enableAgents');
-  const isQuestMasterFeatureEnabled = isFeatureEnabled('enableQuestMaster');
   const isLatticeFeatureEnabled = isFeatureEnabled('enableLattice');
 
   const [tools, toolMode, enabledMcpServers, skipAutoOffers, model, thinking] = useLLM(
     useShallow(s => [s.tools, s.toolMode, s.enabledMcpServers, s.skipAutoOffers, s.model, s.thinking])
   );
-  const [isQuestMasterEnabled, isAgentsEnabled, isLatticeEnabled] = useLLM(
-    useShallow(s => [s.isQuestMasterEnabled, s.isAgentsEnabled, s.isLatticeEnabled])
-  );
+  const [isAgentsEnabled, isLatticeEnabled] = useLLM(useShallow(s => [s.isAgentsEnabled, s.isLatticeEnabled]));
 
   // Presence-only availability of key-gated tools. Already mounted app-wide by
   // WebsocketConfigProvider with a 5-min staleTime, so this shares that cache
@@ -43,7 +43,6 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   const disabledTools = effectiveDisabledTools(currentSession);
   const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability, disabledTools);
   const activePrimaryTools: string[] = PRIMARY_TOOLS.filter(tool => displayTools.includes(tool));
-  const isThinkingActive = thinking?.enabled ?? false;
   // Integrations that actually reach this turn. "Only tools I pick" withholds every
   // non-agent-only MCP tool server-side (`offerOnlyNamedTools` in sharedToolBuilder), so
   // those integrations contribute nothing and must not read as active here - the same
@@ -59,24 +58,34 @@ export function useActiveTools(currentSession: ISessionDocument | null) {
   // so they aren't double-counted.
   const iconedMcpCount = activeMcpServers.filter(name => ICONED_MCP_SERVERS.includes(name)).length;
   const enabledNonIconMcpCount = activeMcpServers.length - iconedMcpCount;
-  // Feature-gated switches outside the `tools` array (Quest Master, Agent Detection,
-  // Lattice). Must stay in sync with pinnedCount's specialToolsCount in ToolsSection.
+  // Custom connectors have no icon, so each active one feeds the "+N" badge. Their slugs can never
+  // be agent-only, so "Only tools I pick" withholds them like any other integration.
+  const { offered: customConnections } = useComposerMcpConnections();
+  const disabledMcpConnections = useLLM(s => s.disabledMcpConnections) ?? [];
+  const enabledPlatformMcpConnections = useLLM(s => s.enabledPlatformMcpConnections) ?? [];
+  const activeCustomConnectionCount = skipAutoOffers
+    ? 0
+    : customConnections.filter(connection =>
+        isComposerConnectionOn(connection, { disabledMcpConnections, enabledPlatformMcpConnections })
+      ).length;
+  // Feature-gated switches outside the `tools` array (Agent Detection, Lattice). Must stay in sync
+  // with pinnedCount's specialToolsCount in ToolsSection.
   const specialToolsCount =
-    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
-    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
-    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) + (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   const otherActiveToolsCount =
     displayTools.filter(
       tool => !PRIMARY_TOOLS.includes(tool as unknown as (typeof PRIMARY_TOOLS)[number]) && tool !== 'dice_roll'
     ).length +
     specialToolsCount +
-    enabledNonIconMcpCount;
+    enabledNonIconMcpCount +
+    activeCustomConnectionCount;
 
   // Fast mode and a model without tool support send no tools, so nothing counts (ToolsButton
   // hides its indicators for the same reason). Same fail-open as ToolsButton while the catalog
   // has not resolved the model yet.
   const { data: modelInfoRepo } = useModelInfo();
   const info = modelInfoRepo?.find(m => m.id === model);
+  const isThinkingActive = isThinkingShownActive(thinking, info);
   const toolsLive = toolMode !== 'fast' && (info ? !!info.supportsTools : true);
   const activeToolsCount = toolsLive ? activePrimaryTools.length + iconedMcpCount + otherActiveToolsCount : 0;
 

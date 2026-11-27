@@ -1,12 +1,13 @@
 import { userApiKeyService } from '@bike4mind/services';
+import { userRepository } from '@bike4mind/database';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { logEventSafe } from '@server/utils/analyticsLog';
-import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { ApiKeyScope, UserApiKeyEvents, assertCanActOnAdminTarget } from '@bike4mind/common';
 
 /**
  * PATCH /api/admin/user-api-keys/[id]/rate-limit
@@ -18,14 +19,14 @@ import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
  * a ceiling below a live counter wedges the key until the window rolls over, or
  * until reset-rate-limit clears it.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { PATCH: 'users:moderate' },
+})
   .use(csrfProtection())
   .patch(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { id } = req.query as { id?: string | string[] };
       if (typeof id !== 'string' || !id) {
         throw new BadRequestError('Invalid API key ID');
@@ -40,6 +41,9 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (!apiKey) {
         throw new NotFoundError('API key not found');
       }
+      // An orphaned key (owner deleted) has no admin access to protect.
+      const owner = await userRepository.findById(apiKey.userId);
+      if (owner) assertCanActOnAdminTarget(req.user, owner, 'change the API key limits of');
 
       const updated = await userApiKeyService.updateApiKeyRateLimit(
         apiKey.userId,
@@ -67,6 +71,25 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
         req.logger,
         `API key ${apiKey.id}`
       );
+
+      await recordAdminActionFromRequest(req, {
+        action: 'user.api_key.rate_limit_updated',
+        target: { kind: 'apiKey', id: apiKey.id, displayName: updated.name },
+        summary: `set API key rate limits to ${updated.rateLimit.requestsPerMinute}/min, ${updated.rateLimit.requestsPerDay}/day`,
+        changes: [
+          {
+            field: 'rateLimit.requestsPerMinute',
+            before: apiKey.rateLimit?.requestsPerMinute ?? null,
+            after: updated.rateLimit.requestsPerMinute,
+          },
+          {
+            field: 'rateLimit.requestsPerDay',
+            before: apiKey.rateLimit?.requestsPerDay ?? null,
+            after: updated.rateLimit.requestsPerDay,
+          },
+        ],
+        details: { ownerUserId: apiKey.userId },
+      });
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) set rate limits ${updated.rateLimit.requestsPerMinute}/min, ` +

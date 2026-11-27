@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 /**
  * GET /api/organizations must (1) scope non-admins to their OWN orgs so the search
@@ -55,6 +56,11 @@ const create = vi.hoisted(() =>
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { search, create } }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
+const audit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: audit }));
+
+const recordOrganizationRead = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead }));
 
 import '@pages/api/organizations/index';
 
@@ -79,6 +85,35 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
     await mockRefs.getHandler!(req, res);
     const params = search.mock.calls[0][1];
     expect(params.filters?.userId).toBeUndefined();
+  });
+
+  it('scopes an admin calling with an API key that lacks the admin scope to their own organizations', async () => {
+    // API key auth applies withholdAdminRole to a key without ApiKeyScope.ADMIN.
+    const { req, res } = mocks(withholdAdminRole({ id: 'admin1', isAdmin: true }));
+    await mockRefs.getHandler!(req, res);
+    const params = search.mock.calls[0][1];
+    expect(params.filters.userId).toBe('admin1');
+  });
+
+  it('returns only member-visible fields to a plain member of a listed organization', async () => {
+    search.mockResolvedValueOnce({
+      data: [
+        {
+          id: 'org1',
+          userId: 'owner1',
+          name: 'Acme',
+          systemPrompt: 'internal enterprise context',
+          users: [{ userId: 'u1', permissions: ['read'] }],
+        },
+      ],
+      hasMore: false,
+      total: 1,
+    } as never);
+    const { req, res } = mocks({ id: 'u1', isAdmin: false });
+    await mockRefs.getHandler!(req, res);
+    const [org] = res._getJSONData().data;
+    expect(org.name).toBe('Acme');
+    expect(org).not.toHaveProperty('systemPrompt');
   });
 
   it('overrides an attacker-supplied filters.userId for a non-admin', async () => {
@@ -108,8 +143,31 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
   });
 });
 
+describe('GET /api/organizations - staff read audit', () => {
+  beforeEach(() => recordOrganizationRead.mockClear());
+
+  it('records the returned organizations as a list read before responding', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    await mockRefs.getHandler!(req, res);
+    expect(recordOrganizationRead).toHaveBeenCalledWith(req, [expect.objectContaining({ id: 'org1' })], {
+      view: 'list',
+    });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('fails the read when the audit write fails', async () => {
+    recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+  });
+});
+
 describe('POST /api/organizations - admin gate + safe serialization', () => {
-  beforeEach(() => create.mockClear());
+  beforeEach(() => {
+    create.mockClear();
+    audit.mockClear();
+  });
 
   it('rejects a non-admin caller and does not create (#1428)', async () => {
     // The route creates an org and re-points the caller's own billing/scope (#1405) onto a
@@ -118,6 +176,22 @@ describe('POST /api/organizations - admin gate + safe serialization', () => {
     (req as any).body = { name: 'Acme' };
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
     expect(create).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('records a best-effort org.created entry after the create (admin)', async () => {
+    const { req, res } = mocks({ id: 'admin1', isAdmin: true });
+    Object.assign(req, { body: { name: 'Acme' } });
+    await mockRefs.postHandler!(req, res);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.created',
+        target: { kind: 'organization', id: 'orgNew', displayName: 'Acme' },
+      })
+    );
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);
   });
 
   it('strips stripeCustomerId from the created org before returning it (admin)', async () => {

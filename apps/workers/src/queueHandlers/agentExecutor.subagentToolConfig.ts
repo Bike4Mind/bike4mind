@@ -14,7 +14,14 @@
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import type { GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import type { BuildSharedToolsOptions } from '@bike4mind/services/llm';
-import type { MusicToolConfig, VideoToolConfig } from '@bike4mind/services/llm/tools';
+import {
+  PRODUCTION_TOOL_NAMES,
+  type AudioToolJobs,
+  type ImageToolConfig,
+  type MusicToolConfig,
+  type ProductionToolConfig,
+  type VideoToolConfig,
+} from '@bike4mind/services/llm/tools';
 
 export interface BuildSubagentToolConfigInput {
   model?: string;
@@ -40,12 +47,24 @@ export interface BuildSubagentToolConfigInput {
    */
   audioConfig?: Partial<AudioGenerationToolCall>;
   /**
+   * The speech / sound-effect job functions audio_generation generates and bills through
+   * (server-utils buildAudioToolJobs). Omitted leaves the tool answering that audio is unavailable.
+   */
+  audioJobs?: AudioToolJobs;
+  /**
+   * Built per invocation by agentExecutor.imageToolConfig.ts around `imageConfig`; when set, the image tools start
+   * capped image jobs instead of rendering in-process. Null/omitted keeps the in-process render.
+   */
+  imageJobConfig?: ImageToolConfig | null;
+  /**
    * Built per invocation by agentExecutor.videoToolConfig.ts (it carries a `createJob` function, so
    * it cannot be persisted on the execution doc). Null/omitted leaves `video_generation` unoffered.
    */
   videoConfig?: VideoToolConfig | null;
   /** Built per invocation by agentExecutor.musicToolConfig.ts, like videoConfig. Null/omitted leaves it unoffered. */
   musicConfig?: MusicToolConfig | null;
+  /** Built per invocation by agentExecutor.productionToolConfig.ts; one config serves all four production tools. */
+  productionConfig?: ProductionToolConfig | null;
   /**
    * Signs web_search image URLs for this subagent - see WebSearchToolConfig.imageUrlSigningSecret.
    * Omit only when the caller genuinely has no secret (performWebSearch then degrades to plain
@@ -60,8 +79,11 @@ export function buildSubagentToolConfig({
   apiKeyTable,
   imageConfig,
   audioConfig,
+  audioJobs,
+  imageJobConfig,
   videoConfig,
   musicConfig,
+  productionConfig,
   imageUrlSigningSecret,
 }: BuildSubagentToolConfigInput): NonNullable<BuildSharedToolsOptions['config']> {
   return {
@@ -74,12 +96,15 @@ export function buildSubagentToolConfig({
     // passes `image_generation` + `edit_image` so the tools have a model to
     // run with. Only set when imageConfig is present so a text-only run
     // doesn't carry an empty object.
-    ...(imageConfig && { image_generation: imageConfig, edit_image: imageConfig }),
+    ...(imageJobConfig
+      ? { image_generation: imageJobConfig, edit_image: imageJobConfig }
+      : imageConfig && { image_generation: imageConfig, edit_image: imageConfig }),
     // Same for audio_generation - the classic path threads `audioConfig`
     // (ChatCompletionProcess), so agent-mode must too or the tool ignores the
-    // user's saved audio settings. Only set when present.
-    ...(audioConfig && { audio_generation: audioConfig }),
+    // user's saved audio settings. Set when either the settings or the jobs are present.
+    ...((audioConfig || audioJobs) && { audio_generation: { ...audioConfig, ...(audioJobs && { jobs: audioJobs }) } }),
     ...(videoConfig && { video_generation: videoConfig }),
     ...(musicConfig && { music_generation: musicConfig }),
+    ...(productionConfig && Object.fromEntries(PRODUCTION_TOOL_NAMES.map(name => [name, productionConfig]))),
   };
 }

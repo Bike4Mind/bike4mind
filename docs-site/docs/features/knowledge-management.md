@@ -12,6 +12,7 @@ Bike4Mind's Knowledge Management system transforms your documents into an intell
 ## Supported File Formats
 
 ### Documents
+
 - **PDF** - Full text extraction and formatting preservation
 - **DOCX/DOC** - Microsoft Word documents
 - **TXT** - Plain text files
@@ -19,17 +20,20 @@ Bike4Mind's Knowledge Management system transforms your documents into an intell
 - **RTF** - Rich text format
 
 ### Data Files
+
 - **CSV** - Spreadsheet data with smart table rendering
 - **XLSX/XLS** - Excel files with multi-sheet support
 - **JSON** - Structured data visualization
 - **XML** - Hierarchical data parsing
 
 ### Code Files
+
 - **All programming languages** - Syntax highlighting
 - **Jupyter Notebooks** - Cell-by-cell rendering
 - **Configuration files** - YAML, TOML, INI
 
 ### Web Content
+
 - **HTML** - Web page content extraction
 - **URL Import** - Direct import from any public URL. A URL that yields no extractable text is refused with an error rather than saved as an empty file.
 - **Google Drive** - Direct integration
@@ -39,26 +43,31 @@ A file's type is determined by its filename extension, not by the type your brow
 ## Smart Document Processing
 
 ### Intelligent Chunking
+
 Our AI automatically:
+
 - **Preserves Context** - Keeps related information together
 - **Respects Structure** - Maintains document hierarchy
 - **Optimizes Size** - Balances detail with performance
 - **Handles Tables** - Special processing for structured data
 
 ### Chunk Policy (passage size)
+
 The passage target - how large each chunk is, in tokens - is a configurable lever, not a fixed
 constant:
+
 - **Resolved at the file owner's altitude** - the effective target is the owner's configured
   `Default Chunk Size` (an individual or organization may pin their own default), falling back to the
   platform default. It is always capped to the embedding model's context window, so a value larger
   than the model can embed is reduced automatically rather than failing vectorization.
 - **A data lake is a constraint, not an override** - chunks are shared by every consumer of a file,
-  so a lake never rewrites a file's chunks to its own size. A lake may declare a *required* passage
+  so a lake never rewrites a file's chunks to its own size. A lake may declare a _required_ passage
   target; a file whose chunks do not meet it (including a file in two lakes whose requirements
   disagree) is flagged with a **chunk-policy conflict** instead of being silently re-chunked. Resolve
   a conflict by aligning the owner's chunk policy, or by removing the file from the conflicting lake.
 
 ### Converging a lake to its chunk policy
+
 A lake that declares a **required passage target** can be repaired toward it. Set one in the lake's
 **Settings -> Required passage size**; leaving it blank means the lake inherits the platform default,
 which is the state in which it is only ever measured, never repaired. Once a target is set,
@@ -71,6 +80,7 @@ carries it out, so no one needs write access to a lake for its contents to be fi
 its own.
 
 What it deliberately refuses to do:
+
 - **A lake with no declared policy is never repaired.** Its health is measured and reported like any
   other lake, but nothing is re-chunked until an owner adopts an explicit passage target - so
   changing a platform default can never silently re-embed every lake.
@@ -86,6 +96,7 @@ What it deliberately refuses to do:
 
 :::note Convergence ran but nothing changed
 Check these in order, all of them visible in the plan the button reads:
+
 - **The lake has no declared passage target.** The action does not appear at all in this case; set a
   required target on the lake first.
 - **Every file is already conformant.** The plan's counts say so explicitly - this is the steady state.
@@ -93,18 +104,18 @@ Check these in order, all of them visible in the plan the button reads:
   failed. Each has its own count in the plan, so "nothing happened" is always attributable.
 - **Background lake work is paused.** An administrator can pause convergence platform-wide or for a
   single lake. Starting a run while it is already paused changes nothing at all - it is refused
-  before any file is touched. If the pause lands on a wave that is *already* running, the files it
+  before any file is touched. If the pause lands on a wave that is _already_ running, the files it
   had reached keep their place in the queue but are not rebuilt: they are marked as having no
   searchable passages, reported that way in lake health, withheld from search results (which say so,
   and say that waiting will not fix it), and offered by **Rebuild passages** once the pause is
   lifted. They do not rebuild themselves - someone has to rebuild the lake's passages, or reprocess
   the files individually. Note that convergence itself may report nothing left to do for them: a file
-  the pause caught after its passages were rewritten is already *at* the target, so it is conformant
+  the pause caught after its passages were rewritten is already _at_ the target, so it is conformant
   as far as convergence is concerned even though none of it is searchable. Repair is the rebuild
   door's job, not the policy door's.
 
   **A file being rebuilt right now is a different state, and reads differently.** From the moment a
-  rebuild is requested until it lands, the file is reported as *re-indexing*: withheld from search
+  rebuild is requested until it lands, the file is reported as _re-indexing_: withheld from search
   with the note that it returns on its own, counted in lake health as not-yet-measured rather than
   failing, and skipped by convergence as already indexing. That is deliberately not the same report
   as the paused state above - telling someone to call an administrator about a file that will be
@@ -123,13 +134,13 @@ Check these in order, all of them visible in the plan the button reads:
   **A rebuild restores searchability, not conformance.** "Rebuild passages" deliberately rebuilds at
   the owner's default passage size rather than the lake's declared target, because it has to work on
   any lake - including one with no policy at all - and because a file can belong to several lakes that
-  want different sizes. So on a lake that *does* declare a target, repaired files come back searchable
+  want different sizes. So on a lake that _does_ declare a target, repaired files come back searchable
   but may be off-policy: health will show them failing the passage-size rule and the reachable
   percentage can dip right after a repair that in fact succeeded. Run **Converge to policy** once
   afterwards to bring them onto the lake's target. Restoring retrieval first and conformance second is
   the intended order - a searchable file that is the wrong size still answers questions; an
   unsearchable one does not.
-:::
+  :::
 
 Before it rewrites a large share of a lake, convergence **asks**. Rewriting most of a lake at once is
 almost always a sign that the declared target itself is wrong, and every individual change inside such
@@ -139,7 +150,7 @@ confirmed. Administrators can tune where that threshold sits.
 :::warning A converging file is not searchable until it finishes
 Re-chunking replaces a file's passages, and the replacements carry no vectors until re-indexing
 completes. The previous passages are deleted first, so there is nothing to fall back on in between.
-Retrieval does not hide this: while any in-scope file is being re-indexed, the result is explicitly
+Retrieval does not hide this: while any in-scope file is still being indexed, the result is explicitly
 marked **partial** rather than quietly answering from the rest of the lake. Searches - the knowledge
 tools and the semantic-search API - name the affected files; grounded chat turns report how many were
 withheld. This starts the moment the rebuild is requested, not when the new passages are written, so
@@ -163,16 +174,19 @@ than a fault; ask an administrator, since nothing you can change from the lake w
 :::
 
 ### Vector Embeddings
+
 Every chunk is:
+
 - **Semantically Indexed** - Meaning-based search
 - **Cross-Referenced** - Links between related content
 - **Ranked by Relevance** - Best matches first
 - **Context-Aware** - Understands surrounding information
 
 ### Lake Health (retrievability)
+
 A data lake reports **how much of its content can actually be found**, not just how much was
 uploaded. Every processing counter can read "complete" while a large share of a lake is unreachable -
-so health is *computed* from four checkable rules, and shown on the lake in the manager panel:
+so health is _computed_ from four checkable rules, and shown on the lake in the manager panel:
 
 - **One headline metric: reachable content.** The share of the lake's stored text that a search can
   actually deliver to the model. This is the number to watch - it accounts for content that was
@@ -182,6 +196,7 @@ so health is *computed* from four checkable rules, and shown on the lake in the 
 - **A drill-down** naming which files are affected and why.
 
 The four rules, per file:
+
 1. **No oversized chunk** - no chunk is larger than the policy passage size.
 2. **Chunk count fits the chunked text** - a document split into too few chunks for its size (in the
    extreme, a whole document in one oversized chunk) is flagged, because most of it can never rank in
@@ -214,7 +229,7 @@ couple of hours old, and running it re-drives them.
 ### The admission contract (enforcement)
 
 Health describes a lake that already has its content. The **admission contract** is the same
-retrievability rule applied one step earlier - when a file is about to *join* a lake. If the file's
+retrievability rule applied one step earlier - when a file is about to _join_ a lake. If the file's
 chunks cannot meet the passage size that lake requires, the content would sit in the lake
 permanently unfindable, so the contract can refuse the membership instead of accepting it.
 
@@ -225,7 +240,7 @@ which can be set for the whole platform, one organization, one owner, or a singl
 can enforce while the rest stay in reporting mode. Check the health report first to see how many
 members a lake would have refused.
 
-One exception to that per-lake independence: a single action that adds a file to *several* lakes at
+One exception to that per-lake independence: a single action that adds a file to _several_ lakes at
 once is refused as a whole if **any** of those lakes is enforcing and would reject it. The file joins
 none of them, so a retry after fixing the passage sizes leaves nothing half-applied. The error names
 only the lake that caused the refusal.
@@ -236,7 +251,7 @@ succeeds immediately after you enable enforcement is a stale cache, not a broken
 
 Two limits are deliberate:
 
-- **Admission only, never eviction.** Enforcement refuses *new* members. Files already in a lake keep
+- **Admission only, never eviction.** Enforcement refuses _new_ members. Files already in a lake keep
   their membership and are never removed by it.
 - **It never blocks a search.** Lake health stays advisory; a degraded lake still answers queries.
 
@@ -254,21 +269,27 @@ mode by turning off **Data Lakes: Enforce the admission contract** for it.
 ## Organization Features
 
 ### Collections
+
 Group related documents:
+
 - **Thematic Organization** - By topic or project
 - **Visual Collections** - Cover images for easy recognition
 - **Quick Access** - Pin frequently used collections
 - **Bulk Operations** - Manage multiple files at once
 
 ### Tagging System
+
 Flexible categorization:
+
 - **Auto-Tagging** - AI suggests relevant tags
 - **Custom Tags** - Create your own taxonomy
 - **Tag Hierarchies** - Parent/child relationships
 - **Smart Filters** - Combine tags for precise search
 
 ### Knowledge Artifacts
+
 Special document types:
+
 - **Code Snippets** - Reusable code blocks
 - **Templates** - Document templates
 - **Cheat Sheets** - Quick reference guides
@@ -277,14 +298,18 @@ Special document types:
 ## Search Capabilities
 
 ### Semantic Search
+
 Find information by meaning:
+
 - **Natural Language** - Ask questions in plain English
 - **Concept Matching** - Find related ideas
 - **Multi-Language** - Search across languages
 - **Fuzzy Matching** - Handles typos and variations
 
 ### Advanced Filters
+
 Refine your search:
+
 - **File Type** - Filter by format
 - **Date Range** - When uploaded or modified
 - **Size** - Find large or small files
@@ -292,7 +317,9 @@ Refine your search:
 - **Collections** - Search within groups
 
 ### Search Operators
+
 Power user features:
+
 - **Exact Match** - "quoted phrases"
 - **Exclusions** - -unwanted terms
 - **Wildcards** - partial* matches
@@ -301,7 +328,9 @@ Power user features:
 ## File Management
 
 ### Upload Methods
+
 Multiple ways to add content:
+
 - **Drag & Drop** - Direct file upload
 - **URL Import** - Paste any web link
 - **Google Drive** - Browse and import
@@ -309,7 +338,9 @@ Multiple ways to add content:
 - **API Upload** - Programmatic access
 
 ### File Operations
+
 Complete control:
+
 - **Preview** - View without downloading
 - **Edit Metadata** - Update titles and descriptions
 - **Move/Copy** - Organize between collections
@@ -317,7 +348,9 @@ Complete control:
 - **Export** - Download originals
 
 ### Storage Management
+
 Efficient use of space:
+
 - **Compression** - Automatic optimization
 - **Deduplication** - Avoid duplicate storage
 - **Usage Analytics** - Track storage by type
@@ -326,21 +359,27 @@ Efficient use of space:
 ## Integration with AI Features
 
 ### Contextual Retrieval
+
 Documents enhance AI responses:
+
 - **Automatic Inclusion** - Relevant docs in context
 - **Citation Support** - AI cites sources
 - **Fact Checking** - Verify against documents
 - **Knowledge Synthesis** - Combine multiple sources
 
 ### With Quest Master
+
 Enhance autonomous tasks:
+
 - **Research Tasks** - Access all documents
 - **Fact Verification** - Cross-reference information
 - **Report Generation** - Pull from knowledge base
 - **Data Analysis** - Process uploaded datasets
 
 ### With Mementos
+
 Knowledge becomes memory:
+
 - **Document Insights** - Key points saved as memories
 - **Learning Tracking** - Remember what you've read
 - **Connection Building** - Link memories to documents
@@ -349,24 +388,28 @@ Knowledge becomes memory:
 ## Use Cases
 
 ### Research & Analysis
+
 - Upload research papers
 - Extract key findings
 - Cross-reference sources
 - Build literature reviews
 
 ### Technical Documentation
+
 - API documentation
 - Code repositories
 - Configuration guides
 - Troubleshooting resources
 
 ### Business Intelligence
+
 - Market reports
 - Competitor analysis
 - Financial documents
 - Strategic plans
 
 ### Personal Knowledge Base
+
 - Book notes
 - Course materials
 - Reference documents
@@ -375,18 +418,21 @@ Knowledge becomes memory:
 ## Best Practices
 
 ### Document Preparation
+
 1. **Use Clear Titles** - Descriptive filenames help
 2. **Add Metadata** - Include dates, authors, versions
 3. **Organize Early** - Create collections before bulk upload
 4. **Clean PDFs** - OCR scanned documents first
 
 ### Optimal Usage
+
 1. **Regular Uploads** - Keep knowledge current
 2. **Consistent Tagging** - Develop a system
 3. **Periodic Review** - Clean up outdated files
 4. **Share Knowledge** - Use in projects
 
 ### Performance Tips
+
 1. **Chunk Large Files** - Split very large documents
 2. **Use Collections** - Don't rely only on search
 3. **Archive Old Files** - Move inactive content
@@ -395,12 +441,14 @@ Knowledge becomes memory:
 ## Security & Privacy
 
 ### Data Protection
+
 - **Encryption** - At rest and in transit
 - **Access Control** - File-level permissions
 - **Audit Trail** - Track all access
 - **Secure Sharing** - Time-limited links
 
 ### Compliance
+
 - **GDPR Ready** - Data export and deletion
 - **SOC 2** - Security controls
 - **HIPAA Compatible** - Healthcare data (Enterprise)
@@ -422,9 +470,18 @@ opens a compliance surface answering the two questions a lake owner is asked fir
 - **Who actually has?**
   - **Access history** - who has read the lake, how many times, when they last read it, and through
     which surface, aggregated from the access-audit trail. Read this as a **lower bound**: an entry
-    exists only for a retrieval surface that emits access events, the audit write is best-effort by
-    design, and events age out on their own retention window. An empty history means "no reads
-    recorded", not "nobody read this lake".
+    exists only for a surface that emits access events, most audit writes are best-effort, and
+    events age out on their own retention window. An empty history means "no reads recorded",
+    not "nobody read this lake". The **Platform admin access** count is the subset of recorded reads and
+    empty searches marked as requiring platform-admin bypass for this lake; an admin's ordinary
+    member access is not included. Older unmarked events do not prove that no bypass occurred.
+    The same count and history window appear in the CSV export.
+
+    On the instrumented lake-backed article and file read paths, an admin's ordinary-member
+    access must be resolved completely before content is returned. If bypass is needed, the
+    audit write must also succeed. A failed access lookup or required audit write returns an
+    error, instead of serving content with a missing or guessed bypass record.
+
   - **Candidate-cap pressure** - how many of those reads ran against a truncated candidate list,
     because more documents matched than the retrieval candidate cap considers. Shown as a pair
     ("N of M reported reads"), since only some retrieval surfaces report it at all: "not reported
@@ -437,9 +494,9 @@ same four sections plus a note when the history was truncated.
 
 ### Transferring a data lake to someone else
 
-The Access view is where you hand a lake on. **Transfer ownership**, next to *Members and grants*,
+The Access view is where you hand a lake on. **Transfer ownership**, next to _Members and grants_,
 appears only if you are the lake's owner, an admin of the organization that owns it, or a platform
-admin - being able to *manage* a lake (a curator, for instance) is not enough to give it away.
+admin - being able to _manage_ a lake (a curator, for instance) is not enough to give it away.
 
 What happens when you transfer:
 

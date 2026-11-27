@@ -134,10 +134,17 @@ const finalTurn = [
 
 function collect() {
   const infos: CompletionInfo[] = [];
-  const cb = async (_text: (string | null | undefined)[], info?: CompletionInfo) => {
+  const text: string[] = [];
+  const cb = async (chunks: (string | null | undefined)[], info?: CompletionInfo) => {
+    text.push(...chunks.filter((chunk): chunk is string => typeof chunk === 'string'));
     if (info) infos.push(info);
   };
-  return { infos, cb, providerBlocks: () => infos.filter(i => i.providerBlock).map(i => i.providerBlock) };
+  return {
+    infos,
+    cb,
+    text: () => text.join(''),
+    providerBlocks: () => infos.filter(i => i.providerBlock).map(i => i.providerBlock),
+  };
 }
 
 // CLAUDE_5_OPUS at `low` runs with thinking on; CLAUDE_5_SONNET at `none` switches it off.
@@ -407,6 +414,7 @@ describe('AnthropicBackend tool search replay', () => {
     expect(getWeather.toolFn).toHaveBeenCalledTimes(2);
     // The search round's server blocks must not leak into the plain round's replay.
     expect((captured[2].messages as Array<{ content: unknown }>).at(-2)?.content).toEqual([
+      { type: 'text', text: 'Let me check.' },
       { type: 'tool_use', id: 'toolu_B', name: 'get_weather', input: { city: 'Oslo' } },
     ]);
   });
@@ -472,6 +480,47 @@ describe('AnthropicBackend tool search (non-streaming)', () => {
       { provider: 'anthropic', block: searchResult },
     ]);
   });
+
+  it.each([
+    [
+      'a tool search turn',
+      [{ type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_regex', input: searchInput }, searchResult],
+    ],
+    ['intro text', [{ type: 'text', text: 'Let me check.' }]],
+  ])('emits a reported tool call in exactly one tool_use frame after %s', async (_label, before) => {
+    const { backend } = buildBackend([
+      {
+        content: [
+          ...before,
+          { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } },
+          { type: 'tool_use', id: 'toolu_2', name: 'get_time', input: { city: 'Oslo' } },
+        ],
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    ]);
+    const frames: Array<{ type: string; tools?: string[] }> = [];
+    await backend.complete(
+      ChatModels.CLAUDE_4_8_OPUS,
+      [{ role: 'user', content: 'weather?' }],
+      {
+        stream: false,
+        executeTools: false,
+        tools: [tool('get_weather', { defer_loading: true }), tool('get_time')],
+        providerTools: [searchTool],
+      },
+      async (text, info) => {
+        const event = buildCompletionStreamEvent(text, info);
+        frames.push({
+          type: event.type,
+          ...('tools' in event && event.tools ? { tools: event.tools.map(t => t.id!) } : {}),
+        });
+      }
+    );
+
+    expect(frames.filter(f => f.type === 'tool_use')).toEqual([{ type: 'tool_use', tools: ['toolu_1', 'toolu_2'] }]);
+    expect(frames[frames.length - 1].type).toBe('tool_use');
+  });
 });
 
 describe.each(THINKING_MODES)(
@@ -518,12 +567,9 @@ describe.each(THINKING_MODES)(
 
 describe('AnthropicBackend plain tool loop replay (thinking off, no server blocks)', () => {
   const toolUse = { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Oslo' } };
-  const expectedReplay = [
-    { role: 'assistant', content: [toolUse] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
-  ];
+  const toolResult = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] };
 
-  it('replays a bare tool_use turn when streaming', async () => {
+  it('replays the streamed intro text with the tool_use turn when streaming', async () => {
     const turn = [
       messageStart,
       { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -548,13 +594,30 @@ describe('AnthropicBackend plain tool loop replay (thinking off, no server block
       collect().cb
     );
 
-    expect((captured[1].messages as unknown[]).slice(-2)).toEqual(expectedReplay);
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual([
+      { role: 'assistant', content: [{ type: 'text', text: 'Let me check.' }, toolUse] },
+      toolResult,
+    ]);
   });
 
-  it('replays a bare tool_use turn when not streaming', async () => {
+  it.each([
+    { label: 'one text block', content: [{ type: 'text', text: 'Let me check.' }, toolUse], replay: 'Let me check.' },
+    {
+      label: 'split text blocks',
+      content: [{ type: 'text', text: 'Let me ' }, { type: 'text', text: 'check.' }, toolUse],
+      replay: 'Let me check.',
+    },
+    { label: 'no text', content: [toolUse], replay: undefined },
+    { label: 'blank text', content: [{ type: 'text', text: ' \n ' }, toolUse], replay: undefined },
+    {
+      label: 'text after the tool',
+      content: [{ type: 'text', text: 'Let me check.' }, toolUse, { type: 'text', text: 'Later note.' }],
+      replay: 'Let me check.',
+    },
+  ])('replays emitted pre-tool text when not streaming: $label', async ({ content, replay }) => {
     const { backend, captured } = buildBackend([
       {
-        content: [{ type: 'text', text: 'Let me check.' }, toolUse],
+        content,
         stop_reason: 'tool_use',
         usage: { input_tokens: 1, output_tokens: 1 },
       },
@@ -565,14 +628,19 @@ describe('AnthropicBackend plain tool loop replay (thinking off, no server block
       },
     ]);
 
+    const emitted = collect();
     await backend.complete(
       ChatModels.CLAUDE_5_SONNET,
       [{ role: 'user', content: 'weather in Oslo?' }],
       { stream: false, executeTools: true, reasoningEffort: 'none', tools: [tool('get_weather')] },
-      collect().cb
+      emitted.cb
     );
 
-    expect((captured[1].messages as unknown[]).slice(-2)).toEqual(expectedReplay);
+    if (replay) expect(emitted.text()).toContain(replay);
+    expect((captured[1].messages as unknown[]).slice(-2)).toEqual([
+      { role: 'assistant', content: replay ? [{ type: 'text', text: replay }, toolUse] : [toolUse] },
+      toolResult,
+    ]);
   });
 });
 

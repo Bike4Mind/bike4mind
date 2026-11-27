@@ -19,7 +19,7 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Resource } from 'sst';
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { Quest } from '@bike4mind/database/content';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
@@ -41,7 +41,7 @@ const ExecuteNotebookBody = z.object({
   timeoutPerCell: z.number().optional().default(30000),
 });
 
-const handler = baseApi({ auth: true }).post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const parsed = ExecuteNotebookBody.safeParse(req.body);
 
   if (!parsed.success) {
@@ -117,7 +117,7 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
       }
     } catch (updateErr) {
       // Non-fatal - continue with execution even if quest update fails
-      console.warn(`[Jupyter Execute] Failed to update quest ${questId}:`, updateErr);
+      req.logger.warn('Failed to update quest', { questId, error: updateErr });
     }
   }
 
@@ -161,8 +161,6 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
       hint: 'All CLI connections may be stale. Try reconnecting the CLI.',
     });
   }
-
-  console.log(`[Jupyter Execute] Sent notebook execution to CLI for user ${userId}, requestId=${requestId}`);
 
   res.json({
     requestId,

@@ -5,23 +5,51 @@ import {
   LogoSettings,
   settingsMap,
 } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { runAfterCommit, withTransaction } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'adminUploadLogo' } });
 
 // Extended schema to support dark mode logo uploads
 const AdminLogoUploadInput = FileGeneratePresignedUrlRequestInput.extend({
   isDarkMode: z.boolean().prefault(false),
   useBothLogos: z.boolean().prefault(false),
 });
+
+/** Deletes the retired logo object once the transaction commits; a failure is logged and never rolls anything back. */
+function deleteLogoAfterCommit(
+  session: Parameters<typeof runAfterCommit>[0],
+  storage: S3Storage,
+  logoType: 'light' | 'dark',
+  fileKey: string
+) {
+  // If the stored value is just a filename, prepend the admin/logos/ path
+  const key = fileKey.startsWith('admin/logos/') ? fileKey : `admin/logos/${fileKey}`;
+  const run = async () => {
+    try {
+      await storage.delete(key);
+    } catch (error) {
+      logger.error(`Post-commit delete of the ${logoType} logo failed; object left orphaned`, {
+        key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  if (!runAfterCommit(session, `adminLogo|${logoType}`, run)) {
+    logger.warn('Logo delete could not be queued after commit; running it inline', { logoType });
+    void run();
+  }
+}
 
 async function getLogoSettings(session?: any): Promise<LogoSettings> {
   const logoSettingsDoc = await AdminSettings.findOne({ settingName: 'logoSettings' }).session(session);
@@ -32,7 +60,7 @@ async function getLogoSettings(session?: any): Promise<LogoSettings> {
     if (parsed.success) {
       return parsed.data;
     }
-    console.warn('Failed to parse logo settings, using defaults');
+    logger.warn('Failed to parse logo settings, using defaults');
   }
 
   return {
@@ -42,7 +70,10 @@ async function getLogoSettings(session?: any): Promise<LogoSettings> {
   };
 }
 
-async function updateLogoSettings(newSettings: Partial<LogoSettings>, session?: any): Promise<void> {
+async function updateLogoSettings(
+  newSettings: Partial<LogoSettings>,
+  session?: any
+): Promise<{ before: LogoSettings; after: LogoSettings }> {
   const currentSettings = await getLogoSettings(session);
   const updatedSettings = { ...currentSettings, ...newSettings };
 
@@ -57,21 +88,18 @@ async function updateLogoSettings(newSettings: Partial<LogoSettings>, session?: 
     },
     { upsert: true, session }
   );
+  return { before: currentSettings, after: updatedSettings };
 }
 
 /**
  * Lambda function to generate S3 signed URL for uploading custom admin logo
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .post(async (req, res) => {
     try {
-      const { user } = req;
-
-      // Only allow admin users to upload admin logos
-      if (!user?.isAdmin) {
-        throw new ForbiddenError('You do not have permission to upload admin logos');
-      }
-
       const data = AdminLogoUploadInput.parse(req.body);
 
       const ext = mime.extension(data.mimeType);
@@ -94,20 +122,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
         // Clean up existing logo file if it exists
         const existingFileKey = data.isDarkMode ? currentSettings.customDarkLogoUrl : currentSettings.customLogoUrl;
-        if (existingFileKey) {
-          try {
-            // If the stored value is just a filename, prepend the admin/logos/ path
-            const s3KeyToDelete = existingFileKey.startsWith('admin/logos/')
-              ? existingFileKey
-              : `admin/logos/${existingFileKey}`;
-            await storage.delete(s3KeyToDelete);
-          } catch (error) {
-            console.warn(`Failed to delete existing ${logoType} logo file:`, error);
-          }
-        }
+        if (existingFileKey) deleteLogoAfterCommit(session, storage, logoType, existingFileKey);
 
         // Create new file key and AppFile record
-        const fileKey = `custom-${logoType}-logo-${uuidv4()}.${ext}`;
+        const fileKey = `custom-${logoType}-logo-${crypto.randomUUID()}.${ext}`;
         // Store the full S3 path for storage operations
         const s3Key = `admin/logos/${fileKey}`;
         // Store only the filename in the database for URL construction
@@ -144,7 +162,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           updatedSettings.useBothLogos = data.useBothLogos;
         }
 
-        await updateLogoSettings(updatedSettings, session);
+        const { before, after } = await updateLogoSettings(updatedSettings, session);
+        await recordAdminSettingChange(req, {
+          settingName: 'logoSettings',
+          before,
+          after,
+          summary: `uploaded a custom ${logoType} logo`,
+        });
 
         return {
           // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
@@ -158,18 +182,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       return res.json(result);
     } catch (error) {
-      console.error('Error in admin logo upload:', error);
+      req.logger.error('Error in admin logo upload', { error });
       throw error;
     }
   })
   .delete(async (req, res) => {
     try {
-      const { user } = req;
-
-      if (!user?.isAdmin) {
-        throw new ForbiddenError('You do not have permission to delete admin logos');
-      }
-
       const { isDarkMode } = req.body;
 
       const result = await withTransaction(async session => {
@@ -180,11 +198,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         const fileKey = isDarkMode ? currentSettings.customDarkLogoUrl : currentSettings.customLogoUrl;
 
         if (fileKey) {
-          // Remove the logo from S3
-          const storage = new S3Storage(Resource.appFilesBucket.name);
-          // If the stored value is just a filename, prepend the admin/logos/ path
-          const s3KeyToDelete = fileKey.startsWith('admin/logos/') ? fileKey : `admin/logos/${fileKey}`;
-          await storage.delete(s3KeyToDelete);
+          deleteLogoAfterCommit(
+            session,
+            new S3Storage(Resource.appFilesBucket.name),
+            isDarkMode ? 'dark' : 'light',
+            fileKey
+          );
         }
 
         // Update logo settings to remove the URL
@@ -195,14 +214,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           updatedSettings.customLogoUrl = '';
         }
 
-        await updateLogoSettings(updatedSettings, session);
+        const { before, after } = await updateLogoSettings(updatedSettings, session);
+        await recordAdminSettingChange(req, {
+          settingName: 'logoSettings',
+          before,
+          after,
+          summary: `removed the custom ${isDarkMode ? 'dark' : 'light'} logo`,
+        });
 
         return { success: true };
       });
 
       return res.json(result);
     } catch (error) {
-      console.error('Error in admin logo delete:', error);
+      req.logger.error('Error in admin logo delete', { error });
       throw error;
     }
   });

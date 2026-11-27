@@ -1,5 +1,5 @@
 import { createHash, createHmac } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { S3Storage } from '../../../../../../b4m-core/fab-pipeline/src/storage/S3Storage';
 
 const h = vi.hoisted(() => ({ findOne: vi.fn(), findAccessibleById: vi.fn(), options: undefined as unknown }));
@@ -14,9 +14,10 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: { findOne: (...args: unknown[]) => ({ lean: () => h.findOne(...args) }) },
   fabFileRepository: { shareable: { findAccessibleById: (...args: unknown[]) => h.findAccessibleById(...args) } },
 }));
-vi.mock('@server/dataLakes', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/index', () => ({
+  adminBypassLakeIds: vi.fn(async () => []),
   resolveAccessibleLakes: vi.fn(async () => []),
-  isFileInAccessibleLake: vi.fn(),
+  grantingLakes: vi.fn(() => []),
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => new S3Storage('files-bucket', 'us-east-2'),
@@ -50,9 +51,14 @@ async function urls(filePaths: string[], expiresIn = '600', audience?: string) {
   return json.mock.calls[0][0].urls as (string | null)[];
 }
 
-beforeEach(async () => {
+const importHandler = async () => (await import('../presigned-url')).default as unknown as typeof handler;
+
+beforeAll(async () => {
+  handler = await importHandler();
+});
+
+beforeEach(() => {
   vi.clearAllMocks();
-  vi.resetModules();
   vi.stubEnv('AWS_REGION', 'us-east-2');
   vi.stubEnv('AWS_ACCESS_KEY_ID', 'fixture-access');
   vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'fixture-secret');
@@ -61,7 +67,6 @@ beforeEach(async () => {
   vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://objects.example.invalid:9443');
   h.findOne.mockResolvedValue({ _id: 'file-1', moderationStatus: 'clean' });
   h.findAccessibleById.mockResolvedValue(true);
-  handler = (await import('../presigned-url')).default as unknown as typeof handler;
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -107,9 +112,14 @@ describe('generic file browser download signing', () => {
   it('retains AWS addressing when neither custom endpoint is configured', async () => {
     vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
     vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+    const shared = handler;
     vi.resetModules();
-    handler = (await import('../presigned-url')).default as unknown as typeof handler;
-    expect(new URL((await urls(['owned/report.txt']))[0]!).hostname).toBe('files-bucket.s3.us-east-2.amazonaws.com');
+    handler = await importHandler();
+    try {
+      expect(new URL((await urls(['owned/report.txt']))[0]!).hostname).toBe('files-bucket.s3.us-east-2.amazonaws.com');
+    } finally {
+      handler = shared;
+    }
   });
 
   it.each(['browser', 'server'])(
@@ -125,4 +135,50 @@ describe('generic file browser download signing', () => {
       expect(h.options).toEqual({ requiredScopes: ['files:read'] });
     }
   );
+});
+
+describe('response disposition on signed reads', () => {
+  const disposition = (url: string | null) => new URL(url!).searchParams.get('response-content-disposition');
+  const contentType = (url: string | null) => new URL(url!).searchParams.get('response-content-type');
+
+  it.each(['browser', 'server'])('downloads html and serves png inline for %s', async audience => {
+    h.findOne.mockImplementation(async ({ filePath }: { filePath: string }) => ({
+      _id: filePath,
+      moderationStatus: 'clean',
+      fileName: filePath === 'owned/page.html' ? 'page.html' : 'photo.png',
+      mimeType: filePath === 'owned/page.html' ? 'text/html' : 'image/png',
+    }));
+    const [html, png] = await urls(['owned/page.html', 'owned/photo.png'], '600', audience);
+    expect(disposition(html)).toBe('attachment; filename="page.html"');
+    expect(contentType(html)).toBeNull();
+    expect(disposition(png)).toBeNull();
+    expect(contentType(png)).toBe('image/png');
+  });
+
+  const withMime = (mimeType: string | undefined) =>
+    h.findOne.mockResolvedValue({ _id: 'file-1', moderationStatus: 'clean', fileName: 'page.html', mimeType });
+
+  it.each(['image/svg+xml', 'text/plain', undefined])(
+    'downloads %s under a signature covering the override',
+    async mimeType => {
+      withMime(mimeType);
+      const [url] = await urls(['owned/page.html']);
+      expect(disposition(url)).toBe('attachment; filename="page.html"');
+      expect(contentType(url)).toBeNull();
+      expect(new URL(url!).searchParams.get('X-Amz-Signature')).toBe(signature(new URL(url!)));
+    }
+  );
+
+  it.each(['application/pdf', 'video/mp4'])('serves %s inline with a pinned type', async mimeType => {
+    withMime(mimeType);
+    const [url] = await urls(['owned/page.html']);
+    expect(disposition(url)).toBeNull();
+    expect(contentType(url)).toBe(mimeType);
+  });
+
+  it('downloads an untracked modal key under its key name', async () => {
+    h.findOne.mockResolvedValue(null);
+    const [url] = await urls(['modals/banner.html']);
+    expect(disposition(url)).toBe('attachment; filename="banner.html"');
+  });
 });

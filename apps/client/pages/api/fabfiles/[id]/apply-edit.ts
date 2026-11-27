@@ -15,7 +15,6 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { deleteDroppedVersions, getAiEditVersionRetention } from '@server/utils/aiEditVersionRetention';
 import { TEXT_EDIT_BACKUP_PREFIX } from '@bike4mind/server-utils/utils/textEditBackupPrefix';
 import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
-import { v4 as uuidv4 } from 'uuid';
 
 const rewriteStorageDb = {
   fabFiles: fabFileRepository,
@@ -106,7 +105,7 @@ const handler = baseApi()
             existingVersions: file.versions,
             newFileSize: newBuffer.length,
             now,
-            nonce: uuidv4(),
+            nonce: crypto.randomUUID(),
             maxEditedVersions,
           });
 
@@ -123,7 +122,12 @@ const handler = baseApi()
               fabFileId: String(file._id),
               newSize: newBuffer.length,
               filter: { filePath: s3Key },
-              set: { filePath: newFilePath, versions, updatedAt: now, ...FAB_FILE_CONTENT_REWRITE_PATCH },
+              set: {
+                filePath: newFilePath,
+                versions,
+                updatedAt: now,
+                ...FAB_FILE_CONTENT_REWRITE_PATCH,
+              },
             },
             rewriteStorageDb
           );
@@ -145,7 +149,7 @@ const handler = baseApi()
         // Text files: keep the existing overwrite-with-single-backup behavior. The quota check runs
         // first so a refused edit writes nothing, not even the backup.
         await fabFilesService.assertRewriteFits(file, contentSize, rewriteStorageDb, user);
-        const backupId = uuidv4();
+        const backupId = crypto.randomUUID();
         const backupPath = `${TEXT_EDIT_BACKUP_PREFIX}${user.id}/${backupId}_${file.fileName}`;
 
         const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', {
@@ -185,7 +189,7 @@ const handler = baseApi()
           updatedAt: new Date(),
         });
       } catch (error) {
-        console.error('Apply edit error:', error);
+        req.logger.error('Apply edit error', { error });
         // The storage gate and a missing owner already carry their own status code; rethrow them
         // instead of flattening every error to a 400.
         if (isStorageLimitError(error) || error instanceof HTTPError) throw error;

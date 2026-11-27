@@ -1,4 +1,4 @@
-import type { IUserDocument } from '@bike4mind/common';
+import { orgApiKeyReachOf, type IUserDocument } from '@bike4mind/common';
 import { organizationRepository } from '@bike4mind/database';
 
 /**
@@ -27,5 +27,9 @@ export interface MembershipRequest {
 export async function getRequestMembershipOrgIds(req: MembershipRequest): Promise<string[]> {
   // Fail closed: a nullish user belongs to nothing.
   if (!req.user) return [];
+  // An org-owned key's lake reach is its grant (apiKeyAuth attaches it), never the service account's
+  // own membership, which is always empty.
+  const keyReach = orgApiKeyReachOf(req.user);
+  if (keyReach) return (req.membershipOrgIds ??= [...keyReach.dataLakeOrgIds]);
   return (req.membershipOrgIds ??= await organizationRepository.findMembershipOrgIds(req.user.id));
 }

@@ -1,10 +1,10 @@
 /** GET /api/v1/video-generations/{id} - one job the caller requested; anything else is a 404. */
 import { getVideoGenerationContract, NotFoundError } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { findOwnGenerationJob } from '@server/generations/findOwnGenerationJob';
+import { findOwnGenerationJob } from '@bike4mind/server-utils/generations/findOwnGenerationJob';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
-import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
+import { VIDEO_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
 
 const handler = nextRouteForContract(getVideoGenerationContract, {
   // Clients poll this until the job is terminal; polling must not drain the daily request budget.
@@ -13,7 +13,7 @@ const handler = nextRouteForContract(getVideoGenerationContract, {
 }).get(async (req, res) => {
   const job = await findOwnGenerationJob(req.validatedParams.id, req.user.id, 'video');
   if (!job) throw new NotFoundError('Video generation not found');
-  return res.json(await toPublicVideoGeneration(job, mapperDeps));
+  return res.json(await toPublicGenerationJob(job, mapperDeps, VIDEO_GENERATION_PROJECTION));
 });
 
 export const config = {

@@ -1,7 +1,13 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
+import {
+  GENERATED_AUDIO_DESCRIPTION,
+  generatedAudioResponses,
+  outlastedAudioResponse,
+  unretrievableAudioResponse,
+} from './audioResponses';
+import { SpeechGenerationSchema } from '../../schemas/audioGenerations';
 // Import the specific schema files, NOT the barrel (`../../schemas`) - see the
 // note in tools.contract.ts (the barrel drags in an unbuilt dist in the CI
 // openapi job).
@@ -16,6 +22,23 @@ import {
   BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION,
   BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION,
 } from '../../schemas/billingOrganization';
+import { SPEND_FROZEN_FORBIDDEN_NOTE } from '../../schemas/chat';
+
+const exampleOutlastedJob = {
+  id: EXAMPLE_RESOURCE_ID,
+  object: 'speech_generation',
+  state: 'running',
+  text: 'Your password has been reset.',
+  provider: 'elevenlabs',
+  model: null,
+  voice: null,
+  source: 'api',
+  error: null,
+  output: null,
+  credits: { reserved: 12, settled: null },
+  created_at: '2026-10-14T00:00:00.000Z',
+  updated_at: '2026-10-14T00:00:30.000Z',
+} as const;
 
 /**
  * Contract for POST /api/ai/tts - multi-provider text-to-speech.
@@ -66,6 +89,7 @@ export const synthesizeSpeechContract = defineEndpoint({
       },
       tooLargeSchema: ttsResponseTooLargeSchema,
     }),
+    202: outlastedAudioResponse({ noun: 'speech', schema: SpeechGenerationSchema, example: exampleOutlastedJob }),
     401: {
       description:
         'Missing/invalid credentials, no provider has a usable key (`provider_not_configured`), or the ' +
@@ -73,17 +97,22 @@ export const synthesizeSpeechContract = defineEndpoint({
       schema: ttsErrorResponseSchema,
     },
     400: {
-      description: `The billing organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
+      description:
+        `The billing organization could not be resolved. ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION} ` +
+        'Also `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` ' +
+        '(`errorCode: "end_user_id_not_allowed"`), or a malformed `end_user_id` (`errorCode: "invalid_end_user_id"`).',
       schema: ttsErrorResponseSchema,
     },
     403: {
       description:
         'The API key lacks the `ai:generate` scope (`required_scopes` names it), or ' +
-        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION}`,
+        `${BILLING_ORGANIZATION_FORBIDDEN_DESCRIPTION} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
       schema: ttsForbiddenResponseSchema,
     },
     404: {
-      description: 'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`.',
+      description:
+        'A nonexistent `organization_id`, for an admin caller; for anyone else it is `403`. A `run` that does ' +
+        'not exist or that another user or billing owner minted is `404` (`errorCode: "run_not_found"`).',
       schema: ttsErrorResponseSchema,
     },
     422: {
@@ -91,12 +120,23 @@ export const synthesizeSpeechContract = defineEndpoint({
         'Request body failed validation, the text exceeds the provider character limit, the provider ' +
         'cannot produce the requested `format`, the provider rejected the request (e.g. an unknown voice), ' +
         'or the caller cannot afford the synthesis - the last of ' +
-        'those is the only one tagged `errorCode: "insufficient_credits"`, so match on the classifier ' +
-        'rather than the status to tell a billing failure from a bad request.',
+        'those is tagged `errorCode: "insufficient_credits"`, and a call whose `run` budget has no room for ' +
+        'it is tagged `errorCode: "run_budget_exhausted"`, so match on the classifier rather than the status ' +
+        'to tell a billing failure from a bad request.',
       schema: ttsErrorResponseSchema,
     },
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
-    502: { description: 'The provider failed to generate speech.', schema: ttsErrorResponseSchema },
+    502: {
+      description:
+        'The provider failed to generate speech. When the clip was generated but could not be read back, the body ' +
+        'carries `jobId`, also sent as `X-B4M-Generation-Job-Id`.',
+      schema: ttsErrorResponseSchema,
+    },
+    503: {
+      description: 'Every candidate provider is out of quota, so speech is temporarily unavailable.',
+      schema: ttsErrorResponseSchema,
+    },
+    504: unretrievableAudioResponse({ noun: 'speech', schema: ttsErrorResponseSchema }),
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

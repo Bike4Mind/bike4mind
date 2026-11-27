@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
-import { GENERIC_MODAL_API_KEY_SCOPES, genericApiKeyScopesFor } from '@client/app/constants/apiKeyScopes';
+import {
+  EXPLICIT_ONLY_API_KEY_SCOPES,
+  GENERIC_MODAL_API_KEY_SCOPES,
+  genericApiKeyScopesFor,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { useUser } from '@client/app/contexts/UserContext';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -19,12 +24,14 @@ const h = vi.hoisted(() => ({
   // here rather than as a 400 at mint time (#2945).
   askedForUserId: undefined as string | undefined,
   hasOptiAccess: true,
+  bypass: false,
 }));
 
 vi.mock('@client/app/hooks/data/opti', () => ({ useOptiAccess: () => h.hasOptiAccess }));
 vi.mock('@client/app/hooks/data/productScopeAccess', () => ({
   useOverwatchAccess: () => true,
   useHearthEnabled: () => true,
+  useApiKeyScopeEntitlements: () => ({ bypass: h.bypass, entitlements: new Set<string>() }),
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -40,7 +47,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
-  useAdminGenerateApiKey: () => ({ mutate: h.mutate, isPending: false }),
+  useAdminGenerateApiKey: () => ({ mutateAsync: h.mutate, isPending: false }),
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -56,6 +63,7 @@ const renderModal = () =>
   );
 
 beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin1', isAdmin: true } as never });
   h.lakes = [
     { id: 'lakeA', name: 'Lake A', canPreauthorize: true },
     { id: 'lakeB', name: 'Lake B', canPreauthorize: true },
@@ -64,9 +72,18 @@ beforeEach(() => {
   h.lakesError = false;
   h.askedForUserId = undefined;
   h.hasOptiAccess = true;
+  h.bypass = false;
   h.refetchLakes.mockClear();
   h.mutate.mockClear();
+  h.mutate.mockResolvedValue({ key: 'secret' });
 });
+
+const confirmGeneration = async () => {
+  fireEvent.click(screen.getByText('Generate API Key'));
+  expect(h.mutate).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByTestId('admin-generate-key-action-dialog-reason-input-preset-0'));
+  await act(async () => fireEvent.click(screen.getByTestId('admin-generate-key-action-dialog-confirm-btn')));
+};
 
 describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
   it('shows a loading state while lakes are fetching', () => {
@@ -114,17 +131,17 @@ describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
     expect(screen.getByTestId('admin-generate-key-lakes-empty').textContent).toContain('target-user');
   });
 
-  it('submits with no preauthorizedLakeIds when none are checked', () => {
+  it('submits with no preauthorizedLakeIds when none are checked', async () => {
     renderModal();
     fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'my key' } });
     fireEvent.click(screen.getAllByRole('checkbox')[0]);
-    fireEvent.click(screen.getByText('Generate API Key'));
+    await confirmGeneration();
 
     const call = h.mutate.mock.calls[0][0];
     expect(call.data.preauthorizedLakeIds).toBeUndefined();
   });
 
-  it('checking a lake includes its id, and unchecking removes it, in the submitted data', () => {
+  it('checking a lake includes its id, and unchecking removes it, in the submitted data', async () => {
     renderModal();
     fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'my key' } });
     fireEvent.click(screen.getAllByRole('checkbox')[0]);
@@ -135,12 +152,11 @@ describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
     fireEvent.click(screen.getByTestId('admin-generate-key-lake-checkbox-lakeB').querySelector('input')!);
     expect(screen.getByTestId('admin-generate-key-lakes-count').textContent).toContain('2 selected');
 
-    fireEvent.click(screen.getByText('Generate API Key'));
-    const call = h.mutate.mock.calls[0][0];
-    expect(call.data.preauthorizedLakeIds).toEqual(['lakeA', 'lakeB']);
-
     fireEvent.click(screen.getByTestId('admin-generate-key-lake-checkbox-lakeA').querySelector('input')!);
     expect(screen.getByTestId('admin-generate-key-lakes-count').textContent).toContain('1 selected');
+    await confirmGeneration();
+    const call = h.mutate.mock.calls[0][0];
+    expect(call.data.preauthorizedLakeIds).toEqual(['lakeB']);
   });
 });
 
@@ -148,9 +164,9 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
   const GENERIC = GENERIC_MODAL_API_KEY_SCOPES[0].value;
   const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
 
-  const submitScopes = () => {
+  const submitScopes = async () => {
     fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'ci ingest' } });
-    fireEvent.click(screen.getByText('Generate API Key'));
+    await confirmGeneration();
     return h.mutate.mock.calls[0][0].data.scopes;
   };
 
@@ -162,33 +178,152 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
 
   it('the generic counter ignores a selected ingest scope, and Select All replaces it', () => {
     renderModal();
+    const offeredScopes = genericApiKeyScopesFor({
+      hasOptiAccess: true,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set<string>(),
+    });
+    const offered = offeredScopes.length;
+    const bulk = offeredScopes.filter(s => !EXPLICIT_ONLY_API_KEY_SCOPES.has(s.value)).length;
     const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
-    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(counter()).toContain(`(0/${offered} selected)`);
 
     fireEvent.click(screen.getByText('Select All'));
-    expect(counter()).toContain(
-      `(${GENERIC_MODAL_API_KEY_SCOPES.length}/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`
-    );
+    expect(counter()).toContain(`(${bulk}/${offered} selected)`);
     expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+    // A key that can mint keys is only ever granted by ticking it.
+    expect(scopeInput(ApiKeyScope.API_KEYS_MANAGE).checked).toBe(false);
 
     fireEvent.click(screen.getByText('Clear All'));
-    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(counter()).toContain(`(0/${offered} selected)`);
     expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
   });
 
-  it('an ingest scope replaces the selection, since it must be the only scope', () => {
+  it('an ingest scope replaces the selection, since it must be the only scope', async () => {
     renderModal();
     fireEvent.click(scopeInput(GENERIC));
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
-    expect(submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
+    expect(await submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
   });
 
-  it('a generic scope drops a selected ingest scope', () => {
+  it('a generic scope drops a selected ingest scope', async () => {
     renderModal();
     fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
     fireEvent.click(scopeInput(GENERIC));
-    expect(submitScopes()).toEqual([GENERIC]);
+    expect(await submitScopes()).toEqual([GENERIC]);
+  });
+});
+
+describe('AdminGenerateApiKeyModal - ingest scopes for a delegate', () => {
+  it('disables the ingest scopes with the reason for a delegate, but not the generic ones', () => {
+    useUser.setState({
+      currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke', 'users:impersonate'] } as never,
+    });
+    renderModal();
+    const input = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+    expect(input(ApiKeyScope.QA_INGEST)).toBeDisabled();
+    expect(screen.getByTestId('admin-generate-key-ingest-reason')).toHaveTextContent(/Only full administrators/);
+    expect(input(GENERIC_MODAL_API_KEY_SCOPES[0].value)).toBeEnabled();
+  });
+
+  it('leaves the ingest scopes selectable for a full admin', () => {
+    renderModal();
+    expect(
+      screen.getByTestId(`admin-generate-key-scope-${ApiKeyScope.QA_INGEST}`).querySelector('input')
+    ).toBeEnabled();
+    expect(screen.queryByTestId('admin-generate-key-ingest-reason')).toBeNull();
+  });
+});
+
+describe('AdminGenerateApiKeyModal - write permissions', () => {
+  it('disables minting without keys:revoke or users:impersonate', () => {
+    useUser.setState({ currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke'] } as never });
+    renderModal();
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'new key' } });
+    fireEvent.click(
+      screen.getByTestId(`admin-generate-key-scope-${GENERIC_MODAL_API_KEY_SCOPES[0].value}`).querySelector('input')!
+    );
+    expect(screen.getByText('Generate API Key').closest('button')).toBeDisabled();
+    expect(h.mutate).not.toHaveBeenCalled();
+  });
+
+  it('disables minting for a protected admin target even with both delegate permissions', () => {
+    useUser.setState({
+      currentUser: { id: 'd1', isAdmin: false, adminPermissions: ['keys:revoke', 'users:impersonate'] } as never,
+    });
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AdminGenerateApiKeyModal open onClose={vi.fn()} user={{ ...USER, isAdmin: true }} />
+      </CssVarsProvider>
+    );
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'new key' } });
+    fireEvent.click(
+      screen.getByTestId(`admin-generate-key-scope-${GENERIC_MODAL_API_KEY_SCOPES[0].value}`).querySelector('input')!
+    );
+    expect(screen.getByText('Generate API Key').closest('button')).toBeDisabled();
+    expect(h.mutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminGenerateApiKeyModal - reason for admin-provisioned scopes', () => {
+  const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+  const submitButton = () => screen.getByTestId('admin-generate-key-action-dialog-confirm-btn');
+  const nameKey = () =>
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'rewards key' } });
+
+  it('requires an audited reason for self-service scopes too', async () => {
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(GENERIC_MODAL_API_KEY_SCOPES[0].value));
+    fireEvent.click(screen.getByText('Generate API Key'));
+    expect(submitButton()).toBeDisabled();
+    expect(h.mutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('admin-generate-key-action-dialog-reason-input-preset-0'));
+    await act(async () => fireEvent.click(submitButton()));
+    expect(h.mutate.mock.calls[0][0].data.reason).toBe('Partner integration');
+  });
+
+  it('requires a reason before an admin-provisioned scope can be minted', () => {
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(ApiKeyScope.REWARDS_GRANT));
+
+    fireEvent.click(screen.getByText('Generate API Key'));
+    expect(submitButton()).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('admin-generate-key-action-dialog-reason-input'), { target: { value: 'abc' } });
+    expect(submitButton()).toBeDisabled();
+  });
+
+  it('submits the composed reason with the key', async () => {
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(ApiKeyScope.REWARDS_GRANT));
+    fireEvent.click(screen.getByText('Generate API Key'));
+    fireEvent.click(screen.getByTestId('admin-generate-key-action-dialog-reason-input-preset-0'));
+    fireEvent.change(screen.getByTestId('admin-generate-key-action-dialog-reason-input'), {
+      target: { value: 'game server' },
+    });
+
+    expect(submitButton()).not.toBeDisabled();
+    await act(async () => fireEvent.click(submitButton()));
+    expect(h.mutate.mock.calls[0][0].data).toMatchObject({
+      scopes: [ApiKeyScope.REWARDS_GRANT],
+      reason: 'Partner integration: game server',
+    });
+  });
+
+  it('keeps the confirmation open when generation fails', async () => {
+    h.mutate.mockRejectedValue(new Error('generation failed'));
+    renderModal();
+    nameKey();
+    fireEvent.click(scopeInput(GENERIC_MODAL_API_KEY_SCOPES[0].value));
+    await confirmGeneration();
+    expect(screen.getByTestId('admin-generate-key-action-dialog')).toBeTruthy();
+    expect(screen.queryByText('Copy this key now. It will not be shown again.')).toBeNull();
   });
 });
 
@@ -202,18 +337,61 @@ describe('AdminGenerateApiKeyModal - premium scopes', () => {
     for (const scope of PREMIUM) expect(scopeRow(scope)).toBeNull();
 
     fireEvent.click(screen.getByText('Select All'));
-    const offered = genericApiKeyScopesFor({
+    const offeredScopes = genericApiKeyScopesFor({
       hasOptiAccess: false,
       hasOverwatchAccess: true,
       hearthEnabled: true,
-    }).length;
+      bypass: false,
+      entitlements: new Set(),
+    });
+    const bulk = offeredScopes.filter(s => !EXPLICIT_ONLY_API_KEY_SCOPES.has(s.value)).length;
     expect(screen.getByTestId('admin-generate-key-scopes-count').textContent).toContain(
-      `(${offered}/${offered} selected)`
+      `(${bulk}/${offeredScopes.length} selected)`
     );
+  });
+
+  it.each([false, true])('offers persona mint only with caller bypass=%s', bypass => {
+    h.bypass = bypass;
+    renderModal();
+    if (bypass) expect(scopeRow(ApiKeyScope.PERSONAS_MINT)).not.toBeNull();
+    else expect(scopeRow(ApiKeyScope.PERSONAS_MINT)).toBeNull();
   });
 
   it('offers the premium scopes with Opti access', () => {
     renderModal();
     for (const scope of PREMIUM) expect(scopeRow(scope)).not.toBeNull();
+  });
+});
+
+describe('platform companion scope count', () => {
+  it('counts only displayed generic scopes while retaining the companion in the minted key', async () => {
+    const offeredScopes = genericApiKeyScopesFor({
+      hasOptiAccess: true,
+      hasOverwatchAccess: true,
+      hearthEnabled: true,
+      bypass: false,
+      entitlements: new Set(),
+    });
+    expect(offeredScopes.some(scope => scope.value === ApiKeyScope.AI_CHAT)).toBe(true);
+    expect(offeredScopes.some(scope => scope.value === ApiKeyScope.AI_END_USER_ID)).toBe(false);
+    renderModal();
+    const input = (scope: string) => {
+      const element = screen.getByTestId(`admin-generate-key-scope-${scope}`).querySelector('input');
+      if (!(element instanceof HTMLInputElement)) throw new Error('Scope checkbox input missing');
+      return element;
+    };
+    const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
+    fireEvent.click(input(ApiKeyScope.AI_CHAT));
+    expect(counter()).toContain(`(1/${offeredScopes.length} selected)`);
+    fireEvent.click(input(ApiKeyScope.AI_END_USER_ID));
+    expect(input(ApiKeyScope.AI_CHAT).checked).toBe(true);
+    expect(input(ApiKeyScope.AI_END_USER_ID).checked).toBe(true);
+    expect(counter()).toContain(`(1/${offeredScopes.length} selected)`);
+    fireEvent.click(input(ApiKeyScope.AI_END_USER_ID));
+    expect(counter()).toContain(`(1/${offeredScopes.length} selected)`);
+    fireEvent.click(input(ApiKeyScope.AI_END_USER_ID));
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'platform key' } });
+    await confirmGeneration();
+    expect(h.mutate.mock.calls[0][0].data.scopes).toEqual([ApiKeyScope.AI_CHAT, ApiKeyScope.AI_END_USER_ID]);
   });
 });

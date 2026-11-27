@@ -1,16 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { mfaService, userService } from '@bike4mind/services';
-import {
-  userRepository,
-  authSessionRepository,
-  passkeyCredentialRepository,
-  realtimeConnectionRepository,
-} from '@bike4mind/database';
-import { issueBrowserSession } from '@server/auth/issueSession';
-import { logAuthAudit } from '@server/utils/authAudit';
-import { logSecondFactorSignIn, readSignInOrigin } from '@server/auth/signInSecondFactor';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { mfaService } from '@bike4mind/services';
+import { userRepository, passkeyCredentialRepository } from '@bike4mind/database';
+import { readSignInOrigin } from '@server/auth/signInSecondFactor';
+import { completeMfaEnrollment } from '@server/auth/completeMfaEnrollment';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { APP_ENROLLMENT_REFUSAL, refuseAppEnrollmentBeforeSecondFactor } from '@server/auth/appEnrollment';
+import { redactUserSecretsForSelf, selfUserResponseSchema, type IUser } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -50,6 +46,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         return res.status(404).json({ error: 'User not found in database' });
       }
 
+      if (refuseAppEnrollmentBeforeSecondFactor(req.user, freshUser)) {
+        return res.status(403).json({ error: APP_ENROLLMENT_REFUSAL });
+      }
+
       // Server-side lockout check (can't be bypassed by refresh/cancel)
       if (mfaService.isUserLockedOut(freshUser)) {
         const remainingMinutes = mfaService.getLockoutTimeRemaining(freshUser);
@@ -60,49 +60,35 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Passkeys only satisfy MFA alongside an enabled TOTP, so any still on file while setup is
-      // pending are orphans of an earlier MFA that a failed cleanup left behind. Purge them so a
-      // fresh enrollment never revives them.
-      if (!freshUser.mfa?.totpEnabled) {
-        await passkeyCredentialRepository.removeAllForUser(freshUser.id);
+      // Before any write or the session mint, and outside the try: a lookup failure must leave no
+      // session behind and must not be booked as a failed MFA attempt.
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions<
+        Pick<IUser, 'adminRoleIds' | 'roleAdminPermissions'>
+      >({ adminRoleIds: freshUser.adminRoleIds });
+
+      // With no factor configured, any passkey still on file is an orphan of an earlier MFA that a
+      // failed cleanup left behind. Purge them so a fresh enrollment never revives them. A
+      // passkey-only user adding an app keeps theirs. Orphans predate this app setup, so the purge
+      // stops at setupAt: a first-factor passkey registered while the user types the code survives.
+      if (!mfaService.userHasMFAConfigured(freshUser)) {
+        const setupAt = freshUser.mfa?.setupAt;
+        await passkeyCredentialRepository.removeAllForUser(
+          freshUser.id,
+          setupAt ? { createdBefore: new Date(setupAt) } : undefined
+        );
       }
 
-      let setupBody: unknown;
+      let setupBody: { success: boolean; accessToken: string };
+      let enrolledUser: Awaited<ReturnType<typeof mfaService.verifyMFASetup>>['user'];
       try {
         // verifyMFASetup clears any failed-attempt/lockout state as part of its single
         // secret-preserving write - a separate clear here (built from the not-+selected
         // `result.user`) would wipe the select:false totpSecret/backupCodes and brick MFA.
         const result = await mfaService.verifyMFASetup(freshUser, cleanToken, userRepository);
+        const tokens = await completeMfaEnrollment(req, res, freshUser);
 
-        // Enabling MFA is a security-relevant change: revoke every existing session (bumps
-        // tokenVersion AND clears session rows, so other devices can't silently refresh back in),
-        // then mint a fresh session for THIS device with the new version.
-        const newTokenVersion = await userService.revokeUserSessions(result.user.id, {
-          db: {
-            users: userRepository,
-            authSessions: authSessionRepository,
-            realtimeConnections: realtimeConnectionRepository,
-          },
-          logger: req.logger,
-        });
-        // Enrollment that finishes a sign-in (enforceMFA) is that sign-in's session, so it keeps
-        // the first-factor origin exactly as completeMfaLogin does. Enrolling from an existing
-        // session carries no origin, and there the session is the enrollment itself.
-        const signInOrigin = readSignInOrigin(req.user);
-        const { accessToken } = await issueBrowserSession(req, res, result.user.id, {
-          createdVia: signInOrigin?.createdVia ?? 'mfa-setup',
-          tokenVersion: newTokenVersion,
-        });
-        const tokens = { accessToken };
-
-        await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
-        if (signInOrigin) await logSecondFactorSignIn(req, result.user.id, signInOrigin);
-
-        setupBody = {
-          success: result.success,
-          ...tokens,
-          user: redactUserSecretsForSelf(result.user),
-        };
+        enrolledUser = result.user;
+        setupBody = { success: result.success, ...tokens };
       } catch (error: unknown) {
         // A code checked by mfaService was counted before it was compared; anything else is counted now.
         const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
@@ -125,9 +111,15 @@ const handler = baseApi({ auth: 'jwtOnly' })
         });
       }
 
-      // Outside the try: a response-boundary failure is our bug and must not be booked as a
-      // failed MFA attempt by the catch above.
-      return respond(res, verifySetupResponseSchema, setupBody);
+      // Outside the try: a response-boundary failure is our bug and must not be booked as a failed
+      // MFA attempt by the catch above. The permissions were resolved above; this reattaches them to
+      // the post-enrollment user without a second role query.
+      return respond(res, verifySetupResponseSchema, {
+        ...setupBody,
+        user: redactUserSecretsForSelf(
+          await resolveRoleAdminPermissions(enrolledUser, async () => [{ permissions: roleAdminPermissions }])
+        ),
+      });
     })
   );
 

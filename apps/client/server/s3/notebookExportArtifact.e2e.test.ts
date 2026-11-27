@@ -13,7 +13,7 @@ import {
   artifactContentRepository,
 } from '@bike4mind/database';
 import { notebookExportService, notebookImportService } from '@bike4mind/services';
-import { createArtifactWrites, createSessionWrites } from './notebookImportComplete';
+import { createArtifactWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -30,7 +30,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  *     one object literal the second would silently replace the first and the access check would be
  *     gone. A stub asserting on `query.$or` cannot tell those two shapes apart.
  *
- * Run `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
+ * Run `pnpm --filter @bike4mind/services-core build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  */
 
@@ -201,6 +201,7 @@ describe('notebook round trip: artifacts', () => {
       knowledgeRepository: { create: async () => null },
       toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
       agentRepository: { create: async () => null },
+      findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
       userRepository: { findById: async () => ({ id: USER }) },
       adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
       fileStorageService: {

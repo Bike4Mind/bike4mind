@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: vi.fn(function () {
     return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -32,16 +32,18 @@ vi.mock('@bike4mind/slack', () => ({
   buildUserLinkRedirectUri: vi.fn(() => 'https://example.test/api/slack/oauth/user-link/callback'),
   verifyUserLinkStateToken: vi.fn(() => ({ valid: true, payload: { userId: 'user-1' } })),
 }));
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   consumeStateNonce: vi.fn(() => 'nonce-hash'),
   NONCE_SLOT: { slackUserLink: 'slack-user-link' },
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: () => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn(), setWorkspaceId: vi.fn() }),
   },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ encryptToken: (token: string) => `encrypted:${token}` }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  encryptToken: (token: string) => `encrypted:${token}`,
+}));
 
 import handler from '@pages/api/slack/oauth/user-link/callback';
 

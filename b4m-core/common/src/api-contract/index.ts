@@ -1,6 +1,7 @@
 export * from './types';
 export * from './defineEndpoint';
 export * from './deprecation';
+export * from './clientVersion';
 export { chatContract } from './contracts/chat.contract';
 export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
@@ -8,23 +9,79 @@ export { sessionGetContract } from './contracts/sessionGet.contract';
 export { sessionDeleteContract } from './contracts/sessionDelete.contract';
 export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
+export { searchWebContract, fetchWebPageContract, getCurrentWeatherContract } from './contracts/webTools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
+export { createSessionTurnContract } from './contracts/sessionTurns.contract';
+export {
+  createCompletionRunContract,
+  getCompletionRunEvaluationContract,
+  getCompletionRunUsageContract,
+  raiseCompletionRunBudgetContract,
+} from './contracts/completionRuns.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { getClientConfigContract, getPublicClientConfigContract } from './contracts/clientConfig.contract';
+export { approvePendingActionContract, denyPendingActionContract } from './contracts/pendingActions.contract';
+export {
+  composeBriefContract,
+  composeFollowUpBriefContract,
+  listBriefsContract,
+  getBriefContract,
+  getBriefScheduleContract,
+  putBriefScheduleContract,
+  getBusyBlocksContract,
+  putBusyBlocksContract,
+  replyToBriefDecisionContract,
+  editBriefDecisionContract,
+  resolveBriefDecisionContract,
+  getPendingDecisionCountContract,
+} from './contracts/briefs.contract';
+export { createDelegationContract, getDelegationContract } from './contracts/delegations.contract';
+export {
+  getObligationContract,
+  handOffObligationContract,
+  listObligationsContract,
+  updateObligationContract,
+} from './contracts/obligations.contract';
+export { registerPushTokenContract, unregisterPushTokenContract } from './contracts/pushTokens.contract';
+export { listHandoffDevicesContract, sendSessionHandoffContract } from './contracts/sessionHandoff.contract';
+export {
+  listAssistantInstructionsContract,
+  createAssistantInstructionContract,
+  deleteAssistantInstructionContract,
+} from './contracts/assistantInstructions.contract';
+export {
+  getInterruptionFeedbackContract,
+  putInterruptionFeedbackContract,
+} from './contracts/interruptionFeedback.contract';
+export { mintPersonaContract, deletePersonaContract } from './contracts/personas.contract';
 export { getCreditBalanceContract } from './contracts/credits.contract';
 export { listModelsContract } from './contracts/models.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
 export { editImageContract } from './contracts/imageEdit.contract';
+export {
+  cancelImageJobContract,
+  createImageJobContract,
+  getImageJobContract,
+  listImageJobsContract,
+} from './contracts/imageJob.contract';
 export {
   createFileUploadContract,
   getFileContract,
   listFilesContract,
   updateFileContract,
   deleteFileContract,
+  chunkFileContract,
+  searchFilesContract,
+  getFilesByIdsContract,
+  getFileLineageContract,
+  bulkDeleteFilesContract,
 } from './contracts/files.contract';
-export { createEmbeddingsContract } from './contracts/embeddings.contract';
+export { createEmbeddingsContract, listEmbeddingModelsContract } from './contracts/embeddings.contract';
+export { postSlackMessageContract } from './contracts/slackMessages.contract';
+export { createTextRefinementContract } from './contracts/textRefinement.contract';
 export { createDecisionContract, listDecisionModelsContract } from './contracts/decisions.contract';
 export { getQuestContract, listQuestFilesContract } from './contracts/quest.contract';
 export {
@@ -35,10 +92,26 @@ export {
   deleteArtifactContract,
   listArtifactVersionsContract,
   getArtifactVersionContract,
+  createArtifactVersionContract,
+  searchArtifactsContract,
+  listArtifactTypesContract,
+  publishArtifactContract,
+  republishArtifactContract,
+  unpublishArtifactContract,
 } from './contracts/artifacts.contract';
 export { createTranscriptionUploadContract, createTranscriptionContract } from './contracts/transcription.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
 export { listSessionsContract } from './contracts/sessionList.contract';
+export { getSessionByIdContract } from './contracts/sessionGetById.contract';
+export { listSessionQuestsContract } from './contracts/sessionQuests.contract';
+export { listSessionFilesContract } from './contracts/sessionFiles.contract';
+export { searchSessionsContract } from './contracts/sessionSemanticSearch.contract';
+export {
+  getSessionMessageContract,
+  updateSessionMessageContract,
+  deleteSessionMessageContract,
+} from './contracts/sessionMessages.contract';
+export { listCreditTransactionsContract } from './contracts/creditTransactions.contract';
 export { getWhatsNewMediaContract, listWhatsNewContract } from './contracts/whatsNew.contract';
 export {
   listDataLakesContract,
@@ -48,6 +121,21 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
+export {
+  listDataLakeResearchConfigsContract,
+  createDataLakeResearchConfigContract,
+  getDataLakeResearchConfigContract,
+  updateDataLakeResearchConfigContract,
+  deleteDataLakeResearchConfigContract,
+  startDataLakeResearchRunContract,
+  listDataLakeResearchRunsContract,
+  getDataLakeResearchRunContract,
+  listDataLakeProposalsContract,
+  decideDataLakeProposalContract,
+  getDataLakeConfigHistoryContract,
+  undoDataLakeConfigChangeContract,
+} from './contracts/dataLakeResearch.contract';
+export { listImageModelsContract } from './contracts/imageModels.contract';
 export {
   cancelVideoGenerationContract,
   createVideoGenerationContract,
@@ -62,6 +150,12 @@ export {
   listMusicGenerationsContract,
   listMusicModelsContract,
 } from './contracts/musicGeneration.contract';
+export {
+  cancelSceneCompositionContract,
+  createSceneCompositionContract,
+  getSceneCompositionContract,
+  listSceneCompositionsContract,
+} from './contracts/sceneComposition.contract';
 export { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './contracts/voice.contract';
 export {
   listProjectsContract,
@@ -71,11 +165,84 @@ export {
   deleteProjectContract,
 } from './contracts/projects.contract';
 export {
+  listProjectFilesContract,
+  addProjectFilesContract,
+  removeProjectFileContract,
+  listProjectSessionsContract,
+  addProjectSessionsContract,
+  removeProjectSessionContract,
+} from './contracts/projectContent.contract';
+export {
+  removeProjectMemberContract,
+  listProjectInvitesContract,
+  createProjectInviteContract,
+  addProjectSystemPromptsContract,
+  updateProjectSystemPromptContract,
+  removeProjectSystemPromptContract,
+} from './contracts/projectSharing.contract';
+export {
   listAgentsContract,
   getAgentContract,
   createAgentContract,
   updateAgentContract,
   deleteAgentContract,
+  generateAgentAvatarContract,
+  generateAgentDescriptionContract,
+  generateAgentSystemPromptContract,
+  enhanceAgentFieldContract,
+  transferAgentCreditsContract,
+  createAgentFromContextContract,
 } from './contracts/agents.contract';
-export { getClaudeMarketplaceContract, getClaudePluginZipContract } from './contracts/skillMarket.contract';
+export {
+  getClaudeBundleZipContract,
+  getClaudeMarketplaceContract,
+  getClaudePluginZipContract,
+} from './contracts/skillMarket.contract';
+export {
+  listSkillMarketListingsContract,
+  getSkillMarketListingContract,
+  publishSkillMarketListingContract,
+  listMySkillMarketListingsContract,
+  withdrawSkillMarketListingContract,
+  submitSkillMarketListingVersionContract,
+  importSkillMarketListingContract,
+  rescanSkillMarketVersionContract,
+} from './contracts/skillMarketWrite.contract';
+export {
+  createSkillContract,
+  updateSkillContract,
+  listMySkillsContract,
+  getSkillContract,
+} from './contracts/skills.contract';
+export {
+  listSkillMarketReviewQueueContract,
+  reviewSkillMarketVersionContract,
+} from './contracts/skillMarketReview.contract';
+export {
+  listFunctionsContract,
+  getFunctionContract,
+  reviewFunctionContract,
+  invokeFunctionContract,
+  getFunctionCallContract,
+  cancelFunctionCallContract,
+} from './contracts/functions.contract';
+export {
+  createFunctionContract,
+  listAuthoredFunctionsContract,
+  getAuthoredFunctionContract,
+  saveFunctionCodeContract,
+  updateFunctionContract,
+  deleteFunctionContract,
+  setFunctionExamplesContract,
+  runFunctionTestsContract,
+  pinFunctionDataContract,
+  unpinFunctionDataContract,
+  setFunctionSourcesContract,
+  promoteFunctionContract,
+  getFunctionShareContract,
+  shareFunctionContract,
+  unshareFunctionContract,
+  findFunctionRecipientContract,
+  getFunctionCallSummaryContract,
+} from './contracts/functionsAuthoring.contract';
 export { CONTRACTS } from './contracts';

@@ -1,5 +1,4 @@
 import {
-  IQuestMasterPlan,
   IQuestMasterPlanDocument,
   IQuestMasterPlanRepository,
   QuestMasterData,
@@ -15,8 +14,9 @@ import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 
-export const QuestMasterDataSchema = new Schema<QuestMasterData>(
+export const QuestMasterDataSchema: Schema<QuestMasterData> = new Schema<QuestMasterData>(
   {
     id: { type: String, required: true },
     title: { type: String, required: true, maxlength: 500 },
@@ -55,7 +55,7 @@ export const QuestMasterDataSchema = new Schema<QuestMasterData>(
   { _id: false }
 );
 
-export const QuestMasterPlanSchema = new Schema<IQuestMasterPlan>(
+export const QuestMasterPlanSchema: Schema<IQuestMasterPlanDocument> = new Schema<IQuestMasterPlanDocument>(
   {
     notebookId: { type: String, required: true },
     goal: { type: String, required: true, maxlength: 2000 },
@@ -201,15 +201,14 @@ QuestMasterPlanSchema.index({ userId: 1, tags: 1 }); // Compound index for user 
 // Apply soft delete plugin for data safety
 QuestMasterPlanSchema.plugin(softDeletePlugin);
 
-export const QuestMasterPlan =
-  mongoose.models.QuestMasterPlan ?? mongoose.model('QuestMasterPlan', QuestMasterPlanSchema);
+export const QuestMasterPlan: Model<IQuestMasterPlanDocument> =
+  mongoose.models.QuestMasterPlan ?? mongoose.model<IQuestMasterPlanDocument>('QuestMasterPlan', QuestMasterPlanSchema);
 
 /**
  * Filter arms that keep a write to a plan the caller can still write: owner or sharedWith, and not
  * soft-deleted. ANDed into every sharee-reachable write so a revoke or delete landing after the
  * route's access check turns the write into a no-op. Public visibility is read-only, so it has no
- * arm. Must stay in sync with verifyQuestPlanWriteAccess (apps/client/server/utils/questMasterPlanAccess.ts)
- * and callerCanWritePlan (b4m-core/services/src/llm/ChatCompletionFeatures.ts).
+ * arm. Kept for the legacy plan conversion and drop migrations; no route or chat path writes plans anymore.
  */
 const writableBy = (userId: string) => ({ deletedAt: null, $or: [{ userId }, { sharedWith: userId }] });
 
@@ -225,7 +224,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
   private scheduleMetricsUpdate(planId: string): void {
     this.updateMetrics(planId).catch(err => {
       // Log with structured format for easier debugging
-      console.warn('[QuestMasterPlan] Metrics update failed', { planId, error: err.message });
+      Logger.warn('[QuestMasterPlan] Metrics update failed', { planId, error: err });
     });
   }
 
@@ -335,7 +334,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
 
     return this.questMasterPlanModel
       .find(query, projection)
-      .sort({ lastAccessedAt: -1 })
+      .sort({ lastAccessedAt: -1, _id: -1 })
       .limit(options?.limit || QuestMasterPlanRepository.DEFAULT_QUERY_LIMIT)
       .skip(options?.offset || 0);
   }
@@ -378,7 +377,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     const [plans, total, statsResult] = await Promise.all([
       this.questMasterPlanModel
         .find(filteredQuery, projection)
-        .sort({ lastAccessedAt: -1 })
+        .sort({ lastAccessedAt: -1, _id: -1 })
         .limit(options?.limit || QuestMasterPlanRepository.DEFAULT_QUERY_LIMIT)
         .skip(options?.offset || 0),
       this.questMasterPlanModel.countDocuments(filteredQuery),
@@ -425,7 +424,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
         // Explicit deletedAt filter ensures soft-deleted documents are excluded
         deletedAt: null,
       })
-      .sort({ lastAccessedAt: -1 })
+      .sort({ lastAccessedAt: -1, _id: -1 })
       .limit(options?.limit || QuestMasterPlanRepository.DEFAULT_QUERY_LIMIT)
       .skip(options?.offset || 0);
   }
@@ -711,7 +710,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
     return this.questMasterPlanModel.findOneAndUpdate(
       { _id: planId, ...writableBy(userId) },
       { $set: { handoff } },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -726,7 +725,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
           },
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -744,7 +743,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
           'blockers.$.resolution': resolution,
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 
@@ -759,7 +758,7 @@ class QuestMasterPlanRepository extends BaseRepository<IQuestMasterPlanDocument>
           },
         },
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
   }
 

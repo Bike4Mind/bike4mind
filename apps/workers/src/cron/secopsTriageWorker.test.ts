@@ -4,11 +4,21 @@ const mockForSystem = vi.fn();
 const mockEmitMetric = vi.fn();
 const mockServiceRun = vi.fn();
 const mockFindOne = vi.fn();
+const mockRecordRun = vi.fn();
+const mockRepoCheck = vi.fn();
+const mockSafeParse = vi.fn();
+const mockSlackSend = vi.fn();
+const mockDecryptToken = vi.fn();
+const mockFindWorkspace = vi.fn();
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: (...args: unknown[]) => mockForSystem(...args),
   },
+}));
+
+vi.mock('@bike4mind/server-utils/security/secopsTriageRepoCheck', () => ({
+  checkSecopsTriageRepo: (...args: unknown[]) => mockRepoCheck(...args),
 }));
 
 vi.mock('@workers/services/secopsTriageService', () => ({
@@ -21,16 +31,25 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
-  decryptToken: vi.fn(() => null),
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
+  decryptToken: (...args: unknown[]) => mockDecryptToken(...args),
+}));
+
+vi.mock('@bike4mind/slack', () => ({
+  SlackClient: vi.fn(function () {
+    return { sendMessage: (...args: unknown[]) => mockSlackSend(...args) };
+  }),
 }));
 
 vi.mock('@bike4mind/database', () => ({
   AdminSettings: {
     findOne: (...args: unknown[]) => mockFindOne(...args),
   },
+  secopsTriageRunRepository: {
+    record: (...args: unknown[]) => mockRecordRun(...args),
+  },
   slackDevWorkspaceRepository: {
-    findByIdWithToken: vi.fn(),
+    findByIdWithToken: (...args: unknown[]) => mockFindWorkspace(...args),
     findAllActive: vi.fn().mockResolvedValue([]),
     findBySlackTeamIdWithToken: vi.fn(),
   },
@@ -39,8 +58,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/common', () => ({
   SECOPS_TRIAGE_SCAN_SOURCES: ['web-owasp', 'secrets', 'packages', 'code-semgrep', 'cloud', 'active-defense'] as const,
   SecopsTriageConfigSchema: {
-    safeParse: (v: unknown) => ({ success: true, data: { enabled: true, ...(v as Record<string, unknown>) } }),
-    parse: (v: unknown) => ({ enabled: true, ...(v as Record<string, unknown>) }),
+    safeParse: (v: unknown) => mockSafeParse(v),
   },
 }));
 
@@ -63,7 +81,7 @@ vi.mock('sst', () => ({
 }));
 
 // Passthrough so we can invoke the inner handler directly with (event, context, logger)
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -80,7 +98,7 @@ const mockLogger = {
   error: vi.fn(),
   log: vi.fn(),
   updateMetadata: vi.fn(),
-} as never;
+};
 
 const validPayload = {
   stage: 'dev',
@@ -95,11 +113,38 @@ const validPayload = {
   ],
 };
 
+const run = () => handler(makeSqsEvent(validPayload), mockContext, mockLogger as never);
+
+const serviceResult = {
+  issuesCreated: 1,
+  issuesUpdated: 2,
+  issuesReopened: 3,
+  issuesClosed: 4,
+  issuesDeduplicated: 2,
+  issuesSuppressed: 5,
+  skippedBelowThreshold: 6,
+  skippedRateLimit: 7,
+};
+
+const recordedRun = () => {
+  expect(mockRecordRun).toHaveBeenCalledOnce();
+  return mockRecordRun.mock.calls[0][0];
+};
+
 describe('secopsTriageWorker handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFindOne.mockResolvedValue({ settingValue: { enabled: true } });
+    mockSafeParse.mockImplementation((v: unknown) => ({
+      success: true,
+      data: { enabled: true, dryRun: false, githubRepo: 'test-org/test-repo', ...(v as Record<string, unknown>) },
+    }));
     mockEmitMetric.mockResolvedValue(undefined);
+    mockRecordRun.mockResolvedValue({});
+    mockRepoCheck.mockResolvedValue({ ok: true });
+    mockDecryptToken.mockReturnValue(null);
+    mockFindWorkspace.mockResolvedValue(null);
+    mockSlackSend.mockResolvedValue(undefined);
   });
 
   it('does not dead-letter when there is no system GitHub connection', async () => {
@@ -107,15 +152,23 @@ describe('secopsTriageWorker handler', () => {
     mockForSystem.mockResolvedValue(null);
 
     // Must resolve (return), not throw - throwing would route the message to the DLQ
-    await expect(handler(makeSqsEvent(validPayload), mockContext, mockLogger)).resolves.toBeUndefined();
+    await expect(run()).resolves.toBeUndefined();
 
     expect(mockServiceRun).not.toHaveBeenCalled();
+    expect(recordedRun()).toMatchObject({
+      stage: 'dev',
+      scanSource: 'active-defense',
+      status: 'skipped',
+      reason: 'no_github_connection',
+      findingCount: 1,
+      startedAt: expect.any(Date),
+    });
   });
 
   it('still emits the NoGitHubConnection failure metric so the condition stays observable', async () => {
     mockForSystem.mockResolvedValue(null);
 
-    await handler(makeSqsEvent(validPayload), mockContext, mockLogger);
+    await run();
 
     expect(mockEmitMetric).toHaveBeenCalledWith(
       'Lumina5/SecOpsTriage',
@@ -124,5 +177,208 @@ describe('secopsTriageWorker handler', () => {
       { Stage: 'dev', ErrorType: 'NoGitHubConnection' },
       expect.anything()
     );
+  });
+
+  it('warns and records a skipped run when the saved config does not parse', async () => {
+    mockSafeParse.mockReturnValue({
+      success: false,
+      error: { issues: [{ path: ['githubRepo'], message: 'A repository is required' }] },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('config is invalid'),
+      expect.objectContaining({ issues: [{ path: 'githubRepo', message: 'A repository is required' }] })
+    );
+    expect(recordedRun()).toMatchObject({ status: 'skipped', reason: 'invalid_config', dryRun: false });
+    expect(mockForSystem).not.toHaveBeenCalled();
+    expect(mockServiceRun).not.toHaveBeenCalled();
+  });
+
+  it('records a skipped run when triage is disabled', async () => {
+    mockFindOne.mockResolvedValue({ settingValue: { enabled: false, dryRun: true } });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(recordedRun()).toMatchObject({ status: 'skipped', reason: 'disabled', dryRun: true });
+    expect(mockForSystem).not.toHaveBeenCalled();
+  });
+
+  describe('repository check', () => {
+    beforeEach(() => {
+      mockForSystem.mockResolvedValue({});
+    });
+
+    it.each(['not_configured', 'not_allowed', 'not_found', 'public', 'archived', 'issues_disabled'])(
+      'skips without retrying when the repository is %s',
+      async reason => {
+        mockRepoCheck.mockResolvedValue({ ok: false, reason });
+
+        await expect(run()).resolves.toBeUndefined();
+
+        expect(mockRepoCheck).toHaveBeenCalledWith({}, 'test-org/test-repo');
+        expect(mockServiceRun).not.toHaveBeenCalled();
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          expect.stringContaining('repository cannot take issues'),
+          expect.objectContaining({ reason })
+        );
+        expect(mockEmitMetric).toHaveBeenCalledWith(
+          'Lumina5/SecOpsTriage',
+          'TriageRunFailure',
+          1,
+          { Stage: 'dev', ErrorType: 'RepoNotWritable' },
+          expect.anything()
+        );
+        expect(recordedRun()).toMatchObject({ status: 'skipped', reason });
+      }
+    );
+
+    it('posts a short Slack message when a channel is configured and a token resolves', async () => {
+      mockFindOne.mockResolvedValue({ settingValue: { slackChannelId: 'C123', slackWorkspaceId: 'ws-1' } });
+      mockFindWorkspace.mockResolvedValue({ slackBotToken: 'encrypted' });
+      mockDecryptToken.mockReturnValue('xoxb-test');
+      mockRepoCheck.mockResolvedValue({ ok: false, reason: 'archived' });
+
+      await run();
+
+      expect(mockSlackSend).toHaveBeenCalledOnce();
+      expect(mockSlackSend.mock.calls[0][0]).toMatchObject({
+        channel: 'C123',
+        text: expect.stringContaining('the repository is archived'),
+      });
+    });
+
+    it('does not post to Slack when no channel is configured', async () => {
+      mockRepoCheck.mockResolvedValue({ ok: false, reason: 'not_found' });
+
+      await run();
+
+      expect(mockSlackSend).not.toHaveBeenCalled();
+    });
+
+    it('still skips cleanly when the Slack message fails', async () => {
+      mockFindOne.mockResolvedValue({ settingValue: { slackChannelId: 'C123', slackWorkspaceId: 'ws-1' } });
+      mockFindWorkspace.mockResolvedValue({ slackBotToken: 'encrypted' });
+      mockDecryptToken.mockReturnValue('xoxb-test');
+      mockRepoCheck.mockResolvedValue({ ok: false, reason: 'archived' });
+      mockSlackSend.mockRejectedValue(new Error('slack down'));
+
+      await expect(run()).resolves.toBeUndefined();
+
+      expect(recordedRun()).toMatchObject({ status: 'skipped', reason: 'archived' });
+    });
+
+    it('records a failed run and rethrows when the repository lookup itself fails', async () => {
+      mockRepoCheck.mockRejectedValue(new Error('GitHub unavailable'));
+
+      await expect(run()).rejects.toThrow('GitHub unavailable');
+
+      expect(mockServiceRun).not.toHaveBeenCalled();
+      expect(recordedRun()).toMatchObject({ status: 'failed', error: 'GitHub unavailable' });
+    });
+  });
+
+  describe('runs that reach the service', () => {
+    beforeEach(() => {
+      mockForSystem.mockResolvedValue({});
+    });
+
+    it('records a completed run with its counts and duration', async () => {
+      mockServiceRun.mockResolvedValue(serviceResult);
+
+      await expect(run()).resolves.toBeUndefined();
+
+      expect(recordedRun()).toEqual({
+        stage: 'dev',
+        scanSource: 'active-defense',
+        findingCount: 1,
+        startedAt: expect.any(Date),
+        status: 'completed',
+        dryRun: false,
+        durationMs: expect.any(Number),
+        counts: { created: 1, updated: 2, reopened: 3, closed: 4, suppressed: 5, belowThreshold: 6, overCap: 7 },
+      });
+    });
+
+    it('emits the reopened and suppressed counts alongside the existing metrics', async () => {
+      mockServiceRun.mockResolvedValue(serviceResult);
+
+      await run();
+
+      const emitted = Object.fromEntries(mockEmitMetric.mock.calls.map(([, name, value]) => [name, value]));
+      expect(emitted).toMatchObject({
+        IssuesCreated: 1,
+        IssuesUpdated: 2,
+        IssuesReopened: 3,
+        IssuesClosed: 4,
+        IssuesSuppressed: 5,
+        IssuesDeduplicated: 2,
+        TriageRunSuccess: 1,
+      });
+    });
+
+    it('records a failed run with the error message and rethrows', async () => {
+      mockServiceRun.mockRejectedValue(new Error('rate limited'));
+
+      await expect(run()).rejects.toThrow('rate limited');
+
+      expect(recordedRun()).toMatchObject({ status: 'failed', error: 'rate limited', durationMs: expect.any(Number) });
+      expect(mockEmitMetric).toHaveBeenCalledWith(
+        'Lumina5/SecOpsTriage',
+        'TriageRunFailure',
+        1,
+        { Stage: 'dev', ErrorType: 'RuntimeError' },
+        expect.anything()
+      );
+    });
+
+    it('keeps the outcome when recording the run fails', async () => {
+      mockRecordRun.mockRejectedValue(new Error('mongo down'));
+      mockServiceRun.mockResolvedValue(serviceResult);
+      await expect(run()).resolves.toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Could not record the triage run'),
+        expect.objectContaining({ error: 'mongo down' })
+      );
+
+      mockServiceRun.mockRejectedValue(new Error('rate limited'));
+      await expect(run()).rejects.toThrow('rate limited');
+
+      mockForSystem.mockResolvedValue(null);
+      await expect(run()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('auto-close scope fields', () => {
+    beforeEach(() => {
+      mockForSystem.mockResolvedValue({});
+      mockServiceRun.mockResolvedValue({
+        issuesCreated: 0,
+        issuesUpdated: 0,
+        issuesClosed: 0,
+        issuesDeduplicated: 0,
+      });
+    });
+
+    it('defaults findingsComplete to true and unverifiedFindingIds to an empty list', async () => {
+      await run();
+
+      expect(mockServiceRun).toHaveBeenCalledOnce();
+      const [payload] = mockServiceRun.mock.calls[0];
+      expect(payload).toMatchObject({ findingsComplete: true, unverifiedFindingIds: [] });
+    });
+
+    it('passes explicit findingsComplete and unverifiedFindingIds through to the service', async () => {
+      await handler(
+        makeSqsEvent({ ...validPayload, findingsComplete: false, unverifiedFindingIds: ['probe-a', 'probe-b'] }),
+        mockContext,
+        mockLogger as never
+      );
+
+      expect(mockServiceRun).toHaveBeenCalledOnce();
+      const [payload] = mockServiceRun.mock.calls[0];
+      expect(payload).toMatchObject({ findingsComplete: false, unverifiedFindingIds: ['probe-a', 'probe-b'] });
+    });
   });
 });

@@ -4,12 +4,14 @@ import { ElevenLabsMusicGenerator } from './ElevenLabsMusicGenerator';
 import { MusicGenerator } from './types';
 
 export * from './types';
-export { ElevenLabsMusicGenerator } from './ElevenLabsMusicGenerator';
+export { ElevenLabsMusicGenerator, MUSIC_GENERATION_TIMEOUT_MS } from './ElevenLabsMusicGenerator';
 export type { ElevenLabsMusicGeneratorConfig } from './ElevenLabsMusicGenerator';
 
 export interface MusicGeneratorOptions {
   /** Injectable HTTP client forwarded to the vendor implementation (tests). */
   fetchImpl?: typeof fetch;
+  /** Provider-fetch deadline override, e.g. what is left of a request budget after waiting for capacity. */
+  timeoutMs?: number;
 }
 
 /**
@@ -25,7 +27,12 @@ export function aiMusicService(
 ): MusicGenerator {
   switch (vendor) {
     case 'elevenlabs':
-      return new ElevenLabsMusicGenerator({ apiKey, logger, fetchImpl: options.fetchImpl });
+      return new ElevenLabsMusicGenerator({
+        apiKey,
+        logger,
+        fetchImpl: options.fetchImpl,
+        timeoutMs: options.timeoutMs,
+      });
     default:
       throw new Error(`Unknown music generation vendor: ${vendor}`);
   }

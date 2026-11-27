@@ -9,8 +9,21 @@ import { createMocks } from 'node-mocks-http';
  * emits - no real database, so we mock the DB layer and inspect the pipeline handed to it.
  */
 
-const { aggregate, buildListVisibilityFilter, buildListQuery, projectFind } = vi.hoisted(() => ({
+const {
+  aggregate,
+  buildListVisibilityFilter,
+  buildListQuery,
+  excludeNonLiveOwners,
+  projectFind,
+  signOwnerThumbnailUrl,
+} = vi.hoisted(() => ({
   aggregate: vi.fn(),
+  // Which owners are live is unit-tested in loadLiveOwner.test.ts; here it is a seam.
+  excludeNonLiveOwners: vi.fn(),
+  signOwnerThumbnailUrl: vi.fn(
+    async (publicId: string, key: string): Promise<string | undefined> =>
+      `https://signed.example.test/${key}?for=${publicId}`
+  ),
   buildListVisibilityFilter: vi.fn(),
   // Narrowing/sort is unit-tested in buildListQuery.test.ts; here it is a seam so these tests
   // can assert WHERE its output lands in the pipeline without restating its logic.
@@ -43,6 +56,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/services/publish', () => ({
   buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a),
   buildListQuery: (...a: unknown[]) => buildListQuery(...a),
+  excludeNonLiveOwners: (...a: unknown[]) => excludeNonLiveOwners(...a),
+}));
+
+vi.mock('@server/services/publish/thumbnailUrl', () => ({
+  signOwnerThumbnailUrl: (publicId: string, key: string) => signOwnerThumbnailUrl(publicId, key),
 }));
 
 import handler from '../index';
@@ -123,6 +141,7 @@ beforeEach(() => {
     },
   ]);
   buildListVisibilityFilter.mockReturnValue(VIS);
+  excludeNonLiveOwners.mockResolvedValue(null);
   buildListQuery.mockReturnValue({ match: {}, sort: { publishedAt: -1, publicId: 1 } });
 });
 
@@ -381,13 +400,32 @@ describe('GET /api/publish/artifacts - cost', () => {
 });
 
 describe('GET /api/publish/artifacts - non-owner row trimming', () => {
-  const OWN = { publicId: 'mine', ownerId: USER, scopeId: 'org-1', previousVersionMeta: { by: 'x' }, gateKind: 'none' };
+  const OWN = {
+    publicId: 'mine',
+    ownerId: USER,
+    scopeId: 'org-1',
+    previousVersionMeta: { by: 'x' },
+    gateKind: 'none',
+    source: { kind: 'reply', sessionId: 'session-1', messageId: 'message-1' },
+  };
   const THEIRS = {
+    _id: 'id-2',
     publicId: 'theirs',
+    tier: 'bundle',
+    slug: 'their-artifact',
+    description: 'Their description',
+    tags: ['a'],
+    visibility: 'public',
+    commentPolicy: 'open',
+    size: 123,
+    publishedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z',
+    viewCount: 7,
     ownerId: 'user-2',
     scopeId: 'org-9',
     previousVersionMeta: { by: 'y' },
     gateKind: 'none',
+    source: { kind: 'bundle', artifactId: 'artifact_other_1_0' },
     title: 'Their artifact',
     versionsCount: 4,
     discoverable: true,
@@ -399,13 +437,51 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
   const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
     res._getJSONData().artifacts;
 
-  it('strips the owner, scope and version-provenance identifiers from another user row', async () => {
+  it('strips the owner, scope, version-provenance and source identifiers from another user row', async () => {
     withRows([THEIRS]);
     const [row] = artifacts(await run({}));
-    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind']) {
+    for (const field of ['ownerId', 'scopeId', 'previousVersionMeta', 'gateKind', 'source']) {
       expect(field in row).toBe(false);
     }
     expect(row.title).toBe('Their artifact');
+  });
+
+  it('returns exactly the display allowlist for another user row', async () => {
+    withRows([THEIRS]);
+    const [row] = artifacts(await run({}));
+    expect(Object.keys(row).sort()).toEqual(
+      [
+        '_id',
+        'publicId',
+        'tier',
+        'slug',
+        'title',
+        'description',
+        'tags',
+        'visibility',
+        'commentPolicy',
+        'discoverable',
+        'size',
+        'publishedAt',
+        'updatedAt',
+        'viewCount',
+        'versionsCount',
+      ].sort()
+    );
+  });
+
+  it('drops any field not on the display allowlist from another user row', async () => {
+    withRows([{ ...THEIRS, someFutureField: 'x' }]);
+    const [row] = artifacts(await run({}));
+    expect('someFutureField' in row).toBe(false);
+  });
+
+  it('keeps source on the caller own row for the owner-scoped lookups', async () => {
+    for (const query of [{ mine: 'true' }, { sourceArtifactId: 'artifact_x' }, { sourceMessageId: 'message-1' }]) {
+      withRows([OWN]);
+      const [row] = artifacts(await run(query));
+      expect(row.source).toEqual(OWN.source);
+    }
   });
 
   it('keeps versionsCount and discoverable, which the owner management tab reads', async () => {
@@ -426,6 +502,8 @@ describe('GET /api/publish/artifacts - non-owner row trimming', () => {
     const [mine, theirs] = artifacts(await run({}));
     expect(mine.ownerId).toBe(USER);
     expect('ownerId' in theirs).toBe(false);
+    expect(mine.source).toEqual(OWN.source);
+    expect('source' in theirs).toBe(false);
   });
 
   it('does not trim for an admin, whose surface is the reason the projection is wide', async () => {
@@ -489,5 +567,117 @@ describe('GET /api/publish/artifacts - reply titles', () => {
     const [row] = artifacts(await run({ mine: 'true' }));
     expect('replyTitleBody' in row).toBe(false);
     expect(row.title).toBe('Recap: Tides');
+  });
+});
+
+describe('GET /api/publish/artifacts - owner-only thumbnails', () => {
+  const KEY = `publish-thumbnails/own1/${'a'.repeat(64)}.webp`;
+  const withRows = (rows: unknown[]) =>
+    aggregate.mockResolvedValue([{ rows, total: [{ n: rows.length }], byKind: [], byVisibility: [], byGate: [] }]);
+  const artifacts = (res: { _getJSONData: () => { artifacts: Array<Record<string, unknown>> } }) =>
+    res._getJSONData().artifacts;
+
+  it('projects only the thumbnail key, never the stored subdocument', async () => {
+    await run({ mine: 'true' });
+    expect(projectStage().thumbnailKey).toBe('$thumbnail.key');
+    expect(projectStage().thumbnail).toBeUndefined();
+  });
+
+  it('signs a short-lived URL for the caller own rows on ?mine and never ships the raw key', async () => {
+    withRows([{ publicId: 'own1', ownerId: USER, thumbnailKey: KEY }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(signOwnerThumbnailUrl).toHaveBeenCalledWith('own1', KEY);
+    expect(row.thumbnailUrl).toBe(`https://signed.example.test/${KEY}?for=own1`);
+    expect('thumbnailKey' in row).toBe(false);
+  });
+
+  it('omits thumbnailUrl for a row that has not rendered yet', async () => {
+    withRows([{ publicId: 'own2', ownerId: USER }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect(signOwnerThumbnailUrl).not.toHaveBeenCalled();
+    expect('thumbnailUrl' in row).toBe(false);
+  });
+
+  it('omits thumbnailUrl when signing declines the key', async () => {
+    signOwnerThumbnailUrl.mockResolvedValueOnce(undefined);
+    withRows([{ publicId: 'own1', ownerId: USER, thumbnailKey: KEY }]);
+    const [row] = artifacts(await run({ mine: 'true' }));
+    expect('thumbnailUrl' in row).toBe(false);
+  });
+
+  it('never signs on a browse listing, even for the caller own row', async () => {
+    withRows([{ publicId: 'own1', ownerId: USER, thumbnailKey: KEY }]);
+    const [row] = artifacts(await run({}));
+    expect(signOwnerThumbnailUrl).not.toHaveBeenCalled();
+    expect('thumbnailUrl' in row).toBe(false);
+    expect('thumbnailKey' in row).toBe(false);
+  });
+
+  it('never signs another user row, admins included', async () => {
+    withRows([{ publicId: 'theirs', ownerId: 'user-2', thumbnailKey: KEY }]);
+    for (const query of [{}, { mine: 'true' }]) {
+      const [row] = artifacts(await run(query, { id: USER, isAdmin: true }));
+      expect('thumbnailUrl' in row).toBe(false);
+      expect('thumbnailKey' in row).toBe(false);
+    }
+    expect(signOwnerThumbnailUrl).not.toHaveBeenCalled();
+  });
+
+  it('signs per row on a mixed page', async () => {
+    withRows([
+      { publicId: 'own1', ownerId: USER, thumbnailKey: KEY },
+      { publicId: 'theirs', ownerId: 'user-2', thumbnailKey: KEY },
+    ]);
+    const [own, theirs] = artifacts(await run({ mine: 'true' }));
+    expect(own.thumbnailUrl).toBeDefined();
+    expect('thumbnailUrl' in theirs).toBe(false);
+    expect(signOwnerThumbnailUrl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GET /api/publish/artifacts - owner state on the browse listing', () => {
+  const GATE = { ownerId: { $nin: ['suspended-owner'] } };
+
+  it('lists every row unchanged when all other owners are live', async () => {
+    await run({});
+    expect(excludeNonLiveOwners).toHaveBeenCalledWith({ deletedAt: null, $and: [VIS] }, USER);
+    expect(matchStage()).toEqual({ deletedAt: null, $and: [VIS] });
+  });
+
+  it('drops a non-live owner in the leading $match, so total and paging count the same rows', async () => {
+    excludeNonLiveOwners.mockResolvedValue(GATE);
+    await run({ limit: '10', skip: '20' });
+
+    expect(matchStage()).toEqual({ $and: [{ deletedAt: null, $and: [VIS] }, GATE] });
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(pipeline.findIndex(stage => '$match' in stage)).toBe(0);
+    expect(rowsStage('$skip')).toBe(20);
+    expect(rowsStage('$limit')).toBe(10);
+  });
+
+  it('checks owners within the caller narrowing', async () => {
+    buildListQuery.mockReturnValue({ match: { tags: 'northwind' }, sort: { publishedAt: -1, publicId: 1 } });
+    excludeNonLiveOwners.mockResolvedValue(GATE);
+    await run({ tag: 'northwind' });
+
+    const narrowed = { $and: [{ deletedAt: null, $and: [VIS] }, { tags: 'northwind' }] };
+    expect(excludeNonLiveOwners).toHaveBeenCalledWith(narrowed, USER);
+    expect(matchStage()).toEqual({ $and: [narrowed, GATE] });
+  });
+
+  it.each([
+    ['an admin browse listing', {}, { id: USER, isAdmin: true }],
+    ['?mine', { mine: 'true' }, { id: USER }],
+    ['?sourceArtifactId', { sourceArtifactId: 'artifact_x' }, { id: USER }],
+    ['?sourceMessageId', { sourceMessageId: 'msg_x' }, { id: USER }],
+  ])('leaves %s unchanged', async (_label, query, user) => {
+    await run(query, user);
+    expect(excludeNonLiveOwners).not.toHaveBeenCalled();
+  });
+
+  it('fails the request when the owner lookup fails', async () => {
+    excludeNonLiveOwners.mockRejectedValue(new Error('db down'));
+    await expect(run({})).rejects.toThrow('db down');
+    expect(aggregate).not.toHaveBeenCalled();
   });
 });

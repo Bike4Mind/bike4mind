@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { z } from 'zod';
-import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 /**
@@ -39,11 +39,11 @@ const handler = baseApi()
         connected: true,
         settings: {
           ...settings,
-          apiKeyPreview: `${apiKey.substring(0, 8)}...`, // Show first 8 chars only
+          apiKeyPreview: apiKey.length > 4 ? `...${apiKey.slice(-4)}` : '****',
         },
       });
     } catch (error) {
-      console.error('[Blog Integration GET] Error:', error);
+      req.logger.error('Failed to fetch blog settings', { error });
       return res.status(500).json({
         error: 'Failed to fetch blog settings',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -66,10 +66,9 @@ const handler = baseApi()
       // Fail closed against SSRF: baseUrl is user-supplied and fetched server-side with the
       // user's key (here, and by blog/publish + blog/presign-image-upload). Reject an
       // internal/loopback/non-https host - DNS-resolving, so a public name that resolves to a
-      // private IP is caught at validation time too - before we test or store it. This does not
-      // close DNS rebinding (validation and the later connect resolve separately; see the TOCTOU
-      // note in ssrfProtection.ts); the outbound calls use safeFetch, which bounds what an upstream
-      // response can return. Shared guard in server/utils/ssrfProtection.ts.
+      // private IP is caught at validation time too - before we test or store it. The outbound
+      // calls use safeFetch, which connects to the address that passed validation and bounds what
+      // an upstream response can return. Shared guard in server-utils/utils/ssrfProtection.ts.
       try {
         await assertUrlAllowed(baseUrl);
       } catch (e) {
@@ -107,7 +106,7 @@ const handler = baseApi()
             });
           }
           if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-            console.warn('[Blog Integration POST] API test timed out after 5s');
+            req.logger.warn('Blog API test timed out after 5s');
             // Continue anyway - timeout shouldn't block setup
           } else {
             throw fetchError;
@@ -121,7 +120,7 @@ const handler = baseApi()
           });
         }
       } catch (testError) {
-        console.warn('[Blog Integration POST] Could not test API key:', testError);
+        req.logger.warn('Could not test API key', { error: testError });
         // Continue anyway - the blog server might not have a GET endpoint
       }
 
@@ -136,14 +135,12 @@ const handler = baseApi()
         },
       });
 
-      console.log(`[Blog Integration POST] ✅ User ${req.user.id} connected blog: ${baseUrl}`);
-
       return res.status(200).json({
         success: true,
         message: 'Blog integration configured successfully',
       });
     } catch (error) {
-      console.error('[Blog Integration POST] Error:', error);
+      req.logger.error('Failed to save blog settings', { error });
       return res.status(500).json({
         error: 'Failed to save blog settings',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -157,14 +154,12 @@ const handler = baseApi()
         blogIntegration: null,
       });
 
-      console.log(`[Blog Integration DELETE] ✅ User ${req.user.id} disconnected blog`);
-
       return res.status(200).json({
         success: true,
         message: 'Blog integration disconnected successfully',
       });
     } catch (error) {
-      console.error('[Blog Integration DELETE] Error:', error);
+      req.logger.error('Failed to disconnect blog', { error });
       return res.status(500).json({
         error: 'Failed to disconnect blog',
         message: error instanceof Error ? error.message : 'Unknown error',

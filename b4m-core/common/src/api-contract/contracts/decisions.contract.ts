@@ -7,7 +7,12 @@ import {
   DecisionsRequestSchema,
   ListDecisionModelsResponseSchema,
 } from '../../schemas/decisions';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  MeteredForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 import { DECISION_PLATFORM_LIMITS } from '../../decisions/catalog';
 
 const DECISION_SCOPES = [ApiKeyScope.AI_DECIDE, ApiKeyScope.AI_GENERATE];
@@ -125,7 +130,10 @@ export const createDecisionContract = defineEndpoint({
         'Missing/invalid credentials, or the provider refused the configured key (`errorCode: "provider_rejected"`).',
       schema: DecisionsErrorSchema,
     },
-    403: scopeForbidden,
+    403: {
+      description: `${scopeForbidden.description} ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
+    },
     404: {
       description:
         'An image `file_id` does not exist or is not readable by the caller. Reading one also needs the ' +

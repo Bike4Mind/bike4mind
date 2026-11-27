@@ -1,10 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
-import { authorizeLakeConnectorAccess } from '@server/dataLakes/authorizeLakeConnectorAccess';
-import { withConnectionId, withLakeConnectorClaim } from '@server/dataLakes/assertLakeConnectorFree';
+import { authorizeLakeConnectorAccess } from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
+import { assertLakePlanAllowed } from '@server/entitlements/lakePlanGate';
+import { withConnectionId, withLakeConnectorClaim } from '@bike4mind/server-utils/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
   createDriveClient,
@@ -13,9 +14,12 @@ import {
   UNREACHABLE_FOLDER_MESSAGES,
   REJECTED_DRIVE_TOKEN_MESSAGE,
   type FolderAccess,
-} from '@server/integrations/google/drive/driveClient';
-import { getValidUserDriveAccessToken, isTerminalDriveGrantError } from '@server/integrations/google/drive/common';
-import { decryptToken } from '@server/security/tokenEncryption';
+} from '@bike4mind/server-utils/integrations/google/drive/driveClient';
+import {
+  getValidUserDriveAccessToken,
+  isTerminalDriveGrantError,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { isEncrypted } from '@bike4mind/server-utils/security/secretEncryption';
 import {
   BadRequestError,
@@ -176,7 +180,7 @@ async function parkConnectionIfFolderGone(
  *
  * Creates (or refreshes) the OrgGoogleDriveConnection binding and enqueues by connectionId (202).
  * On an org lake, binding an org-wide credential and globally claiming a Drive folder is an
- * org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the lake's
+ * org-administrative act, so this gates on `manageContent` (verifyOrgPermission), NOT merely the lake's
  * creator. On a personal lake the creator is the only one who may connect, and the connection keeps
  * no credential copy (see authorizeLakeConnectorAccess and readUserDriveCredential).
  */
@@ -195,6 +199,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // Org lake: owner/manager (or platform admin) only - not the lake creator. Personal lake: its
     // creator only. See the handler note.
     const owner = await authorizeLakeConnectorAccess(req.user, lake);
+    await assertLakePlanAllowed(req, owner.kind === 'organization' ? owner.organizationId : undefined);
 
     // Gated AFTER the authorization so the status is not readable by a non-member, and before the
     // credential capture so a refused connect costs no Drive calls. Without this the connect door

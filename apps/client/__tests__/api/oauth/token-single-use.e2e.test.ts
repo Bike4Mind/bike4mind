@@ -35,7 +35,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 vi.mock('@server/auth/issueSession', () => ({
   issueSessionForRequest: vi.fn().mockResolvedValue({
@@ -114,6 +114,7 @@ const redeem = async (params: { code: string; client_id: string; redirect_uri: s
       code_verifier: VERIFIER,
     },
   });
+  Object.assign(req, { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } });
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
   return res;
 };

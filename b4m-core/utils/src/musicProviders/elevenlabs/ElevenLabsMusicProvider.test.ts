@@ -560,11 +560,28 @@ describe('ElevenLabsMusicProvider', () => {
   });
 
   it('names the failure by the provider status when one is given', async () => {
-    respondWith(() => HttpResponse.json({ detail: { status: 'quota_exceeded', code: 'x' } }, { status: 401 }));
+    respondWith(() => HttpResponse.json({ detail: { status: 'voice_not_found', code: 'x' } }, { status: 400 }));
 
     expect(await provider.generate(request(), {}, ctx())).toMatchObject({
       retryable: false,
-      message: 'elevenlabs_music_quota_exceeded',
+      message: 'elevenlabs_music_voice_not_found',
+    });
+  });
+
+  it.each([
+    [
+      'a 401 whose body says the quota is exceeded',
+      401,
+      { detail: { status: 'quota_exceeded', code: 'quota_exceeded' } },
+    ],
+    ['a 402', 402, { detail: 'payment required' }],
+  ])('reports %s as an exhausted quota, without retrying', async (_label, status, body) => {
+    respondWith(() => HttpResponse.json(body, { status }));
+
+    expect(await provider.generate(request(), {}, ctx())).toMatchObject({
+      status: 'failed',
+      retryable: false,
+      message: 'elevenlabs_music_quota_exhausted',
     });
   });
 

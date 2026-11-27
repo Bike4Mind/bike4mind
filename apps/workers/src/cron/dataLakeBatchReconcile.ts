@@ -36,7 +36,7 @@ import {
   recordChunkRescueSweep,
   type ChunkRescueOutcome,
 } from '@bike4mind/server-utils/utils/cloudwatch';
-import { enqueueTaxonomyAnalysisIfWanted } from '@server/dataLakes/dataLakeBatchProgress';
+import { enqueueTaxonomyAnalysisIfWanted } from '@bike4mind/server-utils/dataLakes/dataLakeBatchProgress';
 import { runChunkRescueSweep } from '@workers/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@workers/s3/moderationRescueSweep';
 import {
@@ -47,6 +47,9 @@ import {
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 const logger = new Logger({ metadata: { service: 'dataLakeBatchReconcile' } });
 
@@ -59,7 +62,7 @@ const MODERATION_RESCUE_MAX_PER_RUN = 200;
 /**
  * How many stranded-vectorize sends are in flight at once, matching the bound the un-chunked sweep
  * and driveLakeResyncPoll already use. sendToQueue builds a fresh SQSClient per call
- * (@server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and every
+ * (server-utils/utils/sqs), so its retry token bucket never throttles down across the loop and every
  * failed send pays its full attempt budget with no back-off. Run one-at-a-time against a degraded
  * queue, CHUNK_RESCUE_MAX_PER_RUN of those is a wall-clock cost this handler cannot absorb - it is
  * the LAST of three sweeps in one 10-minute Lambda, so the tail is what gets cut off.

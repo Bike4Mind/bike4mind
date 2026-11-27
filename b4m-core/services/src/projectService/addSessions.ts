@@ -6,16 +6,16 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
-  Permission,
   ShareableAccessShape,
   BadRequestError,
   NotFoundError,
   secureParameters,
+  withoutOrgApiKeyReach,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import { pushShareable } from '../sharingService';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
-import { grantCap, updateShareableFiles } from './addFiles';
+import { sharesCappedFor, updateShareableFiles } from './addFiles';
+import { AttachableItem, assertCanAttachToProject, canAttachToProject } from './attachGate';
 
 const addSessionsProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -60,16 +60,15 @@ export const addSessions = async (
       : found
   ) as IProjectDocument;
 
-  // Sessions/files being added stay read-level: adding a notebook you can only read into a
-  // project you can update is legitimate, same call addFiles.ts makes for fileIds.
-  const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
-  if (sessions.length === 0) {
-    throw new NotFoundError('Sessions not found');
-  }
-  // Partial resolve is a 400; all-missing keeps the 404 above. See addFiles. Counted as DISTINCT
-  // rows ignoring hex case: the reader returns one row per document, so the same notebook sent
-  // twice - or sent as both `abc` and `ABC` - is not one that could not be reached.
+  // Resolved read-level so an unreachable id stays a 400; the share gate below then refuses one the
+  // caller can only read, since attaching shares it with every member (attachGate.ts).
+  const sessions = await db.sessions.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), sessionIds);
+  // Any unreachable id is a 400, all-missing included, same as addFiles: a 404 here would read as
+  // the project 404 above. Counted as DISTINCT rows ignoring hex case: the reader returns one row
+  // per document, so the same notebook sent twice - or sent as both `abc` and `ABC` - is not one
+  // that could not be reached.
   if (sessions.length !== distinctIdCount(sessionIds)) throw new BadRequestError('Some sessions are not accessible');
+  assertCanAttachToProject(sessions as unknown as AttachableItem[], user, project.sessionIds, 'notebooks');
 
   // The ids that RESOLVED, not the request's raw list - same reason as the fileIds push below.
   project.sessionIds = mergeIds(
@@ -80,7 +79,7 @@ export const addSessions = async (
 
   // Knowledge files are resolved (read-only) before the project write so their ids can go into it;
   // grants are pushed only after that write succeeds - see addFiles.
-  const knowledge = await resolveKnowledgeFiles(user, sessions, adapters);
+  const knowledge = await resolveKnowledgeFiles(user, project, sessions, adapters);
   project.fileIds = mergeIds(
     project.fileIds,
     knowledge.flatMap(({ files }) => files.map(file => file.id))
@@ -101,6 +100,7 @@ export const addSessions = async (
 
 const resolveKnowledgeFiles = async (
   user: IUserDocument,
+  project: IProjectDocument,
   sessions: ISessionDocument[],
   adapters: AddSessionsProjectAdapters
 ) => {
@@ -114,10 +114,13 @@ const resolveKnowledgeFiles = async (
     // spread to another document. Note this is narrower than "the castable ids": softDeletePlugin
     // adds `deletedAt: null` to the find, so a soft-deleted row is absent too and its id stops
     // being inherited. Pinned in addSessions.fileIds.test.ts.
-    const files =
+    const readable =
       session.knowledgeIds && session.knowledgeIds.length > 0
-        ? await db.fabFiles.shareable.findAllAccessibleByIds(user, session.knowledgeIds)
+        ? await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), session.knowledgeIds)
         : [];
+    // A knowledge file the caller cannot share is left out of the project rather than failing the
+    // whole attach, the same skip sharingService/accept.ts makes when a session invite propagates.
+    const files = readable.filter(file => canAttachToProject(file as unknown as AttachableItem, user, project.fileIds));
     knowledge.push({ session, files });
   }
   return knowledge;
@@ -132,17 +135,8 @@ const updateShareableSessions = async (
   const { db } = adapters;
 
   for (const { session, files } of knowledge) {
-    const cap = grantCap(session as ShareableAccessShape, user);
-    const push = (userId: string, permissions: Permission[]) => {
-      const capped = cap(permissions);
-      if (capped.length > 0) pushShareable(session, { userId, permissions: capped, projectId: project.id });
-    };
-
-    if (project.userId !== user.id) push(project.userId, [Permission.read, Permission.update]);
-
-    for (const member of project.users) push(member.userId, member.permissions);
-
-    await db.sessions.update({ id: session.id, users: session.users });
+    const add = sharesCappedFor(session as ShareableAccessShape, user, project);
+    if (add.length > 0) await db.sessions.shareable.updateUserShares(session.id, { add });
 
     if (files.length > 0) await updateShareableFiles(user, { project, files }, adapters);
   }

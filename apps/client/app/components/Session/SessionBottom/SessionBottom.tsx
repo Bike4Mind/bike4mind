@@ -24,6 +24,7 @@ import HighlanderFocus from '@client/app/components/HighlanderFocus';
 import VoiceDebugDrawer from '@client/app/components/Session/VoiceSessionModal/VoiceDebugDrawer';
 import { SessionBottomModals } from './SessionBottomModals';
 import { SessionFilePond } from './SessionFilePond';
+import { cancelComposerUpload } from './uploadComposerFile';
 import { SessionToolbar } from './SessionToolbar';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
 import { MessageFileThumbnails } from '@client/app/components/Session/MessageFileThumbnails';
@@ -67,6 +68,10 @@ import { noModelsPlaceholder, NoModelsPlaceholder, LowCreditsWarning } from '../
 import { ZeroCreditWarning } from '../ZeroCreditWarning';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { getComposerCreditUi } from './composerCreditUi';
+import { ModelSwitchCostNotice } from './ModelSwitchCostNotice';
+import { usePromptCacheComposer } from './usePromptCacheComposer';
+import PromptCacheTtlChip from './PromptCacheTtlChip';
+import PromptCacheExpiryHint from './PromptCacheExpiryHint';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
@@ -95,6 +100,7 @@ import { useAffordableModelOffer } from '../useAffordableModelOffer';
 import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 
 type Props = {
   /**
@@ -236,6 +242,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
   // notice sits above it without blocking typing.
   const lowCreditsThreshold = useLowCreditsThreshold();
+  const tutorialWalk = useTutorialPicker(s => s.walkOnScreen);
   const creditUi = getComposerCreditUi({
     enforceCredits,
     effectiveCredits,
@@ -243,6 +250,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     hasModels,
     lowWarningDismissed: lowCreditsWarningDismissed,
     lowThreshold: lowCreditsThreshold,
+    tutorialWalk,
   });
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'
@@ -291,6 +299,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     () => isChatCompletionActiveFor(chatCompletion, currentSessionId),
     [chatCompletion, currentSessionId]
   );
+  const promptCache = usePromptCacheComposer({
+    selectedModel: useMemo(() => modelInfo?.find(m => m.id === model), [modelInfo, model]),
+    contextUsage,
+    isGenerating: shouldShowStopButton,
+  });
 
   // Check if there are active file uploads or images still pending a content-moderation
   // scan - the Send button must stay disabled until the scan clears, otherwise
@@ -445,13 +458,13 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const canAttachFiles = enableFileAttachments;
 
   const handlePaste = useChatPaste({
+    attachScopeMode,
     currentSession,
     currentSessionId,
+    addToNotebookContext,
     chatHistory,
     chatInputValue,
     setChatInputValue,
-    setWorkBenchFiles,
-    setCurrentSession,
     queryClient,
     lexicalInputRef,
   });
@@ -498,14 +511,19 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Shared by the websocket event and the polling fallback (useModerationScanFallback),
   // which can both report the same scan, so an already-applied clean result is skipped.
   const applyModerationResult = useCallback(
-    (fabFileId: string, moderationStatus: 'pending' | 'clean' | 'blocked', fileUrl?: string) => {
+    (
+      fabFileId: string,
+      moderationStatus: 'pending' | 'clean' | 'blocked',
+      fileUrl?: string,
+      fileUrlExpireAt?: Date | string
+    ) => {
       if (moderationStatus !== 'clean') {
         recordModerationStatus(fabFileId, moderationStatus);
         return;
       }
       const existing = useSessionLayout.getState().pendingMessageFiles.find(item => item.fabFile.id === fabFileId);
       if (existing?.status === 'complete') return;
-      recordModerationStatus(fabFileId, 'clean', fileUrl);
+      recordModerationStatus(fabFileId, 'clean', fileUrl, fileUrlExpireAt);
 
       // An image the user explicitly scoped to the notebook is held back at upload
       // time and promoted only here, once the scan clears. A knowledgeIds entry
@@ -530,14 +548,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
       if (msg.moderationStatus === 'clean') {
         let fileUrl: string | undefined;
+        let fileUrlExpireAt: Date | string | undefined;
         try {
           const [fresh] = await getFabFilesFromServerByIds([msg.fabFileId]);
           fileUrl = fresh?.fileUrl ?? undefined;
+          fileUrlExpireAt = fresh?.fileUrlExpireAt ?? undefined;
         } catch {
           // Fall through - the reducer still flips status to 'complete'; a page refresh
           // (File Manager / message stream) self-heals by refetching a valid fileUrl.
         }
-        applyModerationResult(msg.fabFileId, 'clean', fileUrl);
+        applyModerationResult(msg.fabFileId, 'clean', fileUrl, fileUrlExpireAt);
       } else {
         applyModerationResult(msg.fabFileId, msg.moderationStatus);
       }
@@ -627,6 +647,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           }}
         />
         {!creditUi.replaceComposer && <MemberCreditBudgetNote />}
+        {!creditUi.replaceComposer && <ModelSwitchCostNotice credits={promptCache.modelSwitchCredits} />}
       </Box>
       {/* Above the box rather than under it: the file viewer and other embedded chats leave no room
           below, and on phones the box sits on the keyboard. */}
@@ -653,6 +674,15 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
               inputOverLimit={isOverContextWindow}
               attachment={attachmentFit}
             />
+            {/* The expired-cache hint hangs off the TTL chip, which every Claude chat has. */}
+            {promptCache.ttlChip && (
+              <PromptCacheExpiryHint
+                expiresAt={promptCache.cacheExpiresAt}
+                credits={creditUi.replaceComposer ? null : promptCache.cacheExpiryCredits}
+              >
+                <PromptCacheTtlChip {...promptCache.ttlChip} />
+              </PromptCacheExpiryHint>
+            )}
             <CreditBalanceChip session={currentSession} />
           </>
         }
@@ -668,20 +698,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           maxWidth: promptBarMaxWidth,
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isDockedLayout
-            ? { border: 'none' }
-            : isCompactLayout || isMobile || isFloatingLayout
-              ? {
-                  borderTop: '1px solid',
-                  borderTopColor: 'border.solid',
-                  borderLeft: 'none',
-                  borderRight: 'none',
-                  borderBottom: 'none',
-                }
-              : {
-                  border: '1px solid',
-                  borderColor: 'border.solid',
-                }),
+          // Docked and floating draw only the top line, under the status line: the panel supplies
+          // the sides. Keep in sync with the composer wrappers in SessionContainer.
+          ...(isDockedLayout || isCompactLayout || isMobile || isFloatingLayout
+            ? {
+                borderTop: '1px solid',
+                borderTopColor: isDockedLayout || isFloatingLayout ? 'divider' : 'border.solid',
+                borderLeft: 'none',
+                borderRight: 'none',
+                borderBottom: 'none',
+              }
+            : {
+                border: '1px solid',
+                borderColor: 'border.solid',
+              }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
           // 12px to every edge of the box. The pieces inside add nothing at the edges (editor wrapper
@@ -772,14 +802,22 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         <MessageFileThumbnails
                           files={pendingMessageFiles}
                           onRemove={fileId => {
+                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
                             setPendingMessageFiles(prev => prev.filter(item => item.fabFile.id !== fileId));
-                            setFiles(prevFiles => prevFiles.filter(f => f.serverId !== fileId));
+                            setFiles(prevFiles =>
+                              prevFiles.filter(f => f.serverId !== fileId && f.file !== removed?.localFile)
+                            );
+
+                            // Not on the server yet (or never will be): cancel, nothing to strip or delete.
+                            if (fileId.startsWith('temp-')) {
+                              cancelComposerUpload(fileId);
+                              return;
+                            }
 
                             // Strip knowledgeIds BEFORE the hard delete. If the delete succeeded and
                             // this failed, knowledgeIds would keep a dead id that every later hydration
                             // tries and fails to resolve. Keyed off the item's own frozen scope rather
                             // than the current control value, which the user may have changed since.
-                            const removed = pendingMessageFiles.find(item => item.fabFile.id === fileId);
                             const stripped =
                               removed?.scope === 'notebook'
                                 ? removeFromNotebookContext(currentSessionId, fileId).catch(() => {})

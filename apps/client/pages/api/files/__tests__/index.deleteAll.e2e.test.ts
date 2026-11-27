@@ -9,7 +9,7 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { KnowledgeType, Permission } from '@bike4mind/common';
 import { FabFile, User } from '@bike4mind/database';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -23,7 +23,25 @@ interface BaseApiChain {
   delete: (fn: Handler) => BaseApiChain;
 }
 
-const mockRefs = vi.hoisted(() => ({ deleteHandler: null as null | Handler }));
+const mockRefs = vi.hoisted(() => ({
+  deleteHandler: null as null | Handler,
+  stored: new Set<string>(),
+  logEventFails: false,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
+  getFilesStorage: () => ({
+    delete: async (key: string) => {
+      mockRefs.stored.delete(key);
+    },
+  }),
+}));
+vi.mock('@bike4mind/server-utils/files/generatedCopyStore', () => ({ getGeneratedCopyStore: () => undefined }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
+  logEvent: async () => {
+    if (mockRefs.logEventFails) throw new Error('logEvent failed');
+  },
+}));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: BaseApiChain = {
@@ -51,6 +69,8 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  mockRefs.logEventFails = false;
+  mockRefs.stored.clear();
   await mongoose.connection.dropDatabase();
 });
 
@@ -86,5 +106,47 @@ describe('DELETE /api/files (real mongod)', () => {
     const raw = await FabFile.collection.findOne({ _id: shared._id });
     expect(raw?.deletedAt).toBeInstanceOf(Date);
     expect(raw?.users).toEqual([]);
+  });
+
+  describe('stored objects', () => {
+    const setup = async () => {
+      const caller = await createUser('caller');
+      await FabFile.create({
+        userId: caller.id,
+        fileName: 'a.txt',
+        type: KnowledgeType.FILE,
+        mimeType: 'text/plain',
+        filePath: 'uploads/a.txt',
+      });
+      mockRefs.stored.add('uploads/a.txt');
+      const { req, res } = createMocks({ method: 'DELETE' });
+      Object.assign(req, {
+        user: caller,
+        ability: defineAbilitiesFor(caller),
+        logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      });
+      return { req, res, caller };
+    };
+    const liveCount = () => FabFile.collection.countDocuments({ deletedAt: null });
+
+    it('keeps the files and their objects when the transaction aborts', async () => {
+      const { req, res } = await setup();
+      mockRefs.logEventFails = true;
+
+      await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('logEvent failed');
+
+      expect(await liveCount()).toBe(1);
+      expect(mockRefs.stored.has('uploads/a.txt')).toBe(true);
+    });
+
+    it('deletes the objects once the transaction commits', async () => {
+      const { req, res } = await setup();
+
+      await mockRefs.deleteHandler!(req, res);
+
+      expect(res._getStatusCode()).toBe(204);
+      expect(await liveCount()).toBe(0);
+      expect(mockRefs.stored.has('uploads/a.txt')).toBe(false);
+    });
   });
 });

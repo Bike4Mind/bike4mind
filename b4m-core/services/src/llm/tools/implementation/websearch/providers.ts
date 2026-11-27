@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { WebSearchPlace } from '@bike4mind/common';
 import {
@@ -12,6 +13,8 @@ export interface WebSearchProviderResult {
   title: string;
   url: string;
   snippet: string;
+  /** Label for a hit whose `url` is a search-engine redirect: the destination host, or a platform name ("Reddit"). */
+  displayHost?: string;
   /** Provider-supplied image for this hit, absent when the provider gave none. Same as `images[0]`. */
   thumbnail?: string;
   /** Every image the provider supplied for this hit, deduped and capped. */
@@ -276,8 +279,57 @@ function dedupeImages(values: (string | undefined)[]): string[] {
 interface SerpApiOrganicResult {
   title?: string;
   link?: string;
+  displayed_link?: unknown;
+  source?: unknown;
   snippet?: string;
   thumbnail?: string;
+}
+
+// Matches the pinned `google_domain` of the SerpAPI requests above.
+const GOOGLE_HOSTS: ReadonlySet<string> = new Set(['google.com', 'www.google.com']);
+
+/** Host of a breadcrumb-style `displayed_link` ("https://host > a > b"), or undefined when it is not a URL. */
+function breadcrumbHost(displayedLink: unknown): string | undefined {
+  if (typeof displayedLink !== 'string' || !displayedLink) return undefined;
+  try {
+    const shown = new URL(displayedLink.trim().split(/[\s\u203a>]/)[0]);
+    const isWeb = shown.protocol === 'https:' || shown.protocol === 'http:';
+    return isWeb && !GOOGLE_HOSTS.has(shown.hostname) ? shown.hostname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const MAX_PLATFORM_NAME_CHARS = 40;
+
+/** Platform name from SerpAPI's `source` ("Reddit \u00b7 r/investing" -> "Reddit"), never a Google name. */
+function sourcePlatformName(source: unknown): string | undefined {
+  if (typeof source !== 'string') return undefined;
+  // Brackets and parentheses would break the `[label](url)` link web_search writes for the model,
+  // and a raw newline could forge an extra line in it.
+  const name = source
+    .split(/\s\u00b7\s/)[0]
+    ?.replace(/[[\]()\r\n]/g, '')
+    .trim();
+  return name && !/^google\b/i.test(name) ? name.slice(0, MAX_PLATFORM_NAME_CHARS) : undefined;
+}
+
+/**
+ * SerpAPI can return Google's own redirect (`google.com/goto?url=<opaque token>`) as `link`, which
+ * hides the destination. Returns what to label it with, or undefined for any other link: the host
+ * of the breadcrumb-style `displayed_link` when that is a URL, else the platform name from `source`
+ * for hits whose breadcrumb is an engagement count ("10+ comments", "920+ views"). Only the host is
+ * read from the breadcrumb: its path follows the site's own breadcrumb names, not its URL path, and
+ * is cut short with an ellipsis when long, while the host always comes first and survives both.
+ */
+function googleRedirectDisplayHost(link: string, displayedLink: unknown, source: unknown): string | undefined {
+  try {
+    const parsed = new URL(link);
+    if (!GOOGLE_HOSTS.has(parsed.hostname) || !/^\/(goto|url)$/.test(parsed.pathname)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return breadcrumbHost(displayedLink) ?? sourcePlatformName(source);
 }
 
 /**
@@ -389,6 +441,29 @@ function logSerpApiAttemptFailure(retryable: boolean, message: string, details: 
   else Logger.globalInstance.error(message, details);
 }
 
+const isTransientSerpApiStatus = (status: number): boolean => status === 429 || status >= 500;
+
+// A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a TypeError;
+// anything else is unexpected and is not treated as transient.
+const isTransientFetchError = (error: unknown): boolean => isAbortError(error) || error instanceof TypeError;
+
+/**
+ * Image and place lookups are one supplementary attempt each that degrades to []. A transient failure
+ * warns: a real SerpAPI outage still surfaces at error through the organic search, whose final failure
+ * the tool loop logs. A non-transient one (e.g. a revoked key) stays at error.
+ */
+function logSupplementarySerpApiFailure(message: string, failure: { status: number } | { error: unknown }): void {
+  if ('status' in failure) {
+    logSerpApiAttemptFailure(isTransientSerpApiStatus(failure.status), message, { status: failure.status });
+    return;
+  }
+  const { error } = failure;
+  logSerpApiAttemptFailure(isTransientFetchError(error), message, {
+    timedOut: isAbortError(error),
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /**
  * One SerpAPI organic-search attempt, bounded by SERPAPI_ATTEMPT_TIMEOUT_MS. Never throws -
  * failures (timeout, network error, non-OK response) come back as a tagged result so
@@ -414,7 +489,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     if (response.ok) return { ok: true, data: (await response.json()) as SerpApiResponse };
 
     const errorText = await response.text();
-    const retryable = response.status === 429 || response.status >= 500;
+    const retryable = isTransientSerpApiStatus(response.status);
     logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: API error details:', {
       status: response.status,
       statusText: response.statusText,
@@ -432,9 +507,7 @@ async function attemptSerpApiRequest(url: URL, attempt: number): Promise<SerpApi
     };
   } catch (error) {
     const timedOut = isAbortError(error);
-    // A network-level failure (DNS, connection reset, TLS, ...) surfaces from fetch as a
-    // TypeError; anything else is unexpected and is not treated as transient.
-    const retryable = timedOut || error instanceof TypeError;
+    const retryable = isTransientFetchError(error);
     logSerpApiAttemptFailure(retryable, '❌ WebSearch Tool: SerpAPI request failed:', {
       attempt,
       request,
@@ -468,7 +541,7 @@ function buildSerpApiFailureError(failures: SerpApiAttemptFailure[]): Error {
   const earlierResponses = failures.slice(0, -1).filter(f => !f.timedOut);
   if (earlierResponses.length === 0) {
     // Every attempt made it timed out - the original message is accurate as-is.
-    return new Error(
+    return new ExpectedToolError(
       `Web search timed out: SerpAPI did not respond within ${SERPAPI_ATTEMPT_TIMEOUT_MS / 1000}s (tried ${failures.length} times)`
     );
   }
@@ -566,39 +639,41 @@ async function serpApiImageSearch(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  // Only the request is inside the try, so the failure classification sees fetch and body errors alone.
+  let data: SerpApiImagesResponse | null;
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     if (!response.ok) {
-      Logger.globalInstance.error('WebSearch Tool: SerpAPI image search failed', { status: response.status });
+      logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI image search failed', { status: response.status });
       return [];
     }
-    const data = (await response.json()) as SerpApiImagesResponse;
-    const entries = Array.isArray(data.images_results) ? data.images_results : [];
-
-    const seen = new Set<string>();
-    const images: WebSearchImageResult[] = [];
-    for (const entry of entries) {
-      if (!entry) continue;
-      const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
-      const pageUrl = typeof entry.link === 'string' ? entry.link : '';
-      // A picture with no page cannot be attributed or linked, which is the whole point of a card.
-      if (!image || !pageUrl || seen.has(image)) continue;
-      seen.add(image);
-      images.push({
-        url: image,
-        pageUrl,
-        title: entry.title ?? '',
-        source: entry.source || safeHost(pageUrl),
-      });
-      if (images.length >= limit) break;
-    }
-    return images;
+    data = (await response.json()) as SerpApiImagesResponse | null;
   } catch (error) {
-    Logger.globalInstance.error('WebSearch Tool: SerpAPI image search request failed:', error);
+    logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI image search request failed:', { error });
     return [];
   } finally {
     clearTimeout(timeoutId);
   }
+
+  const entries = Array.isArray(data?.images_results) ? data.images_results : [];
+  const seen = new Set<string>();
+  const images: WebSearchImageResult[] = [];
+  for (const entry of entries) {
+    if (!entry) continue;
+    const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
+    const pageUrl = typeof entry.link === 'string' ? entry.link : '';
+    // A picture with no page cannot be attributed or linked, which is the whole point of a card.
+    if (!image || !pageUrl || seen.has(image)) continue;
+    seen.add(image);
+    images.push({
+      url: image,
+      pageUrl,
+      title: entry.title ?? '',
+      source: entry.source || safeHost(pageUrl),
+    });
+    if (images.length >= limit) break;
+  }
+  return images;
 }
 
 /** An entry of the `google_maps` engine's `local_results`, or its single-match `place_results`. */
@@ -657,21 +732,23 @@ async function serpApiPlaceSearch(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  let data: SerpApiMapsResponse | null;
   try {
     const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
     if (!response.ok) {
-      Logger.globalInstance.error('WebSearch Tool: SerpAPI place search failed', { status: response.status });
+      logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI place search failed', { status: response.status });
       return [];
     }
-    const data = (await response.json()) as SerpApiMapsResponse;
-    const local = Array.isArray(data.local_results) ? data.local_results : [];
-    return dedupePlaces([fromSerpApiMapsPlace(data.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
+    data = (await response.json()) as SerpApiMapsResponse | null;
   } catch (error) {
-    Logger.globalInstance.error('WebSearch Tool: SerpAPI place search request failed:', error);
+    logSupplementarySerpApiFailure('WebSearch Tool: SerpAPI place search request failed:', { error });
     return [];
   } finally {
     clearTimeout(timeoutId);
   }
+
+  const local = Array.isArray(data?.local_results) ? data.local_results : [];
+  return dedupePlaces([fromSerpApiMapsPlace(data?.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
 }
 
 /** Hostname of a URL, or the URL itself when it will not parse. */
@@ -700,10 +777,12 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
           // `organic_results[].thumbnail` is a ~92px preview. Order the big ones first so the card's
           // hero tile - the one scaled up the most - is not the most pixelated image available.
           const images = dedupeImages([...(extraImages.get(r.link!) ?? []), safeImageUrl(r.thumbnail)]);
+          const displayHost = googleRedirectDisplayHost(r.link!, r.displayed_link, r.source);
           return {
             title: r.title ?? r.link!,
             url: r.link!,
             snippet: r.snippet ?? '',
+            ...(displayHost ? { displayHost } : {}),
             ...(images.length > 0 ? { thumbnail: images[0], images } : {}),
           };
         });
@@ -738,6 +817,21 @@ function parseSearxngResults(data: unknown, numResults: number): WebSearchProvid
     });
   }
   return mapped.slice(0, numResults);
+}
+
+/**
+ * SearXNG lists each upstream engine that did not answer as `[name, reason]` (e.g. a CAPTCHA or
+ * "too many requests"), which is what tells a throttled instance from a query with no hits.
+ */
+function parseSearxngUnresponsiveEngines(data: unknown): { engine: string; reason: string }[] {
+  if (typeof data !== 'object' || data === null) return [];
+  const engines = (data as { unresponsive_engines?: unknown }).unresponsive_engines;
+  if (!Array.isArray(engines)) return [];
+  return engines.flatMap(entry =>
+    Array.isArray(entry) && typeof entry[0] === 'string'
+      ? [{ engine: entry[0], reason: typeof entry[1] === 'string' ? entry[1] : '' }]
+      : []
+  );
 }
 
 /**
@@ -858,20 +952,36 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
         }
         const data: unknown = await response.json();
         const results = parseSearxngResults(data, limit);
-        Logger.globalInstance.log('WebSearch Tool: SearXNG response', {
-          status: response.status,
-          request,
-          hits: results.length,
-        });
+        const details = { status: response.status, request, hits: results.length };
+        if (results.length > 0) {
+          Logger.globalInstance.log('WebSearch Tool: SearXNG response', details);
+        } else {
+          const raw = (data as { results?: unknown } | null)?.results;
+          const unresponsiveEngines = parseSearxngUnresponsiveEngines(data);
+          const empty = { ...details, rawResults: Array.isArray(raw) ? raw.length : 0, unresponsiveEngines };
+          // An engine that did not answer is what tells a throttled instance from a query with no
+          // hits, so only that case is worth a warn; a plain zero-hit answer stays at log. When the
+          // empty answer strands the hedge, logHedgedProviderFailure raises the error either way.
+          const message = 'WebSearch Tool: SearXNG answered with no results';
+          if (unresponsiveEngines.length > 0) {
+            Logger.globalInstance.warn(message, empty);
+          } else {
+            Logger.globalInstance.log(message, empty);
+          }
+        }
         return results;
       } catch (error) {
-        logSearxngFailure(options, '❌ WebSearch Tool: SearXNG request failed:', {
-          request,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        const details = { request, error: error instanceof Error ? error.message : String(error) };
+        if (isAbortError(error)) {
+          Logger.globalInstance.warn('WebSearch Tool: SearXNG request timed out', details);
+        } else {
+          logSearxngFailure(options, '\u274c WebSearch Tool: SearXNG request failed:', details);
+        }
         if (!options?.throwOnError) return [];
         if (isAbortError(error)) {
-          throw new Error(`Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`);
+          throw new ExpectedToolError(
+            `Web search timed out: SearXNG did not respond within ${SEARCH_TIMEOUT_MS / 1000}s`
+          );
         }
         throw error;
       } finally {

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
 import { getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import useSessionLayout, {
   markModerationScanTimedOut,
@@ -13,7 +12,12 @@ export const MODERATION_SCAN_TIMEOUT_MS = 60_000;
 export const MODERATION_SLOW_POLL_INTERVAL_MS = 15_000;
 export const MODERATION_SLOW_POLL_WINDOW_MS = 10 * 60_000;
 
-type ApplyResult = (fabFileId: string, moderationStatus: 'clean' | 'blocked', fileUrl?: string) => void;
+type ApplyResult = (
+  fabFileId: string,
+  moderationStatus: 'clean' | 'blocked',
+  fileUrl?: string,
+  fileUrlExpireAt?: Date | string
+) => void;
 
 const pollOnce = async (ids: string[], applyResult: ApplyResult, isCancelled: () => boolean) => {
   try {
@@ -21,7 +25,7 @@ const pollOnce = async (ids: string[], applyResult: ApplyResult, isCancelled: ()
     if (isCancelled()) return;
     for (const file of files) {
       if (file.moderationStatus === 'clean' || file.moderationStatus === 'blocked') {
-        applyResult(file.id, file.moderationStatus, file.fileUrl ?? undefined);
+        applyResult(file.id, file.moderationStatus, file.fileUrl ?? undefined, file.fileUrlExpireAt ?? undefined);
       }
     }
   } catch (error) {
@@ -89,9 +93,6 @@ export function useModerationScanFallback(pendingMessageFiles: PendingMessageFil
           for (const id of timedOut) next[id] = now + MODERATION_SLOW_POLL_WINDOW_MS;
           return next;
         });
-        toast.info(
-          "An image's safety check is taking longer than usual. We're still checking - it will attach once it clears, or you can remove it."
-        );
       }
     };
 

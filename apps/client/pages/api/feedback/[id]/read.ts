@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const handler = baseApi().get(
@@ -28,6 +29,8 @@ const handler = baseApi().get(
     if (!req.ability.can('read', feedback)) {
       throw new NotFoundError('Feedback not found');
     }
+
+    await recordFeedbackRead(req, [{ id: feedback.id, userId: feedback.userId }]);
 
     const [hydrated] = await hydrateFeedbackText([toRedactedFeedback(feedback)]);
     return res.json(hydrated);

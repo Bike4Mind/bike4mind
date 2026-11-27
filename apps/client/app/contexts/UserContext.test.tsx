@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import axios, { type InternalAxiosRequestConfig } from 'axios';
+import { registerAccountDeletionRequestGuard } from '@client/app/utils/accountDeletionInterceptor';
 import { IUserDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import {
@@ -9,6 +11,7 @@ import {
   shouldAdoptIdentifyToken,
   shouldRevokeForTokenVersion,
   applyUserPush,
+  carryRoleAdminPermissions,
 } from './UserContext';
 
 // Builds a JWT-shaped string (unsigned - decodeTokenVersion never verifies the
@@ -275,10 +278,47 @@ describe('useUser store — isHydrated flag', () => {
   // `beforeLoad` consent guard reads a rehydrated user missing the field, treats an
   // already-consented user as un-consented, and flashes the /accept-policies interstitial on every
   // hard reload until /api/identify refetches. Guards the persisted-field whitelist regression.
+  it('persists delegated admin permissions for consistent console access on reload', () => {
+    useUser.getState().setCurrentUser(fakeUser({ adminPermissions: ['support:read'] }));
+    const persisted = JSON.parse(localStorage.getItem('user-context') as string);
+    expect(persisted.state.currentUser.adminPermissions).toEqual(['support:read']);
+  });
+
   it('persists aupAcceptedVersion so the consent guard does not re-flash on reload', () => {
     useUser.getState().setCurrentUser(fakeUser({ aupAcceptedVersion: 'v1' }));
     const persisted = JSON.parse(localStorage.getItem('user-context') as string);
     expect(persisted.state.currentUser.aupAcceptedVersion).toBe('v1');
+  });
+
+  it('persists a pending deletion so a reload is locked before any request fires', () => {
+    const deletion = { requestedAt: new Date(), scheduledFor: new Date('2026-12-01T00:00:00.000Z'), source: 'self' };
+    useUser.getState().setCurrentUser(fakeUser({ deletion } as Partial<IUserDocument>));
+    const persisted = JSON.parse(localStorage.getItem('user-context') as string);
+    expect(persisted.state.currentUser.deletion.scheduledFor).toBe('2026-12-01T00:00:00.000Z');
+  });
+
+  it('cancels app requests through the api guard only while the store user is deletion-pending', async () => {
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => ({
+      data: {},
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    }));
+    const client = axios.create({ adapter });
+    const eject = registerAccountDeletionRequestGuard(client);
+    try {
+      const deletion = { requestedAt: new Date(), scheduledFor: new Date(), source: 'self' };
+      useUser.getState().setCurrentUser(fakeUser({ deletion } as Partial<IUserDocument>));
+      expect(axios.isCancel(await client.get('/api/sessions').catch((e: unknown) => e))).toBe(true);
+      expect(adapter).not.toHaveBeenCalled();
+
+      useUser.getState().setCurrentUser(fakeUser({ deletion: null }));
+      await client.get('/api/sessions');
+      expect(adapter).toHaveBeenCalledTimes(1);
+    } finally {
+      eject();
+    }
   });
 });
 
@@ -334,6 +374,67 @@ describe('refreshUser single-flight guard', () => {
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['resolve', 'reject'] as const)(
+    'starts a fresh read after an older read settles (%s), coalescing fresh callers',
+    async outcome => {
+      const olderRequest = Promise.withResolvers<unknown>();
+      const freshRequest = Promise.withResolvers<unknown>();
+      mockGet.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(freshRequest.promise);
+      const { refreshUser } = useUser.getState();
+
+      const olderRefresh = refreshUser();
+      const firstFresh = refreshUser({ fresh: true });
+      const secondFresh = refreshUser({ fresh: true });
+      expect(mockGet).toHaveBeenCalledTimes(1);
+
+      if (outcome === 'reject') {
+        olderRequest.reject(new Error('old request failed'));
+      } else {
+        olderRequest.resolve({ data: { user: fakeUser({ photoUrl: 'old.png' }) } });
+      }
+      await olderRefresh;
+      expect(mockGet).toHaveBeenCalledTimes(2);
+
+      const concurrentRefresh = refreshUser();
+      expect(mockGet).toHaveBeenCalledTimes(2);
+      freshRequest.resolve({ data: { user: fakeUser({ photoUrl: 'new.png' }) } });
+      await Promise.all([firstFresh, secondFresh, concurrentRefresh]);
+      expect(useUser.getState().currentUser?.photoUrl).toBe('new.png');
+      expect(mockGet).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([
+    ['no read in flight', false],
+    ['an older read in flight', true],
+  ])('bumps avatarVersion after a fresh refresh with %s, not after a plain one', async (_label, olderInFlight) => {
+    const before = useUser.getState().avatarVersion;
+    const older = Promise.withResolvers<unknown>();
+    if (olderInFlight) mockGet.mockReturnValueOnce(older.promise);
+    mockGet.mockResolvedValue({ data: { user: fakeUser() } });
+    const { refreshUser } = useUser.getState();
+
+    const olderRefresh = olderInFlight ? refreshUser() : Promise.resolve();
+    const fresh = refreshUser({ fresh: true });
+    older.resolve({ data: { user: fakeUser() } });
+    await Promise.all([olderRefresh, fresh]);
+    const afterFresh = useUser.getState().avatarVersion;
+    expect(afterFresh).toBeGreaterThan(before);
+
+    await refreshUser();
+    expect(useUser.getState().avatarVersion).toBe(afterFresh);
+  });
+
+  it("writes the identify response's photoUrl into currentUser", async () => {
+    mockGet.mockResolvedValueOnce({ data: { user: fakeUser({ photoUrl: 'uploads/avatar-1.png' }) } });
+
+    await useUser.getState().refreshUser();
+
+    // The sidebar avatar renders currentUser.photoUrl. Dropping the response from the set
+    // leaves the avatar on its fallback initial, which is the bug this refresh exists to fix.
+    expect(useUser.getState().currentUser?.photoUrl).toBe('uploads/avatar-1.png');
+  });
+
   it('clears the guard even when the request rejects, so a retry can still fire', async () => {
     mockGet.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ data: { user: fakeUser() } });
     const { refreshUser } = useUser.getState();
@@ -342,5 +443,28 @@ describe('refreshUser single-flight guard', () => {
     await refreshUser();
 
     expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('carryRoleAdminPermissions', () => {
+  const user = (fields: Partial<IUserDocument>) => ({ id: 'u1', ...fields }) as IUserDocument;
+
+  it('keeps the resolved role permissions when an update response for the same user omits them', () => {
+    const previous = user({ roleAdminPermissions: ['support:read'] });
+    expect(carryRoleAdminPermissions(previous, user({ name: 'New' }))?.roleAdminPermissions).toEqual(['support:read']);
+  });
+
+  it('takes a freshly resolved set, even an empty one', () => {
+    const previous = user({ roleAdminPermissions: ['support:read'] });
+    expect(carryRoleAdminPermissions(previous, user({ roleAdminPermissions: [] }))?.roleAdminPermissions).toEqual([]);
+  });
+
+  it('never carries permissions across to a different user', () => {
+    const previous = user({ roleAdminPermissions: ['support:read'] });
+    expect(carryRoleAdminPermissions(previous, user({ id: 'u2' }))?.roleAdminPermissions).toBeUndefined();
+  });
+
+  it('passes a sign-out through', () => {
+    expect(carryRoleAdminPermissions(user({ roleAdminPermissions: ['support:read'] }), null)).toBeNull();
   });
 });

@@ -4,12 +4,17 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { GENERATED_ASSET_MAX_STORED_TEXT_CHARS, type IFabFileDocument } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { setOpen, toastSuccess } = vi.hoisted(() => ({ setOpen: vi.fn(), toastSuccess: vi.fn() }));
+const { setOpen, toastSuccess, useElevenLabsTtsVoicesMock } = vi.hoisted(() => ({
+  setOpen: vi.fn(),
+  toastSuccess: vi.fn(),
+  useElevenLabsTtsVoicesMock: vi.fn(),
+}));
 
 vi.mock('sonner', () => ({ toast: { success: (...a: unknown[]) => toastSuccess(...a) } }));
 vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
   useFileBrowser: (select: (state: { setOpen: typeof setOpen }) => unknown) => select({ setOpen }),
 }));
+vi.mock('@client/app/hooks/data/ttsVoices', () => ({ useElevenLabsTtsVoices: useElevenLabsTtsVoicesMock }));
 vi.mock('@client/app/components/Media/MediaPlayer', () => ({
   MediaPlayer: ({ file }: { file: { id: string } }) => <div data-testid="media-player" data-file-id={file.id} />,
 }));
@@ -33,6 +38,7 @@ const speechFile = (generation?: Record<string, unknown>) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useElevenLabsTtsVoicesMock.mockReturnValue({ data: undefined });
   useAudioGenSettings.getState().reset();
   useAudioStudioDraft.setState({ text: { tts: '', 'sound-effects': '' } });
 });
@@ -52,6 +58,21 @@ describe('GeneratedAudioCard', () => {
     expect(screen.getByTestId('media-player')).toHaveAttribute('data-file-id', 'fab-1');
     expect(screen.getByTestId('generated-audio-card-settings')).toHaveTextContent('ElevenLabs, v-1, opus, ja');
     expect(screen.getByTestId('generated-audio-card-prompt')).toHaveTextContent('Hello there');
+  });
+
+  it('names an ElevenLabs voice from the voice list', () => {
+    useElevenLabsTtsVoicesMock.mockReturnValue({ data: [{ id: 'v-1', name: 'Laura', labels: {} }] });
+    renderWithTheme(<GeneratedAudioCard mode="tts" file={speechFile(generation)} />);
+    expect(screen.getByTestId('generated-audio-card-settings')).toHaveTextContent('ElevenLabs, Laura, opus, ja');
+    expect(useElevenLabsTtsVoicesMock).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('does not fetch ElevenLabs voices for an OpenAI clip', () => {
+    renderWithTheme(
+      <GeneratedAudioCard mode="tts" file={speechFile({ ...generation, provider: 'openai', voice: 'alloy' })} />
+    );
+    expect(screen.getByTestId('generated-audio-card-settings')).toHaveTextContent('OpenAI, alloy, opus, ja');
+    expect(useElevenLabsTtsVoicesMock).toHaveBeenCalledWith({ enabled: false });
   });
 
   it('copies its settings and text into the form', () => {

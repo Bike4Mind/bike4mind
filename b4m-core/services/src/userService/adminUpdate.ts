@@ -9,6 +9,9 @@ import {
 } from './update';
 import {
   ConflictError,
+  MAX_STORAGE_LIMIT_MB,
+  THROTTLE_TIERS,
+  resolveUserStorageLimit,
   CreditHolderType,
   ICreditTransactionRepository,
   IOrganizationDocument,
@@ -17,14 +20,23 @@ import {
   IFriendshipModelAdapter,
   IUserApiKeyRepository,
   IRealtimeConnectionRepository,
+  type SignupRiskReviewState,
+  SuspensionReasonCategorySchema,
+  hasAdminPermission,
+  assertCanActOnAdminTarget,
+  NotFoundError,
+  type ResolveAdminRoles,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
-import { addCredits } from '../creditService/addCredits';
-import { subtractCredits } from '../creditService/subtractCredits';
+import { addCreditsWithLedgerRow } from '../creditService/addCredits';
+import { subtractCreditsWithLedgerRow } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 import { entersBlockedState } from './accountState';
 import { endRealtimeConnections } from '../authSessionService/endRealtimeConnections';
+import { Logger } from '@bike4mind/observability';
+
+const MAX_CREDIT_VALUE = 1_000_000_000;
 
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
@@ -36,20 +48,23 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // feeds access control. Re-declared here so admins can still manage user tags.
   tags: z.array(z.string()).nullable().optional(),
   organizationId: z.string().optional().nullable(),
-  storageLimit: z.number().optional(),
-  currentCredits: z.number().optional(),
+  storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).optional(),
+  storageLimitOverride: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
+  currentCredits: z.number().int().min(0).max(MAX_CREDIT_VALUE).optional(),
   isBanned: z.boolean().optional(),
+  // The reason the suspended user is told (a fixed category, never the detection signal). Cleared when
+  // `isBanned` goes false; see accountSuspensionCategories.ts.
+  suspensionReasonCategory: SuspensionReasonCategorySchema.nullable().optional(),
   isModerated: z.boolean().optional(),
   subscribedUntil: z.string().optional().nullable(),
   systemFiles: z.array(z.object({ fileId: z.string(), enabled: z.boolean() })).optional(),
   level: z.enum(['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser']).optional(),
   lastNotebookId: z.string().optional().nullable(),
-  userNotes: z.array(z.object({ timestamp: z.string(), note: z.string(), userName: z.string() })).optional(),
   numReferralsAvailable: z.number().optional(),
   disputePending: z.boolean().optional(),
   // Admin control over the per-user moderation escalation state. Routed through
-  // `setModerationStatus` (not the generic field spread) so the `isModerated` mirror and
-  // `throttledUntil` stay consistent - this is how an admin confirms a `suspend_pending`
+  // `setModerationStatus` (not the generic field spread) so `throttledUntil` stays consistent -
+  // this is how an admin confirms a `suspend_pending`
   // account, lifts a throttle/suspension back to `active`, or manually throttles.
   moderationStatus: z.enum(['active', 'throttled', 'suspend_pending', 'suspended']).optional(),
   // Human-readable reason for a manual credit adjustment. Not a user-doc field:
@@ -62,13 +77,38 @@ export const adminUpdateUserSchema = updateUserSchema.extend({
   // this write is never refunded (the failure mode of sending a frozen client snapshot
   // as an absolute `currentCredits`). Not a user-doc field: stripped from the doc write
   // and routed to addCredits/subtractCredits. Takes precedence over `currentCredits`.
-  creditDelta: z.number().optional(),
+  creditDelta: z.number().int().min(-MAX_CREDIT_VALUE).max(MAX_CREDIT_VALUE).optional(),
   // Why the admin role is being granted or revoked. Not a user-doc field: the route records it on
   // the audit entry, and it is stripped from the doc write here.
   roleChangeReason: z.string().max(500).optional(),
+  // Restricted-tier change. Not user-doc fields: the route applies them via `setThrottleTier`
+  // (the only writer of `throttle`) and audits them, so they are stripped from the doc write here.
+  throttleTier: z.enum(THROTTLE_TIERS).optional(),
+  throttleReason: z.string().max(500).optional(),
+  // Why `isBanned` or `isModerated` is changing. Like `roleChangeReason`, audit-only and stripped here.
+  statusChangeReason: z.string().max(500).optional(),
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
+
+/**
+ * The fields a `users:moderate` delegate may write: suspend, restrict, moderation status and the
+ * limited tier. Every other field stays full-admin. The user update route checks the same set first,
+ * so a delegate gets a 403 naming the field rather than this function's generic refusal.
+ */
+export const MODERATION_UPDATE_FIELDS: ReadonlySet<string> = new Set([
+  'id',
+  'isBanned',
+  'suspensionReasonCategory',
+  'isModerated',
+  'moderationStatus',
+  'statusChangeReason',
+  'throttleTier',
+  'throttleReason',
+]);
+
+const writesOnlyModerationFields = (params: Record<string, unknown>): boolean =>
+  Object.entries(params).every(([field, value]) => value === undefined || MODERATION_UPDATE_FIELDS.has(field));
 
 export interface AdminUpdateUserAdapters {
   db: {
@@ -86,6 +126,8 @@ export interface AdminUpdateUserAdapters {
     // so no admin adjustment can land without a CreditTransaction row.
     creditTransactions: ICreditTransactionRepository;
   };
+  /** Resolves the acting admin's role permissions on the re-read below. */
+  resolveAdminRoles?: ResolveAdminRoles;
 }
 
 /** The balance change an admin update applied; signed, after the non-negative floor. */
@@ -94,11 +136,15 @@ export type AdminCreditAdjustment = {
   previousBalance: number;
   resultingBalance: number;
   note?: string;
+  /** The CreditTransaction row the adjustment wrote; the audit entry links to it. */
+  creditTransactionId?: string;
 };
 
 export type AdminUpdateUserResult = {
   user: Awaited<ReturnType<IUserRepository['findById']>>;
   creditAdjustment: AdminCreditAdjustment | null;
+  /** The signup risk review state the ban moved to 'banned', for the route's audit entry. */
+  bannedRiskReviewFrom: SignupRiskReviewState | null;
 };
 
 async function sendFriendRequestsToOrgMembers(
@@ -120,7 +166,7 @@ async function sendFriendRequestsToOrgMembers(
       );
     } catch (error) {
       if (error instanceof BadRequestError) {
-        console.log(`Error sending friend request to ${memberId}: ${error.message}`);
+        Logger.info('Error sending friend request', { memberId, error });
         return;
       }
       throw error;
@@ -131,19 +177,22 @@ async function sendFriendRequestsToOrgMembers(
 export async function adminUpdateUser(
   userId: string,
   parameters: AdminUpdateUserParameters,
-  { db }: AdminUpdateUserAdapters
+  { db, resolveAdminRoles }: AdminUpdateUserAdapters
 ): Promise<AdminUpdateUserResult> {
   const params = secureParameters(parameters, adminUpdateUserSchema);
-  const admin = await db.users.findById(userId);
-  if (!admin || !admin.isAdmin) {
+  const stored = await db.users.findById(userId);
+  const admin = stored && resolveAdminRoles ? await resolveAdminRoles(stored) : stored;
+  const moderates = !!admin && hasAdminPermission(admin, 'users:moderate') && writesOnlyModerationFields(params);
+  if (!admin || !(admin.isAdmin || moderates)) {
     throw new ForbiddenError('Unauthorized');
   }
 
   const user = await db.users.findByIdWithPassword(params.id);
   if (!user) {
-    throw new Error('User not found');
+    throw new NotFoundError('User not found');
   }
-  await validateUsernameChange(user, params, db.users);
+  assertCanActOnAdminTarget(admin, user, 'suspend or restrict');
+  await validateUsernameChange(user, params, db.users, { allowReservedUsername: true });
   if (params.email !== undefined && params.email !== user.email) {
     if (await db.users.existsOtherUserWithEmail(params.email, user.id)) {
       throw new ConflictError(EMAIL_IN_USE_MESSAGE);
@@ -160,11 +209,20 @@ export async function adminUpdateUser(
   //   membership move, the doc write, the moderation transition, and the API-key
   //   deactivation.
   //
-  // `moderationStatus`/`creditReason`/`creditDelta`/`roleChangeReason` are handled out-of-band (a
-  // dedicated repo call, the CreditTransaction record, the ledger, and the route's audit entry) - pull them out
-  // so they never land as stray top-level fields on the user doc.
+  // `moderationStatus`/`creditReason`/`creditDelta`/`roleChangeReason`/`statusChangeReason` are handled
+  // out-of-band (a dedicated repo call, the CreditTransaction record, the ledger, and the route's audit
+  // entries) - pull them out so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
-  const { moderationStatus, creditReason, creditDelta: signedDelta, roleChangeReason, ...baseParams } = params;
+  const {
+    moderationStatus,
+    creditReason,
+    creditDelta: signedDelta,
+    roleChangeReason,
+    throttleTier: _throttleTier,
+    throttleReason: _throttleReason,
+    statusChangeReason,
+    ...baseParams
+  } = params;
   // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
   // Stripe dispute path and the client use-time gate.
   const enteringBlockedState = entersBlockedState(user, {
@@ -180,17 +238,41 @@ export async function adminUpdateUser(
       : params.currentCredits !== undefined && params.currentCredits !== previousBalance
         ? params.currentCredits - previousBalance
         : 0;
-  // Floor a deduction so a non-negative balance is never driven below zero (mirrors the
-  // old client-side Math.max(0, ...) clamp). Only when the balance is non-negative: when
-  // it is already negative, `-previousBalance` is a positive floor that would invert a
-  // deduction into a credit, so apply the delta verbatim in that case.
-  const creditDelta = previousBalance >= 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
+  // A deduction never drives the balance further down than zero, and is rejected outright when
+  // there is nothing to deduct so the caller does not see a silent success.
+  if (rawDelta < 0 && previousBalance <= 0) {
+    throw new BadRequestError('Balance is already at or below zero; nothing to deduct');
+  }
+  const creditDelta = rawDelta < 0 ? Math.max(rawDelta, -previousBalance) : rawDelta;
   const note = creditReason?.trim() || undefined;
 
-  // Stamp a purchase timestamp only for a net grant: a deduction is not a purchase, and carrying
-  // the field on every other admin save would $set the read snapshot back over a concurrent
-  // purchase stamp (addCredits only stamps for type === 'purchase', so an admin grant needs this).
-  const builtParams = creditDelta > 0 ? { ...baseParams, lastCreditsPurchasedAt: new Date() } : baseParams;
+  const requestedOverride =
+    params.storageLimitOverride !== undefined ? params.storageLimitOverride : params.storageLimit;
+  const storageParams =
+    requestedOverride !== undefined
+      ? {
+          storageLimitOverride: requestedOverride,
+          storageLimit: resolveUserStorageLimit({
+            storageLimitOverride: requestedOverride,
+            planStorageLimit: user.planStorageLimit,
+          }).limitMb,
+        }
+      : {};
+  // The stamp confers paid standing, which an admin comps with an `admin_grant` subscription, never
+  // with a credit adjustment alone. A net grant to an account with a purchase on the ledger re-stamps
+  // it: that is the repair for a purchase whose balance $inc (and so its stamp) never ran, which
+  // creditPurchaseReconciliation keeps flagging until the stamp is at least as new as the row. A purchase
+  // that was refunded or lost a dispute does not count, so a grant never re-confers what the reversal revoked.
+  const restoresPurchaseStamp =
+    creditDelta > 0 && (await db.creditTransactions.findUnreversedPurchase(params.id, CreditHolderType.User)) !== null;
+  // Reinstating clears the reason, so a later suspension without one cannot resurface a stale category.
+  const suspensionParams = params.isBanned === false ? { suspensionReasonCategory: null } : {};
+  const builtParams = {
+    ...baseParams,
+    ...storageParams,
+    ...suspensionParams,
+    ...(restoresPurchaseStamp ? { lastCreditsPurchasedAt: new Date() } : {}),
+  };
   const builtUser = applyBaseUserUpdates(user, builtParams);
   // Persist ONLY the fields this request changed, never a spread of the read snapshot -
   // that is what let an admin save round-trip (and revert) a concurrent tokenVersion bump
@@ -220,9 +302,8 @@ export async function adminUpdateUser(
   // generic_deduct CreditTransaction (ordering and failure modes: see above).
   let creditAdjustment: AdminCreditAdjustment | null = null;
   if (creditDelta !== 0) {
-    // Best-effort resulting balance predicted from the read snapshot. The atomic $inc
-    // inside addCredits/subtractCredits is the source of truth, so concurrent spend
-    // between the read and the increment can make this differ from the committed balance.
+    // Predicted from the read snapshot; an absolute set is applied as a delta, so concurrent
+    // spend before the atomic $inc makes the committed balance differ from this value.
     const resultingBalance = previousBalance + creditDelta;
     const metadata: Record<string, unknown> = { actorId: userId, previousBalance, resultingBalance };
     if (note) {
@@ -232,34 +313,33 @@ export async function adminUpdateUser(
       db: { creditTransactions: db.creditTransactions },
       creditHolderMethods: db.users,
     };
-    if (creditDelta > 0) {
-      await addCredits(
-        {
-          ownerId: params.id,
-          ownerType: CreditHolderType.User,
-          credits: creditDelta,
-          type: 'generic_add',
-          reason: 'admin_adjustment',
-          description: note || 'Admin credit adjustment',
-          metadata,
-        },
-        creditAdapters
-      );
-    } else {
-      await subtractCredits(
-        {
-          ownerId: params.id,
-          ownerType: CreditHolderType.User,
-          credits: Math.abs(creditDelta),
-          type: 'generic_deduct',
-          reason: 'admin_adjustment',
-          description: note || 'Admin credit adjustment',
-          metadata,
-        },
-        creditAdapters
-      );
-    }
-    creditAdjustment = { credits: creditDelta, previousBalance, resultingBalance, note };
+    const { creditTransactionId } =
+      creditDelta > 0
+        ? await addCreditsWithLedgerRow(
+            {
+              ownerId: params.id,
+              ownerType: CreditHolderType.User,
+              credits: creditDelta,
+              type: 'generic_add',
+              reason: 'admin_adjustment',
+              description: note || 'Admin credit adjustment',
+              metadata,
+            },
+            creditAdapters
+          )
+        : await subtractCreditsWithLedgerRow(
+            {
+              ownerId: params.id,
+              ownerType: CreditHolderType.User,
+              credits: Math.abs(creditDelta),
+              type: 'generic_deduct',
+              reason: 'admin_adjustment',
+              description: note || 'Admin credit adjustment',
+              metadata,
+            },
+            creditAdapters
+          );
+    creditAdjustment = { credits: creditDelta, previousBalance, resultingBalance, note, creditTransactionId };
   }
 
   if (currentOrg) {
@@ -285,8 +365,16 @@ export async function adminUpdateUser(
 
   await writeUserUpdate(db.users, writeData);
 
+  // Settles a signup risk review the way the bulk ban does (bulkAbuseResponse banStep). Unbanning
+  // leaves it 'banned'.
+  let bannedRiskReviewFrom: SignupRiskReviewState | null = null;
+  const reviewState = user.riskScore?.reviewState;
+  if (params.isBanned && !user.isBanned && reviewState && reviewState !== 'banned') {
+    if (await db.users.setRiskReviewState(params.id, reviewState, 'banned')) bannedRiskReviewFrom = reviewState;
+  }
+
   // Apply the moderation escalation transition last so it authoritatively sets
-  // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
+  // `moderation.status` and `throttledUntil`. It leaves `isModerated` as written above.
   if (moderationStatus) {
     await db.users.setModerationStatus(params.id, moderationStatus, {
       throttledUntil:
@@ -302,5 +390,5 @@ export async function adminUpdateUser(
 
   const finalUser = await db.users.findById(params.id);
 
-  return { user: finalUser, creditAdjustment };
+  return { user: finalUser, creditAdjustment, bannedRiskReviewFrom };
 }

@@ -48,6 +48,7 @@ export const leave = async (
   // own owner can never reach here, since leaving your own organization is refused above.
   const purged = await purgeOrgMembershipArtifacts(user.id, organization, { userId: user.id }, adapters);
   organization.adminUserIds = purged.adminUserIds;
+  organization.billingManagerUserIds = purged.billingManagerUserIds;
 
   await adapters.db.organizations.removeMember(organization.id, user.id);
 
@@ -64,8 +65,9 @@ export const leave = async (
   // hands us a hydrated Mongoose doc where it is an ObjectId (UserModel declares
   // Schema.Types.ObjectId with no stringifying transform), so a strict `===` against the route
   // param is ALWAYS false and the pointer never cleared. The type does not catch this; every other
-  // reader of this field normalizes the same way (revokeAccess.ts, orgAccess.ts).
-  if (user.organizationId?.toString() === id) {
+  // reader of this field normalizes the same way (revokeAccess.ts, orgAccess.ts). Compare against
+  // the loaded org's canonical id, not the route param, whose spelling the lookup does not fix.
+  if (user.organizationId?.toString() === organization.id) {
     await adapters.db.users.update({ id: user.id, organizationId: null });
   }
 

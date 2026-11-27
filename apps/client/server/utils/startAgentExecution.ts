@@ -8,9 +8,10 @@
  * (AgentExecution + the dispatch-time prompt Quest) before dispatching the executor.
  * Duplicating that across two transports is how the two drift; it lives here instead.
  *
- * The function never throws for a rejected request and never speaks HTTP or WebSocket:
+ * The function returns guard refusals and never speaks HTTP or WebSocket:
  * it returns a discriminated {@link StartAgentExecutionResult} and each caller maps the
  * `reason` onto its own wire (an `agent_error` frame, or an HTTP status).
+ * Operational quota errors throw so each transport can preserve their retry metadata.
  */
 
 import {
@@ -19,24 +20,33 @@ import {
   sessionRepository,
   sessionToolApprovalRepository,
   userRepository,
+  studioCompositionRepository,
   Quest,
   type AgentExecutionStatus,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
+import { readOrgModelPolicy } from '@bike4mind/common';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { orgDisallowedTools } from '@bike4mind/services/llm/orgToolPolicy';
 import type { Logger } from '@bike4mind/observability';
-import { credentialExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
-import type { ApiKeyInfo } from '@server/cli/auth';
+import { credentialExecutionFields, type ApiKeyCredential } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import type { ApiKeyInfo } from '@bike4mind/server-utils/cli/auth';
 import { apiKeyBillingOrgId, resolveApiKeyBillingOrg } from '@server/billing/apiKeyBillingOrg';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
-} from '@server/utils/dispatchAgentExecution';
+} from '@bike4mind/server-utils/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@bike4mind/server-utils/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
-import { pinFilesToSessionKnowledge } from '@server/managers/sessionCrud';
-import { pinnableMessageFileIds } from '@server/managers/pinnableMessageFileIds';
+import { pinFilesToSessionKnowledge } from '@bike4mind/server-utils/managers/sessionCrud';
+import { admitApiKeyCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
+import { pinnableMessageFileIds } from '@bike4mind/server-utils/managers/pinnableMessageFileIds';
+import { isStudioFeatureEnabled } from '@bike4mind/server-utils/middlewares/studioFeatureFlag';
+import type { Request } from 'express';
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -117,7 +127,10 @@ export type StartAgentExecutionInput = {
    * `scopeDeniedTools` and `apiKeyId` are all derived from it here so a door cannot forward one
    * without the others.
    */
-  apiKeyInfo: (ApiKeyCredential & Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId'>) | undefined;
+  apiKeyInfo:
+    | (ApiKeyCredential &
+        Pick<ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'ownerUntrusted' | 'unpaidAccountLimits'>)
+    | undefined;
   maxIterations?: number;
   messageFileIds?: string[];
   /**
@@ -145,6 +158,19 @@ export type StartAgentExecutionInput = {
    * system message, carried in the server-only checkpoint so continuations keep it.
    */
   systemContext?: string;
+  /**
+   * The Studio production a Direct launch directs. Once the run is accepted, the session is marked with it
+   * (`ISession.productionCompositionId`) so every later turn runs as the director, but only for a signed-in caller
+   * with Productions open who owns the composition. Anything else is ignored rather than refused: the run itself
+   * is an ordinary agent run. The executor re-checks Productions access for the user on every run, and the
+   * production tools check ownership of the composition themselves.
+   */
+  productionCompositionId?: string;
+  /**
+   * Scripted per-iteration gate confidences (see `IAgentExecution.confidenceOverrides`).
+   * Admin-only: any other caller is refused with `confidence_overrides_forbidden`.
+   */
+  confidenceOverrides?: number[];
 };
 
 /** Why a start was refused. Callers map these onto their own transport's errors. */
@@ -152,7 +178,9 @@ export type StartAgentExecutionFailureReason =
   | 'session_not_found'
   | 'organization_not_found'
   | 'billing_organization_mismatch'
+  | 'org_tool_not_allowed'
   | 'billing_key_stale'
+  | 'confidence_overrides_forbidden'
   | 'concurrent_limit'
   | 'dispatch_failed';
 
@@ -168,8 +196,10 @@ export type StartAgentExecutionResult =
       reason: StartAgentExecutionFailureReason;
       /** Caller-safe message; already phrased for an end user. */
       message: string;
-      /** Set only for `dispatch_failed` - the doc exists but dispatch acceptance was not confirmed. */
+      /** Set only for `dispatch_failed` after the execution doc was created. */
       executionId?: string;
+      /** Set only when the executor may still have accepted the dispatch, so the run can still start. */
+      dispatchUnconfirmed?: true;
     };
 
 export async function startAgentExecution(
@@ -177,6 +207,16 @@ export async function startAgentExecution(
   logger: Logger
 ): Promise<StartAgentExecutionResult> {
   const { userId } = input;
+
+  // A key without the admin scope does not carry its owner's admin role (see withholdAdminRole).
+  if (input.confidenceOverrides && (adminRoleWithheldFor(input.apiKeyInfo) || !(await isAdminUser(userId)))) {
+    logger.warn('[Start] Non-admin caller sent confidenceOverrides', { userId });
+    return {
+      ok: false,
+      reason: 'confidence_overrides_forbidden',
+      message: 'Only an admin can set confidence overrides',
+    };
+  }
 
   // Validate session ownership before creating anything.
   const session = await sessionRepository.findById(input.sessionId);
@@ -188,6 +228,36 @@ export async function startAgentExecution(
   const billing = await resolveRunBillingOrg(input, logger);
   if (!billing.ok) return billing;
   const { organizationId } = billing;
+
+  // Same rule as /api/chat: an API-key caller chose these tools, so it is told which ones the org
+  // disallows. Session callers have them stripped silently by the executor.
+  if (input.apiKeyInfo && organizationId && input.enabledTools?.length) {
+    const org = await organizationRepository.findById(organizationId);
+    const disallowed = orgDisallowedTools(
+      input.enabledTools,
+      readOrgModelPolicy(org?.modelPolicy),
+      new Set(Object.keys(premiumLlmTools))
+    );
+    if (disallowed.length > 0) {
+      return {
+        ok: false,
+        reason: 'org_tool_not_allowed',
+        message: `Tools not allowed by your organization: ${disallowed.join(', ')}`,
+      };
+    }
+  }
+
+  // Queued work does not occupy a synchronous completion slot. Both transports must
+  // still refuse starts while the verified personal-key owner's token window is full.
+  if (input.apiKeyInfo) {
+    await admitApiKeyCompletion({
+      owner: userId,
+      ownerUntrusted: input.apiKeyInfo.ownerUntrusted,
+      billingOwnerType: input.apiKeyInfo.billingOwnerType,
+      unpaidAccountLimits: input.apiKeyInfo.unpaidAccountLimits,
+      holdSlot: false,
+    });
+  }
 
   // Sweep stale active executions before counting - `pending` / `running` /
   // `continuing` / `awaiting_permission` / `paused` that the executor never
@@ -328,6 +398,7 @@ export async function startAgentExecution(
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,
+    confidenceOverrides: input.confidenceOverrides,
   });
 
   const executionId = execution.id;
@@ -396,6 +467,8 @@ export async function startAgentExecution(
   }
 
   await pinning;
+  // Before dispatch, so the executor's first run already reads the marker.
+  if (input.productionCompositionId) await markDirectedSession(input, logger);
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the agent executor (async - don't wait for completion). If dispatch is
@@ -446,6 +519,7 @@ export async function startAgentExecution(
         reason: 'dispatch_failed',
         message: `Execution ${executionId} dispatch could not be confirmed. Check it before starting another run.`,
         executionId,
+        dispatchUnconfirmed: true,
       };
     }
     logger.error('[Start] Executor rejected dispatch - cleaning up dispatch-time Quest', {
@@ -474,6 +548,40 @@ export async function startAgentExecution(
   return { ok: true, executionId, questId: persistedQuestId };
 }
 
+/**
+ * Marks the session as directing `productionCompositionId` (see the input field). Never throws: a refused or failed
+ * mark leaves the run as an ordinary agent run.
+ */
+async function markDirectedSession(input: StartAgentExecutionInput, logger: Logger): Promise<void> {
+  const { userId, sessionId, productionCompositionId } = input;
+  if (!productionCompositionId) return;
+  try {
+    // An API key never gets the production tools (buildAgentProductionToolConfig), so it never directs either.
+    if (input.apiKeyInfo) return;
+    const user = await userRepository.findById(userId);
+    // The flag check reads only req.user, the same way the executor calls it (agentExecutor.productionToolConfig).
+    if (!user || !(await isStudioFeatureEnabled('productions', { user } as unknown as Request))) {
+      logger.warn('[Start] Productions is not open to the caller; session not marked as directed', { sessionId });
+      return;
+    }
+    if (!(await studioCompositionRepository.findOwned(productionCompositionId, userId))) {
+      logger.warn('[Start] Composition not found for the caller; session not marked as directed', { sessionId });
+      return;
+    }
+    await sessionRepository.update({ id: sessionId, productionCompositionId });
+  } catch (error) {
+    logger.warn('[Start] Could not mark the session as directed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function isAdminUser(userId: string): Promise<boolean> {
+  const user = await userRepository.findById(userId);
+  return user?.isAdmin === true;
+}
+
 type RunBillingOrg =
   { ok: true; organizationId: string | undefined } | Extract<StartAgentExecutionResult, { ok: false }>;
 
@@ -494,7 +602,12 @@ async function resolveRunBillingOrg(input: StartAgentExecutionInput, logger: Log
     const user = await userRepository.findById(userId);
     const billing = await resolveApiKeyBillingOrg({
       apiKeyInfo: input.apiKeyInfo,
-      user: { id: userId, isAdmin: user?.isAdmin ?? false },
+      user: {
+        id: userId,
+        isAdmin: user?.isAdmin ?? false,
+        isSystem: user?.isSystem,
+        serviceAccountOrganizationId: user?.serviceAccountOrganizationId,
+      },
       requestedOrgId: input.organizationId,
     });
     switch (billing.kind) {

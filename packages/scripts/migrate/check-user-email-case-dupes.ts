@@ -1,5 +1,5 @@
 import { connectDB } from '@bike4mind/db-core';
-import { User } from '@bike4mind/database';
+import { loadKeyringInBackground, User } from '@bike4mind/database';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
 import { findCaseInsensitiveCollisions, renderCollisionGroups, type UserIdentityRow } from './userCaseDupesReport';
@@ -25,6 +25,7 @@ async function main() {
   // rows on connect and a checkout ahead of the stage would build indexes, neither of which a
   // read-only report may do.
   await connectDB(dbUri.replace('%STAGE%', stage), undefined, { autoIndex: false, autoCreate: false });
+  loadKeyringInBackground();
 
   console.log(`Checking case-insensitive users.email / users.username collisions on stage="${stage}"...`);
 

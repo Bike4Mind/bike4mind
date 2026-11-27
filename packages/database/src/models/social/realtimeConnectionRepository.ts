@@ -12,6 +12,7 @@ import { UserApiKey } from '../auth/UserApiKeyModel';
 import User from '../auth/UserModel';
 import { Connection } from './ConnectionModel';
 import { QuerySubscription } from './QuerySubscriptionModel';
+import { Logger } from '@bike4mind/observability';
 
 const ID_CHUNK_SIZE = 500;
 
@@ -265,6 +266,21 @@ async function removeConnectionSubscribers(connectionId: string): Promise<void> 
 }
 
 /**
+ * Pull every subscription the users' live connections hold, so their frozen ACL scopes are rebuilt
+ * when the clients re-subscribe. Returns the connections to tell to re-subscribe.
+ */
+async function dropUserSubscriptions(userIds: readonly string[]): Promise<string[]> {
+  const ids = [...new Set(userIds)];
+  ids.forEach(id => assertNonEmptyString('userIds entry', id));
+  if (ids.length === 0) return [];
+  const connectionIds = (await outsideTransaction(Connection.find({ userId: { $in: ids } })).distinct(
+    'connectionId'
+  )) as string[];
+  await pullSubscribers(connectionIds);
+  return connectionIds;
+}
+
+/**
  * Re-stamp a connection with a freshly verified access token and drop all its subscriptions, so
  * the client re-subscribes under the new token (and the ACL scope is re-evaluated). Returns false
  * when the row is gone or already ended: an ended connection is never revived.
@@ -481,7 +497,7 @@ async function removeStaleSubscribers({
         await QuerySubscription.deleteMany({ _id: { $in: affectedIds }, subscribers: { $size: 0 } });
         removed += affected.length;
       } catch (error) {
-        console.warn(`[realtimeConnectionRepository] Failed to remove stale subscribers of ${connectionId}`, error);
+        Logger.warn('[realtimeConnectionRepository] Failed to remove stale subscribers', { connectionId, error });
       }
     }
     if (rows.length < batchSize) break;
@@ -496,6 +512,7 @@ export const realtimeConnectionRepository = {
   reauthenticate,
   upsertSubscriber,
   removeConnectionSubscribers,
+  dropUserSubscriptions,
   readSweepPage,
   classifySweepRows,
   removeOrphanSubscribers,

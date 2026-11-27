@@ -27,6 +27,11 @@ export const DataLakeResourceSchema = z.object({
   is_public: z.boolean(),
   /** A lake built into the platform: readable like any other, but read-only for every caller. */
   built_in: z.boolean(),
+  can_manage: z
+    .boolean()
+    .describe(
+      'True when the caller can manage research, proposals and settings on this lake. False for a lake the caller can only read, and for built-in lakes. Research routes answer 403 when this is false.'
+    ),
   status: z.enum(DATA_LAKE_STATUSES),
   file_count: z.number().int().nonnegative(),
   total_size_bytes: z.number().nonnegative(),

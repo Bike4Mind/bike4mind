@@ -176,3 +176,26 @@ describe('orgAclRowConfersMembership agrees with orgMembershipFilter, per row sh
     expect(predicateSaysMember).toBe(datastoreSaysMember);
   });
 });
+
+describe('OrganizationRepository.sharesMembership', () => {
+  setupMongoTest();
+
+  it('is true when one user owns an org the other is an ACL member of', async () => {
+    await makeOrg('shared', { userId: 'u1', users: [{ userId: 'u2', permissions: ['read'] }] });
+    expect(await organizationRepository.sharesMembership('u1', 'u2')).toBe(true);
+    expect(await organizationRepository.sharesMembership('u2', 'u1')).toBe(true);
+  });
+
+  it('is false when the users are members of different orgs only', async () => {
+    await makeOrg('one', { userId: 'u1' });
+    await makeOrg('two', { users: [{ userId: 'u2', permissions: ['read'] }] });
+    expect(await organizationRepository.sharesMembership('u1', 'u2')).toBe(false);
+  });
+
+  it('ignores a row that does not confer membership and a soft-deleted shared org', async () => {
+    await makeOrg('share-only', { userId: 'u1', users: [{ userId: 'u2', permissions: ['share'] }] });
+    const deleted = await makeOrg('deleted', { userId: 'u1', users: [{ userId: 'u2', permissions: ['read'] }] });
+    await Organization.collection.updateOne({ _id: deleted._id }, { $set: { deletedAt: new Date() } });
+    expect(await organizationRepository.sharesMembership('u1', 'u2')).toBe(false);
+  });
+});

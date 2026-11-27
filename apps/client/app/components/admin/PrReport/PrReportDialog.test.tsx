@@ -64,6 +64,12 @@ beforeEach(() => {
 });
 
 describe('PrReportDialog send-state machine', () => {
+  it('is titled after the page it opens from', () => {
+    renderDialog();
+
+    expect(screen.getByRole('dialog', { name: 'PR digest' })).toBeInTheDocument();
+  });
+
   it('sends and reports success, then keeps Send locked', async () => {
     const user = userEvent.setup();
     sendMutateAsync.mockResolvedValue({ outcome: 'sent' });
@@ -114,6 +120,7 @@ describe('PrReportDialog send-state machine', () => {
     // In flight: nothing that could race the continuation or abandon it is usable.
     await waitFor(() => expect(screen.getByTestId('pr-report-regenerate-btn')).toBeDisabled());
     expect(screen.getByTestId('pr-report-close-btn')).toBeDisabled();
+    expect(screen.getByTestId('pr-report-dialog-close-btn')).toBeDisabled();
     expect(screen.getByTestId('pr-report-send-btn')).toBeDisabled();
 
     await act(async () => {
@@ -125,6 +132,7 @@ describe('PrReportDialog send-state machine', () => {
     expect(await screen.findByTestId('pr-report-confirm-resend-btn')).toBeInTheDocument();
     expect(screen.getByTestId('pr-report-regenerate-btn')).toBeDisabled();
     expect(screen.getByTestId('pr-report-close-btn')).toBeDisabled();
+    expect(screen.getByTestId('pr-report-dialog-close-btn')).toBeDisabled();
   });
 
   it('IS dismissable via Escape when idle (control - proves the gated cases are real)', async () => {

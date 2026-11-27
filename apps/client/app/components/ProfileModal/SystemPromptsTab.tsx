@@ -23,17 +23,22 @@ import {
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { updateUserToServer } from '@client/app/utils/userAPICalls';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { useEffect, useState, useMemo, useCallback, memo, useRef } from 'react';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useGetFabFile, useGetFabFiles } from '@client/app/hooks/data/fabFiles';
-import { Sort, Search, Add, AutoFixHigh } from '@mui/icons-material';
+import Sort from '@mui/icons-material/Sort';
+import Search from '@mui/icons-material/Search';
+import Add from '@mui/icons-material/Add';
+import AutoFixHigh from '@mui/icons-material/AutoFixHigh';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PublicIcon from '@mui/icons-material/Public';
+import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { useSettingsFromServer, useUpdateSettings } from '@client/app/hooks/data/settings';
 import debounce from 'lodash/debounce';
@@ -701,9 +706,49 @@ interface SystemPromptRowProps {
 
 const SystemPromptRow = memo<SystemPromptRowProps>(
   ({ file, isGlobal, isAdmin, isToggling, isDeleting, isDisabled, onToggle, onView, onDelete, onToggleGlobal }) => {
-    const { data: fileInfo, isLoading } = useGetFabFile(file.fileId);
+    const { data: fileInfo, error } = useGetFabFile(file.fileId);
 
-    if (!fileInfo || isLoading) return null;
+    // A deleted file, or one no longer shared with this user, still sits in systemFiles and is
+    // reported missing on every turn; this row is the only place it can be removed from. Only a 404
+    // proves that: a network error or 5xx must not offer to unpin a file that is fine.
+    if (isAxiosError(error) && error.response?.status === 404) {
+      return (
+        <ListItem
+          data-testid="system-prompt-unavailable-row"
+          sx={theme => ({
+            ...cardSurfaceSx(theme),
+            display: 'flex',
+            width: '100%',
+            alignItems: 'center',
+            gap: '20px',
+            p: '20px',
+          })}
+        >
+          <WarningAmberRounded color="warning" sx={{ fontSize: 32 }} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography sx={{ fontSize: { xs: '14px', sm: '16px' }, color: 'text.primary' }}>
+              Unavailable file
+            </Typography>
+            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+              It was deleted or is no longer shared with you, so it is not sent with your messages.
+            </Typography>
+          </Box>
+          <Button
+            variant="outlined"
+            color="danger"
+            size="sm"
+            startDecorator={<DeleteOutline />}
+            loading={isDeleting}
+            disabled={isDisabled}
+            onClick={onDelete}
+            data-testid="system-prompt-unavailable-remove-btn"
+          >
+            Remove
+          </Button>
+        </ListItem>
+      );
+    }
+    if (!fileInfo) return null;
 
     return (
       <ListItem

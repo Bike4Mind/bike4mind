@@ -1,19 +1,25 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import type { Logger } from '@bike4mind/observability';
 import { handler as createMementoHandler } from '@workers/events/createMemento';
+import { handler as briefComposeHandler } from '@workers/events/briefCompose';
+import { handler as delegationProcessHandler } from '@workers/events/delegationProcess';
 import { handler as sessionAutoNamingHandler } from '@workers/events/sessionAutoNaming';
 import { handler as sessionSummarizationHandler } from '@workers/events/sessionSummarization';
 import { handler as sessionContextSummarizationHandler } from '@workers/events/sessionContextSummarization';
 import { handler as sessionTaggingHandler } from '@workers/events/sessionTagging';
 import { handler as notebookCurationHandler } from '@workers/events/notebookCuration';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
+import { handler as sendPushHandler } from '@workers/events/sendPush';
+import { handler as studioJobCompletedHandler } from '@workers/events/studioJobCompleted';
+import { handler as invoicePaymentSucceededHandler } from '@workers/events/stripe/invoicePaymentSucceeded';
+import { handler as customerSubscriptionUpdatedHandler } from '@workers/events/stripe/customerSubscriptionUpdated';
 
 /**
  * Self-host event routing.
  *
  * eventBus.publishSelfHost enqueues non-email events to SELF_HOST_EVENT_QUEUE as
  * `{ detailType, detail }`. This table maps each detailType to the SAME hosted event
- * handler the cloud EventBridge rules invoke, so enrichment (memento creation, session
- * auto-naming, summaries, tagging) runs identically in self-host. Handlers are
+ * handler the cloud EventBridge rules invoke for enrichment and billing fulfillment. Handlers are
  * withEventContext-wrapped and connect to Mongo themselves.
  *
  * detail-types with no entry here are logged at debug and treated as handled: most
@@ -21,13 +27,34 @@ import { handler as notebookCurationHandler } from '@workers/events/notebookCura
  */
 type EventHandler = (event: EventBridgeEvent<string, unknown>) => Promise<void>;
 
+const OBJECT_ID_PATTERN = /^[0-9a-f]{24}$/i;
+
+// Mirrors the hosted rule that also routes completion.completed to riskEvidenceQueue. The refresh never
+// throws, so it cannot block memento creation.
+const completionCompletedHandler: EventHandler = async event => {
+  const detail: unknown = event.detail;
+  const userId = typeof detail === 'object' && detail !== null && 'userId' in detail ? detail.userId : undefined;
+  if (typeof userId === 'string' && OBJECT_ID_PATTERN.test(userId)) {
+    await requestRiskEvidenceRefresh(userId, 'completion', console);
+  }
+  await createMementoHandler(event);
+};
+
 const HANDLERS: Record<string, EventHandler> = {
-  'completion.completed': createMementoHandler,
+  'completion.completed': completionCompletedHandler,
+  'brief.compose': briefComposeHandler,
+  'delegation.process': delegationProcessHandler,
   'session.auto_name': sessionAutoNamingHandler,
   'session.summarize': sessionSummarizationHandler,
   'session.context_summarize': sessionContextSummarizationHandler,
   'session.tag': sessionTaggingHandler,
   'notebook.curation.start': notebookCurationHandler,
+  // No-ops unless all four APNS_* values or FCM_SERVICE_ACCOUNT are set (see pushDelivery in server-utils).
+  'notification.push': sendPushHandler,
+  'stripe.invoice.payment_succeeded': invoicePaymentSucceededHandler,
+  'stripe.cus.sub.updated': customerSubscriptionUpdatedHandler,
+  'notification.liveActivity': sendPushHandler,
+  'studio.job.completed': studioJobCompletedHandler,
 };
 
 export async function dispatchSelfHostEvent(

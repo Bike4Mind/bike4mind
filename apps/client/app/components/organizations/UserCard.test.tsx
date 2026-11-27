@@ -1,44 +1,89 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { IOrganizationDocument, IUserDocument, Permission } from '@bike4mind/common';
-import OrganizationUserCard from './UserCard';
+import { IOrganizationDocument, Permission } from '@bike4mind/common';
+import i18next from 'i18next';
+import en from '@client/app/locales/en.json';
+import OrganizationUserCard, { OrganizationRosterRow } from './UserCard';
 import { MemberCreditUsage } from './memberCreditBudget';
+import { MemberRole } from './memberRosterView';
 
 const setOverride = vi.fn();
-const viewer = vi.hoisted(() => ({ id: 'viewer' }));
+const setRole = vi.fn();
+const viewer = vi.hoisted(() => ({ id: 'viewer', isAdmin: false }));
+const hooks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  removeMember: vi.fn(),
+  leave: vi.fn(),
+  navigate: vi.fn(),
+  isMobile: false,
+}));
 vi.mock('@client/app/hooks/data/organizations', () => ({
-  useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
-  useLeaveOrganization: () => ({ mutateAsync: vi.fn() }),
+  useRemoveMemberFromOrganization: () => ({ mutateAsync: hooks.removeMember }),
+  useLeaveOrganization: () => ({ mutateAsync: hooks.leave }),
   useSetMemberCreditOverride: () => ({ mutateAsync: setOverride, isPending: false }),
+  useSetOrganizationMemberRole: () => ({ mutate: setRole, isPending: false }),
 }));
-vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
-vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
+vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => hooks.confirm }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: viewer.id, isAdmin: false } }),
+  useUser: () => ({ currentUser: { id: viewer.id, isAdmin: viewer.isAdmin } }),
 }));
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
-vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => hooks.isMobile }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => hooks.navigate }));
+vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: ({ key }: { key: string }) => `https://files.test/${key}` }));
+vi.mock('./OffboardMemberDialog', () => ({
+  default: ({ member }: { member: { id: string } | null }) =>
+    member ? <div data-testid="offboard-dialog" data-member-id={member.id} /> : null,
+}));
+
+// A real i18next over en.json, so the chip assertions pin the wording users see.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const org = { id: 'org1', userId: 'owner1', maxCreditsPerMember: 500 } as unknown as IOrganizationDocument;
+const org = {
+  id: 'org1',
+  name: 'Acme',
+  userId: 'owner1',
+  maxCreditsPerMember: 500,
+} as unknown as IOrganizationDocument;
 
-const member = (id: string, creditUsage: MemberCreditUsage | null, status: 'accepted' | 'pending' = 'accepted') =>
-  ({ id, name: `User ${id}`, status, permissions: [Permission.read], creditUsage }) as unknown as IUserDocument & {
-    status: 'accepted' | 'pending';
-    permissions: Permission[];
-    creditUsage: MemberCreditUsage | null;
-  };
+const defaultRole = (id: string): MemberRole => (id === 'owner1' ? 'owner' : id === 'mgr' ? 'manager' : 'member');
 
-type Roster = { invite: boolean; revoke: boolean };
+const member = (id: string, creditUsage: MemberCreditUsage | null, role: MemberRole = defaultRole(id)) =>
+  ({
+    id,
+    name: `User ${id}`,
+    email: `${id}@example.test`,
+    role,
+    permissions: [Permission.read],
+    creditUsage,
+  }) as unknown as OrganizationRosterRow;
+
+type Roster = { revoke: boolean };
 const renderCard = (
   user: ReturnType<typeof member>,
   canManageCreditBudgets: boolean,
-  roster: boolean | Roster = false
+  roster: boolean | Roster = false,
+  {
+    organization = org,
+    selectable = false,
+    selected = false,
+    onToggleSelect,
+    showEmails = true,
+  }: {
+    showEmails?: boolean;
+    organization?: IOrganizationDocument;
+    selectable?: boolean;
+    selected?: boolean;
+    onToggleSelect?: () => void;
+  } = {}
 ) =>
   render(
     ((children: ReactNode) => (
@@ -47,11 +92,14 @@ const renderCard = (
       </QueryClientProvider>
     ))(
       <OrganizationUserCard
-        organization={org}
+        organization={organization}
         user={user}
-        canInviteMembers={typeof roster === 'boolean' ? roster : roster.invite}
         canRevokeMembers={typeof roster === 'boolean' ? roster : roster.revoke}
         canManageCreditBudgets={canManageCreditBudgets}
+        selectable={selectable}
+        selected={selected}
+        onToggleSelect={onToggleSelect}
+        showEmails={showEmails}
       />
     )
   );
@@ -71,10 +119,17 @@ describe('OrganizationUserCard credit usage', () => {
     expect(screen.getByTestId('organization-user-card-credit-usage').textContent).toBe('120 / 50(own limit)');
   });
 
-  it('shows a dash for a pending invite and offers no limit control', () => {
-    renderCard(member('a', null, 'pending'), true);
-    expect(screen.getByTestId('organization-user-card-credit-usage').textContent).toBe('-');
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+  it('explains the dash for an active member whose usage the viewer may not see', async () => {
+    renderCard(member('a', null), false);
+    const dash = screen.getByTestId('organization-user-card-credit-usage');
+    expect(dash.textContent).toBe('-Only team managers can see member usage');
+    fireEvent.mouseOver(dash);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Only team managers can see member usage');
+  });
+
+  it('greys an untracked member and shows uncapped usage plainly', () => {
+    renderCard(member('a', { tracked: true, used: 7, cap: null, isOverride: false }), false);
+    expect(screen.getByTestId('organization-user-card-credit-usage').textContent).toBe('7');
   });
 });
 
@@ -94,10 +149,18 @@ describe('OrganizationUserCard monthly limit control', () => {
     renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
-    expect(screen.queryByTestId('organization-user-card-revoke-access')).toBeNull();
-    expect(screen.queryByTestId('organization-user-card-cancel-invite')).toBeNull();
+    expect(screen.queryByTestId('organization-user-card-remove-member')).toBeNull();
     fireEvent.click(screen.getByTestId('organization-user-card-set-limit'));
     expect(screen.getByTestId('credit-limit-modal')).toBeTruthy();
+  });
+
+  it('describes an unlimited team default', async () => {
+    renderCard(member('a', { tracked: true, used: 0, cap: null, isOverride: false }), true, false, {
+      organization: { ...org, maxCreditsPerMember: null } as unknown as IOrganizationDocument,
+    });
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-set-limit'));
+    expect(screen.getByText('Overrides the team default, which is currently no limit.')).toBeTruthy();
   });
 
   // The billing owner viewing their own row would satisfy canLeave, so this pins the `!isOwner` guard on it.
@@ -106,7 +169,7 @@ describe('OrganizationUserCard monthly limit control', () => {
     renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, true);
     openMenu();
     expect(await screen.findByText('Set monthly limit')).toBeTruthy();
-    expect(screen.queryByText('Leave Team')).toBeNull();
+    expect(screen.queryByTestId('organization-user-card-leave')).toBeNull();
   });
 
   it('saves an override of 0 and can clear back to the org default', async () => {
@@ -129,7 +192,6 @@ describe('OrganizationUserCard monthly limit control', () => {
   });
 });
 
-// Revoke Access and Cancel Invite hit endpoints with different server gates, so each follows its own flag.
 describe('OrganizationUserCard roster actions', () => {
   beforeEach(() => {
     viewer.id = 'viewer';
@@ -137,32 +199,321 @@ describe('OrganizationUserCard roster actions', () => {
 
   const accepted = () => member('a', { tracked: true, used: 0, cap: 500, isOverride: false });
 
-  it('offers Revoke Access on the revoke flag alone', async () => {
-    renderCard(accepted(), false, { invite: false, revoke: true });
+  it('offers Remove member on the revoke flag alone', async () => {
+    renderCard(accepted(), false, { revoke: true });
     openMenu();
-    expect(await screen.findByTestId('organization-user-card-revoke-access')).toBeTruthy();
+    expect(await screen.findByTestId('organization-user-card-remove-member')).toBeTruthy();
   });
 
-  it('withholds Revoke Access from a viewer who may only invite', () => {
-    renderCard(accepted(), false, { invite: true, revoke: false });
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
-  });
-
-  it('offers Cancel Invite on the invite flag alone', async () => {
-    renderCard(member('p', null, 'pending'), false, { invite: true, revoke: false });
+  it('opens the offboarding dialog for that member instead of a plain confirm', async () => {
+    renderCard(accepted(), false, { revoke: true });
+    expect(screen.queryByTestId('offboard-dialog')).toBeNull();
     openMenu();
-    expect(await screen.findByTestId('organization-user-card-cancel-invite')).toBeTruthy();
+    fireEvent.click(await screen.findByTestId('organization-user-card-remove-member'));
+    expect(screen.getByTestId('offboard-dialog').getAttribute('data-member-id')).toBe('a');
   });
 
-  it('withholds Cancel Invite from a viewer who may only revoke', () => {
-    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: true });
+  it('shows no menu when revoke is withheld', () => {
+    renderCard(accepted(), false, { revoke: false });
     expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
+});
 
-  it('shows no menu when both invite and revoke are withheld', () => {
-    renderCard(accepted(), false, { invite: false, revoke: false });
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
-    renderCard(member('p', null, 'pending'), false, { invite: false, revoke: false });
-    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
+describe('OrganizationUserCard team role', () => {
+  const roster = ['a', 'mgr', 'mgr2', 'bill', 'viewer', 'viewerMgr'].map(userId => ({
+    userId,
+    permissions: [Permission.read],
+  }));
+  const managedOrg = {
+    ...org,
+    adminUserIds: ['mgr', 'mgr2', 'viewerMgr'],
+    billingManagerUserIds: ['bill'],
+    users: roster,
+  } as unknown as IOrganizationDocument;
+  const usage: MemberCreditUsage = { tracked: true, used: 0, cap: 500, isOverride: false };
+  const option = (role: string) => screen.getByTestId(`organization-user-card-role-option-${role}`);
+  const openSelect = () => fireEvent.click(screen.getByTestId('organization-user-card-role-select'));
+
+  beforeEach(() => {
+    viewer.id = 'owner1';
+    viewer.isAdmin = false;
+    setRole.mockReset();
+  });
+
+  it('shows a Billing manager chip', () => {
+    renderCard(member('bill', usage), false, false, { organization: managedOrg });
+    expect(screen.getByTestId('organization-user-card-billing-manager-chip').textContent).toBe('Billing manager');
+    expect(screen.queryByTestId('organization-user-card-member-chip')).toBeNull();
+  });
+
+  it('shows a Manager chip in place of the sharing label', () => {
+    renderCard(member('mgr', usage), false, false, { organization: managedOrg });
+    expect(screen.getByTestId('organization-user-card-manager-chip').textContent).toBe('Manager');
+    expect(screen.queryByText('Viewer')).toBeNull();
+  });
+
+  it('labels a plain member by team role, never by an ACL name', () => {
+    renderCard(
+      { ...member('a', usage), permissions: [Permission.read, Permission.update, Permission.share] },
+      false,
+      false,
+      { organization: managedOrg }
+    );
+    expect(screen.getByTestId('organization-user-card-member-chip').textContent).toBe('Member');
+    for (const aclLabel of ['Admin', 'Editor', 'Viewer']) expect(screen.queryByText(aclLabel)).toBeNull();
+  });
+
+  it('shows the Owner chip, not Manager, on the owner row', () => {
+    renderCard(member('owner1', usage), false, false, {
+      organization: { ...org, adminUserIds: ['owner1'] } as unknown as IOrganizationDocument,
+    });
+    expect(screen.getByTestId('organization-user-card-owner-chip').textContent).toBe('Owner');
+    expect(screen.queryByTestId('organization-user-card-manager-chip')).toBeNull();
+  });
+
+  it('lets the owner pick any of the three roles on a member', async () => {
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    openSelect();
+    expect(option('manager')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(option('billingManager')).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(option('billingManager'));
+    expect(setRole).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'a', role: 'billingManager' });
+  });
+
+  it('lets the owner demote a manager to member', () => {
+    renderCard(member('mgr', usage), false, false, { organization: managedOrg });
+    openSelect();
+    fireEvent.click(option('member'));
+    expect(setRole).toHaveBeenCalledWith({ organizationId: 'org1', userId: 'mgr', role: 'member' });
+  });
+
+  it('offers a manager Manager for a plain member, and leaves Billing manager out', () => {
+    viewer.id = 'viewerMgr';
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    openSelect();
+    expect(option('manager')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByTestId('organization-user-card-role-option-billingManager')).toBeNull();
+    expect(option('member')).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('offers a manager no selector on another manager', () => {
+    viewer.id = 'viewerMgr';
+    renderCard(member('mgr', usage), false, false, { organization: managedOrg });
+    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
+  });
+
+  it.each([
+    ['member', 'viewer'],
+    ['billing manager', 'bill'],
+  ])('offers a %s viewer no selector', (_label, id) => {
+    viewer.id = id;
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
+  });
+
+  it('offers no selector on the owner row', () => {
+    renderCard(member('owner1', usage), true, false, { organization: managedOrg });
+    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
+  });
+
+  it('only offers Member on a deactivated manager', () => {
+    renderCard({ ...member('mgr', usage), isBanned: true }, false, false, { organization: managedOrg });
+    openSelect();
+    expect(option('manager')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByTestId('organization-user-card-role-option-billingManager')).toBeNull();
+    expect(option('member')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('withholds roles above Member from a row whose permissions confer no membership', () => {
+    renderCard({ ...member('a', usage), permissions: [] }, false, false, { organization: managedOrg });
+    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
+  });
+
+  it('offers no selector on a personal organization, even to its owner', () => {
+    renderCard(member('a', usage), false, false, {
+      organization: { ...managedOrg, personal: true } as unknown as IOrganizationDocument,
+    });
+    expect(screen.queryByTestId('organization-user-card-role-select')).toBeNull();
+  });
+
+  it('lets a platform admin who is not on the team assign any role', () => {
+    viewer.id = 'platform-admin';
+    viewer.isAdmin = true;
+    renderCard(member('a', usage), false, false, { organization: managedOrg });
+    openSelect();
+    expect(option('manager')).not.toHaveAttribute('aria-disabled', 'true');
+    expect(option('billingManager')).not.toHaveAttribute('aria-disabled', 'true');
+  });
+});
+
+type ConfirmArgs = {
+  title: string;
+  description: string;
+  type?: string;
+  okLabel?: string;
+  cancelLabel?: string;
+  onOk: () => Promise<void>;
+};
+const lastConfirm = () => hooks.confirm.mock.calls.at(-1)?.[0] as ConfirmArgs;
+
+describe('OrganizationUserCard confirmations', () => {
+  const usage: MemberCreditUsage = { tracked: true, used: 0, cap: 500, isOverride: false };
+
+  beforeEach(() => {
+    viewer.id = 'viewer';
+    hooks.confirm.mockReset();
+    hooks.removeMember.mockReset().mockResolvedValue(undefined);
+    hooks.leave.mockReset().mockResolvedValue(undefined);
+    hooks.navigate.mockReset();
+  });
+
+  it('routes removal through offboarding without an immediate destructive call', async () => {
+    renderCard(member('a', usage), false, { revoke: true });
+    openMenu();
+    const item = await screen.findByTestId('organization-user-card-remove-member');
+    expect(item).toHaveTextContent('Remove member');
+    fireEvent.click(item);
+    expect(screen.getByTestId('offboard-dialog')).toHaveAttribute('data-member-id', 'a');
+    expect(hooks.confirm).not.toHaveBeenCalled();
+    expect(hooks.removeMember).not.toHaveBeenCalled();
+  });
+
+  it('offers Leave team only on your own row, behind a divider, and never Remove member there', async () => {
+    viewer.id = 'a';
+    renderCard(member('a', usage), true, true);
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-leave')).toHaveTextContent('Leave team');
+    expect(screen.getByTestId('organization-user-card-leave-divider')).toBeTruthy();
+    expect(screen.queryByTestId('organization-user-card-remove-member')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-user-card-leave'));
+    const args = lastConfirm();
+    expect(args.title).toBe('Leave team');
+    expect(args.description).toContain('Leave Acme?');
+    await args.onOk();
+    expect(hooks.leave).toHaveBeenCalledWith({ organizationId: 'org1' });
+    expect(hooks.navigate).toHaveBeenCalledWith({ to: '/organizations' });
+  });
+
+  it('shows Leave team alone, without a divider, when it is the only action', async () => {
+    viewer.id = 'a';
+    renderCard(member('a', usage), false, false);
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-leave')).toBeTruthy();
+    expect(screen.queryByTestId('organization-user-card-leave-divider')).toBeNull();
+  });
+
+  it('offers no Leave team on another member row', async () => {
+    renderCard(member('a', usage), false, true);
+    openMenu();
+    expect(await screen.findByTestId('organization-user-card-remove-member')).toBeTruthy();
+    expect(screen.queryByTestId('organization-user-card-leave')).toBeNull();
+  });
+});
+
+describe('OrganizationUserCard row content', () => {
+  const usage: MemberCreditUsage = { tracked: true, used: 0, cap: 500, isOverride: false };
+
+  beforeEach(() => {
+    viewer.id = 'viewer';
+    hooks.isMobile = false;
+  });
+
+  it('labels the row menu with the member name', () => {
+    renderCard(member('a', usage), true);
+    expect(screen.getByTestId('org-user-card-menu-btn')).toHaveAttribute('aria-label', 'Actions for User a');
+  });
+
+  it('shows email and role columns', () => {
+    renderCard(member('a', usage, 'member'), false);
+    expect(screen.getByTestId('organization-user-card-email')).toHaveTextContent('a@example.test');
+    expect(screen.getByTestId('organization-user-card-member-chip')).toHaveTextContent('Member');
+  });
+
+  it('renders no email cell in a names-only roster, even if a row carries one', () => {
+    renderCard(member('a', usage, 'member'), false, false, { showEmails: false });
+    expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
+    expect(screen.queryByText('a@example.test')).toBeNull();
+    expect(screen.getByTestId('organization-user-card-name')).toHaveTextContent('User a');
+  });
+
+  it('shows a Deactivated chip and the avatar photo', () => {
+    renderCard({ ...member('p', null), isBanned: true, photoUrl: 'me.png' }, false);
+    expect(screen.getByText('Deactivated')).toBeTruthy();
+    expect(document.querySelector('img')).toHaveAttribute('src', 'https://files.test/me.png');
+  });
+
+  it('shows last active as a relative time with the full timestamp on hover', () => {
+    const lastActiveAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    renderCard({ ...member('a', usage), lastActiveAt }, false);
+    const cell = screen.getByTestId('organization-user-card-last-active');
+    expect(cell).toHaveTextContent('3d ago');
+    expect(cell.getAttribute('title')).toMatch(/^Last active /);
+  });
+
+  it('explains a missing last active value', () => {
+    renderCard(member('a', usage), false);
+    expect(screen.getByTestId('organization-user-card-last-active').textContent).toBe('-No activity recorded');
+  });
+
+  it('renders a labelled checkbox when the row is selectable', () => {
+    const onToggleSelect = vi.fn();
+    renderCard(member('a', usage), false, false, { selectable: true, selected: true, onToggleSelect });
+    const box = screen.getByTestId('organization-user-card-select');
+    expect(box).toHaveAttribute('aria-label', 'Select User a');
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    expect(onToggleSelect).toHaveBeenCalled();
+  });
+
+  it('leaves the selection cell empty for a row that cannot be selected', () => {
+    renderCard(member('owner1', usage), false, false, { selectable: true });
+    expect(screen.queryByTestId('organization-user-card-select')).toBeNull();
+  });
+
+  it('closes the monthly limit modal', async () => {
+    renderCard(member('a', usage), true);
+    openMenu();
+    fireEvent.click(await screen.findByTestId('organization-user-card-set-limit'));
+    const modal = screen.getByTestId('credit-limit-modal');
+    fireEvent.click(within(modal).getByText('Cancel'));
+    await waitFor(() => expect(screen.queryByTestId('credit-limit-modal')).toBeNull());
+  });
+
+  describe('on mobile', () => {
+    beforeEach(() => {
+      hooks.isMobile = true;
+    });
+
+    it('stacks name, email, role and usage with the menu and checkbox', () => {
+      renderCard(member('a', usage), true, false, { selectable: true, onToggleSelect: vi.fn() });
+      expect(screen.getByTestId('organization-user-card-email')).toHaveTextContent('a@example.test');
+      expect(screen.getByTestId('organization-user-card-member-chip')).toBeTruthy();
+      expect(screen.getByTestId('organization-user-card-select')).toBeTruthy();
+      expect(screen.getByTestId('org-user-card-menu-btn')).toBeTruthy();
+    });
+
+    it('omits the email line in a names-only roster', () => {
+      renderCard(member('a', usage), false, false, { showEmails: false });
+      expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
+    });
+
+    it('omits the email line when there is none', () => {
+      renderCard({ ...member('a', usage), email: null } as unknown as OrganizationRosterRow, false);
+      expect(screen.queryByTestId('organization-user-card-email')).toBeNull();
+    });
+  });
+});
+
+describe('OrganizationUserCard accessible names', () => {
+  it('uses a readable email name when a member has no display name', () => {
+    renderCard({ ...member('a', null), name: '' }, true);
+    expect(screen.getByRole('button', { name: 'Actions for a@example.test' })).toBeTruthy();
+  });
+
+  it('names the kebab menu after the member it acts on', () => {
+    renderCard(member('a', null), true);
+    expect(screen.getByRole('button', { name: 'Actions for User a' })).toBe(
+      screen.getByTestId('org-user-card-menu-btn')
+    );
   });
 });

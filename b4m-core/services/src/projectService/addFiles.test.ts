@@ -1,19 +1,25 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { addFiles } from './addFiles';
-import { captureWrites, createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
-import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
+import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  IUserDocument,
+  NotFoundError,
+  Permission,
+  attachOrgApiKeyReach,
+  orgApiKeyReachOf,
+} from '@bike4mind/common';
 
 describe('projectService - addFiles', () => {
   const contributorId = 'contributor-123';
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
   let adapters: { db: { projects: IProjectRepository; fabFiles: IFabFileRepository } };
-  let fabFileWrites: unknown[];
 
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
-    fabFileWrites = captureWrites(mockFabFileRepo.update);
     adapters = {
       db: {
         projects: mockProjectRepo,
@@ -76,21 +82,18 @@ describe('projectService - addFiles', () => {
     ]);
     expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockUser);
 
-    expect(mockFabFileRepo.update).toHaveBeenCalledTimes(fileIds.length);
-    fileIds.forEach((id, i) => {
-      expect(fabFileWrites[i]).toStrictEqual({
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
+    expect((mockFabFileRepo.shareable.updateUserShares as Mock).mock.calls).toStrictEqual(
+      fileIds.map(id => [
         id,
-        users: [
-          {
-            userId: projectOwnerId,
-            permissions: [Permission.read, Permission.update],
-            projectId,
-            sessionId: undefined,
-          },
-          { userId: contributorId, permissions: [Permission.read], projectId, sessionId: undefined },
-        ],
-      });
-    });
+        {
+          add: [
+            { userId: projectOwnerId, permissions: [Permission.read, Permission.update], projectId },
+            { userId: contributorId, permissions: [Permission.read], projectId },
+          ],
+        },
+      ])
+    );
   });
 
   it('should throw error when project is not found', async () => {
@@ -100,7 +103,7 @@ describe('projectService - addFiles', () => {
     await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(NotFoundError);
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
     expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
-    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
   it('should throw error when some files are not accessible', async () => {
@@ -117,7 +120,7 @@ describe('projectService - addFiles', () => {
     );
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
     expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
-    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 
   it('should throw validation error for invalid parameters', async () => {
@@ -133,5 +136,27 @@ describe('projectService - addFiles', () => {
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
     expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+
+  it('checks file readability without the caller org key reach', async () => {
+    const keyUser = attachOrgApiKeyReach({ id: contributorId, groups: ['group-1'] } as IUserDocument, {
+      organizationId: 'org-1',
+      readGroupIds: ['group-2'],
+      dataLakeOrgIds: [],
+    });
+    (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce({
+      id: 'p1',
+      userId: 'owner',
+      fileIds: [],
+      users: [],
+      groups: [],
+    });
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValueOnce([]);
+
+    await addFiles(keyUser, { projectId: 'p1', fileIds: ['file-1'] }, adapters).catch(() => undefined);
+
+    const [accessor] = (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mock.calls[0]!;
+    expect(orgApiKeyReachOf(accessor)).toBeUndefined();
+    expect(accessor).toMatchObject({ id: contributorId, groups: ['group-1'] });
   });
 });

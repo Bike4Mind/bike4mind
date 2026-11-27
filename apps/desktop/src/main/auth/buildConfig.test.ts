@@ -1,0 +1,109 @@
+import childProcess from 'node:child_process';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadEnv } from 'vite';
+import config from '../../../electron.vite.config';
+
+// Isolate developer-specific .env files while exercising the real exported build config.
+// buildShared.ts reads the files through vite's loadEnv, so that is the one to replace.
+vi.mock('vite', async importOriginal => {
+  const actual = await importOriginal<typeof import('vite')>();
+  return { ...actual, loadEnv: vi.fn() };
+});
+
+// Every config() call asks git for the dev version (dev-version.cjs), status of the whole checkout
+// included; nothing here reads that version.
+vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+  throw new Error('git is not run by these tests');
+});
+
+const API_VARIABLE = 'B4M_DEFAULT_API_URL';
+const FEED_VARIABLE = 'B4M_UPDATE_FEED_URL';
+const KEYS_VARIABLE = 'B4M_UPDATE_PUBLIC_KEYS';
+const CURATED_VARIABLE = 'B4M_CURATED_MANIFEST_URL';
+const PRODUCTION = 'https://app.bike4mind.com';
+
+function bakedDefinitions() {
+  return config({ command: 'build', mode: 'production' }).main?.define;
+}
+
+describe('desktop build environment', () => {
+  beforeEach(() => {
+    vi.stubEnv(API_VARIABLE, undefined);
+    vi.stubEnv(FEED_VARIABLE, undefined);
+    // Explicitly empty so these lookups never reach loadEnv and only the backend and feed do.
+    vi.stubEnv(KEYS_VARIABLE, '');
+    vi.stubEnv(CURATED_VARIABLE, '');
+    vi.mocked(loadEnv).mockReset();
+    vi.mocked(loadEnv).mockReturnValue({});
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('bakes Production and disables updates when no brand environment is provided', () => {
+    expect(bakedDefinitions()).toMatchObject({
+      [`process.env.${API_VARIABLE}`]: JSON.stringify(PRODUCTION),
+      [`process.env.${FEED_VARIABLE}`]: JSON.stringify(''),
+    });
+  });
+
+  it('uses explicit shell overrides ahead of local environment files', () => {
+    vi.stubEnv(API_VARIABLE, 'https://fork.example.com');
+    vi.stubEnv(FEED_VARIABLE, 'https://updates.example.com');
+    vi.mocked(loadEnv).mockReturnValue({ [API_VARIABLE]: 'https://local.example.com' });
+
+    expect(bakedDefinitions()).toMatchObject({
+      [`process.env.${API_VARIABLE}`]: JSON.stringify('https://fork.example.com'),
+      [`process.env.${FEED_VARIABLE}`]: JSON.stringify('https://updates.example.com'),
+    });
+    expect(loadEnv).not.toHaveBeenCalled();
+  });
+
+  it('uses local environment files when the shell has no backend override', () => {
+    vi.mocked(loadEnv).mockReturnValue({ [API_VARIABLE]: 'https://local.example.com' });
+
+    expect(bakedDefinitions()?.[`process.env.${API_VARIABLE}`]).toBe(JSON.stringify('https://local.example.com'));
+    expect(loadEnv).toHaveBeenCalledWith('production', expect.stringContaining('apps/desktop'), 'B4M_');
+  });
+
+  it('lets an empty CI backend variable fall through to local files and restores the shell value', () => {
+    vi.stubEnv(API_VARIABLE, '');
+    vi.mocked(loadEnv).mockImplementationOnce(() => {
+      // Vite gives the shell precedence, so it must be absent during the file lookup.
+      expect(process.env[API_VARIABLE]).toBeUndefined();
+      return { [API_VARIABLE]: 'https://local.example.com' };
+    });
+
+    expect(bakedDefinitions()?.[`process.env.${API_VARIABLE}`]).toBe(JSON.stringify('https://local.example.com'));
+    expect(process.env[API_VARIABLE]).toBe('');
+  });
+
+  it('falls back to Production when an empty CI backend has no local override', () => {
+    vi.stubEnv(API_VARIABLE, '');
+
+    expect(bakedDefinitions()?.[`process.env.${API_VARIABLE}`]).toBe(JSON.stringify(PRODUCTION));
+    expect(process.env[API_VARIABLE]).toBe('');
+  });
+
+  it('bakes no backend in development so a source run falls back to Local Dev', () => {
+    const define = config({ command: 'serve', mode: 'development' }).main?.define;
+
+    expect(define?.[`process.env.${API_VARIABLE}`]).toBe(JSON.stringify(''));
+  });
+
+  it('bakes update keys from the shell, and an explicitly empty value as no keys', () => {
+    vi.stubEnv(KEYS_VARIABLE, 'first-key,second-key');
+    expect(bakedDefinitions()?.[`process.env.${KEYS_VARIABLE}`]).toBe(JSON.stringify('first-key,second-key'));
+
+    vi.stubEnv(KEYS_VARIABLE, '');
+    vi.mocked(loadEnv).mockReturnValue({ [KEYS_VARIABLE]: 'local-key' });
+    expect(bakedDefinitions()?.[`process.env.${KEYS_VARIABLE}`]).toBe(JSON.stringify(''));
+  });
+
+  it('keeps an explicitly empty feed disabled even when local files provide a feed', () => {
+    vi.stubEnv(FEED_VARIABLE, '');
+    vi.mocked(loadEnv).mockReturnValue({ [FEED_VARIABLE]: 'https://updates.example.com' });
+
+    expect(bakedDefinitions()?.[`process.env.${FEED_VARIABLE}`]).toBe(JSON.stringify(''));
+    expect(process.env[FEED_VARIABLE]).toBe('');
+  });
+});

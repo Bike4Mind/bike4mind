@@ -13,6 +13,7 @@ import { grantChange } from './diffLakeConfig';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { refuseGrantWrite, refuseOwnerGrantChange } from './lakeGrantWriteRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * REQUIRED audit repo, unlike the optional shape `LakeConfigAuditAdapters` carries: this door has
@@ -281,7 +282,7 @@ async function stampLake(lake: IDataLakeDocument, actor: ManageActor, { db, logg
   if (!stamp.lastUpdatedByUserId) return;
   const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
   if (!stamped) {
-    const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : console.warn(msg, meta));
+    const warn = (msg: string, meta: unknown) => (logger?.warn ? logger.warn(msg, meta) : Logger.warn(msg, meta));
     warn('[dataLakes] grant changed but the lake was not found for the actor stamp', { dataLakeId: lake.id });
   }
 }

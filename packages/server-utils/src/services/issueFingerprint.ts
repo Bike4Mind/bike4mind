@@ -2,9 +2,8 @@
  * Shared Fingerprint Utilities for GitHub Issues
  *
  * Provides common functionality for embedding and extracting fingerprints
- * from GitHub issue bodies. The fingerprint format/extraction logic is shared
- * between LiveOps and Telemetry systems, while the generation logic is
- * system-specific (in liveopsFingerprint.ts and telemetryFingerprint.ts).
+ * from GitHub issue bodies. The fingerprint format/extraction logic is shared,
+ * while the generation logic is system-specific (e.g. telemetryFingerprint.ts).
  */
 
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -26,7 +25,7 @@ export const FINGERPRINT_PATTERN = /^[a-f0-9]{40}$/;
  * This is the standard approach used by Sentry, Rollbar, and similar tools.
  *
  * @param fingerprint - SHA-1 fingerprint (40 hex chars)
- * @param prefix - System prefix (e.g., 'liveops', 'telemetry') - defaults to no prefix for backward compatibility
+ * @param prefix - System prefix (e.g., 'telemetry') - defaults to no prefix for backward compatibility
  * @returns HTML comment string to embed in issue body
  *
  * @example
@@ -34,13 +33,13 @@ export const FINGERPRINT_PATTERN = /^[a-f0-9]{40}$/;
  * // Returns: <!-- telemetry-fingerprint:abc123... -->
  *
  * formatFingerprintComment('abc123...')
- * // Returns: <!-- fingerprint:abc123... --> (backward compatible with liveops)
+ * // Returns: <!-- fingerprint:abc123... --> (unprefixed legacy format)
  */
 export function formatFingerprintComment(fingerprint: string, prefix?: string): string {
   if (prefix) {
     return `<!-- ${prefix}-fingerprint:${fingerprint} -->`;
   }
-  // Backward compatible format (used by liveops)
+  // Unprefixed legacy format
   return `<!-- fingerprint:${fingerprint} -->`;
 }
 
@@ -49,14 +48,14 @@ export function formatFingerprintComment(fingerprint: string, prefix?: string): 
  * Semantic fingerprints use more aggressive normalization for looser matching.
  *
  * @param fingerprint - SHA-1 semantic fingerprint (40 hex chars)
- * @param prefix - System prefix (e.g., 'liveops', 'telemetry') - defaults to no prefix for backward compatibility
+ * @param prefix - System prefix (e.g., 'telemetry') - defaults to no prefix for backward compatibility
  * @returns HTML comment string to embed in issue body
  */
 export function formatSemanticFingerprintComment(fingerprint: string, prefix?: string): string {
   if (prefix) {
     return `<!-- ${prefix}-semantic-fingerprint:${fingerprint} -->`;
   }
-  // Backward compatible format (used by liveops)
+  // Unprefixed legacy format
   return `<!-- semantic-fingerprint:${fingerprint} -->`;
 }
 
@@ -66,7 +65,7 @@ export function formatSemanticFingerprintComment(fingerprint: string, prefix?: s
  * Extract a fingerprint from an issue body by prefix.
  *
  * When a prefix is specified, only matches prefixed format (strict mode).
- * When no prefix is specified, matches non-prefixed format (backward compatible with liveops).
+ * When no prefix is specified, matches the unprefixed legacy format.
  *
  * @param body - Issue body text (may be null/undefined)
  * @param prefix - Optional system prefix to look for. If provided, only matches prefixed format.
@@ -77,7 +76,7 @@ export function formatSemanticFingerprintComment(fingerprint: string, prefix?: s
  * // Returns: 'abc123...'
  *
  * extractFingerprintFromBody('...<!-- fingerprint:abc123... -->...')
- * // Returns: 'abc123...' (backward compatible with liveops)
+ * // Returns: 'abc123...' (unprefixed legacy format)
  *
  * extractFingerprintFromBody('...<!-- fingerprint:abc123... -->...', 'telemetry')
  * // Returns: null (strict mode - only matches telemetry-fingerprint:xxx)
@@ -93,7 +92,7 @@ export function extractFingerprintFromBody(body: string | null | undefined, pref
     return prefixedMatch?.[1] || null;
   }
 
-  // No prefix - use non-prefixed format (backward compatible with liveops)
+  // No prefix - use the unprefixed legacy format
   const genericPattern = /<!-- fingerprint:([a-f0-9]{40}) -->/i;
   const genericMatch = body.match(genericPattern);
   return genericMatch?.[1] || null;
@@ -103,7 +102,7 @@ export function extractFingerprintFromBody(body: string | null | undefined, pref
  * Extract a semantic fingerprint from an issue body by prefix.
  *
  * When a prefix is specified, only matches prefixed format (strict mode).
- * When no prefix is specified, matches non-prefixed format (backward compatible with liveops).
+ * When no prefix is specified, matches the unprefixed legacy format.
  *
  * @param body - Issue body text (may be null/undefined)
  * @param prefix - Optional system prefix to look for. If provided, only matches prefixed format.
@@ -120,7 +119,7 @@ export function extractSemanticFingerprintFromBody(body: string | null | undefin
     return prefixedMatch?.[1] || null;
   }
 
-  // No prefix - use non-prefixed format (backward compatible with liveops)
+  // No prefix - use the unprefixed legacy format
   const genericPattern = /<!-- semantic-fingerprint:([a-f0-9]{40}) -->/i;
   const genericMatch = body.match(genericPattern);
   return genericMatch?.[1] || null;

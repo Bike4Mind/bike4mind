@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PinnedFetchError } from '@bike4mind/fab-pipeline/ssrf';
 import { streamWithSizeLimit } from './streamWithSizeLimit';
 
 /** A Response whose body streams `chunks` once via a real ReadableStreamDefaultReader shape. */
@@ -57,5 +58,21 @@ describe('streamWithSizeLimit', () => {
       5
     ).catch(() => undefined);
     expect(released).toBe(1);
+  });
+
+  it('reports the pinned fetch body cap as an oversized image', async () => {
+    const response = {
+      body: {
+        getReader: () => ({
+          read: async () => {
+            throw new PinnedFetchError('size_cap', 'Response body exceeded 5 bytes');
+          },
+          cancel: async () => undefined,
+          releaseLock: () => undefined,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(streamWithSizeLimit(response, 5)).rejects.toThrow('Image too large');
   });
 });

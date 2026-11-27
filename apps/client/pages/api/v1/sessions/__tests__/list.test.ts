@@ -6,7 +6,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockListByUserId } = vi.hoisted(() => ({ mockListByUserId: vi.fn() }));
+const { mockListByUserId, mockListChangesByUserId } = vi.hoisted(() => ({
+  mockListByUserId: vi.fn(),
+  mockListChangesByUserId: vi.fn(),
+}));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -43,16 +46,16 @@ vi.mock('@bike4mind/database', () => ({
   fallbackLakeSettingsRepository: {},
   organizationRepository: {},
   projectRepository: {},
-  sessionRepository: { listByUserId: mockListByUserId },
+  sessionRepository: { listByUserId: mockListByUserId, listChangesByUserId: mockListChangesByUserId },
   userRepository: {},
   User: {},
   activityRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: {}, dataLakeService: {}, projectService: {} }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/managers/sessionOrigin', () => ({ resolveSessionOrigin: vi.fn() }));
 vi.mock('@server/entitlements/surfaceAccess', () => ({ surfaceAccessForRequest: vi.fn() }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
 
 const { default: handler } = await import('@pages/api/v1/sessions/index');
 
@@ -175,6 +178,71 @@ describe('GET /api/v1/sessions', () => {
     const notAnId = Buffer.from(JSON.stringify({ v: 1, s: 'v1.sessions', after: 'nope' })).toString('base64url');
     expect((await errorOf({ cursor: notAnId })).statusCode).toBe(422);
     expect(mockListByUserId).not.toHaveBeenCalled();
+  });
+
+  describe('with updated_since', () => {
+    const SINCE = '2026-03-01T00:00:00.000Z';
+    // Oldest change first; the middle row is a tombstone and two rows tie on updatedAt.
+    const CHANGES = [
+      { id: IDS[2], updatedAt: new Date('2026-03-01T00:00:00.000Z') },
+      { id: IDS[1], updatedAt: new Date('2026-03-02T00:00:00.000Z'), deletedAt: new Date('2026-03-02T00:00:00.000Z') },
+      { id: IDS[0], updatedAt: new Date('2026-03-02T00:00:00.000Z') },
+    ];
+    type After = { at: Date; id: string } | undefined;
+    const sortKey = (row: { id: string; updatedAt: Date }) => `${row.updatedAt.toISOString()}|${row.id}`;
+
+    beforeEach(() => {
+      // Stands in for the repo: honours the (updatedAt, _id) keyset and limit.
+      mockListChangesByUserId.mockImplementation(async ({ after, limit }: { after: After; limit: number }) =>
+        CHANGES.filter(row => !after || sortKey(row) > `${after.at.toISOString()}|${after.id}`)
+          .slice(0, limit)
+          .map(row => ({ ...sessionDoc(row.id), ...row }))
+      );
+    });
+
+    it('reads the change feed, with updatedAt on every row and deletedAt on tombstones', async () => {
+      const res = await run({ updated_since: SINCE });
+      expect(res._getStatusCode()).toBe(200);
+      expect(logger.warn).not.toHaveBeenCalled();
+      const body = res._getJSONData();
+      expect(body.data.map((row: { id: string }) => row.id)).toEqual(CHANGES.map(row => row.id));
+      expect(body.data.map((row: { updatedAt: string }) => row.updatedAt)).toEqual(
+        CHANGES.map(row => row.updatedAt.toISOString())
+      );
+      expect(body.data.map((row: { deletedAt?: string }) => row.deletedAt)).toEqual([
+        undefined,
+        '2026-03-02T00:00:00.000Z',
+        undefined,
+      ]);
+      expect(mockListByUserId).not.toHaveBeenCalled();
+      expect(mockListChangesByUserId).toHaveBeenCalledWith({
+        userId: 'u1',
+        search: undefined,
+        surface: undefined,
+        filters: undefined,
+        since: new Date(SINCE),
+        after: undefined,
+        limit: 26,
+      });
+    });
+
+    it('pages on (updatedAt, _id), so rows that tie on updatedAt split across pages cleanly', async () => {
+      const first = (await run({ updated_since: SINCE, limit: '2' }))._getJSONData();
+      expect(first.data.map((row: { id: string }) => row.id)).toEqual([IDS[2], IDS[1]]);
+      const second = (await run({ updated_since: SINCE, limit: '2', cursor: first.next_cursor }))._getJSONData();
+      expect(mockListChangesByUserId).toHaveBeenLastCalledWith(
+        expect.objectContaining({ after: { at: CHANGES[1].updatedAt, id: IDS[1] }, limit: 3 })
+      );
+      expect(second.data.map((row: { id: string }) => row.id)).toEqual([IDS[0]]);
+      expect(second.next_cursor).toBeNull();
+    });
+
+    it('rejects a malformed timestamp, and a cursor from the other listing order, with a 422', async () => {
+      expect((await errorOf({ updated_since: 'yesterday' })).name).toBe('ZodError');
+      const byId = (await run({ limit: '1' }))._getJSONData().next_cursor;
+      expect((await errorOf({ updated_since: SINCE, cursor: byId })).statusCode).toBe(422);
+      expect(mockListChangesByUserId).not.toHaveBeenCalled();
+    });
   });
 
   it('answers 405 for a verb the path does not declare', async () => {

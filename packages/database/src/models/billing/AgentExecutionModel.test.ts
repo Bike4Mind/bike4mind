@@ -36,6 +36,44 @@ function makeBaseExecution(overrides: Partial<Parameters<typeof agentExecutionRe
 describe('AgentExecutionRepository', () => {
   setupMongoTest();
 
+  describe('markFailedIfActive', () => {
+    it.each(ACTIVE_STATUSES)('marks a %s execution failed', async status => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status }));
+
+      expect(await agentExecutionRepository.markFailedIfActive(execution.id, { message: 'boom' })).toBe(true);
+
+      const failed = await agentExecutionRepository.findById(execution.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.error?.message).toBe('boom');
+      expect(failed?.completedAt).toBeInstanceOf(Date);
+    });
+
+    it('stores a fallback message when the error message is empty, instead of failing validation', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+
+      expect(await agentExecutionRepository.markFailedIfActive(execution.id, { message: '', stack: 'trace' })).toBe(
+        true
+      );
+
+      const failed = await agentExecutionRepository.findById(execution.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.error?.message).toBe('Unknown error');
+      expect(failed?.error?.stack).toBe('trace');
+    });
+
+    it.each(TERMINAL_STATUSES)('leaves a %s execution untouched', async status => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status, ...(status === 'failed' ? { error: { message: 'original' } } : {}) })
+      );
+
+      expect(await agentExecutionRepository.markFailedIfActive(execution.id, { message: 'late' })).toBe(false);
+
+      const after = await agentExecutionRepository.findById(execution.id);
+      expect(after?.status).toBe(status);
+      expect(after?.error?.message).not.toBe('late');
+    });
+  });
+
   describe('restoreRejectedResume', () => {
     it('atomically restores the paused marker after a definitive dispatch rejection', async () => {
       const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'continuing' }));
@@ -1331,9 +1369,9 @@ describe('AgentExecutionRepository', () => {
     it('accumulates evaluated count, sum, and running min across calls', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
 
-      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.7);
-      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.1);
-      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.7);
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.7, { belowThreshold: false });
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.1, { belowThreshold: true });
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.7, { belowThreshold: false });
 
       const updated = await agentExecutionRepository.findById(exec.id);
       expect(updated?.confidenceTelemetry?.evaluatedCount).toBe(3);
@@ -1342,10 +1380,144 @@ describe('AgentExecutionRepository', () => {
       expect(updated?.confidenceTelemetry?.emittedCount).toBe(0);
     });
 
+    it('pauses on a streak: a low iteration then a high one resets, two lows in a row build it', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const record = (confidence: number, belowThreshold: boolean) =>
+        agentExecutionRepository.recordIterationConfidence(exec.id, confidence, { belowThreshold });
+
+      expect(await record(0.3, true)).toBe(1);
+      expect(await record(0.8, false)).toBe(0);
+      expect(await record(0.3, true)).toBe(1);
+      expect(await record(0.2, true)).toBe(2);
+    });
+
+    it('keeps the streak on the doc across a continuation and resets it when the gate pauses', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.3, { belowThreshold: true });
+
+      // A continuation Lambda starts with fresh memory; the streak is read back off the doc.
+      expect((await agentExecutionRepository.findById(exec.id))?.lowConfidenceStreak).toBe(1);
+      expect(await agentExecutionRepository.recordIterationConfidence(exec.id, 0.2, { belowThreshold: true })).toBe(2);
+
+      await agentExecutionRepository.setPendingGate(exec.id, {
+        iteration: 1,
+        confidence: 0.2,
+        reason: 'low',
+        requestedAt: new Date(),
+      });
+      expect((await agentExecutionRepository.findById(exec.id))?.lowConfidenceStreak).toBe(0);
+      expect(await agentExecutionRepository.recordIterationConfidence(exec.id, 0.2, { belowThreshold: true })).toBe(1);
+    });
+
+    it('keeps the streak and holds the result on a completion pause, and clears both with the gate', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.2, { belowThreshold: true });
+      const completion = {
+        answer: 'done',
+        replyText: 'done',
+        totalTokens: 10,
+        totalIterations: 2,
+        reachedMaxIterations: false,
+        canReconsider: true,
+        lowConfidence: { confidence: 0.2, reason: 'low' },
+        generatedImages: ['img.png'],
+        allSideEffects: [],
+      };
+
+      await agentExecutionRepository.setPendingGate(
+        exec.id,
+        { iteration: 1, confidence: 0.2, reason: 'low', requestedAt: new Date() },
+        { completion, checkpoint: { iteration: 2, steps: ['final'] } }
+      );
+      const paused = await agentExecutionRepository.findById(exec.id);
+      expect(paused?.lowConfidenceStreak).toBe(1);
+      expect(paused?.pendingCompletion).toMatchObject(completion);
+      expect(paused?.checkpoint).toEqual({ iteration: 2, steps: ['final'] });
+
+      const checkpoint = { iteration: 2, steps: [] };
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, { checkpoint })).toBe(true);
+      const cleared = await agentExecutionRepository.findById(exec.id);
+      expect(cleared?.pendingGate).toBeUndefined();
+      expect(cleared?.pendingCompletion).toBeUndefined();
+      expect(cleared?.checkpoint).toEqual(checkpoint);
+      // A repeated or racing gate response finds no live gate to act on.
+      expect(await agentExecutionRepository.clearPendingGate(exec.id)).toBe(false);
+    });
+
+    it('clearPendingGate with keepCompletion drops the gate but keeps the held completion', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const completion = { answer: 'done', replyText: 'done', totalTokens: 10, totalIterations: 2 };
+      await agentExecutionRepository.setPendingGate(
+        exec.id,
+        { iteration: 1, confidence: 0.2, reason: 'low', requestedAt: new Date() },
+        { completion: completion as never, checkpoint: { iteration: 2, steps: [] } }
+      );
+
+      expect(await agentExecutionRepository.clearPendingGate(exec.id, { keepCompletion: true })).toBe(true);
+      const kept = await agentExecutionRepository.findById(exec.id);
+      expect(kept?.pendingGate).toBeUndefined();
+      expect(kept?.pendingCompletion).toMatchObject(completion);
+    });
+
+    it('markComplete drops a held completion in the same write', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await agentExecutionRepository.setPendingGate(
+        exec.id,
+        { iteration: 1, confidence: 0.2, reason: 'low', requestedAt: new Date() },
+        {
+          completion: { answer: 'done', replyText: 'done', totalTokens: 1, totalIterations: 1 } as never,
+          checkpoint: { iteration: 1, steps: [] },
+        }
+      );
+
+      await agentExecutionRepository.markComplete(exec.id, { answer: 'done' });
+      const done = await agentExecutionRepository.findById(exec.id);
+      expect(done?.status).toBe('completed');
+      expect(done?.pendingCompletion).toBeUndefined();
+    });
+
+    it('records the latest evaluated confidence on the doc, whether or not it was below threshold', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBeUndefined();
+
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.3, { belowThreshold: true });
+      expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBe(0.3);
+
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.8, { belowThreshold: false });
+      expect((await agentExecutionRepository.findById(exec.id))?.lastConfidence).toBe(0.8);
+    });
+
+    it('advances only the streak when told not to record telemetry (a scripted score)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      const scripted = (confidence: number, belowThreshold: boolean) =>
+        agentExecutionRepository.recordIterationConfidence(exec.id, confidence, {
+          belowThreshold,
+          recordTelemetry: false,
+        });
+
+      expect(await scripted(0.1, true)).toBe(1);
+      expect(await scripted(0.1, true)).toBe(2);
+      // Above threshold with no telemetry leaves nothing to `$inc`; the reset must still land.
+      expect(await scripted(0.9, false)).toBe(0);
+
+      expect((await agentExecutionRepository.findById(exec.id))?.confidenceTelemetry).toMatchObject({
+        evaluatedCount: 0,
+        minConfidence: 1,
+        confidenceSum: 0,
+      });
+    });
+
+    it('starts the streak from a doc written before the field existed', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+      await AgentExecutionModel.updateOne({ _id: exec.id }, { $unset: { lowConfidenceStreak: '' } });
+
+      expect(await agentExecutionRepository.recordIterationConfidence(exec.id, 0.3, { belowThreshold: true })).toBe(1);
+    });
+
     it('increments emittedCount independently of evaluatedCount', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution());
 
-      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.4);
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.4, { belowThreshold: true });
       await agentExecutionRepository.recordGateEmitted(exec.id);
 
       const updated = await agentExecutionRepository.findById(exec.id);
@@ -1360,8 +1532,8 @@ describe('AgentExecutionRepository', () => {
       );
       await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'paused', query: 'untouched' }));
 
-      await agentExecutionRepository.recordIterationConfidence(evaluated.id, 0.8);
-      await agentExecutionRepository.recordIterationConfidence(evaluated.id, 0.2);
+      await agentExecutionRepository.recordIterationConfidence(evaluated.id, 0.8, { belowThreshold: false });
+      await agentExecutionRepository.recordIterationConfidence(evaluated.id, 0.2, { belowThreshold: true });
       await agentExecutionRepository.recordGateEmitted(evaluated.id);
 
       const old = new Date(Date.now() - 60 * 60 * 1000);

@@ -3,14 +3,29 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { SkillsScope, SkillsState } from '@shared/skills';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
 import { setWorktreeByDefault } from './worktreeDefault';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+vi.mock('./CustomizePanel', () => ({ CustomizeScreen: () => null, useCustomizeAttention: () => undefined }));
+// The 3D engine's iframe would make jsdom boot a whole extra window on every mount.
+vi.mock('./model3d/modelEngineFrame', async importOriginal => ({
+  ...(await importOriginal<typeof import('./model3d/modelEngineFrame')>()),
+  ModelEngineFrame: class {
+    warm() {
+      return this;
+    }
+    dispose() {}
+    async build() {
+      return null;
+    }
+  },
+}));
 
 window.matchMedia ??= ((query: string) => ({
   matches: false,
@@ -22,6 +37,14 @@ window.matchMedia ??= ((query: string) => ({
   removeEventListener: () => {},
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
+
+// Joy's autosizing textarea measures itself on every render, and jsdom resolves that against every
+// emotion sheet in the document and every ancestor, with no layout to measure in the end.
+const realGetComputedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) =>
+  element instanceof HTMLTextAreaElement
+    ? element.style
+    : realGetComputedStyle(element, pseudo)) as typeof getComputedStyle;
 
 window.ResizeObserver ??= class {
   observe() {}
@@ -41,11 +64,20 @@ const FIRST: ChatSessionSummary = {
   id: 'code-1',
   title: 'First',
   mode: 'code',
+  model: 'test-model',
   project: PROJECT,
   messageCount: 0,
   createdAt: '2026-10-01T00:00:00.000Z',
   updatedAt: '2026-10-01T00:00:00.000Z',
 } as ChatSessionSummary;
+
+const MY_REVIEW = {
+  name: 'my-review',
+  description: 'Review the branch.',
+  source: 'global',
+  filePath: '/home/user/.claude/skills/my-review/SKILL.md',
+} as const;
+const MY_PLAN = { ...MY_REVIEW, name: 'my-plan', filePath: '/home/user/.claude/skills/my-plan/SKILL.md' };
 
 const SECOND: ChatSessionSummary = { ...FIRST, id: 'code-2', title: 'Second' };
 const FRESH: ChatSessionSummary = { ...FIRST, id: 'code-3', title: 'Fresh thread' };
@@ -65,6 +97,11 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let createCodeSession = vi.fn<(request?: unknown) => Promise<unknown>>();
 let inspectProject = vi.fn<(directory: string) => Promise<unknown>>();
+let created: ChatSessionSummary | null = null;
+let supportsTools = true;
+const setSessionOrchestrate = vi.fn();
+const sendMessage = vi.fn();
+const listSkills = vi.fn<(scope: SkillsScope) => Promise<SkillsState>>();
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = () => undefined;
@@ -81,7 +118,23 @@ beforeEach(() => {
   );
   // Opens on a Code session, so the sidebar draws the project group and its "+".
   window.localStorage.setItem('b4m.chat.lastSession', JSON.stringify({ id: FIRST.id, mode: 'code' }));
-  createCodeSession = vi.fn(() => Promise.resolve({ ok: true, session: FRESH }));
+  created = null;
+  supportsTools = true;
+  setSessionOrchestrate.mockReset().mockImplementation(async (id: string, on: boolean) => {
+    if (!created || created.id !== id) return null;
+    created = { ...created, orchestrate: on };
+    return created;
+  });
+  sendMessage.mockReset().mockResolvedValue({ ok: true, messageId: 'first-message' });
+  listSkills.mockReset().mockImplementation(async () => ({
+    skills: [MY_REVIEW, MY_PLAN],
+    projectDirectory: null,
+    untrustedProject: null,
+  }));
+  createCodeSession = vi.fn(async () => {
+    created = FRESH;
+    return { ok: true, session: FRESH };
+  });
   inspectProject = vi.fn(async () => ({
     directory: PROJECT.directory,
     name: PROJECT.name,
@@ -91,13 +144,18 @@ beforeEach(() => {
   }));
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
-        listSessions: async () => [FIRST, SECOND],
+        listSessions: async () => (created ? [FIRST, SECOND, created] : [FIRST, SECOND]),
         getSession: async (id: string) =>
-          ({ ...(id === FRESH.id ? FRESH : FIRST), messages: [] }) as unknown as ChatSession,
+          ({ ...(id === FRESH.id ? (created ?? FRESH) : FIRST), messages: [] }) as unknown as ChatSession,
         getQueuedMessages: async () => [],
         getSessionStatuses: async () => [],
-        listModels: async () => ({ models: [] }),
+        listModels: async () => ({ models: [{ id: 'test-model', name: 'Test Model', supportsTools }] }),
+        defaultsForNewSession: async () => ({ model: 'test-model', approvalMode: 'auto', reasoningEffort: 'default' }),
+        setSessionOrchestrate,
+        sendMessage,
+        listSkills,
         // The bridge's `[]` default is truthy, so the changes bar would render it as a reading.
         workspaceChanges: async () => null,
         inspectProject,
@@ -145,11 +203,25 @@ async function mount() {
   await act(async () => undefined);
 }
 
+function type(text: string) {
+  const element = el('chat-composer-input') as HTMLTextAreaElement;
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  act(() => {
+    element.focus();
+    setter?.call(element, text);
+    element.setSelectionRange(text.length, text.length);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+const skillNames = () =>
+  [...document.querySelectorAll<HTMLElement>('[data-testid="skill-picker-option"]')].map(
+    row => row.querySelector('.MuiTypography-title-sm')?.textContent
+  );
+
 async function clickNewInProject() {
-  const before = inspectProject.mock.calls.length;
   await act(async () => el('project-new-btn').click());
   await act(async () => undefined);
-  return inspectProject.mock.calls.length - before;
 }
 
 describe("starting a new session from a project group's header", () => {
@@ -157,18 +229,75 @@ describe("starting a new session from a project group's header", () => {
     setWorktreeByDefault(true);
     await mount();
 
-    expect(await clickNewInProject()).toBe(1);
+    await clickNewInProject();
 
     expect(inspectProject).toHaveBeenCalledWith(PROJECT.directory);
-    expect(createCodeSession).toHaveBeenCalledWith({ directory: PROJECT.directory, workspace: true });
-    expect(el('chat-session-title').textContent).toBe('Fresh thread');
+    expect(createCodeSession).not.toHaveBeenCalled();
+    expect(el('chat-code-workspace-setup').textContent).toContain(PROJECT.name);
   });
 
-  it('asks git nothing and carries no worktree when the preference is off', async () => {
+  it('opens a project draft without persisting, and saves orchestration on it before the first send', async () => {
     await mount();
+    await clickNewInProject();
+    expect(createCodeSession).not.toHaveBeenCalled();
+    expect(el('chat-code-workspace-setup').textContent).toContain(PROJECT.name);
+    expect(document.querySelectorAll('[data-testid="chat-session-item"]')).toHaveLength(2);
+    await act(async () => el('composer-orchestrate-toggle').click());
+    await act(async () => el('orchestrate-budget-start-btn').click());
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
+    expect(setSessionOrchestrate).not.toHaveBeenCalled();
+    await act(async () => el('orchestrator-example-quest-1').click());
+    await act(async () => el('chat-send-btn').click());
+    expect(createCodeSession).toHaveBeenCalledOnce();
+    expect(setSessionOrchestrate).toHaveBeenCalledExactlyOnceWith(FRESH.id, true);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(setSessionOrchestrate.mock.invocationCallOrder[0]).toBeLessThan(sendMessage.mock.invocationCallOrder[0]);
+  });
 
-    expect(await clickNewInProject()).toBe(0);
+  it('keeps orchestration unavailable on a draft whose model cannot use tools', async () => {
+    supportsTools = false;
+    await mount();
+    await clickNewInProject();
+    expect(document.querySelector('[data-testid="composer-orchestrate-toggle"]')).toBeNull();
+    expect(createCodeSession).not.toHaveBeenCalled();
+  });
+});
 
-    expect(createCodeSession).toHaveBeenCalledWith({ directory: PROJECT.directory });
+describe('skills in a Code draft before its first send', () => {
+  it('lists global skills for "/" and scopes the read to the chosen folder', async () => {
+    await mount();
+    await clickNewInProject();
+    expect(createCodeSession).not.toHaveBeenCalled();
+
+    type('/my-');
+    await act(async () => undefined);
+
+    expect(listSkills).toHaveBeenCalledWith({ draftDirectory: PROJECT.directory });
+    expect(skillNames()).toEqual(['/my-plan', '/my-review']);
+    expect(document.querySelector('[data-testid="skill-picker-empty-text"]')).toBeNull();
+  });
+
+  // The picker's empty, no-match and trust states are SkillPicker.test.tsx's.
+  it('runs a skill picked in the draft as the first turn of the created session', async () => {
+    await mount();
+    await clickNewInProject();
+
+    type('/my-rev');
+    await act(async () => undefined);
+    act(() => {
+      document
+        .querySelector('[data-testid="skill-picker-option"]')
+        ?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    });
+    expect((el('chat-composer-input') as HTMLTextAreaElement).value).toBe('/my-review ');
+
+    await act(async () => el('chat-send-btn').click());
+    await act(async () => undefined);
+
+    expect(createCodeSession).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionId: FRESH.id, text: '/my-review' })
+    );
+    expect(listSkills).toHaveBeenLastCalledWith({ sessionId: FRESH.id });
   });
 });

@@ -1,6 +1,7 @@
 import { VIDEO_MODEL_CATALOG, type VideoModelId } from '@bike4mind/common';
 import type { CreateVideoJobInput, CreateVideoJobResult } from '../../../../videoJobs/types';
 import type { ToolContext, ToolDefinition } from '../../base/types';
+import { paidPlanRefusalOrRethrow } from '../../helpers/toolModelRefusal';
 import {
   buildJobIdempotencyKey,
   buildUnavailableTool,
@@ -27,6 +28,9 @@ export const isVideoToolConfig = (value: unknown): value is PopulatedVideoToolCo
   Array.isArray(value.usableModels) &&
   value.usableModels.length > 0;
 
+// Still the legacy single-image fields (read as one first_frame input), not `inputs`: a handler from before
+// `inputs` existed cannot read an inputs-only payload, so a rollback would fail every pending agent job. Switch
+// once that rollback window has passed, or when the tool offers more than one image.
 const toRequest = (args: VideoToolArgs) => {
   const caps = VIDEO_MODEL_CATALOG[args.model];
   return {
@@ -36,6 +40,7 @@ const toRequest = (args: VideoToolArgs) => {
     durationSeconds: args.durationSeconds ?? caps.defaults.durationSeconds,
     aspectRatio: args.aspectRatio ?? caps.defaults.aspectRatio,
     resolution: args.resolution ?? caps.defaults.resolution,
+    ...(args.audio !== undefined ? { audio: args.audio } : {}),
     ...(args.inputImageFileId ? { inputImageFileId: args.inputImageFileId } : {}),
     ...(args.inputGeneratedImageKey ? { inputGeneratedImageKey: args.inputGeneratedImageKey } : {}),
   };
@@ -55,13 +60,24 @@ export const videoGenerationTool: ToolDefinition = {
           return 'Video generation failed (invalid_request): set inputImageFileId or inputGeneratedImageKey, not both.';
         }
         const request = toRequest(args);
-        const result = await config.createJob({
-          user: { id: context.userId, organizationId: context.organizationId ?? null },
-          request,
-          source: 'agent',
-          questId: context.questId,
-          idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
-        });
+        // createVideoJob asserts model admission itself; its REST callers need the throw, the model needs a result.
+        let result: CreateVideoJobResult;
+        try {
+          result = await config.createJob({
+            user: {
+              id: context.userId,
+              organizationId: context.organizationId ?? null,
+              adminRoleWithheld: !context.user.isAdmin,
+            },
+            request,
+            source: 'agent',
+            apiKeyId: context.apiKeyId,
+            questId: context.questId,
+            idempotencyKey: buildJobIdempotencyKey(context.userId, context.questId, request),
+          });
+        } catch (error) {
+          return paidPlanRefusalOrRethrow(context, error, request.model, 'video_generation');
+        }
         if (!result.ok) return `Video generation failed (${result.code}): ${result.message}`;
         if (isReplayOfDeadJob(result.created, result.job.state)) {
           const reason = result.job.error?.code ?? result.job.state;

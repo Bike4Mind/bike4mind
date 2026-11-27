@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { hasAdminPermission } from '@bike4mind/common';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -23,8 +24,16 @@ vi.mock('sst', () => ({
   }),
 }));
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({
   initializeSlackPackage: vi.fn(),
+}));
+
+const mockChatOptions = vi.hoisted(() => vi.fn());
+const mockChatProcess = vi.hoisted(() => vi.fn());
+const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
+
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
+  resolveCallableFunctionsEnabled: mockResolveCallableFunctions,
 }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
@@ -33,7 +42,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: {
     SlackCompletionStart: { schema: { parse: (v: unknown) => v } },
     CompletionCompleted: { publish: vi.fn() },
@@ -46,12 +55,13 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: () => 'xoxb-decrypted',
 }));
 
@@ -60,7 +70,10 @@ vi.mock('@bike4mind/services/llm', async () => {
   return {
     ...actual,
     ChatCompletionProcess: class {
-      process = vi.fn();
+      constructor(options: unknown) {
+        mockChatOptions(options);
+      }
+      process = mockChatProcess;
     },
   };
 });
@@ -96,6 +109,13 @@ vi.mock('@bike4mind/database', async () => {
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
 describe('slackQuestProcessor getStaticOptions', () => {
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getStaticOptions } = await import('./slackQuestProcessor');
+    const { operationalBillingAdapters } = await import('@bike4mind/server-utils/billing/operationalBilling');
+
+    expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 120_000);
+
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
     // that resolving it inside a test can exceed the default timeout.
@@ -118,5 +138,82 @@ describe('slackQuestProcessor getStaticOptions', () => {
 
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
     expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
+  }, 120_000);
+
+  it('wires the moderation escalation notifier', async () => {
+    const { getStaticOptions } = await import('./slackQuestProcessor');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
+
+    expect(getStaticOptions().notifyModerationEscalation).toBe(publishModerationEscalation);
+  }, 120_000);
+});
+
+describe('slackQuestProcessor role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const stop = new Error('stop after the user load');
+  const event = {
+    'detail-type': 'slack.completion.started',
+    detail: { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} },
+  } as never;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockChatProcess.mockRejectedValue(stop);
+    const { adminRoleRepository } = await import('@bike4mind/database');
+    vi.spyOn(adminRoleRepository, 'findByIds').mockResolvedValue([{ permissions: ['settings:manage'] }] as never);
+  });
+
+  async function runWithUser(fields: Record<string, unknown>) {
+    const { User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', id: 'user-1', ...fields } as never);
+    const { handler } = await import('./slackQuestProcessor');
+    return (handler as unknown as (e: never) => Promise<void>)(event);
+  }
+
+  const handedUser = () => mockChatOptions.mock.calls.at(-1)?.[0].user as Parameters<typeof hasAdminPermission>[0];
+
+  it('hands the completion a user whose only grant comes from a role', async () => {
+    await expect(runWithUser({ adminRoleIds: [ROLE_ID] })).rejects.toThrow(stop.message);
+
+    expect(hasAdminPermission(handedUser(), 'settings:manage')).toBe(true);
+  }, 120_000);
+
+  it('hands process() a resolver that asks whether callable functions are on for the turn owner', async () => {
+    await expect(runWithUser({})).rejects.toThrow(stop.message);
+    const { callableFunctionsResolver } = mockChatProcess.mock.lastCall?.[0] as {
+      callableFunctionsResolver: () => Promise<boolean>;
+    };
+
+    await expect(callableFunctionsResolver()).resolves.toBe(true);
+    expect(mockResolveCallableFunctions).toHaveBeenCalledWith(handedUser());
+  }, 120_000);
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    await expect(runWithUser({ adminRoleIds: [ROLE_ID] })).rejects.toThrow(stop.message);
+    expect(hasAdminPermission(handedUser(), 'settings:manage')).toBe(true);
+
+    await expect(runWithUser({ adminRoleIds: [] })).rejects.toThrow(stop.message);
+    expect(hasAdminPermission(handedUser(), 'settings:manage')).toBe(false);
+  }, 120_000);
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    const { adminRoleRepository } = await import('@bike4mind/database');
+    vi.mocked(adminRoleRepository.findByIds).mockResolvedValue([]);
+
+    await expect(runWithUser({ adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] })).rejects.toThrow(stop.message);
+
+    expect(adminRoleRepository.findByIds).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(handedUser(), 'settings:manage')).toBe(false);
+  }, 120_000);
+
+  it('does not start the completion when the role lookup throws', async () => {
+    const { adminRoleRepository } = await import('@bike4mind/database');
+    vi.mocked(adminRoleRepository.findByIds).mockRejectedValue(new Error('db down'));
+
+    await expect(runWithUser({ adminRoleIds: [ROLE_ID] })).rejects.toThrow('db down');
+
+    expect(mockChatOptions).not.toHaveBeenCalled();
+    expect(mockChatProcess).not.toHaveBeenCalled();
   }, 120_000);
 });

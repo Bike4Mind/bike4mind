@@ -1,11 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { GENERATION_JOB_KINDS } from '@bike4mind/common';
+import { AGENT_GENERATION_SLOT_KINDS } from '@bike4mind/common';
 import { createMongoServer } from '../../../__test__/createMongoServer';
 import { Quest, questRepository } from '../QuestModel';
 
-const counterField = { video: 'agentVideoClipsClaimed', music: 'agentMusicTracksClaimed' } as const;
+const counterField = {
+  video: 'agentVideoClipsClaimed',
+  music: 'agentMusicTracksClaimed',
+  image: 'agentImagesClaimed',
+  speech: 'agentSpeechClipsClaimed',
+  sound_effect: 'agentSoundEffectsClaimed',
+} as const satisfies Record<(typeof AGENT_GENERATION_SLOT_KINDS)[number], string>;
 
 // Real Mongo: the cap only holds if the conditional $inc is atomic and the counter path survives
 // Mongoose strict mode.
@@ -31,7 +37,7 @@ describe('QuestModel agent generation slots', () => {
       status: 'running',
     });
 
-  describe.each(GENERATION_JOB_KINDS)('%s', kind => {
+  describe.each(AGENT_GENERATION_SLOT_KINDS)('%s', kind => {
     it('grants exactly `limit` slots, even to concurrent claimers', async () => {
       const quest = await createQuest();
       const results = await Promise.all(
@@ -76,5 +82,22 @@ describe('QuestModel agent generation slots', () => {
     expect(await questRepository.claimAgentGenerationSlot(quest.id, 'music', 1)).toBe(true);
     expect(await questRepository.claimAgentGenerationSlot(quest.id, 'video', 1)).toBe(false);
     expect(await questRepository.claimAgentGenerationSlot(quest.id, 'music', 1)).toBe(false);
+  });
+
+  describe('claimVoiceVideoStart', () => {
+    it('claims and increments on a running quest', async () => {
+      const quest = await createQuest();
+      expect(await questRepository.claimVoiceVideoStart(quest.id)).toBe(true);
+      const readBack = await Quest.findById(quest.id).lean();
+      expect(readBack?.agentVideoClipsClaimed).toBe(1);
+    });
+
+    it('refuses and leaves the counter unset on a stopped quest', async () => {
+      const quest = await createQuest();
+      await Quest.updateOne({ _id: quest.id }, { $set: { status: 'stopped' } });
+      expect(await questRepository.claimVoiceVideoStart(quest.id)).toBe(false);
+      const readBack = await Quest.findById(quest.id).lean();
+      expect(readBack?.agentVideoClipsClaimed).toBeUndefined();
+    });
   });
 });

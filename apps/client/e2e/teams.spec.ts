@@ -1,0 +1,493 @@
+import type { Browser } from '@playwright/test';
+import { test, expect, openPageAs } from './fixtures';
+import { TEAMS_INVITEE_KEY, TEAMS_MANAGER_KEY, TEAMS_MEMBER_KEY, TIMEOUTS } from './constants';
+import { getTestUsers, type TestUser } from './helpers/test-users';
+import { apiAddTeamMember, apiDeleteGrantedTeam, apiGetTeam, apiGrantTeam, apiRevokeTeamGrant } from './helpers/api';
+import { AdminPage } from './pages/AdminPage';
+import { fetchWithWafBypass, newWafRequestContext } from './helpers/waf-bypass';
+import { ALL_TEAM_TABS, TeamsPage } from './pages/TeamsPage';
+
+/**
+ * Teams (organizations on the Team plan): list, detail, members, roles, settings.
+ *
+ * Every team here is seeded through the admin grant endpoint, never Stripe, so this file runs on any
+ * env. Seats are the grant's `seats` field and the admin panel's "Adjust seats" action; buying seats
+ * through Stripe is teams-checkout.spec.ts, which runs on staging only.
+ *
+ * Serial mode: the tests share three seeded teams and walk one roster through invite, cancel, add
+ * and revoke, so a later test relies on the state an earlier one left.
+ *
+ * The fixture page is always the owner. Every other identity gets its own browser context via
+ * openTeamsPageAs: switching identity on one page let the previous user's persisted session leak into
+ * the next (requests for the old user id 401'd and the app bounced to /login?error=session_expired).
+ */
+test.describe.configure({ mode: 'serial' });
+
+const RUN_ID = Date.now().toString().slice(-6);
+const MAIN_TEAM = `E2E Team ${RUN_ID}`;
+// Full means owner + members >= seats (organizationService/addMember.ts): 2 seats with one member.
+const FULL_TEAM = `E2E Full Team ${RUN_ID}`;
+const DISPOSABLE_TEAM = `E2E Disposable Team ${RUN_ID}`;
+
+let admin: TestUser;
+let adminToken: string;
+let owner: TestUser;
+let member: TestUser;
+let manager: TestUser;
+let invitee: TestUser;
+let mainTeamId: string;
+let fullTeamId: string;
+let disposableTeamId: string;
+
+async function openTeamsPageAs(browser: Browser, baseURL: string | undefined, user: TestUser) {
+  const { page, close } = await openPageAs(browser, baseURL, user);
+  return { page, teamsPage: new TeamsPage(page), close };
+}
+
+/** Names follow the `Setup <key> <suffix>` shape teams.setup.ts gives them. */
+function seededName(user: TestUser): string {
+  return user.email.replace(/^setup-(\w+)-(.+)-e2e@test\.com$/, 'Setup $1 $2');
+}
+
+test.describe('Teams', () => {
+  test.beforeAll(async ({ playwright }) => {
+    const users = getTestUsers();
+    admin = users.admin;
+    adminToken = admin.accessToken;
+    owner = users.specUsers.teams;
+    member = users.specUsers[TEAMS_MEMBER_KEY];
+    manager = users.specUsers[TEAMS_MANAGER_KEY];
+    invitee = users.specUsers[TEAMS_INVITEE_KEY];
+    if (!owner || !member || !manager || !invitee) {
+      throw new Error('Missing teams spec users - teams.setup.ts must run first');
+    }
+
+    const ctx = await newWafRequestContext(playwright.request);
+    mainTeamId = await apiGrantTeam(ctx, adminToken, { name: MAIN_TEAM, ownerEmail: owner.email, seats: 6 });
+    await apiAddTeamMember(ctx, adminToken, mainTeamId, member.userId);
+    await apiAddTeamMember(ctx, adminToken, mainTeamId, manager.userId);
+
+    fullTeamId = await apiGrantTeam(ctx, adminToken, { name: FULL_TEAM, ownerEmail: owner.email, seats: 2 });
+    await apiAddTeamMember(ctx, adminToken, fullTeamId, member.userId);
+
+    disposableTeamId = await apiGrantTeam(ctx, adminToken, {
+      name: DISPOSABLE_TEAM,
+      ownerEmail: owner.email,
+      seats: 2,
+    });
+    await ctx.dispose();
+  });
+
+  test.afterAll(async ({ playwright }) => {
+    const ctx = await newWafRequestContext(playwright.request);
+    await Promise.allSettled(
+      [mainTeamId, fullTeamId, disposableTeamId].filter(Boolean).map(id => apiDeleteGrantedTeam(ctx, adminToken, id))
+    );
+    await ctx.dispose();
+  });
+
+  // --- List ---------------------------------------------------------------------
+
+  test('team list shows the teams the owner was granted', async ({ teamsPage }) => {
+    await teamsPage.gotoList();
+    await expect(teamsPage.teamCard(mainTeamId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.teamCard(mainTeamId)).toContainText(MAIN_TEAM);
+    await expect(teamsPage.teamCard(fullTeamId)).toBeVisible();
+  });
+
+  test('search filters the team list and shows the empty state on no match', async ({ page, teamsPage }) => {
+    await teamsPage.gotoList();
+    await expect(teamsPage.teamCard(mainTeamId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await teamsPage.search(MAIN_TEAM);
+    await expect(teamsPage.teamCard(mainTeamId)).toBeVisible();
+    await expect(teamsPage.teamCard(fullTeamId)).toBeHidden();
+
+    await teamsPage.search(`no-such-team-${RUN_ID}`);
+    await expect(page.getByTestId('organizations-empty-state')).toBeVisible();
+  });
+
+  test('Create Team is disabled while the team plan is closed', async ({ page, teamsPage }) => {
+    // Stubbed rather than toggled: enableTeamPlan is a shared admin setting, and flipping it on a
+    // shared env would close team purchases for real users for the length of the test.
+    await page.route('**/api/settings/fetch', async route => {
+      const response = await fetchWithWafBypass(route);
+      const settings: { settingName: string; settingValue: unknown }[] = await response.json();
+      const rest = settings.filter(s => s.settingName !== 'enableTeamPlan');
+      await route.fulfill({ response, json: [...rest, { settingName: 'enableTeamPlan', settingValue: 'false' }] });
+    });
+
+    await teamsPage.gotoList();
+    await expect(page.getByTestId('organizations-create-team-btn')).toBeDisabled();
+  });
+
+  // --- Detail as owner -------------------------------------------------------------
+
+  test('overview shows the plan, and the Members tab the seats', async ({ page, teamsPage }) => {
+    await teamsPage.gotoList();
+    await teamsPage.teamCard(mainTeamId).getByTestId('organization-card-view-btn').click();
+    await page.waitForURL(`**/organizations/${mainTeamId}*`, { timeout: TIMEOUTS.NAVIGATION });
+
+    await expect(teamsPage.tab('Overview')).toHaveAttribute('aria-selected', 'true');
+    await expect(page).toHaveTitle(new RegExp(MAIN_TEAM));
+    await expect(page.getByTestId('subscription-status-card')).toContainText('Team Plan');
+    await teamsPage.openTab('Members');
+    await expect(page.getByTestId('organization-members-seats-count')).toContainText('of 6 seats used');
+  });
+
+  test('the owner sees every tab', async ({ teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId);
+    expect(await teamsPage.visibleTabs()).toEqual(ALL_TEAM_TABS);
+  });
+
+  test('a ?tab= deep link opens that tab', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.tab('Members')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByTestId('organization-members-seats-card')).toBeVisible();
+  });
+
+  // --- Members --------------------------------------------------------------------
+
+  test('inviting a user adds a pending invitation and takes a seat', async ({ teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    const before = await teamsPage.seatsUsed();
+
+    // The invitee shares no team or project with the owner, so the non-admin picker only reaches
+    // them by their exact, fully typed email (pages/api/users/index.ts); a name search finds nothing.
+    await teamsPage.inviteMember(invitee.email, seededName(invitee));
+
+    // Listed once, in the Pending invitations table, never as a roster row.
+    const row = teamsPage.pendingInviteRow(seededName(invitee));
+    await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(row).toContainText('You');
+    await expect(teamsPage.memberRow(invitee.userId)).toHaveCount(0);
+    await expect.poll(async () => (await teamsPage.seatsUsed()).used).toBe(before.used + 1);
+  });
+
+  test('roster identities and headers stay readable across narrow and wide panels', async ({ teamsPage, page }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    const header = page.getByTestId('organization-members-list-header');
+    const credits = header.getByTestId('organization-members-header-credits');
+    const active = header.getByTestId('organization-members-header-active');
+    for (const width of [768, 1024, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const user of [owner, member, manager]) {
+        const row = teamsPage.memberRow(user.userId);
+        const name = row.getByTestId('organization-user-card-name');
+        await expect(name).not.toHaveText('');
+        await expect
+          .poll(() =>
+            name.evaluate(
+              element =>
+                element.scrollWidth <= element.clientWidth + 1 &&
+                element.scrollHeight <= element.clientHeight + 1 &&
+                getComputedStyle(element).textOverflow !== 'ellipsis'
+            )
+          )
+          .toBe(true);
+        await expect.poll(() => row.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        const role = row.getByTestId(/^organization-user-card-(owner|manager|member)-chip$/);
+        await expect
+          .poll(() =>
+            role.evaluate(element => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return range.getBoundingClientRect().width <= element.getBoundingClientRect().width + 1;
+            })
+          )
+          .toBe(true);
+      }
+      if (width <= 1024) await expect(credits).toBeHidden();
+      if (width === 1920) await expect(credits).toBeVisible();
+      if (await credits.isVisible()) {
+        const creditBounds = await credits.boundingBox();
+        const activeBounds = await active.boundingBox();
+        expect(creditBounds).not.toBeNull();
+        expect(activeBounds).not.toBeNull();
+        if (!creditBounds || !activeBounds) throw new Error('Missing visible roster header bounds');
+        expect(creditBounds.x + creditBounds.width).toBeLessThanOrEqual(activeBounds.x + 1);
+      }
+    }
+  });
+
+  test('cancelling a pending invite frees the seat', async ({ teamsPage, page }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    const row = teamsPage.pendingInviteRow(seededName(invitee));
+    await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    const before = await teamsPage.seatsUsed();
+
+    await row.getByTestId('organization-pending-invite-cancel-btn').click();
+    await teamsPage.confirm();
+
+    await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+    await expect.poll(async () => (await teamsPage.seatsUsed()).used).toBe(before.used - 1);
+  });
+
+  test('removing an active member takes them off the roster', async ({ teamsPage, page, request }) => {
+    await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
+
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    const row = teamsPage.memberRow(invitee.userId);
+    await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await teamsPage.openMemberMenu(invitee.userId);
+    await page.getByTestId('organization-user-card-remove-member').click();
+    await teamsPage.confirmOffboard();
+
+    await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('selected members are removed together from the bulk bar', async ({ teamsPage, page, request }) => {
+    await apiAddTeamMember(request, adminToken, mainTeamId, invitee.userId);
+
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    const row = teamsPage.memberRow(invitee.userId);
+    await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    // Neither the owner nor your own row can be selected.
+    await expect(teamsPage.memberRow(owner.userId).getByTestId('organization-user-card-select')).toHaveCount(0);
+
+    await row.getByTestId('organization-user-card-select').check();
+    await expect(page.getByTestId('organization-members-bulk-bar')).toContainText('1 selected');
+    await page.getByTestId('organization-members-remove-selected-btn').click();
+    await expect(page.getByTestId('organization-members-bulk-remove-description')).toContainText(seededName(invitee));
+    await teamsPage.confirm();
+
+    await expect(row).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('organization-members-bulk-bar')).toBeHidden();
+  });
+
+  test('role filter and search narrow the roster, and a miss offers Clear filters', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await page.getByTestId('organization-members-role-filter').click();
+    await page.getByTestId('organization-members-role-option-owner').click();
+    await expect(teamsPage.memberRow(owner.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(member.userId)).toBeHidden();
+
+    // The member is not the owner, so the owner filter plus their name matches nobody.
+    await page.getByTestId('organization-members-search-input').fill(seededName(member));
+    await expect(page.getByTestId('organization-members-no-match')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await page.getByTestId('organization-members-clear-filters-btn').click();
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(owner.userId)).toBeVisible();
+  });
+
+  test('member search filters the roster and sort reverses it', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(manager.userId)).toBeVisible();
+
+    const rowIds = () => teamsPage.memberRows().evaluateAll(rows => rows.map(r => r.getAttribute('data-user-id')));
+    const ascending = await rowIds();
+    await page.getByTestId('organization-members-sort-btn').click();
+    await expect.poll(rowIds).toEqual([...ascending].reverse());
+
+    await page.getByTestId('organization-members-search-input').fill(seededName(member));
+    await expect(teamsPage.memberRow(manager.userId)).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible();
+  });
+
+  test('the owner can set a member monthly credit limit', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'members');
+    await expect(teamsPage.memberRow(member.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+
+    await teamsPage.openMemberMenu(member.userId);
+    await page.getByTestId('organization-user-card-set-limit').click();
+    const modal = page.getByTestId('credit-limit-modal');
+    await expect(modal).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await page.getByTestId('credit-limit-input').fill('500');
+    await page.getByTestId('credit-limit-save-btn').click();
+    await expect(modal).toBeHidden({ timeout: TIMEOUTS.MODAL });
+
+    await expect(teamsPage.memberRow(member.userId).getByTestId('organization-user-card-credit-usage')).toContainText(
+      '(own limit)',
+      { timeout: TIMEOUTS.VISIBLE }
+    );
+  });
+
+  // --- Seats ------------------------------------------------------------------------
+
+  test('a full team disables Add Member and points the owner to Billing', async ({ page, teamsPage }) => {
+    await teamsPage.gotoTeam(fullTeamId, 'members');
+    await expect(page.getByTestId('organization-members-seats-limit')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('organization-members-add-btn')).toHaveCount(0);
+    await expect(page.getByTestId('organization-members-add-no-seats-btn')).toBeDisabled();
+
+    await page.getByTestId('organization-members-add-seats-link').click();
+    await expect(teamsPage.tab('Billing')).toHaveAttribute('aria-selected', 'true', { timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('an admin raising seats re-opens Add Member for the owner', async ({ page, teamsPage, browser, baseURL }) => {
+    const asAdmin = await openTeamsPageAs(browser, baseURL, admin);
+    try {
+      const adminPage = new AdminPage(asAdmin.page);
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToOrganizationsTab();
+      // The search is debounced and its refetch swaps the rows for the loading state, which closes a
+      // row menu opened on the unfiltered list. Open the menu only once the filtered list has loaded.
+      const searched = asAdmin.page.waitForResponse(r => {
+        const url = new URL(r.url());
+        return (
+          r.request().method() === 'GET' &&
+          url.pathname.endsWith('/api/organizations') &&
+          url.searchParams.get('query') === FULL_TEAM
+        );
+      });
+      await asAdmin.page.getByTestId('admin-organizations-search-input').fill(FULL_TEAM);
+      expect((await searched).ok()).toBe(true);
+      await asAdmin.page.getByTestId(`org-actions-${fullTeamId}`).filter({ visible: true }).first().click();
+      await asAdmin.page.getByTestId(`adjust-seats-${fullTeamId}`).click();
+      await asAdmin.page.getByTestId('seats-input').locator('input').fill('4');
+      await asAdmin.page.getByTestId('seats-reason-input-preset-0').click();
+      const seatsSaved = asAdmin.page.waitForResponse(
+        r => r.request().method() === 'PATCH' && r.url().includes(`/api/admin/organizations/${fullTeamId}/seats`)
+      );
+      await asAdmin.page.getByTestId('seats-submit').click();
+      expect((await seatsSaved).ok()).toBe(true);
+    } finally {
+      await asAdmin.close();
+    }
+
+    await teamsPage.gotoTeam(fullTeamId, 'members');
+    await expect(page.getByTestId('organization-members-add-btn')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(page.getByTestId('organization-members-seats-limit')).toBeHidden();
+    expect((await teamsPage.seatsUsed()).max).toBe(4);
+  });
+
+  // --- Roles ------------------------------------------------------------------------
+
+  test('a plain member sees only Overview, Members and Library, with no roster controls', async ({
+    browser,
+    baseURL,
+  }) => {
+    const { page, teamsPage, close } = await openTeamsPageAs(browser, baseURL, member);
+    try {
+      await teamsPage.gotoTeam(mainTeamId);
+      expect(await teamsPage.visibleTabs()).toEqual(['Overview', 'Members', 'Library']);
+
+      await teamsPage.openTab('Members');
+      await expect(teamsPage.memberRow(manager.userId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+      await expect(page.getByTestId('organization-members-add-btn')).toHaveCount(0);
+      // Everyone sees the one seat summary; only the controls are withheld.
+      await expect(page.getByTestId('organization-members-seats-card')).toBeVisible();
+      await expect(teamsPage.memberRow(manager.userId).getByTestId('org-user-card-menu-btn')).toHaveCount(0);
+
+      // A deep link to an owner-only tab falls back to Overview rather than rendering it.
+      await teamsPage.gotoTeam(mainTeamId, 'billing');
+      await expect(teamsPage.tab('Overview')).toHaveAttribute('aria-selected', 'true');
+    } finally {
+      await close();
+    }
+  });
+
+  test('the owner appoints a manager, who gains roster control but not billing', async ({
+    page,
+    teamsPage,
+    browser,
+    baseURL,
+  }) => {
+    await teamsPage.gotoTeam(mainTeamId, 'groups');
+    const managersInput = page.getByTestId('org-admins-input').locator('input');
+    await managersInput.click();
+    await managersInput.fill(seededName(manager));
+    await page.getByRole('option', { name: seededName(manager) }).click();
+    const saved = page.waitForResponse(
+      r => r.request().method() === 'PUT' && r.url().includes(`/api/organizations/${mainTeamId}/admins`)
+    );
+    await page.getByTestId('admin-save-confirm-btn').click();
+    expect((await saved).ok()).toBe(true);
+
+    const asManager = await openTeamsPageAs(browser, baseURL, manager);
+    try {
+      await asManager.teamsPage.gotoTeam(mainTeamId);
+      const tabs = await asManager.teamsPage.visibleTabs();
+      expect(tabs).toEqual(
+        expect.arrayContaining(['Overview', 'Members', 'Library', 'Usage', 'Analysis', 'Integrations'])
+      );
+      // Billing stays owner-only, but a manager sees it locked and gets a read-only summary.
+      expect(tabs).toContain('Billing');
+      const lockedBilling = asManager.teamsPage.lockedTab('billing');
+      await expect(lockedBilling).toBeVisible();
+      await lockedBilling.click();
+      await expect(asManager.page.getByTestId('organization-billing-locked')).toBeVisible({
+        timeout: TIMEOUTS.VISIBLE,
+      });
+      await expect(asManager.page.getByTestId('organization-billing-owner-only')).toBeVisible();
+      await expect(asManager.page.getByTestId('organization-billing-locked-credits')).not.toBeEmpty();
+      await expect(asManager.page.getByTestId('organization-billing-locked-seats')).not.toBeEmpty();
+      // Integrations stands for a manager on its Connectors section alone; the owner-only
+      // GitHub, Slack and Webhooks sections stay hidden.
+      await asManager.teamsPage.openTab('Integrations');
+      await expect(asManager.page.getByTestId('organization-integration-section-connectors')).toBeVisible({
+        timeout: TIMEOUTS.VISIBLE,
+      });
+      await expect(asManager.page.getByTestId('organization-integration-sections')).toHaveCount(0);
+
+      await asManager.teamsPage.openTab('Members');
+      await expect(asManager.page.getByTestId('organization-members-add-btn')).toBeVisible({
+        timeout: TIMEOUTS.VISIBLE,
+      });
+    } finally {
+      await asManager.close();
+    }
+  });
+
+  // --- Settings ---------------------------------------------------------------------
+
+  test('the team AI context saves and survives a reload', async ({ page, teamsPage }) => {
+    const context = `E2E team context ${RUN_ID}`;
+    await teamsPage.gotoTeam(mainTeamId, 'settings');
+    const input = page.getByTestId('organization-settings-system-prompt-input');
+    await input.fill(context);
+    const saved = page.waitForResponse(
+      r => r.request().method() === 'PUT' && new URL(r.url()).pathname === `/api/organizations/${mainTeamId}`
+    );
+    await page.getByTestId('admin-save-confirm-btn').click();
+    expect((await saved).ok()).toBe(true);
+
+    await teamsPage.gotoTeam(mainTeamId, 'settings');
+    await expect(page.getByTestId('organization-settings-system-prompt-input')).toHaveValue(context);
+  });
+
+  test('a team with an active subscription cannot be deleted', async ({ page, teamsPage, request }) => {
+    await teamsPage.gotoTeam(disposableTeamId, 'settings');
+    await page.getByTestId('organization-settings-delete-btn').click();
+    const dialog = teamsPage.deleteTeamDialog();
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(dialog.getByTestId('delete-organization-plan-blocking')).toBeVisible({
+      timeout: TIMEOUTS.VISIBLE,
+    });
+    await teamsPage.deleteTeamNameInput().fill(DISPOSABLE_TEAM);
+    await expect(teamsPage.deleteTeamConfirm()).toBeDisabled();
+    await expect(page).toHaveURL(new RegExp(`/organizations/${disposableTeamId}`));
+    expect(await apiGetTeam(request, owner.accessToken, disposableTeamId)).not.toBeNull();
+    await dialog.getByTestId('delete-organization-cancel-btn').click();
+    await expect(dialog).toBeHidden({ timeout: TIMEOUTS.MODAL });
+  });
+
+  test('deleting a team returns to the list without it', async ({ page, teamsPage, request }) => {
+    // The seeded grant is an active subscription, which blocks deletion (previous test).
+    expect((await apiRevokeTeamGrant(request, adminToken, disposableTeamId)).ok()).toBe(true);
+
+    await teamsPage.gotoTeam(disposableTeamId, 'settings');
+    await page.getByTestId('organization-settings-delete-btn').click();
+    const dialog = teamsPage.deleteTeamDialog();
+    await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+    await expect(dialog.getByTestId('delete-organization-plan-none')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.deleteTeamConfirm()).toBeDisabled();
+    await teamsPage.deleteTeamNameInput().fill(`${DISPOSABLE_TEAM} wrong`);
+    await expect(teamsPage.deleteTeamConfirm()).toBeDisabled();
+    await teamsPage.deleteTeamNameInput().fill(DISPOSABLE_TEAM);
+    await expect(teamsPage.deleteTeamConfirm()).toBeEnabled();
+    await teamsPage.deleteTeamConfirm().click();
+
+    await page.waitForURL(/\/organizations\/?(?:\?|$)/, { timeout: TIMEOUTS.NAVIGATION });
+    await expect(teamsPage.teamCard(mainTeamId)).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(teamsPage.teamCard(disposableTeamId)).toHaveCount(0);
+    expect(await apiGetTeam(request, owner.accessToken, disposableTeamId)).toBeNull();
+  });
+});

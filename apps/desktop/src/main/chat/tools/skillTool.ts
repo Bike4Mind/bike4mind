@@ -11,8 +11,6 @@ import { requireString, type ToolContext, type ToolDefinition } from './types';
  * typed the same request. What the skill may READ without asking is bounded too, by expandSkill
  * putting each `@file` reference through the session's granted roots.
  *
- * Whether reading one makes the reply untrusted depends on where it came from; see `run`.
- *
  * The one thing it must not do is widen what a skill can reach, so it does not resolve its own
  * files, does not run the lifecycle hooks the CLI's version shells out to, and takes the set it
  * may run from the session rather than from its arguments.
@@ -58,6 +56,13 @@ export const skillTool: ToolDefinition = {
     const available = await skills.available();
     const command = available.find(candidate => candidate.name === name);
     if (!command) {
+      // Reported as missing, a user-only skill sends the model and the user hunting for a stale
+      // install; it is there, and typing its name is the way to run it.
+      if (await skills.isUserOnly?.(name))
+        throw new Error(
+          `The skill "${name}" exists but only the user can start it (it sets disable-model-invocation), ` +
+            `so you cannot load it. Ask the user to type /${name} if they want it to run.`
+        );
       // Named rather than a bare miss: the usual cause is a near-miss on a real skill, and a
       // model told only "not found" guesses again or abandons the skill and improvises the job.
       const names = available.map(candidate => candidate.name).join(', ');
@@ -70,11 +75,8 @@ export const skillTool: ToolDefinition = {
 
     const expanded = await expandSkill(command, args, context.roots, context.workingDirectory);
     if (!expanded.body.trim()) throw new Error(`The skill "${name}" has an empty body, so there is nothing to run.`);
-    // A skill from the user's own folder, or from a project they agreed to load (ProjectTrustStore),
-    // is their instruction text like a CLAUDE.md. An account skill is not: /api/skills also returns
-    // skills other people shared or published, so it still counts as untrusted content. Listed as
-    // an allowlist so a source added to CustomCommand later is not trusted by default.
-    if (command.source === 'global' || command.source === 'project') context.report?.ownContent();
+    if (!command.untrusted && (command.source === 'global' || command.source === 'project'))
+      context.report?.ownContent?.();
 
     // An import's body is already wrapped as untrusted and carries its own framing.
     const header = command.untrusted

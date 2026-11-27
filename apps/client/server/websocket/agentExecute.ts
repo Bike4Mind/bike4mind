@@ -13,15 +13,17 @@
  * - reconnect: find active execution, re-stream current state
  */
 
-import { withWebSocketContext } from '@server/websocket/utils';
-import { isAuthInfraFailure } from '@server/auth/apiKeyAuthFailure';
-import { adminSettingsRepository, agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
+import { TooManyRequestsError } from '@bike4mind/common';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { agentExecutionRepository, sessionToolApprovalRepository } from '@bike4mind/database';
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
-import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
-import { extractFinalAnswer } from '@bike4mind/server-utils/utils/extractFinalAnswer';
+import { recordUserActivity } from '@server/users/recordUserActivity';
+import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
+import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
-import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import {
   verifyJwtToken,
@@ -29,14 +31,13 @@ import {
   verifyApiKey,
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
-} from '@server/cli/auth';
+} from '@bike4mind/server-utils/cli/auth';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
   AgentExecutorRejectedError,
   type ExecutorTarget,
-} from '@server/utils/dispatchAgentExecution';
-import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
+} from '@bike4mind/server-utils/utils/dispatchAgentExecution';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
 import {
@@ -46,21 +47,8 @@ import {
   PROMPT_TEXT_MAX,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-
-/**
- * Send an untyped JSON payload to a WebSocket connection.
- * Agent execution events use their own action schema (not MessageDataToClient)
- * since they're consumed by dedicated client-side agent execution handlers.
- */
-async function sendAgentEvent(connectionId: string, endpoint: string, payload: Record<string, unknown>): Promise<void> {
-  const client = new ApiGatewayManagementApiClient({ endpoint });
-  await client.send(
-    new PostToConnectionCommand({
-      ConnectionId: connectionId,
-      Data: Buffer.from(JSON.stringify(payload)),
-    })
-  );
-}
+import { handleGateResponse } from '@bike4mind/server-utils/agentExecution/gateResponse';
+import { sendAgentEvent } from '@bike4mind/server-utils/agentExecution/sendAgentEvent';
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -160,6 +148,9 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // continuations keep it. Capped like every other caller-supplied prompt body (the client
   // refuses an over-cap launch before sending). Must stay in sync with `StartExecutionSchema`.
   systemContext: z.string().max(PROMPT_TEXT_MAX).optional(),
+  // The Studio production a Direct launch directs. startAgentExecution marks the session with it only after its own
+  // access and ownership checks (an id that fails them is ignored); see `productionCompositionId` there.
+  productionCompositionId: z.string().max(64).optional(),
 });
 
 const AbortCommandSchema = BaseMessageSchema.extend({
@@ -217,11 +208,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     return { statusCode: 200 };
   }
 
+  // Re-attaching to a running execution is the client reconnecting, not the user acting.
+  const isUserAction = body.command !== 'reconnect';
+
   // Authenticate
   let userId: string;
   let apiKeyInfo: ApiKeyInfo | undefined;
   try {
-    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
+    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` }, { recordUse: isUserAction });
     userId = apiKeyInfo.userId;
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
@@ -239,16 +233,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       const user = await verifyJwtToken(body.accessToken);
       userId = user.id;
       await checkRateLimit(userId, undefined, { bucket: 'ws' });
-    } catch {
+    } catch (error) {
       await sendAgentEvent(connectionId, endpoint, {
         action: 'agent_error',
-        message: 'Authentication failed',
+        message: error instanceof ForbiddenError || isAuthInfraFailure(error) ? error.message : 'Authentication failed',
       });
       return { statusCode: 200 };
     }
   }
 
   logger.updateMetadata({ userId, command: body.command });
+  if (isUserAction) recordUserActivity(userId, logger);
 
   // Route command
   const rawBody = JSON.parse(event.body ?? '');
@@ -299,38 +294,51 @@ async function handleStart(
   // Guards, document creation and executor dispatch are shared with the public REST
   // route (`pages/api/v1/agent-executions/index.ts`) so the two transports cannot
   // drift; this handler only translates the outcome into `agent_error` frames.
-  const result = await startAgentExecution(
-    {
-      userId,
-      sessionId: cmd.sessionId,
-      questId: cmd.questId,
-      query: cmd.query,
-      model: cmd.model,
-      connectionId,
-      organizationId: cmd.organizationId,
-      agentId: cmd.agentId,
-      enabledTools: cmd.enabledTools,
-      enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
-      // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
-      apiKeyInfo,
-      maxIterations: cmd.maxIterations,
-      messageFileIds: cmd.messageFileIds,
-      pinMessageFiles: true,
-      messageOnlyFileIds: cmd.messageOnlyFileIds,
-      sessionFabFileIds: cmd.sessionFabFileIds,
-      temperature: cmd.temperature,
-      maxTokens: cmd.maxTokens,
-      thinking: cmd.thinking,
-      enableMementos: cmd.enableMementos,
-      enableLattice: cmd.enableLattice,
-      enableArtifacts: cmd.enableArtifacts,
-      imageConfig: cmd.imageConfig,
-      audioConfig: cmd.audioConfig,
-      routingSource: cmd.routingSource,
-      systemContext: cmd.systemContext,
-    },
-    logger
-  );
+  let result: Awaited<ReturnType<typeof startAgentExecution>>;
+  try {
+    result = await startAgentExecution(
+      {
+        userId,
+        sessionId: cmd.sessionId,
+        questId: cmd.questId,
+        query: cmd.query,
+        model: cmd.model,
+        connectionId,
+        organizationId: cmd.organizationId,
+        agentId: cmd.agentId,
+        enabledTools: cmd.enabledTools,
+        enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
+        // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
+        apiKeyInfo,
+        maxIterations: cmd.maxIterations,
+        messageFileIds: cmd.messageFileIds,
+        pinMessageFiles: true,
+        messageOnlyFileIds: cmd.messageOnlyFileIds,
+        sessionFabFileIds: cmd.sessionFabFileIds,
+        temperature: cmd.temperature,
+        maxTokens: cmd.maxTokens,
+        thinking: cmd.thinking,
+        enableMementos: cmd.enableMementos,
+        enableLattice: cmd.enableLattice,
+        enableArtifacts: cmd.enableArtifacts,
+        imageConfig: cmd.imageConfig,
+        audioConfig: cmd.audioConfig,
+        routingSource: cmd.routingSource,
+        systemContext: cmd.systemContext,
+        productionCompositionId: cmd.productionCompositionId,
+      },
+      logger
+    );
+  } catch (error) {
+    if (!(error instanceof TooManyRequestsError)) throw error;
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'agent_error',
+      message: error.message,
+      ...(typeof error.additionalInfo?.errorCode === 'string' ? { errorCode: error.additionalInfo.errorCode } : {}),
+      ...(typeof error.additionalInfo?.retryAfter === 'number' ? { retryAfter: error.additionalInfo.retryAfter } : {}),
+    });
+    return;
+  }
 
   if (result.ok) return;
 
@@ -373,6 +381,7 @@ async function handleAbort(
     execution.status === 'awaiting_dag_children'
   ) {
     await agentExecutionRepository.markAborted(cmd.executionId);
+    await endAgentRunLiveActivity(execution, { status: 'stopped' }, logger);
   }
 
   // Cascade abort to the synchronous child the parent is waiting on, if any.
@@ -483,9 +492,9 @@ async function rememberToolDecision(
  * previous executor handoff, not in the AgentExecution document, so this handler cannot
  * read it. The resumed executor starts at depth 0. This is safe on two counts: permission
  * pauses are user-driven, not loop-driven, so they cannot self-dispatch a runaway on
- * their own; and the resume runs as status `continuing`, which the executor still
- * bounds via the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a
- * counter the message payload cannot reset.
+ * their own. `resumedBy: 'user'` keeps the click itself off the executor's
+ * `lambdaInvocationCount` budget (MAX_LAMBDA_HANDOFFS); any timeout self-dispatch after
+ * it still counts, and the payload can only skip an increment, never reset the counter.
  */
 async function dispatchPermissionResume(
   executionId: string,
@@ -493,7 +502,7 @@ async function dispatchPermissionResume(
   target: ExecutorTarget
 ): Promise<void> {
   await agentExecutionRepository.updateStatus(executionId, 'continuing');
-  await dispatchAgentExecution({ executionId, connectionId }, target);
+  await dispatchAgentExecution({ executionId, connectionId, resumedBy: 'user' }, target);
 }
 
 export async function handlePermissionResponse(
@@ -614,6 +623,7 @@ export async function handlePermissionResponse(
     // send: a closed socket makes the send throw, and a retried Deny cannot repair it
     // because the CAS above has already left `awaiting_permission`.
     await persistRunAsQuest(cmd.executionId, denialMessage, logger);
+    await endAgentRunLiveActivity(execution, { status: 'failed', errored: true }, logger);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
@@ -711,121 +721,6 @@ export async function handlePermissionResponse(
   });
 }
 
-/**
- * Handle a client response to a confidence-gate pause. Two outcomes:
- * - `continue` -> clear `pendingGate`, transition `paused -> continuing`,
- *   re-invoke the executor. Mirrors the structural template of
- *   `handlePermissionResponse` so the CAS contract on the executor side
- *   (`['continuing'] -> 'running'`) is satisfied identically.
- * - `stop` -> mark the execution complete with the partial answer captured
- *   in the checkpoint so far, and emit a `completed` event. The user keeps
- *   whatever the agent had produced before the gate fired.
- *
- * Validates `executionId` ownership and current status. Silently ignores
- * gate responses for executions not in `paused` to defend against stale
- * client retries.
- */
-export async function handleGateResponse(
-  cmd: z.infer<typeof GateResponseSchema>,
-  userId: string,
-  connectionId: string,
-  endpoint: string,
-  logger: Logger
-): Promise<void> {
-  const execution = await agentExecutionRepository.findById(cmd.executionId);
-  if (!execution || execution.userId !== userId) return;
-  if (execution.status !== 'paused') {
-    logger.warn('[Gate] gate_response received for non-paused execution — ignoring', {
-      executionId: cmd.executionId,
-      status: execution.status,
-    });
-    return;
-  }
-
-  if (cmd.decision === 'stop') {
-    // Same `abortedAt`-not-exists guard as the `continue` branch - bail if a
-    // concurrent abort landed between the status read above and now. Without
-    // this, `markComplete` (which has no such guard) would silently overwrite
-    // a freshly-aborted execution back to `completed`, contradicting the
-    // user's abort decision.
-    const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
-    if (!cleared) {
-      logger.warn('[Gate] Stop ignored — clearPendingGate matched 0 docs (likely aborted concurrently)', {
-        executionId: cmd.executionId,
-      });
-      return;
-    }
-    const checkpoint = execution.checkpoint as AgentCheckpoint | undefined;
-    const finalAnswer = checkpoint ? extractFinalAnswer(checkpoint.steps) : undefined;
-    await agentExecutionRepository.markComplete(cmd.executionId, {
-      answer: finalAnswer,
-      steps: checkpoint?.steps ?? [],
-      totalTokens: checkpoint?.totalTokens ?? 0,
-      totalIterations: checkpoint?.iteration ?? 0,
-      stoppedByGate: true,
-    });
-    await sendAgentEvent(connectionId, endpoint, {
-      action: 'completed',
-      executionId: cmd.executionId,
-      answer: finalAnswer,
-      totalIterations: checkpoint?.iteration ?? 0,
-      totalCreditsUsed: execution.totalCreditsUsed,
-      stoppedByGate: true,
-      mementoIds: execution.usedMementoIds ?? [],
-    });
-    // Persist a Quest so the partial answer survives a page refresh - parity
-    // with the executor's natural completion path. Without this, refreshing
-    // after a stop leaves chat history blank (the prompt
-    // bubble exists with an empty `replies[]` until something writes it).
-    await persistRunAsQuest(
-      cmd.executionId,
-      finalAnswer ?? 'Agent stopped at confidence gate without a partial answer.',
-      logger
-    );
-    // Memento parity with chat_completion. Stop-at-gate is also a
-    // terminal `completed` write, so fire the same event the executor's
-    // natural completion path fires. Resolve gates through the shared authority
-    // and hand them over; the helper guards on the gates and `parentExecutionId`.
-    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
-    logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
-    return;
-  }
-
-  const executorTarget = resolveAgentExecutorTarget();
-  if (!executorTarget) throw new Error('Agent execution is not configured');
-
-  // decision === 'continue' - clear the gate and resume.
-  const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
-  if (!cleared) {
-    // Either the doc no longer exists or the execution was aborted between
-    // the status check above and now. Bail rather than re-invoke into a
-    // state the executor's CAS will reject.
-    logger.warn('[Gate] clearPendingGate matched 0 docs — likely aborted concurrently', {
-      executionId: cmd.executionId,
-    });
-    return;
-  }
-  await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
-
-  // Note: checkpointDepth is not carried here - same limitation as the permission_response
-  // path above. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
-  // are likewise bounded by the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS).
-  try {
-    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
-  } catch (error) {
-    // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
-    if (error instanceof AgentExecutorRejectedError) {
-      await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
-        status: 'paused',
-        pendingGate: execution.pendingGate,
-      });
-    }
-    throw error;
-  }
-
-  logger.info('[Gate] Continue - executor re-invoked', { executionId: cmd.executionId });
-}
-
 async function handleReconnect(
   cmd: z.infer<typeof ReconnectCommandSchema>,
   userId: string,
@@ -871,7 +766,8 @@ async function handleReconnect(
   // But both ride the same WS frame, so the budget is shared - see
   // `decideInlineBudgets`. Like `steps`, oversize children fall back to REST
   // hydration via `/api/agent-executions/[id]`.
-  const childSnapshots = await buildChildExecutionSnapshots(execution.id);
+  // Reconnect is gated on execution.userId === userId above, so the caller started the run and sees its own output.
+  const childSnapshots = await buildChildExecutionSnapshots(execution.id, { isOwner: true });
   const childrenJsonSize = childSnapshots.length > 0 ? Buffer.byteLength(JSON.stringify(childSnapshots), 'utf8') : 0;
   const { includeStepsInline, includeChildrenInline } = decideInlineBudgets(stepsJsonSize, childrenJsonSize);
 

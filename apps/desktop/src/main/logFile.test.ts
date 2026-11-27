@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import {
   LOG_FILE_NAME,
   MAX_LOG_BYTES,
@@ -7,6 +7,9 @@ import {
   ROTATED_LOG_FILE_NAME,
   type LogFileSystem,
 } from './logFile';
+import { mkdtemp, mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { privateFile } from './privateFile';
 
 const DIRECTORY = '/logs';
 const LOG = join(DIRECTORY, LOG_FILE_NAME);
@@ -125,5 +128,37 @@ describe('persistConsoleWarnings', () => {
     restore();
 
     expect(target.warn).toBe(warn);
+  });
+});
+
+describe('privateFile', () => {
+  describe('privateFile', () => {
+    let directory: string;
+    beforeEach(async () => {
+      directory = await mkdtemp(join(tmpdir(), 'private-file-'));
+    });
+    afterEach(async () => {
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    it('treats a missing file as absent', async () => {
+      expect(await privateFile(join(directory, 'missing.json')).read()).toBeNull();
+    });
+
+    it('propagates read failures instead of pretending credentials are absent', async () => {
+      const path = join(directory, 'not-a-file');
+      await mkdir(path);
+      await expect(privateFile(path).read()).rejects.toThrow();
+    });
+
+    it('replaces the document atomically with owner-only permissions', async () => {
+      const path = join(directory, 'nested', 'secret.json');
+      const file = privateFile(path);
+      await file.write('first');
+      await file.write('replacement');
+      expect(await readFile(path, 'utf8')).toBe('replacement');
+      if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600);
+      await expect(stat(`${path}.tmp`)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
   });
 });

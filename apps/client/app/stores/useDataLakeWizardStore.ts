@@ -69,7 +69,8 @@ export interface DataLakeFormValues {
  * hint that actually match the cause (a config/validation problem vs a network or
  * upload problem) instead of one generic "check your Name and Tag Prefix" hint.
  */
-export type UploadErrorKind = 'validation' | 'network' | 'upload' | 'server' | 'unknown';
+/** `entitlement`: the account may not create this lake right now (lake cap, plan) - a retry cannot help. */
+export type UploadErrorKind = 'validation' | 'network' | 'upload' | 'server' | 'entitlement' | 'unknown';
 
 export interface UploadProgress {
   totalFiles: number;

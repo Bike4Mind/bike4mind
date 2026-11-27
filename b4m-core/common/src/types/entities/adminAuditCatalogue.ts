@@ -49,33 +49,135 @@ export const ADMIN_AUDIT_CATALOGUE = {
     write: 'strict',
     escalatesAboveGrantThreshold: true,
   },
+  'user.credits.grant_blocked': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'spend.freeze.applied': { category: 'credits', severity: 'critical', write: 'strict' },
+  'spend.freeze.lifted': { category: 'credits', severity: 'critical', write: 'strict' },
+  'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.synced': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
+  'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // bestEffort: the StripeDispute record holds the resolution; the Contain a lost dispute applies is audited per user.
+  'billing.dispute.resolved': { category: 'credits', severity: 'notice', write: 'bestEffort' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.throttle_tier.changed': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'user.permissions.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.permissions.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.completed': { category: 'access', severity: 'notice', write: 'strict' },
+  'access_review.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'access_review.exported': { category: 'access', severity: 'notice', write: 'bestEffort' },
   'user.impersonation.started': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.impersonation.escalated': { category: 'access', severity: 'critical', write: 'strict' },
   'user.impersonation.ended': { category: 'access', severity: 'info', write: 'bestEffort' },
   'user.impersonation.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Single-user counterparts of user.bulk.suspended / user.bulk.restricted, written by PUT /api/users/[id]/update.
+  'user.suspended': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.reinstated': { category: 'access', severity: 'notice', write: 'strict' },
+  // The text-moderation escalation state (moderation.status), set by PUT /api/users/[id]/update.
+  'user.moderation_status.changed': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.restricted': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.restriction_lifted': { category: 'access', severity: 'notice', write: 'strict' },
+  // A graduated automated intervention (limit, verify, review, holdGrant) placed on one account by auto-containment.
+  'user.intervention_hold.applied': { category: 'access', severity: 'notice', write: 'strict' },
+  // An admin release, legitimate verdict or rollback lifting one decision's graduated hold from one account.
+  'user.intervention_hold.released': { category: 'access', severity: 'notice', write: 'strict' },
+  // The linked-account propagation run once for accounts an admin suspended together
+  // (apps/client/pages/api/admin/users/linked-suspend-propagation.ts). bestEffort: it is written after the
+  // locks it reports, which have already happened.
+  'user.linked_accounts.propagated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'user.deleted': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.scheduled': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.deletion.cancelled': { category: 'account', severity: 'notice', write: 'strict' },
+  // A data subject export carries all of a person's stored data, so both steps are critical and fail
+  // the action when they cannot be recorded (the request before it is queued, the download before it is signed).
+  'user.data_export.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.data_export.downloaded': { category: 'account', severity: 'critical', write: 'strict' },
+  // The request was recorded but could not be queued; the export list shows it as failed.
+  'user.data_export.failed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.data_export.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // A data subject erasure: the dry run, the request (written before the account is locked) and the
+  // check after the user delete of what still names them (counts per collection, no personal data).
+  'user.erasure.previewed': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.erasure.requested': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.erasure.completed': { category: 'account', severity: 'critical', write: 'strict' },
   'user.deletion.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // notice, not critical like user.deleted: the sweep carrying out a user's own scheduled deletion.
+  'user.deletion.completed': { category: 'account', severity: 'notice', write: 'strict' },
+  // notice, not info: the same entry carries an admin's change to another user's email, password and tags.
+  'user.profile.updated': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.note.created': { category: 'support', severity: 'info', write: 'strict' },
+  'user.note.edited': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.note.deleted': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.note.restored': { category: 'support', severity: 'notice', write: 'strict' },
+  'user.tags.updated': { category: 'account', severity: 'notice', write: 'strict' },
+  // Name and username as written, plus a requested email change that the user still has to verify.
+  'user.identity.updated': { category: 'identity', severity: 'notice', write: 'strict' },
 
   'org.seats.changed': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.seats.ceiling_raised': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.conversion.initiated': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.revoked': { category: 'org', severity: 'notice', write: 'strict' },
-  'org.group_types.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.group_types.updated': { category: 'org', severity: 'info', write: 'strict' },
+  'org.segment.changed': { category: 'org', severity: 'notice', write: 'strict' },
   'org.admins.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.owner.transferred': { category: 'org', severity: 'notice', write: 'strict' },
   'org.group_member.assigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.group_member.unassigned': { category: 'org', severity: 'info', write: 'bestEffort' },
   'org.invite.created': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite.resent': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite_link.created': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.invite_link.revoked': { category: 'org', severity: 'notice', write: 'bestEffort' },
   'org.member_budget.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.budget_alerts.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.added': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.domain.verified': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.policy_updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.domain.removed': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.custom_mcp_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.model_policy.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.slack_channel_api_posting.updated': { category: 'org', severity: 'notice', write: 'strict' },
+  // Target the member, not the org, so the entry reaches the user's Admin log; organizationId names the org.
+  'org.member.added': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.removed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.content_reassigned': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.member.role_changed': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.api_key.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.rotated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.callback_secret_rotated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.access_updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.api_key.member_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.settings.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // A platform admin reading an org they do not belong to. strict, like the other staff read audits.
+  'org.viewed': { category: 'org', severity: 'info', write: 'strict' },
+  'org.logo.updated': { category: 'org', severity: 'info', write: 'bestEffort' },
+  // strict: written inside the delete transaction, so the delete never lands without its entry.
+  'org.deleted': { category: 'org', severity: 'notice', write: 'strict' },
+  'org.slack.connected': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.secret_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.webhook.deliveries_replayed': { category: 'org', severity: 'info', write: 'bestEffort' },
+  'org.github_connection.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.updated': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.deleted': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.key_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'org.github_connection.pat_rotated': { category: 'access', severity: 'notice', write: 'bestEffort' },
 
   'settings.admin_settings.updated': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.admin_settings.denied': { category: 'settings', severity: 'critical', write: 'bestEffort' },
   'settings.whats_new.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.whats_new.synced': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.whats_new.generation_triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.security_scan.enabled': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.security_scan.disabled': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'settings.security_scan.triggered': { category: 'settings', severity: 'notice', write: 'bestEffort' },
@@ -88,14 +190,302 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'system_health.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'user.email.verified': { category: 'identity', severity: 'info', write: 'bestEffort' },
+  'user.api_key_trust.approved': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.api_key_trust.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.new_account_spend_cap.lifted': { category: 'identity', severity: 'notice', write: 'strict' },
+  'user.new_account_spend_cap.restored': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.file_embedding_window.reset': { category: 'credits', severity: 'notice', write: 'strict' },
+  // Analytics classification (User.isInternal): grants nothing, but decides whether an account
+  // counts as a customer, so both directions keep a record.
+  'user.internal.marked': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.internal.unmarked': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.segment.changed': { category: 'account', severity: 'notice', write: 'strict' },
+  // The home-org pointer (user.organizationId): billing fallback and org-scoped access context.
+  'user.home_org.cleared': { category: 'account', severity: 'notice', write: 'strict' },
   'user.email.unverified': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.verification_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_resent': { category: 'identity', severity: 'info', write: 'bestEffort' },
   'user.email.change_cancelled': { category: 'identity', severity: 'info', write: 'bestEffort' },
+  'user.sessions.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  'user.session.revoked': { category: 'identity', severity: 'notice', write: 'bestEffort' },
+  // Bulk abuse response (apps/client/pages/api/admin/abuse/bulk-*.ts): one strict entry per user and
+  // step, written in that user's transaction, plus a summary per execute. The summary is bestEffort
+  // because the per-user entries are the record and the work is already committed when it is written.
+  'abuse.bulk.executed': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  'abuse.bulk.ban': { category: 'access', severity: 'critical', write: 'strict' },
+  'abuse.bulk.revoke_keys': { category: 'access', severity: 'notice', write: 'strict' },
+  'abuse.bulk.revoke_sessions': { category: 'identity', severity: 'notice', write: 'strict' },
+  'abuse.bulk.clawback': { category: 'credits', severity: 'notice', write: 'strict' },
+  'abuse.bulk.denied': { category: 'account', severity: 'critical', write: 'bestEffort' },
+  // Signup risk review (apps/client/pages/api/admin/signup-risk-reviews.ts): one strict entry per user,
+  // written in that user's transaction. reopened is the undo of approved.
+  'user.signup_risk.approved': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.signup_risk.reopened': { category: 'access', severity: 'notice', write: 'strict' },
+  // A system actor approving on payment or quiet-account evidence (packages/server-utils/src/security/riskReviewAutoApproval.ts).
+  'user.signup_risk.auto_approved': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.signup_risk.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Signup domain holds: one strict entry per decision, written in the same transaction as the status
+  // change. confirmed/released come from admins (apps/client/pages/api/admin/signup-domain-holds.ts);
+  // auto_confirmed and auto_released from the triage job (apps/workers/src/cron/signupDomainHoldTriage.ts).
+  'signup_domain_hold.confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.released': { category: 'credits', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.auto_confirmed': { category: 'access', severity: 'notice', write: 'strict' },
+  'signup_domain_hold.auto_released': { category: 'credits', severity: 'notice', write: 'strict' },
+  // Users-list bulk actions (apps/client/pages/api/admin/users/bulk/*): one strict entry per changed
+  // user, written in that user's transaction, plus a bestEffort summary per batch.
+  'user.bulk.executed': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.bulk.suspended': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.bulk.restricted': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.bulk.credits_adjusted': {
+    category: 'credits',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.bulk.api_keys_revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.bulk.tagged': { category: 'account', severity: 'info', write: 'strict' },
+  'user.bulk.contained': { category: 'access', severity: 'critical', write: 'strict' },
+  // An undo that reverses a deduction adds credits, so it is held to the same grant thresholds.
+  'user.bulk.undone': {
+    category: 'account',
+    severity: 'notice',
+    write: 'strict',
+    escalatesAboveGrantThreshold: true,
+  },
   'user.mfa.reset': { category: 'identity', severity: 'notice', write: 'strict' },
   'user.mfa.denied': { category: 'identity', severity: 'critical', write: 'bestEffort' },
 
+  // Handler coverage: secrets and integration credentials
+  'settings.system_secret.upserted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'settings.system_secret.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.updated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.deleted': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.github_connection.key_rotated': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.created': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
+  'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
+  // A channel's messages leave Slack as a file; recorded for both the direct download and the queued job.
+  'integration.slack_channel.exported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
+  'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
+
+  // Handler coverage: email and messaging
+  // Job entries record the claim and enqueue request, not delivery.
+  'email.job.started': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.sent': { category: 'support', severity: 'critical', write: 'strict' },
+  'email.job.test_sent': { category: 'support', severity: 'notice', write: 'strict' },
+  'email.job.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.scheduled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.job.cancelled': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.updated': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.deleted': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.cloned': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'email.template.test_sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'support.inbox.message_sent': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'support.pr_report.sent': { category: 'support', severity: 'info', write: 'bestEffort' },
+
+  // Handler coverage: users and credentials
+  'user.created': { category: 'account', severity: 'critical', write: 'strict' },
+  'user.bulk_created': {
+    category: 'account',
+    severity: 'notice',
+    write: 'bestEffort',
+    escalatesAboveGrantThreshold: true,
+  },
+  'user.emergency_login.challenged': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.emergency_login.denied': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.generated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.subscription.removed': { category: 'credits', severity: 'critical', write: 'strict' },
+  // Written after a suspend, contain or delete commits, so it cannot be strict: the block already happened.
+  'user.subscriptions.canceled': { category: 'credits', severity: 'critical', write: 'bestEffort' },
+  'user.api_key.rate_limit_updated': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  'user.api_key.rate_limit_reset': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'user.api_key.moderation_exception_updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.api_key.revoked': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.api_key.restored': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.api_key.rotated': { category: 'access', severity: 'critical', write: 'strict' },
+  // Adds or removes ai:end-user-id on an existing key (pages/api/admin/user-api-keys/[id]/end-user-id.ts).
+  'user.api_key.end_user_id_updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'user.api_keys.revoked_all': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.data_lake.embedding_spend_reset': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.storage.recalculated': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // Test personas minted, deleted and expired (pages/api/v1/personas, server/personas).
+  'user.persona.created': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.persona.deleted': { category: 'account', severity: 'notice', write: 'strict' },
+  'user.persona.expired': { category: 'account', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: liveops, sre and queues
+
+  // ops
+
+  // Handler coverage: liveops, sre and queues
+  'ops.triage_config.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.triage_config.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.triage_config.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.scan_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.run_triggered': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.pattern_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_dismissed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_rerun': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.sre.tracking_retried': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.replayed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.discarded': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.dlq.triage.dismissed': { category: 'support', severity: 'notice', write: 'strict' },
+  'ops.dlq.triage.accepted': { category: 'support', severity: 'notice', write: 'strict' },
+  'ops.agent_executions.cleaned_up': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: billing and model config
+  'settings.model_price.repriced': { category: 'settings', severity: 'notice', write: 'strict' },
+  'settings.provider_invoice.recorded': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.model_lifecycle.suggestion_resolved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.model_discovery.triggered': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.gear_override.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.gear_override.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.tool_definition.override_deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: platform MCP connectors
+  'settings.mcp_connector.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.api_key_rotated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.mcp_connector.tools_refreshed': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: rapid reply
+  'settings.rapid_reply_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_prompt.activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply_mapping.bulk_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.rapid_reply.test_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: content and directory config
+  'settings.modal.variants_updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.variants_cleared': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.modal.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.modal.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.release_note.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.release_note.status_changed': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.business_link.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.business_link.imported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.business_link_category.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link_category.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.business_link_category.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.team_member.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.team_member.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.team_member.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.voice_agent.created': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.voice_agent.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  'settings.voice_agent.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+
+  // Preference arena: the comparison pairs raters vote on
+  'settings.arena_pair.imported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.arena_pair.retired': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.arena_pair.restored': { category: 'settings', severity: 'info', write: 'bestEffort' },
+  // Handler coverage: signup and org access
+  'org.partner_signup_rule.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.deleted': { category: 'access', severity: 'notice', write: 'strict' },
+  'org.partner_signup_rule.backfilled': { category: 'access', severity: 'notice', write: 'bestEffort' },
+  // No credits move when a package is defined, so these are not credit-grant actions.
+  'credits.grant_package.created': { category: 'credits', severity: 'notice', write: 'strict' },
+  'credits.grant_package.updated': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.accounts.migrated': { category: 'account', severity: 'notice', write: 'bestEffort' },
+  'user.reg_invite.updated': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.reg_invite.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'user.waitlist_subscriber.deleted': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'org.created': { category: 'org', severity: 'notice', write: 'bestEffort' },
+  // Handler coverage: telemetry, backfills and health
+  'ops.context_telemetry.deleted': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.context_telemetry.analyzed': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.context_telemetry.issue_created': { category: 'support', severity: 'notice', write: 'bestEffort' },
+  'ops.context_telemetry.test_run': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.mementos.reembedded': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.memory_ledger.reembedded': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.overwatch.first_seen_backfilled': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'ops.spider_job.started': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'system_health.integration_override_set': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'system_health.integration_probe_run': { category: 'settings', severity: 'info', write: 'bestEffort' },
+
+  // Handler coverage: security and trust and safety
+  'security.blocked_ip.added': { category: 'access', severity: 'notice', write: 'strict' },
+  'security.blocked_ip.removed': { category: 'access', severity: 'critical', write: 'strict' }, // critical: removing a block lifts a security control
+  'security.blocked_ip.auto_added': { category: 'access', severity: 'notice', write: 'strict' },
+  // bestEffort: the verdict history on the ShadowDetection record is the source of truth; grading never acts.
+  'security.detection.reviewed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'security.watch.created': { category: 'support', severity: 'info', write: 'strict' },
+  'security.watch.updated': { category: 'support', severity: 'info', write: 'strict' },
+  // bestEffort: the AbuseAssessment record is the source of truth; an advisory assessment never acts.
+  'security.detection.assessed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'security.detection.replayed': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin agreeing with an abuse assessment on a user queue; records the suggestion decision only.
+  'security.ai_assessment.accepted': { category: 'access', severity: 'info', write: 'strict' },
+  // bestEffort: the AbuseEvalSet record is the source of truth; evaluation sets are grading data and never act.
+  'abuse.eval_set.created': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.verdict_recorded': { category: 'access', severity: 'info', write: 'bestEffort' },
+  'abuse.eval_set.run': { category: 'access', severity: 'info', write: 'bestEffort' },
+  // An admin resolving a provider end-user identifier (from a provider safety notice) to an account.
+  'user.provider_id.resolved': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.viewed': { category: 'support', severity: 'notice', write: 'strict' },
+  // An admin read of other users' feedback text. No support case (triage reads it routinely), but strict.
+  'feedback.viewed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.status_changed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.ai_labels_changed': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.note_added': { category: 'support', severity: 'info', write: 'strict' },
+  'feedback.deleted': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.verdict_recorded': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.incident.escalated': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.published_artifact.taken_down': { category: 'support', severity: 'notice', write: 'strict' },
+  'moderation.published_artifact.takedown_reverted': { category: 'support', severity: 'notice', write: 'strict' },
+
+  // Handler coverage: system prompts and agent ops
+  'settings.system_prompt.created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_created': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_saved': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.version_switched': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.system_prompt.reset': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.version_added': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.seeded': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.version_activated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
+
+  'admin.search.performed': { category: 'support', severity: 'info', write: 'strict' },
+
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // info, not critical: a sign-off row must never itself enter the review queue. The review document is the source of truth.
+  'audit.reviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
+
+  'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
+  // The `platform` trust label on a person's callable function (pages/api/admin/callable-functions).
+  'callable_function.platform.marked': { category: 'settings', severity: 'notice', write: 'strict' },
+  'callable_function.platform.cleared': { category: 'settings', severity: 'notice', write: 'strict' },
+  // Offering a marked function to every signed-in person, set and withdrawn on the same route.
+  'callable_function.audience.set': { category: 'settings', severity: 'notice', write: 'strict' },
+  'callable_function.audience.cleared': { category: 'settings', severity: 'notice', write: 'strict' },
+
+  // Two-person approvals (apps/client/server/admin/approvals). executed/failed are bestEffort because
+  // the gated action has already run (or failed) when they are written; the record keeps the outcome.
+  'admin.approval.requested': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.approved': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.approval.rejected': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  // Admin roles (pages/api/admin/admin-roles). Editing a role's permissions is a grant to every member.
+  'admin.role.created': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.role.updated': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.role.deleted': { category: 'access', severity: 'notice', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;

@@ -13,6 +13,9 @@ on:
     inputs:
       stage:              { type: string,  required: false, default: 'dev' }
       pr_number:          { type: string,  required: false, default: '' }
+      preview_head_sha:   { type: string, required: false, default: '' }
+      preview_deploy_id:  { type: string, required: false, default: '' }
+      pr_eligible_only:   { type: boolean, required: false, default: false }
       e2e_test_id:        { type: string,  required: false, default: '' }
       gate_run:           { type: string,  required: false, default: 'false' }
       playwright_args:    { type: string,  required: true }
@@ -20,12 +23,19 @@ on:
       suite_name:         { type: string,  required: false, default: '' }
       artifact_suffix:    { type: string,  required: false, default: '' }
       timeout_minutes:    { type: number,  required: false, default: 35 }
+      # Playwright's globalTimeout in minutes; keep it below timeout_minutes so teardown can run.
+      global_timeout_minutes: { type: number, required: false, default: 30 }
+      execution_timeout_minutes: { type: number, required: false, default: 32 }
       stamp_promotable:   { type: boolean, required: true }
       wait_for_deploy:    { type: boolean, required: false, default: false }
       show_credits:       { type: boolean, required: false, default: false }
       trigger_label:      { type: string,  required: true }
       concurrency_group:  { type: string,  required: true }
       cancel_in_progress: { type: boolean, required: false, default: false }
+    outputs:
+      outcome:
+        description: 'Actual E2E execution outcome (passed, failed, skipped, cancelled, setup_failed, no_tests, incomplete, not_run)'
+        value: ${{ jobs.e2e-run.outputs.outcome }}
 
 env:
   AWS_REGION: us-east-2
@@ -33,11 +43,14 @@ env:
 
 jobs:
   e2e-run:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: ${{ inputs.suite_name && format('E2E {0} Tests', inputs.suite_name) || 'E2E Tests' }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    outputs:
+      outcome: ${{ steps.results.outputs.outcome }}
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
       statuses: write
     concurrency:
@@ -54,8 +67,13 @@ jobs:
           STAGE_INPUT: ${{ inputs.stage }}
           PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
           STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+          TRUSTED_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.preview_deploy_id != '' && inputs.preview_head_sha != '' }}
         run: |
           if [ -n "$PR_NUMBER" ]; then
+            if [ "$TRUSTED_PREVIEW" != "true" ]; then
+              echo "::error::Preview execution requires a trusted main dispatch and verified deployment evidence"
+              exit 1
+            fi
             if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
               echo "::error::pr_number must be digits-only; got '$PR_NUMBER'"
               exit 1
@@ -77,8 +95,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           submodules: false
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify trusted checkout
+        if: inputs.preview_head_sha != ''
+        env:
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$TRUSTED_SHA"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -86,7 +113,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Cache pnpm dependencies
         uses: actions/cache@v5
@@ -106,7 +133,8 @@ jobs:
         run: pnpm core:build
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
+        if: inputs.pr_number == ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -140,18 +168,15 @@ jobs:
             core.warning(`No recent main commit has staging/deploy=success; ${process.env.STATUS_CONTEXT} status will be skipped.`);
 
       - name: Install Playwright Chromium
-        working-directory: apps/client
-        # Cap the install: the yauzl/Node>=24.16 extraction wedge
-        # (playwright#40724) can hang this step indefinitely, idling to the job
-        # cap. Fail fast instead.
-        timeout-minutes: 8
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 12
+        uses: ./.github/actions/install-playwright-chromium
 
       # A staging deploy in flight swaps the Lambda under the suite, so requests can
       # 401 or 5xx mid-run. When that hits the create-test-user setup it skips the
       # ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
-      # "did not run"). E2E_CLEANUP_SECRET itself is stable across deploys (every
-      # tier gets the same value), so the secret is not the hazard - the swap is.
+      # "did not run"). E2E_CLEANUP_SECRET itself is stable across deploys (the
+      # deployer re-seeds the same per-tier value), so the secret is not the hazard -
+      # the swap is.
       # /api/ping is not enough: CloudFront answers it green all
       # through a deploy. So gate on the `staging/deploy` commit status: if the
       # newest commit that has one is still `pending`, a deploy is running - wait it
@@ -206,6 +231,32 @@ jobs:
           echo "Deployment did not become healthy within 300s"
           exit 1
 
+      - name: Verify immutable preview readiness before testing
+        if: inputs.pr_number != '' && inputs.preview_deploy_id != ''
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.preview_head_sha }}
+          DEPLOY_ID: ${{ inputs.preview_deploy_id }}
+        with:
+          script: |
+            await require('./.github/scripts/preview-e2e.cjs').verify({ github, context });
+
+      # Weekend-scaled previews run zero tasks; wake one before the suite instead of letting
+      # every test time out. Its own budget, outside execution_timeout_minutes.
+      - name: Wake a sleeping preview before testing
+        if: inputs.pr_number != '' && inputs.preview_deploy_id != ''
+        timeout-minutes: 10
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}
+          E2E_PREVIEW_SEED: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SST_STAGE: ${{ steps.config.outputs.stage }}
+        run: |
+          . .github/scripts/derive-preview-e2e-secret.sh "$SST_STAGE"
+          node .github/scripts/preview-e2e.cjs
+
       - name: Resolve E2E test ID
         id: testid
         env:
@@ -233,15 +284,19 @@ jobs:
 
       - name: Run E2E tests
         id: e2e
+        timeout-minutes: ${{ inputs.execution_timeout_minutes }}
         env:
           API_URL: ${{ steps.config.outputs.api_url }}
           # dev/staging read E2E_CLEANUP_SECRET from SST via the `sst shell` wrapper
           # below (same-account). Preview stacks live in a SEPARATE AWS account the
           # dev role can't `sst shell` into, so for pr<N> runs we inject the secret
-          # directly from this repo secret instead. It must match the stable value the
-          # deployer seeds onto every stage (bike4mind-deployer _tier-deploy.yml).
+          # per-stage from this seed secret instead. It must match what the deployer sets on
+          # each preview stage.
+          # Empty for dev/staging: the suite prefers the env var over SST, so the preview
+          # value must never reach a staging run.
           # E2E_CLEANUP_SECRET is the ONLY SST value the suite needs.
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          E2E_PREVIEW_SEED: ${{ inputs.pr_number != '' && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
           E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
           # Only wire the credits webhook for suites that report credits (show_credits).
           # Core runs the notebook project too, but must NOT post the in-process AI
@@ -251,23 +306,21 @@ jobs:
           SLACK_WEBHOOK_URL_SLOW_RESPONSES: ${{ inputs.show_credits && secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES || '' }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '3'
+          PW_GLOBAL_TIMEOUT_MINUTES: ${{ inputs.global_timeout_minutes }}
           CI: 'true'
           PLAYWRIGHT_ARGS: ${{ inputs.playwright_args }}
+          PR_E2E: ${{ inputs.pr_eligible_only && 'true' || 'false' }}
           PR_NUMBER: ${{ inputs.pr_number }}
           SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
           set -o pipefail
           [ -n "$PLAYWRIGHT_ARGS" ] && echo "Running: playwright test $PLAYWRIGHT_ARGS" || echo "Running full suite"
           if [ -n "$PR_NUMBER" ]; then
-            # Preview (cross-account): E2E_CLEANUP_SECRET is injected from the repo secret above.
-            # An unset secret means the suite cannot start at all. Report that as a labeled
-            # skip rather than `exit 1`: a red job here is indistinguishable from a real test
-            # failure, so a reviewer reads "e2e broke on this PR" when nothing ever ran. The
-            # Slack status below branches on `preview_skipped` AHEAD of pass/fail for the same reason
-            # - a skip must never render as either. (The promotion commit status needs no
-            # skip branch: it already returns early on zero parsed results.)
+            # Preview (cross-account): E2E_CLEANUP_SECRET is derived from the seed above.
+            . .github/scripts/derive-preview-e2e-secret.sh "$SST_STAGE"
+            # A missing preview seed is an explicit skip, not evidence of passing tests.
             if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-              echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
+              echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET_PREVIEW repo secret is not configured; skipping (0 tests run)"
               echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -277,119 +330,50 @@ jobs:
             pnpm sst shell --stage "$SST_STAGE" -- pnpm --filter client exec playwright test $PLAYWRIGHT_ARGS 2>&1 | tee apps/client/playwright-output.txt
           fi
 
+      - name: Scrub E2E secrets from test output
+        id: scrub
+        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        env:
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
+          E2E_PREVIEW_SEED: ${{ startsWith(steps.config.outputs.stage, 'pr') && secrets.E2E_CLEANUP_SECRET_PREVIEW || '' }}
+          STAGE: ${{ steps.config.outputs.stage }}
+        # A preview run sent its derived value, not the staging secret, so scrub that one.
+        run: |
+          case "$STAGE" in pr[0-9]*) . .github/scripts/derive-preview-e2e-secret.sh "$STAGE" ;; esac
+          python3 scripts/scrub-e2e-token.py apps/client/playwright-report apps/client/e2e/test-results apps/client/pw-results.json
+
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
+        # Private repositories only: an artifact is readable by everyone who can read the repo.
+        # Elsewhere the report is reached through the QA ingest below.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' && github.repository_visibility == 'private'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report${{ inputs.artifact_suffix && format('-{0}', inputs.artifact_suffix) || '' }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
-          path: apps/client/playwright-report/
+          path: |
+            apps/client/playwright-report/
+            apps/client/pw-results.json
           retention-days: 7
 
       - name: Parse test results
         id: results
         if: always()
-        run: |
-          JSON_FILE="apps/client/pw-results.json"
-
-          if [ ! -f "$JSON_FILE" ]; then
-            echo "passed=0" >> $GITHUB_OUTPUT
-            echo "failed=0" >> $GITHUB_OUTPUT
-            echo "skipped=0" >> $GITHUB_OUTPUT
-            echo "not_started=0" >> $GITHUB_OUTPUT
-            echo "real_failed=0" >> $GITHUB_OUTPUT
-            echo "setup_failed=0" >> $GITHUB_OUTPUT
-            echo "total=0" >> $GITHUB_OUTPUT
-            echo "spec_summary=_No results available_" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          FAILED=$(jq '.stats.unexpected' "$JSON_FILE")
-          echo "failed=$FAILED" >> $GITHUB_OUTPUT
-
-          # A spec "ran" if at least one of its test entries has non-empty results.
-          # Tests that were registered but never started (global timeout / worker killed)
-          # appear in pw-results.json with ok:true but results:[] — the old .ok? logic
-          # incorrectly counted those as passed. We now gate on actual execution evidence.
-          SPEC_LINES=$(jq -r '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            . as $suite |
-            ($suite.title | gsub("e2e/"; "") | gsub("\\.spec\\.ts$"; "")) as $raw |
-            ([$raw | split("-")[] | split("_")[] | (.[0:1] | ascii_upcase) + .[1:]] | join(" ")) as $name |
-            ([.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0))] | length) as $ran |
-            ([.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok == true)] | length) as $passed |
-            ([.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
-              select(all(.tests[]?; (.results? // []) | length == 0))] | length) as $not_run |
-            (if $ran == 0 and $not_run > 0 then ":no_entry_sign:"
-             elif $ran > 0 and $ran - $passed > 0 then ":red_circle:"
-             else ":large_green_circle:" end) +
-            " " + $name + ": " + ($passed|tostring) + "/" + ($ran|tostring) +
-            (if $not_run > 0 then " (" + ($not_run|tostring) + " did not run)" else "" end)
-          ] | join("\\n")' "$JSON_FILE")
-          echo "spec_summary=$SPEC_LINES" >> $GITHUB_OUTPUT
-
-          # Count only specs that actually executed (results non-empty) — excludes
-          # unstarted tests that pw-results.json still records with ok:true.
-          PASSED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok == true)] | length
-          ] | add // 0' "$JSON_FILE")
-          TOTAL_WITH_OK=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0))] | length
-          ] | add // 0' "$JSON_FILE")
-          SKIPPED=$(( TOTAL_WITH_OK - PASSED - FAILED ))
-          # Clamp to 0 — FAILED includes setup failures not in TOTAL_WITH_OK
-          [ "$SKIPPED" -lt 0 ] && SKIPPED=0
-          NOT_STARTED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
-              select(all(.tests[]?; (.results? // []) | length == 0))] | length
-          ] | add // 0' "$JSON_FILE")
-          # Split failures into real-test vs setup: a spec that ran (non-empty results) and
-          # did NOT pass (.ok != true), scoped to non-setup files vs setup files. Lets the
-          # commit-status step leave e2e/smoke *missing* (not a sticky red) when the only
-          # failure is a global-setup infra flake (e.g. create-test-user 401), while a genuine
-          # test failure still posts `failure`. Mirrors the PASSED computation, inverted.
-          REAL_FAILED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok != true)] | length
-          ] | add // 0' "$JSON_FILE")
-          SETUP_FAILED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$")) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok != true)] | length
-          ] | add // 0' "$JSON_FILE")
-          TOTAL=$((PASSED + SKIPPED + FAILED))
-          echo "passed=$PASSED" >> $GITHUB_OUTPUT
-          echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
-          echo "not_started=$NOT_STARTED" >> $GITHUB_OUTPUT
-          echo "real_failed=$REAL_FAILED" >> $GITHUB_OUTPUT
-          echo "setup_failed=$SETUP_FAILED" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+        env:
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          E2E_PREVIEW_SKIPPED: ${{ steps.e2e.outputs.preview_skipped }}
+          E2E_CANCELLED: ${{ job.status == 'cancelled' }}
+          E2E_JOB_STATUS: ${{ job.status }}
+          E2E_SUITE_NAME: ${{ inputs.suite_name }}
+        run: node scripts/e2e-outcome.mjs
 
       # Shadow mode: stores the run for /status; the Slack post below still runs.
       # Best-effort by design: scripts/qa-report.mjs exits 0 on every failure. Skipped
       # on the same two states Notify Slack treats specially: a cancelled (superseded)
       # run would store zeros as an infra error, and a preview skip ran nothing.
       - name: Ingest QA run (shadow)
-        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' }}
+        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 10
         env:
@@ -400,7 +384,7 @@ jobs:
           QA_ENV: ${{ steps.config.outputs.env_label }}
           QA_BRANCH: ${{ inputs.pr_number && format('pr-{0}', inputs.pr_number) || github.ref_name }}
           QA_TRIGGER: ${{ inputs.trigger_label }}
-          QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
+          QA_SHA: ${{ inputs.preview_head_sha || steps.tested_sha.outputs.sha || github.sha }}
           SHOW_CREDITS: ${{ inputs.show_credits }}
         run: |
           args=(--results apps/client/pw-results.json --report-dir apps/client/playwright-report --counts-out qa-counts.json)
@@ -410,7 +394,7 @@ jobs:
           fi
           node scripts/qa-report.mjs "${args[@]}"
 
-      # Phase 4 gate: /status counts must match the Slack summary before the post is removed.
+      # The legacy QA ingest still uses spec-level accounting; compare during migration.
       - name: Compare QA counts with the Slack summary (shadow)
         if: ${{ !cancelled() && hashFiles('qa-counts.json') != '' }}
         continue-on-error: true
@@ -440,23 +424,15 @@ jobs:
           fi
 
       - name: Post e2e commit status
-        # Stamp the tested staging SHA with the full-suite result so the prod-
-        # promotion console can read a per-commit e2e signal. `success` only when
-        # nothing failed, nothing was left unstarted, and tests actually ran.
-        # A setup-only infra flake leaves the status MISSING (not `failure`) so a
-        # transient blip doesn't stick a red on the SHA - see the guard below.
-        # Best-effort: never fails the e2e run.
+        # Nonrequired status; errors must replace any stale success on the tested SHA.
         if: always() && inputs.stamp_promotable && steps.tested_sha.outputs.sha != ''
         continue-on-error: true
         uses: actions/github-script@v8
         env:
           TESTED_SHA: ${{ steps.tested_sha.outputs.sha }}
-          FAILED: ${{ steps.results.outputs.failed }}
-          NOT_STARTED: ${{ steps.results.outputs.not_started }}
-          REAL_FAILED: ${{ steps.results.outputs.real_failed }}
-          SETUP_FAILED: ${{ steps.results.outputs.setup_failed }}
-          PASSED: ${{ steps.results.outputs.passed }}
-          TOTAL: ${{ steps.results.outputs.total }}
+          E2E_STATE: ${{ steps.results.outputs.state }}
+          E2E_LABEL: ${{ steps.results.outputs.label }}
+          E2E_CANCELLED: ${{ job.status == 'cancelled' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           STATUS_CONTEXT: ${{ inputs.status_context }}
           SUITE_NAME: ${{ inputs.suite_name }}
@@ -464,32 +440,9 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const sha = process.env.TESTED_SHA;
-            const total = Number(process.env.TOTAL || '0');
-            // Also the backstop for a run that skipped before Playwright started: it parses
-            // zero results, so the status is left missing rather than posted red. (Preview
-            // runs, the only ones that can skip, are never promotable to begin with - both
-            // callers tie stamp_promotable to an empty pr_number - so this step does not run
-            // for them at all. Belt and braces.)
-            if (total === 0) {
-              core.warning(`No e2e results parsed; skipping ${process.env.STATUS_CONTEXT} status (leaves it missing = not promotable).`);
-              return;
-            }
-            // Setup/infra flake (e.g. create-test-user 401): the only failures are in global
-            // setup and no actual test failed. Leave e2e/smoke MISSING (still not promotable,
-            // but re-seedable by a later run) rather than a sticky `failure` red on the SHA.
-            const realFailed = Number(process.env.REAL_FAILED || '0');
-            const setupFailed = Number(process.env.SETUP_FAILED || '0');
-            if (realFailed === 0 && setupFailed > 0) {
-              core.warning(`Setup failed (${setupFailed}) with no test failures; skipping ${process.env.STATUS_CONTEXT} status (leaves it missing = re-seedable).`);
-              return;
-            }
-            const ok = process.env.FAILED === '0' && process.env.NOT_STARTED === '0';
-            const state = ok ? 'success' : 'failure';
-            const okDesc = process.env.SUITE_NAME ? `${process.env.SUITE_NAME} e2e subset passed` : 'Full e2e suite passed';
-            const badDesc = process.env.SUITE_NAME ? `${process.env.SUITE_NAME} e2e subset` : 'Full e2e suite';
-            const desc = (ok
-              ? `${okDesc} (${process.env.PASSED}/${total})`
-              : `${badDesc}: ${process.env.FAILED} failed, ${process.env.NOT_STARTED} not started`).slice(0, 140);
+            const cancelled = process.env.E2E_CANCELLED === 'true';
+            const state = cancelled ? 'error' : process.env.E2E_STATE || 'error';
+            const desc = `E2E: ${cancelled ? 'Cancelled' : process.env.E2E_LABEL || 'Setup/deployment failed'}`;
             await github.rest.repos.createCommitStatus({
               owner: 'Bike4Mind', repo: 'bike4mind', sha,
               state, context: process.env.STATUS_CONTEXT, target_url: process.env.RUN_URL, description: desc,
@@ -518,25 +471,15 @@ jobs:
           echo "credits_block=,{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*💳 AI Credits*\\n${CREDITS_LINES}\"}}" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        # Cancelled = superseded gate run (the e2e-core-gate concurrency group cancels
-        # it): post nothing, since its parser emits zeros an always() post would show
-        # as a bogus green. A pre-test failure (install hang, health probe) is failure()
-        # not cancelled(), so it still posts - the total==0 branch in the status
-        # expressions below renders it red instead of a misleading green. The skip
-        # branch ahead of it is the third state: a preview run that could not start
-        # for a missing repo secret is neither a pass nor a failure. The action button
-        # below degrades with it: no report is uploaded on a skip, so it links the run
-        # rather than an empty artifact list. Its `!= 'true' && '#artifacts' || ''` shape
-        # is deliberate - '' is falsy in a GitHub expression, so the non-empty branch has
-        # to come first or the anchor would be appended in both states.
+        # Superseded runs stay quiet in Slack; their workflow/status records cancellation.
         if: ${{ !cancelled() }}
-        uses: slackapi/slack-github-action@v2
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2
         with:
           webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (preview e2e unavailable: E2E_CLEANUP_SECRET repo secret not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
+              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) - ${{ steps.results.outputs.label || 'Setup/deployment failed' }}",
               "blocks": [
                 {
                   "type": "header",
@@ -550,7 +493,7 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.e2e.outputs.preview_skipped == 'true' && ':fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)' || steps.results.outputs.total == '0' && ':x: No results (run failed before tests)' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
+                      "text": "*Status*\n${{ steps.results.outputs.slack_status || ':x: Setup/deployment failed' }}"
                     },
                     {
                       "type": "mrkdwn",
@@ -567,24 +510,17 @@ jobs:
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Results*\n:white_check_mark: ${{ steps.results.outputs.passed }} passed  :x: ${{ steps.results.outputs.failed }} failed  :fast_forward: ${{ steps.results.outputs.skipped }} skipped  :no_entry_sign: ${{ steps.results.outputs.not_started }} not started  Total: ${{ steps.results.outputs.total }}"
+                      "text": "*Results*\n${{ steps.results.outputs.slack_results || 'No test results available' }}"
                     }
                   ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*${{ inputs.suite_name && format('{0} Run Summary', inputs.suite_name) || 'Test Run Summary' }}*\n${{ steps.results.outputs.spec_summary }}"
-                  }
-                }${{ steps.credits.outputs.credits_block }},
+                }${{ steps.results.outputs.slack_spec_blocks }}${{ steps.credits.outputs.credits_block }},
                 {
                   "type": "actions",
                   "elements": [
                     {
                       "type": "button",
-                      "text": { "type": "plain_text", "text": "${{ steps.e2e.outputs.preview_skipped == 'true' && 'View Run' || 'View Report' }}" },
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ steps.e2e.outputs.preview_skipped != 'true' && '#artifacts' || '' }}"
+                      "text": { "type": "plain_text", "text": "${{ steps.e2e.outputs.preview_skipped != 'true' && github.repository_visibility == 'private' && 'View Report' || 'View Run' }}" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ steps.e2e.outputs.preview_skipped != 'true' && github.repository_visibility == 'private' && '#artifacts' || '' }}"
                     }
                   ]
                 }
@@ -595,7 +531,7 @@ jobs:
       # hung prod must not hold up the Slack post or the promotion stamp above. No --counts-out:
       # the Slack comparison reads the staging ingest's counts.
       - name: Ingest QA run to production
-        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && vars.QA_INGEST_URL_PROD != '' }}
+        if: ${{ !cancelled() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' && vars.QA_INGEST_URL_PROD != '' }}
         continue-on-error: true
         timeout-minutes: 10
         env:
@@ -606,7 +542,7 @@ jobs:
           QA_ENV: ${{ steps.config.outputs.env_label }}
           QA_BRANCH: ${{ inputs.pr_number && format('pr-{0}', inputs.pr_number) || github.ref_name }}
           QA_TRIGGER: ${{ inputs.trigger_label }}
-          QA_SHA: ${{ steps.tested_sha.outputs.sha || github.sha }}
+          QA_SHA: ${{ inputs.preview_head_sha || steps.tested_sha.outputs.sha || github.sha }}
           SHOW_CREDITS: ${{ inputs.show_credits }}
         run: |
           args=(--results apps/client/pw-results.json --report-dir apps/client/playwright-report)
@@ -615,11 +551,6 @@ jobs:
           fi
           node scripts/qa-report.mjs "${args[@]}"
 
-      # Asymmetry by design: this fails the job only on a real test failure, but the
-      # commit-status step above also posts `failure` when not_started > 0 (specs
-      # registered but never executed). So the run conclusion can be green while the
-      # status (e2e/core, e2e/smoke) is red. Consumers MUST read the commit status,
-      # never poll this run's conclusion.
-      - name: Fail if E2E tests failed
-        if: steps.results.outputs.failed != '0'
+      - name: Enforce E2E outcome
+        if: ${{ !cancelled() && steps.results.outputs.outcome != 'passed' && steps.results.outputs.outcome != 'skipped' }}
         run: exit 1

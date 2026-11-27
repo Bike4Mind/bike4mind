@@ -1,6 +1,6 @@
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
-import { IFileTag, IFileTagRepository, TagType } from '@bike4mind/common';
+import { IFileTag, IFileTagRepository, MAX_LAKE_FILE_TAG_NAME_LENGTH, TagType } from '@bike4mind/common';
 import { extractStaticRegistryPrefixedTags } from '../dataLakeService/authorizeLakeWrite';
 import { isDataLakeTagName, normalizeTagName } from './tagName';
 
@@ -55,6 +55,12 @@ export const create = async (userId: string, parameters: TagCreateParameters, ad
   // body spread, but a direct call with the session type would otherwise answer 500.
   if (params.type !== TagType.FILE) {
     throw new BadRequestError('Tag Service - Create: Invalid tag type');
+  }
+
+  if (name.length > MAX_LAKE_FILE_TAG_NAME_LENGTH) {
+    throw new BadRequestError(
+      `Tag Service - Create: a tag name cannot be longer than ${MAX_LAKE_FILE_TAG_NAME_LENGTH} characters`
+    );
   }
 
   if (isDataLakeTagName(name)) {

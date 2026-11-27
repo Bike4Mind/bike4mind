@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { ApiProvider, api, resetRedirectingGuard } from './ApiContext';
-import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
+import { refreshSession, resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { useAccessToken } from '../hooks/useAccessToken';
 import { useStepUpStore } from '@client/app/stores/useStepUpStore';
 import { STEP_UP_REQUIRED_CODE } from '@bike4mind/common';
@@ -335,6 +335,31 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
     await expect(api.get('/api/agents')).rejects.toBeTruthy();
     expect(errorSpy).toHaveBeenCalledWith('Axios Error:', expect.anything());
+
+    errorSpy.mockRestore();
+  });
+
+  it('does NOT console-log a 400/401 from the refresh exchange (the "no session" answer), but logs its 5xx', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    useAccessToken.setState({ accessToken: null, expired: false, mfaPending: false });
+
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+    await expect(refreshSession()).rejects.toBeTruthy();
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(makeStatus(config, 400))) as AxiosAdapter;
+    await expect(refreshSession()).rejects.toBeTruthy();
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // The same 401 on any other endpoint is still a real error.
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+    await expect(api.post('/api/auth/otc', {}, { skipAuthRefresh: true })).rejects.toBeTruthy();
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    // An outage on the exchange is not an answer about the session, so it stays visible.
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(makeStatus(config, 503))) as AxiosAdapter;
+    await expect(refreshSession()).rejects.toBeTruthy();
+    expect(errorSpy).toHaveBeenCalledTimes(2);
 
     errorSpy.mockRestore();
   });

@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { ACQUISITION_FIELD_LIMIT } from './acquisitionLimits';
+
+export { ACQUISITION_FIELD_LIMIT } from './acquisitionLimits';
 
 export const ACQUISITION_COOKIES = {
   marketingFirstTouch: 'b4m-first-touch',
@@ -6,8 +9,6 @@ export const ACQUISITION_COOKIES = {
   lastTouch: 'b4m_last_touch',
   session: 'b4m_utm',
 } as const;
-
-export const ACQUISITION_FIELD_LIMIT = 128;
 
 const normalizeField = (value: unknown) =>
   typeof value === 'string' && value.trim() ? value.trim().slice(0, ACQUISITION_FIELD_LIMIT) : undefined;

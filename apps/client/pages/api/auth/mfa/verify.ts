@@ -3,7 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { completeMfaLogin } from '@server/auth/completeMfaLogin';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { redactUserSecretsForSelf, selfUserResponseSchema, type IUser } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import * as z from 'zod';
 
@@ -22,7 +23,9 @@ const verifyResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi() // Now requires authentication
+// jwtOnly: a passed challenge mints a full session, so an API key must never reach it (the mfaPending
+// JWT still does). Same as passkey/authenticate.ts; see sessionGrantRoutesRejectApiKeys.test.ts.
+const handler = baseApi({ auth: 'jwtOnly' })
   // No rate limiting - using 3-strike abort for stronger security
   .post(
     asyncHandler(async (req, res) => {
@@ -49,9 +52,16 @@ const handler = baseApi() // Now requires authentication
         });
       }
 
-      let loginBody: unknown;
+      // Before the code is checked and the session minted, and outside the try: a lookup failure
+      // must leave no session behind and must not be booked as a failed MFA attempt.
+      const { roleAdminPermissions = [] } = await resolveRoleAdminPermissions<
+        Pick<IUser, 'adminRoleIds' | 'roleAdminPermissions'>
+      >({ adminRoleIds: freshUser.adminRoleIds });
+
+      let loginBody: { deviceRemembered: boolean; accessToken: string };
+      let loggedInUser: Awaited<ReturnType<typeof mfaService.verifyMFA>>['user'];
       try {
-        if (!freshUser.mfa || !freshUser.mfa.totpEnabled) {
+        if (!mfaService.userHasMFAConfigured(freshUser)) {
           return res.status(400).json({ error: 'MFA is not enabled for this user.' });
         }
 
@@ -62,12 +72,8 @@ const handler = baseApi() // Now requires authentication
 
         const { accessToken, deviceRemembered } = await completeMfaLogin(req, res, result.user, { rememberDevice });
 
-        loginBody = {
-          verified: true,
-          deviceRemembered,
-          accessToken,
-          user: redactUserSecretsForSelf(result.user),
-        };
+        loggedInUser = result.user;
+        loginBody = { deviceRemembered, accessToken };
       } catch (error: unknown) {
         // A code checked by mfaService was counted before it was compared; anything else is counted now.
         const updatedUser = await mfaService.recordFailedMfaAttempt(error, freshUser.id, userRepository);
@@ -90,9 +96,16 @@ const handler = baseApi() // Now requires authentication
         });
       }
 
-      // Outside the try: a response-boundary failure is our bug and must not be booked as a
-      // failed MFA attempt by the catch above.
-      return respond(res, verifyResponseSchema, loginBody);
+      // Outside the try: a response-boundary failure is our bug and must not be booked as a failed
+      // MFA attempt by the catch above. The permissions were resolved above; this reattaches them to
+      // the post-verification user without a second role query.
+      return respond(res, verifyResponseSchema, {
+        verified: true,
+        ...loginBody,
+        user: redactUserSecretsForSelf(
+          await resolveRoleAdminPermissions(loggedInUser, async () => [{ permissions: roleAdminPermissions }])
+        ),
+      });
     })
   );
 

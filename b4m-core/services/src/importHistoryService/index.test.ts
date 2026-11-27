@@ -30,6 +30,7 @@ vi.mock('yauzl', () => ({
           return zip;
         },
         openReadStream: (_entry: unknown, cb: (err: Error | null, stream: unknown) => void) => cb(null, makeStream()),
+        close: () => {},
       };
       cb(null, zip);
     },

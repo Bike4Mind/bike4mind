@@ -16,6 +16,7 @@ import {
   Tabs,
   TabList,
   Tab,
+  Link,
 } from '@mui/joy';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
@@ -29,11 +30,13 @@ import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { useHelpIndex, searchEntries, getEntryBySlug } from '@client/app/hooks/useHelpIndex';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
+import { adminSurfaceExcludeProps } from '@client/app/utils/themes/customizations/adminSkin';
 import HelpContent from './HelpContent';
 import HelpTOC from './HelpTOC';
 import HelpBreadcrumbs from './HelpBreadcrumbs';
 import HelpChat from './HelpChat';
 import RecentlyViewedList from './RecentlyViewedList';
+import { HelpTutorialsEntry } from '../tutorial/core/HelpTutorialsEntry';
 import { useHelpChat } from '@client/app/hooks/useHelpChat';
 import { useHelpAnalytics, useMyRecentlyViewed } from '@client/app/hooks/useHelpAnalytics';
 import { useArticleFeedbackState } from '@client/app/hooks/useArticleFeedbackState';
@@ -42,6 +45,7 @@ import ThumbDownIcon from '@mui/icons-material/ThumbDown';
 import ThumbUpOutlinedIcon from '@mui/icons-material/ThumbUpOutlined';
 import ThumbDownOutlinedIcon from '@mui/icons-material/ThumbDownOutlined';
 import type { HelpIndexEntry } from '@bike4mind/scripts/help/types';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 
 const MIN_PANEL_WIDTH = 320;
 const MAX_PANEL_WIDTH = 1200;
@@ -423,6 +427,8 @@ const HelpPanel: React.FC = () => {
           Welcome to the documentation. Browse by category or use the search above.
         </Typography>
 
+        <HelpTutorialsEntry />
+
         <RecentlyViewedList articles={recentlyViewed} onNavigate={navigateTo} />
 
         {helpIndex.categories.map(category => (
@@ -461,6 +467,21 @@ const HelpPanel: React.FC = () => {
             </List>
           </Box>
         ))}
+
+        <Box sx={{ mb: 3 }}>
+          <Typography level="title-md" sx={{ mb: 1 }}>
+            Security and legal
+          </Typography>
+          <Link
+            href={ExternalLinks.dataHandling}
+            target="_blank"
+            rel="noopener noreferrer"
+            level="body-sm"
+            data-testid="help-home-data-handling-link"
+          >
+            API data handling and sub-processors
+          </Link>
+        </Box>
       </Box>
     );
   };
@@ -474,6 +495,8 @@ const HelpPanel: React.FC = () => {
       anchor="right"
       open={open}
       onClose={close}
+      // App-wide chrome: the admin skin stops here (adminSkin.ts).
+      {...adminSurfaceExcludeProps}
       slotProps={{
         content: {
           sx: {

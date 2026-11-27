@@ -18,7 +18,8 @@ export const BreakdownTable: React.FC<{
   keyLabel: string;
   testid: string;
   rows: BreakdownRow[];
-}> = ({ title, keyLabel, testid, rows }) => (
+  emptyText?: string;
+}> = ({ title, keyLabel, testid, rows, emptyText = 'No usage in this window.' }) => (
   <Box>
     <Typography level="title-sm" sx={{ mb: 1 }}>
       {title}
@@ -46,7 +47,7 @@ export const BreakdownTable: React.FC<{
             <tr>
               <td colSpan={4}>
                 <Typography level="body-sm" color="neutral">
-                  No usage in this window.
+                  {emptyText}
                 </Typography>
               </td>
             </tr>

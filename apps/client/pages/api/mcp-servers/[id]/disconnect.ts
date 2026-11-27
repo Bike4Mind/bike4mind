@@ -29,7 +29,7 @@ const handler = baseApi().delete(async (req, res) => {
         await mcpServerRepository.delete(server.id);
       }
     } catch (mcpError) {
-      console.warn('Failed to delete Atlassian MCP server during unlink:', mcpError);
+      req.logger.warn('Atlassian MCP server delete during unlink failed', { userId: req.user.id, error: mcpError });
     }
 
     res.status(200).json({ success: true });

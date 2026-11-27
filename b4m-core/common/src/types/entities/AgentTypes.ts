@@ -1,4 +1,5 @@
 // b4m-core/common/src/types/entities/AgentTypes.ts
+import type { ConfidenceGateMode } from '../../schemas/settings';
 import { IBaseRepository } from './BaseTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { IModelConfig } from './ModelConfigTypes';
@@ -49,12 +50,9 @@ export interface IAgentRepository extends IBaseRepository<IAgentDocument>, ICred
 
   appendMemory: (agentId: string, entry: IMemoryEntry) => Promise<IAgentDocument | null>;
   getMemoryJournal: (agentId: string, limit?: number) => Promise<IMemoryEntry[]>;
-  replaceMemoryJournal: (agentId: string, entries: IMemoryEntry[]) => Promise<void>;
-  appendWorldMemory: (agentId: string, entry: IWorldMemoryEntry) => Promise<void>;
   getWorldMemory: (agentId: string, limit?: number) => Promise<IWorldMemoryEntry[]>;
   findHeartbeatEligible: () => Promise<IAgentDocument[]>;
   updateHeartbeat: (agentId: string, timestamp: Date, mood?: { energy: number; curiosity: number }) => Promise<void>;
-  pushPendingMessage(agentId: string, message: IPendingAgentMessage): Promise<void>;
   consumePendingMessages(agentId: string): Promise<IPendingAgentMessage[]>;
   addCooldown(agentId: string, otherAgentId: string, cooldownUntil: Date): Promise<void>;
   cleanExpiredCooldowns(agentId: string): Promise<void>;
@@ -255,6 +253,9 @@ export interface IAgent extends ICreditHolder, IModelConfig {
   deniedTools?: string[];
   maxIterations?: { quick: number; medium: number; very_thorough: number };
   defaultThoroughness?: 'quick' | 'medium' | 'very_thorough';
+  confidenceGateThreshold?: number;
+  confidenceGateMode?: ConfidenceGateMode;
+  confidenceGateSelfReport?: boolean;
   defaultVariables?: Record<string, string>;
   exclusiveMcpServers?: string[];
   fallbackModels?: string[];

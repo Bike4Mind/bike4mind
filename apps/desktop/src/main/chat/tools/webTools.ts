@@ -23,8 +23,9 @@ const MAX_QUERY_CHARS = 400;
 /** What the frame around a result may take, so frame plus body stays under the tool cap. */
 const FRAME_ROOM = 1_000;
 
-/** The route's own sentence; see WEB_SEARCH_NOT_CONFIGURED_MSG in the shared websearch tool. */
-const NOT_CONFIGURED = /^Web search is not configured\b/;
+/** The route's own sentences; see WEB_SEARCH_NOT_CONFIGURED_MSG and WEB_SEARCH_UNAVAILABLE_MSG in
+ * the shared websearch tool. */
+const SERVER_NOTICE = /^Web search is (?:not configured|temporarily unavailable)\b/;
 
 const SIGNED_OUT = 'Web search and fetch need a signed-in Bike4Mind session. Ask the user to sign in again.';
 
@@ -71,11 +72,22 @@ function describeFailure(error: unknown, action: string, stalled: string, log?: 
   if (message === STOPPED_WHILE_QUEUED) return new Error(message);
   if (name === 'SessionRevokedError' || name === 'NotAuthenticatedError') return new Error(SIGNED_OUT);
   const status = isAxiosError(error) ? error.response?.status : undefined;
-  const body = (isAxiosError(error) ? (error.response?.data ?? {}) : {}) as { error?: unknown; message?: unknown };
+  const body = (isAxiosError(error) ? (error.response?.data ?? {}) : {}) as {
+    error?: unknown;
+    message?: unknown;
+    errorCode?: unknown;
+  };
   const raw = typeof body.error === 'string' ? body.error : typeof body.message === 'string' ? body.message : '';
   const detail = oneLine(raw, 300);
   const code = isAxiosError(error) ? error.code : undefined;
   if (status === 401 || status === 403) return new Error(SIGNED_OUT);
+  // Refused before the provider ran, so retrying the same call changes nothing until credits are added.
+  if (status === 422 && body.errorCode === 'insufficient_credits') {
+    return new Error(
+      `The ${action} was not run: the account is out of credits. Tell the user to add credits in Bike4Mind, then try again.` +
+        (detail ? ` (${detail})` : '')
+    );
+  }
   if (status === 429) return new Error(`The ${action} was rate limited by the server. Try again later.`);
   if (
     code === 'ECONNABORTED' ||
@@ -177,8 +189,8 @@ export const webSearch: ToolDefinition = {
 
     // Passed through as the server said it, unframed: it is the server's own sentence, and the
     // model has to tell the user rather than read it as an empty web.
-    if (NOT_CONFIGURED.test(text.trim())) {
-      context.report?.label('Web search is not configured');
+    if (SERVER_NOTICE.test(text.trim())) {
+      context.report?.label('Web search unavailable');
       return text;
     }
 
@@ -303,13 +315,12 @@ export const webFetch: ToolDefinition = {
       required: ['url'],
     },
   },
-  // Asked in 'ask', run in 'auto' unless the reply has read untrusted content (see ChatService's
-  // DirectoryTurn.untrusted). The URL is the model's choice, and a query string is how an injected page would ask for
-  // something to be sent out; web_search has no such destination, so it is not gated.
+  // Asked in 'ask', run in 'auto'. The URL is the model's choice and can carry data out; web_search has no such
+  // destination, so it is not gated.
   needsApproval: () => true,
   approval(input) {
     const url = parseFetchUrl(requireString(input, 'url'));
-    // One key for every site, so "always" covers the tool rather than one host; see ALWAYS_OVERRIDES_TAINT.
+    // One key for every site, so "always" covers the tool rather than one host.
     return { detail: `Read ${url.toString()}`, key: 'web-fetch', alwaysCovers: 'every site' };
   },
   async run(input, context) {

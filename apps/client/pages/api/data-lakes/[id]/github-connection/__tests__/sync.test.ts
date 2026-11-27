@@ -2,18 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   BadRequestError,
   ConflictError,
+  ForbiddenError,
   InternalServerError,
   NotFoundError,
 } from '@bike4mind/server-utils/utils/errors';
 
 const h = vi.hoisted(() => ({
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
   connRecordLastError: vi.fn(),
   sendToQueue: vi.fn(),
   requireFeatureEnabled: vi.fn(() => () => {}),
+  assertLakePlanAllowed: vi.fn(),
+  enableGitHubConnectionForLake: vi.fn(),
 }));
+
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
+  enableGitHubConnectionForLake: h.enableGitHubConnectionForLake,
+}));
+
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: h.assertLakePlanAllowed }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -28,7 +38,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
@@ -61,9 +71,11 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active' });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.connFindByDataLakeIdAny.mockResolvedValue(CONN);
     h.sendToQueue.mockResolvedValue(undefined);
+    h.assertLakePlanAllowed.mockResolvedValue(undefined);
+    h.enableGitHubConnectionForLake.mockResolvedValue(true);
   });
 
   it('gates on both EnableDataLakes and EnableDataLakeGitHub', () => {
@@ -82,9 +94,20 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
   });
 
   it('checks org access before looking up the connection', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Data lake not found'));
     await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(NotFoundError);
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('checks the paid-plan gate for the owning org and queues nothing on a refusal', async () => {
+    h.assertLakePlanAllowed.mockRejectedValue(new ForbiddenError('plan required'));
+    await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(
+      expect.objectContaining({ user: { id: 'u1', isAdmin: false } }),
+      'orgA'
+    );
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.enableGitHubConnectionForLake).not.toHaveBeenCalled();
   });
 
   it('404s a missing lake', async () => {
@@ -104,7 +127,7 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
     it('lets the creator re-sync without an org check', async () => {
       const { res, status, json } = makeRes();
       await run(makeReq(), res);
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
       expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeIngestQueue', {
         connectionId: 'conn1',
         manual: true,
@@ -146,9 +169,30 @@ describe('POST /api/data-lakes/[id]/github-connection/sync', () => {
     await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(BadRequestError);
   });
 
-  it('409s a disabled connection', async () => {
+  it('re-enables a connection paused by archive/delete and enqueues the re-sync', async () => {
     h.connFindByDataLakeIdAny.mockResolvedValue({ ...CONN, enabled: false });
+    const { res, status } = makeRes();
+    await run(makeReq(), res);
+    expect(h.enableGitHubConnectionForLake).toHaveBeenCalledWith('lake1');
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeIngestQueue', {
+      connectionId: 'conn1',
+      manual: true,
+    });
+    expect(status).toHaveBeenCalledWith(202);
+  });
+
+  it('409s a disabled connection with a pending disconnect, without re-enabling it', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ ...CONN, enabled: false, disconnectRequestedAt: new Date() });
     await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(ConflictError);
+    expect(h.enableGitHubConnectionForLake).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('does not re-enable a disabled connection when the plan gate refuses', async () => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ ...CONN, enabled: false });
+    h.assertLakePlanAllowed.mockRejectedValue(new ForbiddenError('plan required'));
+    await expect(run(makeReq(), makeRes().res)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(h.enableGitHubConnectionForLake).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 

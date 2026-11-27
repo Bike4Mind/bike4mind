@@ -7,7 +7,7 @@ tags: [quests, tasks, automation, planning]
 
 # Quest Master - Autonomous Task Planning
 
-*(Experimental Feature — enable in [Profile > Settings > Experimental Features](./profile-settings.md#experimental-features))*
+_(Experimental Feature — enable in [Profile > Settings > Experimental Features](./profile-settings.md#experimental-features))_
 
 > **Availability:** This feature may be enabled or disabled at the organizational level by your administrator. If the toggle is grayed out with "Disabled by administrator," contact your organization admin to request access.
 
@@ -16,6 +16,7 @@ Quest Master is Bike4Mind's revolutionary autonomous task planning and execution
 ## What is Quest Master?
 
 Quest Master acts as your AI project manager, taking your high-level goals and:
+
 1. **Analyzing** the request to understand all requirements
 2. **Planning** an optimal sequence of tasks
 3. **Executing** tasks in parallel where possible
@@ -24,28 +25,36 @@ Quest Master acts as your AI project manager, taking your high-level goals and:
 ## How It Works
 
 ### 1. Request Analysis
+
 When you enable Quest Master for a prompt, it first analyzes your request to identify:
+
 - Core objectives
 - Required information gathering
 - Necessary computations or generations
 - Dependencies between tasks
 
 ### 2. Task Planning
+
 Quest Master creates a structured plan with:
+
 - **Main Quests**: High-level objectives
 - **Sub-Quests**: Specific tasks to achieve each objective
 - **Dependencies**: Which tasks must complete before others
 - **Parallel Opportunities**: Tasks that can run simultaneously
 
 ### 3. Task Execution
+
 The system then:
+
 - Executes independent tasks in parallel
 - Monitors progress in real-time
 - Handles errors gracefully
 - Adjusts the plan if needed
 
 ### 4. Result Synthesis
+
 Finally, Quest Master:
+
 - Collects all sub-task results
 - Synthesizes them into a coherent response
 - Provides a summary of what was accomplished
@@ -56,41 +65,48 @@ Finally, Quest Master:
 Quest Master can handle various task types:
 
 ### 📝 Text Generation
+
 - Research and analysis
 - Content creation
 - Summarization
 - Translation
 
 ### 🖼️ Image Generation
+
 - Creating visuals from descriptions
 - Generating multiple variations
 - Style transformations
 
 ### 🔍 Web Search
+
 - Current information gathering
 - Fact checking
 - Market research
 - Competitor analysis
 
 ### 🧮 Math Solving
+
 - Complex calculations
 - Statistical analysis
 - Financial modeling
 - Scientific computations
 
 ### 💻 Code Writing
+
 - Algorithm implementation
 - Bug fixes
 - Code refactoring
 - Documentation generation
 
 ### 👁️ Vision Review
+
 - Image analysis
 - Content extraction
 - Visual comparison
 - Quality assessment
 
 ### 👤 Human Tasks
+
 - Tasks requiring human input
 - Approval workflows
 - Creative decisions
@@ -100,22 +116,26 @@ Quest Master can handle various task types:
 ### Enabling Quest Master
 
 **Step 1 — Enable the feature:**
+
 1. Click your **avatar** in the sidebar footer to open your Profile
 2. Go to the **Settings** tab
 3. Scroll to **Experimental Features** and toggle **Quest Master** on
 
 **Step 2 — Enable in a notebook:**
+
 1. Open a notebook and click the **Smart Tools** dropdown
 2. Toggle **Quest Master** on
 3. Submit your request as normal
 
-**Viewing your quests:**
-1. In the left sidebar footer, click the **three-dot menu** (more options button)
-2. Select **My Quests** to see all your quest history and status
+**Viewing historical plans:**
+Open the notebook where the plan was created and find its Quest Master reply in chat history. Existing plans still support progress updates and exports from that reply.
+
+The legacy v4 **My Quests** page (`/quests`) and the v5 graph page (`/quests-v5`) have been retired. Their navigation entries and the v5 experimental toggle are removed. Existing plan and graph records are retained; this retirement does not delete stored data.
 
 ### Best Use Cases
 
 Quest Master excels at:
+
 - **Research Projects**: "Analyze the AI industry landscape for 2024"
 - **Content Creation**: "Create a comprehensive guide about machine learning"
 - **Comparative Analysis**: "Compare the top 5 project management tools"
@@ -133,8 +153,9 @@ Quest Master excels at:
 ## Visual Progress Tracking
 
 Quest Master provides real-time visual feedback:
+
 - **Task Cards**: Each sub-task displayed as a card
-- **Status Indicators**: 
+- **Status Indicators**:
   - 🔵 Not Started
   - 🟡 In Progress
   - ✅ Completed
@@ -147,6 +168,7 @@ Quest Master provides real-time visual feedback:
 **User Request**: "Create a business plan for an AI tutoring startup"
 
 **Quest Master Plan**:
+
 ```
 Main Quest: AI Tutoring Startup Business Plan
 ├── Market Research (3 sub-tasks)
@@ -170,21 +192,27 @@ Main Quest: AI Tutoring Startup Business Plan
 ## Advanced Features
 
 ### Parallel Execution
+
 Quest Master intelligently identifies tasks that can run simultaneously:
+
 - Independent research tasks
 - Multiple image generations
 - Separate calculations
 - Unrelated web searches
 
 ### Error Recovery
+
 If a sub-task fails, Quest Master:
+
 - Attempts alternate approaches
 - Continues with other tasks
 - Reports issues clearly
 - Provides partial results
 
 ### Context Sharing
+
 Information discovered in one task is automatically available to subsequent tasks, enabling:
+
 - Progressive refinement
 - Building on previous findings
 - Avoiding duplicate work
@@ -207,6 +235,7 @@ Information discovered in one task is automatically available to subsequent task
 ## Integration with Other Features
 
 Quest Master works seamlessly with:
+
 - **Web Search**: Gathering current information
 - **Image Generation**: Creating supporting visuals
 - **Mementos**: Saving important findings

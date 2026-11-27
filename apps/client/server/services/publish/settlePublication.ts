@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, liveShareTokens, type PublishedArtifactShareToken } from '@bike4mind/database';
 import type { CitableSource, PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 import { checkPublishQuota } from './checkPublishQuota';
-import { invalidatePublishCdn, toCacheTarget } from './invalidatePublishCdn';
-import type { MinimalLogger } from './minimalLogger';
+import { invalidatePublishCdn, toCacheTarget } from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
+import type { MinimalLogger } from '@bike4mind/server-utils/services/publish/minimalLogger';
+import { consumePublishAction } from './publishRateLimit';
 import { restrictDuplicatePublications } from './restrictDuplicatePublications';
+import { assertPublicationPublicLink } from './organizationPolicy';
 
 export type SettleSource =
   { kind: 'reply'; sessionId: string; messageId: string } | { kind: 'fabfile'; fabFileId: string };
@@ -12,6 +14,8 @@ export type SettleSource =
 export interface SettlePublicationInput {
   ownerId: string;
   isAdmin?: boolean;
+  /** The owner's account creation time, which picks their daily publish allowance (publishRateLimit.ts). */
+  ownerCreatedAt: Date | string | undefined;
   source: SettleSource;
   tier: PublishScopeTier;
   scopeId: string;
@@ -37,7 +41,8 @@ function newPublicId(): string {
  * the owner already handed out is the one the new scope and visibility apply to. Owner-keyed, so
  * an admin publishing someone else's source never rewrites the owner's record. Afterwards purges
  * the CDN when a cached public copy can exist and narrows older duplicates
- * (restrictDuplicatePublications). Returns the saved record, or the status + body to answer with.
+ * (restrictDuplicatePublications). Returns the saved record, or the status + body to answer with;
+ * throws the 429 from consumePublishAction when the owner's daily publish allowance is used up.
  */
 export async function settlePublication(input: SettlePublicationInput) {
   const { ownerId, source, tier, scopeId, visibility, renderedBody } = input;
@@ -59,7 +64,10 @@ export async function settlePublication(input: SettlePublicationInput) {
       tier: PublishScopeTier;
       scopeId: string;
       visibility: PublishVisibility;
+      shareTokens?: PublishedArtifactShareToken[];
     } | null>();
+
+  if (existing?.shareTokens?.length && liveShareTokens(existing).length > 0) await assertPublicationPublicLink(input);
 
   const publicId = existing?.publicId ?? newPublicId();
   const slug = existing?.slug ?? `${SLUG_PREFIX[source.kind]}-${publicId}`;
@@ -80,6 +88,10 @@ export async function settlePublication(input: SettlePublicationInput) {
       body: { error: quota.error, code: quota.code, details: quota.details },
     };
   }
+
+  // Counted after every refusal above, so a rejected publish does not use up the allowance. The
+  // write below failing or finding the row gone hands the action back, since nothing was published.
+  const action = await consumePublishAction({ id: ownerId, isAdmin: input.isAdmin, createdAt: input.ownerCreatedAt });
 
   const publishedAt = new Date();
   const saved = await PublishedArtifact.findOneAndUpdate(
@@ -108,8 +120,12 @@ export async function settlePublication(input: SettlePublicationInput) {
     // Upsert only for a first publish. If `existing` was deleted after the lookup, an upsert would
     // try to re-insert its _id over the soft-deleted row and fail with a duplicate key.
     { upsert: !existing, new: true }
-  );
+  ).catch(async (err: unknown) => {
+    await action.refund();
+    throw err;
+  });
   if (!saved) {
+    await action.refund();
     return {
       ok: false as const,
       status: 409,

@@ -17,6 +17,7 @@ function updatePendingAssistant(update: (message: Message) => Message): void {
 export interface WireAgentEventsInput {
   agent: ReActAgent;
   orchestrator: SubagentOrchestrator;
+  isCurrent?: () => boolean;
 }
 
 /**
@@ -29,12 +30,16 @@ export interface WireAgentEventsInput {
  * step handlers already used) and emits tavern events through the bridge
  * singleton; neither owns React-lifecycle state.
  */
+// Process-wide, so a run of a released session never shares an id with one of the session after a sign-in.
+let nextSubagentRunId = 0;
+
 export function wireAgentEvents(input: WireAgentEventsInput): void {
-  const { agent, orchestrator } = input;
+  const { agent, orchestrator, isCurrent = () => true } = input;
 
   // Set up step event handlers for real-time UI updates
   // These persist for the lifetime of the agent and update pending messages in the store
   const stepHandler = (step: AgentStep) => {
+    if (!isCurrent()) return;
     updatePendingAssistant(message => ({
       ...message,
       metadata: {
@@ -51,6 +56,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   // turnController replaces the content with the final answer when the turn ends.
   let liveText = { messageId: '', iteration: -1, text: '' };
   const textDeltaHandler = ({ delta, iteration }: { delta: string; iteration: number }) => {
+    if (!isCurrent()) return;
     updatePendingAssistant(message => {
       const sameStream = liveText.messageId === message.id && liveText.iteration === iteration;
       liveText = { messageId: message.id, iteration, text: (sameStream ? liveText.text : '') + delta };
@@ -58,6 +64,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
     });
   };
   const clearLiveText = () => {
+    if (!isCurrent()) return;
     if (!liveText.text) return;
     liveText = { ...liveText, text: '' };
     updatePendingAssistant(message => ({ ...message, content: PENDING_ASSISTANT_CONTENT }));
@@ -95,6 +102,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
     }
   };
   const tavernActionHandler = (step: AgentStep) => {
+    if (!isCurrent()) return;
     const toolName = step.metadata?.toolName ?? 'tool';
     const toolUseId = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const queue = pendingToolUseIds.get(toolName) ?? [];
@@ -108,6 +116,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
     });
   };
   const tavernObservationHandler = (step: AgentStep) => {
+    if (!isCurrent()) return;
     // `observation` steps don't carry toolName directly on the step -
     // the agent calls emitObservationStep(toolName, observation) and the
     // resulting step's `content` is the observation body. Pull toolName
@@ -145,6 +154,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
     });
   };
   const tavernFinalAnswerHandler = (step: AgentStep) => {
+    if (!isCurrent()) return;
     const text = typeof step.content === 'string' ? step.content : '';
     if (!text) return;
     void bridgePresence.emitEvent({
@@ -166,8 +176,8 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   // concurrently). Final totals reach session.metadata separately via the
   // orchestrator's onSubagentUsage callback (wired in index.tsx).
   const subagentRunState = new WeakMap<ReActAgent, { runId: string; usageHandler: () => void }>();
-  let nextSubagentRunId = 0;
   orchestrator.setBeforeRunCallback((subagent, subagentType) => {
+    if (!isCurrent()) return;
     subagent.on('thought', stepHandler);
     subagent.on('observation', stepHandler);
     subagent.on('action', stepHandler);
@@ -177,6 +187,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
 
     const runId = `run-${nextSubagentRunId++}`;
     const usageHandler = () => {
+      if (!isCurrent()) return;
       useCliStore
         .getState()
         .updateLiveSubagentUsage(runId, subagentType, subagent.getTokenUsage(), subagent.getCreditsUsage());

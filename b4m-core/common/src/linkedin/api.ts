@@ -1,3 +1,5 @@
+import { stderrLogger, type CommonLogger } from '../logging/stderrLogger';
+
 export const LINKEDIN_API_VERSION = '202604';
 
 export type OrganizationLookupResponse = {
@@ -142,8 +144,10 @@ export interface BatchShareStatisticsResponse {
  */
 export class LinkedInApi {
   private readonly accessToken: string;
-  constructor(accessToken: string) {
+  private readonly logger: CommonLogger;
+  constructor(accessToken: string, opts: { logger?: CommonLogger } = {}) {
     this.accessToken = accessToken;
+    this.logger = opts.logger ?? stderrLogger;
   }
 
   /**
@@ -194,7 +198,10 @@ export class LinkedInApi {
       }
     );
     if (!orgsResponse.ok) {
-      console.error(JSON.stringify({ status: orgsResponse.status, statusText: orgsResponse.statusText }));
+      this.logger.error('[LinkedIn] Request failed', {
+        status: orgsResponse.status,
+        statusText: orgsResponse.statusText,
+      });
       throw new Error(`Failed to fetch organizations ${orgsResponse.statusText}`);
     }
 
@@ -211,7 +218,10 @@ export class LinkedInApi {
     });
 
     if (!profileResponse.ok) {
-      console.error(JSON.stringify({ status: profileResponse.status, statusText: profileResponse.statusText }));
+      this.logger.error('[LinkedIn] Request failed', {
+        status: profileResponse.status,
+        statusText: profileResponse.statusText,
+      });
       throw new Error(`Failed to fetch profile ${profileResponse.statusText}`);
     }
 
@@ -233,7 +243,10 @@ export class LinkedInApi {
       }
     );
     if (!postsResponse.ok) {
-      console.error(JSON.stringify({ status: postsResponse.status, statusText: postsResponse.statusText }));
+      this.logger.error('[LinkedIn] Request failed', {
+        status: postsResponse.status,
+        statusText: postsResponse.statusText,
+      });
       throw new Error(`Failed to fetch posts ${postsResponse.statusText}`);
     }
     const posts = (await postsResponse.json()) as PostLookupResponse;
@@ -249,7 +262,10 @@ export class LinkedInApi {
       },
     });
     if (!statsResponse.ok) {
-      console.error(JSON.stringify({ status: statsResponse.status, statusText: statsResponse.statusText }));
+      this.logger.error('[LinkedIn] Request failed', {
+        status: statsResponse.status,
+        statusText: statsResponse.statusText,
+      });
       throw new Error(`Failed to fetch stats ${statsResponse.statusText}`);
     }
     const stats = (await statsResponse.json()) as SocialMetadataResponse;
@@ -268,7 +284,10 @@ export class LinkedInApi {
       }
     );
     if (!statsResponse.ok) {
-      console.error(JSON.stringify({ status: statsResponse.status, statusText: statsResponse.statusText }));
+      this.logger.error('[LinkedIn] Request failed', {
+        status: statsResponse.status,
+        statusText: statsResponse.statusText,
+      });
       throw new Error(`Failed to fetch stats ${statsResponse.statusText}`);
     }
     const stats = (await statsResponse.json()) as BatchSocialMetadataResponse;

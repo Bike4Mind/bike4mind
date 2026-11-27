@@ -5,7 +5,7 @@ import BaseRepository from '@bike4mind/db-core';
 /**
  * Organization-level Jira API connection schema.
  *
- * Enables org-scoped Jira access for automation features like LiveOps Triage,
+ * Enables org-scoped Jira access for automation features,
  * replacing the system-level ATLASSIAN_* environment configuration for
  * multi-tenant deployments. Mirrors OrgGitHubConnectionModel: one connection
  * per organization, plus an optional system default (organizationId: null).

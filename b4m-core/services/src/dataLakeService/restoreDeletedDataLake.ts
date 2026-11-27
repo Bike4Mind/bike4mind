@@ -1,4 +1,5 @@
 import type {
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileRepository,
@@ -14,6 +15,7 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { assertLakeCountWithinCap } from './assertLakeCountWithinCap';
 import type { UnarchiveResult } from './unarchiveDataLake';
 import {
   bestEffortSetConnectionEnabled,
@@ -33,8 +35,14 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMe
       lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
       dataLakes: Pick<
         IDataLakeRepository,
-        'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimRestoring'
+        | 'findById'
+        | 'settleLifecycleStatus'
+        | 'setStats'
+        | 'activateIfDraft'
+        | 'claimRestoring'
+        | 'countCountedCreatedBy'
       >;
+      adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
       fabFiles: Pick<
         IFabFileRepository,
@@ -97,6 +105,12 @@ export const restoreDeletedDataLake = async (
   // can be retried (the dedup + undelete + recompute below are idempotent).
   if (existing.status !== 'deleted' && existing.status !== 'restoring') {
     throw new BadRequestError(`Cannot restore a data lake in '${existing.status}' status`);
+  }
+  // A 'deleted' lake is outside the per-user lake count, so bringing one back is a create as far
+  // as the cap is concerned. Counted against the creator, like createDataLake. A 'restoring' lake
+  // already counts, so a retried restore is not re-checked.
+  if (existing.status === 'deleted') {
+    await assertLakeCountWithinCap(db, existing.createdByUserId);
   }
 
   // Conditional on the statuses the guard above admitted, NOT a blind $set: the check ran against a

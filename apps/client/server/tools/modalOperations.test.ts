@@ -1,26 +1,110 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+// @vitest-environment node
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { findOne, find } = vi.hoisted(() => ({ findOne: vi.fn(), find: vi.fn() }));
-
-vi.mock('@bike4mind/database/social', () => ({
-  ModalModel: { findOne, find, findById: vi.fn() },
+const model = vi.hoisted(() => ({
+  findOne: vi.fn(),
+  find: vi.fn(),
+  create: vi.fn(),
+  findById: vi.fn(),
+  findByIdAndUpdate: vi.fn(),
+  findByIdAndDelete: vi.fn(),
 }));
-vi.mock('./modalImageHandler', () => ({ ModalImageHandler: class {} }));
+
+vi.mock('@bike4mind/database/social', () => ({ ModalModel: model }));
+vi.mock('./modalImageHandler', () => ({ ModalImageHandler: { processModalImageUrl: vi.fn() } }));
 vi.mock('@server/utils/cacheExternalImage', () => ({ cacheExternalImage: vi.fn() }));
 
-import { updateModal } from './modalOperations';
+import { collectModalChanges, createModal, deleteModal, modalAuditTitle, updateModal } from './modalOperations';
+
+const ID = '64b7f0c2a1b2c3d4e5f60718';
+
+describe('collectModalChanges', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('collects the writes that succeeded inside the callback', async () => {
+    model.create.mockResolvedValue({ _id: 'new-1', title: 'Welcome' });
+    model.findById.mockResolvedValue({ _id: ID, tags: [] });
+    model.findByIdAndUpdate.mockResolvedValue({ _id: ID, textMessage: 'Banner' });
+    model.findByIdAndDelete.mockResolvedValue({ _id: 'gone-1', title: 'Old' });
+
+    const { changes } = await collectModalChanges(async () => {
+      await createModal({ type: 'modal', title: 'Welcome' }, 'actor-1');
+      await updateModal(ID, { enabled: true }, 'actor-1');
+      await deleteModal('gone-1');
+    });
+
+    expect(changes).toEqual([
+      { kind: 'created', id: 'new-1', title: 'Welcome' },
+      { kind: 'updated', id: ID, title: 'Banner' },
+      { kind: 'deleted', id: 'gone-1', title: 'Old' },
+    ]);
+  });
+
+  it('does not collect a delete that found nothing', async () => {
+    model.findByIdAndDelete.mockResolvedValue(null);
+
+    const { changes } = await collectModalChanges(() => deleteModal('missing'));
+
+    expect(changes).toEqual([]);
+  });
+
+  it('hands collected changes to onThrow before rethrowing', async () => {
+    model.findByIdAndDelete.mockResolvedValue({ _id: 'gone-1', title: 'Old' });
+    const onThrow = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      collectModalChanges(async () => {
+        await deleteModal('gone-1');
+        throw new Error('boom');
+      }, onThrow)
+    ).rejects.toThrow('boom');
+
+    expect(onThrow).toHaveBeenCalledWith([{ kind: 'deleted', id: 'gone-1', title: 'Old' }]);
+  });
+
+  it('does not call onThrow when nothing was written', async () => {
+    const onThrow = vi.fn();
+
+    await expect(
+      collectModalChanges(async () => {
+        throw new Error('boom');
+      }, onThrow)
+    ).rejects.toThrow('boom');
+
+    expect(onThrow).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op outside a collector', async () => {
+    model.findByIdAndDelete.mockResolvedValue({ _id: 'x', title: 'X' });
+    await expect(deleteModal('x')).resolves.toMatchObject({ success: true });
+  });
+});
+
+describe('modalAuditTitle', () => {
+  it('prefers the title and falls back to the body, then Untitled', () => {
+    expect(modalAuditTitle({ title: 'Launch', textMessage: 'Body' })).toBe('Launch');
+    expect(modalAuditTitle({ title: null, textMessage: 'Banner body' })).toBe('Banner body');
+    expect(modalAuditTitle({})).toBe('Untitled');
+  });
+
+  it('caps long banner bodies at 80 characters', () => {
+    const title = modalAuditTitle({ textMessage: 'x'.repeat(500) });
+    expect(title).toHaveLength(80);
+    expect(title.endsWith('...')).toBe(true);
+  });
+});
 
 describe('updateModal search-term regex escaping', () => {
   beforeEach(() => {
-    findOne.mockReset().mockResolvedValue(null);
-    find.mockReset().mockReturnValue({ lean: () => [] });
+    model.findOne.mockReset().mockResolvedValue(null);
+    model.find.mockReset().mockReturnValue({ lean: () => [] });
   });
 
   it('escapes regex metacharacters in the $regex operand instead of passing them raw', async () => {
-    await updateModal(undefined, { title: '(a+)+$' });
+    await updateModal(undefined, { title: '(a+)+$' }, 'actor-1');
 
-    expect(findOne).toHaveBeenCalledTimes(1);
-    const query = findOne.mock.calls[0][0];
+    expect(model.findOne).toHaveBeenCalledTimes(1);
+    const query = model.findOne.mock.calls[0][0];
     const titleRe = query.$or[0].title as RegExp;
     const textRe = query.$or[1].textMessage as RegExp;
 
@@ -38,17 +122,36 @@ describe('updateModal search-term regex escaping', () => {
   it('coerces a non-string search term instead of throwing inside escapeRegex', async () => {
     // `params` is untyped model output and can carry a number or boolean here. `new RegExp(123)`
     // used to coerce silently; escapeRegex would throw on `.replace`.
-    await updateModal(undefined, { title: 123 });
+    await updateModal(undefined, { title: 123 }, 'actor-1');
 
-    expect(findOne).toHaveBeenCalledTimes(1);
-    expect((findOne.mock.calls[0][0].$or[0].title as RegExp).source).toBe('123');
+    expect(model.findOne).toHaveBeenCalledTimes(1);
+    expect((model.findOne.mock.calls[0][0].$or[0].title as RegExp).source).toBe('123');
   });
 
   it('leaves an ordinary search term matchable (contains semantics preserved)', async () => {
-    await updateModal(undefined, { title: 'Launch' });
+    await updateModal(undefined, { title: 'Launch' }, 'actor-1');
 
-    const titleRe = findOne.mock.calls[0][0].$or[0].title as RegExp;
+    const titleRe = model.findOne.mock.calls[0][0].$or[0].title as RegExp;
     expect(titleRe.test('Summer Launch Event')).toBe(true);
     expect(titleRe.flags).toContain('i');
+  });
+});
+
+describe('updateModal image handling', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('does not re-process an unchanged image and passes the actor for a new one', async () => {
+    const { ModalImageHandler } = await import('./modalImageHandler');
+    const process = vi.mocked(ModalImageHandler.processModalImageUrl);
+    process.mockResolvedValue('modal-images/new.png');
+    const stored = 'https://b.s3.amazonaws.com/uploads/old.png';
+    model.findById.mockResolvedValue({ _id: ID, tags: [], imageUrl: stored });
+    model.findByIdAndUpdate.mockResolvedValue({ _id: ID, title: 'T' });
+
+    await updateModal(ID, { imageUrl: stored, enabled: true }, 'actor-1');
+    expect(process).not.toHaveBeenCalled();
+
+    await updateModal(ID, { imageUrl: 'https://b.s3.amazonaws.com/uploads/new.png' }, 'actor-1');
+    expect(process).toHaveBeenCalledWith('https://b.s3.amazonaws.com/uploads/new.png', 'actor-1');
   });
 });

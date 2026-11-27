@@ -42,6 +42,18 @@ export function pyodideSandboxWorkerBody(): void {
       set: (name: string, value: unknown) => void;
       delete: (name: string) => void;
     };
+    FS: {
+      analyzePath: (path: string) => { exists: boolean };
+      mkdir: (path: string) => void;
+      readdir: (path: string) => string[];
+      lstat: (path: string) => { mode: number };
+      isDir: (mode: number) => boolean;
+      writeFile: (path: string, data: Uint8Array) => void;
+      chmod: (path: string, mode: number) => void;
+      lchmod: (path: string, mode: number) => void;
+      unlink: (path: string) => void;
+      rmdir: (path: string) => void;
+    };
   }
 
   let pyodideBaseUrl = DEFAULT_PYODIDE_BASE_URL;
@@ -49,7 +61,9 @@ export function pyodideSandboxWorkerBody(): void {
   const loadedPackages = new Set<string>();
   let cancelled = false;
 
-  const post = (response: PyodideWorkerResponse): void => self.postMessage(response);
+  // Bound once at start, so guest code that replaces `self.postMessage` through `js` never sees a call's nonce.
+  const postToParent = self.postMessage.bind(self);
+  const post = (response: PyodideWorkerResponse): void => postToParent(response);
 
   async function initializePyodide(): Promise<void> {
     if (pyodide) {
@@ -289,6 +303,222 @@ _result
     }
   }
 
+  /**
+   * Load the code as module `b4m_function` (so a `__main__` block does not run), read FUNCTION and, given
+   * params, call `run(**params)`. Code and params enter through globals, never interpolation; only strings return.
+   */
+  async function callFunction(
+    code: string,
+    packages: string[],
+    paramsJson: string | null,
+    nonce: string,
+    files: { name: string; bytes: ArrayBuffer }[]
+  ): Promise<void> {
+    const startTime = performance.now();
+    const fail = (error: string): void =>
+      post({
+        type: 'call-result',
+        nonce,
+        result: { success: false, output: '', error, executionTime: performance.now() - startTime },
+      });
+    if (!pyodide) {
+      fail('Pyodide not initialized');
+      return;
+    }
+
+    cancelled = false;
+    let globalsSet = false;
+    try {
+      post({
+        type: 'executing',
+        message: packages.length > 0 ? `Loading packages: ${packages.join(', ')}` : 'Preparing...',
+      });
+      await loadPackages(code, packages);
+      if (cancelled) {
+        fail('Execution cancelled');
+        return;
+      }
+      // One Pyodide serves every call, so /data is emptied first; files and directory are then made read-only.
+      const fs = pyodide.FS;
+      // lstat and lchmod so a guest's symlink is removed itself, never followed out of /data.
+      const empty = (dir: string) => {
+        for (const entry of fs.readdir(dir)) {
+          if (entry === '.' || entry === '..') continue;
+          const path = `${dir}/${entry}`;
+          if (fs.isDir(fs.lstat(path).mode)) {
+            fs.lchmod(path, 0o755);
+            empty(path);
+            fs.rmdir(path);
+          } else {
+            fs.lchmod(path, 0o644);
+            fs.unlink(path);
+          }
+        }
+      };
+      const lstatOrNull = (path: string) => {
+        try {
+          return fs.lstat(path);
+        } catch {
+          return null;
+        }
+      };
+      // A guest may have replaced /data with a file or a symlink; the link itself goes, its target is never touched.
+      const existing = lstatOrNull('/data');
+      if (existing && !fs.isDir(existing.mode)) fs.unlink('/data');
+      if (existing && fs.isDir(existing.mode)) {
+        fs.chmod('/data', 0o755);
+        empty('/data');
+      } else if (files.length > 0) {
+        fs.mkdir('/data');
+      }
+      for (const file of files) {
+        // Must stay in sync with CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN, which this serialized body cannot import.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(file.name)) throw new Error('Invalid data file name');
+        fs.writeFile(`/data/${file.name}`, new Uint8Array(file.bytes));
+        fs.chmod(`/data/${file.name}`, 0o444);
+      }
+      if (lstatOrNull('/data')) fs.chmod('/data', 0o555);
+      post({ type: 'executing', message: 'Running...' });
+
+      pyodide.globals.set('_fn_code', code);
+      pyodide.globals.set('_fn_params_json', paramsJson);
+      globalsSet = true;
+
+      // Plain compile() refuses top-level await, so `async def run` is refused by name instead. The caps match
+      // MAX_FUNCTION_OUTPUT_CHARS and FUNCTION_CONTRACT_LIMITS, which the parent applies again; json.dumps output
+      // is ASCII, so its length is its size in bytes.
+      const wrapper = `
+import sys
+import json
+import inspect
+import traceback
+from io import StringIO
+
+_MAX_OUTPUT_CHARS = 100000
+_MAX_CONTRACT_BYTES = 32768
+_MAX_RESULT_BYTES = 5242880
+_MAX_PROBLEMS = 50
+
+class _FunctionCallError(Exception):
+    pass
+
+# JSON turns 3.0 into 3 and True into true, so number types are checked while Python still knows them.
+def _output_type_problems(field, value, path, problems):
+    if len(problems) > _MAX_PROBLEMS or not isinstance(field, dict):
+        return
+    kind = field.get('type')
+    if kind in ('number', 'integer'):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            problems.append({'path': path, 'message': 'must be a number'})
+        elif kind == 'integer' and not isinstance(value, int):
+            problems.append({'path': path, 'message': 'must be a whole number'})
+    elif kind == 'array' and isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _output_type_problems(field.get('items'), item, path + '.' + str(index) if path else str(index), problems)
+    elif kind == 'object' and isinstance(value, dict) and isinstance(field.get('properties'), dict):
+        for name, item in value.items():
+            if isinstance(name, str) and name in field['properties']:
+                _output_type_problems(field['properties'][name], item, path + '.' + name if path else name, problems)
+
+# The class name as traceback prints it, taken from the exception's type so a message cannot change it.
+def _error_class(e):
+    try:
+        kind = type(e)
+        name = kind.__qualname__ if kind.__module__ in ('builtins', '__main__') else kind.__module__ + '.' + kind.__qualname__
+        return str(name)[:100]
+    except Exception:
+        return 'Exception'
+
+def _b4m_call_function(code, params_json):
+    stdout = StringIO()
+    stderr = StringIO()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = stdout
+    sys.stderr = stderr
+    contract_json = None
+    value_json = None
+    output_problems = []
+    error = None
+    error_class = None
+    try:
+        namespace = {'__name__': 'b4m_function'}
+        exec(compile(code, 'function.py', 'exec'), namespace)
+        contract = namespace.get('FUNCTION')
+        if contract is None:
+            raise _FunctionCallError('FUNCTION is not defined')
+        try:
+            contract_text = json.dumps(contract, allow_nan=False)
+        except (TypeError, ValueError) as e:
+            raise _FunctionCallError('FUNCTION is not valid JSON: ' + str(e))
+        if len(contract_text) > _MAX_CONTRACT_BYTES:
+            raise _FunctionCallError('The function contract is larger than 32 KB.')
+        contract_json = contract_text
+        if params_json is not None:
+            run = namespace.get('run')
+            if not callable(run):
+                raise _FunctionCallError('run is not defined as a function')
+            if inspect.iscoroutinefunction(run):
+                raise _FunctionCallError('run must be defined with def, not async def')
+            value = run(**json.loads(params_json))
+            if not isinstance(value, dict):
+                raise _FunctionCallError('run must return a dict')
+            try:
+                value_text = json.dumps(value, allow_nan=False)
+            except (TypeError, ValueError) as e:
+                raise _FunctionCallError('run returned a value that is not valid JSON: ' + str(e))
+            if len(value_text) > _MAX_RESULT_BYTES:
+                raise _FunctionCallError('The function returned a result larger than 5 MB.')
+            value_json = value_text
+            _output_type_problems(contract.get('outputs'), value, '', output_problems)
+    except _FunctionCallError as e:
+        error = str(e)
+    except BaseException as e:
+        error = traceback.format_exc()
+        error_class = _error_class(e)
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+    return {
+        'contract_json': contract_json,
+        'value_json': value_json,
+        'output_problems_json': json.dumps(output_problems) if output_problems else None,
+        'stdout': stdout.getvalue()[:_MAX_OUTPUT_CHARS],
+        'stderr': stderr.getvalue()[:_MAX_OUTPUT_CHARS],
+        'error': None if error is None else error[:_MAX_OUTPUT_CHARS],
+        'error_class': error_class,
+    }
+
+_b4m_call_function(_fn_code, _fn_params_json)
+`;
+
+      const result = await pyodide.runPythonAsync(wrapper);
+      const resultObj = result.toJs({ dict_converter: Object.fromEntries });
+      const text = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+      const error = text(resultObj.error);
+      post({
+        type: 'call-result',
+        nonce,
+        result: {
+          success: !error,
+          contractJson: text(resultObj.contract_json),
+          valueJson: text(resultObj.value_json),
+          outputProblemsJson: text(resultObj.output_problems_json),
+          output: (text(resultObj.stdout) || '') + (text(resultObj.stderr) || ''),
+          error,
+          executionTime: performance.now() - startTime,
+        },
+      });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (pyodide && globalsSet) {
+        pyodide.globals.delete('_fn_code');
+        pyodide.globals.delete('_fn_params_json');
+      }
+    }
+  }
+
   self.onmessage = async (event: MessageEvent<PyodideWorkerMessage>): Promise<void> => {
     const msg = event.data;
 
@@ -304,6 +534,10 @@ _result
 
       case 'execute':
         await executePython(msg.code, msg.packages);
+        break;
+
+      case 'call':
+        await callFunction(msg.code, msg.packages, msg.paramsJson, msg.nonce, msg.files ?? []);
         break;
 
       case 'cancel':

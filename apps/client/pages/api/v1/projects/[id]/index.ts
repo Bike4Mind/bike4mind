@@ -9,16 +9,25 @@
  * mode, scopes and validation come from the contracts; the SPA route is unchanged.
  */
 import { deleteProjectContract, getProjectContract, ProjectEvents, updateProjectContract } from '@bike4mind/common';
-import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
+import {
+  fabFileRepository,
+  projectRepository,
+  sessionRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
-import { toPublicProject } from '@server/projects/toPublicProject';
+import { requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { toPublicProjectFor } from '@server/projects/projectItemReach';
 
 // Named so every project id shares one bucket per method instead of one per pathname.
 const perUserRateLimit = (bucket: string) =>
@@ -30,8 +39,13 @@ const getAccessibleProject = (userId: string, id: string) =>
 const getRoute = nextRouteForContract(getProjectContract, {
   rateLimit: perUserRateLimit('/api/v1/projects/[id]'),
 }).get(async (req, res) => {
-  const project = await getAccessibleProject(req.user.id, req.validatedParams.id);
-  return res.json(toPublicProject(project));
+  // The request-scoped users adapter, so an org-owned key's read grants survive the service's re-read.
+  const project = await projectService.get(
+    req.user.id,
+    { id: req.validatedParams.id },
+    { db: { projects: projectRepository, users: requesterScopedUsers(req, userRepository) } }
+  );
+  return res.json(await toPublicProjectFor(req.user, project));
 });
 
 const updateRoute = nextRouteForContract(updateProjectContract, {
@@ -44,7 +58,7 @@ const updateRoute = nextRouteForContract(updateProjectContract, {
   if (Object.keys(req.validated).length === 0) {
     const owned = await projectRepository.findByIdAndUserId(id, req.user.id);
     if (!owned) throw new NotFoundError('Project not found');
-    return res.json(toPublicProject(owned));
+    return res.json(await toPublicProjectFor(req.user, owned));
   }
 
   let project;
@@ -74,7 +88,7 @@ const updateRoute = nextRouteForContract(updateProjectContract, {
     req.logger
   );
 
-  return res.json(toPublicProject(project));
+  return res.json(await toPublicProjectFor(req.user, project));
 });
 
 const deleteRoute = nextRouteForContract(deleteProjectContract, {
@@ -82,18 +96,29 @@ const deleteRoute = nextRouteForContract(deleteProjectContract, {
 }).delete(async (req, res) => {
   const project = await getAccessibleProject(req.user.id, req.validatedParams.id);
 
-  await projectService.deleteProject(
-    req.user.id,
-    { id: project.id },
-    {
-      db: {
-        projects: projectRepository,
-        sessions: sessionRepository,
-        fabFiles: fabFileRepository,
-        users: userRepository,
-      },
-    }
-  );
+  // Read before the delete: its cascade prunes the project's file list.
+  const cleanUpTargets = await projectRevokeCleanupTargets(project.id, undefined, req.logger);
+
+  const affectedUserIds = await withTransaction(async () => {
+    const affected = new Set<string>();
+    await projectService.deleteProject(
+      req.user.id,
+      { id: project.id },
+      {
+        db: {
+          projects: projectRepository,
+          sessions: sessionRepository,
+          fabFiles: fabFileRepository,
+          users: userRepository,
+        },
+        onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
+      }
+    );
+    return [...affected];
+  });
+  await rescopeUserSubscriptions(affectedUserIds, req.logger);
+
+  await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
 
   // Same analytics event DELETE /api/projects/[id] emits.
   await logEventSafe(

@@ -1,4 +1,4 @@
-import type { LakeAccessView } from '@bike4mind/common';
+import type { LakeAccessView, LakeAccessViewWithAdminBypass } from '@bike4mind/common';
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import { escapeCsvCell } from '@client/app/utils/csv';
 
@@ -25,7 +25,7 @@ const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString
  * Pure and deterministic (input order is already stabilized by the assembler), so it is unit-tested
  * directly and the route just streams the string.
  */
-export function lakeAccessViewToCsv(view: LakeAccessView): string {
+export function lakeAccessViewToCsv(view: LakeAccessViewWithAdminBypass): string {
   const lines: string[] = [];
 
   lines.push('# Data lake access view');
@@ -159,6 +159,9 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
   lines.push(
     '# NOTE: readCount counts every recorded read (a catalog browse included, which returns no file or chunk ids); noResultCount counts searches that returned nothing, which only forced retrieval on a lake-scoped session records - so it is a lower bound and 0 is not proof that every search succeeded'
   );
+  lines.push(
+    '# NOTE: adminBypassReadCount counts reads and no-result searches a platform admin could make only through the admin bypass, not as a member of this lake'
+  );
   if (view.historyTruncated) {
     // readCount/firstAccessedAt are window-scoped when truncated - label them so, never as all-time.
     lines.push('# NOTE: readCount and firstAccessedAt below cover only the truncated window above, not all time');
@@ -172,6 +175,7 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
       'onBehalfOfName',
       'readCount',
       'noResultCount',
+      'adminBypassReadCount',
       'firstAccessedAt',
       'lastAccessedAt',
       'surfaces',
@@ -187,6 +191,7 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
         h.onBehalfOfName,
         h.readCount,
         h.noResultCount,
+        h.adminBypassReadCount,
         iso(h.firstAccessedAt),
         iso(h.lastAccessedAt),
         h.surfaces.join(';'),

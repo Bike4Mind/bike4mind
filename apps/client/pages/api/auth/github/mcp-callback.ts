@@ -6,12 +6,13 @@ import { InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { McpServerName } from '@bike4mind/common';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptEnvVariables } from '@server/security/tokenEncryption';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
+import { oauthProviderErrorCode } from '@server/utils/auth/oauthProviderErrorCode';
 
 function getJwtSecret(): string {
   // Never fall back to a hardcoded secret. Fail closed.
@@ -46,16 +47,26 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   );
 
   try {
-    const { code, state } = req.query;
+    const { code, state, error: providerError } = req.query;
+
+    // warn, not error: a provider error (the user declined consent) or a code-less hit on this public
+    // URL is an expected outcome, and error-level lines raise production alerts.
+    if (providerError) {
+      const providerErrorCode = oauthProviderErrorCode(providerError);
+      req.logger.warn('GitHub authorization not completed', { error: providerErrorCode });
+      auditLogger.failure('oauth_error');
+      const uiError = providerErrorCode === 'access_denied' ? 'access_denied' : 'callback_failed';
+      return res.redirect(`/profile?tab=integrations&github_oauth=error&error=${uiError}#github-integration`);
+    }
 
     if (!code || typeof code !== 'string') {
-      req.logger.error('Missing or invalid code parameter');
+      req.logger.warn('Missing or invalid code parameter');
       auditLogger.failure('missing_code');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=missing_code#github-integration');
     }
 
     if (!state || typeof state !== 'string') {
-      req.logger.error('Missing or invalid state parameter');
+      req.logger.warn('Missing or invalid state parameter');
       auditLogger.failure('missing_state');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=missing_state#github-integration');
     }
@@ -71,7 +82,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       userId = decoded.userId;
       stateNonceHash = decoded.nh;
     } catch (error) {
-      req.logger.error('Invalid state token', error);
+      if (!(error instanceof jwt.JsonWebTokenError)) throw error;
+      req.logger.warn('Invalid state token', error);
       auditLogger.failure('invalid_state');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=invalid_state#github-integration');
     }
@@ -83,12 +95,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // another browser. Fails closed - no cookie, or a mismatch, is rejected.
     const presentedNonceHash = readStateNonceHash(req);
     if (!presentedNonceHash) {
-      req.logger.error('Missing browser-binding nonce cookie - session expired or different browser', { userId });
+      req.logger.warn('Missing browser-binding nonce cookie - session expired or different browser', { userId });
       auditLogger.failure('session_missing');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=session_expired#github-integration');
     }
     if (!stateNonceHash || presentedNonceHash !== stateNonceHash) {
-      req.logger.error('Session mismatch - nonce cookie does not match state token', { userId });
+      req.logger.warn('Session mismatch - nonce cookie does not match state token', { userId });
       auditLogger.failure('session_mismatch');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=session_mismatch#github-integration');
     }
@@ -161,7 +173,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     } catch (fetchError) {
       clearTimeout(tokenTimeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        req.logger.error('GitHub token exchange timed out after 30s');
+        req.logger.warn('GitHub token exchange timed out after 30s');
         return res.redirect('/profile?tab=integrations&github_oauth=error&error=timeout#github-integration');
       }
       throw fetchError;
@@ -170,18 +182,18 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     const tokenData = await tokenResponse.json();
 
     if (tokenData.error) {
-      req.logger.error('[OAuth Callback] GitHub OAuth error', {
-        userId,
-        error: tokenData.error,
-        errorDescription: tokenData.error_description,
-      });
-
       // Handle common duplicate request case with user-friendly error
       if (tokenData.error === 'bad_verification_code') {
         req.logger.warn('[OAuth Callback] Duplicate code detected', { userId });
         auditLogger.failure('auth_code_reused');
         return res.redirect('/profile?tab=integrations&github_oauth=error&error=auth_code_reused#github-integration');
       }
+
+      req.logger.error('[OAuth Callback] GitHub OAuth error', {
+        userId,
+        error: tokenData.error,
+        errorDescription: tokenData.error_description,
+      });
 
       auditLogger.failure(tokenData.error);
       return res.redirect(
@@ -214,7 +226,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     } catch (fetchError) {
       clearTimeout(userTimeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        req.logger.error('GitHub user info fetch timed out after 15s');
+        req.logger.warn('GitHub user info fetch timed out after 15s');
         return res.redirect('/profile?tab=integrations&github_oauth=error&error=timeout#github-integration');
       }
       throw fetchError;
@@ -341,7 +353,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Dynamically discover tools from the GitHub MCP server so the tools list
     // matches what the server actually provides.
     try {
-      const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+      const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
       const result = await invokeMcpHandler<any>({
         envVariables: plaintextEnvVariables,
         name: 'github',

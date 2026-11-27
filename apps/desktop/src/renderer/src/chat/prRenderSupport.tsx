@@ -1,23 +1,24 @@
 import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
-import type { PrBarState, PrDisplayState, PrState, PrSummary } from '@shared/pullRequest';
+import type { PrBarSnapshot, PrBarState, PrDisplayState, PrState, PrSummary } from '@shared/pullRequest';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { PrStatusBar } from './PrStatusBar';
 import { SessionList } from './SessionList';
 
 /** Test-only: the bar and a one-row sidebar rendered to markup, for the PR colour tests. */
 
-export const STATES: { display: PrDisplayState; state: PrState; isDraft: boolean }[] = [
+export const STATES: { display: PrDisplayState; state: PrState; isDraft: boolean; queued?: boolean }[] = [
   { display: 'open', state: 'OPEN', isDraft: false },
   { display: 'draft', state: 'OPEN', isDraft: true },
+  { display: 'queued', state: 'OPEN', isDraft: false, queued: true },
   { display: 'merged', state: 'MERGED', isDraft: false },
   { display: 'closed', state: 'CLOSED', isDraft: false },
 ];
 
 const URL = 'https://github.com/example-org/widgets/pull/611';
 
-function barState(state: PrState, isDraft: boolean): PrBarState {
+function barState(state: PrState, isDraft: boolean, queued: boolean, overrides: Partial<PrBarSnapshot>): PrBarState {
   return {
     sessionId: 'session-1',
     binding: { owner: 'example-org', repo: 'widgets', number: 611, url: URL, source: 'shell', boundAt: '' },
@@ -44,10 +45,11 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
       repoSettings: { autoMergeAllowed: false, allowedMethods: ['squash'] },
       viewer: 'octo-dev',
       fetchedAt: 0,
+      ...overrides,
     },
     gh: 'ok',
     refreshing: false,
-    autoMerge: { mode: null },
+    autoMerge: queued ? { mode: null, queued: { position: 1 } } : { mode: null },
     autoFix: { status: 'off', attempts: 0, max: 5 },
   };
 }
@@ -55,11 +57,17 @@ function barState(state: PrState, isDraft: boolean): PrBarState {
 // The fields the sidebar reads; the rest of a summary is irrelevant to a row's marker.
 const SESSION = { id: 'session-1', title: 'Ladder', mode: 'code', messageCount: 1 } as ChatSessionSummary;
 
-export function renderBar(mode: 'light' | 'dark', state: PrState, isDraft: boolean): string {
+export function renderBar(
+  mode: 'light' | 'dark',
+  state: PrState,
+  isDraft: boolean,
+  queued = false,
+  overrides: Partial<PrBarSnapshot> = {}
+): string {
   return renderToStaticMarkup(
     <CssVarsProvider defaultMode={mode}>
       <PrStatusBar
-        state={barState(state, isDraft)}
+        state={barState(state, isDraft, queued, overrides)}
         onDismiss={async () => ({ ok: true })}
         onRefresh={() => {}}
         onSetOption={async () => ({ ok: true })}
@@ -78,7 +86,6 @@ export function renderSidebar(
       <SessionList
         sessions={[SESSION]}
         mode="code"
-        onModeChange={() => {}}
         loading={false}
         activeId={null}
         statuses={new Map(status === 'done' ? [] : [[SESSION.id, status]])}
@@ -94,6 +101,7 @@ export function renderSidebar(
         onTogglePin={() => {}}
         onToggleArchived={() => {}}
         onRename={() => {}}
+        onDownload={() => {}}
         userSections={EMPTY_SIDEBAR_SECTIONS}
         sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
       />

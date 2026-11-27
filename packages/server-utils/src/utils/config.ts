@@ -1,4 +1,6 @@
 import { Resource } from 'sst';
+import { Logger } from '@bike4mind/observability';
+import { isUnconfiguredSecret, requireConfiguredSecret } from '@bike4mind/common';
 
 /**
  * Safe read for a manifest-optional secret (see b4m-core/resource manifest.ts
@@ -21,28 +23,45 @@ function readOptionalSecret(name: string, read: () => string | undefined): strin
   try {
     return read();
   } catch {
-    console.warn(
+    Logger.warn(
       `[config] ${name} is not linked/provisioned on this stage - degrading to undefined instead of throwing.`
     );
     return undefined;
   }
 }
 
+function unlessUnconfigured(value: string | undefined): string | undefined {
+  return isUnconfiguredSecret(value) ? undefined : value;
+}
+
 const Config = {
-  // Hard-required core boot secrets (see manifest.ts) - intentionally left
-  // unguarded so a missing one fails fast at startup rather than degrading.
+  // Hard-required core secrets (see manifest.ts), never degraded. The two signing secrets are read
+  // on use, so a stage still on a placeholder fails every sign/verify instead of signing with it.
   MONGODB_URI: Resource.MONGODB_URI.value,
-  SESSION_SECRET: Resource.SESSION_SECRET.value,
-  JWT_SECRET: Resource.JWT_SECRET.value,
+  get SESSION_SECRET(): string {
+    return requireConfiguredSecret('SESSION_SECRET', Resource.SESSION_SECRET.value);
+  },
+  get JWT_SECRET(): string {
+    return requireConfiguredSecret('JWT_SECRET', Resource.JWT_SECRET.value);
+  },
   // These are manifest-optional (self-host env-var fallback) but every real deployed
   // stage has always had them linked with a default, so callers assume `string` and
   // are out of scope for the premium-overlay eager-read fix below - left untouched.
   SLACK_WEBHOOK_URL: Resource.SLACK_WEBHOOK_URL.value,
+  SLACK_FEEDBACK_DESTINATIONS: readOptionalSecret(
+    'SLACK_FEEDBACK_DESTINATIONS',
+    () => Resource.SLACK_FEEDBACK_DESTINATIONS.value
+  ),
   SLACK_ERROR_REPORTING_WEBHOOK_URL: Resource.SLACK_ERROR_REPORTING_WEBHOOK_URL.value,
   GOOGLE_CLIENT_ID: Resource.GOOGLE_CLIENT_ID.value,
   GOOGLE_CLIENT_SECRET: Resource.GOOGLE_CLIENT_SECRET.value,
   GITHUB_CLIENT_ID: Resource.GITHUB_CLIENT_ID.value,
   GITHUB_CLIENT_SECRET: Resource.GITHUB_CLIENT_SECRET.value,
+  // Sign in with Apple; optional so a stage without it simply does not register the strategy.
+  APPLE_CLIENT_ID: readOptionalSecret('APPLE_CLIENT_ID', () => Resource.APPLE_CLIENT_ID.value),
+  APPLE_TEAM_ID: readOptionalSecret('APPLE_TEAM_ID', () => Resource.APPLE_TEAM_ID.value),
+  APPLE_KEY_ID: readOptionalSecret('APPLE_KEY_ID', () => Resource.APPLE_KEY_ID.value),
+  APPLE_PRIVATE_KEY: readOptionalSecret('APPLE_PRIVATE_KEY', () => Resource.APPLE_PRIVATE_KEY.value),
   // Read-only data-lake GitHub App; resolved (and 'not-configured' rejected) by getGitHubLakeAppConfig.
   GITHUB_LAKE_APP_CLIENT_ID: readOptionalSecret(
     'GITHUB_LAKE_APP_CLIENT_ID',
@@ -62,6 +81,13 @@ const Config = {
     'GITHUB_LAKE_APP_WEBHOOK_SECRET',
     () => Resource.GITHUB_LAKE_APP_WEBHOOK_SECRET.value
   ),
+  // APNs push delivery; resolved (and 'not-configured' rejected) by readApnsCredentials in ./pushDelivery.
+  APNS_KEY_ID: readOptionalSecret('APNS_KEY_ID', () => Resource.APNS_KEY_ID.value),
+  APNS_TEAM_ID: readOptionalSecret('APNS_TEAM_ID', () => Resource.APNS_TEAM_ID.value),
+  APNS_KEY: readOptionalSecret('APNS_KEY', () => Resource.APNS_KEY.value),
+  APNS_TOPIC: readOptionalSecret('APNS_TOPIC', () => Resource.APNS_TOPIC.value),
+  // FCM (Android push) service account JSON; resolved by readFcmConfig in ./pushDelivery.
+  FCM_SERVICE_ACCOUNT: readOptionalSecret('FCM_SERVICE_ACCOUNT', () => Resource.FCM_SERVICE_ACCOUNT.value),
   STRIPE_WEBHOOK_SECRET: Resource.STRIPE_WEBHOOK_SECRET.value,
   STRIPE_SECRET_KEY: Resource.STRIPE_SECRET_KEY.value,
   STRIPE_PUBLISHABLE_KEY: Resource.STRIPE_PUBLISHABLE_KEY.value,
@@ -73,6 +99,7 @@ const Config = {
   MAIL_PASSWORD: Resource.MAIL_PASSWORD.value,
   ANTHROPIC_API_KEY: Resource.ANTHROPIC_API_KEY.value,
   ANTHROPIC_ADMIN_API_KEY: readOptionalSecret('ANTHROPIC_ADMIN_API_KEY', () => Resource.ANTHROPIC_ADMIN_API_KEY.value),
+  TURNSTILE_SECRET_KEY: readOptionalSecret('TURNSTILE_SECRET_KEY', () => Resource.TURNSTILE_SECRET_KEY.value),
   OPENAI_ADMIN_API_KEY: readOptionalSecret('OPENAI_ADMIN_API_KEY', () => Resource.OPENAI_ADMIN_API_KEY.value),
   GEMINI_API_KEY: Resource.GEMINI_API_KEY.value,
   OKTA_AUDIENCE: Resource.OKTA_AUDIENCE.value,
@@ -83,7 +110,8 @@ const Config = {
   // NOTE: manifest.ts marks this hard-required (unlike the other entries below);
   // left as pre-existing `?.` behavior here rather than reconciled, since changing
   // encryption-key requiredness is out of scope for this change.
-  SECRET_ENCRYPTION_KEY: Resource.SECRET_ENCRYPTION_KEY?.value,
+  // A placeholder reads as unset, so callers take their existing "not configured" path.
+  SECRET_ENCRYPTION_KEY: unlessUnconfigured(Resource.SECRET_ENCRYPTION_KEY?.value),
   // RSA private key for OIDC ID token signing (RS256). Base64-encoded PEM.
   // If not set, an ephemeral key is generated at startup (dev only).
   OAUTH_RSA_PRIVATE_KEY: readOptionalSecret('OAUTH_RSA_PRIVATE_KEY', () => Resource.OAUTH_RSA_PRIVATE_KEY.value),
@@ -135,6 +163,11 @@ const isDevelopment = () => {
   return (isLocal || isDevEnv) && isNotDeployedStage;
 };
 
+// True on stages deployed from this repo's infra (CloudFront sets ORIGIN_VERIFY_SECRET), never
+// for local development or a self-hosted install. infra/web.ts omits that secret when
+// DISABLE_ORIGIN_VERIFY='true', so such a stage reads as not deployed here too.
+const isDeployedStage = () => Boolean(process.env.ORIGIN_VERIFY_SECRET) && process.env.B4M_SELF_HOST !== 'true';
+
 // E2E test endpoint guard - allows /api/test/* on local dev, preview, and staging deployments.
 // Set via E2E_ENDPOINTS_ENABLED env var (injected by SST for preview/staging stages) or isDevelopment().
 // Explicitly blocks production as defense-in-depth even if E2E_ENDPOINTS_ENABLED is accidentally set.
@@ -144,4 +177,7 @@ const isE2EEnabled = () => {
   return isDevelopment();
 };
 
-export { Config, isProduction, isDevelopment, isE2EEnabled };
+export { Config, isProduction, isDevelopment, isDeployedStage, isE2EEnabled };
+
+// Overlay-declared secrets: read by name, never as a typed Resource.<x> field.
+export { readContributedSecret, registerContributedSecrets } from './contributedSecrets';

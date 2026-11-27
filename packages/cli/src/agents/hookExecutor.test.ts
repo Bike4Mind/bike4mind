@@ -23,7 +23,7 @@ const mockRunShellCommand = vi.mocked(runShellCommand);
 // Threaded into every executeHooks call because `perm` is now required (a
 // forgotten wiring is a type error, not a silent unprompted bypass).
 const ALLOW_ALL = {
-  permissionManager: { needsPermission: () => false },
+  permissionManager: { needsPermission: () => false, isExactCommandSessionTrusted: () => false },
   promptFn: async () => ({ action: 'allow-once' as const }),
 } as unknown as ShellCommandPermissionDeps;
 

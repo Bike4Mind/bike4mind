@@ -139,7 +139,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       responseFormat: jsonSchemaFormat,
     });
 
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
@@ -152,7 +152,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       responseFormat: jsonSchemaFormat,
     });
 
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
     expect(request.thinking).toBeUndefined();
     expect(request.output_config).toBeUndefined();
   });
@@ -165,7 +165,7 @@ describe('AnthropicBackend reasoningEffort', () => {
     });
 
     expect(request.thinking).toEqual({ type: 'disabled' });
-    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer' });
+    expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
   });
 
   it('keeps the native structured-output format when adding effort on a model without forced tool use', async () => {
@@ -178,6 +178,127 @@ describe('AnthropicBackend reasoningEffort', () => {
     expect(request.tool_choice).toBeUndefined();
     expect(request.thinking).toEqual({ type: 'adaptive' });
     expect(request.output_config).toMatchObject({ effort: 'low', format: { type: 'json_schema' } });
+  });
+
+  describe('a caller-set reasoning request with json_schema on a model with forced tool use', () => {
+    it.each([ChatModels.CLAUDE_5_5_HAIKU, ChatModels.CLAUDE_5_SONNET, ChatModels.CLAUDE_4_8_OPUS] as const)(
+      'moves %s to native structured outputs and applies the effort',
+      async model => {
+        const { request, thinkingEnabled } = await run(model, {
+          reasoningEffort: 'low',
+          explicitReasoning: true,
+          maxTokens: 2000,
+          responseFormat: jsonSchemaFormat,
+        });
+
+        expect(request.tools).toBeUndefined();
+        expect(request.tool_choice).toBeUndefined();
+        expect(request.thinking).toEqual({ type: 'adaptive' });
+        expect(request.output_config).toEqual({
+          effort: 'low',
+          format: { type: 'json_schema', schema: { type: 'object', properties: {}, additionalProperties: false } },
+        });
+        expect(request.max_tokens).toBe(2000);
+        expect(thinkingEnabled).toBe(true);
+      }
+    );
+
+    it('moves an explicit thinking request native without raising max_tokens', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+        thinking: { enabled: true, budget_tokens: 8000 },
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toBeUndefined();
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+      expect(request.output_config).toMatchObject({ effort: 'high', format: { type: 'json_schema' } });
+      expect(request.max_tokens).toBe(2000);
+    });
+
+    it('keeps the forced tool for a route-default effort', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'medium',
+        maxTokens: 2000,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool and the off switch for `none`', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'none',
+        explicitReasoning: true,
+        maxTokens: 800,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toEqual({ type: 'disabled' });
+    });
+
+    // Fable 5 has no off switch, so `none` plans the lowest effort; under the forced tool it stays off.
+    it('keeps the forced tool, without thinking, for `none` on a model with no off switch', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_FABLE_5, {
+        reasoningEffort: 'none',
+        explicitReasoning: true,
+        maxTokens: 800,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool, without thinking, on a model that thinks with a budget', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_4_5_SONNET, {
+        reasoningEffort: 'high',
+        explicitReasoning: true,
+        maxTokens: 8192,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool, without thinking, for a schema structured outputs reject', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'low',
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: { type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } },
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
+
+    it('keeps the forced tool, unconstrained, for a schema that declares an open object', async () => {
+      const schema = {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        additionalProperties: { type: 'number' },
+      };
+      const request = await requestFor(ChatModels.CLAUDE_5_5_HAIKU, {
+        reasoningEffort: 'high',
+        explicitReasoning: true,
+        maxTokens: 2000,
+        responseFormat: { type: 'json_schema', json_schema: { name: 'answer', schema } },
+      });
+
+      expect(request.tools).toEqual([{ name: 'answer', input_schema: schema }]);
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toBeUndefined();
+      expect(request.output_config).toBeUndefined();
+    });
   });
 
   it('sends no thinking config when reasoningEffort is absent', async () => {
@@ -230,7 +351,7 @@ describe('AnthropicBackend reasoningEffort', () => {
       });
 
       expect(request.thinking).toEqual({ type: 'adaptive' });
-      expect(request.output_config).toEqual({ effort: 'high' });
+      expect(request.output_config).toEqual({ effort: 'medium' });
     });
 
     // Opus 4.7/4.8 do not think when `thinking` is omitted, so naming an effort would turn
@@ -284,6 +405,67 @@ describe('AnthropicBackend reasoningEffort', () => {
       expect(request.tool_choice).toEqual({ type: 'tool', name: 'get_weather' });
       expect(request.thinking).toBeUndefined();
       expect(request.output_config).toBeUndefined();
+    });
+  });
+
+  describe('thinking toggled off by the caller', () => {
+    const off = { enabled: false, budget_tokens: 16000 };
+
+    it.each([
+      [ChatModels.CLAUDE_5_SONNET, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_SONNET, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_OPUS, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_OPUS, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_5_HAIKU, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_5_HAIKU, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_5_SONNET, 'simple', 'between_tools'],
+      [ChatModels.CLAUDE_5_5_SONNET, 'complex', 'between_tools'],
+    ] as const)('sends the off switch for %s at %s complexity', async (model, complexity, offSwitch) => {
+      const { request, thinkingEnabled } = await run(model, { complexity, thinking: off, maxTokens: 2000 });
+
+      expect(request.thinking).toEqual({ type: offSwitch });
+      expect(request.output_config).toBeUndefined();
+      expect(thinkingEnabled).toBe(false);
+    });
+
+    it('lets an explicit reasoningEffort win over the toggle', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+        complexity: 'simple',
+        thinking: off,
+        reasoningEffort: 'high',
+        maxTokens: 2000,
+      });
+
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('keeps the off switch under the forced response_format tool', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, {
+        complexity: 'simple',
+        thinking: off,
+        maxTokens: 2000,
+        responseFormat: jsonSchemaFormat,
+      });
+
+      expect(request.tool_choice).toEqual({ type: 'tool', name: 'answer', disable_parallel_tool_use: true });
+      expect(request.thinking).toEqual({ type: 'disabled' });
+    });
+
+    it('keeps the complexity default on a model with no off switch', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_5_OPUS, {
+        complexity: 'simple',
+        thinking: off,
+        maxTokens: 2000,
+      });
+
+      expect(request.thinking).toEqual({ type: 'adaptive' });
+      expect(request.output_config).toEqual({ effort: 'low' });
+    });
+
+    it('keeps the complexity default when thinking is omitted', async () => {
+      const request = await requestFor(ChatModels.CLAUDE_5_SONNET, { complexity: 'simple', maxTokens: 2000 });
+
+      expect(request.thinking).toEqual({ type: 'adaptive' });
     });
   });
 });
@@ -347,7 +529,7 @@ describe('AnthropicBedrockBackend reasoningEffort', () => {
     });
 
     expect(body.thinking).toEqual({ type: 'adaptive' });
-    expect(body.output_config).toEqual({ effort: 'high' });
+    expect(body.output_config).toEqual({ effort: 'medium' });
   });
 
   it('does not turn thinking on for a model that does not think unless asked', () => {
@@ -355,5 +537,40 @@ describe('AnthropicBedrockBackend reasoningEffort', () => {
 
     expect(body.thinking).toBeUndefined();
     expect(body.output_config).toBeUndefined();
+  });
+
+  describe('thinking toggled off by the caller', () => {
+    const off = { enabled: false, budget_tokens: 16000 };
+
+    it.each([
+      [ChatModels.CLAUDE_5_SONNET_BEDROCK, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_SONNET_BEDROCK, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_OPUS_BEDROCK, 'simple', 'disabled'],
+      [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'complex', 'disabled'],
+      [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'simple', 'between_tools'],
+      [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'complex', 'between_tools'],
+    ] as const)('sends the off switch for %s at %s complexity', (model, complexity, offSwitch) => {
+      const body = bodyFor(model, { complexity, thinking: off, maxTokens: 2000 });
+
+      expect(body.thinking).toEqual({ type: offSwitch });
+      expect(body.output_config).toBeUndefined();
+    });
+
+    it('lets an explicit reasoningEffort win over the toggle', () => {
+      const body = bodyFor(ChatModels.CLAUDE_5_SONNET_BEDROCK, {
+        complexity: 'simple',
+        thinking: off,
+        reasoningEffort: 'high',
+        maxTokens: 2000,
+      });
+
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('keeps the complexity default when thinking is omitted', () => {
+      const body = bodyFor(ChatModels.CLAUDE_5_SONNET_BEDROCK, { complexity: 'simple', maxTokens: 2000 });
+
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+    });
   });
 });

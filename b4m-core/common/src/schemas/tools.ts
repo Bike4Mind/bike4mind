@@ -24,6 +24,8 @@ export const ToolExecutionResponseSchema = z.object({
   result: z.unknown().optional(),
   error: z.string().optional(),
   errorType: z.string().optional(),
+  /** Billing classifier on a failure, e.g. `insufficient_credits` (answered with a 422). */
+  errorCode: z.string().optional(),
   executionTimeMs: z.number().optional(),
   request_id: z.string(),
 });

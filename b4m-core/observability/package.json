@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/observability",
-  "version": "0.2.3",
+  "version": "1.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -29,15 +29,14 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

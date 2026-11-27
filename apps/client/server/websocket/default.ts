@@ -1,4 +1,7 @@
 import { APIGatewayProxyWebsocketHandlerV2 } from 'aws-lambda';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'wsDefault' } });
 
 /**
  * WebSocket $default route handler.
@@ -28,9 +31,8 @@ export const handler: APIGatewayProxyWebsocketHandlerV2 = async (event, context)
     return func(event, context);
   }
 
-  console.warn(`[WS $default] Unrouted message — action="${parsedAction || 'NONE'}"`, {
+  logger.warn('Unrouted websocket message', {
     action: parsedAction,
-    bodyPreview: (event.body ?? '').substring(0, 200),
     connectionId: event.requestContext?.connectionId,
     routeKey: event.requestContext?.routeKey,
   });

@@ -1,5 +1,6 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
-import { v4 as uuidv4 } from 'uuid';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
@@ -9,11 +10,14 @@ import {
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   checkScopePermission,
   resolveVisibility,
+  archivedVersionBytes,
   checkPublishQuota,
+  consumePublishAction,
   mintDraftUploadUrl,
   mayRepublishSlug,
   SLUG_OWNED_BY_OTHER,
@@ -38,7 +42,10 @@ function isAllowedMime(mimeType: string): boolean {
   return ALLOWED_MIME_EXACT.includes(mimeType) || ALLOWED_MIME_PREFIXES.some(p => mimeType.startsWith(p));
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -100,6 +107,7 @@ const handler = baseApi().post(async (req, res) => {
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
+  if (viz.visibility === 'public') await assertPublicationPublicLink(body);
 
   const existing = await PublishedArtifact.findOne({
     tier: body.tier,
@@ -107,32 +115,51 @@ const handler = baseApi().post(async (req, res) => {
     slug: body.slug,
     deletedAt: null,
   })
-    .select('ownerId')
-    .lean<{ ownerId: string } | null>();
+    .select('ownerId sha256Index versions')
+    .lean<{
+      ownerId: string;
+      sha256Index?: string;
+      versions?: Array<{ sha256Index: string; indexBytes?: number }>;
+    } | null>();
   if (existing && !mayRepublishSlug(existing.ownerId, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
   }
 
-  // ── Cumulative per-owner quota (count + bytes) ──
+  // -- Cumulative per-owner storage quota (bytes only; there is no page-count cap) --
   // Checked here so we reject before issuing presigned URLs (no wasted S3 PUTs).
   // A bundle publish targets a fixed {tier,scopeId,slug}: if a row already exists
   // there it's an in-place overwrite (exclude it from usage so it isn't double
   // counted); if not, excluding a non-existent key is a harmless no-op. So we can
   // pass `replacing` unconditionally here (unlike reply/fabfile, whose slug is
-  // only known to be an overwrite after the source-reuse lookup).
+  // only known to be an overwrite after the source-reuse lookup). The page's earlier
+  // versions stay archived through the overwrite, so they are added back; whether the
+  // current version gets archived too depends on the new bytes, which finalize checks.
   const quota = await checkPublishQuota({
     ownerId: String(req.user.id),
     orgScopeId: body.tier === 'organization' ? body.scopeId : null,
     isAdmin: req.user.isAdmin,
-    incoming: { bytes: totalBytes, fileCount: body.files.length },
+    incoming: {
+      bytes: totalBytes,
+      fileCount: body.files.length,
+      archivedBytes: archivedVersionBytes(existing?.versions, existing?.sha256Index),
+    },
     replacing: { tier: body.tier, scopeId: body.scopeId, slug: body.slug },
   });
   if (!quota.ok) {
     return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
   }
 
+  // The daily publish allowance is counted here, once per bundle publish: finalize only promotes
+  // the draft this issues, so it is not counted again. Throws a 429 when the allowance is used up.
+  // If the draft then cannot be issued, no draft id reaches the caller, so the action is handed back.
+  const action = await consumePublishAction(req.user);
+  const refundAndRethrow = async (err: unknown): Promise<never> => {
+    await action.refund();
+    throw err;
+  };
+
   // ── Issue draft + presigned PUT URLs ──
-  const draftId = uuidv4();
+  const draftId = crypto.randomUUID();
   const draftPrefix = `drafts/${draftId}/`;
   const expiresAt = new Date(Date.now() + PRESIGNED_URL_EXPIRY_SECONDS * 1000).toISOString();
 
@@ -162,14 +189,16 @@ const handler = baseApi().post(async (req, res) => {
   };
 
   const storage = getPublishedArtifactsStorage();
-  await storage.upload(Buffer.from(JSON.stringify(draftManifest)), `${draftPrefix}_manifest.json`, {
-    ContentType: 'application/json',
-  });
+  await storage
+    .upload(Buffer.from(JSON.stringify(draftManifest)), `${draftPrefix}_manifest.json`, {
+      ContentType: 'application/json',
+    })
+    .catch(refundAndRethrow);
 
-  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL (draftUploadUrl.ts).
+  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL plus a token header (draftUploadUrl.ts).
   const uploadUrls: UploadUrlResponse['uploadUrls'] = await Promise.all(
     body.files.map(async file => {
-      const url = await mintDraftUploadUrl({
+      const target = await mintDraftUploadUrl({
         storage,
         key: `${draftPrefix}${file.path}`,
         draftId,
@@ -178,9 +207,9 @@ const handler = baseApi().post(async (req, res) => {
         size: file.size,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
       });
-      return { path: file.path, url, expiresAt };
+      return { path: file.path, ...target, expiresAt };
     })
-  );
+  ).catch(refundAndRethrow);
 
   req.logger.info(
     `[PUBLISH] upload-url draft=${draftId} ${body.tier}/${body.scopeId}/${body.slug} files=${body.files.length} user=${req.user.id}`

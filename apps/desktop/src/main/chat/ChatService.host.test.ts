@@ -4,11 +4,16 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -160,10 +165,11 @@ describe('ChatService app-control tools', () => {
     expect(codeTools.filter(name => name.startsWith('session_'))).toEqual([
       'session_list',
       'session_read',
-      'session_spawn',
       'session_send',
       'session_archive',
+      'session_rename',
       'session_delete',
+      'session_spawn',
       'session_suggestion_update',
       'session_suggestion_dismiss',
     ]);
@@ -183,6 +189,26 @@ describe('ChatService app-control tools', () => {
     expect(listing).not.toContain(theirs.id);
   });
 
+  it('lists another project with no reply excerpt until the user mentions that conversation', async () => {
+    const mine = await codeSession(projectA);
+    const theirs = await codeSession(projectB);
+    const at = new Date().toISOString();
+    await store.appendMessage(theirs.id, { id: 'r1', role: 'assistant', content: 'private reply', createdAt: at });
+
+    await service.send(mine.id, 'list everything');
+    callTool(await awaitStreamOf('list everything'), 'c1', 'session_list', { scope: 'all' });
+    await vi.waitUntil(() => settled('session_list').length === 1, { timeout: 5000, interval: 5 });
+    expect(settled('session_list')[0]?.preview).toContain(theirs.id);
+    expect(settled('session_list')[0]?.preview).not.toContain('private reply');
+
+    const told = await codeSession(projectA);
+    const prompt = `what did ${formatSessionMention(theirs.id, theirs.title)} say?`;
+    await service.send(told.id, prompt);
+    callTool(await awaitStreamOf(prompt), 'c2', 'session_list', { scope: 'all' });
+    await vi.waitUntil(() => settled('session_list').length === 2, { timeout: 5000, interval: 5 });
+    expect(settled('session_list')[1]?.preview).toContain('private reply');
+  });
+
   it('refuses to delete a conversation belonging to another project', async () => {
     const mine = await codeSession(projectA);
     const theirs = await codeSession(projectB);
@@ -193,6 +219,40 @@ describe('ChatService app-control tools', () => {
     await vi.waitUntil(() => settled('session_delete').length === 1, { timeout: 5000, interval: 5 });
     expect(settled('session_delete')[0]?.preview).toMatch(/No conversation with that id in this project/);
     // Still there: a refusal must not be a delete that merely reported badly.
+    expect(await store.get(theirs.id)).not.toBeNull();
+  });
+
+  it('names an out-of-project session on a send card but not on an archive or delete card', async () => {
+    const mine = await codeSession(projectA);
+    const theirs = await codeSession(projectB);
+    await store.rename(theirs.id, 'Elsewhere');
+    await store.setApprovalMode(mine.id, 'ask');
+
+    await service.send(mine.id, 'reach out');
+    const stream = await awaitStreamOf('reach out');
+    const tools = [
+      { id: 'c1', name: 'session_archive', arguments: JSON.stringify({ session_id: theirs.id }) },
+      { id: 'c2', name: 'session_send', arguments: JSON.stringify({ session_id: theirs.id, message: 'hello' }) },
+      { id: 'c3', name: 'session_delete', arguments: JSON.stringify({ session_id: theirs.id }) },
+    ];
+    stream.write(frame({ type: 'tool_use', tools }));
+    stream.write(frame('[DONE]'));
+    await vi.waitUntil(
+      () =>
+        settled('session_archive').length === 1 &&
+        settled('session_send').length === 1 &&
+        settled('session_delete').length === 1,
+      { timeout: 5000, interval: 5 }
+    );
+
+    const detailOf = (name: string) =>
+      events.flatMap(event => (event.type === 'tool-start' && event.call.name === name ? [event.call] : []))[0]
+        ?.approvalDetail;
+    expect(detailOf('session_archive')).toContain(theirs.id);
+    expect(detailOf('session_archive')).not.toContain('Elsewhere');
+    expect(detailOf('session_delete')).toContain(theirs.id);
+    expect(detailOf('session_delete')).not.toContain('Elsewhere');
+    expect(detailOf('session_send')).toContain('Elsewhere');
     expect(await store.get(theirs.id)).not.toBeNull();
   });
 
@@ -221,7 +281,48 @@ describe('ChatService app-control tools', () => {
     expect(prompts.every(call => call?.approvalIrreversible === true)).toBe(true);
   });
 
-  it('tells a parent that a spawned session finished, without its output, once the parent is idle', async () => {
+  it('deletes a batch of conversations behind a single approval', async () => {
+    const mine = await codeSession(projectA);
+    const targets = [await codeSession(projectA), await codeSession(projectA), await codeSession(projectA)];
+    const elsewhere = await codeSession(projectB);
+    const ids = [...targets.map(target => target.id), elsewhere.id];
+
+    await service.send(mine.id, 'tidy all');
+    callTool(await awaitStreamOf('tidy all'), 'c1', 'session_delete', { session_ids: ids });
+    await vi.waitUntil(() => settled('session_delete').length === 1, { timeout: 5000, interval: 5 });
+
+    expect(asked.filter(entry => entry.toolName === 'session_delete')).toHaveLength(1);
+    for (const target of targets) expect(await store.get(target.id)).toBeNull();
+    expect(await store.get(elsewhere.id)).not.toBeNull();
+    const preview = settled('session_delete')[0]?.preview ?? '';
+    expect(preview).toContain('Deleted 3 of 4 conversations');
+    expect(preview).toContain(elsewhere.id);
+
+    const prompt = events.flatMap(event =>
+      event.type === 'tool-start' && event.call.name === 'session_delete' && event.call.approvalId ? [event.call] : []
+    )[0];
+    expect(prompt?.approvalIrreversible).toBe(true);
+    expect(prompt?.approvalDetail).toContain('these 4 conversations');
+  });
+
+  it('refuses a batch over the cap, or one naming the caller, without deleting anything', async () => {
+    const mine = await codeSession(projectA);
+    const other = await codeSession(projectA);
+
+    await service.send(mine.id, 'too many');
+    const tooMany = Array.from({ length: 26 }, (_, index) => `missing-${index}`);
+    callTool(await awaitStreamOf('too many'), 'c1', 'session_delete', { session_ids: [other.id, ...tooMany] });
+    await vi.waitUntil(() => settled('session_delete').length === 1, { timeout: 5000, interval: 5 });
+    expect(JSON.stringify(settled('session_delete')[0])).toMatch(/at most 25/);
+
+    callTool(await awaitStreamOf('too many'), 'c2', 'session_delete', { session_ids: [other.id, mine.id] });
+    await vi.waitUntil(() => settled('session_delete').length === 2, { timeout: 5000, interval: 5 });
+    expect(JSON.stringify(settled('session_delete')[1])).toMatch(/cannot delete itself/);
+    expect(asked.filter(entry => entry.toolName === 'session_delete')).toHaveLength(0);
+    expect(await store.get(other.id)).not.toBeNull();
+  });
+
+  it('tells a parent that a spawned session finished, with its reply quoted as data, once the parent is idle', async () => {
     const parent = await codeSession(projectA);
     await service.send(parent.id, 'delegate it');
     callTool(await awaitStreamOf('delegate it'), 'c1', 'session_spawn', { prompt: 'go and do it' });
@@ -253,9 +354,10 @@ describe('ChatService app-control tools', () => {
     const stored = (await store.get(parent.id))?.messages ?? [];
     const notice = stored.find(message => message.system);
     expect(notice?.content).toContain('has finished');
-    // Only THAT it finished. Carrying its reply across would put text nobody read into the
-    // parent request as though the user had typed it; session_read is the way to that.
-    expect(notice?.content).not.toContain('Finished: the file is updated.');
+    // The reply rides along fenced as the session's own words, never as the user's.
+    expect(notice?.content).toContain('<child-reply>\nFinished: the file is updated.\n</child-reply>');
+    expect(notice?.content).toContain("not the user's");
+    expect(notice?.display).not.toContain('Finished: the file is updated.');
     expect(notice?.content).toContain('session_read');
     expect(notice?.content).toContain(childId);
     // The user's half of the same report: same event, none of the handles the model needs.
@@ -306,5 +408,109 @@ describe('ChatService app-control tools', () => {
     callTool(await awaitStreamOf('tidy up'), 'c2', 'session_archive', { session_id: other.id, archived: false });
     await vi.waitUntil(() => settled('session_archive').length === 2, { timeout: 5000, interval: 5 });
     expect((await store.get(other.id))?.archived).toBeUndefined();
+  });
+
+  describe('session_rename', () => {
+    /** A session the caller started, in the caller's own project. */
+    async function childOf(parent: ChatSessionSummary): Promise<ChatSessionSummary> {
+      const stored = await store.get(parent.id);
+      return store.create(undefined, {
+        mode: 'code',
+        ...(stored?.project ? { project: stored.project } : {}),
+        origin: { parentSessionId: parent.id, depth: 1, seedPrompt: 'child task' },
+      });
+    }
+
+    const outcomeOf = (index: number): string => JSON.stringify(settled('session_rename')[index] ?? null);
+
+    it('renames the calling conversation when session_id is omitted or "self"', async () => {
+      const mine = await codeSession(projectA);
+
+      await service.send(mine.id, 'name yourself');
+      callTool(await awaitStreamOf('name yourself'), 'c1', 'session_rename', {
+        title: '  #12 | PR#34 | rename tool  ',
+      });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      expect(await store.get(mine.id)).toMatchObject({
+        title: '#12 | PR#34 | rename tool',
+        titleLocked: true,
+        titleSource: 'agent',
+      });
+
+      callTool(await awaitStreamOf('name yourself'), 'c2', 'session_rename', { session_id: 'self', title: 'Second' });
+      await vi.waitUntil(() => settled('session_rename').length === 2, { timeout: 5000, interval: 5 });
+      expect((await store.get(mine.id))?.title).toBe('Second');
+    });
+
+    it('renames a conversation it started', async () => {
+      const mine = await codeSession(projectA);
+      const child = await childOf(mine);
+
+      await service.send(mine.id, 'name the child');
+      callTool(await awaitStreamOf('name the child'), 'c1', 'session_rename', {
+        session_id: child.id,
+        title: 'Child work',
+      });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      expect(await store.get(child.id)).toMatchObject({ title: 'Child work', titleSource: 'agent' });
+    });
+
+    it('refuses a conversation it did not start, in this project or another', async () => {
+      const mine = await codeSession(projectA);
+      const sibling = await codeSession(projectA);
+      const theirs = await codeSession(projectB);
+      const before = { sibling: (await store.get(sibling.id))?.title, theirs: (await store.get(theirs.id))?.title };
+
+      await service.send(mine.id, 'rename others');
+      callTool(await awaitStreamOf('rename others'), 'c1', 'session_rename', { session_id: sibling.id, title: 'Nope' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      callTool(await awaitStreamOf('rename others'), 'c2', 'session_rename', { session_id: theirs.id, title: 'Nope' });
+      await vi.waitUntil(() => settled('session_rename').length === 2, { timeout: 5000, interval: 5 });
+
+      expect(outcomeOf(0)).toMatch(/Only this conversation and the ones it started can be renamed/);
+      expect(outcomeOf(1)).toMatch(/Only this conversation and the ones it started can be renamed/);
+      expect((await store.get(sibling.id))?.title).toBe(before.sibling);
+      expect((await store.get(theirs.id))?.title).toBe(before.theirs);
+    });
+
+    it('never overwrites a title the user chose by hand', async () => {
+      const mine = await codeSession(projectA);
+      const child = await childOf(mine);
+      await service.renameSession(child.id, 'Picked by the user');
+
+      await service.send(mine.id, 'rename child');
+      callTool(await awaitStreamOf('rename child'), 'c1', 'session_rename', { session_id: child.id, title: 'Agent' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(outcomeOf(0)).toMatch(/named that conversation themselves/);
+      expect((await store.get(child.id))?.title).toBe('Picked by the user');
+    });
+
+    it('stops renaming its own conversation once the user renames it after the agent did', async () => {
+      const mine = await codeSession(projectA);
+
+      await service.send(mine.id, 'self rename');
+      callTool(await awaitStreamOf('self rename'), 'c1', 'session_rename', { title: 'Agent first' });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+      await service.renameSession(mine.id, 'User later');
+
+      callTool(await awaitStreamOf('self rename'), 'c2', 'session_rename', { title: 'Agent again' });
+      await vi.waitUntil(() => settled('session_rename').length === 2, { timeout: 5000, interval: 5 });
+      expect(outcomeOf(1)).toMatch(/named that conversation themselves/);
+      expect((await store.get(mine.id))?.title).toBe('User later');
+    });
+
+    it.each(['ask', 'auto', 'full'] as const)('asks for no approval in %s mode', async mode => {
+      const mine = await codeSession(projectA);
+      await store.setApprovalMode(mine.id, mode);
+
+      await service.send(mine.id, `rename in ${mode}`);
+      callTool(await awaitStreamOf(`rename in ${mode}`), 'c1', 'session_rename', { title: `Named in ${mode}` });
+      await vi.waitUntil(() => settled('session_rename').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(asked.filter(entry => entry.toolName === 'session_rename')).toEqual([]);
+      expect(settled('session_rename')[0]?.approvalId).toBeUndefined();
+      expect((await store.get(mine.id))?.title).toBe(`Named in ${mode}`);
+    });
   });
 });

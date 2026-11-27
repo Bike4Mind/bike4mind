@@ -62,8 +62,8 @@ In your Okta Admin Console:
 
 ### Step 2: Add Identity Provider in B4M
 
-1. Go to **Admin > General Ops > Identity Providers**
-2. Click **Add Identity Provider**
+1. Go to **Admin > Trust and safety > Identity providers**
+2. Click **Add identity provider**
 3. Fill in the form:
 
 | Field | Description | Example |
@@ -77,7 +77,7 @@ In your Okta Admin Console:
 | **Client Secret** | From Okta app | Click eye icon to verify |
 | **Use Org-Level Authorization Server** | Check for org-level auth server | See below |
 
-4. Click **Create**
+4. Click **Add identity provider**
 
 ### Authorization Server Types
 
@@ -203,7 +203,7 @@ The Identity Providers feature also supports SAML 2.0. When adding a SAML provid
    - **Issuer** - Your IdP's entity ID
    - **Certificate** - Your IdP's signing certificate (PEM format)
 
-3. Use the **SP Metadata** button (info icon) to get values for your IdP:
+3. Open the row's **...** menu and choose **View SP metadata** to get values for your IdP:
    - **ACS URL**: `https://app.yourdomain.com/api/auth/saml/callback`
    - **Entity ID**: `https://app.yourdomain.com/saml/metadata`
 

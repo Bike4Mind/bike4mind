@@ -11,6 +11,7 @@ export const PlanAgent = (config?: ServerAgentConfig): ServerAgentDefinition => 
     'image_generation',
     'edit_image',
     'video_generation',
+    'production_*',
     'deep_research',
     'delegate_to_agent',
     ...(config?.extraDeniedTools ?? []),

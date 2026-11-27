@@ -1,9 +1,6 @@
-import { settingsMap } from '@bike4mind/common';
-import { adminSettingsRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
-import { isLocalAppUrl } from '@server/utils/validators';
+import { resolvePublicClientConfig } from '@server/utils/publicClientConfig';
 
 export type ServerConfigPublic = {
   apiUrl: string;
@@ -14,6 +11,12 @@ export type ServerConfigPublic = {
   pyodideBaseUrl: string;
   /** When true, the MFA prompt offers "remember this device" so the next login skips TOTP. */
   allowTrustedDevices: boolean;
+  /** Turnstile site key; empty when the challenge is not enforced on this stage. */
+  turnstileSiteKey: string;
+  /** True when Apple credentials are configured, so the login page offers Sign in with Apple. */
+  appleSignInEnabled: boolean;
+  /** Support address the login page names on a blocked-account notice; empty when not configured. */
+  supportEmail: string;
 };
 
 // Public pre-login config - minimal fields only.
@@ -21,29 +24,16 @@ export type ServerConfigPublic = {
 // /api/settings/serverConfig which requires authentication.
 const handler = baseApi({ auth: false }).get(
   asyncHandler(async (req, res) => {
-    // Surface only the registration master switch - never any sensitive setting - so the
-    // pre-login register form knows whether an invite code is required. Shared with the
-    // server-side gates that enforce it (see isOpenRegistrationAllowed) so what the form
-    // shows and what the server accepts can never diverge.
-    const allowOpenRegistration = await isOpenRegistrationAllowed();
-
-    // Same treatment for the trusted-device switch, so the MFA prompt knows whether to
-    // offer "remember this device". Defaults OPEN (unlike registration) to match the
-    // setting's own default and the server-side `!== false` checks in the auth routes -
-    // the checkbox is only ever a hint; /api/auth/mfa/verify re-checks before granting.
-    const trustedSetting = await adminSettingsRepository.findBySettingName('allowTrustedDevices').catch(() => null);
-    const trustedParsed = settingsMap.allowTrustedDevices.schema.safeParse(trustedSetting?.settingValue);
-    const allowTrustedDevices = trustedParsed.success ? trustedParsed.data : true;
-
+    const resolved = await resolvePublicClientConfig(req);
     const config: ServerConfigPublic = {
-      // In dev, derive from request host so the URL matches the actual port
-      apiUrl: isLocalAppUrl()
-        ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
-        : process.env.APP_URL || '',
-      defaultTheme: 'bike4mind',
-      allowOpenRegistration,
-      pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',
-      allowTrustedDevices,
+      apiUrl: resolved.api_url,
+      defaultTheme: resolved.default_theme,
+      allowOpenRegistration: resolved.allow_open_registration,
+      pyodideBaseUrl: resolved.pyodide_base_url,
+      allowTrustedDevices: resolved.allow_trusted_devices,
+      turnstileSiteKey: resolved.turnstile_site_key,
+      appleSignInEnabled: resolved.apple_sign_in_enabled,
+      supportEmail: resolved.support_email,
     };
 
     return res.json(config);

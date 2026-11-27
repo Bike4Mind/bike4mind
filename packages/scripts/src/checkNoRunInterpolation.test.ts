@@ -22,12 +22,18 @@ afterEach(() => {
   while (sandboxes.length) fs.rmSync(sandboxes.pop()!, { recursive: true, force: true });
 });
 
-function scan(files: Record<string, string>) {
+function scan(files: Record<string, string>, actions: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-interp-guard-'));
   sandboxes.push(dir);
   const workflows = path.join(dir, '.github', 'workflows');
   fs.mkdirSync(workflows, { recursive: true });
   for (const [name, body] of Object.entries(files)) fs.writeFileSync(path.join(workflows, name), body);
+  // Keys are paths under .github/actions, e.g. 'demo/action.yml'.
+  for (const [file, body] of Object.entries(actions)) {
+    const actionPath = path.join(dir, '.github', 'actions', file);
+    fs.mkdirSync(path.dirname(actionPath), { recursive: true });
+    fs.writeFileSync(actionPath, body);
+  }
   const r = spawnSync('python3', [GUARD], { cwd: dir, encoding: 'utf8' });
   if (r.error) throw r.error;
   return { status: r.status, out: r.stdout + r.stderr };
@@ -120,6 +126,118 @@ jobs:
 `),
     });
     expect(r.status).toBe(0);
+  });
+
+  it('flags a github-script script: body and reports the script: line', () => {
+    const r = scan({
+      'gs.yml': workflow(`      - name: Comment
+        uses: actions/github-script@v8
+        with:
+          github-token: \${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const n = '\${{ steps.pr.outputs.number }}';
+      - name: Other action with a script input
+        uses: some/action@v1
+        with:
+          script: echo \${{ inputs.name }}
+`),
+    });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/workflows/gs.yml:11  ->  ${{ steps.pr.outputs.number }}');
+    // Only github-script's script: is code; other inputs, and other actions' inputs, are data.
+    expect(r.out).not.toContain('secrets.GITHUB_TOKEN');
+    expect(r.out).not.toContain('inputs.name');
+  });
+
+  it('flags a run: body in a composite action', () => {
+    const r = scan(
+      {},
+      {
+        'demo/action.yml': `name: demo
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        STAGE: \${{ inputs.stage }}
+      run: echo \${{ inputs.stage }}
+`,
+      }
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/actions/demo/action.yml:8  ->  ${{ inputs.stage }}');
+  });
+
+  it('passes a github-script step that reads its value from process.env', () => {
+    const r = scan({
+      'gs-ok.yml': workflow(`      - name: Comment
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: \${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const n = Number(process.env.PR_NUMBER);
+`),
+    });
+    expect(r.status).toBe(0);
+  });
+
+  it('matches the github-script owner and repo case-insensitively', () => {
+    const r = scan({
+      'gs-case.yml': workflow(`      - uses: Actions/GitHub-Script@v8
+        with:
+          script: core.info('\${{ github.ref }}')
+`),
+    });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/workflows/gs-case.yml:9  ->  ${{ github.ref }}');
+  });
+
+  it('flags steps listed at the same indentation as steps:', () => {
+    const r = scan({
+      'compact.yml': `name: t
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo \${{ github.ref }}
+`,
+    });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/workflows/compact.yml:7  ->  ${{ github.ref }}');
+  });
+
+  it('flags a github-script body in a composite action', () => {
+    const r = scan(
+      {},
+      {
+        'gs/action.yml': `name: gs
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v8
+      with:
+        script: core.info('\${{ inputs.stage }}')
+`,
+      }
+    );
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/actions/gs/action.yml:7  ->  ${{ inputs.stage }}');
+  });
+
+  it('scans nested composite actions and action.yaml', () => {
+    const action = `name: a
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: echo \${{ inputs.stage }}
+`;
+    const r = scan({}, { 'nested/inner/action.yml': action, 'alt/action.yaml': action });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('.github/actions/nested/inner/action.yml:6  ->  ${{ inputs.stage }}');
+    expect(r.out).toContain('.github/actions/alt/action.yaml:6  ->  ${{ inputs.stage }}');
   });
 
   it('scans .yaml files too', () => {

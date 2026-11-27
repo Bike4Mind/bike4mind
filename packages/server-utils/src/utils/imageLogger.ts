@@ -1,17 +1,13 @@
+import { Logger } from '@bike4mind/observability';
+
 /**
  * Image generation logging utility, gated on NEXT_PUBLIC_VERBOSE_IMAGES. Errors always log.
+ * Routes through the structured Logger.
  */
 
-const isVerboseImages = (() => {
-  // Check explicit setting first (takes priority)
-  if (process.env.NEXT_PUBLIC_VERBOSE_IMAGES === 'true') return true;
-  if (process.env.NEXT_PUBLIC_VERBOSE_IMAGES === 'false') return false;
+// Opt-in: only an explicit 'true' enables verbose image logging.
+const isVerboseImages = process.env.NEXT_PUBLIC_VERBOSE_IMAGES === 'true';
 
-  // Default: disable in all environments for clean console (enable on demand)
-  return false;
-})();
-
-// Image logger interface
 interface ImageLogger {
   log: (...args: unknown[]) => void;
   info: (...args: unknown[]) => void;
@@ -25,53 +21,38 @@ interface ImageLogger {
   isEnabled: () => boolean;
 }
 
+const timers = new Map<string, number>();
+
 /**
  * @deprecated To be deleted as we already have a Logger class in b4m-core
  */
 export const imageLogger: ImageLogger = {
-  log: (...args: unknown[]) => {
-    if (isVerboseImages) {
-      console.log(...args);
-    }
+  log: (...args) => {
+    if (isVerboseImages) Logger.info(...args);
   },
-  info: (...args: unknown[]) => {
-    if (isVerboseImages) {
-      console.info(...args);
-    }
+  info: (...args) => {
+    if (isVerboseImages) Logger.info(...args);
   },
-  warn: (...args: unknown[]) => {
-    if (isVerboseImages) {
-      console.warn(...args);
-    }
+  warn: (...args) => {
+    if (isVerboseImages) Logger.warn(...args);
   },
-  error: (...args: unknown[]) => {
-    // Always show errors, even in production
-    console.error(...args);
+  // Always logged, even when verbose logging is off.
+  error: (...args) => Logger.error(...args),
+  group: label => {
+    if (isVerboseImages) Logger.debug(`[group] ${label}`);
   },
-  group: (label: string) => {
-    if (isVerboseImages) {
-      console.group(label);
-    }
+  groupEnd: () => {},
+  time: label => {
+    if (isVerboseImages) timers.set(label, Date.now());
   },
-  groupEnd: () => {
-    if (isVerboseImages) {
-      console.groupEnd();
-    }
+  timeEnd: label => {
+    const start = timers.get(label);
+    if (!isVerboseImages || start === undefined) return;
+    timers.delete(label);
+    Logger.debug(label, { durationMs: Date.now() - start });
   },
-  time: (label: string) => {
-    if (isVerboseImages) {
-      console.time(label);
-    }
-  },
-  timeEnd: (label: string) => {
-    if (isVerboseImages) {
-      console.timeEnd(label);
-    }
-  },
-  debug: (...args: unknown[]) => {
-    if (isVerboseImages) {
-      console.log('[DEBUG]', ...args);
-    }
+  debug: (...args) => {
+    if (isVerboseImages) Logger.debug(...args);
   },
   isEnabled: () => isVerboseImages,
 };

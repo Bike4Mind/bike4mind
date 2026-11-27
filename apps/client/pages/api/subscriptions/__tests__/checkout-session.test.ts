@@ -18,10 +18,21 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 const mockSessionsRetrieve = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+const mockFindTeam = vi.fn();
+vi.mock('@bike4mind/database/infra', () => ({
+  organizationRepository: {
+    findByStripeCustomerId: (...args: unknown[]) => mockFindTeam(...args),
+  },
+}));
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     checkout: { sessions: { retrieve: (...args: unknown[]) => mockSessionsRetrieve(...args) } },
   },
+}));
+
+const mockPlanCreditsPerCycle = vi.fn();
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/planCreditsPerCycle', () => ({
+  planCreditsPerCycle: (...args: unknown[]) => mockPlanCreditsPerCycle(...args),
 }));
 
 import handler from '../checkout-session';
@@ -56,6 +67,10 @@ function call(sessionId: string | undefined, userId = OWNER_ID) {
 describe('GET /api/subscriptions/checkout-session', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPlanCreditsPerCycle.mockImplementation(
+      async ({ ownerType, priceId, quantity }: { ownerType: string; priceId?: string; quantity: number }) =>
+        ownerType === 'Organization' ? quantity * 1000 : priceId === 'price_pro' ? 50000 : null
+    );
   });
 
   it('returns the purchase facts in major currency units', async () => {
@@ -71,7 +86,71 @@ describe('GET /api/subscriptions/checkout-session', () => {
       priceId: 'price_pro',
       planName: 'Professional',
       quantity: 1,
+      credits: 50000,
     });
+  });
+
+  it("returns a team checkout's per-seat credits for the seats bought", async () => {
+    mockSessionsRetrieve.mockResolvedValue(
+      paidSession({
+        subscription: { metadata: { userId: OWNER_ID, ownerType: 'Organization' } },
+        line_items: { data: [{ price: { id: 'price_team' }, description: 'Team', quantity: 3 }] },
+      })
+    );
+
+    const { promise, res } = call('cs_test_1');
+    await promise;
+
+    expect(res._getJSONData()).toMatchObject({ planName: 'Team', quantity: 3, credits: 3000 });
+  });
+
+  it('still returns the conversion facts when the credits lookup fails', async () => {
+    mockSessionsRetrieve.mockResolvedValue(paidSession());
+    mockPlanCreditsPerCycle.mockRejectedValue(new Error('settings read failed'));
+
+    const { promise, res } = call('cs_test_1');
+    await promise;
+
+    const data = res._getJSONData();
+    expect(data).toMatchObject({ transactionId: 'cs_test_1', value: 30 });
+    expect(data.credits).toBeUndefined();
+  });
+
+  it("resolves only the purchasing owner's newly provisioned team", async () => {
+    mockSessionsRetrieve.mockResolvedValue(
+      paidSession({
+        customer: 'cus_team',
+        subscription: {
+          metadata: { userId: OWNER_ID, ownerType: 'Organization', newOrganizationName: 'New team' },
+        },
+      })
+    );
+    mockFindTeam.mockResolvedValue({ id: 'org1', userId: OWNER_ID });
+    const first = call('cs_test_1');
+    await first.promise;
+    expect(first.res._getJSONData()).toMatchObject({ teamCheckout: true, organizationId: 'org1' });
+    mockFindTeam.mockResolvedValue({ id: 'org2', userId: 'other' });
+    const second = call('cs_test_1');
+    await second.promise;
+    expect(second.res._getJSONData().organizationId).toBeUndefined();
+  });
+
+  it('preserves purchase facts while a new team is pending or its lookup fails', async () => {
+    mockSessionsRetrieve.mockResolvedValue(
+      paidSession({
+        customer: 'cus_team',
+        subscription: {
+          metadata: { userId: OWNER_ID, ownerType: 'Organization', newOrganizationName: 'New team' },
+        },
+      })
+    );
+    mockFindTeam.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('database unavailable'));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = call('cs_test_1');
+      await result.promise;
+      expect(result.res._getJSONData()).toMatchObject({ transactionId: 'cs_test_1', teamCheckout: true });
+      expect(result.res._getJSONData().organizationId).toBeUndefined();
+    }
   });
 
   it('retrieves the caller-supplied session with the expansions authorization needs', async () => {

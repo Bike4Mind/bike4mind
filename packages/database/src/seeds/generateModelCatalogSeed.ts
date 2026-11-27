@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/llm-adapters';
 import { groupsTouchedByPatch, toModelRecord } from '@bike4mind/common';
 import type { FieldGroup, ModelInfo, ModelRecord } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 export interface ModelCatalogSeedEntry {
   modelId: string;
@@ -80,9 +81,7 @@ export async function generateModelCatalogSeed(): Promise<ModelCatalogSeedEntry[
   if (droppedDates.length > 0) {
     // Loud rather than silent: the field is gone from the fallback tier until
     // the adapter literal is corrected to a full calendar date.
-    console.warn(
-      `[modelCatalog] seed dropped ${droppedDates.length} date field(s) that are not YYYY-MM-DD: ${droppedDates.join(', ')}`
-    );
+    Logger.warn('[modelCatalog] seed dropped date field(s) that are not YYYY-MM-DD', { droppedDates });
   }
 
   return entries.sort((a, b) => a.modelId.localeCompare(b.modelId));

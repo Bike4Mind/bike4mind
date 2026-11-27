@@ -144,6 +144,24 @@ describe('runModelDiscovery', () => {
     expect(result.metrics).toMatchObject({ ModelsDiscovered: 1, ModelsPromoted: 1, ModelsBlockedByDispatch: 0 });
   });
 
+  it('does not promote on a provider price the price plan refuses to write', async () => {
+    const dissenting = (name: string) =>
+      stubSource({
+        name,
+        kind: 'aggregator',
+        records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 20, outputPerMTok: 80 } }],
+      });
+    const refused = harness([openaiSource(), dissenting('models.dev'), dissenting('litellm')]);
+
+    const result = await runModelDiscovery(refused.adapters, refused.options);
+
+    // Every mirror dissents, so no price row lands; promoting would leave an
+    // active text model with nothing in force to bill it by.
+    expect(refused.prices.rows).toEqual([]);
+    expect(result.metrics.ModelsPromoted).toBe(0);
+    expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6', promoted: false, blockedBy: ['no-trusted-price'] });
+  });
+
   it('appends nothing on a second run over identical source data', async () => {
     await runModelDiscovery(bench.adapters, bench.options);
     bench.advance(60_000);
@@ -654,6 +672,36 @@ describe('runModelDiscovery', () => {
         });
       });
 
+      it('reports a never-promoted model it deprecates without counting it toward the alarm', async () => {
+        bench.catalog.append({
+          modelId: 'gpt-6',
+          source: 'discovery',
+          patch: testRecord({
+            id: 'gpt-6',
+            name: 'GPT-6',
+            contextWindow: 400_000,
+            lifecycle: { status: 'discovered' },
+            autoDisabled: true,
+          }),
+          ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle', 'availability'],
+          effectiveFrom: new Date(START.getTime() - DAY),
+        });
+
+        // Missing from the first run on, so no run ever sees it and promotes it.
+        bench.adapters.sources = [openaiSource([])];
+        let result = await runModelDiscovery(bench.adapters, bench.options);
+        for (let miss = 1; miss < 3; miss += 1) {
+          bench.advance(DAY);
+          result = await runModelDiscovery(bench.adapters, bench.options);
+        }
+
+        expect(result.lifecycle.transitions).toMatchObject([
+          { modelId: 'gpt-6', from: 'discovered', to: 'deprecated', signal: 'absence' },
+        ]);
+        expect(bench.runs.docs[2].changes?.deprecated).toEqual(['gpt-6']);
+        expect(result.metrics.ModelsDeprecated).toBe(0);
+      });
+
       it('waits while only two misses have accrued', async () => {
         const result = await missFor(bench, 2);
 
@@ -716,6 +764,21 @@ describe('runModelDiscovery', () => {
         // Still counted as missing, which is only possible if the graduation row
         // kept the identity group it took over from the row it superseded.
         expect(result.absence.missed).toEqual(['gpt-6']);
+      });
+
+      it('keeps the credits of the discovery row it graduates', async () => {
+        await missFor(bench, 3);
+
+        const [sighted, graduation] = bench.catalog.rows;
+        expect(sighted.contributors).toContainEqual({ group: 'identity', source: 'openai' });
+        // planPass hands planLifecycle the in-force credits; without them the graduation would
+        // blanket-credit discovery, and the read path interprets the availability credit.
+        expect(graduation.contributors).toEqual(
+          expect.arrayContaining([
+            { group: 'identity', source: 'openai' },
+            { group: 'limits', source: 'openai' },
+          ])
+        );
       });
 
       it('plans the graduation but writes nothing in report mode', async () => {
@@ -841,17 +904,20 @@ describe('runModelDiscovery', () => {
             }),
             authoritativeFor: [ModelBackend.Bedrock],
           }),
-          stubSource({
-            name: 'litellm',
-            kind: 'aggregator',
-            records: [
-              {
-                modelId: profileId,
-                lifecycleEvidence: 'typed',
-                patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
-              },
-            ],
-          }),
+          // Two agreeing aggregators, since a lone aggregator sunset of a held model is only a suggestion.
+          ...['litellm', 'models.dev'].map(name =>
+            stubSource({
+              name,
+              kind: 'aggregator',
+              records: [
+                {
+                  modelId: profileId,
+                  lifecycleEvidence: 'typed',
+                  patch: { lifecycle: { status: 'deprecated', deprecationDate: '2026-07-01' } },
+                },
+              ],
+            })
+          ),
         ]);
         await seedActive(bedrock, profileId, 'Claude Sonnet 4.6 (global)');
 
@@ -973,17 +1039,25 @@ describe('runModelDiscovery', () => {
             expected: [] as string[],
           },
           {
-            name: 'is written once the provider is not configured, so it cannot be reporting',
+            name: 'stays refused when the provider is not configured',
             openai: () => stubSource({ name: 'openai', kind: 'provider', configured: false }),
-            expected: [FUTURE],
+            expected: [] as string[],
           },
         ])('$name', async ({ openai, expected }) => {
           await firstPass(bench);
           bench.adapters.sources = [openai(), azure(), aggregator()];
 
-          await runModelDiscovery(bench.adapters, bench.options);
+          const result = await runModelDiscovery(bench.adapters, bench.options);
 
           expect(writtenDates(bench)).toEqual(expected);
+          expect(result.lifecycle.suggestions).toContainEqual(
+            expect.objectContaining({
+              modelId: 'gpt-6',
+              status: 'active',
+              deprecationDate: FUTURE,
+              source: 'models.dev',
+            })
+          );
         });
       });
 
@@ -1071,6 +1145,52 @@ describe('runModelDiscovery', () => {
         expect(bench.catalog.rows[1].patch).toMatchObject({
           lifecycle: { status: 'deprecated', deprecationDate: '2026-07-30' },
         });
+      });
+
+      const litellmSunset = (name: string) =>
+        stubSource({
+          name,
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' }],
+        });
+
+      it('queues a lone aggregator sunset of a listed model instead of writing it', async () => {
+        const result = await secondRun(bench, [openaiSource([gpt6]), litellmSunset('litellm')]);
+
+        expect(result.lifecycle.transitions).toEqual([]);
+        expect(bench.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+        expect(result.lifecycle.suggestions).toEqual([
+          expect.objectContaining({ modelId: 'gpt-6', status: 'deprecated', source: 'litellm' }),
+        ]);
+      });
+
+      it('withholds a lone aggregator sunset of a static model that has no catalog row yet', async () => {
+        const gpt4o: DiscoveredModel = { ...gpt6, modelId: 'gpt-4o', patch: { ...gpt6.patch, id: 'gpt-4o' } };
+        const fresh = harness([
+          openaiSource([gpt4o]),
+          stubSource({
+            name: 'litellm',
+            kind: 'aggregator',
+            records: [
+              { modelId: 'gpt-4o', patch: { lifecycle: { status: 'deprecated' } }, lifecycleEvidence: 'typed' },
+            ],
+          }),
+        ]);
+
+        await runModelDiscovery(fresh.adapters, fresh.options);
+
+        expect(fresh.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+      });
+
+      it('writes an aggregator sunset both aggregators agree on', async () => {
+        const result = await secondRun(bench, [
+          openaiSource([gpt6]),
+          litellmSunset('litellm'),
+          litellmSunset('models.dev'),
+        ]);
+
+        expect(result.lifecycle.transitions[0]).toMatchObject({ modelId: 'gpt-6', to: 'deprecated' });
+        expect(bench.catalog.rows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
 
       it('drops a docs signal whose parser row count moved more than 20%', async () => {
@@ -1384,19 +1504,30 @@ describe('runModelDiscovery', () => {
       expect(second.passes).toBeGreaterThanOrEqual(2);
     });
 
-    it('words a per-image literal as priced in this build, which no trusted source quotes', async () => {
+    it('promotes an image model on its build literal, which no source quotes', async () => {
       const image: DiscoveredModel = {
+        modelId: 'gpt-image-2',
+        patch: { ...gpt6.patch, id: 'gpt-image-2', name: 'GPT Image 2', type: 'image' },
+      };
+      const imaging = harness([openaiSource([image])], { modelDiscoveryAutoEnable: 'priced' });
+
+      const result = await runModelDiscovery(imaging.adapters, imaging.options);
+
+      expect(result.diff[0].blockedBy ?? []).not.toContain('no-trusted-price');
+      expect(imaging.catalog.rows[0].patch).toMatchObject({ lifecycle: { status: 'active' }, autoDisabled: false });
+    });
+
+    it('words a text-typed id whose only literal is non-text as awaiting a price', async () => {
+      const mistyped: DiscoveredModel = {
         modelId: 'gpt-image-1',
         patch: { ...gpt6.patch, id: 'gpt-image-1', name: 'GPT Image 1' },
       };
-      const imaging = harness([openaiSource([image])]);
+      const imaging = harness([openaiSource([mistyped])]);
 
       const result = await runModelDiscovery(imaging.adapters, imaging.options);
 
       expect(result.diff[0].blockedBy).toContain('no-trusted-price');
-      expect(imaging.catalog.rows[0].patch).toMatchObject({
-        autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
-      });
+      expect(imaging.catalog.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
     });
 
     it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {
@@ -1581,7 +1712,8 @@ describe('runModelDiscovery', () => {
           autoApplied: false,
         },
       ]);
-      expect(result.metrics.ModelsDeprecated).toBe(1);
+      // Never promoted, so never in a picker: reported, but not counted toward the alarm.
+      expect(result.metrics.ModelsDeprecated).toBe(0);
       expect(result.diff.some(entry => entry.promoted)).toBe(false);
       expect(bench.catalog.rows[bench.catalog.rows.length - 1].patch).toMatchObject({
         lifecycle: { status: 'deprecated', deprecationDate: '2026-01-15' },
@@ -2133,6 +2265,124 @@ describe('runModelDiscovery', () => {
       // Charged, unlike a retryable upstream: the model answered, and without the
       // charge it would be re-probed with live calls every run forever.
       expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
+    });
+  });
+
+  describe('model-list refresh', () => {
+    const withRefresh = (bench: Harness) => {
+      const onModelListChanged = vi.fn(async () => {});
+      bench.adapters.onModelListChanged = onModelListChanged;
+      return onModelListChanged;
+    };
+
+    it('refreshes once when a run promotes a model onto the list', async () => {
+      const onModelListChanged = withRefresh(bench);
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.metrics.ModelsPromoted).toBe(1);
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+      expect(bench.infos.some(line => line.includes('model lists refreshed for 1 model(s): gpt-6'))).toBe(true);
+    });
+
+    it('refreshes before the run document reports the run finished', async () => {
+      const onModelListChanged = withRefresh(bench);
+      let finishedWhenRefreshed: unknown = 'not called';
+      onModelListChanged.mockImplementation(async () => {
+        finishedWhenRefreshed = bench.runs.docs[0]?.finishedAt;
+      });
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(finishedWhenRefreshed).toBeUndefined();
+    });
+
+    it('does not refresh when a run writes nothing', async () => {
+      await runModelDiscovery(bench.adapters, bench.options);
+      const onModelListChanged = withRefresh(bench);
+      bench.advance(60_000);
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(onModelListChanged).not.toHaveBeenCalled();
+    });
+
+    it('does not refresh when the only row written is for a model that stays unpromoted', async () => {
+      const dissenting = (name: string) =>
+        stubSource({
+          name,
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 20, outputPerMTok: 80 } }],
+        });
+      const refused = harness([openaiSource(), dissenting('models.dev'), dissenting('litellm')]);
+      const onModelListChanged = withRefresh(refused);
+
+      await runModelDiscovery(refused.adapters, refused.options);
+
+      expect(refused.catalog.rows.map(row => row.modelId)).toContain('gpt-6');
+      expect(onModelListChanged).not.toHaveBeenCalled();
+      expect(refused.infos.some(line => line.includes('model lists left as they were'))).toBe(true);
+    });
+
+    it('does not refresh in report mode', async () => {
+      const reporting = harness([openaiSource()], { modelDiscoveryMode: 'report' });
+      const onModelListChanged = withRefresh(reporting);
+
+      await runModelDiscovery(reporting.adapters, reporting.options);
+
+      expect(onModelListChanged).not.toHaveBeenCalled();
+    });
+
+    it('refreshes once when the run throws after a promotion landed', async () => {
+      const onModelListChanged = withRefresh(bench);
+      bench.state.recordSighting = vi.fn().mockRejectedValue(new Error('state store down'));
+      bench.state.recordMiss = vi.fn().mockRejectedValue(new Error('state store down'));
+
+      await expect(runModelDiscovery(bench.adapters, bench.options)).rejects.toThrow('state store down');
+
+      expect(bench.catalog.rows.map(row => row.modelId)).toContain('gpt-6');
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes for every written model when the catalog re-read fails', async () => {
+      const onModelListChanged = withRefresh(bench);
+      let absenceApplied = false;
+      const recordSighting = bench.state.recordSighting.bind(bench.state);
+      const recordMiss = bench.state.recordMiss.bind(bench.state);
+      bench.state.recordSighting = async (modelId, at) => {
+        absenceApplied = true;
+        return recordSighting(modelId, at);
+      };
+      bench.state.recordMiss = async (modelId, at) => {
+        absenceApplied = true;
+        return recordMiss(modelId, at);
+      };
+      const rowsInForce = bench.catalog.rowsInForceWithRejects.bind(bench.catalog);
+      bench.catalog.rowsInForceWithRejects = async at => {
+        if (absenceApplied) throw new Error('catalog read timed out');
+        return rowsInForce(at);
+      };
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(onModelListChanged).toHaveBeenCalledTimes(1);
+      expect(
+        bench.warnings.some(
+          line =>
+            line.includes('catalog re-read failed') && line.includes('every written model: catalog read timed out')
+        )
+      ).toBe(true);
+    });
+
+    it('keeps the run when the refresh throws', async () => {
+      const onModelListChanged = withRefresh(bench);
+      onModelListChanged.mockRejectedValue(new Error('cache unreachable'));
+
+      const result = await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(result.outcome).toBe('ok');
+      expect(bench.runs.docs[0]).toMatchObject({ status: 'ok' });
+      expect(bench.errors.some(line => line.includes('model-list refresh failed: cache unreachable'))).toBe(true);
     });
   });
 });

@@ -7,7 +7,7 @@ The default stack runs app, chatcompletion, background worker, WebSocket gateway
 ## Prerequisites
 
 - Kubernetes 1.27 or newer, Helm 3.19 or newer, and a working default storage class, or `storage.className` explicitly set to an available class.
-- A trusted evaluation namespace. MongoDB and ElasticMQ have no authentication here. ClusterIP services have no public ingress, but other workloads in the cluster can reach them unless the cluster's network policy prevents it. Do not expose backing services publicly. TLS, authenticated database operation, ingress and backup/restore are separate production work.
+- A trusted evaluation namespace. MongoDB and ElasticMQ have no authentication here. ClusterIP services have no public ingress, but other workloads in the cluster can reach them unless the cluster's network policy prevents it. Do not expose backing services publicly. TLS, authenticated database operation and ingress are separate production work. For backups, see [Backup and restore](#backup-and-restore).
 - A registry reachable by every node, including credentials in `imagePullSecrets` if needed. All application images must come from the same source revision. Tagged references and digests are accepted; untagged images and `:latest` are rejected. For repeatable tests and rollback, use digests or immutable tags.
 - Available PVC capacity: 10 GiB MongoDB, 20 GiB object storage and 5 GiB queues by default. Configure sizes before creating PVCs. Single replicas and ReadWriteOnce storage provide no high availability.
 
@@ -40,7 +40,7 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
    kubectl create namespace bike4mind-eval
    ```
 
-2. Copy `runtime.env.example` outside the checkout, restrict it to mode 600, and generate separate secrets. `SECRET_ENCRYPTION_KEY` must be 64 hexadecimal characters. Signing and internal authentication secrets must have at least 32 characters. The MinIO password must have at least 16 characters. For local MinIO, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` equal its username/password; they are compatibility credentials, not AWS account credentials. Do not rotate the encryption key without preserving `SECRET_ENCRYPTION_KEY_PREVIOUS` for existing ciphertext. Set `MEMORY_KEY_SECRET` to a persistent random value (`openssl rand -hex 32`) and back it up with the other encryption keys: it wraps the per-principal memory keys, so losing it makes stored lake and user memory unreadable. Do not generate a new one on redeploy.
+2. Copy `runtime.env.example` outside the checkout, restrict it to mode 600, and generate separate secrets. `SECRET_ENCRYPTION_KEY` must be 64 hexadecimal characters. Signing and internal authentication secrets must have at least 32 characters. The MinIO password must have at least 16 characters. For local MinIO, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` equal its username/password; they are compatibility credentials, not AWS account credentials. Do not rotate the encryption key without preserving `SECRET_ENCRYPTION_KEY_PREVIOUS` for existing ciphertext. If the Secret sets `SECRET_ENCRYPTION_KEY_PREVIOUS`, it must be empty, `not-configured`, or 64 hexadecimal characters; the `validate-secrets` init container rejects anything else. The chart has no plaintext opt-out: a missing or malformed `SECRET_ENCRYPTION_KEY` always blocks the pods. Set `MEMORY_KEY_SECRET` to a persistent random value (`openssl rand -hex 32`) and back it up with the other encryption keys: it wraps the per-principal memory keys, so losing it makes stored lake and user memory unreadable. Do not generate a new one on redeploy; rotate it only by the procedure in `docs/security/credential-storage.md`, which adds the optional `MEMORY_KEY_SECRET_PREVIOUS` to the Secret.
 
    ```sh
    kubectl create secret generic bike4mind-runtime \
@@ -62,7 +62,7 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
    kubectl get pods,pvc,jobs --namespace bike4mind-eval
    ```
 
-   App and workers wait for Mongo PRIMARY and a successful storage initialization marker. The initializer creates the seven configured buckets, upload notification registrations and current Compose lifecycle policies, then writes the marker. It is safe to rerun. Its deterministic name changes when chart initialization inputs or values change, avoiding immutable Job updates. Change `initializationRevision` when an existing Secret's contents change or an explicit rerun is needed. Do not delete PVCs to retry initialization.
+   App and workers wait for Mongo PRIMARY and a successful storage initialization marker. The initializer creates the seven configured buckets, upload notification registrations and current Compose lifecycle policies, then writes the marker. It is safe to rerun. Its deterministic name changes when chart initialization inputs or values change, avoiding immutable Job updates. Change `initializationRevision` (as a string, for example `--set-string initializationRevision=2`) when an existing Secret's contents change or an explicit rerun is needed. Do not delete PVCs to retry initialization.
 
 5. Open four separate terminals for the browser-facing services. The chatcompletion port serves the CLI/API SSE endpoint. Keep these loopback-bound port-forwards private.
 
@@ -75,7 +75,7 @@ Copy `images.example.yaml` outside the checkout and replace all registry placeho
 
    The MinIO API forward matches `config.S3_PRESIGN_ENDPOINT` for QuestMaster ZIP downloads. Backend storage traffic keeps the private service endpoint. For remote browsers, set this value to a trusted HTTPS S3 API origin serving the same buckets; preserve the signed host, path and query through any proxy.
 
-   Open `http://localhost:3000`. Read test email by forwarding deployment/b4m-mail port 8025. Mailpit's UI port is intentionally absent from its Service.
+   Open `http://localhost:3000`. Read test email by forwarding deployment/b4m-mail port 8025. Mailpit's UI port is intentionally absent from its Service. The gateway's management API has its own internal Service (`b4m-ws-management`, port 3002) that only the application pods call; do not port-forward or expose it.
 
 ## Configuration and mixed providers
 
@@ -85,17 +85,132 @@ To retain an external S3-compatible backend, set `AWS_ENDPOINT_URL_S3`, bucket n
 
 Queue declarations and environment names mirror root `elasticmq.conf` and `.env.selfhost.example`; tests reject drift. Configuring a queue does not prove its consumer's outcome. The WebSocket gateway and scheduler worker remain singleton deployments with `Recreate`, since their state/leases do not justify unrestricted scaling. No ArgoCD, AWS-specific storage class, load balancer or administrative tunnel is installed.
 
+### Email
+
+By default `MAIL_HOST`, `MAIL_PORT` and `MAIL_FROM` point at the bundled Mailpit with no SMTP authentication, so sign-in codes land in its inbox (see the port-forward above). Mailpit has no persistent volume here, so a restart of its pod empties the inbox. Its pod does not roll on chart config or Secret changes.
+
+- **Real relay:** set `config.MAIL_HOST`, `config.MAIL_PORT` (465 for implicit TLS, 587 for STARTTLS) and `config.MAIL_FROM`. If the relay needs authentication, put `MAIL_USERNAME` and `MAIL_PASSWORD` in the runtime Secret; the Secret is loaded after the ConfigMap, so its values win. Set both or neither: for a relay without authentication, omit both. Setting only one is reported as a missing setting on Admin -> System Health.
+- **Mail off:** set `config.MAIL_HOST: ''`. An empty value counts as unset, so System Health reports email as not configured and sign-in codes cannot be delivered.
+- After a Secret change, pods do not restart on their own; bump `initializationRevision` with `--set-string` and rerun the upgrade, as described under [Restart and rollback](#restart-and-rollback).
+
+### Agent execution
+
 For agent execution, set `agentExecutor.enabled: true`, supply the matching source-built image, and add `AGENT_EXECUTOR_INTERNAL_SECRET` to the Secret. App and executor validate it before starting. Executor termination allows 14 minutes; chatcompletion allows 150 seconds and the background worker 30 seconds.
 
 ## Restart and rollback
 
 - Record the exact source/image references and `helm get values b4m -n bike4mind-eval` before upgrading. Never include secret values in receipts.
-- Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command.
+- Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command with `--set-string initializationRevision=<new value>` (the schema requires a string, so `--set initializationRevision=2` fails validation).
+- The gateway's management endpoint is `<release>-ws-management:3002`. Remove any `config.WEBSOCKET_MANAGEMENT_ENDPOINT` override that points at `<release>-ws:3001` before upgrading, and keep `images.ws` at the same revision as the other images.
 - An upgrade to a release that requires `MEMORY_KEY_SECRET` fails with `CreateContainerConfigError` if the existing runtime Secret has no such key. Add one to the Secret (a new, persistent value; never a value changed on every deploy) before running the upgrade.
-- For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery.
+- For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery; for that, see [Backup and restore](#backup-and-restore).
 - Inspect `kubectl logs -n bike4mind-eval pod/<mongo-pod> -c wait-member-dns` for DNS guard failures. Confirm the advertised member DNS resolves only to its current IP. An existing replica-set configuration mismatch fails closed; investigate it rather than deleting database storage or silently reconfiguring it.
-- Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and backups before upgrades that change persisted data.
+- Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and a [backup](#backup-and-restore) before upgrades that change persisted data.
 - `helm uninstall` leaves the three PVCs because of their retention annotations. Reinstallation requires explicit ownership/adoption of retained claims; do not assume a clean install will adopt them. Delete claims only after independently deciding their data can be discarded.
+
+### Pod roll reconnect check
+
+`apps/client/e2e/selfhost-pod-roll.spec.ts` drives one chat in a browser, replaces the app pod and then the WebSocket gateway pod, and requires the same page, never reloaded, to be back on a working realtime socket and to get a streamed reply after each. It then reads the chat back from the API and loads it cold. It sends three chat prompts, so the release needs a working model provider for the default chat model. It is not part of the default E2E suite or CI: it interrupts the release it runs against, so run it only against an evaluation release.
+
+Settings (environment, or `apps/client/.env.e2e`):
+
+| Variable | Meaning |
+|---|---|
+| `API_URL` | Browser-facing app origin, e.g. `http://localhost:3000`. |
+| `E2E_CLEANUP_SECRET` | The release's `E2E_CLEANUP_SECRET` runtime value. The check mints its own throwaway user through `/api/test/create-user`, which is off by default: the release must run with `E2E_ENDPOINTS_ENABLED` set to `true` (chart `config`) and `E2E_CLEANUP_SECRET` in the runtime Secret. Enable it on an evaluation release only. |
+| `SELFHOST_ROLL_APP_CMD` | Shell command that replaces the app pod and returns only when the replacement serves requests at `API_URL`. |
+| `SELFHOST_ROLL_WS_CMD` | The same for the gateway pod and the browser-facing WebSocket URL. |
+| `SELFHOST_ROLL_TIMEOUT_MS` | Optional budget for one roll command. Default 300000. |
+| `SELFHOST_RECONNECT_TIMEOUT_MS` | Optional budget for the client to be back on a working socket. Default 180000. |
+
+A `kubectl port-forward` ends when the pod behind it is replaced, so with the loopback forwards from the install steps each roll command must leave a forward running again (with its output redirected, so it does not hold the test run open), or the forwards must run in a loop (`while true; do kubectl port-forward ...; sleep 1; done`). With an ingress the rollout commands are enough:
+
+```sh
+cd apps/client
+export API_URL=http://localhost:3000
+export SELFHOST_ROLL_APP_CMD='kubectl -n bike4mind-eval rollout restart deployment/b4m-app && kubectl -n bike4mind-eval rollout status deployment/b4m-app --timeout=4m'
+export SELFHOST_ROLL_WS_CMD='kubectl -n bike4mind-eval rollout restart deployment/b4m-ws && kubectl -n bike4mind-eval rollout status deployment/b4m-ws --timeout=4m'
+pnpm exec playwright test --config e2e/selfhost-pod-roll.config.ts
+```
+
+The gateway holds the browser socket, so an app roll need not drop it: after the app roll the check requires a socket that carries traffic, reused or reopened. After the gateway roll it requires every earlier socket closed and a new one opened and answered. The throwaway user is left in place; the `/api/test/cleanup` sweep reclaims it.
+
+To show the check can fail, run it once with a gateway that never returns, then restore the release:
+
+```sh
+SELFHOST_ROLL_WS_CMD='kubectl -n bike4mind-eval scale deployment/b4m-ws --replicas=0' \
+  SELFHOST_RECONNECT_TIMEOUT_MS=60000 pnpm exec playwright test --config e2e/selfhost-pod-roll.config.ts
+kubectl -n bike4mind-eval scale deployment/b4m-ws --replicas=1
+```
+
+That run must fail at the gateway step with "the client did not reconnect after the gateway pod rolled".
+
+## Upload readability check
+
+A Playwright check signs in, uploads a file through the browser, and compares every byte the browser reads back with what was uploaded: straight after the upload, after a page reload, and after the app pod is replaced. It also requires two reads to fail: the signed URL re-pointed at another object key, and a key that has no object.
+
+It needs `kubectl` access to the release, Chromium for Playwright (`pnpm exec playwright install chromium`), and three things reachable from the machine that runs it: the app (`SELFHOST_URL`), the object store at `config.S3_PRESIGN_ENDPOINT`, and Mailpit's API for the sign-in code:
+
+```sh
+kubectl port-forward --namespace bike4mind-eval deployment/b4m-mail 8025:8025
+```
+
+A port-forward to the app ends when its pod is replaced, and the check then waits for the URL to answer again. Run that forward in a loop, or point `SELFHOST_URL` at an ingress:
+
+```sh
+while true; do kubectl port-forward --namespace bike4mind-eval svc/b4m-app 3000:3000; sleep 1; done
+```
+
+Then, from `apps/client`:
+
+```sh
+SELFHOST_URL=http://localhost:3000 SELFHOST_EMAIL=you@example.com \
+  SELFHOST_KUBE_NAMESPACE=bike4mind-eval SELFHOST_REVISION=$(git rev-parse HEAD) \
+  pnpm exec playwright test -c e2e/selfhost-upload-readable.config.ts --project=live
+```
+
+`SELFHOST_EMAIL` is an account that can sign in with an emailed code; an email with no account yet is registered on the spot, which only works where registration is open to it (a fresh install's first account, for example). Optional: `SELFHOST_KUBE_RELEASE` (default `b4m`), `SELFHOST_KUBE_CONTEXT`, `SELFHOST_MAILPIT_URL` (default `http://localhost:8025`), `SELFHOST_USERNAME`, `SELFHOST_READY_TIMEOUT_MS`. The check replaces the pod with `kubectl rollout restart deployment/<release>-app` and passes that step only when no app pod UID from before the restart remains. `SELFHOST_SKIP_POD_REPLACE=true` runs the first two reads only, for a target without Kubernetes; that is not a pod-replacement proof.
+
+The run prints a JSON receipt: the revision you supplied, the uploaded size and sha256, the verdict and sha256 of each read, the status of the two reads that must fail, and the app pod names, UIDs and images before and after. It holds no credentials, but the image references name your registry; check them before posting a receipt publicly. Each run leaves one small file and one notebook in the account.
+
+For a mutation proof, repeat the command with `SELFHOST_MUTATE_EXPECTED=true`. It flips one bit of the reference bytes, so that run must fail at all three reads. A mutation run also fails if sign-in or the upload breaks, so read its receipt: only `"mutationDetectedAtEveryRead": true` is the proof. Keep it next to the passing receipt. `--project=selftest` runs the comparison's own checks with no target.
+
+## Backup and restore
+
+`backup.py` backs up the bundled MongoDB (`bike4mind` replica set) and the seven MinIO buckets from your machine through `kubectl`, and writes them off the cluster. Back up the runtime Secret first: it holds `SECRET_ENCRYPTION_KEY`, `SECRET_ENCRYPTION_KEY_PREVIOUS` (if set), `MEMORY_KEY_SECRET` and `MEMORY_KEY_SECRET_PREVIOUS` (if set). The script never writes or copies it (it reads only the bucket names and the S3 endpoint, `AWS_ENDPOINT_URL_S3`, from the helper pod's environment; by default both come from the chart's ConfigMap, and a runtime Secret key of the same name overrides it). Without the same values in the restored release, encrypted data cannot be read. Store the env file encrypted, apart from the backup.
+
+Not covered: the ElasticMQ PVC (in-flight messages are transient and replaying stale ones repeats old work), external MongoDB (use the provider's backups) and external S3 (the script refuses a non-MinIO endpoint). The archive itself is not encrypted; encrypt it where you store it. VolumeSnapshots or Velero are an alternative on clusters that already run them, but are not scripted here and are crash-consistent rather than app-consistent for a live `mongod`.
+
+```sh
+python3 selfhost/kubernetes/backup.py backup --namespace bike4mind-eval --release b4m --dest ./b4m-backup-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+Add `--context` to pick a kube context. If the bucket-init Job has been pruned (GitOps) or deleted, pass `--mc-image` with the chart's mc image. The helper pod mounts an `emptyDir` at `/work`, so the node that runs it needs free disk roughly equal to the bucket data.
+
+The command pauses the app Deployments and waits for their pods to drain before copying either store; this requires a maintenance window for the full backup. It restores their original replica counts on success or failure. This writes `mongo.archive.gz` (`mongodump --oplog`), `objects.tar` (a `mc mirror` of the seven buckets, run in a short-lived helper pod cloned from the bucket-init Job, so it uses the same `mc` image and credentials) and `manifest.json` (times, image refs, per-bucket object counts, sha256 per file). Mongo is dumped first while application writers remain stopped, so application deletes cannot remove file bytes between the database dump and object copy. Pause external writers too; do not run concurrent backup, restore, upgrades or replica reconciliation. MinIO lifecycle expiration is independent and can still remove expiring objects during the copy.
+
+**Recovery point and retention.** The recovery point is the end of the last completed run. Mongo is consistent as of the end of its dump; the object copy finishes later while application writers are stopped. Objects subject to lifecycle expiration are not a transactional snapshot. Assumed retention (the script does not rotate): run it daily from a scheduler outside the cluster and keep 7 daily and 4 weekly copies, encrypted, off-cluster. A tighter recovery point needs managed MongoDB with point-in-time recovery.
+
+**Restore into a fresh release:**
+
+1. Create the namespace and recreate the Secret from the backed-up env file (same encryption keys). To make that file, export the live Secret before a disaster, for example `(umask 077; kubectl -n bike4mind-eval get secret bike4mind-runtime -o json | python3 -c 'import sys,json,base64; [print(k+"="+base64.b64decode(v).decode()) for k,v in json.load(sys.stdin)["data"].items()]' > runtime.env.tmp && mv runtime.env.tmp runtime.env)` (single-line values only, as the install steps use), and keep it encrypted; it feeds the `kubectl create secret generic --from-env-file` command in the install steps.
+2. `helm install` the chart with the same values and wait for it (`--wait --wait-for-jobs`); the init Job recreates the buckets, webhooks and lifecycle rules. Once running, the worker seeds a few documents into the `bike4mind` database, so a freshly installed release is never empty.
+3. Run the restore with `--yes`. It is expected here: it is the flag for a target that already holds data, including that boot-time seed.
+
+   ```sh
+   python3 selfhost/kubernetes/backup.py restore --namespace NEW_NS --release NEW_RELEASE --from ./b4m-backup-DIR --yes
+   ```
+
+   It verifies the manifest checksums, scales the app Deployments to 0 and waits for their pods to drain, restores Mongo (`--oplogReplay`), mirrors the objects, checks that each bucket holds at least the backup's object count, and scales the Deployments back after a successful restore. A failure before the first destructive write also restores replica counts. After a destructive write starts, any failure or Ctrl-C leaves the app stopped to protect partially restored data; the error prints the original replica counts as recovery commands. Retry with `--yes` while the app stays stopped, then run those printed commands only after the restore succeeds (the retry sees 0 replicas and preserves them). A Deployment that is already at 0 is left at 0 (it prints a warning). With the app at 0 the bucket put webhook has no target, so restored files are not re-processed. Without `--yes` it refuses a target that already has user databases or objects both before and after the app drains; data appearing during the drain also requires explicit `--yes`. With `--yes` it drops the target's user databases first (re-read after the app has drained, so a database the worker seeds in the meantime is dropped too) and makes each bucket match the backup: objects that are not in the backup are removed (the init Job's `.initialized-*` marker is kept). Do not pass `--yes` to a release whose data you want to keep.
+4. Sign in as an existing user and open a known file.
+
+To prove the procedure on a disposable local cluster (kind, k3d, minikube or Docker Desktop; it refuses other contexts unless you pass `--context-ok`), build the `selfhost/minio` images, load them into the cluster, and run the drill. It installs two throwaway releases, seeds one user and one file, backs up, deletes the source, restores into the second release, and prints `PASS user` and `PASS file sha256` only if the same user and the same file bytes come back:
+
+```sh
+python3 selfhost/kubernetes/verify-backup-restore.py --images images.yaml
+```
+
+`images.yaml` is a values file with all six `images.*` set (`app`, `chatcompletion`, `ws`, `subscriberFanout`, `minio`, `mc`); `minio` and `mc` must be the built images. Any tagged image works for the app roles: the drill cannot wait for them to become ready, so it does not use `--wait`, and it writes the worker's boot-time seed marker itself so the destination looks like a freshly installed release. It then runs the same `restore ... --yes` command as step 3 and checks that the app Deployments return to their original replica counts.
 
 ## Local package checks
 
@@ -114,7 +229,7 @@ Tests render the real chart, reject duplicate YAML keys and unsafe configuration
 
 Local MongoDB remains the default. To prepare an Atlas deployment, combine the normal image values with `external-mongo.example.yaml`. Create the runtime Secret separately with all required runtime keys plus `MONGODB_URI`. The chart requires that key explicitly and rejects a URI in config values when external MongoDB is enabled. No credential belongs in Git, Helm values, or command arguments.
 
-External mode omits the local MongoDB StatefulSet, Service, PVC, default URI, and DNS guard. Its startup check reads the URI from the environment, requires a writable primary, and never initializes or changes the external replica set. Each of 60 attempts is limited to 15 seconds, with a further 5 seconds to force termination, even when the URI specifies unlimited timeouts. Existing timeout options are preserved; defaults are added only for missing options. Connection output is suppressed and failures emit only fixed, credential-free reason names. Use Atlas TLS verification without insecure URI options, a dedicated evaluation database and least-privilege database user, and an Atlas network allowlist matching the cluster's actual outbound addresses. This chart does not manage Atlas access, backups, or migration. Switching an existing local installation does not migrate its data; preserve its retained PVC and migrate separately. Disabling external mode restores the ConfigMap URI even if the Secret still contains an external URI; it does not copy external data into local MongoDB.
+External mode omits the local MongoDB StatefulSet, Service, PVC, default URI, and DNS guard. Its startup check reads the URI from the environment, requires a writable primary, and never initializes or changes the external replica set. Each of 60 attempts is limited to 15 seconds, with a further 5 seconds to force termination, even when the URI specifies unlimited timeouts. Existing timeout options are preserved; defaults are added only for missing options. Connection output is suppressed and failures emit only fixed, credential-free reason names. Use Atlas TLS verification without insecure URI options, a dedicated evaluation database and least-privilege database user, and an Atlas network allowlist matching the cluster's actual outbound addresses. This chart does not manage Atlas access or migration, and `backup.py` refuses external mode: back up Atlas with its own snapshots or PITR. Switching an existing local installation does not migrate its data; preserve its retained PVC and migrate separately. Disabling external mode restores the ConfigMap URI even if the Secret still contains an external URI; it does not copy external data into local MongoDB.
 
 MinIO and ElasticMQ remain local and require persistent storage (20Gi and 5Gi by default). On EKS, install and verify a compatible EBS CSI driver and StorageClass before deployment. External MongoDB does not make the complete stack fit a single small worker: default application/init requests total 2816Mi, plus existing system workloads, and eight steady pods require an additional slot for the bucket initialization Job. Measure capacity and preserve honest requests and limits before deployment; the example does not lower them. The optional executor adds another pod and 512Mi requested memory.
 

@@ -9,11 +9,15 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   bedrockClientConfig,
   estimateStreamedOutputTokens,
+  isEmptyConversationError,
+  isRetryableError,
+  TOOL_SEARCH_BLOCK_TYPES,
   type ModelInfo,
   type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
-import { executeToolsBatch, shouldEndTurnAfterTools } from '../executeToolsBatch';
+import { HiddenReasoningOnlyEmptyError, isHiddenReasoningOnlyEmptyError } from '../llmEmptyTurnErrors';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from '../executeToolsBatch';
 import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
@@ -30,6 +34,7 @@ import { getCachingAdapter } from '../caching/adapters';
 import { describePayloadShape } from './payloadShape';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from '../abortAwareRetry';
 import {
   BedrockRuntimeClient,
   InvokeModelCommand,
@@ -60,6 +65,51 @@ const BEDROCK_RETRY_CONFIG = { maxAttempts: 6, retryMode: 'adaptive' as const };
 // error once per recursion depth, and the outer entries would describe a request that never failed.
 // The innermost catch sees the failing payload, so it logs and the rest stay quiet.
 const loggedErrors = new WeakSet<Error>();
+// Caps the provider message in the error title; the full message stays in the log metadata.
+const MAX_LOGGED_ERROR_REASON_LENGTH = 300;
+
+/**
+ * Message for a stream that produced no text and no tool call. A stall (no terminal event from an
+ * adapter that signals one) carries "stream timeout" so isStreamIdleTimeoutError in
+ * services/src/llm/llmErrorPredicates.ts retries it once then falls back; it must not say "without a
+ * terminal event", which isTruncatedStreamError reads as a mid-stream truncation. Any other empty
+ * stream is deterministic (the max-tool-calls cap) and must match neither.
+ *
+ * `hiddenReasoningOnly` marks a stream whose only output was a thinking block with no displayed
+ * text: the model was reached, so the misrouted-profile hint does not apply. The non-stalled variant
+ * is thrown as a HiddenReasoningOnlyEmptyError (retried once, then fallback) except on the capped round.
+ */
+export function bedrockEmptyResponseMessage(
+  model: string,
+  region: string,
+  stalled: boolean,
+  hiddenReasoningOnly = false
+): string {
+  if (hiddenReasoningOnly) {
+    const what =
+      `model "${model}" in region ${region} streamed only a thinking block with no displayed text, ` +
+      `then no text and no tool call`;
+    return stalled
+      ? `[BaseBedrockBackend] stream timeout - ${what} and no terminal event: an EMPTY response, usually a ` +
+          `Bedrock socket that stalled after the thinking block.`
+      : `[BaseBedrockBackend] ${what}: an EMPTY response.`;
+  }
+  const profileHint =
+    `If every call on this model is empty, a "global." cross-region inference profile served from a ` +
+    `region that does not host it does the same - try the "us." variant, or confirm the model/profile ` +
+    `is granted in ${region}.`;
+  if (stalled) {
+    return (
+      `[BaseBedrockBackend] stream timeout - model "${model}" in region ${region} returned an EMPTY ` +
+      `response (no text, no tool call) and no terminal event. Usually a stalled Bedrock socket ` +
+      `before the first token. ${profileHint}`
+    );
+  }
+  return (
+    `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${region} ` +
+    `(no text, no tool call, no output tokens). ${profileHint}`
+  );
+}
 
 /**
  * The subset of @smithy's NodeHttp2HandlerOptions that BEDROCK_REQUEST_HANDLER sets. Declared
@@ -137,6 +187,29 @@ function isAbortError(err: unknown): boolean {
   return err.message.includes('aborted');
 }
 
+function isRetryableBedrockError(error: unknown): boolean {
+  if (!(error instanceof Error) || isAbortError(error)) return false;
+  const { $metadata, $retryable } = error as Error & {
+    $metadata?: { httpStatusCode?: number };
+    $retryable?: { throttling?: boolean };
+  };
+  const status = $metadata?.httpStatusCode;
+  return (
+    Boolean($retryable) ||
+    status === 408 ||
+    status === 429 ||
+    (typeof status === 'number' && status >= 500 && status < 600) ||
+    [
+      'ThrottlingException',
+      'ModelNotReadyException',
+      'ServiceUnavailableException',
+      'InternalServerException',
+      'TimeoutError',
+    ].includes(error.name) ||
+    isRetryableError(error)
+  );
+}
+
 export abstract class BaseBedrockBackend implements ICompletionBackend {
   private _options: BedrockOptions;
   protected _bedrockRuntime: BedrockRuntimeClient;
@@ -178,19 +251,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    */
   protected async invokeModel(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: Uint8Array }> {
     const command = new InvokeModelCommand(input);
-    return this._bedrockRuntime.send(command, { abortSignal });
+    return client.send(command, { abortSignal });
   }
 
   /** @see invokeModel */
   protected async invokeModelStream(
     input: { modelId: string; contentType: string; accept: string; body: string },
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    client = this._bedrockRuntime
   ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
     const command = new InvokeModelWithResponseStreamCommand(input);
-    return this._bedrockRuntime.send(command, { abortSignal });
+    return client.send(command, { abortSignal });
   }
 
   /**
@@ -222,6 +297,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     return false;
   }
 
+  /**
+   * The text that closes a reasoning block the stream ended inside, at its choice index, or
+   * undefined when none is open. A stream cut mid-block never delivers the event that closes
+   * the marker, so complete() asks for it once the stream loop ends. Adapters that wrap
+   * reasoning across chunks override this.
+   */
+  protected closeOpenReasoning(): { index: number; text: string } | undefined {
+    return undefined;
+  }
+
   protected updateClientForModel(model: string): void {
     const requiredRegion = this.getRegionForModel(model);
     this._options.region = requiredRegion;
@@ -234,6 +319,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     });
   }
 
+  protected createAbortAwareClient(model: string): BedrockRuntimeClient {
+    return new BedrockRuntimeClient({
+      region: this.getRegionForModel(model),
+      ...bedrockClientConfig(),
+      maxAttempts: 1,
+      retryMode: 'standard',
+      requestHandler: BEDROCK_REQUEST_HANDLER,
+    });
+  }
+
   async complete(
     model: string,
     messages: IMessage[],
@@ -241,9 +336,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
     // Update client region if needed for this specific model
-    this.updateClientForModel(model);
+    if (!retrySignal) this.updateClientForModel(model);
 
     // Tool chaining safeguard: Track and limit recursive tool calls
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -278,6 +374,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         {
           ...options,
           tools: undefined,
+          providerTools: undefined,
           // Defensive parity with the OpenAI/Anthropic backends: reset tool_choice on
           // recursion. Bedrock doesn't send request-side tool_choice, so this is a no-op
           // today, but it keeps the recursion invariant uniform across backends.
@@ -302,11 +399,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the same Anthropic Messages API as anthropicBackend.ts and rejects any tool block when
     // `tools` is absent regardless of pairing. Mirrors the same proactive strip added there;
     // the reactive count-mismatch warning below only logs, it never stripped this case either.
-    if (!options.tools?.length) {
+    if (!options.tools?.length && !options.providerTools?.length) {
       const hasToolBlocks = messagesWithFormat.some(
         m =>
           Array.isArray(m.content) &&
-          m.content.some((b: { type?: string }) => b.type === 'tool_use' || b.type === 'tool_result')
+          m.content.some(
+            (b: { type?: string }) =>
+              b.type === 'tool_use' || b.type === 'tool_result' || TOOL_SEARCH_BLOCK_TYPES.has(b.type ?? '')
+          )
       );
       if (hasToolBlocks) {
         Logger.globalInstance.warn(
@@ -327,12 +427,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // the reactive ValidationException catches below remain the safety net for those cases.
     const contextWindow = this.getModelContextWindow(model);
     if (contextWindow > 0) {
-      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options);
+      const baseOutputTokens = this.getEffectiveMaxOutputTokens(options, model);
       // Extended thinking reserves additional tokens on top of max_tokens in the actual payload.
       const thinkingBudget = options.thinking?.budget_tokens ?? 0;
       const reservedOutputTokens = baseOutputTokens + thinkingBudget;
       const maxInputTokens = contextWindow - reservedOutputTokens;
-      let estimatedInputTokens = Math.ceil(input.body.length / 4);
+      let estimatedInputTokens = this.estimateInputTokens(input.body);
 
       if (estimatedInputTokens > maxInputTokens) {
         // Graceful degradation: rather than failing the completion outright,
@@ -364,7 +464,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           prunedMessages = next;
           formattedMessages = this.formatMessages(prunedMessages);
           input = this.getPayload(model, formattedMessages, options);
-          estimatedInputTokens = Math.ceil(input.body.length / 4);
+          estimatedInputTokens = this.estimateInputTokens(input.body);
         }
 
         if (estimatedInputTokens > maxInputTokens) {
@@ -473,6 +573,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       }
     }
 
+    const requestClient = retrySignal ? this.createAbortAwareClient(model) : this._bedrockRuntime;
     try {
       Logger.globalInstance.log(
         `[BaseBedrockBackend] Invoking model: ${model} with stream=${options.stream} in region: ${this._options.region}`
@@ -483,7 +584,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         const roundStart = Date.now();
         let firstChunkAt: number | null = null;
         try {
-          response = await this.invokeModelStream(input, options.abortSignal);
+          response = await this.invokeModelStream(input, options.abortSignal, requestClient);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -495,17 +596,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // the old code returned silently, so the chat had nothing to render and hung until the client
         // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
         let emittedTextChars = 0;
+        // A turn the server-run tool search paused (pause_turn) can hold nothing but provider blocks.
+        let emittedProviderBlocks = 0;
         // This round's visible answer text (no reasoning), for shouldEndTurnAfterTools.
         let streamedRoundText = '';
         // @see signalsStreamTermination - only meaningful for adapters that opt in.
         let sawTerminalEvent = false;
+        // A reasoning frame arrived, even one with no displayable text; see bedrockEmptyResponseMessage.
+        let sawReasoning = false;
         const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
           firstChunkAt ??= Date.now();
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
-            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            const { done, chunk } = this.translateStreamChunk(model, JSON.parse(json), options);
             sawTerminalEvent ||= done;
             if (chunk?.stopReason) stopReason = chunk.stopReason;
 
@@ -522,6 +627,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               cacheReadTokens = Math.max(cacheReadTokens, choice.usage?.cache_read_input_tokens || 0);
               cacheWriteTokens = Math.max(cacheWriteTokens, choice.usage?.cache_creation_input_tokens || 0);
             });
+
+            for (const { providerBlock } of chunk?.providerBlocks ?? []) {
+              emittedProviderBlocks++;
+              await callback([], { ...buildCompletionInfo(), providerBlock });
+            }
 
             // While a tool is being streamed, only choices an adapter explicitly marked as prose are
             // forwarded; everything else is dropped as before, so adapters that never set the flag
@@ -542,32 +652,41 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
             // Reasoning arrives on its own chunk, so the tag is frame-wide.
             const channel = chunk?.choices.find(c => c.channel)?.channel;
-            if (channel !== 'reasoning') streamedRoundText += streamedText.join('');
+            if (channel === 'reasoning') sawReasoning = true;
+            else streamedRoundText += streamedText.join('');
 
             // Send streamed text from chunk text data
             await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
         }
+        const openReasoning = this.closeOpenReasoning();
+        if (openReasoning) {
+          const closing: string[] = [];
+          closing[openReasoning.index] = openReasoning.text;
+          emittedTextChars += openReasoning.text.length;
+          await callback(closing, { ...buildCompletionInfo(), channel: 'reasoning' });
+        }
         const modelDoneAt = Date.now();
 
-        // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
-        // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
-        // served from a region that does not host it) or an unavailable model. Returning silently makes
-        // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
-        // count is deliberately NOT part of the condition: an empty response can still report phantom
-        // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
-        // Ordering note: a stall that lands BEFORE the first token also arrives here with zero
-        // output and no terminal event, so it is reported as EMPTY rather than TRUNCATED and
-        // misses the retry below. That is deliberate, not an oversight - a misrouted "global."
-        // profile produces literally the same observable (no chunks, no terminal event), so the
-        // two are indistinguishable at this layer and the more actionable message should win.
-        if (emittedTextChars === 0 && !func.some(f => f.name)) {
-          throw new Error(
-            `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
-              `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
-              `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
-              `model/profile is granted in ${this._options.region}.`
-          );
+        // FAIL LOUD on an empty completion: no text and no tool call (token counts can be phantom).
+        // Aborted requests are excluded, as in the TRUNCATED guard below. A stall (no terminal event)
+        // gets the retried wording; a single call cannot tell it from a misrouted profile, so a
+        // persistent misroute also retries then falls back. The retry is turn-level, so a stall on a
+        // later tool round re-runs the earlier rounds, as TRUNCATED does. See bedrockEmptyResponseMessage.
+        if (
+          emittedTextChars === 0 &&
+          emittedProviderBlocks === 0 &&
+          !func.some(f => f.name) &&
+          !options.abortSignal?.aborted
+        ) {
+          const stalled = this.signalsStreamTermination && !sawTerminalEvent;
+          const message = bedrockEmptyResponseMessage(model, this._options.region, stalled, sawReasoning);
+          // The capped round (tools stripped at maxToolCalls) is deterministic: a retry would replay
+          // every tool round and land in the same place, so it keeps the plain, non-retried error.
+          if (sawReasoning && !stalled && toolCallCount < maxToolCalls) {
+            throw new HiddenReasoningOnlyEmptyError('Bedrock', model, message);
+          }
+          throw new Error(message);
         }
 
         // FAIL LOUD on a TRUNCATED completion. A transport stall mid-body closes the h2 stream
@@ -586,7 +705,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         //
         // Worded to include "stream timeout" on purpose: that is the substring
         // ChatCompletionProcess's isStreamIdleTimeoutError matches, which buys the existing
-        // retry-once-then-fallback path. Keep the phrase if you reword this. Note it is NOT in
+        // retry-once-then-fallback path. Keep the phrase if you reword this, and keep "without a
+        // terminal event" in sync with isTruncatedStreamError in llmErrorPredicates.ts. Note it is NOT in
         // logToSlackClassify's skip list and does not satisfy isAbortError, so a genuine
         // truncation logs at ERROR and is alert-visible - deliberate, since a truncated answer
         // that survived a retry and a provider fallback is worth seeing.
@@ -762,7 +882,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 if (isAbortError(outcome.error)) throw outcome.error;
-                Logger.globalInstance.error(
+                Logger.globalInstance[toolFailureLogLevel(outcome.error)](
                   `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
@@ -856,14 +976,19 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       } else {
         let response;
         try {
-          response = await this.invokeModel(input, options.abortSignal);
+          response = retrySignal
+            ? await retryAbortAware(() => this.invokeModel(input, retrySignal, requestClient), retrySignal, {
+                isRetryable: isRetryableBedrockError,
+              })
+            : await this.invokeModel(input, options.abortSignal, requestClient);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
         if (!response.body) throw new Error('No response body');
         const json = new TextDecoder().decode(response.body);
-        const { chunk } = this.translateChunk(model, JSON.parse(json));
+        const { chunk } = this.translateChunk(model, JSON.parse(json), options);
         if (chunk?.stopReason) stopReason = chunk.stopReason;
+        const providerBlocks = chunk?.providerBlocks ?? [];
         const streamedText: string[] = [];
         chunk?.choices.forEach(choice => {
           // Accumulate: a whole-message response can carry several choices at one index (prose
@@ -871,10 +996,34 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           streamedText[choice.index] = (streamedText[choice.index] ?? '') + (choice.chunkText || '');
         });
 
-        inputTokens = chunk?.choices[0].usage?.input_tokens || 0;
-        outputTokens = chunk?.choices[0].usage?.output_tokens || 0;
-        cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
-        cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
+        inputTokens = chunk?.choices[0]?.usage?.input_tokens || 0;
+        outputTokens = chunk?.choices[0]?.usage?.output_tokens || 0;
+        cacheReadTokens = chunk?.choices[0]?.usage?.cache_read_input_tokens || 0;
+        cacheWriteTokens = chunk?.choices[0]?.usage?.cache_creation_input_tokens || 0;
+        if (retrySignal) {
+          const hasUsage = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens > 0;
+          await reportUsageOnAbort(retrySignal, callback, hasUsage ? buildCompletionInfo() : undefined);
+        }
+
+        // Provider blocks go out at their place in the text, so a caller echoing them keeps the response order.
+        const emitResponseText = async (text: string[]) => {
+          retrySignal?.throwIfAborted();
+          if (providerBlocks.length === 0) {
+            await callback(text, buildCompletionInfo());
+            return;
+          }
+          const whole = text.join('');
+          let from = 0;
+          for (const { providerBlock, textOffset } of providerBlocks) {
+            retrySignal?.throwIfAborted();
+            if (textOffset > from) await callback([whole.slice(from, textOffset)], buildCompletionInfo());
+            from = Math.max(from, textOffset);
+            retrySignal?.throwIfAborted();
+            await callback([], { ...buildCompletionInfo(), providerBlock });
+          }
+          retrySignal?.throwIfAborted();
+          await callback([whole.slice(from)], buildCompletionInfo());
+        };
 
         // Collect EVERY tool call, not just the first. A provider that emits
         // parallel calls returns one TOOL_USE choice per call, and the old
@@ -885,12 +1034,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
         if (toolChoices.length > 0) {
           // Track tool usage (including ID for history reconstruction, allow empty parameters)
-          for (const { tool } of toolChoices) {
-            if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
-          }
+          const recordToolCalls = () => {
+            for (const { tool } of toolChoices) {
+              if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
+            }
+          };
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
+            recordToolCalls();
             const executable = toolChoices
               .map(tc => tc.tool)
               .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
@@ -906,7 +1058,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               // The text-only send below is never reached on this branch, so a turn's intro text
               // ("Here's the second chart:") goes out here. On a chained call `callback` is the
               // guard's buffering callback, so emitArtifact still flushes it ahead of the artifact.
-              if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
+              if (streamedText.some(Boolean) || providerBlocks.length > 0) await emitResponseText(streamedText);
 
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
@@ -921,7 +1073,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 } catch (err) {
                   if (err instanceof PermissionDeniedError) throw err;
                   if (isAbortError(err)) throw err;
-                  Logger.globalInstance.error(
+                  Logger.globalInstance[toolFailureLogLevel(err)](
                     `[BaseBedrockBackend] Tool ${name} failed:`,
                     err instanceof Error ? err.message : String(err)
                   );
@@ -1010,18 +1162,21 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
             // Same as the executing branch above: the text-only send below is never reached, so
             // intro text sharing this chunk with the reported tool call goes out here.
-            if (streamedText.some(Boolean)) await callback(streamedText, buildCompletionInfo());
+            // Recorded after the text, as when streaming: each send carrying toolsUsed is its own tool_use frame.
+            if (streamedText.some(Boolean) || providerBlocks.length > 0) await emitResponseText(streamedText);
+            recordToolCalls();
             await callback([null], buildCompletionInfo());
             return; // Exit after passing tools
           }
         }
 
-        await callback(streamedText, buildCompletionInfo());
+        await emitResponseText(streamedText);
+        retrySignal?.throwIfAborted();
       }
     } catch (error) {
       // Log detailed error information
       if (error instanceof Error) {
-        if (error.message.includes('aborted')) {
+        if (error.message.includes('aborted') || (retrySignal && (retrySignal.aborted || isAbortError(error)))) {
           Logger.globalInstance.log('[BaseBedrockBackend] Request aborted, skipping error logging');
           throw error;
         }
@@ -1029,12 +1184,29 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // error logs reach a shared alert channel and must never include prompt text.
         if (loggedErrors.has(error)) throw error;
         loggedErrors.add(error);
+        // Thrown by getPayload before any provider call: caller input, not a provider fault, and the
+        // caller settles it (ChatCompletionProcess warns once), so it must not page here.
+        if (isEmptyConversationError(error)) {
+          Logger.globalInstance.warn(`[BaseBedrockBackend] Refused an empty conversation for ${model}`);
+          throw error;
+        }
+        // Retried, then fallen back, by the completion loop; it logs at error only if neither answers.
+        if (isHiddenReasoningOnlyEmptyError(error)) {
+          Logger.globalInstance.warn(`[BaseBedrockBackend] ${error.message}`);
+          throw error;
+        }
         const { $fault, $metadata, $retryable } = error as Error & {
           $fault?: unknown;
           $metadata?: unknown;
           $retryable?: unknown;
         };
-        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${error.name}`, {
+        // The alert shows only this title, so it carries the provider's reason (e.g. which block a
+        // ValidationException rejected). Bedrock describes the request's structure here, not its text.
+        const reason =
+          error.message && error.message !== error.name
+            ? `${error.name}: ${error.message.slice(0, MAX_LOGGED_ERROR_REASON_LENGTH)}`
+            : error.name;
+        Logger.globalInstance.error(`[BaseBedrockBackend] Error invoking model ${model}: ${reason}`, {
           name: error.name,
           message: error.message,
           stack: error.stack,
@@ -1050,6 +1222,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       }
 
       throw error;
+    } finally {
+      if (retrySignal) requestClient.destroy();
     }
   }
 
@@ -1085,7 +1259,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    * @param model AI Model being used.
    * @param chunk The stream chunk
    */
-  abstract translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk };
+  abstract translateStreamChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk };
 
   /**
    * [NON-STREAM]
@@ -1096,7 +1274,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
    * @param model The model ID.
    * @param chunk The response
    */
-  abstract translateChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk };
+  abstract translateChunk(
+    model: string,
+    chunk: unknown,
+    options?: Partial<ICompletionOptions>
+  ): { done: boolean; chunk?: ICompletionResponseChunk };
 
   /**
    * Push the tool messages to the messages array.
@@ -1150,8 +1332,13 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   }
 
   /** Output reservation must match any provider-specific limit applied to the payload. */
-  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>): number {
+  protected getEffectiveMaxOutputTokens(options: Partial<ICompletionOptions>, _model?: string): number {
     return typeof options.maxTokens === 'number' ? options.maxTokens : 4096;
+  }
+
+  /** Provider payloads may contain binary data that is not tokenized as text. */
+  protected estimateInputTokens(body: string): number {
+    return Math.ceil(body.length / 4);
   }
 
   /**

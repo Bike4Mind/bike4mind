@@ -249,6 +249,37 @@ describe('pricing utils', () => {
     });
   });
 
+  describe('creditsToUsdAtFloor and formatUsdAmount', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('values credits at the floor rate', async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', undefined);
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', undefined);
+      const pricing = await importPricing();
+      expect(pricing.creditsToUsdAtFloor(10000)).toBeCloseTo(6);
+      expect(pricing.creditsToUsdAtFloor(0)).toBe(0);
+      expect(pricing.formatUsdAmount(pricing.creditsToUsdAtFloor(10000))).toBe('$6.00');
+    });
+
+    it('follows an env-configured floor', async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', '2');
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', '0.001');
+      const pricing = await importPricing();
+      expect(pricing.creditsToUsdAtFloor(1000)).toBeCloseTo(1000 * pricing.MIN_PRICE_PER_CREDIT_USD);
+    });
+
+    it('formats dollars with cents and keeps sub-cent amounts visible', async () => {
+      const pricing = await importPricing();
+      expect(pricing.formatUsdAmount(0)).toBe('$0.00');
+      expect(pricing.formatUsdAmount(1234.5)).toBe('$1,234.50');
+      expect(pricing.formatUsdAmount(0.0006)).toBe('$0.0006');
+      expect(pricing.formatUsdAmount(0.1 + 0.2)).toBe('$0.30');
+    });
+  });
+
   describe('env-configured valuation', () => {
     afterEach(() => {
       vi.unstubAllEnvs();

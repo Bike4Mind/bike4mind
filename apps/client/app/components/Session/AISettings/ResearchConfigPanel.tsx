@@ -1,6 +1,7 @@
 import { FC } from 'react';
 import { Box, Card, Typography, Button, Input, IconButton, Stack, Select, Option, Divider, Tooltip } from '@mui/joy';
-import { Close as CloseIcon, KeyboardArrowDown } from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import KeyboardArrowDown from '@mui/icons-material/KeyboardArrowDown';
 import { ResearchModeConfiguration } from '@client/app/types/ResearchMode';
 import { ChatModelName, ChatModels, NO_TEMPERATURE_MODELS } from '@bike4mind/common';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
@@ -107,8 +108,8 @@ export const ResearchConfigPanel: FC<ResearchConfigPanelProps> = ({ index, confi
             onClick={() =>
               onUpdate({
                 enabled: true,
-                // Cast is safe today: the catalog has no row for the dated gpt-5.4-mini snapshot, so
-                // it never reaches textModels. Add a supportedChatModels.safeParse here if one is added.
+                // Cast is safe today: the catalog has no row for the dated snapshots supportedChatModels
+                // excludes, so they never reach textModels. Add a supportedChatModels.safeParse here if one is added.
                 model: (textModels[0]?.id as ChatModelName) || ChatModels.GPT4_1,
                 parameters: {
                   temperature: 0.7,

@@ -1,8 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { UsageEvent, usageEventRepository } from './UsageEventModel';
+import { UsageEvent, UsageEventRepository, usageEventRepository } from './UsageEventModel';
+import { CreditLot } from './CreditLotModel';
+import { User } from '../auth/UserModel';
+import { Organization } from '../infra/admin/OrganizationModel';
 import { CreditHolderType, IUsageEventInput } from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
@@ -45,6 +48,19 @@ const record = (overrides: Partial<IUsageEventInput> = {}) =>
 
 describe('UsageEventRepository', () => {
   describe('record', () => {
+    it('persists run lineage as sent, leaving an absent purpose absent', async () => {
+      const run = { runId: 'run-1', role: 'worker' as const, taskId: 'task-1', parentSessionId: 'root-session' };
+      const doc = await record({ feature: 'completion_api', run });
+
+      const stored = await UsageEvent.findById(doc!.id).lean();
+      expect(stored?.run).toEqual(run);
+      expect(stored?.run).not.toHaveProperty('purpose');
+    });
+
+    it('rejects a run role outside the vocabulary', async () => {
+      await expect(record({ run: { runId: 'run-1', role: 'boss' as unknown as 'root' } })).rejects.toThrow(/role/);
+    });
+
     it('persists an event with all quantities and money fields', async () => {
       const doc = await record({
         providerInputTokens: 900,
@@ -69,6 +85,13 @@ describe('UsageEventRepository', () => {
       const doc = await record();
       expect(doc!.source).toBeUndefined();
       expect(doc!.apiKeyId).toBeUndefined();
+    });
+
+    it('persists prospective project attribution without populating historical rows', async () => {
+      const attributed = await record({ projectId: 'project-1' });
+      const unassigned = await record();
+      expect((await UsageEvent.findById(attributed!.id).lean())!.projectId).toBe('project-1');
+      expect((await UsageEvent.findById(unassigned!.id).lean())!.projectId).toBeUndefined();
     });
 
     it('round-trips the price stamp: source, string row id, rates and per-turn usage', async () => {
@@ -128,6 +151,92 @@ describe('UsageEventRepository', () => {
     });
   });
 
+  describe('userTokensSince', () => {
+    it.each(['chat', 'completion_api'] as const)(
+      'excludes unbilled %s timeout cache usage from quotas but retains its COGS',
+      async feature => {
+        await record({
+          feature,
+          status: 'timeout',
+          inputTokens: 0,
+          outputTokens: 0,
+          providerInputTokens: 1000,
+          providerOutputTokens: 100,
+          cachedInputTokens: 30_000,
+          cacheWriteTokens: 500,
+          creditsCharged: 0,
+          settledBasis: 'provider',
+        });
+
+        expect(await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000))).toEqual({
+          tokens: 0,
+        });
+        const cogs = await usageEventRepository.marginByModelDay();
+        expect(cogs).toHaveLength(1);
+        expect(cogs[0].cogsUsd).toBeCloseTo(baseEvent.costUsd, 12);
+      }
+    );
+
+    it("counts a chat row's cache tokens once, as part of its inputTokens", async () => {
+      await record({ feature: 'chat', inputTokens: 100, outputTokens: 50, cachedInputTokens: 20, cacheWriteTokens: 5 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(150);
+    });
+
+    it('adds the separate cache buckets of a non-chat row', async () => {
+      await record({
+        feature: 'completion_api',
+        inputTokens: 100,
+        outputTokens: 50,
+        cachedInputTokens: 20,
+        cacheWriteTokens: 5,
+      });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(175);
+    });
+
+    it("sums the user's own events in the window and reports the oldest", async () => {
+      const first = await record({ inputTokens: 100, outputTokens: 50 });
+      await record({ inputTokens: 10, outputTokens: 1 });
+      await record({ userId: 'user-2', ownerId: 'user-2', inputTokens: 9999 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(161);
+      expect(result.oldestAt?.getTime()).toBe(first!.createdAt.getTime());
+    });
+
+    it('leaves out usage billed to an organization', async () => {
+      await record({ inputTokens: 10, outputTokens: 0 });
+      await record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, inputTokens: 5000 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(10);
+    });
+
+    it('ignores events before the window', async () => {
+      await record({ inputTokens: 100 });
+      // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 120_000) } });
+      await record({ inputTokens: 7, outputTokens: 0 });
+
+      const result = await usageEventRepository.userTokensSince('user-1', new Date(Date.now() - 60_000));
+
+      expect(result.tokens).toBe(7);
+    });
+
+    it('reads zero for a user with no recent usage', async () => {
+      expect(await usageEventRepository.userTokensSince('nobody', new Date(Date.now() - 60_000))).toEqual({
+        tokens: 0,
+      });
+    });
+  });
+
   describe('marginByModelDay', () => {
     it('groups cost and credits per provider/model per UTC day', async () => {
       await record({ costUsd: 0.01, creditsCharged: 50 });
@@ -142,6 +251,22 @@ describe('UsageEventRepository', () => {
       expect(sonnet!.cogsUsd).toBeCloseTo(0.03, 10);
       expect(sonnet!.creditsCharged).toBe(150);
       expect(sonnet!.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('splits substituted traffic into its own row under the executed model', async () => {
+      await record({ costUsd: 0.01, creditsCharged: 50 });
+      await record({ costUsd: 0.002, creditsCharged: 50, executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+
+      const rows = await usageEventRepository.marginByModelDay();
+
+      expect(rows).toHaveLength(2);
+      rows.forEach(r => expect(r).toMatchObject({ provider: 'bedrock', model: 'claude-sonnet-4-5' }));
+      const substituted = rows.find(r => r.executedModel === 'gpt-4o-mini');
+      expect(substituted).toMatchObject({ executedProvider: 'openai', requests: 1, creditsCharged: 50 });
+      expect(substituted!.cogsUsd).toBeCloseTo(0.002, 10);
+      const normal = rows.find(r => r.executedModel === 'claude-sonnet-4-5');
+      expect(normal).toMatchObject({ executedProvider: 'bedrock', requests: 1 });
+      expect(normal!.cogsUsd).toBeCloseTo(0.01, 10);
     });
 
     it('excludes events older than the since date', async () => {
@@ -172,6 +297,73 @@ describe('UsageEventRepository', () => {
     });
   });
 
+  describe('spendProfileByUsers', () => {
+    const since = new Date('2026-10-01T00:00:00Z');
+    const backdate = (requestId: string, createdAt: Date) =>
+      UsageEvent.collection.updateOne({ requestId }, { $set: { createdAt } });
+
+    it('sums spend per model, counts written-off credits, and finds the first spend', async () => {
+      await record({ requestId: 'a1', userId: 'u1', model: 'm-big', creditsCharged: 40 });
+      await record({ requestId: 'a2', userId: 'u1', model: 'm-big', creditsCharged: 10, writtenOffCredits: 5 });
+      await record({ requestId: 'a3', userId: 'u1', model: 'm-small', creditsCharged: 3 });
+      await record({ requestId: 'a4', userId: 'u1', model: 'm-small', creditsCharged: 0 });
+      await record({ requestId: 'a5', userId: 'u1', model: 'm-old', creditsCharged: 99 });
+      await record({ requestId: 'a6', userId: 'other', creditsCharged: 7 });
+      await backdate('a1', new Date('2026-10-05T00:00:00Z'));
+      await backdate('a2', new Date('2026-10-03T00:00:00Z'));
+      await backdate('a3', new Date('2026-10-04T00:00:00Z'));
+      await backdate('a4', new Date('2026-10-02T00:00:00Z'));
+      await backdate('a5', new Date('2026-09-30T00:00:00Z'));
+
+      const profiles = await usageEventRepository.spendProfileByUsers(['u1', 'nobody'], since);
+
+      expect(Object.keys(profiles)).toEqual(['u1']);
+      expect(profiles.u1.firstSpendAt).toEqual(new Date('2026-10-03T00:00:00Z'));
+      expect(profiles.u1.totalCredits).toBe(58);
+      expect(profiles.u1.byModel).toEqual([
+        { model: 'm-big', credits: 55, events: 2 },
+        { model: 'm-small', credits: 3, events: 1 },
+      ]);
+    });
+
+    it('keeps the largest models up to the cap', async () => {
+      await record({ requestId: 'b1', userId: 'u1', model: 'm1', creditsCharged: 1 });
+      await record({ requestId: 'b2', userId: 'u1', model: 'm2', creditsCharged: 2 });
+      await record({ requestId: 'b3', userId: 'u1', model: 'm3', creditsCharged: 3 });
+      const profiles = await usageEventRepository.spendProfileByUsers(['u1'], since, 2);
+      expect(profiles.u1.byModel.map(m => m.model)).toEqual(['m3', 'm2']);
+    });
+
+    it('keeps the same top models when equally funded aggregate rows arrive in a different order', async () => {
+      const rows = ['m6', 'm2', 'm4', 'm1', 'm5', 'm3'].map(model => ({
+        _id: { userId: 'u1', model },
+        credits: 10,
+        events: 1,
+        firstAt: since,
+      }));
+      const query = UsageEvent.aggregate<(typeof rows)[number]>([]);
+      const execute = vi
+        .spyOn(query, 'exec')
+        .mockResolvedValueOnce(rows)
+        .mockResolvedValueOnce([...rows].reverse());
+      const aggregate = vi.spyOn(UsageEvent, 'aggregate').mockReturnValue(query);
+      try {
+        const first = await usageEventRepository.spendProfileByUsers(['u1'], since);
+        const second = await usageEventRepository.spendProfileByUsers(['u1'], since);
+        expect(first.u1.byModel.map(entry => entry.model)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5']);
+        expect(second).toEqual(first);
+        expect(execute).toHaveBeenCalledTimes(2);
+      } finally {
+        aggregate.mockRestore();
+        execute.mockRestore();
+      }
+    });
+
+    it('reads nothing for an empty id list', async () => {
+      expect(await usageEventRepository.spendProfileByUsers([], since)).toEqual({});
+    });
+  });
+
   describe('monthlyCogsByProvider', () => {
     it('sums cost and token quantities per provider per month, newest first', async () => {
       await record({ inputTokens: 1000, outputTokens: 500, cachedInputTokens: 200 });
@@ -189,6 +381,22 @@ describe('UsageEventRepository', () => {
         cachedInputTokens: 200,
       });
       expect(bedrock!.month).toMatch(/^\d{4}-\d{2}$/);
+    });
+
+    it('attributes substituted rows to the executed provider', async () => {
+      await record({ costUsd: 0.01 });
+      await record({ costUsd: 0.01 });
+      await record({ costUsd: 0.002, executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+
+      const rows = await usageEventRepository.monthlyCogsByProvider();
+
+      expect(rows).toHaveLength(2);
+      const bedrock = rows.find(r => r.provider === 'bedrock');
+      expect(bedrock!.requests).toBe(2);
+      expect(bedrock!.cogsUsd).toBeCloseTo(0.02, 10);
+      const openai = rows.find(r => r.provider === 'openai');
+      expect(openai!.requests).toBe(1);
+      expect(openai!.cogsUsd).toBeCloseTo(0.002, 10);
     });
 
     it('sums cacheWriteTokens', async () => {
@@ -245,7 +453,96 @@ describe('UsageEventRepository', () => {
     });
   });
 
+  describe('providerUnitsBreakdown', () => {
+    const at = async (doc: { id: string } | null, iso: string) => {
+      await UsageEvent.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(doc!.id) },
+        { $set: { createdAt: new Date(iso) } }
+      );
+    };
+    const window = {
+      provider: 'elevenlabs',
+      from: new Date('2026-03-01T00:00:00Z'),
+      to: new Date('2026-04-01T00:00:00Z'),
+    };
+    const tts = { feature: 'text_to_speech' as const, provider: 'elevenlabs', model: 'eleven_multilingual_v2' };
+
+    it('sums units and requests per day, feature, model, user, key source and status', async () => {
+      await at(await record({ ...tts, units: 100, keySource: 'platform' }), '2026-03-02T01:00:00Z');
+      await at(await record({ ...tts, units: 50, keySource: 'platform' }), '2026-03-02T23:00:00Z');
+      await at(await record({ ...tts, units: 7, keySource: 'user' }), '2026-03-02T05:00:00Z');
+      await at(await record({ ...tts, units: 30, status: 'error' }), '2026-03-03T05:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ day: '2026-03-02', keySource: 'platform', status: 'ok', requests: 2, units: 150 }),
+          expect.objectContaining({ day: '2026-03-02', keySource: 'user', requests: 1, units: 7 }),
+          expect.objectContaining({ day: '2026-03-03', keySource: null, status: 'error', requests: 1, units: 30 }),
+        ])
+      );
+      expect(rows).toHaveLength(3);
+      expect(rows.at(-1)!.day).toBe('2026-03-03');
+      expect(rows[0]).toMatchObject({ feature: 'text_to_speech', model: 'eleven_multilingual_v2', userId: 'user-1' });
+    });
+
+    it('excludes other providers and rows outside [from, to)', async () => {
+      await at(await record({ ...tts, units: 1 }), '2026-02-28T23:59:59Z');
+      await at(await record({ ...tts, units: 2 }), '2026-04-01T00:00:00Z');
+      await at(await record({ units: 3 }), '2026-03-10T00:00:00Z');
+      await at(await record({ ...tts, units: 4 }), '2026-03-01T00:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(rows.map(r => r.units)).toEqual([4]);
+    });
+
+    it('buckets rows at the flat-priced default units apart', async () => {
+      const sound = { feature: 'sound_effects' as const, provider: 'elevenlabs', model: 'elevenlabs' };
+      await at(await record({ ...sound, units: 200 / 11 }), '2026-03-05T01:00:00Z');
+      await at(await record({ ...sound, units: 200 / 11 }), '2026-03-05T02:00:00Z');
+      await at(await record({ ...sound, units: 5 }), '2026-03-05T03:00:00Z');
+
+      const rows = await usageEventRepository.providerUnitsBreakdown({ ...window, defaultUnits: 200 / 11 });
+
+      expect(rows).toHaveLength(2);
+      expect(rows.find(r => r.atDefaultUnits)).toMatchObject({ requests: 2 });
+      expect(rows.find(r => !r.atDefaultUnits)).toMatchObject({ requests: 1, units: 5 });
+    });
+
+    it('counts a row without units as zero units', async () => {
+      await at(await record({ ...tts }), '2026-03-05T00:00:00Z');
+
+      const [row] = await usageEventRepository.providerUnitsBreakdown(window);
+
+      expect(row).toMatchObject({ requests: 1, units: 0 });
+    });
+  });
+
   describe('settlementBreakdown', () => {
+    it('keeps timeout requests without treating quota sentinels as local token estimates', async () => {
+      await record({
+        settledBasis: 'provider',
+        status: 'timeout',
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 1000,
+        providerOutputTokens: 700,
+        creditsCharged: 0,
+      });
+
+      expect(await usageEventRepository.settlementBreakdown()).toEqual([
+        expect.objectContaining({
+          requests: 1,
+          creditsCharged: 0,
+          deltaSampleSize: 0,
+          inputTokenDelta: 0,
+          outputTokenDelta: 0,
+        }),
+      ]);
+    });
+
     it('buckets by settledBasis and sums credits, write-offs, and token deltas', async () => {
       await record({
         settledBasis: 'provider',
@@ -328,6 +625,34 @@ describe('UsageEventRepository', () => {
     const orgEvent = (overrides: Partial<IUsageEventInput> = {}) =>
       record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, ...overrides });
 
+    it('reconciles persisted projects and Unassigned within the selected owner and period', async () => {
+      await orgEvent({ projectId: 'p1', creditsCharged: 70 });
+      await orgEvent({ creditsCharged: 30 });
+      await orgEvent({ projectId: 'p2', creditsCharged: 5 });
+      await orgEvent({ ownerId: 'other-org', projectId: 'p1', creditsCharged: 999 });
+      const old = await orgEvent({ projectId: 'old', creditsCharged: 999 });
+      await UsageEvent.collection.updateOne({ _id: old!._id }, { $set: { createdAt: new Date('2020-01-01') } });
+
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization, 7);
+      expect(summary.byProject).toMatchObject([
+        { projectId: 'p1', creditsCharged: 70, requests: 1 },
+        { projectId: null, creditsCharged: 30, requests: 1 },
+        { projectId: 'p2', creditsCharged: 5, requests: 1 },
+      ]);
+      for (const rows of [summary.byProject, summary.byMember, summary.byModel, summary.overTime]) {
+        expect(rows.reduce((sum, row) => sum + row.creditsCharged, 0)).toBe(summary.totals.creditsCharged);
+      }
+    });
+
+    it('never exposes executed model fields', async () => {
+      await orgEvent();
+      await orgEvent({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization);
+      expect(summary.byModel).toHaveLength(1);
+      expect(summary.byModel[0].requests).toBe(2);
+      expect(summary.byModel[0]).not.toHaveProperty('executedModel');
+    });
+
     it('rolls up an owner spend by day, member, model, and feature', async () => {
       await orgEvent({ userId: 'user-a', feature: 'chat', costUsd: 0.01, creditsCharged: 50 });
       await orgEvent({ userId: 'user-a', feature: 'agent_execution', costUsd: 0.02, creditsCharged: 100 });
@@ -390,6 +715,7 @@ describe('UsageEventRepository', () => {
       expect(summary).toEqual({
         overTime: [],
         byMember: [],
+        byProject: [],
         byModel: [],
         byFeature: [],
         totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
@@ -455,6 +781,17 @@ describe('UsageEventRepository', () => {
   });
 
   describe('platformUsageSummary', () => {
+    it('splits byModel by executed model, coalescing rows without one', async () => {
+      await record();
+      await record({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const { byModel } = await usageEventRepository.platformUsageSummary();
+      expect(byModel).toHaveLength(2);
+      expect(byModel.map(r => [r.executedProvider, r.executedModel]).sort()).toEqual([
+        ['bedrock', 'claude-sonnet-4-5'],
+        ['openai', 'gpt-4o-mini'],
+      ]);
+    });
+
     it('rolls up across owners by day, feature, consumer, and model', async () => {
       await record({
         ownerId: 'u1',
@@ -568,6 +905,18 @@ describe('UsageEventRepository', () => {
   });
 
   describe('sessionUsageSummary', () => {
+    it('splits by executed model only when includeExecuted', async () => {
+      await record({ sessionId: 's-x' });
+      await record({ sessionId: 's-x', executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const withExec = await usageEventRepository.sessionUsageSummary('s-x', undefined, { includeExecuted: true });
+      expect(withExec.byModel).toHaveLength(2);
+      expect(withExec.byModel.map(r => r.executedModel).sort()).toEqual(['claude-sonnet-4-5', 'gpt-4o-mini']);
+      const plain = await usageEventRepository.sessionUsageSummary('s-x');
+      expect(plain.byModel).toHaveLength(1);
+      expect(plain.byModel[0].requests).toBe(2);
+      expect(plain.byModel[0]).not.toHaveProperty('executedModel');
+    });
+
     it('rolls up a session by quest and by model with token totals', async () => {
       await record({
         sessionId: 's-1',
@@ -699,6 +1048,26 @@ describe('UsageEventRepository', () => {
   });
 
   describe('spendSummary', () => {
+    it('splits byModel by executed model, coalescing rows without one', async () => {
+      await record();
+      await record({ executedProvider: 'openai', executedModel: 'gpt-4o-mini' });
+      const { byModel } = await usageEventRepository.spendSummary();
+      expect(byModel).toHaveLength(2);
+      for (const r of byModel) expect([r.provider, r.model]).toEqual(['bedrock', 'claude-sonnet-4-5']);
+      expect(byModel.map(r => [r.executedProvider, r.executedModel]).sort()).toEqual([
+        ['bedrock', 'claude-sonnet-4-5'],
+        ['openai', 'gpt-4o-mini'],
+      ]);
+    });
+
+    it('model filter matches requested or executed model', async () => {
+      await record({ model: 'opus' });
+      await record({ model: 'sonnet', executedProvider: 'bedrock', executedModel: 'opus' });
+      await record({ model: 'haiku' });
+      const s = await usageEventRepository.spendSummary({ model: 'opus' });
+      expect(s.totals.requests).toBe(2);
+    });
+
     it('rolls up totals, models, accounts, and daily cost in one pass', async () => {
       await record({
         ownerId: 'org-1',
@@ -814,6 +1183,28 @@ describe('UsageEventRepository', () => {
       expect(summary.latency.p95).toBeGreaterThanOrEqual(summary.latency.p50);
     });
 
+    it('counts failures and p95 latency per account', async () => {
+      const org = { ownerId: 'org-1', ownerType: CreditHolderType.Organization };
+      for (const latencyMs of [100, 200, 300]) {
+        await record({ ...org, latencyMs, status: 'ok' });
+      }
+      await record({ ...org, status: 'error', latencyMs: 400 });
+      await record({ ...org, status: 'timeout', latencyMs: 500 });
+      // Refusals and degenerates are their own rates, not failures.
+      await record({ ...org, status: 'refusal', latencyMs: 600 });
+      await record({ ...org, status: 'degenerate', latencyMs: 700 });
+      // No latencyMs anywhere: p95 reads 0 rather than null.
+      await record({ ownerId: 'user-9', ownerType: CreditHolderType.User, status: 'ok' });
+
+      const summary = await usageEventRepository.spendSummary();
+      const byOwner = Object.fromEntries(summary.byAccount.map(a => [a.ownerId, a]));
+
+      expect(byOwner['org-1']).toMatchObject({ requests: 7, failures: 2 });
+      expect(byOwner['org-1'].p95LatencyMs).toBeGreaterThanOrEqual(500);
+      expect(byOwner['org-1'].p95LatencyMs).toBeLessThanOrEqual(700);
+      expect(byOwner['user-9']).toMatchObject({ requests: 1, failures: 0, p95LatencyMs: 0 });
+    });
+
     it('honors the date window and the user/model filters', async () => {
       // timestamps:true governs createdAt through Mongoose, so age this row via the raw driver.
       const oldDoc = await record({ userId: 'u-a', model: 'opus' });
@@ -864,5 +1255,281 @@ describe('UsageEventRepository', () => {
       expect(summary.byAccount).toEqual([]);
       expect(summary.dailyCost).toEqual([]);
     });
+  });
+});
+
+describe('UsageEventRepository.creditsSpentByUser', () => {
+  const from = new Date('2026-10-20T10:00:00Z');
+  const to = new Date('2026-10-21T10:00:00Z');
+  const at = async (createdAt: Date, overrides: Partial<IUsageEventInput> = {}) => {
+    const event = await record(overrides);
+    // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+    await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
+  };
+
+  it('sums creditsCharged inside [from, to) for that user only, not adding the write-off it already includes', async () => {
+    await at(from, { creditsCharged: 30 });
+    await at(new Date('2026-10-21T09:59:59Z'), { creditsCharged: 20, writtenOffCredits: 5 });
+    await at(to, { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T09:59:59Z'), { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(50);
+  });
+
+  it('returns 0 when the user spent nothing in the window', async () => {
+    await expect(usageEventRepository.creditsSpentByUser('user-1', from, to)).resolves.toBe(0);
+  });
+});
+
+describe('UsageEventRepository.activitySummaryByUser', () => {
+  const from = new Date('2026-10-20T10:00:00Z');
+  const to = new Date('2026-10-21T10:00:00Z');
+  const at = async (createdAt: Date, overrides: Partial<IUsageEventInput> = {}) => {
+    const event = await record(overrides);
+    // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+    await UsageEvent.collection.updateOne({ _id: event!._id }, { $set: { createdAt } });
+  };
+
+  it('counts events by outcome and sums credits inside [from, to) for that user only', async () => {
+    const latest = new Date('2026-10-21T09:00:00Z');
+    await at(from, { creditsCharged: 30 });
+    await at(latest, { creditsCharged: 5, writtenOffCredits: 5, status: 'error' });
+    await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 0, status: 'refusal' });
+    await at(to, { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 100)).resolves.toEqual({
+      events: 3,
+      completed: 1,
+      failed: 2,
+      credits: 35,
+      latestAt: latest,
+    });
+  });
+
+  it('returns zeros and no latestAt when the user had no usage in the window', async () => {
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 100)).resolves.toEqual({
+      events: 0,
+      completed: 0,
+      failed: 0,
+      credits: 0,
+      latestAt: null,
+    });
+  });
+
+  it('summarises only the newest `limit` events, so a busy account is a bounded read', async () => {
+    const latest = new Date('2026-10-21T09:00:00Z');
+    await at(new Date('2026-10-20T11:00:00Z'), { creditsCharged: 1000 });
+    await at(new Date('2026-10-20T12:00:00Z'), { creditsCharged: 7 });
+    await at(latest, { creditsCharged: 3 });
+
+    await expect(usageEventRepository.activitySummaryByUser('user-1', from, to, 2)).resolves.toEqual({
+      events: 2,
+      completed: 2,
+      failed: 0,
+      credits: 10,
+      latestAt: latest,
+    });
+  });
+});
+
+describe('UsageEventRepository.creditsSpentByUsers', () => {
+  it('sums creditsCharged per user without re-adding write-offs, leaving out users who spent nothing', async () => {
+    await record({ userId: 'user-1', creditsCharged: 30 });
+    await record({ userId: 'user-1', creditsCharged: 20, writtenOffCredits: 5 });
+    await record({ userId: 'user-2', creditsCharged: 7 });
+    await record({ userId: 'someone-else', creditsCharged: 1000 });
+
+    await expect(usageEventRepository.creditsSpentByUsers(['user-1', 'user-2', 'user-3'])).resolves.toEqual({
+      'user-1': 50,
+      'user-2': 7,
+    });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(usageEventRepository.creditsSpentByUsers([])).resolves.toEqual({});
+  });
+});
+
+describe('UsageEventRepository.largestSettlementOverHold', () => {
+  const since = new Date(Date.now() - 60 * 60 * 1000);
+
+  it('ratios creditsCharged over the hold, not adding the write-off it already includes', async () => {
+    await record({ userId: 'user-1', reservedCredits: 10, creditsCharged: 40, writtenOffCredits: 30 });
+    await record({ userId: 'user-1', reservedCredits: 10, creditsCharged: 20 });
+    await record({ userId: 'user-1', creditsCharged: 1000 });
+    await record({ userId: 'someone-else', reservedCredits: 1, creditsCharged: 1000 });
+
+    await expect(usageEventRepository.largestSettlementOverHold(['user-1', 'user-2'], since)).resolves.toEqual({
+      'user-1': { reservedCredits: 10, settledCredits: 40, ratio: 4 },
+    });
+  });
+
+  it('returns nothing for no users', async () => {
+    await expect(usageEventRepository.largestSettlementOverHold([], since)).resolves.toEqual({});
+  });
+});
+
+describe('UsageEventRepository funding stamp', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  afterEach(async () => {
+    await CreditLot.deleteMany({});
+    await User.deleteMany({});
+  });
+
+  const createLot = (ownerId: string, source: 'promo' | 'pack', amount: number, expiresInDays: number) =>
+    CreditLot.create({
+      ownerId,
+      ownerType: CreditHolderType.User,
+      source,
+      amount,
+      expiresAt: new Date(Date.now() + expiresInDays * DAY_MS),
+    });
+
+  it('splits the charge across the lots it drew from, soonest expiry first', async () => {
+    // 100 promo + 500 pack granted, 480 left after this charge: 120 consumed, the last 50 of it this charge.
+    const user = await User.create({
+      username: `u-${new mongoose.Types.ObjectId()}`,
+      name: 'Funding fixture',
+      currentCredits: 480,
+    });
+    await createLot(user.id, 'pack', 500, 365);
+    await createLot(user.id, 'promo', 100, 90);
+
+    const doc = await record({ userId: user.id, ownerId: user.id, creditsCharged: 50 });
+
+    expect(doc!.fundingBreakdown).toEqual({ granted: 30, purchased: 20, subscription: 0, unknown: 0 });
+  });
+
+  it("reads an organization holder's own balance", async () => {
+    const org = await Organization.create({
+      name: 'Funding org',
+      userId: 'owner',
+      users: [],
+      groups: [],
+      currentCredits: 480,
+    });
+    const lot = (source: 'promo' | 'pack', amount: number, expiresInDays: number) =>
+      CreditLot.create({
+        ownerId: org.id,
+        ownerType: CreditHolderType.Organization,
+        source,
+        amount,
+        expiresAt: new Date(Date.now() + expiresInDays * DAY_MS),
+      });
+    await lot('pack', 500, 365);
+    await lot('promo', 100, 90);
+
+    const doc = await record({ ownerId: org.id, ownerType: CreditHolderType.Organization, creditsCharged: 50 });
+
+    expect(doc!.fundingBreakdown).toEqual({ granted: 30, purchased: 20, subscription: 0, unknown: 0 });
+    await Organization.deleteMany({});
+  });
+
+  it('leaves the row unstamped when the holder record is gone', async () => {
+    const goneUserId = new mongoose.Types.ObjectId().toString();
+    await createLot(goneUserId, 'pack', 500, 365);
+
+    const doc = await record({ userId: goneUserId, ownerId: goneUserId, creditsCharged: 50 });
+
+    expect(doc).not.toBeNull();
+    expect(doc!.fundingBreakdown).toBeUndefined();
+  });
+
+  it('marks the charge unknown when the holder has no lots', async () => {
+    const doc = await record({ creditsCharged: 50 });
+
+    expect(doc!.fundingBreakdown).toEqual({ granted: 0, purchased: 0, subscription: 0, unknown: 50 });
+  });
+
+  it('leaves zero-credit rows unstamped', async () => {
+    const doc = await record({ creditsCharged: 0, status: 'refusal' });
+
+    expect(doc!.fundingBreakdown).toBeUndefined();
+  });
+
+  it('keeps a breakdown the caller already supplied', async () => {
+    const supplied = { granted: 0, purchased: 50, subscription: 0, unknown: 0 };
+
+    const doc = await record({ fundingBreakdown: supplied });
+
+    expect(doc!.fundingBreakdown).toEqual(supplied);
+  });
+
+  it('records the event unstamped when the funding lookup fails', async () => {
+    const failing = new UsageEventRepository(UsageEvent, async () => {
+      throw new Error('lots unavailable');
+    });
+
+    const doc = await failing.record(baseEvent);
+
+    expect(doc).not.toBeNull();
+    expect(doc!.fundingBreakdown).toBeUndefined();
+  });
+});
+
+describe('UsageEventRepository.costByFundingCohort', () => {
+  afterEach(async () => {
+    await User.deleteMany({});
+  });
+
+  const createUser = (createdAt: Date) =>
+    User.create({ username: `u-${new mongoose.Types.ObjectId()}`, name: 'Cohort fixture', createdAt });
+
+  it('splits provider cost by funding share and groups spenders by signup week', async () => {
+    // Wednesday and Friday of the same UTC week, and a user from the week before.
+    const early = await createUser(new Date('2026-10-21T10:00:00Z'));
+    const late = await createUser(new Date('2026-10-23T22:00:00Z'));
+    const older = await createUser(new Date('2026-10-14T10:00:00Z'));
+    const recordFor = (userId: string, overrides: Partial<IUsageEventInput>) =>
+      record({ userId, ownerId: userId, ...overrides });
+
+    await recordFor(early.id, {
+      costUsd: 1,
+      creditsCharged: 100,
+      fundingBreakdown: { granted: 75, purchased: 25, subscription: 0, unknown: 0 },
+    });
+    await recordFor(late.id, {
+      costUsd: 2,
+      creditsCharged: 40,
+      fundingBreakdown: { granted: 40, purchased: 0, subscription: 0, unknown: 0 },
+    });
+    await recordFor(late.id, { costUsd: 0.5, creditsCharged: 0, status: 'refusal' });
+    await recordFor(older.id, {
+      costUsd: 4,
+      creditsCharged: 10,
+      fundingBreakdown: { granted: 0, purchased: 0, subscription: 10, unknown: 0 },
+    });
+
+    const rows = await usageEventRepository.costByFundingCohort(30);
+
+    expect(rows).toEqual([
+      {
+        cohortWeek: new Date('2026-10-19T00:00:00Z'),
+        accounts: 2,
+        costUsd: { granted: 2.75, purchased: 0.25, subscription: 0, unknown: 0 },
+        credits: { granted: 115, purchased: 25, subscription: 0, unknown: 0 },
+        unattributedCostUsd: 0.5,
+        platformCostUsd: 0,
+      },
+      {
+        cohortWeek: new Date('2026-10-12T00:00:00Z'),
+        accounts: 1,
+        costUsd: { granted: 0, purchased: 0, subscription: 4, unknown: 0 },
+        credits: { granted: 0, purchased: 0, subscription: 10, unknown: 0 },
+        unattributedCostUsd: 0,
+        platformCostUsd: 0,
+      },
+    ]);
+  });
+
+  it('puts spenders without a user record in a null cohort', async () => {
+    await record({ userId: 'gone-user', costUsd: 1, creditsCharged: 0 });
+
+    const rows = await usageEventRepository.costByFundingCohort(30);
+
+    expect(rows).toEqual([expect.objectContaining({ cohortWeek: null, accounts: 1, unattributedCostUsd: 1 })]);
   });
 });

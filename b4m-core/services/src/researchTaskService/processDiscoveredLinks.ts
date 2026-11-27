@@ -1,19 +1,21 @@
 import {
   IFabFileRepository,
   IMessage,
+  IResearchTask,
   IResearchDataRepository,
   IResearchTaskJobs,
   IResearchTaskRepository,
   ResearchTaskStatus,
   ResearchTaskType,
+  getQuestErrorCode,
+  limitConcurrency,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import { isAiAccessRefusal } from '../userService/accountState';
 import { createSendStatusUpdate } from './utils';
-import axios from 'axios';
+import type mongoose from 'mongoose';
 import { z } from 'zod';
-import plimit from 'p-limit';
-import pLimit from 'p-limit';
 
 const researchTaskProcessDiscoveredLinksSchema = z.object({
   id: z.string(),
@@ -23,7 +25,7 @@ type IResearchTaskProcessDiscoveredLinks = z.infer<typeof researchTaskProcessDis
 
 interface IResearchTaskProcessDiscoveredLinksAdapters {
   db: {
-    withTransaction: (fn: (session: any) => Promise<void>) => Promise<void>;
+    withTransaction: (fn: (session: mongoose.ClientSession) => Promise<void>) => Promise<void>;
     researchTasks: IResearchTaskRepository;
     fabFiles: IFabFileRepository;
     researchDatas: IResearchDataRepository;
@@ -34,10 +36,11 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
     warn: (message: string) => void;
   };
   llm: ICompletionBackend;
+  storage: { download: (path: string) => Promise<Buffer> };
   jobs: {
     researchTasks: IResearchTaskJobs & {
       sendToClient: (
-        researchTask: any,
+        researchTask: IResearchTask,
         update: { status: string; currentStep: string; progress: number }
       ) => Promise<void>;
     };
@@ -47,15 +50,23 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
 // TODO: move BATCH_SIZE / CONCURRENCY_LIMIT to admin settings so they're adjustable.
 const BATCH_SIZE = 50;
 const CONCURRENCY_LIMIT = 3;
+// A batch of BATCH_SIZE links comes back as pretty-printed JSON, which runs past a 4096-token default
+// with long URLs and is cut off mid-array. Finite on purpose: the metered backend sizes its credit hold
+// from it (clamped to the model's own output cap), and a non-finite value reads as "no budget".
+const LINK_EXTRACTION_MAX_TOKENS = 16_384;
 
 // No whitespace consumers around the lazy body: the caller trims, and `\s*` there is quadratic on an unclosed fence.
+/** A refusal about the task owner (no credits, or no AI access), not the links; it fails every batch alike. */
+const isOwnerRefusal = (error: unknown): boolean =>
+  getQuestErrorCode(error) === 'insufficient_credits' || isAiAccessRefusal(error);
+
 export const FENCED_JSON_REGEX = /```(?:json)?([\s\S]*?)```/;
 
 export const processDiscoveredLinks = async (
   parameters: IResearchTaskProcessDiscoveredLinks,
   adapters: IResearchTaskProcessDiscoveredLinksAdapters
 ) => {
-  const { db, logger, llm, jobs } = adapters;
+  const { db, logger, llm, jobs, storage } = adapters;
   const { id } = secureParameters(parameters, researchTaskProcessDiscoveredLinksSchema);
 
   const researchTask = await db.researchTasks.findById(id);
@@ -78,8 +89,10 @@ export const processDiscoveredLinks = async (
   });
 
   const totalPendingLinks = researchTask.discoveredLinks?.filter(l => l.status === 'pending').length || 0;
+  let creditRefusal: unknown;
 
   const processLinks = async (url: string, urlIndex: number) => {
+    if (creditRefusal) throw creditRefusal;
     const links = researchTask.discoveredLinks?.filter(l => l.status === 'pending' && l.sourceUrl === url);
 
     if (!links || links.length === 0) return;
@@ -100,22 +113,22 @@ export const processDiscoveredLinks = async (
         `Research Task Process Discovered Links - Research Data for ${url} not found for task ${researchTask.id}`
       );
 
-    const fabFile = await db.fabFiles.findById(researchData.fabFileId);
+    const linkedFile = await db.fabFiles.findById(researchData.fabFileId);
+    const fabFile = linkedFile && String(linkedFile.userId) === researchTask.userId ? linkedFile : null;
 
     if (!fabFile)
       throw new NotFoundError(`Research Task Process Discovered Links - Fab File ${researchData.fabFileId} not found`);
-    if (!fabFile.fileUrl)
+    if (!fabFile.filePath)
       throw new UnprocessableEntityError(
-        `Research Task Process Discovered Links - Fab File ${fabFile.id} has no file url`
+        `Research Task Process Discovered Links - Fab File ${fabFile.id} has no file path`
       );
 
     let content: string;
     try {
-      const response = await axios.get(fabFile.fileUrl);
-      content = response.data;
+      content = (await storage.download(fabFile.filePath)).toString('utf8');
     } catch (error) {
       throw new UnprocessableEntityError(
-        `Research Task Process Discovered Links - Failed to get content from Fab File ${fabFile.id} at ${fabFile.fileUrl}`
+        `Research Task Process Discovered Links - Failed to get content from Fab File ${fabFile.id}`
       );
     }
     const { prompt } = researchTask;
@@ -131,7 +144,7 @@ export const processDiscoveredLinks = async (
       batches.push(uniqueLinks.slice(i, i + BATCH_SIZE));
     }
 
-    const concurrencyLimit = plimit(CONCURRENCY_LIMIT);
+    const concurrencyLimit = limitConcurrency(CONCURRENCY_LIMIT);
     const stats = {
       updated: 0,
       failed: 0,
@@ -148,9 +161,10 @@ export const processDiscoveredLinks = async (
       0
     );
 
-    await Promise.allSettled(
+    const batchResults = await Promise.allSettled(
       batches.map((batch, batchIndex) =>
         concurrencyLimit(async () => {
+          if (creditRefusal) throw creditRefusal;
           const index = batchIndex + 1;
           logger?.info(`** RUNNING BATCH ${index}/${batches.length}**`);
 
@@ -165,6 +179,7 @@ export const processDiscoveredLinks = async (
 
           let retry = 0;
           while (retry < 2) {
+            if (creditRefusal) throw creditRefusal;
             try {
               const linkExtractionPrompt: IMessage[] = [
                 {
@@ -234,7 +249,7 @@ export const processDiscoveredLinks = async (
               await llm.complete(
                 llm.currentModel,
                 linkExtractionPrompt,
-                { stream: false, temperature: 0.2, topP: 0.1, maxTokens: Infinity },
+                { stream: false, temperature: 0.2, topP: 0.1, maxTokens: LINK_EXTRACTION_MAX_TOKENS },
                 async text => {
                   if (text && text[0]) {
                     extractedLinks = text[0];
@@ -283,6 +298,12 @@ export const processDiscoveredLinks = async (
 
               break;
             } catch (e) {
+              // A credit or AI-access refusal is about the owner, not the links. Preserve them for a later run
+              // and let the queue handler fail the task rather than retrying each unpaid batch.
+              if (isOwnerRefusal(e)) {
+                creditRefusal = e;
+                throw e;
+              }
               retry += 1;
               logger?.info(`RETRY: Failed to extract links for batch ${index}/${batches.length}`);
 
@@ -323,6 +344,12 @@ export const processDiscoveredLinks = async (
       )
     );
 
+    for (const result of batchResults) {
+      if (result.status === 'rejected' && isOwnerRefusal(result.reason)) {
+        throw result.reason;
+      }
+    }
+
     logger?.info(`***OVERALL TOTAL LINKS EXTRACTED: ${stats.updated}/${links.length}***`);
     if (stats.failed > 0) {
       logger?.warn(`***OVERALL TOTAL LINKS FAILED: ${stats.failed}/${links.length}***`);
@@ -334,7 +361,7 @@ export const processDiscoveredLinks = async (
     );
   };
 
-  const sequencial = pLimit(1);
+  const sequencial = limitConcurrency(1);
 
   try {
     await Promise.all(
@@ -351,6 +378,13 @@ export const processDiscoveredLinks = async (
 
     await jobs.researchTasks.downloadRelevantLinks(id, researchTask.userId);
   } catch (e) {
+    await queueRunner.close();
+    // Keep completed, paid batches when another batch is refused, so retrying the task does not
+    // pay for those batches again. The queue handler owns the task's credit-refusal failure state.
+    if (isOwnerRefusal(e)) {
+      await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
+      throw e;
+    }
     if (e instanceof NotFoundError || e instanceof UnprocessableEntityError) {
       researchTask.status = ResearchTaskStatus.FAILED;
       researchTask.statusFailedMessage = e.message;

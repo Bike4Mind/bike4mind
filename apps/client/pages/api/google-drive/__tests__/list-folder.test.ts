@@ -9,19 +9,19 @@ import { createMocks } from 'node-mocks-http';
 
 const { mockList, mockGetToken } = vi.hoisted(() => ({ mockList: vi.fn(), mockGetToken: vi.fn() }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: vi.fn().mockResolvedValue({ allowed: true, headers: {} }),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/database', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   connectDB: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   getValidUserDriveAccessToken: (...a: unknown[]) => mockGetToken(...a),
 }));
-vi.mock('@server/integrations/google/drive/driveClient', async orig => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   listFolderChildren: (...a: unknown[]) => mockList(...a),
 }));

@@ -1,7 +1,7 @@
 {
-  "name": "@bike4mind/services",
+  "name": "@bike4mind/services-core",
   "description": "This packages contains all the core business logic",
-  "version": "20.0.0",
+  "version": "31.3.3",
   "publishConfig": {
     "access": "restricted"
   },
@@ -40,6 +40,16 @@
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
       }
     },
+    "./notebookMirror": {
+      "import": {
+        "types": "./dist/notebookExportService/mirror.d.mts",
+        "default": "./dist/notebookExportService/mirror.mjs"
+      },
+      "require": {
+        "types": "./dist/notebookExportService/mirror.d.cts",
+        "default": "./dist/notebookExportService/mirror.cjs"
+      }
+    },
     "./evals/lakeRag": {
       "import": {
         "types": "./dist/llm/evals/lakeRag/index.d.mts",
@@ -68,6 +78,16 @@
       "require": {
         "types": "./dist/apiKeyService/index.d.cts",
         "default": "./dist/apiKeyService/index.cjs"
+      }
+    },
+    "./billing/completionMeter": {
+      "import": {
+        "types": "./dist/billing/completionMeter.d.mts",
+        "default": "./dist/billing/completionMeter.mjs"
+      },
+      "require": {
+        "types": "./dist/billing/completionMeter.d.cts",
+        "default": "./dist/billing/completionMeter.cjs"
       }
     },
     "./creditService": {
@@ -100,6 +120,16 @@
         "default": "./dist/videoJobs/index.cjs"
       }
     },
+    "./imageJobs": {
+      "import": {
+        "types": "./dist/imageJobs/index.d.mts",
+        "default": "./dist/imageJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageJobs/index.d.cts",
+        "default": "./dist/imageJobs/index.cjs"
+      }
+    },
     "./musicJobs": {
       "import": {
         "types": "./dist/musicJobs/index.d.mts",
@@ -108,6 +138,36 @@
       "require": {
         "types": "./dist/musicJobs/index.d.cts",
         "default": "./dist/musicJobs/index.cjs"
+      }
+    },
+    "./sceneJobs": {
+      "import": {
+        "types": "./dist/sceneJobs/index.d.mts",
+        "default": "./dist/sceneJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/sceneJobs/index.d.cts",
+        "default": "./dist/sceneJobs/index.cjs"
+      }
+    },
+    "./audioJobs": {
+      "import": {
+        "types": "./dist/audioJobs/index.d.mts",
+        "default": "./dist/audioJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioJobs/index.d.cts",
+        "default": "./dist/audioJobs/index.cjs"
+      }
+    },
+    "./renderJobs": {
+      "import": {
+        "types": "./dist/renderJobs/index.d.mts",
+        "default": "./dist/renderJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/renderJobs/index.d.cts",
+        "default": "./dist/renderJobs/index.cjs"
       }
     },
     "./agentProactiveMessagingService": {
@@ -168,6 +228,16 @@
       "require": {
         "types": "./dist/llm/toolFinishObserver.d.cts",
         "default": "./dist/llm/toolFinishObserver.cjs"
+      }
+    },
+    "./organizationService/orgEventObserver": {
+      "import": {
+        "types": "./dist/organizationService/orgEventObserver.d.mts",
+        "default": "./dist/organizationService/orgEventObserver.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/orgEventObserver.d.cts",
+        "default": "./dist/organizationService/orgEventObserver.cjs"
       }
     },
     "./llm/ChatCompletionInvoke": {
@@ -248,6 +318,56 @@
       "require": {
         "types": "./dist/llm/intentClassifier.d.cts",
         "default": "./dist/llm/intentClassifier.cjs"
+      }
+    },
+    "./userService/accountState": {
+      "import": {
+        "types": "./dist/userService/accountState.d.mts",
+        "default": "./dist/userService/accountState.mjs"
+      },
+      "require": {
+        "types": "./dist/userService/accountState.d.cts",
+        "default": "./dist/userService/accountState.cjs"
+      }
+    },
+    "./llm/modelAdmission": {
+      "import": {
+        "types": "./dist/llm/modelAdmission.d.mts",
+        "default": "./dist/llm/modelAdmission.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/modelAdmission.d.cts",
+        "default": "./dist/llm/modelAdmission.cjs"
+      }
+    },
+    "./llm/shadowTier": {
+      "import": {
+        "types": "./dist/llm/shadowTier.d.mts",
+        "default": "./dist/llm/shadowTier.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/shadowTier.d.cts",
+        "default": "./dist/llm/shadowTier.cjs"
+      }
+    },
+    "./llm/llmUsageSettledLog": {
+      "import": {
+        "types": "./dist/llm/llmUsageSettledLog.d.mts",
+        "default": "./dist/llm/llmUsageSettledLog.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/llmUsageSettledLog.d.cts",
+        "default": "./dist/llm/llmUsageSettledLog.cjs"
+      }
+    },
+    "./llm/orgToolPolicy": {
+      "import": {
+        "types": "./dist/llm/orgToolPolicy.d.mts",
+        "default": "./dist/llm/orgToolPolicy.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/orgToolPolicy.d.cts",
+        "default": "./dist/llm/orgToolPolicy.cjs"
       }
     },
     "./llm/refineText": {
@@ -399,6 +519,16 @@
         "types": "./dist/utils/crypto.d.cts",
         "default": "./dist/utils/crypto.cjs"
       }
+    },
+    "./llm/embeddingProviders": {
+      "import": {
+        "types": "./dist/llm/embeddingProviders.d.mts",
+        "default": "./dist/llm/embeddingProviders.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/embeddingProviders.d.cts",
+        "default": "./dist/llm/embeddingProviders.cjs"
+      }
     }
   },
   "files": [
@@ -408,12 +538,12 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
-    "typecheck": "tsc --noEmit && pnpm typecheck:scheduler",
-    "typecheck:native": "tsgo --noEmit --types node && pnpm typecheck:scheduler",
-    "typecheck:fast": "(tsgo --noEmit --types node || tsc --noEmit) && pnpm typecheck:scheduler",
+    "typecheck:tsc": "tsc --noEmit && pnpm typecheck:scheduler",
+    "typecheck":"tsgo --noEmit --types node && pnpm typecheck:scheduler",
     "typecheck:scheduler": "tsc --noEmit -p tsconfig.scheduler-test.json",
     "dev": "tsdown --watch",
     "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui"
   },
@@ -423,7 +553,6 @@
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
     "@aws-sdk/client-transcribe": "^3.1150.0",
-    "@aws-sdk/credential-provider-node": "^3.972.86",
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
@@ -437,49 +566,44 @@
     "@google/genai": "^1.46.0",
     "@joplin/turndown-plugin-gfm": "^1.0.67",
     "@mendable/firecrawl-js": "^1.29.3",
-    "@opensearch-project/opensearch": "2.11.0",
-    "async-mutex": "^0.5.0",
     "axios": "1.20.0",
     "bcryptjs": "^3.0.3",
     "cheerio": "1.2.0",
     "chess.js": "^1.4.0",
     "dayjs": "^1.11.23",
     "diff": "^9.0.0",
-    "disposable-email-domains": "^1.0.62",
+    "disposable-domains": "^2.0.7",
     "file-type": "^22.1.0",
-    "glob": "^13.0.6",
+    "glob": "^14.0.2",
     "lodash": "^4.18.1",
     "marked": "^15.0.11",
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
-    "mongoose": "^8.24.1",
     "openai": "^6.46.0",
-    "p-limit": "^7.3.2",
     "sharp": "^0.35.4",
-    "tiktoken": "^1.0.22",
     "turndown": "^7.2.4",
-    "uuid": "^14.0.2",
     "write-excel-file": "^4.1.1",
     "yauzl": "^3.4.0",
-    "zod": "^4.6.6",
-    "zod-validation-error": "^5.0.0"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
-    "@types/disposable-email-domains": "^1.0.6",
     "@types/lodash": "^4.17.24",
     "@types/mailparser": "^3.9.0",
     "@types/mime-types": "^3.0.1",
     "@types/turndown": "^5.0.6",
     "@types/yauzl": "^3.4.0",
-    "@vitest/coverage-v8": "^4.1.11",
-    "@vitest/ui": "^4.1.11",
-    "mailparser": "^3.9.38",
+    "@vitest/coverage-v8": "^4.1.12",
+    "@vitest/ui": "^4.1.12",
+    "mailparser": "^3.12.4",
+    "mongoose": "^8.24.7",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"
+  },
+  "peerDependencies": {
+    "mongoose": "^8.22.1"
   }
 }

@@ -1,4 +1,4 @@
-#!/usr/bin/env npx ts-node -r tsconfig-paths/register
+#!/usr/bin/env tsx
 
 import { sanitizeUsername } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';

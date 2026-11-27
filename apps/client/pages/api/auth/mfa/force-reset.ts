@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import {
@@ -7,7 +7,7 @@ import {
   passkeyCredentialRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
+import { ForbiddenError, redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { logAuthAudit } from '@server/utils/authAudit';
 import {
@@ -15,7 +15,7 @@ import {
   isSelfOrImpersonator,
   parseAdminActionReason,
   recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
+} from '@bike4mind/server-utils/utils/adminAudit';
 import * as z from 'zod';
 
 const forceResetBodySchema = z.object({
@@ -28,13 +28,9 @@ const forceResetResponseSchema = z.object({
   user: selfUserResponseSchema,
 });
 
-const handler = baseApi().post(
+const handler = adminApi({ adminPermissions: { POST: 'users:moderate' } }).post(
   asyncHandler(async (req, res) => {
     const adminUser = req.user;
-
-    if (!adminUser?.isAdmin) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
 
     const { userId, reason: rawReason } = forceResetBodySchema.parse(req.body);
 
@@ -45,7 +41,7 @@ const handler = baseApi().post(
         action: 'user.mfa.denied',
         attempted: 'user.mfa.reset',
         target: { kind: 'user', id: userId, displayName: adminUser.name || adminUser.username },
-        message: 'Use Profile > Settings > Security to turn off your own MFA.',
+        message: 'Use Profile > Security to turn off your own MFA.',
       });
     }
     const reason = parseAdminActionReason(rawReason);
@@ -56,12 +52,13 @@ const handler = baseApi().post(
     try {
       const { result, removedPasskeys, revokedDevices } = await withTransaction(async () => {
         auditWriteStarted = false;
+        // Authorize the target inside the transaction before deleting any credentials.
+        const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
+
         // A suspected-compromise reset must not leave an enrolled passkey able to satisfy MFA.
         // Removed in the same transaction as the reset, so a failure leaves MFA intact rather
         // than leaving passkeys behind a reset that succeeded.
         const removedPasskeys = await passkeyCredentialRepository.removeAllForUser(userId);
-
-        const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
 
         // This is the lost-authenticator / suspected-compromise action, and trusts are
         // deliberately not keyed on tokenVersion (see trustedDevice.ts). Leaving them alive
@@ -103,10 +100,12 @@ const handler = baseApi().post(
       }
 
       resetBody = { success: result.success, user: redactUserSecretsForSelf(result.user) };
-    } catch (error: any) {
-      if (auditWriteStarted) throw error;
-      console.error('Error force resetting MFA:', error);
-      return res.status(400).json({ error: error.message || 'Failed to reset MFA' });
+    } catch (error: unknown) {
+      if (auditWriteStarted || error instanceof ForbiddenError) throw error;
+      req.logger.error('Error force resetting MFA', { error });
+      return res
+        .status(400)
+        .json({ error: error instanceof Error && error.message ? error.message : 'Failed to reset MFA' });
     }
 
     // Outside the try so a response-boundary failure stays an opaque 500, not a 400.

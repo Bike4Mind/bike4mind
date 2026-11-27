@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { deepAgentCharterRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * GET /api/deep-agent/mission-counts - mission count per linked B4M agent for

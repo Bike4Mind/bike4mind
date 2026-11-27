@@ -16,6 +16,15 @@ const frame = (query: Record<string, unknown>) => ({
 });
 
 describe('DataSubscribeRequestAction query filter gate', () => {
+  it('retains the opt-in initial delivery flag and leaves legacy frames unopted', () => {
+    expect(DataSubscribeRequestAction.parse(frame({})).initialDataAfterSubscribe).toBeUndefined();
+    expect(
+      DataSubscribeRequestAction.parse({ ...frame({}), initialDataAfterSubscribe: true }).initialDataAfterSubscribe
+    ).toBe(true);
+    expect(DataSubscribeRequestAction.safeParse({ ...frame({}), initialDataAfterSubscribe: 'yes' }).success).toBe(
+      false
+    );
+  });
   it('accepts an ordinary equality filter', () => {
     expect(DataSubscribeRequestAction.parse(frame({ sessionId: 'abc' })).query).toEqual({ sessionId: 'abc' });
   });

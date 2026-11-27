@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { connectDB } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { runAllProbes } from '@server/services/integrationHealthService';
+import { runAllProbes } from '@bike4mind/server-utils/services/integrationHealthService';
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),

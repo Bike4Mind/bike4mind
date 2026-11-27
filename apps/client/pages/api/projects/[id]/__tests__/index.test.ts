@@ -44,7 +44,19 @@ vi.mock('@bike4mind/utils', () => ({
 
 const mockUpdate = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'p1', name: 'updated' }));
 const mockGet = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'p1', name: 'project' }));
-const mockDeleteProject = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockDeleteProject = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _user: unknown,
+      _params: unknown,
+      adapters: {
+        onAccessRemoved: (ids: string[]) => void;
+      }
+    ) => {
+      adapters.onAccessRemoved(['actual-recipient']);
+    }
+  )
+);
 vi.mock('@bike4mind/services', () => ({
   projectService: {
     update: (...a: unknown[]) => mockUpdate(...a),
@@ -58,9 +70,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
   sessionRepository: {},
   fabFileRepository: {},
+  withTransaction: async (operation: () => Promise<unknown>) => operation(),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/utils/isDuplicateKeyError', () => ({ isDuplicateKeyError: () => false }));
 vi.mock('@bike4mind/common', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/common')>()),
@@ -76,6 +89,18 @@ vi.mock('@server/projects/projectScopes', async importOriginal => {
   };
 });
 
+const refCleanup = vi.hoisted(() => ({
+  targets: vi.fn().mockResolvedValue([{ userId: 'planned', fileIds: ['f1'] }]),
+  cleanUp: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@server/sharing/revokedFileReferences', () => ({
+  projectRevokeCleanupTargets: (...a: unknown[]) => refCleanup.targets(...a),
+  cleanUpRevokedFileReferences: (...a: unknown[]) => refCleanup.cleanUp(...a),
+}));
+
+const mockRescope = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/websocket/rescopeUserSubscriptions', () => ({ rescopeUserSubscriptions: mockRescope }));
+
 import '@pages/api/projects/[id]/index';
 import { ApiKeyScope } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -84,7 +109,7 @@ import { assertProjectsReadScope, assertProjectsWriteScope } from '@server/proje
 
 function request(method: 'GET' | 'DELETE', query: Record<string, unknown>) {
   const { req, res } = createMocks({ method, query });
-  Object.assign(req, { user: { id: 'u1' }, ability: {} });
+  Object.assign(req, { user: { id: 'u1' }, ability: {}, logger: { warn: vi.fn() } });
   return { req, res };
 }
 
@@ -141,6 +166,22 @@ describe('GET and DELETE /api/projects/[id] scope asserts', () => {
     const { req, res } = request('DELETE', { id: 'p1' });
     await mockRefs.deleteHandler!(req, res);
     expect(assertProjectsWriteScope).toHaveBeenCalledWith(req);
+  });
+  it("DELETE plans every participant's reference cleanup before the delete and runs it after", async () => {
+    const { req, res } = request('DELETE', { id: 'p1' });
+    await mockRefs.deleteHandler!(req, res);
+    expect(refCleanup.targets).toHaveBeenCalledWith('p1', undefined, expect.anything());
+    expect(refCleanup.cleanUp).toHaveBeenCalledWith([{ userId: 'planned', fileIds: ['f1'] }], expect.anything());
+    expect(refCleanup.targets.mock.invocationCallOrder[0]).toBeLessThan(mockDeleteProject.mock.invocationCallOrder[0]);
+    expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(refCleanup.cleanUp.mock.invocationCallOrder[0]);
+  });
+
+  it('DELETE rescopes actual recipients after commit even when the planner is empty', async () => {
+    refCleanup.targets.mockResolvedValueOnce([]);
+    const { req, res } = request('DELETE', { id: 'p1' });
+    await mockRefs.deleteHandler!(req, res);
+    expect(mockRescope).toHaveBeenCalledExactlyOnceWith(['actual-recipient'], req.logger);
+    expect(mockDeleteProject.mock.invocationCallOrder[0]).toBeLessThan(mockRescope.mock.invocationCallOrder[0]);
   });
 });
 

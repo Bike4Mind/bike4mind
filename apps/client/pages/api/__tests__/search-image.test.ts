@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { signImageUrl } from '@bike4mind/common';
 
@@ -19,6 +20,14 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: null as null | Record<string, unknown>,
 }));
 
+// The pinned client forwards to global fetch so these cases can stub the upstream.
+vi.mock('@bike4mind/fab-pipeline/ssrf', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline/ssrf')>()),
+  createPinnedFetch: () =>
+    Object.assign((input: string | URL, init?: RequestInit) => globalThis.fetch(input, init), {
+      close: async () => undefined,
+    }),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: any) => {
     mockRefs.baseApiOptions = options;
@@ -35,7 +44,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET } }));
+// The signing secrets signingKeys.ts reads; the default below is the stage with no dedicated secret.
+const secrets = vi.hoisted(() => ({ values: {} as Record<string, string | undefined> }));
+vi.mock('sst', () => ({
+  Resource: new Proxy(
+    {},
+    {
+      get: (_target, name) => {
+        const value = secrets.values[String(name)];
+        return value === undefined ? undefined : { value };
+      },
+    }
+  ),
+}));
 
 const tryIncrement = vi.hoisted(() => vi.fn(async () => ({ success: true, expiresAt: new Date() })));
 vi.mock('@bike4mind/database', () => ({
@@ -94,6 +115,7 @@ describe('GET /api/search-image', () => {
   const originalFetch = global.fetch;
   beforeEach(() => {
     vi.clearAllMocks();
+    secrets.values = { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET };
     global.fetch = originalFetch;
     tryIncrement.mockResolvedValue({ success: true, expiresAt: new Date() });
   });
@@ -252,5 +274,82 @@ describe('GET /api/search-image', () => {
     const { req, res } = request(signed('https://cdn.example.com/missing.png'));
 
     await expect(mockRefs.handler!(req, res)).rejects.toThrow(/404/);
+  });
+});
+
+describe('GET /api/search-image signing keys', () => {
+  const originalFetch = global.fetch;
+  const derive = (root: string) => createHmac('sha256', root).update('b4m-signing/search-image-url/v1').digest('hex');
+  const IMAGE = 'https://cdn.example.com/a.webp';
+  const BYTES = new Uint8Array([1, 2, 3, 4]);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    global.fetch = originalFetch;
+    tryIncrement.mockResolvedValue({ success: true, expiresAt: new Date() });
+  });
+
+  const expectAccepted = async (url: string) => {
+    global.fetch = vi.fn().mockResolvedValue(imageResponse('image/webp', [BYTES])) as never;
+    const { req, res } = request(url);
+    await mockRefs.handler!(req, res);
+    expect(res.statusCode).toBe(200);
+  };
+  const expectRejected = async (url: string) => {
+    const fetchMock = vi.fn();
+    global.fetch = fetchMock as never;
+    const { req, res } = request(url);
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow('Image URL is not allowed');
+    expect(fetchMock).not.toHaveBeenCalled();
+  };
+
+  it('accepts a URL signed with the key derived from the dedicated secret', async () => {
+    const root = randomBytes(32).toString('hex');
+    secrets.values = { HMAC_SIGNING_SECRET: root, SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET };
+    await expectAccepted(signImageUrl(IMAGE, derive(root)));
+  });
+
+  it('no longer accepts a URL signed with the encryption key once a dedicated secret is set', async () => {
+    secrets.values = {
+      HMAC_SIGNING_SECRET: randomBytes(32).toString('hex'),
+      SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET,
+    };
+    await expectRejected(signImageUrl(IMAGE, TEST_SIGNING_SECRET));
+  });
+
+  it('accepts a URL signed with the raw previous secret while the previous slot is set, and not after it is cleared', async () => {
+    const root = randomBytes(32).toString('hex');
+    const previous = randomBytes(32).toString('hex');
+    const signedWithPrevious = signImageUrl(IMAGE, previous);
+
+    secrets.values = { HMAC_SIGNING_SECRET: root, HMAC_SIGNING_SECRET_PREVIOUS: previous };
+    await expectAccepted(signedWithPrevious);
+
+    secrets.values = { HMAC_SIGNING_SECRET: root, HMAC_SIGNING_SECRET_PREVIOUS: 'not-configured' };
+    await expectRejected(signedWithPrevious);
+  });
+
+  it('accepts a URL signed with the key derived from the previous secret while the previous slot is set', async () => {
+    const previous = randomBytes(32).toString('hex');
+    secrets.values = { HMAC_SIGNING_SECRET: randomBytes(32).toString('hex'), HMAC_SIGNING_SECRET_PREVIOUS: previous };
+    await expectAccepted(signImageUrl(IMAGE, derive(previous)));
+  });
+
+  it('rejects a URL signed with an unrelated key', async () => {
+    secrets.values = {
+      HMAC_SIGNING_SECRET: randomBytes(32).toString('hex'),
+      HMAC_SIGNING_SECRET_PREVIOUS: randomBytes(32).toString('hex'),
+    };
+    await expectRejected(signImageUrl(IMAGE, randomBytes(32).toString('hex')));
+  });
+
+  it('accepts a URL signed with the raw encryption key when no dedicated secret is set', async () => {
+    secrets.values = { SECRET_ENCRYPTION_KEY: TEST_SIGNING_SECRET, HMAC_SIGNING_SECRET: 'not-configured' };
+    await expectAccepted(signImageUrl(IMAGE, TEST_SIGNING_SECRET));
+  });
+
+  it('rejects every URL when no usable secret is configured', async () => {
+    secrets.values = { SECRET_ENCRYPTION_KEY: 'my-secret-placeholder-value' };
+    await expectRejected(signImageUrl(IMAGE, 'my-secret-placeholder-value'));
   });
 });

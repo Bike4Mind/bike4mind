@@ -1,7 +1,6 @@
 import { IUserDocument } from '@bike4mind/common';
-import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { BadRequestError, emailTokenMatches, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { safeCompareTokens } from '@bike4mind/auth/crypto';
 import { EMAIL_VERIFICATION_TOKEN_EXPIRY } from './sendEmailVerification';
 
 const verifyEmailTokenSchema = z.object({
@@ -27,7 +26,7 @@ export const verifyEmailToken = async (
 
   const user = await db.users.findByEmailVerificationToken(token);
 
-  if (!user || !user?.emailVerificationSentAt || !safeCompareTokens(token, user.emailVerificationToken || '')) {
+  if (!user || !user?.emailVerificationSentAt || !emailTokenMatches(token, user.emailVerificationToken)) {
     throw new BadRequestError('Invalid or expired verification token');
   }
 

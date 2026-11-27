@@ -11,6 +11,8 @@ import {
   IProjectRepository,
   ISessionDocument,
   ISessionRepository,
+  ISpaceDocument,
+  ISpaceRepository,
   IUserDocument,
   IUserRepository,
   Permission,
@@ -18,13 +20,28 @@ import {
   grantablePermissions,
   generateInviteToken,
   isOrgMember,
+  isOrgOwnerOrPlatformAdmin,
+  isSpaceManager,
+  isSpaceMember,
+  ORG_INVITE_ROLES,
+  roleForPermissions,
+  MAX_ORG_LINK_AVAILABLE,
+  MAX_INVITE_ALLOWED_DOMAINS,
+  INVITE_HOSTNAME_PATTERN as HOSTNAME_PATTERN,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
+import { pendingOrgInviteRecipients } from './orgSeatReservations';
+import { BadRequestError, ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
+import { assertContentInvitePolicy } from './organizationPolicy';
 
 const defaultExpiration = () => new Date(new Date().getFullYear() + 100, new Date().getMonth(), new Date().getDate());
 export const DEFAULT_AVAILABLE = 1;
+export {
+  MAX_ORG_LINK_AVAILABLE,
+  MAX_INVITE_ALLOWED_DOMAINS,
+  INVITE_HOSTNAME_PATTERN as HOSTNAME_PATTERN,
+} from '@bike4mind/common';
 
 const createInviteSchema = z.object({
   id: z.string(),
@@ -34,8 +51,14 @@ const createInviteSchema = z.object({
   description: z.string().optional(),
   expiresAt: z.date().prefault(defaultExpiration()),
   // No prefault here: the default depends on recipients.length (below), which this schema
-  // cannot see. No caller currently sets this explicitly.
-  available: z.number().optional(),
+  // cannot see. The organization invite-links route sets it to cap a share link's joins.
+  available: z.number().int().min(1).optional(),
+  // An Organization or Space share link: names nobody, joins whoever holds its token (see accept.ts).
+  link: z.boolean().optional(),
+  allowedDomains: z
+    .array(z.string().trim().toLowerCase().max(253).regex(HOSTNAME_PATTERN, 'Invalid domain'))
+    .max(MAX_INVITE_ALLOWED_DOMAINS)
+    .optional(),
 });
 
 interface CreateInviteAdapters {
@@ -48,6 +71,7 @@ interface CreateInviteAdapters {
     projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
     organizations: IOrganizationRepository;
+    spaces: Pick<ISpaceRepository, 'findLiveById'>;
     // TODO: Use Group model create type def
     groups: {
       findById: (id: string) => Promise<IGroupDocument | null>;
@@ -62,15 +86,33 @@ export const createInvite = async (
   parameters: z.input<typeof createInviteSchema>,
   { db }: CreateInviteAdapters
 ) => {
-  const { id, type, available, recipients, ...rest } = secureParameters(parameters, createInviteSchema);
+  const { id, type, available, recipients, link, allowedDomains, ...rest } = secureParameters(
+    parameters,
+    createInviteSchema
+  );
+  const isOrgLink = link === true && type === InviteType.Organization;
+  const isLinkInvite = link === true && (type === InviteType.Organization || type === InviteType.Space);
+  if (link && !isLinkInvite) throw new BadRequestError('Share links are only for organizations and spaces');
+  if (allowedDomains?.length && !isLinkInvite) {
+    throw new BadRequestError('Allowed domains apply only to share links');
+  }
+  if (isLinkInvite && recipients?.length) throw new BadRequestError('A share link cannot name recipients');
 
   // When no expiration date is given, default to 100 years from now.
 
   // May throw if a field is missing:
 
-  let doc: IFabFileDocument | ISessionDocument | IOrganizationDocument | IGroupDocument | IProjectDocument | null =
-    null;
+  let doc:
+    | IFabFileDocument
+    | ISessionDocument
+    | IOrganizationDocument
+    | IGroupDocument
+    | IProjectDocument
+    | ISpaceDocument
+    | null = null;
   let name: string | undefined = '';
+  let organizationForInvite: IOrganizationDocument | null = null;
+  let pendingOrganizationRecipients: string[] = [];
 
   switch (type) {
     case InviteType.FabFile:
@@ -81,11 +123,22 @@ export const createInvite = async (
       doc = await db.sessions.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
-    case InviteType.Organization:
-      doc = await inviteToOrg(user, { id, recipients }, db);
-
+    case InviteType.Organization: {
+      const organizationInvite = await inviteToOrg(user, { id, recipients: isOrgLink ? [] : recipients }, db);
+      organizationForInvite = organizationInvite.organization;
+      doc = organizationForInvite;
+      pendingOrganizationRecipients = organizationInvite.pendingRecipients;
       name = doc?.name;
+      // The invite's permissions become the member's users[] row on accept, so only a known role
+      // may be minted, and the manager-making admin role stays with the owner tier.
+      const role = roleForPermissions(rest.permissions);
+      if (!role) throw new BadRequestError('Invalid role for organization invite');
+      if (role === 'admin' && !isOrgOwnerOrPlatformAdmin(user, organizationForInvite)) {
+        throw new ForbiddenError('Only the organization owner can invite an admin');
+      }
+      rest.permissions = [...ORG_INVITE_ROLES[role]];
       break;
+    }
     case InviteType.Group: {
       if (!rest.permissions) throw new BadRequestError('Invalid invite group request');
       const group = await db.groups.findById(id);
@@ -114,8 +167,17 @@ export const createInvite = async (
       // the FabFile arm above. A caller with no share access gets the same generic "Document not
       // found" as a nonexistent project, since findShareAccessById returns null for both.
       doc = await db.projects.shareable.findShareAccessById(user, id);
-      name = doc?.name;
+      if (!doc) throw new NotFoundError('Project not found');
+      name = doc.name;
       break;
+    case InviteType.Space: {
+      const space = await inviteToSpace(user, { id }, db);
+      doc = space;
+      name = space.name;
+      // A Space invite only ever grants plain membership; the caller's permissions are ignored.
+      rest.permissions = [...ORG_INVITE_ROLES.viewer];
+      break;
+    }
     default:
       break;
   }
@@ -142,9 +204,11 @@ export const createInvite = async (
   // who did not resolve". `recipients` omitted entirely names nobody just as `[]` does, which is
   // why this is not simply isLinkOnlyInvite (that one sizes `available` and is left as it was).
   // Type-aware so it agrees with `isLinkOnlyInvite`'s legacy inference in @bike4mind/common: only
-  // FabFile and Session are shareable by link. A recipientless invite of any other type is a
-  // mistake, not a share link, and is refused below - this keeps the flag fail-closed regardless.
-  const namesNobody = recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session);
+  // FabFile and Session are shareable by link, plus an Organization invite minted with `link: true`.
+  // A recipientless invite of any other kind is a mistake, not a share link, and is refused below -
+  // this keeps the flag fail-closed regardless.
+  const namesNobody =
+    recipientsArray.length === 0 && (type === InviteType.FabFile || type === InviteType.Session || isLinkInvite);
 
   // Every other type always names people, so a recipientless invite there is a mistake, and one
   // that persists: it stores isLinkOnly false with an empty `pending`, which both the view gate and
@@ -187,7 +251,9 @@ export const createInvite = async (
     // Dedupe: two recipient strings (an email and that same person's username) can resolve to
     // the same one user, and pending.length below counts unique resolved users, not raw entries.
     pending = Array.from(new Set(resolved));
-  } else if (type === InviteType.Project || type === InviteType.Organization) {
+  } else if (isLinkInvite) {
+    pending = [];
+  } else if (type === InviteType.Project || type === InviteType.Organization || type === InviteType.Space) {
     // Project and Organization invites carry raw user ids (the add-members modals send
     // `recipients: [userId]`), which findAllByEmailsOrUsernames cannot resolve - it queries email
     // and username only, never _id. Left unresolved, `pending` stayed empty and every gate keyed
@@ -207,18 +273,15 @@ export const createInvite = async (
     const resolvedEmails = [...matchedByEmailOrName, ...byId]
       .map(u => u.email)
       .filter((email): email is string => Boolean(email));
-    // A Project invite may name someone with no account yet by exact address: they register with
+    // A Project or Organization invite may name someone with no account yet by exact address: they register with
     // that email and find the invite waiting. Stored lowercased; an SSO signup keeps the provider's
     // casing, which is why accept.ts and refuseWholeInvite.ts match pending case-insensitively.
     // Built the same whether or not the address belongs to an account, so the response reveals
     // nothing new (toSharerInviteViews lowercases typed addresses for the same reason).
     const resolvedLower = new Set(resolvedEmails.map(email => email.toLowerCase()));
-    const unregistered =
-      type === InviteType.Project
-        ? recipientsArray
-            .map(recipient => recipient.trim().toLowerCase())
-            .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient))
-        : [];
+    const unregistered = recipientsArray
+      .map(recipient => recipient.trim().toLowerCase())
+      .filter(recipient => z.email().safeParse(recipient).success && !resolvedLower.has(recipient));
     pending = Array.from(new Set([...resolvedEmails, ...unregistered]));
     // An invite naming only unresolvable recipients can never be viewed or accepted by anyone now
     // that those gates key on `pending`, so fail loudly at mint time instead of persisting a row
@@ -236,24 +299,66 @@ export const createInvite = async (
     }
   }
 
+  if (
+    (type === InviteType.Session || type === InviteType.Project || type === InviteType.FabFile) &&
+    (doc as { organizationId?: string }).organizationId
+  ) {
+    const resolvedUsers = await db.users.findAllByEmailsOrUsernames(pending, []);
+    await assertContentInvitePolicy(
+      doc as { organizationId?: string },
+      pending.map(email => ({
+        id: resolvedUsers.find(user => user.email?.toLowerCase() === email.toLowerCase())?.id ?? '',
+        email,
+        // The invite is addressed to this email; accept re-checks the redeeming account's verification.
+        emailVerified: true,
+      })),
+      db.organizations,
+      namesNobody
+    );
+  }
+
+  let seatsLeft = 0;
+  if (organizationForInvite) {
+    pending = Array.from(new Set(pending.map(email => email.trim().toLowerCase())));
+    const alreadyInvited = new Set(pendingOrganizationRecipients.map(email => email.trim().toLowerCase()));
+    if (pending.some(email => alreadyInvited.has(email))) {
+      throw new BadRequestError('A recipient already has a pending organization invitation');
+    }
+    // The owner holds a seat outside users[].
+    const totalUsers = organizationForInvite.users.length + 1;
+    if (totalUsers + pendingOrganizationRecipients.length + pending.length > organizationForInvite.seats) {
+      throw new BadRequestError('Organization is full');
+    }
+    // A link holds no seat at mint: each join is seat-checked on accept, with named invites reserved.
+    if (isOrgLink) {
+      seatsLeft = organizationForInvite.seats - totalUsers - pendingOrganizationRecipients.length;
+      if (seatsLeft <= 0) throw new BadRequestError('Organization is full');
+    }
+  }
+
   // Only an address the inviter typed may be shown back to them; anything resolved from an id or a
   // username is withheld by the sharer-facing invite views. Recorded against `pending` so a typed
   // address that matched nobody is not listed.
   const typedEmails = new Set(recipientsArray.filter(r => r.includes('@')).map(r => r.trim().toLowerCase()));
   const typedRecipients = pending.map(email => email.toLowerCase()).filter(email => typedEmails.has(email));
 
-  // No caller sets `available` explicitly today. Defaulting it to a flat 1 regardless of
+  // The organization invite-links route sets `available` for a share link. Defaulting it to a flat 1 regardless of
   // recipient count meant a multi-recipient By-Users share minted one invite whose single
   // accept slot only the first recipient could ever claim, while the sharer was told all of
   // them succeeded - so the default has to track how many people this invite is actually for.
   // pending.length (not recipientsArray.length): two recipient strings that resolve to the
   // same person, or an org/project id that resolves to nobody, must not inflate the count.
-  const resolvedAvailable = available ?? (isLinkOnlyInvite ? 1000 : Math.max(pending.length, DEFAULT_AVAILABLE));
+  const resolvedAvailable = isOrgLink
+    ? Math.min(available ?? seatsLeft, MAX_ORG_LINK_AVAILABLE)
+    : isLinkInvite
+      ? Math.min(available ?? MAX_ORG_LINK_AVAILABLE, MAX_ORG_LINK_AVAILABLE)
+      : (available ?? (isLinkOnlyInvite ? 1000 : Math.max(pending.length, DEFAULT_AVAILABLE)));
 
   const build: Omit<IInvite, 'id'> = {
     // We suggest that it's a FabFile so that permissions is a valid/required field
     type: type as InviteType,
-    documentId: id,
+    // The loaded document's id, not the caller's spelling: invite readers match documentId exactly.
+    documentId: doc.id,
     remaining: resolvedAvailable,
     ...rest,
     recipients: {
@@ -275,6 +380,7 @@ export const createInvite = async (
     // (refusing or capping the grant) and caps a notebook's propagated file grants to what they hold.
     inviterId: user.id,
     typedRecipients,
+    ...(isLinkInvite && allowedDomains?.length ? { allowedDomains: Array.from(new Set(allowedDomains)) } : {}),
   };
 
   const invite = await db.invites.create(build);
@@ -298,19 +404,15 @@ const inviteToOrg = async (
   if (!isOrgMember(user, organization)) throw new BadRequestError('Organization not found');
   assertCanManageOrgGroups(user, organization);
 
-  // We add 1 to include the owner of the organization
-  const totalUsers = (organization.users.length ?? 0) + 1;
+  const pendingRecipients = pendingOrgInviteRecipients(await db.invites.findAllByDocumentId(organization.id));
 
-  if (totalUsers + params.recipients.length > organization.seats) {
-    throw new BadRequestError('Organization is full');
-  }
+  return { organization, pendingRecipients };
+};
 
-  const invites = await db.invites.findAllByDocumentId(organization.id);
-  const pending = invites?.map(invite => invite.recipients?.pending || []).flat().length;
-
-  if (totalUsers + pending + params.recipients.length > organization.seats) {
-    throw new BadRequestError('Organization is full');
-  }
-
-  return organization;
+const inviteToSpace = async (user: IUserDocument, params: { id: string }, db: CreateInviteAdapters['db']) => {
+  const space = await db.spaces.findLiveById(params.id);
+  // Same answer for a missing and a forbidden Space, so the id cannot be probed.
+  if (!space || !isSpaceMember(user.id, space)) throw new NotFoundError('Document not found');
+  if (!isSpaceManager(user.id, space)) throw new ForbiddenError('Only a Space admin can invite');
+  return space;
 };

@@ -1,4 +1,14 @@
+import type { Logger } from '@bike4mind/observability';
+import { isTerminalCreditRefusal } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+
+/** A BadRequestError so the SPA route keeps its 400; the public v1 route reports it as a 429. */
+export class SystemPromptRateLimitError extends BadRequestError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SystemPromptRateLimitError';
+  }
+}
 
 /**
  * Throws when an agent's system prompt was generated less than rateLimitSeconds ago.
@@ -21,9 +31,26 @@ export const assertSystemPromptGenerationAllowed = (
   const timeRemainingMs = rateLimitSeconds * 1000 - (now - lastGenerationMs);
   if (timeRemainingMs <= 0) return;
 
-  throw new BadRequestError(
+  throw new SystemPromptRateLimitError(
     `Rate limit exceeded. Please wait ${Math.ceil(
       timeRemainingMs / 1000
     )} seconds before generating another system prompt.`
   );
+};
+
+/**
+ * Logs a generate-system-prompt failure. A rate-limit refusal (a repeat request inside the admin-set
+ * interval) and a credit refusal (out of credits, free-tier daily cap) are expected 4xx, so they log
+ * at warn; every other failure stays at error.
+ */
+export const logSystemPromptGenerationFailure = (
+  logger: Pick<Logger, 'warn' | 'error'>,
+  message: string,
+  error: unknown
+): void => {
+  if (error instanceof SystemPromptRateLimitError || isTerminalCreditRefusal(error)) {
+    logger.warn(message, (error as Error).message);
+    return;
+  }
+  logger.error(message, error);
 };

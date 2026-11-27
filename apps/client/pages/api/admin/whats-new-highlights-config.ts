@@ -1,11 +1,12 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
-import { validateHighlightsTemplate } from '@server/whatsNew/whatsNewHighlights.prompt';
+import { validateHighlightsTemplate } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.prompt';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { diffSettingChanges } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 
 // Rate limiting constants
 const ADMIN_CONFIG_RATE_LIMIT = 10; // requests per minute
@@ -44,14 +45,12 @@ const HighlightsConfigSchema = z.object({
   attachMarkdownFile: z.boolean().optional(),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(rateLimit({ limit: ADMIN_CONFIG_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .get(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const setting = await AdminSettings.findOne({ settingName: SETTING_NAME });
       const config = setting?.settingValue || {
@@ -68,18 +67,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       return res.json(config);
     } catch (error) {
-      console.error('Error getting highlights config:', error);
+      req.logger.error('Error getting highlights config', { error });
       return res.status(500).json({
         error: 'Failed to get highlights configuration',
       });
     }
   })
   .put(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       // Validate configuration with Zod schema
       const config = HighlightsConfigSchema.parse(req.body);
@@ -122,12 +116,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         { upsert: true }
       );
 
+      // The stored value also carries bookkeeping (updatedAt, lastRunAt, ...); only the admin's fields are diffed.
+      const before = Object.fromEntries(Object.keys(config).map(key => [key, existingValue[key]]));
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.updated',
+        target: { kind: 'settings', id: SETTING_NAME, displayName: "What's New highlights configuration" },
+        summary: 'updated the highlights configuration',
+        changes: diffSettingChanges('highlightsConfig', before, config),
+      });
+
       return res.json({
         success: true,
         config,
       });
     } catch (error) {
-      console.error('Error updating highlights config:', error);
+      req.logger.error('Error updating highlights config', { error });
 
       // Check if it's a Zod validation error
       if (error && typeof error === 'object' && 'issues' in error) {

@@ -22,7 +22,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
-import { postSreTimeoutSummaryMessage } from '@server/integrations/slack/sreSlackApproval';
+import { postSreTimeoutSummaryMessage } from '@bike4mind/server-utils/integrations/slack/sreSlackApproval';
 
 const logger = new Logger({ metadata: { service: 'sreStaleDispatch' } });
 

@@ -24,9 +24,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // The module calls initializeSlackPackage() at import time, which wires the real server
 // dependency graph (sst Resource, ability, storage, ...). Nothing here needs it.
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 
-// Deliberately NOT mocking verifyOrgOwner, matching the sibling index.test.ts: the behaviour the
+// Deliberately NOT mocking verifyOrgPermission, matching the sibling index.test.ts: the behaviour the
 // gate swap changes lives INSIDE the helper, so mocking it would assert the mock. Stubbing the
 // repository exercises route + helper together and pins the document contract between them.
 const mockOrgFindById = vi.fn();
@@ -56,7 +56,7 @@ vi.mock('@bike4mind/slack', () => ({
 // issueStateNonce SETS A COOKIE on the response, so it is a side effect a refused caller must
 // never trigger - not merely a value the handler happens not to use.
 const mockIssueStateNonce = vi.fn();
-vi.mock('@server/auth/oauthFlowCookie', () => ({
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
   issueStateNonce: (...args: unknown[]) => mockIssueStateNonce(...args),
   NONCE_SLOT: { orgSlackConnect: 'org-slack-connect' },
 }));
@@ -67,6 +67,7 @@ import '../connect';
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const STRANGER = '650000000000000000000333';
+const MANAGER = '650000000000000000000444';
 
 // `id` is the Mongoose virtual: always the canonical lowercase spelling, whatever casing the
 // request used to reach the document.
@@ -85,12 +86,13 @@ function makeReq(user: { id: string; isAdmin: boolean }, orgId: string | null = 
 const owner = { id: OWNER, isAdmin: false };
 const stranger = { id: STRANGER, isAdmin: false };
 const admin = { id: STRANGER, isAdmin: true };
+const manager = { id: MANAGER, isAdmin: false };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockOrgFindById.mockResolvedValue(org);
   mockFindByOrganizationId.mockResolvedValue(null);
-  mockGetCredentials.mockResolvedValue({ clientId: 'client_1' });
+  mockGetCredentials.mockResolvedValue({ workspaceId: 'ws_app', clientId: 'client_1' });
   mockGenerateStateToken.mockReturnValue('state_token');
   mockBuildOAuthUrl.mockReturnValue('https://slack.com/oauth/v2/authorize?state=state_token');
   mockIssueStateNonce.mockReturnValue('nonce_hash');
@@ -105,6 +107,16 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     expect(mockOrgFindById).toHaveBeenCalledWith(ORG);
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toEqual({ url: 'https://slack.com/oauth/v2/authorize?state=state_token' });
+  });
+
+  it('resolves credentials from the Slack app the request names', async () => {
+    const { req, res } = makeReq(owner);
+    (req as Record<string, unknown>).query = { id: ORG, workspaceId: 'ws_named' };
+
+    await routeHandlers.POST(req, res);
+
+    expect(mockGetCredentials).toHaveBeenCalledWith('ws_named');
+    expect(res.statusCode).toBe(200);
   });
 
   it('returns an OAuth url to a platform admin', async () => {
@@ -123,7 +135,7 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     await routeHandlers.POST(req, res);
 
     expect(mockIssueStateNonce).toHaveBeenCalledWith(res, 'org-slack-connect');
-    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash');
+    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash', 'ws_app');
     expect(mockBuildOAuthUrl).toHaveBeenCalledWith(
       'client_1',
       expect.stringContaining('/api/slack/oauth/org-connect/callback'),
@@ -144,6 +156,21 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     });
 
     // The gate must precede the lookup, or a non-owner learns whether the org has Slack wired up.
+    expect(mockFindByOrganizationId).not.toHaveBeenCalled();
+    expect(mockIssueStateNonce).not.toHaveBeenCalled();
+    expect(mockGenerateStateToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue({ ...org, adminUserIds: [MANAGER], users: [{ userId: MANAGER }] });
+    const { req, res } = makeReq(manager);
+
+    await expect(routeHandlers.POST(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+      message: 'Organization not found',
+    });
+
     expect(mockFindByOrganizationId).not.toHaveBeenCalled();
     expect(mockIssueStateNonce).not.toHaveBeenCalled();
     expect(mockGenerateStateToken).not.toHaveBeenCalled();
@@ -229,7 +256,7 @@ describe('POST /api/organizations/[id]/integrations/slack/connect', () => {
     await routeHandlers.POST(req, res);
 
     expect(mockFindByOrganizationId).toHaveBeenCalledWith(ORG);
-    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash');
+    expect(mockGenerateStateToken).toHaveBeenCalledWith(ORG, OWNER, 'nonce_hash', 'ws_app');
     expect(res.statusCode).toBe(200);
   });
 });

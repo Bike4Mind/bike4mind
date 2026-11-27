@@ -1,7 +1,8 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { CssVarsProvider } from '@mui/joy/styles';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { COOKIE_BANNER_HEIGHT_VAR } from '@client/app/utils/cookieBannerSpace';
 
 const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadRedditPixel: vi.fn(),
@@ -22,6 +23,9 @@ vi.mock('@client/app/utils/metaPixel', async importOriginal => ({
 import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
 import { CONSENT_VENDORS } from '../utils/consentVendors';
 import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
+import { beaconVisit } from '../utils/visitBeacon';
+import { startPageBeacon } from '../utils/pageBeacon';
+import { useTutorialPicker } from './tutorial/core/tutorialPickerStore';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -66,11 +70,14 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    useTutorialPicker.setState({ walkOnScreen: false });
     // The grant loads only configured vendors, so configure the pixels the mocks stand in for.
     vi.stubEnv('NEXT_PUBLIC_META_PIXEL_ID', 'meta-test');
     vi.stubEnv('NEXT_PUBLIC_REDDIT_PIXEL_ID', 'reddit-test');
     // What the inline tag in layout.tsx would have set; each test states its own.
     delete window.__b4mGaConsentDefault;
+    // A grant calls the page beacon, whose state outlives a case; keep any request it makes local.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 204 }));
   });
 
   afterEach(() => {
@@ -98,6 +105,16 @@ describe('CookieConsentBanner', () => {
 
     expect(screen.getByRole('region', { name: 'Cookie settings' })).toBeInTheDocument();
     expect(document.body).toHaveFocus();
+  });
+
+  it('sits under the modal layer so an open dialog is never covered by it', () => {
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    const { zIndex } = getComputedStyle(screen.getByTestId('cookie-consent-banner'));
+    expect(Number(zIndex)).toBe(extendTheme().zIndex.modal - 1);
   });
 
   it('hides banner when consent was previously granted', () => {
@@ -160,6 +177,32 @@ describe('CookieConsentBanner', () => {
     expect(localStorageMock.getItem('cookie_consent')).toBe('granted');
     expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
     expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+  });
+
+  it('publishes its height while it shows, so the layout can make room, and clears it once answered', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(94);
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    const rootStyle = document.documentElement.style;
+    expect(rootStyle.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('94px');
+
+    fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+    expect(rootStyle.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('');
+    vi.restoreAllMocks();
+  });
+
+  it('publishes no height while a tutorial walk holds the ask back', () => {
+    useTutorialPicker.setState({ walkOnScreen: true });
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+    expect(document.documentElement.style.getPropertyValue(COOKIE_BANNER_HEIGHT_VAR)).toBe('');
   });
 
   it('denies consent and hides banner on Decline click', () => {
@@ -392,6 +435,202 @@ describe('CookieConsentBanner', () => {
       expect(mockGtag).not.toHaveBeenCalled();
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
       expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('while a tutorial walk is on screen', () => {
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    it('holds the unprompted ask back, then shows it once the walk ends', () => {
+      setRegion('eu');
+      useTutorialPicker.setState({ walkOnScreen: true });
+      renderBanner();
+      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+
+      act(() => useTutorialPicker.setState({ walkOnScreen: false }));
+      expect(screen.getByTestId('cookie-consent-banner')).toBeInTheDocument();
+    });
+
+    it('still shows when reopened from Cookie settings', () => {
+      setRegion('eu');
+      useTutorialPicker.setState({ walkOnScreen: true });
+      renderBanner();
+      act(() => useCookieSettings.getState().open());
+      expect(screen.getByTestId('cookie-consent-banner')).toBeInTheDocument();
+    });
+  });
+
+  // The first visit from search or a shared link lands on this ask, so the visit beacon holds
+  // its source until the answer (visitBeacon.ts). The answer is what sends it.
+  describe('recording the visit the beacon held for the answer', () => {
+    const bodies = (fetchMock: ReturnType<typeof vi.fn>) =>
+      fetchMock.mock.calls.map(c => JSON.parse((c as [string, RequestInit])[1].body as string) as unknown);
+    const urls = (fetchMock: ReturnType<typeof vi.fn>) => fetchMock.mock.calls.map(([url]) => url as string);
+    const settle = () => act(() => new Promise(resolve => setTimeout(resolve, 0)));
+
+    beforeEach(() => {
+      Object.defineProperty(document, 'referrer', { value: 'https://www.google.com/search?q=x', configurable: true });
+      window.history.replaceState({}, '', '/pricing?utm_source=newsletter');
+    });
+    afterEach(() => {
+      Object.defineProperty(document, 'referrer', { value: '', configurable: true });
+      window.history.replaceState({}, '', '/');
+      vi.unstubAllGlobals();
+      vi.stubGlobal('gtag', mockGtag);
+    });
+
+    it('sends the held source on Accept, after the campaign it carries is written', () => {
+      let cookieAtRelease = '';
+      const fetchMock = vi.fn().mockImplementation(() => {
+        cookieAtRelease = document.cookie;
+        return Promise.resolve({ status: 204 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      captureUtmParams();
+      beaconVisit();
+      window.history.replaceState({}, '', '/login');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(bodies(fetchMock)).toEqual([
+        { awaitingConsent: true },
+        { referrer: 'https://www.google.com', landingPath: '/pricing' },
+      ]);
+      expect(cookieAtRelease).toContain('b4m_utm=');
+    });
+
+    it('sends no source on Decline', () => {
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      beaconVisit();
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(bodies(fetchMock)).toEqual([{ awaitingConsent: true }, {}]);
+    });
+
+    // The visit names the landing; a grant that finds the visitor elsewhere (the login a
+    // signed-out landing redirects to) records that page too, after the visit is recorded.
+    it('then records the page the visitor is on, once the held visit is recorded, on Accept', async () => {
+      let recordVisit: (value: unknown) => void = () => {};
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      beaconVisit();
+      startPageBeacon();
+      window.history.replaceState({}, '', '/login');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      // The release is still in flight: a page sent now would find the visit pending and be lost.
+      fetchMock.mockImplementationOnce(() => new Promise(resolve => (recordVisit = resolve)));
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      await settle();
+      expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+
+      recordVisit({ status: 204 });
+      await settle();
+
+      expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit', '/api/analytics/page']);
+      expect(bodies(fetchMock)[2]).toEqual({ path: '/login' });
+    });
+
+    it('records no page on Decline', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      beaconVisit();
+      startPageBeacon();
+      window.history.replaceState({}, '', '/login');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      await settle();
+
+      expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+    });
+
+    // Exactly one request names the page a grant finds the visitor on: the release when it carries
+    // the landing, otherwise the page beacon, even when that page is the landing.
+    describe('when the grant finds the visitor on the landing', () => {
+      it('records no page: the release carries the landing', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+        vi.stubGlobal('fetch', fetchMock);
+        beaconVisit();
+        startPageBeacon();
+
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+        await settle();
+
+        expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit']);
+        expect(bodies(fetchMock)[1]).toMatchObject({ landingPath: '/pricing' });
+      });
+
+      it('records the landing as a page when the visit was released without it while hidden', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+        vi.stubGlobal('fetch', fetchMock);
+        beaconVisit();
+        startPageBeacon();
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Reflect.deleteProperty(document, 'visibilityState');
+
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+        await settle();
+
+        expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/visit', '/api/analytics/page']);
+        expect(bodies(fetchMock)).toEqual([{ awaitingConsent: true }, {}, { path: '/pricing' }]);
+      });
+
+      it('records the landing as a page on a grant from Cookie settings after a decline at load', async () => {
+        localStorageMock.setItem('cookie_consent', 'denied');
+        const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+        vi.stubGlobal('fetch', fetchMock);
+        beaconVisit();
+        startPageBeacon();
+
+        render(
+          <TestWrapper>
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        act(() => useCookieSettings.getState().open());
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+        await settle();
+
+        expect(urls(fetchMock)).toEqual(['/api/analytics/visit', '/api/analytics/page']);
+        expect(bodies(fetchMock)).toEqual([{}, { path: '/pricing' }]);
+      });
     });
   });
 
@@ -767,7 +1006,7 @@ describe('CookieConsentBanner', () => {
   // The bridge from this origin's decision to the server's. The banner keeps its own decision in
   // localStorage, which no request handler can read, so it publishes the resolution it reached
   // into a first-party cookie (see publishResolvedConsent). Signup attribution is gated on that
-  // cookie in server/analytics/serverConsent.ts, so if the banner stops publishing it, every
+  // cookie in packages/server-utils/src/analytics/serverConsent.ts, so if the banner stops publishing it, every
   // app-direct signup silently stops being attributed and nothing near the auth code fails.
   describe('publishing the resolved decision for the server', () => {
     const published = () =>

@@ -1,10 +1,29 @@
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, isFullAdmin } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqByLabel, getDlqUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
-import { receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
+import {
+  CONSUMER_LOGS_BUDGET_MS,
+  resolveConsumerLogsForSourceQueue,
+  settleWithinBudget,
+} from '@bike4mind/server-utils/utils/dlqConsumerLogs';
+import {
+  countDlqReplayAttempts,
+  DLQ_BROWSE_MESSAGE_ATTRIBUTES,
+  findDlqFailures,
+  latestCopies,
+} from '@bike4mind/server-utils/utils/dlqMessages';
+import {
+  resolveDlqScheduleFacts,
+  resolveDlqTargetLogs,
+  toDlqMessageRow,
+} from '@bike4mind/server-utils/utils/dlqMessageRow';
+import { getQueueAttributes, receiveFromQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+
+// Short polling samples a subset of SQS servers and can return empty for a sparse queue; a brief wait queries them all.
+const RECEIVE_WAIT_SECONDS = 2;
 
 const QuerySchema = z.object({
   queue: z.string().min(1, 'queue label is required'),
@@ -20,13 +39,17 @@ const QuerySchema = z.object({
 /**
  * GET /api/admin/dlq/messages?queue=<label>&maxMessages=10
  *
- * Peeks at messages in a specific DLQ. Uses a 120-second visibility
- * timeout so that receipt handles remain valid while the admin reviews
- * and decides whether to replay individual messages.
+ * Receives messages with immediate visibility so browsing does not hide them from other admins.
+ * SQS still increments ApproximateReceiveCount for these receives.
+ * Each message carries a Logs Insights link (see messageLogsUrl in server-utils dlqMessages): the
+ * consumer's, EventBridge TARGET_ARN's or schedule rule target's log group, filtered to the RequestID
+ * when the message has one; null when no log group or send time is known.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
+  const enrichmentDeadline = Date.now() + CONSUMER_LOGS_BUDGET_MS;
   const result = QuerySchema.safeParse(req.query);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid query parameters');
@@ -45,17 +68,41 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
   Logger.info(`[DLQ Messages] Peeking at ${queueLabel}`, { adminUserId, maxMessages });
 
-  // Use 120s visibility timeout so receipt handles stay valid while the admin decides to replay
-  const messages = await receiveFromQueue(dlqUrl, maxMessages, 120);
+  const [received, consumerLogs, queueDepth] = await Promise.all([
+    receiveFromQueue(dlqUrl, maxMessages, 0, RECEIVE_WAIT_SECONDS, DLQ_BROWSE_MESSAGE_ATTRIBUTES),
+    settleWithinBudget(
+      [resolveConsumerLogsForSourceQueue(dlqEntry.sourceQueue, enrichmentDeadline)],
+      enrichmentDeadline - Date.now()
+    ).then(([logs]) => logs),
+    getQueueAttributes(dlqUrl).then(
+      attributes => attributes.approximateMessageCount + attributes.approximateNotVisibleCount,
+      () => undefined
+    ),
+  ]);
+  const messages = latestCopies(received);
+  const ids = messages.map(message => message.MessageId!);
+  const [[failureLookup], [attempts], schedules, targetLogs] = await Promise.all([
+    settleWithinBudget([findDlqFailures(queueLabel, dlqEntry.sourceQueue, ids)], CONSUMER_LOGS_BUDGET_MS),
+    settleWithinBudget([countDlqReplayAttempts(queueLabel, ids)], CONSUMER_LOGS_BUDGET_MS),
+    resolveDlqScheduleFacts(dlqEntry, messages, queueDepth, enrichmentDeadline),
+    resolveDlqTargetLogs(messages, enrichmentDeadline),
+  ]);
+  const { failures, lookupFailed } = failureLookup ?? { failures: [], lookupFailed: true };
+  const failureById = new Map(failures.map(failure => [failure.messageId, failure]));
 
-  const formatted = messages.map(msg => ({
-    messageId: msg.MessageId,
-    body: msg.Body,
-    receiptHandle: msg.ReceiptHandle,
-    sentTimestamp: msg.Attributes?.SentTimestamp,
-    approximateReceiveCount: msg.Attributes?.ApproximateReceiveCount,
-    approximateFirstReceiveTimestamp: msg.Attributes?.ApproximateFirstReceiveTimestamp,
-  }));
+  // receiptHandle is omitted: with VisibilityTimeout 0 the handle expires immediately,
+  // so the frontend uses the messageIds replay path which receives with its own timeout.
+  const formatted = messages.map(message =>
+    toDlqMessageRow(dlqEntry, message, {
+      recorded: failureById.get(message.MessageId!),
+      lookupFailed,
+      logs: consumerLogs,
+      replayAttempts: attempts?.get(message.MessageId!),
+      schedule: schedules.get(message.MessageId!),
+      targetLogs: targetLogs.get(message.MessageId!),
+      revealRestrictedBody: isFullAdmin(req.user),
+    })
+  );
 
   Logger.info(`[DLQ Messages] Returned ${formatted.length} messages from ${queueLabel}`, { adminUserId });
 

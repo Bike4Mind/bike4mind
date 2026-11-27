@@ -1,12 +1,20 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact, Project } from '@bike4mind/database';
-import { buildListVisibilityFilter, buildListQuery, type ListQueryParams } from '@server/services/publish';
+import {
+  buildListVisibilityFilter,
+  buildListQuery,
+  excludeNonLiveOwners,
+  type ListQueryParams,
+} from '@server/services/publish';
 import { displayReplyTitle } from '@server/services/publish/plainTitle';
+import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
 
 /**
  * GET /api/publish/artifacts - list artifacts visible to the caller.
  * Non-admins see their own + public + their org/project-visible artifacts
- * (buildListVisibilityFilter); admins see everything. Summary fields only.
+ * (buildListVisibilityFilter), minus other owners' rows whose owner is banned, suspended or gone
+ * (excludeNonLiveOwners, the check serve applies per request); admins see everything. Summary fields only.
  *
  * Query params (all optional):
  *   mine, sourceArtifactId  - scoping, as before
@@ -26,13 +34,20 @@ import { displayReplyTitle } from '@server/services/publish/plainTitle';
  * Always returns `total` alongside the page, which is what lets a caller tell a full page
  * from a truncated list - the previous hard `$limit: 200` with no count meant the
  * management tab silently stopped showing the oldest artifacts past that mark.
+ *
+ * On `mine`, each row the caller owns carries `thumbnailUrl` (a short-lived presigned GET, stable
+ * within a signing window so the browser can cache it; see thumbnailUrl.ts) once its owner-only
+ * thumbnail has rendered. No other listing, and no other route, ever exposes one.
  */
 
 /** Matches the pre-paging hard cap, so an existing caller that sends no `limit` is unaffected. */
 const LEGACY_LIMIT = 200;
 const MAX_LIMIT = 200;
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).get(async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -136,7 +151,12 @@ const handler = baseApi().get(async (req, res) => {
   // one day hide is a narrowing clause clobbering the visibility filter - i.e. WIDENING the
   // authorized set, which buildListQuery says must be impossible. $and makes that structural, and a
   // top-level $and is flattened by the planner so index eligibility is unaffected.
-  const filter = Object.keys(match).length ? { $and: [scope, match] } : scope;
+  const narrowed = Object.keys(match).length ? { $and: [scope, match] } : scope;
+  // Browse listing only: the owner-scoped branches list the caller's own rows, and admins see all.
+  // Applied before paging so `total`, skip and limit count the same rows the page shows.
+  const browse = !sourceArtifactId && !sourceMessageId && !mine;
+  const ownerGate = browse && !isAdmin ? await excludeNonLiveOwners(narrowed, userId) : null;
+  const filter = ownerGate ? { $and: [narrowed, ownerGate] } : narrowed;
 
   // `versions` can grow unbounded, so compute its length server-side with $size and never
   // ship the array over the wire - the count drives the management tab's version chip and
@@ -184,6 +204,9 @@ const handler = baseApi().get(async (req, res) => {
               gateKind: '$accessGate.kind',
               // Consumed and dropped below; never sent to the caller.
               replyTitleBody,
+              // Storage key only, also consumed and dropped below: the caller gets a presigned
+              // `thumbnailUrl` instead, and only for its own rows on the owner-scoped listing.
+              thumbnailKey: '$thumbnail.key',
             },
           },
         ],
@@ -231,27 +254,57 @@ const handler = baseApi().get(async (req, res) => {
 
   // A browse listing mixes the caller's own rows with other people's. The projection above is
   // shaped for the management tab, so on someone else's row it also carries identifiers a viewer
-  // has no claim to: the owner's user id, the owning org/project id, the previous version's
-  // authoring metadata, and which gate kind protects it. Strip those from rows the caller does
-  // not own; the display fields the browse grid renders are untouched. Admins keep the full rows
-  // - the admin surface is the reason the wide projection exists.
+  // has no claim to (owner and scope ids, version provenance, gate kind, the publisher's source
+  // references). Rows the caller does not own keep only the display fields below, so a field
+  // added to the projection stays owner/admin-only unless it is listed here. Admins keep the full
+  // rows - the admin surface is the reason the wide projection exists.
   //
-  // Deliberately NOT stripped: versionsCount and discoverable. Neither identifies a tenant, both
-  // are read by the owner's own management tab (PublishedArtifactsTabContent, PublishShareModal),
-  // and hiding them would couple those reads to ownerId staying in the projection forever.
-  const NON_OWNER_HIDDEN_FIELDS = ['scopeId', 'ownerId', 'previousVersionMeta', 'gateKind'] as const;
+  // versionsCount and discoverable stay: neither identifies a tenant, both are read by the
+  // owner's own management tab (PublishedArtifactsTabContent, PublishShareModal), and hiding them
+  // would couple those reads to ownerId staying in the projection forever.
+  const NON_OWNER_VISIBLE_FIELDS = [
+    '_id',
+    'publicId',
+    'tier',
+    'slug',
+    'title',
+    'description',
+    'tags',
+    'visibility',
+    'commentPolicy',
+    'discoverable',
+    'size',
+    'publishedAt',
+    'updatedAt',
+    'viewCount',
+    'versionsCount',
+  ] as const;
 
-  const rows = ((result?.rows ?? []) as Array<Record<string, unknown>>).map(({ replyTitleBody: body, ...row }) =>
-    typeof body === 'string' && typeof row.title === 'string'
-      ? { ...row, title: displayReplyTitle(row.title, body) || row.title }
-      : row
+  const rows = await Promise.all(
+    ((result?.rows ?? []) as Array<Record<string, unknown>>).map(
+      async ({ replyTitleBody: body, thumbnailKey, ...row }) => {
+        const titled =
+          typeof body === 'string' && typeof row.title === 'string'
+            ? { ...row, title: displayReplyTitle(row.title, body) || row.title }
+            : row;
+        // Thumbnails are owner-only: signed for the caller's OWN rows on `?mine`, never for a browse
+        // listing (admins included) and never anywhere else. See signOwnerThumbnailUrl.
+        if (!mine || row.ownerId !== userId || typeof row.publicId !== 'string' || typeof thumbnailKey !== 'string') {
+          return titled;
+        }
+        const thumbnailUrl = await signOwnerThumbnailUrl(row.publicId, thumbnailKey);
+        return thumbnailUrl ? { ...titled, thumbnailUrl } : titled;
+      }
+    )
   );
   const visibleRows = isAdmin
     ? rows
     : rows.map(row => {
         if (row.ownerId === userId) return row;
-        const trimmed = { ...row };
-        for (const field of NON_OWNER_HIDDEN_FIELDS) delete trimmed[field];
+        const trimmed: Record<string, unknown> = {};
+        for (const field of NON_OWNER_VISIBLE_FIELDS) {
+          if (field in row) trimmed[field] = row[field];
+        }
         return trimmed;
       });
 

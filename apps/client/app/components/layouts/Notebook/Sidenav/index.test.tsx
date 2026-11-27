@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { WORKSPACE_SURFACES } from '@bike4mind/common';
@@ -52,9 +52,14 @@ vi.mock('next/dynamic', () => ({
 
 vi.mock('./Header', () => ({ default: () => <div /> }));
 vi.mock('./Footer', () => ({ default: () => <div /> }));
-vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => false }));
+const { layout } = vi.hoisted(() => ({ layout: { isMobile: false, isTablet: false, openSideNav: false } }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({
+  useIsMobile: () => layout.isMobile,
+  useIsTablet: () => layout.isTablet,
+}));
 vi.mock('..', () => ({
-  useNotebookLayout: (select: (s: unknown) => unknown) => select({ openSideNav: false, setOpenSideNav: vi.fn() }),
+  useNotebookLayout: (select: (s: unknown) => unknown) =>
+    select({ openSideNav: layout.openSideNav, setOpenSideNav: vi.fn() }),
 }));
 
 import NotebookSideNav from './index';
@@ -186,5 +191,29 @@ describe('NotebookSideNav landmark', () => {
     // the selection above picks.
     renderAt('/new', [], []);
     expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBe(screen.getByTestId('sidenav-container'));
+  });
+});
+
+describe('NotebookSideNav coach cover', () => {
+  const cover = () => screen.getByTestId('sidenav-container').getAttribute('data-coach-cover');
+  const at = (isMobile: boolean, isTablet: boolean, openSideNav: boolean) => {
+    Object.assign(layout, { isMobile, isTablet, openSideNav });
+    renderAt('/');
+  };
+  afterEach(() => Object.assign(layout, { isMobile: false, isTablet: false, openSideNav: false }));
+
+  it('marks the open drawer on a phone as covering the coach card', () => {
+    at(true, true, true);
+    expect(cover()).toBe('true');
+  });
+
+  it('leaves the open drawer on a tablet unmarked', () => {
+    at(false, true, true);
+    expect(cover()).toBeNull();
+  });
+
+  it('leaves the closed drawer on a phone unmarked', () => {
+    at(true, true, false);
+    expect(cover()).toBeNull();
   });
 });

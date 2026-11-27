@@ -1,3 +1,4 @@
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   createRegInvites,
   deleteRegInvites,
@@ -17,8 +18,9 @@ export function useGetRegInvites() {
 
 export function useUpdateRegInvites(options: { onSuccess?: () => void; onError?: () => void } = {}) {
   return useMutation({
-    mutationFn: async (data: Partial<IRegInviteDocument & { ids: string[]; status: RegInviteStatusType }>) =>
-      await updateRegInvites(data),
+    mutationFn: async (
+      data: Partial<IRegInviteDocument & { ids: string[]; status: RegInviteStatusType }> & { reason?: string }
+    ) => await updateRegInvites(data),
     onSuccess: () => {
       toast.success('Successfully updated registration invite(s)');
       if (options.onSuccess) options.onSuccess();
@@ -76,5 +78,10 @@ export function useSubmitUserInvitation() {
 export function useSubmitReferral() {
   return useMutation({
     mutationFn: async (data: IUserInvitation) => await submitReferral(data),
+    // Fire and forget: the server owns the quota, so a slow /api/identify call must not hold
+    // the modal's spinner open until its timeout.
+    onSettled: () => {
+      void useUser.getState().refreshUser();
+    },
   });
 }

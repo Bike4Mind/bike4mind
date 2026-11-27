@@ -8,7 +8,8 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { Quest } from '@bike4mind/database';
+import { Quest, User, AdminSupportAccessAuditLog, adminSupportAccessAuditLogRepository } from '@bike4mind/database';
+import { AdminSupportAccessAction } from '@bike4mind/common';
 
 // This route's fix is a MongoDB query-semantics question (does $elemMatch actually match an
 // array-of-objects field, does a dropped $or arm actually stop matching), which the directory's
@@ -19,10 +20,14 @@ import { Quest } from '@bike4mind/database';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
     const chain = Object.assign(
-      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) await middleware(req, res, () => undefined);
+        return h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
       {
-        use: () => chain,
+        use: (middleware: (typeof middlewares)[number]) => (middlewares.push(middleware), chain),
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
     );
@@ -34,19 +39,24 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: (req: unknown, res: unknown) => unknown) => fn,
 }));
 
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
-}));
-
-import handler from '../model-logs';
+import handler, { MODEL_LOGS_MAX_LIMIT } from '../model-logs';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
-const run = (query: Record<string, string> = {}) => {
-  const { req, res } = createMocks({ method: 'GET', query });
-  (req as Record<string, unknown>).user = { id: 'admin1', isAdmin: true };
+const SUPPORT_CASE = 'ZD-4821';
+
+// A search is a support read, so it carries a case unless a test passes its own (or null for none).
+const run = (query: Record<string, string | null> = {}, isAdmin = true) => {
+  const withCase = query.search && query.supportCase === undefined ? { ...query, supportCase: SUPPORT_CASE } : query;
+  const sent = Object.fromEntries(Object.entries(withCase).filter(([, value]) => value !== null)) as Record<
+    string,
+    string
+  >;
+  const { req, res } = createMocks({ method: 'GET', query: sent });
+  (req as Record<string, unknown>).user = { id: 'admin1', isAdmin };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   return { req, res };
 };
 
@@ -134,9 +144,8 @@ describe('GET /api/admin/model-logs', () => {
       },
     });
 
-    // This route spreads promptMeta across ALL users to any admin - functionCalls[].returnValue
-    // is verbatim tool output (private corpus chunks, file contents), the same class of content
-    // every other cross-user promptMeta read redacts.
+    // functionCalls[].returnValue is verbatim tool output (private corpus chunks, file contents);
+    // the list must not carry it at all, and the detail route redacts it.
     await Quest.create({
       sessionId: 'session-6',
       type: 'message',
@@ -186,25 +195,195 @@ describe('GET /api/admin/model-logs', () => {
     expect(JSON.stringify(body.logs)).not.toContain('grok-3');
   });
 
-  it('redacts functionCalls[].returnValue - this route serves every user, not just the caller', async () => {
+  it('projects only the card fields, never the full promptMeta', async () => {
     const { req, res } = run({ search: 'claude-sonnet-5' });
     await handler(req, res);
     const body = res._getJSONData();
     expect(body.total).toBe(1);
     const serialized = JSON.stringify(body.logs);
     expect(serialized).not.toContain('private tool output');
-    expect(serialized).toContain('web_search');
+    expect(serialized).not.toContain('web_search');
+    expect(Object.keys(body.logs[0]).sort()).toEqual(
+      ['artifacts', 'attachedFileCount', 'completedStepCount', 'failedStepCount', 'id', 'modelName', 'timestamp'].sort()
+    );
+  });
+
+  it('derives the card counts and artifact types in the projection', async () => {
+    await Quest.create({
+      sessionId: 'session-7',
+      type: 'message',
+      timestamp: new Date(),
+      prompt: 'counts',
+      promptMeta: {
+        session: { id: 'session-7', userId: 'user-1' },
+        model: { name: 'counted-model' },
+        tokenUsage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+        performance: { totalResponseTime: 1234 },
+        context: {
+          messageHistoryLength: 4,
+          attachedFiles: [
+            { name: 'a.txt', type: 'text', size: 1 },
+            { name: 'b.txt', type: 'text', size: 1 },
+          ],
+        },
+        executionTracking: { completedSteps: ['a', 'b', 'c'], failedSteps: ['d'] },
+        artifacts: [{ type: 'html', content: 'x'.repeat(500) }],
+      },
+    });
+
+    const { req, res } = run({ model: 'counted-model' });
+    await handler(req, res);
+    const [log] = res._getJSONData().logs;
+    expect(log).toMatchObject({
+      modelName: 'counted-model',
+      inputTokens: 10,
+      outputTokens: 20,
+      totalResponseTime: 1234,
+      messageHistoryLength: 4,
+      attachedFileCount: 2,
+      completedStepCount: 3,
+      failedStepCount: 1,
+      artifacts: [{ type: 'html' }],
+    });
+    expect(log.artifacts[0]).not.toHaveProperty('preview');
+  });
+
+  it('pages newest first, with total counting every match', async () => {
+    await Quest.updateMany({}, { $set: { timestamp: new Date('2026-01-01T00:00:00Z') } });
+    await Quest.updateOne({ sessionId: 'session-1' }, { $set: { timestamp: new Date('2026-01-03T00:00:00Z') } });
+    await Quest.updateOne({ sessionId: 'session-2' }, { $set: { timestamp: new Date('2026-01-02T00:00:00Z') } });
+
+    const first = run({ page: '1', limit: '2' });
+    await handler(first.req, first.res);
+    const firstBody = first.res._getJSONData();
+    expect(firstBody).toMatchObject({ total: 6, page: 1, limit: 2 });
+    expect(firstBody.logs.map((log: { modelName: string }) => log.modelName)).toEqual(['claude-opus-5', 'gpt-4o']);
+
+    const last = run({ page: '3', limit: '2' });
+    await handler(last.req, last.res);
+    const lastBody = last.res._getJSONData();
+    expect(lastBody).toMatchObject({ total: 6, page: 3, limit: 2 });
+    expect(lastBody.logs).toHaveLength(2);
+
+    const past = run({ page: '4', limit: '2' });
+    await handler(past.req, past.res);
+    expect(past.res._getJSONData()).toMatchObject({ logs: [], total: 6 });
+  });
+
+  it('keeps tied timestamps in a stable order across independently fetched pages', async () => {
+    const identifiers = Array.from(
+      { length: 30 },
+      (_, index) => new mongoose.Types.ObjectId((index + 1).toString(16).padStart(24, '0'))
+    );
+    await Quest.insertMany(
+      identifiers.map(_id => ({
+        _id,
+        sessionId: 'tied-timestamps',
+        type: 'message',
+        timestamp: new Date('2026-01-01T00:00:00Z'),
+        promptMeta: {
+          session: { id: 'tied-timestamps', userId: 'user-1' },
+          model: { name: 'tied-model' },
+        },
+      }))
+    );
+
+    const pages = await Promise.all(
+      [1, 2, 3].map(async page => {
+        const { req, res } = run({ model: 'tied-model', page: String(page), limit: '10' });
+        await handler(req, res);
+        return res._getJSONData().logs as { id: string }[];
+      })
+    );
+    expect(pages.flat().map(log => log.id)).toEqual([...identifiers].reverse().map(id => id.toString()));
+  });
+
+  it('defaults page and limit and clamps an oversized limit', async () => {
+    const defaults = run();
+    await handler(defaults.req, defaults.res);
+    expect(defaults.res._getJSONData()).toMatchObject({ page: 1, limit: 25, total: 6 });
+
+    const oversized = run({ limit: '5000' });
+    await handler(oversized.req, oversized.res);
+    expect(oversized.res._getJSONData().limit).toBe(MODEL_LOGS_MAX_LIMIT);
+  });
+
+  it('leaves soft-deleted logs out of both the page and the total', async () => {
+    await Quest.updateOne({ sessionId: 'session-1' }, { $set: { deletedAt: new Date() } });
+    const { req, res } = run();
+    await handler(req, res);
+    const body = res._getJSONData();
+    expect(body.total).toBe(5);
+    expect(JSON.stringify(body.logs)).not.toContain('claude-opus-5');
+  });
+
+  it.each([
+    ['page', '0'],
+    ['page', 'abc'],
+    ['page', '1.5'],
+    ['limit', '0'],
+    ['limit', '-1'],
+    ['limit', 'abc'],
+    ['page', '10001'],
+  ])('rejects %s=%s before any query runs', async (param, value) => {
+    const aggregateSpy = vi.spyOn(Quest, 'aggregate');
+    const { req, res } = run({ [param]: value });
+    await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+    expect(aggregateSpy).not.toHaveBeenCalled();
+    aggregateSpy.mockRestore();
   });
   // A bare z.string() let an unparseable value become an Invalid Date and cast against the
   // Date-typed `timestamp` filter, which surfaces as a 500 rather than answering the caller.
   it.each(['startDate', 'endDate'])('rejects an unparseable %s before any query runs', async param => {
-    const findSpy = vi.spyOn(Quest, 'find');
+    const querySpy = vi.spyOn(Quest, 'aggregate');
     const { req, res } = run({ [param]: 'not-a-date' });
     // Pin that it failed at schema parse (errorHandler maps a ZodError to 422). A bare
     // Error would still fail the request but would come back as a 500.
     await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
-    expect(findSpy).not.toHaveBeenCalled();
-    findSpy.mockRestore();
+    expect(querySpy).not.toHaveBeenCalled();
+    querySpy.mockRestore();
+  });
+
+  it('rejects a non-admin before any query runs', async () => {
+    const aggregateSpy = vi.spyOn(Quest, 'aggregate');
+    const countSpy = vi.spyOn(Quest, 'countDocuments');
+    const { req, res } = run({}, false);
+    await expect(handler(req, res)).rejects.toThrow(/missing permission/i);
+    expect(aggregateSpy).not.toHaveBeenCalled();
+    expect(countSpy).not.toHaveBeenCalled();
+    aggregateSpy.mockRestore();
+    countSpy.mockRestore();
+  });
+
+  it('answers an empty page and a zero total when nothing matches', async () => {
+    const { req, res } = run({ model: 'no-such-model' });
+    await handler(req, res);
+    expect(res._getJSONData()).toMatchObject({ logs: [], total: 0, page: 1 });
+  });
+
+  it('includes the whole end day for a date-only endDate', async () => {
+    await Quest.updateMany({}, { $set: { timestamp: new Date('2026-01-01T00:00:00Z') } });
+    await Quest.updateOne({ sessionId: 'session-1' }, { $set: { timestamp: new Date('2026-01-02T23:59:59Z') } });
+    await Quest.updateOne({ sessionId: 'session-2' }, { $set: { timestamp: new Date('2026-01-03T00:00:00Z') } });
+
+    const { req, res } = run({ startDate: '2026-01-02', endDate: '2026-01-02' });
+    await handler(req, res);
+    const body = res._getJSONData();
+    expect(body.total).toBe(1);
+    expect(body.logs[0].modelName).toBe('claude-opus-5');
+  });
+
+  it('keeps an endDate with a time as an inclusive instant', async () => {
+    await Quest.updateMany({}, { $set: { timestamp: new Date('2026-01-01T00:00:00Z') } });
+    await Quest.updateOne({ sessionId: 'session-1' }, { $set: { timestamp: new Date('2026-01-02T12:00:00Z') } });
+
+    const { req, res } = run({ startDate: '2026-01-02', endDate: '2026-01-02T12:00:00.000Z' });
+    await handler(req, res);
+    expect(res._getJSONData().total).toBe(1);
+
+    const before = run({ endDate: '2026-01-02T11:59:59.999Z' });
+    await handler(before.req, before.res);
+    expect(before.res._getJSONData().total).toBe(5);
   });
 
   it('still accepts an empty date param, which the handler skips', async () => {
@@ -217,5 +396,128 @@ describe('GET /api/admin/model-logs', () => {
     const { req, res } = run({ startDate: '2000-01-01T00:00:00.000Z' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  describe('support-case audit of searches', () => {
+    it('refuses a search without a case and records nothing', async () => {
+      const { req, res } = run({ search: 'claude-opus-5', supportCase: null });
+      await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+      expect(res._isEndCalled()).toBe(false);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('refuses a search with a too-short case and records nothing', async () => {
+      const { req, res } = run({ search: 'claude-opus-5', supportCase: 'ab' });
+      await expect(handler(req, res)).rejects.toMatchObject({ name: 'ZodError' });
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('refuses a search from a caller without support:read before parsing the case', async () => {
+      const { req, res } = run({ search: 'claude-opus-5', supportCase: null }, false);
+      await expect(handler(req, res)).rejects.toThrow(/missing permission/i);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+
+    it('records one ModelLogsSearch with the term and the returned quest ids, and no owner or session', async () => {
+      const { req, res } = run({ search: 'claude-opus-5' });
+      await handler(req, res);
+
+      const body = res._getJSONData();
+      expect(body.total).toBe(1);
+      const records = await AdminSupportAccessAuditLog.find({}).lean();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        action: AdminSupportAccessAction.ModelLogsSearch,
+        actorUserId: 'admin1',
+        supportCase: SUPPORT_CASE,
+        details: { search: 'claude-opus-5', total: 1, questIds: [body.logs[0].id] },
+      });
+      expect(records[0].targetUserId).toBeUndefined();
+      expect(records[0].sessionId).toBeUndefined();
+    });
+
+    it('fails the request and serves no results when the audit write fails', async () => {
+      const recordSpy = vi.spyOn(adminSupportAccessAuditLogRepository, 'record').mockRejectedValue(new Error('down'));
+      const { req, res } = run({ search: 'claude-opus-5' });
+      await expect(handler(req, res)).rejects.toThrow('down');
+      expect(res._isEndCalled()).toBe(false);
+      recordSpy.mockRestore();
+    });
+
+    it('needs no case and records nothing without a search', async () => {
+      const { req, res } = run({ model: 'claude-opus-5' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().total).toBe(1);
+      expect(await AdminSupportAccessAuditLog.countDocuments()).toBe(0);
+    });
+  });
+
+  describe('search scope for a support:read delegate', () => {
+    const TERM = 'scoped search term';
+    let customerId: string;
+    let adminOwnerIds: string[];
+
+    const seedLog = (userId: string | undefined, model: string) =>
+      Quest.create({
+        sessionId: `session-${model}`,
+        type: 'message',
+        timestamp: new Date(),
+        prompt: 'scoped',
+        promptMeta: {
+          ...(userId ? { session: { id: `session-${model}`, userId } } : {}),
+          model: { name: model },
+          prompt: `a prompt with the ${TERM}`,
+        },
+      });
+
+    const runAs = (user: Record<string, unknown>) => {
+      const { req, res } = run({ search: TERM });
+      (req as Record<string, unknown>).user = user;
+      return { req, res };
+    };
+
+    beforeEach(async () => {
+      const makeUser = (name: string, admin: Record<string, unknown> = {}) =>
+        User.create({ username: name, name, email: `${name}@example.com`, aupAcceptedVersion: '2026-01-01', ...admin });
+      customerId = (await makeUser('customer')).id;
+      adminOwnerIds = [
+        (await makeUser('fulladmin', { isAdmin: true })).id,
+        (await makeUser('delegated', { adminPermissions: ['support:read'] })).id,
+        (await makeUser('roled', { adminRoleIds: [new mongoose.Types.ObjectId()] })).id,
+      ];
+      await seedLog(customerId, 'customer-model');
+      for (const [i, ownerId] of adminOwnerIds.entries()) await seedLog(ownerId, `admin-model-${i}`);
+      // Written past the schema, which requires the recorded owner that older logs lack.
+      await Quest.collection.insertOne({
+        sessionId: 'session-ownerless',
+        type: 'message',
+        timestamp: new Date(),
+        deletedAt: null,
+        promptMeta: { model: { name: 'ownerless-model' }, prompt: `a prompt with the ${TERM}` },
+      });
+    });
+
+    it('leaves logs owned by accounts with admin access, and owner-less logs, out of the page and the total', async () => {
+      const { req, res } = runAs({ id: 'delegate1', isAdmin: false, adminPermissions: ['support:read'] });
+      await handler(req, res);
+      const body = res._getJSONData();
+      expect(body.total).toBe(1);
+      expect(body.logs.map((log: { modelName: string }) => log.modelName)).toEqual(['customer-model']);
+    });
+
+    it('serves a full admin every matching log', async () => {
+      const { req, res } = runAs({ id: 'admin1', isAdmin: true });
+      await handler(req, res);
+      expect(res._getJSONData().total).toBe(adminOwnerIds.length + 2);
+    });
+
+    it('keeps browsing without a search unscoped for a delegate', async () => {
+      const { req, res } = createMocks({ method: 'GET', query: { model: 'admin-model-0' } });
+      (req as Record<string, unknown>).user = { id: 'delegate1', isAdmin: false, adminPermissions: ['support:read'] };
+      (req as Record<string, unknown>).logger = { error: vi.fn() };
+      await handler(req, res);
+      expect(res._getJSONData().total).toBe(1);
+    });
   });
 });

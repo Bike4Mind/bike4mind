@@ -16,7 +16,7 @@ import {
   Alert,
   useTheme,
 } from '@mui/joy';
-import { Settings as SettingsIcon } from '@mui/icons-material';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import ModelSelection from '../ModelSelection';
@@ -37,6 +37,7 @@ import {
   isGPTImageModel,
   isGPTImage25Model,
   supportsTransparentBackground,
+  supportsPromptUpsampling,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -55,16 +56,42 @@ import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
 import {
   ASPECT_RATIO_INERT_NOTE,
+  OUTPUT_FORMAT_INERT_NOTE,
+  OUTPUT_FORMAT_TOOLTIP,
   ignoresAspectRatio,
-  ignoresUpsamplingAndSeed,
+  ignoresOutputFormat,
+  ignoresSeed,
+  seedInertNote,
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
 import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
+import { IMAGE_TOOL_PRICE_TOOLTIP, useImageToolPrice } from './useImageToolPrice';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
 }
+
+interface ImageSettingBase {
+  label: string;
+  testId: string;
+  tooltip?: string;
+  // Set when the selected model ignores the setting: row stays visible but is not editable.
+  disabled?: boolean;
+}
+interface ImageSelectSetting extends ImageSettingBase {
+  type: 'select';
+  value: string | undefined;
+  options: { value: string; label: string }[];
+  onChange(value: string | null): void;
+}
+interface ImageInputSetting extends ImageSettingBase {
+  type: 'input';
+  value: string;
+  inputProps?: Record<string, unknown>;
+  onChange(value: number | undefined): void;
+}
+type ImageSetting = ImageSelectSetting | ImageInputSetting;
 
 // Always defaults to GPT_IMAGE_2 for best chat-based editing experience (no mask required)
 const getDefaultEditModel = (generationModel: string): ModelName => {
@@ -184,6 +211,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     return getModelPriceTier(selectedModelInfo);
   }, [selectedModelInfo]);
 
+  const imageToolPrice = useImageToolPrice(selectedModel);
+
   const modelSpeed = getModelSpeedFromStats(selectedModelInfo?.id || '', stats?.avgResponseTime ?? {});
   const isNew = selectedModelInfo ? isNewModel(selectedModelInfo) : false;
 
@@ -258,14 +287,12 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     width: '100%',
     borderRadius: 6,
     border: 'none',
-    backgroundColor: (theme: any) => theme.palette.aiSettings.inputBackground,
     color: 'text.primary',
   };
 
   const commonSelectStyles = {
     borderRadius: 6,
     border: 'none',
-    backgroundColor: (theme: any) => theme.palette.aiSettings.inputBackground,
     color: 'text.primary',
   };
 
@@ -287,7 +314,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     setLLM({ quality: validQualities.includes(clamped) ? clamped : getDefaultQuality(contextImageModel) });
   }, [open, contextImageModel, _quality, setLLM]);
 
-  const imageSettings = [
+  const imageSettings: ImageSetting[] = [
     // Temperature (generic input like AdvancedAIModal renders via imageSettings mapping here)
     {
       label: 'Temperature',
@@ -346,9 +373,10 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       onChange: (value: number | undefined) => setLLM({ seed: typeof value === 'number' ? value : null }),
       tooltip: withInertNote(
         'Set a specific seed for reproducible images (leave empty for random)',
-        ignoresUpsamplingAndSeed(contextImageModel)
+        ignoresSeed(contextImageModel),
+        seedInertNote(contextImageModel)
       ),
-      disabled: ignoresUpsamplingAndSeed(contextImageModel),
+      disabled: ignoresSeed(contextImageModel),
       inputProps: {
         type: 'number',
         placeholder: 'Random',
@@ -422,6 +450,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: (_output_format ?? 'png') as 'jpeg' | 'png',
       onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
+      tooltip: withInertNote(OUTPUT_FORMAT_TOOLTIP, ignoresOutputFormat(contextImageModel), OUTPUT_FORMAT_INERT_NOTE),
+      disabled: ignoresOutputFormat(contextImageModel),
       options: [
         { value: 'jpeg', label: 'JPEG' },
         { value: 'png', label: 'PNG' },
@@ -525,6 +555,11 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                 <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1, mb: 2 }}>
                   {isNew && <MetadataChip label="New" mode={mode} variant="blue" />}
                   <MetadataChip label={priceTierInfo.tier} mode={mode} variant={priceTierInfo.variant} />
+                  {imageToolPrice && (
+                    <Box data-testid="image-model-credit-price" sx={{ display: 'contents' }}>
+                      <MetadataChip label={imageToolPrice.label} mode={mode} tooltip={IMAGE_TOOL_PRICE_TOOLTIP} />
+                    </Box>
+                  )}
                   {modelSpeed && (
                     <MetadataChip
                       label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
@@ -589,8 +624,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   <Box sx={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '20px' }}>
                     {/* A row is only disabled when the selected model ignores it, and then the label
                       carries the reason - the rest of this list has no tooltip surface. */}
-                    {(setting as { disabled?: boolean }).disabled ? (
-                      <Tooltip title={(setting as { tooltip?: string }).tooltip ?? ''}>
+                    {setting.disabled ? (
+                      <Tooltip title={setting.tooltip ?? ''}>
                         <Typography level="body-sm">{setting.label}</Typography>
                       </Tooltip>
                     ) : (
@@ -600,13 +635,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                       {setting.type === 'select' && (
                         <Select
                           value={setting.value}
-                          onChange={(_, newValue: any) => setting.onChange(newValue)}
-                          disabled={(setting as { disabled?: boolean }).disabled}
+                          onChange={(_, newValue) => setting.onChange(newValue)}
+                          disabled={setting.disabled}
                           sx={commonSelectStyles}
                           slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
-                          data-testid={(setting as any).testId}
+                          data-testid={setting.testId}
                         >
-                          {(setting as any).options.map((option: any) => (
+                          {setting.options.map(option => (
                             <Option key={option.value} value={option.value}>
                               {option.label}
                             </Option>
@@ -619,15 +654,15 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                           size="sm"
                           variant="outlined"
                           color="primary"
-                          value={(setting as any).value}
-                          disabled={(setting as { disabled?: boolean }).disabled}
-                          {...(setting as any).inputProps}
-                          onChange={(e: any) => {
+                          value={setting.value}
+                          disabled={setting.disabled}
+                          {...setting.inputProps}
+                          onChange={e => {
                             const raw = e.target.value;
                             const val = raw === '' ? undefined : Number(raw);
-                            (setting as any).onChange(val);
+                            setting.onChange(val);
                           }}
-                          data-testid={(setting as any).testId}
+                          data-testid={setting.testId}
                         />
                       )}
                     </Box>
@@ -639,21 +674,23 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             {/* BFL-specific Prompt Upsampling & Safety controls */}
             {(BFL_IMAGE_MODELS as readonly string[]).includes(contextImageModel) && (
               <Grid container spacing={2}>
-                <Grid xs={12} md={6}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Tooltip title="Enhances prompt quality for better image generation">
-                      <Typography level="body-sm" sx={{ mb: 0.5 }}>
-                        Prompt Upsampling
-                      </Typography>
-                    </Tooltip>
-                    <Switch
-                      checked={_prompt_upsampling ?? false}
-                      onChange={(e: any) => setLLM({ prompt_upsampling: e.target.checked })}
-                      color={_prompt_upsampling ? 'success' : 'neutral'}
-                      data-testid="prompt-upsampling-switch"
-                    />
-                  </Box>
-                </Grid>
+                {supportsPromptUpsampling(contextImageModel) && (
+                  <Grid xs={12} md={6}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Tooltip title="Enhances prompt quality for better image generation">
+                        <Typography level="body-sm" sx={{ mb: 0.5 }}>
+                          Prompt Upsampling
+                        </Typography>
+                      </Tooltip>
+                      <Switch
+                        checked={_prompt_upsampling ?? false}
+                        onChange={event => setLLM({ prompt_upsampling: event.target.checked })}
+                        color={_prompt_upsampling ? 'success' : 'neutral'}
+                        data-testid="prompt-upsampling-switch"
+                      />
+                    </Box>
+                  </Grid>
+                )}
                 <Grid xs={12} md={6}>
                   <Box>
                     <Tooltip title="Controls content filtering: 0=Strictest, 2=Most permissive (hard-capped)">
@@ -724,9 +761,9 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
 
               {/* Edit Model Selection */}
               <Box sx={{ mb: 2 }}>
-                <Select
-                  value={selectedEditModel as any}
-                  onChange={(_, newValue: any) => handleEditModelChange(newValue as ModelName)}
+                <Select<ModelName>
+                  value={selectedEditModel}
+                  onChange={(_, newValue) => newValue && handleEditModelChange(newValue)}
                   sx={{ ...commonSelectStyles, width: '100%' }}
                   slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                   data-testid="edit-model-select"
@@ -735,7 +772,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                     const modelInfo = modelInfoRepo?.find(m => m.id === modelId);
                     const isMaskRequired = modelId === ImageModels.FLUX_PRO_FILL;
                     return (
-                      <Option key={modelId} value={modelId as any}>
+                      <Option key={modelId} value={modelId}>
                         {modelInfo?.name || modelId}
                         {isMaskRequired && ' (requires mask)'}
                         {!isMaskRequired && ' ✓'}

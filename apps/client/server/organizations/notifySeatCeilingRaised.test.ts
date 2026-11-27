@@ -4,7 +4,7 @@ const mockPostToSlack = vi.fn();
 const mockRecordAdminAction = vi.fn();
 const mockFindUserById = vi.fn();
 
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostToSlack(...args),
 }));
 
@@ -13,7 +13,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: { findById: (id: string) => mockFindUserById(id) } }));
 vi.mock('@bike4mind/database', () => ({ adminAuditLogRepository: { append: vi.fn() } }));
-vi.mock('@server/utils/adminAudit', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
 

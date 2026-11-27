@@ -1,9 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { hasAdminPermission } from '@bike4mind/common';
 // The same module instance the handler imports, so the assertion below pins identity, not a copy.
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 
 const mockProcess = vi.hoisted(() => vi.fn());
+const processOptions = vi.hoisted(() => vi.fn());
+const mockCapCheck = vi.hoisted(() => vi.fn());
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null));
+const mockRecordFirstChatValue = vi.hoisted(() => vi.fn(async () => false));
+const mockLiveActivityEnd = vi.hoisted(() => vi.fn(async () => undefined));
+const mockResolveCallableFunctions = vi.hoisted(() => vi.fn(async (_user: unknown) => true));
 
 // This exercises only the db-adapter assembly in getStaticOptions: the surface
 // save_content_to_data_lake (-> saveContentAdapters in adapters.ts) reads from. Mocks mirror
@@ -31,7 +38,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   }),
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { publish: vi.fn() } },
   SessionEvents: { AutoName: { publish: vi.fn() } },
 }));
@@ -41,9 +48,10 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getGeneratedImageStorage: () => ({ download: vi.fn() }),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getSharedTokenizer: () => ({}),
   publishTelemetryAlertCallback: vi.fn(),
+  publishModerationEscalation: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services/llm', async () => {
@@ -51,6 +59,9 @@ vi.mock('@bike4mind/services/llm', async () => {
   return {
     ...actual,
     ChatCompletionProcess: class {
+      constructor(options: unknown) {
+        processOptions(options);
+      }
       process = mockProcess;
     },
   };
@@ -65,12 +76,29 @@ vi.mock('@bike4mind/database', async () => {
     Session: { findById: vi.fn(async () => ({ userId: 'user-1' })) },
     User: { findById: vi.fn(async () => ({ _id: 'user-1' })) },
     sessionRepository: { findById: vi.fn(async () => ({ id: 'session-1' })) },
+    spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   };
 });
 
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({
+vi.mock('./questProcessor.push', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questProcessor.push')>()),
+  createChatLiveActivity: () => ({ end: mockLiveActivityEnd }),
+}));
+
+vi.mock('@server/analytics/funnel', () => ({ recordFirstChatValue: mockRecordFirstChatValue }));
+
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
+  resolveCallableFunctionsEnabled: mockResolveCallableFunctions,
+}));
+
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/billing/freeTierDailyCapGate')>()),
+  checkFreeTierDailySpendCap: mockCapCheck,
+}));
+
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({
   buildVideoToolConfig: vi.fn(async () => ({ usableModels: ['test-video'], createJob: vi.fn() })),
 }));
 
@@ -82,7 +110,7 @@ describe('questProcessor getVideoToolConfigResolver', () => {
 
   it('offers a video resolver on a session turn', async () => {
     const { getVideoToolConfigResolver } = await import('./questProcessor');
-    const { buildVideoToolConfig } = await import('@server/videoGenerations/buildVideoToolConfig');
+    const { buildVideoToolConfig } = await import('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig');
     const resolver = getVideoToolConfigResolver(undefined, 'u1');
     expect(resolver).toBeTypeOf('function');
     await resolver?.();
@@ -90,7 +118,7 @@ describe('questProcessor getVideoToolConfigResolver', () => {
   }, 120_000);
 });
 
-vi.mock('@server/musicGenerations/buildMusicToolConfig', () => ({
+vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({
   buildMusicToolConfig: vi.fn(async () => ({ usableModels: ['test-music'], createJob: vi.fn() })),
 }));
 
@@ -102,7 +130,7 @@ describe('questProcessor getMusicToolConfigResolver', () => {
 
   it('offers a music resolver on a session turn', async () => {
     const { getMusicToolConfigResolver } = await import('./questProcessor');
-    const { buildMusicToolConfig } = await import('@server/musicGenerations/buildMusicToolConfig');
+    const { buildMusicToolConfig } = await import('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig');
     const resolver = getMusicToolConfigResolver(undefined, 'u1');
     expect(resolver).toBeTypeOf('function');
     await resolver?.();
@@ -110,7 +138,40 @@ describe('questProcessor getMusicToolConfigResolver', () => {
   }, 120_000);
 });
 
+vi.mock('@bike4mind/services/imageJobs', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/imageJobs')>()),
+  createImageJobs: vi.fn(async () => ({ ok: true, groupId: 'g1', jobs: [], created: true })),
+}));
+
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/generationJobs/wiring')>()),
+  getCreateImageJobsDeps: vi.fn(() => ({ marker: 'image-deps' })),
+}));
+
+describe('questProcessor getImageJobsResolver', () => {
+  it('keeps an API-key turn on the in-process image tools', async () => {
+    const { getImageJobsResolver } = await import('./questProcessor');
+    expect(getImageJobsResolver('key-1')).toBeUndefined();
+  }, 120_000);
+
+  it('gives a session turn a createJobs bound to the image job deps', async () => {
+    const { getImageJobsResolver } = await import('./questProcessor');
+    const { createImageJobs } = await import('@bike4mind/services/imageJobs');
+    const createJobs = await getImageJobsResolver(undefined)?.();
+    const input = { user: { id: 'u1', organizationId: null }, request: {}, count: 1, source: 'agent' as const };
+    await createJobs?.(input);
+    expect(createImageJobs).toHaveBeenCalledWith(input, { marker: 'image-deps' });
+  }, 120_000);
+});
+
 describe('questProcessor getStaticOptions', () => {
+  it('wires the shared operational billing adapter into tool execution', async () => {
+    const { getStaticOptions } = await import('./questProcessor');
+    const { operationalBillingAdapters } = await import('@bike4mind/server-utils/billing/operationalBilling');
+
+    expect(getStaticOptions().db.operationalBilling).toBe(operationalBillingAdapters);
+  }, 120_000);
+
   it('wires the save_content_to_data_lake audit adapters', async () => {
     // The handler's transitive import graph (services + database + slack) is heavy enough
     // that resolving it inside a test can exceed the default timeout.
@@ -131,6 +192,8 @@ describe('questProcessor getStaticOptions', () => {
   it('carries the contributed surface denials into the options', async () => {
     const { getStaticOptions } = await import('./questProcessor');
 
+    // The queue processor is the web chat turn that renders the confirm card.
+    expect(getStaticOptions().customMcp?.listConnections).toBeTypeOf('function');
     expect(getStaticOptions().workspaceDeniedTools).toBe(premiumWorkspaceDeniedTools);
     expect(getStaticOptions().workspaceSessionSettings).toBe(premiumWorkspaceSessionSettings);
   }, 120_000);
@@ -154,5 +217,382 @@ describe('processQuest', () => {
     expect(mockProcess).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }) })
     );
+  }, 120_000);
+
+  it('passes an injected frame sender to the process', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+    const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} };
+    const clientMessageSender = { sendToClient: vi.fn() };
+
+    await processQuest(params as never, logger as never, { clientMessageSender });
+
+    expect(processOptions.mock.lastCall?.[0]).toEqual(expect.objectContaining({ clientMessageSender }));
+  }, 120_000);
+
+  it('hands process() a resolver that asks whether callable functions are on for the turn owner', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+    const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} };
+
+    await processQuest(params as never, logger as never);
+    const { callableFunctionsResolver } = mockProcess.mock.lastCall?.[0] as {
+      callableFunctionsResolver: () => Promise<boolean>;
+    };
+    const { user } = processOptions.mock.lastCall?.[0] as { user: unknown };
+
+    await expect(callableFunctionsResolver()).resolves.toBe(true);
+    expect(mockResolveCallableFunctions).toHaveBeenCalledWith(user);
+  }, 120_000);
+
+  it('wires the moderation escalation notifier', async () => {
+    const { processQuest } = await import('./questProcessor');
+    const { publishModerationEscalation } = await import('@bike4mind/server-utils/utils/chatCompletionDefaults');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await processQuest(
+      { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+      logger as never
+    );
+
+    expect(processOptions.mock.calls.at(-1)?.[0].notifyModerationEscalation).toBe(publishModerationEscalation);
+  }, 120_000);
+
+  it.each([
+    ['withholds the admin role when the payload says so', true, false],
+    ['keeps the stored role for a payload without the field', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expected) => {
+      const { User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', isAdmin: true } as never);
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      processOptions.mockClear();
+      mockCapCheck.mockImplementationOnce(({ user }: { user: { isAdmin?: boolean } }) => {
+        expect(user.isAdmin).toBe(true);
+      });
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      expect(processOptions.mock.calls[0][0].user.isAdmin).toBe(expected);
+      expect(mockCapCheck).toHaveBeenCalled();
+    },
+    120_000
+  );
+
+  it.each([
+    ['withholds the admin role from a tool that re-reads the owner', true, false],
+    ['hands tools the stored role for a payload without the field', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expected) => {
+      const { userRepository } = await import('@bike4mind/database');
+      const { getStaticOptions, processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      processOptions.mockClear();
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      const { users } = processOptions.mock.calls[0][0].db;
+      if (!adminRoleWithheld) expect(users).toBe(getStaticOptions().db.users);
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        expect((await users.findById('user-1')).isAdmin).toBe(expected);
+      } finally {
+        findUser.mockRestore();
+      }
+    },
+    120_000
+  );
+
+  it.each([
+    ['withholds every admin_ tool when the admin role is withheld', true, false],
+    ['injects the admin tools for an admin without the withheld flag', undefined, true],
+  ])(
+    '%s',
+    async (_, adminRoleWithheld, expectsAdminTools) => {
+      const { User } = await import('@bike4mind/database');
+      vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', isAdmin: true } as never);
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      mockProcess.mockClear();
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+        logger as never
+      );
+
+      expect(mockProcess).toHaveBeenCalledTimes(1);
+      const externalToolNames = Object.keys(mockProcess.mock.lastCall?.[0].externalTools ?? {});
+      const adminToolNames = externalToolNames.filter(name => name.startsWith('admin_'));
+      if (expectsAdminTools) {
+        expect(adminToolNames).toContain('admin_get_usage_signals');
+      } else {
+        expect(adminToolNames).toEqual([]);
+      }
+    },
+    120_000
+  );
+
+  it.each([undefined, 'team-org'])(
+    'forwards the quest billing organization %s to the daily cap',
+    async organizationId => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, organizationId } as never,
+        logger as never
+      );
+
+      expect(mockCapCheck).toHaveBeenLastCalledWith(expect.objectContaining({ billingOrganizationId: organizationId }));
+      expect(mockProcess).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ organizationId }) })
+      );
+    },
+    120_000
+  );
+
+  it('settles a capped quest with the limit message instead of throwing or calling the model', async () => {
+    const { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } = await import('@bike4mind/common');
+    const { questRepository } = await import('@bike4mind/database');
+    const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+    const capError = new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+      errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+    });
+    mockCapCheck.mockRejectedValueOnce(capError);
+    mockProcess.mockClear();
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await expect(
+      processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      )
+    ).resolves.toBeUndefined();
+
+    expect(settle).toHaveBeenCalledWith('quest-1', {
+      status: 'stopped',
+      type: 'error',
+      reply: capError.message,
+      replies: [capError.message],
+    });
+    expect(mockProcess).not.toHaveBeenCalled();
+    settle.mockRestore();
+  }, 120_000);
+
+  describe('spend freeze', () => {
+    const frozenRecord = { scopeType: 'User', frozenAt: new Date('2026-11-16T00:00:00.000Z'), reason: 'internal' };
+    const run = async (extra: Record<string, unknown> = {}) => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      return processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, ...extra } as never,
+        logger as never
+      );
+    };
+
+    it('settles a frozen quest as spend_frozen and acks, with no cap check and no model call', async () => {
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockFindActiveFreeze.mockResolvedValueOnce(frozenRecord);
+      mockProcess.mockClear();
+      mockCapCheck.mockClear();
+      mockLiveActivityEnd.mockClear();
+
+      await expect(run()).resolves.toBeUndefined();
+
+      expect(settle).toHaveBeenCalledWith(
+        'quest-1',
+        expect.objectContaining({ status: 'stopped', type: 'error', errorCode: 'spend_frozen' })
+      );
+      const settled = settle.mock.calls[0][1] as { reply: string };
+      expect(settled.reply).not.toContain('internal');
+      expect(mockCapCheck).not.toHaveBeenCalled();
+      expect(mockProcess).not.toHaveBeenCalled();
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+      settle.mockRestore();
+    }, 120_000);
+
+    it('leaves the creating user out of an org-billed key turn and carries the billing org', async () => {
+      mockFindActiveFreeze.mockClear();
+      await run({ apiKeyId: 'key-1', apiKeyBillingOwnerType: 'Organization', organizationId: 'org-1' });
+      expect(mockFindActiveFreeze).toHaveBeenCalledWith({
+        userId: 'user-1',
+        organizationId: 'org-1',
+        apiKeyId: 'key-1',
+      });
+    }, 120_000);
+
+    it('checks the user on a session turn', async () => {
+      mockFindActiveFreeze.mockClear();
+      await run();
+      expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: null });
+    }, 120_000);
+
+    it('propagates a freeze lookup failure so the queue retries', async () => {
+      mockFindActiveFreeze.mockRejectedValueOnce(new Error('mongo down'));
+      await expect(run()).rejects.toThrow('mongo down');
+    }, 120_000);
+  });
+
+  describe('first_value', () => {
+    const visitId = 'a'.repeat(32);
+    const run = async (extra: Record<string, unknown>) => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      await processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, ...extra } as never,
+        logger as never
+      );
+    };
+    const recordedVisits = () =>
+      mockRecordFirstChatValue.mock.calls
+        .map(call => (call as unknown[])[0] as { visitId?: string })
+        .map(o => o.visitId);
+
+    it('names the visit the queued turn carries', async () => {
+      mockRecordFirstChatValue.mockClear();
+      await run({ visitId });
+      expect(recordedVisits()).toEqual([visitId]);
+    }, 120_000);
+
+    it('names no visit for a turn queued without one', async () => {
+      mockRecordFirstChatValue.mockClear();
+      await run({});
+      expect(recordedVisits()).toEqual([undefined]);
+    }, 120_000);
+  });
+
+  it('still throws an unrelated error from the cap check', async () => {
+    mockCapCheck.mockRejectedValueOnce(new Error('boom'));
+    const { processQuest } = await import('./questProcessor');
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+
+    await expect(
+      processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      )
+    ).rejects.toThrow('boom');
+  }, 120_000);
+
+  describe('live activity end', () => {
+    const run = async () => {
+      const { processQuest } = await import('./questProcessor');
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+      return processQuest(
+        { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} } as never,
+        logger as never
+      );
+    };
+
+    it('ends once with no outcome when the turn completes', async () => {
+      mockLiveActivityEnd.mockClear();
+      await run();
+      expect(mockLiveActivityEnd.mock.calls).toEqual([[]]);
+    }, 120_000);
+
+    it('ends once as failed on the free-tier cap path', async () => {
+      const { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, TooManyRequestsError } = await import('@bike4mind/common');
+      const { questRepository } = await import('@bike4mind/database');
+      const settle = vi.spyOn(questRepository, 'settleIfUnfinished').mockResolvedValue(true);
+      mockCapCheck.mockRejectedValueOnce(
+        new TooManyRequestsError('limit', { errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE })
+      );
+      mockLiveActivityEnd.mockClear();
+      await run();
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+      settle.mockRestore();
+    }, 120_000);
+
+    it('ends once as failed when the cap check throws something else', async () => {
+      mockCapCheck.mockRejectedValueOnce(new Error('boom'));
+      mockLiveActivityEnd.mockClear();
+      await expect(run()).rejects.toThrow('boom');
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+    }, 120_000);
+
+    it('ends once as failed when process() throws', async () => {
+      mockProcess.mockRejectedValueOnce(new Error('model down'));
+      mockLiveActivityEnd.mockClear();
+      await expect(run()).rejects.toThrow('model down');
+      expect(mockLiveActivityEnd.mock.calls).toEqual([['failed']]);
+    }, 120_000);
+  });
+});
+
+describe('processQuest role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
+  let findRoles: {
+    mockRestore: () => void;
+    mockResolvedValue: (value: never) => unknown;
+    mockRejectedValue: (e: Error) => unknown;
+  };
+
+  beforeEach(async () => {
+    processOptions.mockClear();
+    mockProcess.mockClear();
+    const { adminRoleRepository } = await import('@bike4mind/database');
+    findRoles = vi
+      .spyOn(adminRoleRepository, 'findByIds')
+      .mockResolvedValue([{ permissions: ['settings:manage'] }] as never) as unknown as typeof findRoles;
+  });
+
+  afterEach(() => findRoles.mockRestore());
+
+  async function run(fields: Record<string, unknown>, adminRoleWithheld?: boolean) {
+    const { User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'user-1', id: 'user-1', ...fields } as never);
+    const { processQuest } = await import('./questProcessor');
+    await processQuest(
+      { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {}, adminRoleWithheld } as never,
+      logger as never
+    );
+    return processOptions.mock.calls.at(-1)?.[0].user as Parameters<typeof hasAdminPermission>[0];
+  }
+
+  it('hands the completion a user whose only grant comes from a role', async () => {
+    expect(hasAdminPermission(await run({ adminRoleIds: [ROLE_ID] }), 'settings:manage')).toBe(true);
+  }, 120_000);
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    expect(hasAdminPermission(await run({ adminRoleIds: [ROLE_ID] }), 'settings:manage')).toBe(true);
+    expect(hasAdminPermission(await run({ adminRoleIds: [] }), 'settings:manage')).toBe(false);
+  }, 120_000);
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    findRoles.mockResolvedValue([] as never);
+
+    const user = await run({ adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+
+    expect(findRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+  }, 120_000);
+
+  it('does not start the completion when the role lookup throws', async () => {
+    findRoles.mockRejectedValue(new Error('db down'));
+
+    await expect(run({ adminRoleIds: [ROLE_ID] })).rejects.toThrow('db down');
+
+    expect(processOptions).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  }, 120_000);
+
+  it('keeps the withheld admin role withheld for a role-only delegate', async () => {
+    const user = await run({ adminRoleIds: [ROLE_ID] }, true);
+
+    expect(findRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
   }, 120_000);
 });

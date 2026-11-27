@@ -38,7 +38,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: () => h.route
 vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => (_req: unknown, _res: unknown, next: Next) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: Next) => {
     h.rateLimitSpy();
     next();
@@ -50,7 +50,10 @@ vi.mock('@bike4mind/database', () => ({
   passkeyChallengeRepository: {},
   userRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ mfaService: {} }));
+// passkey/register-options' skip predicate asks whether the user already has a factor. Report none,
+// so the predicate falls through to the fresh-sign-in check (false here: the session has no
+// interactive origin) and the gate runs, like every other route in this table.
+vi.mock('@bike4mind/services', () => ({ mfaService: { userHasMFAConfigured: () => false } }));
 
 import regenerateBackupCodes from '@pages/api/auth/mfa/regenerate-backup-codes';
 import mfaSetup from '@pages/api/auth/mfa/setup';
@@ -73,12 +76,13 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// Third column: how many rate limiters the route mounts after the gate (email/change has a short and a daily one).
 describe.each([
-  ['POST /api/auth/mfa/regenerate-backup-codes', regenerateBackupCodes as unknown as RunRoute],
-  ['POST /api/auth/mfa/setup', mfaSetup as unknown as RunRoute],
-  ['POST /api/auth/mfa/passkey/register-options', passkeyRegisterOptions as unknown as RunRoute],
-  ['POST /api/email/change', emailChange as unknown as RunRoute],
-])('%s: step-up gate runs ahead of the rate limit', (_name, route) => {
+  ['POST /api/auth/mfa/regenerate-backup-codes', regenerateBackupCodes as unknown as RunRoute, 1],
+  ['POST /api/auth/mfa/setup', mfaSetup as unknown as RunRoute, 1],
+  ['POST /api/auth/mfa/passkey/register-options', passkeyRegisterOptions as unknown as RunRoute, 1],
+  ['POST /api/email/change', emailChange as unknown as RunRoute, 2],
+])('%s: step-up gate runs ahead of the rate limit', (_name, route, limiterCount) => {
   it('does not spend the rate limit on a request bounced for verification', async () => {
     h.findBySid.mockResolvedValue(sessionSteppedUpAt(null));
 
@@ -102,7 +106,7 @@ describe.each([
     const { error } = await route(requestFor({}), {});
 
     expect(error).toBeUndefined();
-    expect(h.rateLimitSpy).toHaveBeenCalledTimes(1);
+    expect(h.rateLimitSpy).toHaveBeenCalledTimes(limiterCount);
     expect(h.routeHandler).toHaveBeenCalledTimes(1);
   });
 });

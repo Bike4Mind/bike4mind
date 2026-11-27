@@ -23,17 +23,15 @@ import Editor from 'react-simple-code-editor';
 import { getEditorTokenSx, CODE_FONT_STACK } from '@client/app/components/Session/markdown/syntaxTheme';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
-import {
-  PlayArrow as RunIcon,
-  Stop as StopIcon,
-  Code as CodeIcon,
-  Save as SaveIcon,
-  Undo as UndoIcon,
-  Lock as LockIcon,
-  LockOpen as UnlockIcon,
-  Warning as WarningIcon,
-  Terminal as OutputIcon,
-} from '@mui/icons-material';
+import RunIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import CodeIcon from '@mui/icons-material/Code';
+import SaveIcon from '@mui/icons-material/Save';
+import UndoIcon from '@mui/icons-material/Undo';
+import LockIcon from '@mui/icons-material/Lock';
+import UnlockIcon from '@mui/icons-material/LockOpen';
+import WarningIcon from '@mui/icons-material/Warning';
+import OutputIcon from '@mui/icons-material/Terminal';
 import { ArtifactVersionDropdown } from '@client/app/components/artifacts';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
@@ -46,6 +44,15 @@ import {
 } from '@client/app/utils/artifactPersistence';
 import { setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
 import { usePyodide } from '@client/app/hooks/usePyodide';
+import {
+  describePythonNetworkAccess,
+  usePythonArtifactDataOrigins,
+} from '@client/app/hooks/usePythonArtifactDataOrigins';
+import { useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
+import { useArtifact } from '@client/app/hooks/data/artifacts';
+import { hasFunctionEntryPoint } from '@client/app/utils/pythonFunctionEntry';
+import FunctionIcon from '@mui/icons-material/Functions';
+import PythonFunctionPanel, { type PythonFunctionSave } from './PythonFunctionPanel';
 
 interface PythonArtifactViewerProps {
   artifact: PythonArtifact;
@@ -71,9 +78,11 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
     interrupt,
     detectPackages,
     isReady,
-  } = usePyodide();
+  } = usePyodide(artifact.id);
+  const dataOrigins = usePythonArtifactDataOrigins();
+  const callableFunctionsEnabled = useCallableFunctionsEnabled();
 
-  // Tab state: 0 = Output, 1 = Code
+  // Tab state: 0 = Output, 1 = Code, 2 = Function
   const [activeTab, setActiveTab] = useState<number>(0);
 
   // Execution state
@@ -95,6 +104,8 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
   // Version state
   const [currentVersion, setCurrentVersion] = useState<number>(artifact.version || 1);
   const [isViewingDifferentVersion, setIsViewingDifferentVersion] = useState(false);
+  // The stored head read is cached for a while, so a version saved here can be newer than it.
+  const [savedVersion, setSavedVersion] = useState(0);
 
   // Syntax highlighting for Python
   const highlightCode = useCallback((code: string) => {
@@ -139,6 +150,30 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
     return detectPackages(editableCode);
   }, [editableCode, detectPackages]);
 
+  const showFunctionTab = callableFunctionsEnabled && hasFunctionEntryPoint(editableCode);
+  // Adjusted during render, so the viewer never paints an empty tab panel.
+  if (!showFunctionTab && activeTab === 2) setActiveTab(0);
+
+  // A chat artifact carries no owner, so ownership comes from the server's read; its id is also the one a save uses.
+  const { data: stored } = useArtifact(showFunctionTab && onSave && isPersisted ? artifact.id : null);
+  const owned = stored?.access === 'owner' ? stored.artifact : null;
+  const functionSave = ((): PythonFunctionSave | null => {
+    if (!onSave) return null;
+    if (!isPersisted) {
+      return { artifactId: artifact.id, version: currentVersion, blocked: 'Save the artifact to make it a tool.' };
+    }
+    if (!owned) return null;
+    // A chat artifact reopens at the version it was created with, so compare with the stored head. A viewer ahead
+    // of it has just saved a new version that the head read has not caught up with.
+    const behindHead = currentVersion < Math.max(owned.version, savedVersion);
+    const blocked = hasChanges
+      ? 'Save your changes to make this a tool.'
+      : behindHead
+        ? 'Switch to the latest version to make this a tool.'
+        : null;
+    return { artifactId: owned.id, version: currentVersion, blocked };
+  })();
+
   const handleRun = useCallback(async () => {
     setExecutionError(null);
     setExecutionOutput('');
@@ -175,6 +210,7 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
       const newVersion = result?.artifact?.version ?? result?.version;
       if (newVersion && typeof newVersion === 'number' && newVersion !== currentVersion) {
         setCurrentVersion(newVersion);
+        setSavedVersion(previous => Math.max(previous, newVersion));
         saveArtifactVersionToLocalStorage(artifact.id, newVersion, editableCode);
       }
 
@@ -413,18 +449,32 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
         >
           {/* Tab header with controls */}
           <Box
+            data-testid="python-artifact-viewer-header"
             sx={{
               borderBottom: '1px solid',
               borderColor: 'divider',
               px: 2,
               py: 1,
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
+              gap: 1,
               flexShrink: 0,
+              containerType: 'inline-size',
+              // Same narrow-pane handling as ReactArtifactViewer's header: globals.css sets `min-width: 0`
+              // on everything, so without this the tabs and buttons squeeze into each other instead of wrapping.
+              '& > .python-artifact-viewer-tab-list, & .python-artifact-viewer-toolbar > *': {
+                flexShrink: 0,
+                maxWidth: '100%',
+              },
+              '@container (max-width: 720px)': {
+                '& .artifact-version-dropdown-history-text, & .artifact-version-dropdown-label': { display: 'none' },
+                '& .artifact-version-dropdown-button': { minWidth: 'auto' },
+              },
             }}
           >
-            <TabList sx={{ minHeight: 'auto' }}>
+            <TabList className="python-artifact-viewer-tab-list" sx={{ minHeight: 'auto', flexWrap: 'wrap' }}>
               <Tab value={0} sx={{ py: 0.5, minHeight: 'auto' }}>
                 <Stack direction="row" spacing={0.5} alignItems="center">
                   <OutputIcon sx={{ fontSize: 18 }} />
@@ -437,9 +487,26 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
                   <Typography level="body-sm">Code</Typography>
                 </Stack>
               </Tab>
+              {showFunctionTab && (
+                <Tab value={2} sx={{ py: 0.5, minHeight: 'auto' }} data-testid="python-artifact-function-tab">
+                  <Stack direction="row" spacing={0.5} alignItems="center">
+                    <FunctionIcon sx={{ fontSize: 18 }} />
+                    <Typography level="body-sm">Function</Typography>
+                  </Stack>
+                </Tab>
+              )}
             </TabList>
 
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack
+              className="python-artifact-viewer-toolbar"
+              direction="row"
+              spacing={1}
+              useFlexGap
+              flexWrap="wrap"
+              alignItems="center"
+              justifyContent="flex-end"
+              sx={{ ml: 'auto' }}
+            >
               {/* Run/Stop button */}
               {isExecuting ? (
                 <Button size="sm" variant="solid" color="danger" startDecorator={<StopIcon />} onClick={interrupt}>
@@ -609,6 +676,18 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
               )}
             </Box>
           </TabPanel>
+
+          {showFunctionTab && (
+            <TabPanel value={2} sx={{ p: 0, position: 'relative' }}>
+              <PythonFunctionPanel
+                sandboxOwner={artifact.id}
+                code={editableCode}
+                packages={detectedPackages}
+                disabled={isPyodideLoading || isExecuting || !isReady()}
+                save={functionSave}
+              />
+            </TabPanel>
+          )}
         </Tabs>
       </Box>
 
@@ -634,7 +713,9 @@ const PythonArtifactViewer: React.FC<PythonArtifactViewerProps> = ({ artifact, o
               <Stack spacing={0.5} sx={{ mt: 0.5 }}>
                 <Typography level="body-sm">Python code runs entirely in your browser (no server execution)</Typography>
                 <Typography level="body-sm">Cannot access files outside the browser sandbox</Typography>
-                <Typography level="body-sm">Network access is restricted to CORS-allowed endpoints</Typography>
+                <Typography level="body-sm" data-testid="python-artifact-network-note">
+                  {describePythonNetworkAccess(dataOrigins)}
+                </Typography>
               </Stack>
             </Alert>
 

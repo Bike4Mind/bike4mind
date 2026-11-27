@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Bike4Mind</string>
+
+    <!-- Shared -->
+    <string name="action_back">Back</string>
+    <string name="action_refresh">Refresh</string>
+    <string name="action_try_again">Try again</string>
+
+    <!-- First-launch welcome (the page copy is in kit Onboarding.pages, shared with iOS) -->
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_page_indicator">Page %1$d of %2$d</string>
+
+    <!-- Sign-in -->
+    <string name="signin_title">@string/app_name</string>
+    <string name="signin_action">Sign in</string>
+    <string name="signin_failed">Sign-in failed</string>
+    <string name="signin_server_label">Server (debug builds only)</string>
+    <string name="signin_server_apply">Use this server</string>
+
+    <!-- Upgrade required -->
+    <string name="upgrade_title">Update required</string>
+    <string name="upgrade_body_version">This version of Bike4Mind is no longer supported. Version %1$s or later is required.</string>
+    <string name="upgrade_body">This version of Bike4Mind is no longer supported. Please install the latest version.</string>
+
+    <!-- Chats list -->
+    <string name="sessions_title">Chats</string>
+    <string name="sessions_brief">Brief</string>
+    <string name="sessions_settings">Settings</string>
+    <string name="sessions_studio">Studio</string>
+    <string name="sessions_new_chat">New chat</string>
+    <string name="sessions_default_model">Default model: %1$s</string>
+    <string name="sessions_load_failed">Could not load chats</string>
+
+    <!-- Chat -->
+    <!-- Launcher shortcuts (xml/shortcuts.xml): the Pixel launcher menu shows the short label. -->
+    <string name="shortcut_ask_short">Ask</string>
+    <string name="shortcut_ask_long">Ask Bike4Mind</string>
+    <string name="shortcut_note_short">Capture note</string>
+    <string name="shortcut_note_long">Capture note</string>
+    <string name="shortcut_quest_short">Start quest</string>
+    <string name="shortcut_quest_long">Start quest</string>
+    <string name="chat_title">Chat</string>
+    <string name="chat_title_new">New chat</string>
+    <string name="chat_message_placeholder">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_refused">The message was refused (%1$s)</string>
+    <string name="chat_refused_unknown">unknown</string>
+    <string name="chat_send_failed">Not sent. Check your connection and try again.</string>
+    <string name="chat_send_failed_reason">Not sent. %1$s</string>
+    <string name="chat_reply_failed">The reply failed.</string>
+    <string name="chat_reply_failed_code">The reply failed (%1$s).</string>
+    <string name="chat_reply_pending" translatable="false">...</string>
+    <string name="chat_agent_toggle">Agent</string>
+    <string name="chat_agent_placeholder">Describe a task for the agent</string>
+    <string name="chat_agent_no_attachments">An agent run cannot take attachments. Remove them, or turn off Agent.</string>
+
+    <!-- Chat approval card -->
+    <string name="approval_approve">Approve</string>
+    <string name="approval_deny">Deny</string>
+    <string name="approval_param">%1$s: %2$s</string>
+    <string name="approval_open">Approve or deny this request</string>
+    <string name="approval_lapsed">This request expired</string>
+    <string name="approval_approving">Approving</string>
+    <string name="approval_denying">Denying</string>
+    <string name="approval_approved">Approved</string>
+    <string name="approval_approved_tool_failed">Approved, but the tool reported a problem</string>
+    <string name="approval_denied">Denied</string>
+    <string name="approval_failed_replaced">A newer approval replaced this one.</string>
+    <string name="approval_failed_expired">This request expired before it was answered.</string>
+    <string name="approval_failed_already_answered">This request was already answered.</string>
+    <string name="approval_failed_not_found">This request is no longer available.</string>
+    <string name="approval_failed_unavailable">This request can\'t be answered from here. Open Bike4Mind to review it.</string>
+    <string name="approval_failed_offline">You appear to be offline. Check your connection and try again.</string>
+    <string name="approval_failed_rate_limited">Too many requests. Wait a moment and try again.</string>
+    <string name="approval_failed_server">Bike4Mind had a problem. Try again in a moment.</string>
+    <string name="approval_failed_signed_out">Your session ended. Sign in to Bike4Mind and try again.</string>
+    <string name="approval_failed_upgrade">Update Bike4Mind to answer approvals.</string>
+
+    <!-- Brief -->
+    <!-- Studio gallery (apps/ios Features/Media) -->
+    <string name="media_title">Studio</string>
+    <string name="media_filter_all">All</string>
+    <string name="media_filter_images">Images</string>
+    <string name="media_filter_video">Video</string>
+    <string name="media_filter_audio">Audio</string>
+    <string name="media_kind_image">Image</string>
+    <string name="media_kind_video">Video</string>
+    <string name="media_kind_audio">Audio</string>
+    <string name="media_tile_description">%1$s, %2$s</string>
+    <string name="media_open">Open full screen</string>
+    <string name="media_loading">Loading media</string>
+    <string name="media_load_failed">Couldn\'t load your media</string>
+    <string name="media_empty_title">Nothing created yet</string>
+    <string name="media_empty_all">Images, video and music you generate will appear here.</string>
+    <string name="media_empty_images">No images generated yet.</string>
+    <string name="media_empty_video">No video generated yet.</string>
+    <string name="media_empty_audio">No audio generated yet.</string>
+    <string name="media_open_failed">Couldn\'t open this file</string>
+    <string name="media_processing_title">Not available</string>
+    <string name="media_processing_body">This file is still being processed.</string>
+    <string name="media_error_offline">Couldn\'t reach Bike4Mind. Check your connection and try again.</string>
+    <string name="media_error_not_found">This file is no longer available.</string>
+    <string name="media_error_rate_limited">Too many requests. Try again in a moment.</string>
+    <string name="media_error_unreadable">This needs a newer version of Bike4Mind.</string>
+    <string name="media_error_unplayable">The link to this file expired.</string>
+    <string name="media_error_server">The server could not load your media (HTTP %1$d).</string>
+
+    <string name="brief_title">Brief</string>
+    <string name="brief_load_failed">Couldn\'t load the brief</string>
+    <string name="brief_empty_title">No brief yet</string>
+    <string name="brief_empty_body">Your assistant can summarize what happened, what it handled and what needs you.</string>
+    <string name="brief_compose">Compose a brief</string>
+    <string name="brief_timed_out_title">Still working on it</string>
+    <string name="brief_timed_out_body">This is taking longer than usual. Refresh to check again.</string>
+    <string name="brief_composing">Putting your brief together</string>
+    <string name="brief_failed_title">The brief didn\'t finish</string>
+    <string name="brief_failed_body">Something went wrong while putting it together.</string>
+    <string name="brief_unsupported_title">Update to read this brief</string>
+    <string name="brief_unsupported_body">This brief needs a newer version of Bike4Mind.</string>
+    <string name="brief_quiet_title">All quiet</string>
+    <string name="brief_quiet_body">Nothing needs you right now.</string>
+    <string name="brief_since">Since %1$s</string>
+    <string name="brief_decisions">What needs you</string>
+    <string name="brief_handled">Handled</string>
+    <string name="brief_happened">What happened</string>
+    <string name="brief_open_approval">Open approval</string>
+    <string name="brief_followup_dictate">Dictate follow-up</string>
+    <string name="brief_followup_ok">OK</string>
+    <string name="brief_followup_no_mail_app">No mail app is set up on this device to send the draft.</string>
+    <string name="brief_followup_action_item">Action item</string>
+    <string name="brief_followup_email">Follow-up email</string>
+    <string name="brief_followup_reminder_at">Reminder, %1$s</string>
+    <string name="brief_followup_reminder_unset">Reminder, no time set yet</string>
+    <string name="brief_followup_to">To: %1$s</string>
+    <string name="brief_followup_subject">Subject: %1$s</string>
+    <string name="brief_followup_approve">Approve</string>
+    <string name="brief_followup_edit">Edit</string>
+    <string name="brief_followup_dismiss">Dismiss</string>
+    <string name="brief_followup_approved">Approved</string>
+    <string name="brief_followup_open_mail">Open in mail app</string>
+    <string name="brief_followup_dismissed">Dismissed</string>
+    <string name="brief_followup_edit_title">Edit follow-up</string>
+    <string name="brief_followup_text">Text</string>
+    <string name="brief_followup_email_to">To</string>
+    <string name="brief_followup_email_subject">Subject</string>
+    <string name="brief_followup_email_body">Message</string>
+    <string name="brief_followup_pick_time">Time</string>
+    <string name="brief_followup_save">Save</string>
+    <string name="brief_followup_cancel">Cancel</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_load_failed">Couldn\'t load your account.</string>
+    <string name="settings_notifications">Notifications</string>
+    <string name="settings_notifications_intro">Choose what Bike4Mind tells you about. This applies to every device you\'re signed in on.</string>
+    <string name="settings_notifications_off">Notifications are off for Bike4Mind on this device.</string>
+    <string name="settings_notifications_open_system">Open notification settings</string>
+    <string name="settings_busy_block_title">Brief after busy blocks</string>
+    <string name="settings_busy_block_detail">Hold run updates while a calendar event marks you busy, then get one brief of what happened when it ends. Only event start and end times leave this device.</string>
+    <string name="settings_busy_block_denied">Bike4Mind needs calendar access for this. Allow calendar access in system settings, then turn it on again.</string>
+    <string name="settings_busy_block_open_settings">Open settings</string>
+    <string name="settings_busy_block_load_failed">Couldn\'t load your busy-block setting. Try again later.</string>
+    <string name="settings_busy_block_save_failed">Couldn\'t save your busy-block setting. Try again.</string>
+    <string name="settings_save_failed">Couldn\'t save that change. Try again.</string>
+    <string name="settings_account">Account</string>
+    <string name="settings_credits">Credits</string>
+    <string name="settings_server">Server: %1$s</string>
+    <string name="settings_sign_out">Sign out</string>
+    <string name="settings_delete_account">Delete account</string>
+    <string name="settings_delete_account_detail">Permanently deletes your account after a %1$d-day grace period.</string>
+
+    <string name="category_agent_completed_title">Agent finished</string>
+    <string name="category_agent_completed_detail">Hear when an agent wraps up the job you gave it.</string>
+    <string name="category_agent_failed_title">Agent hit a problem</string>
+    <string name="category_agent_failed_detail">Know right away when a run stops so you can step in.</string>
+    <string name="category_approval_needed_title">Needs your approval</string>
+    <string name="category_approval_needed_detail">An agent is waiting on your go-ahead before it continues.</string>
+    <string name="category_chat_completed_title">Replies ready</string>
+    <string name="category_chat_completed_detail">A long answer finished while you were away.</string>
+    <string name="category_generation_ready_title">Creations ready</string>
+    <string name="category_generation_ready_detail">Your image, video or music is done and waiting.</string>
+    <string name="category_agent_message_title">Agent messages</string>
+    <string name="category_agent_message_detail">Your agent has something to tell you.</string>
+    <string name="category_brief_ready_title">Briefs ready</string>
+    <string name="category_brief_ready_detail">Your assistant put together a summary of what needs you.</string>
+
+    <!-- Account errors -->
+    <string name="account_error_offline">You appear to be offline. Check your connection and try again.</string>
+    <string name="account_error_signed_out">Your session ended. Sign in again.</string>
+    <string name="account_error_rate_limited">Too many attempts. Try again in a few minutes.</string>
+    <string name="account_error_server">Something went wrong. Try again.</string>
+
+    <!-- Delete account -->
+    <string name="delete_title">Delete account</string>
+    <string name="delete_what_happens">What happens</string>
+    <string name="delete_body">Deleting your account removes your profile, conversations, notebooks, files and any remaining credits, and cancels active subscriptions.</string>
+    <string name="delete_grace">Your account is held for %1$d days first. Sign in again within that time to restore it; after that it is permanently deleted and cannot be recovered.</string>
+    <string name="delete_confirm_label">Type %1$s to confirm</string>
+    <string name="delete_action">Delete my account</string>
+    <string name="delete_transfer_title">Transfer ownership first</string>
+    <string name="delete_transfer_body">You own these organizations. Transfer ownership of each one to another member, then come back and delete your account.</string>
+    <string name="delete_untitled_organization">Untitled organization</string>
+    <string name="delete_not_permitted">Account deletion isn\'t available for this session.</string>
+    <string name="delete_step_up_unavailable">This sign-in can\'t confirm your identity. Sign out and sign in again, then retry. You can also delete your account from Bike4Mind on the web.</string>
+    <string name="delete_already_scheduled">This account is already scheduled for deletion.</string>
+    <string name="delete_upgrade">Update Bike4Mind to delete your account from the app.</string>
+    <string name="delete_server">Something went wrong (%1$d). Try again.</string>
+
+    <!-- Step-up -->
+    <string name="stepup_title">Confirm it\'s you</string>
+    <string name="stepup_body">Confirm it\'s you to continue. Your account is not deleted until you do.</string>
+    <string name="stepup_method_password">Password</string>
+    <string name="stepup_method_totp">Authenticator</string>
+    <string name="stepup_method_email">Email</string>
+    <string name="stepup_password">Password</string>
+    <string name="stepup_totp_code">Authenticator or backup code</string>
+    <string name="stepup_email_code">Code from your email</string>
+    <string name="stepup_send_code">Send code</string>
+    <string name="stepup_confirm">Confirm</string>
+    <string name="stepup_cancel">Cancel</string>
+    <string name="stepup_no_method">This account can\'t be confirmed in the app. Delete your account from Bike4Mind on the web.</string>
+    <string name="stepup_rejected">That didn\'t work.</string>
+    <plurals name="stepup_attempts_remaining">
+        <item quantity="one">%1$s %2$d attempt remaining.</item>
+        <item quantity="other">%1$s %2$d attempts remaining.</item>
+    </plurals>
+    <string name="stepup_session_ended">Your session has ended. Sign in again.</string>
+
+    <!-- Restore -->
+    <string name="restore_title">Your account is scheduled for deletion</string>
+    <string name="restore_scheduled_on">It will be permanently deleted on %1$s unless you restore it.</string>
+    <string name="restore_scheduled">It will be permanently deleted at the end of the %1$d-day grace period unless you restore it.</string>
+    <string name="restore_body">Restoring your account brings back your conversations and files. It does not reinstate subscriptions that were canceled; you will need to subscribe again.</string>
+    <string name="restore_action">Restore my account</string>
+
+    <!-- Capture: composer attachments and dictation -->
+    <string name="capture_attach">Attach</string>
+    <string name="capture_take_photo">Take photo</string>
+    <string name="capture_scan_document">Scan document</string>
+    <string name="capture_choose_file">Choose file</string>
+    <string name="capture_dictate">Dictate</string>
+    <string name="capture_photo_name">Photo %1$s.jpg</string>
+    <string name="capture_scan_name">Scan %1$s.pdf</string>
+    <string name="capture_attached_message">Attached %1$s</string>
+    <string name="capture_uploading">Uploading</string>
+    <string name="capture_ready">Ready</string>
+    <string name="capture_remove">Remove</string>
+    <string name="capture_retry">Retry</string>
+    <string name="capture_no_camera">No camera app is available.</string>
+    <string name="capture_scanner_unavailable">Document scanning isn\'t available on this device.</string>
+    <string name="capture_handoff_title">Use this scan</string>
+    <string name="capture_handoff_message">Hand a bill or letter to the assistant to track what\'s owed and when.</string>
+    <string name="capture_handoff">Hand to assistant</string>
+    <string name="capture_handoff_attach">Attach to message</string>
+    <string name="obligation_title">Bill details</string>
+    <string name="obligation_uploading">Uploading the scan&#8230;</string>
+    <string name="obligation_reading">Reading the bill&#8230;</string>
+    <string name="obligation_amount">Amount (%1$s)</string>
+    <string name="obligation_amount_negative">The amount can\'t be negative.</string>
+    <string name="obligation_amount_invalid">Enter a number, or leave it empty.</string>
+    <string name="obligation_payee">Payee</string>
+    <string name="obligation_due_date">Due date (YYYY-MM-DD)</string>
+    <string name="obligation_destination">File in</string>
+    <string name="obligation_no_destination">Don\'t file</string>
+    <string name="obligation_confirm">Confirm</string>
+    <string name="obligation_close">Close</string>
+    <string name="obligation_saved">Saved. Your brief will remind you before it\'s due.</string>
+    <string name="obligation_problem_not_found">The scan couldn\'t be found. Please scan it again.</string>
+    <string name="obligation_problem_checking">The scan is still being checked. Please try again in a moment.</string>
+    <string name="obligation_problem_dismissed">This bill was dismissed and can\'t be changed.</string>
+    <string name="obligation_problem_offline">You\'re offline. Please try again when you\'re connected.</string>
+    <string name="obligation_problem_generic">Something went wrong. Please try again.</string>
+    <string name="capture_read_failed">That file couldn\'t be read.</string>
+    <string name="capture_failure_offline">No connection.</string>
+    <string name="capture_failure_blocked">The file was blocked by the server\'s scan.</string>
+    <string name="capture_failure_still_scanning">The file is still being scanned.</string>
+    <string name="capture_failure_upgrade">Update Bike4Mind to keep sending.</string>
+    <string name="capture_failure_signed_out">Sign in to Bike4Mind to finish this.</string>
+    <string name="capture_failure_payload_missing">The file is no longer on this device.</string>
+    <string name="capture_failure_destination_gone">That chat no longer exists, or you can\'t post to it.</string>
+    <string name="capture_failure_delivery_unknown">This may already be in the chat. Retry to send it again.</string>
+    <string name="capture_failure_rejected">The server couldn\'t accept this.</string>
+    <string name="capture_failure_generic">Something went wrong.</string>
+    <string name="dictation_title">Dictate</string>
+    <string name="dictation_listening">Listening. Tap Done when you finish speaking.</string>
+    <string name="dictation_transcribing">Transcribing\u2026</string>
+    <string name="dictation_done">Done</string>
+    <string name="dictation_cancel">Cancel</string>
+    <string name="dictation_ok">OK</string>
+    <string name="dictation_failed_microphone">The microphone couldn\'t be opened.</string>
+    <string name="dictation_failed_permission">Bike4Mind needs microphone access to dictate. Allow it in Settings.</string>
+    <string name="dictation_failed_nothing_heard">Nothing was heard. Try again a little closer to the microphone.</string>
+    <string name="dictation_failed_unavailable">Dictation isn\'t available on this server.</string>
+    <string name="dictation_failed_credits">You\'re out of credits for dictation.</string>
+    <string name="dictation_failed_offline">No connection. Try again when you\'re online.</string>
+    <string name="dictation_failed_other">Dictation failed. Try a shorter note.</string>
+
+    <!-- Share to Bike4Mind -->
+    <string name="share_target_label">Bike4Mind</string>
+    <string name="share_title">Share to Bike4Mind</string>
+    <string name="share_cancel">Cancel</string>
+    <string name="share_send">Send</string>
+    <string name="share_note_label">Add a message</string>
+    <string name="share_destination">Send to</string>
+    <string name="share_new_chat">New chat</string>
+    <string name="share_chats_failed">Your chats couldn\'t be loaded. You can still start a new chat.</string>
+    <string name="share_nothing">There\'s nothing here Bike4Mind can use.</string>
+    <string name="share_signed_out">Sign in to Bike4Mind first, then share again.</string>
+    <string name="share_open_app">Open Bike4Mind</string>
+    <string name="share_sending">Sending to Bike4Mind</string>
+    <string name="share_read_failed">The shared content couldn\'t be read.</string>
+    <plurals name="share_files">
+        <item quantity="one">%d file</item>
+        <item quantity="other">%d files</item>
+    </plurals>
+
+    <!-- Pending shares on the chats list -->
+    <plurals name="shares_sending">
+        <item quantity="one">Sending %d share</item>
+        <item quantity="other">Sending %d shares</item>
+    </plurals>
+    <string name="share_failed_to">Couldn\'t send to %1$s: %2$s</string>
+    <string name="share_discard">Discard</string>
+    <string name="share_retry">Retry</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_default">@string/app_name</string>
+    <string name="notification_channel_agent_runs">Running agents</string>
+    <string name="agent_run_working">Working</string>
+    <string name="agent_run_iteration">Step %1$d</string>
+    <string name="agent_run_steps_done">%1$d of %2$d steps done</string>
+    <string name="agent_run_chip">Agent</string>
+    <string name="agent_run_needs_you">Needs you</string>
+</resources>

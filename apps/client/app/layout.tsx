@@ -1,18 +1,19 @@
 import '@/app/globals.css';
 import Script from 'next/script';
 import { ReactNode } from 'react';
-import { Source_Serif_4, Libre_Franklin, JetBrains_Mono } from 'next/font/google';
+import { Source_Serif_4, Libre_Franklin, JetBrains_Mono, Inter } from 'next/font/google';
 import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
-import { ClientProviders } from './providers';
 import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
-import { gaBootstrapScript, getGaMeasurementId } from './utils/gaConsentBootstrap';
+import { gaBootstrapScript, getGaMeasurementIds } from './utils/gaConsentBootstrap';
+import { authFragmentCaptureScript } from './utils/authParams';
 import { Metadata } from 'next';
 
 // Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
 // deliberate no-op. See infra/web.ts for why a wrong value is worse than unset.
 const GA_COOKIE_DOMAIN = process.env.NEXT_PUBLIC_GA_COOKIE_DOMAIN;
-const GA_MEASUREMENT_ID = getGaMeasurementId();
+// The app's own property first: gtag.js loads under it, and configures the others itself.
+const GA_MEASUREMENT_IDS = getGaMeasurementIds();
 
 // The app's UI face, applied to <html>. A Franklin Gothic revival, and a text
 // face first: it sets reply prose as well as interface chrome, so it has to hold
@@ -62,6 +63,15 @@ const jetbrainsMono = JetBrains_Mono({
   variable: '--font-reading-mono',
 });
 
+// The admin's face (components/admin/DESIGN_GUIDE.md, "Type"), read by the admin skin through
+// the variable. Not preloaded: only admins ever see it.
+const adminSans = Inter({
+  subsets: ['latin'],
+  display: 'swap',
+  preload: false,
+  variable: '--font-admin-sans',
+});
+
 export const viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -79,26 +89,27 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${uiSans.className} ${sourceSerif.variable} ${uiSans.variable} ${jetbrainsMono.variable}`}
+      className={`${uiSans.className} ${sourceSerif.variable} ${uiSans.variable} ${jetbrainsMono.variable} ${adminSans.variable}`}
       suppressHydrationWarning
     >
       <body>
+        {/* Before the GA tag below: its page_view records the full URL. */}
+        <script dangerouslySetInnerHTML={{ __html: authFragmentCaptureScript() }} />
         <ColorSchemeScript />
-        {GA_MEASUREMENT_ID && (
+        {GA_MEASUREMENT_IDS.length > 0 && (
           <>
             <Script
-              src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}`}
+              src={`https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_IDS[0]}`}
               strategy="afterInteractive"
             />
             <Script id="google-analytics" strategy="afterInteractive">
-              {gaBootstrapScript(GA_MEASUREMENT_ID, GA_COOKIE_DOMAIN)}
+              {gaBootstrapScript(GA_MEASUREMENT_IDS, GA_COOKIE_DOMAIN)}
             </Script>
           </>
         )}
         <AppRouterCacheProvider options={{ key: 'joy' }}>
-          <SerwistProvider swUrl="/serwist/sw.js">
-            <ClientProviders>{children}</ClientProviders>
-          </SerwistProvider>
+          {/* The client providers mount with the SPA in [[...slug]]/SpaApp, so they stay out of SSR. */}
+          <SerwistProvider swUrl="/serwist/sw.js">{children}</SerwistProvider>
         </AppRouterCacheProvider>
       </body>
     </html>

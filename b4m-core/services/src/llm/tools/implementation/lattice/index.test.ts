@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Types } from 'mongoose';
 import { parseArtifacts } from '@bike4mind/utils/artifactParser';
-import { latticeCreateModelTool, latticeAddEntityTool, latticeSetValueTool, latticeCreateRuleTool } from './index';
+import {
+  latticeCreateModelTool,
+  latticeAddEntityTool,
+  latticeSetValueTool,
+  latticeCreateRuleTool,
+  latticeQueryTool,
+  validateLatticeResult,
+} from './index';
 import { canReadModel } from '../../../../latticeService/latticeModelService';
 
 // 24-hex id so the persistence path's `isObjectIdShaped` gate is satisfied.
@@ -408,5 +415,21 @@ describe('lattice_create_model - artifact title attribute injection', () => {
     const { artifacts } = parseArtifacts(output);
     expect(artifacts[0].title).toBe('Q1 Budget');
     expect(artifacts[0].type).toBe('lattice');
+  });
+});
+
+describe('validateLatticeResult', () => {
+  it('has no opinion on a successful envelope', async () => {
+    const tool = latticeQueryTool.implementation({} as never, {});
+    const result = await tool.toolFn({ modelId: 'm1', query: 'Revenue in Q1' });
+
+    expect(tool.validateResult).toBe(validateLatticeResult);
+    expect(validateLatticeResult(result)).toBeUndefined();
+  });
+
+  it('scores a success: false envelope as a failure', () => {
+    const result = JSON.stringify({ success: false, action: 'ADD_ENTITY', error: 'Model m1 not found' });
+
+    expect(validateLatticeResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
   });
 });

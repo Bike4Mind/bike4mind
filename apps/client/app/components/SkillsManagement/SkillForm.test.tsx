@@ -4,6 +4,7 @@ import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toSkillMd } from '@bike4mind/common/utils/skillMd';
 import { getThemeConfig } from '@client/app/utils/themes';
+import JSZip from 'jszip';
 import { SkillForm } from './SkillForm';
 
 vi.mock('@client/app/hooks/data/skills', () => ({}));
@@ -23,6 +24,12 @@ const upload = (text: string) =>
   fireEvent.change(screen.getByTestId('skill-form-import-file'), {
     target: { files: [new File([text], 'SKILL.md', { type: 'text/markdown' })] },
   });
+
+const inFolder = (relativePath: string, content: string | Uint8Array) => {
+  const file = new File([content], relativePath.split('/').pop()!);
+  Object.defineProperty(file, 'webkitRelativePath', { value: relativePath });
+  return file;
+};
 
 const paste = (text: string) => {
   fireEvent.click(screen.getByTestId('skill-form-import-paste-toggle'));
@@ -47,12 +54,72 @@ const deferredFile = () => {
 };
 
 describe('SkillForm SKILL.md import', () => {
-  it('always explains that supporting files are not imported', () => {
+  it('explains which supporting files a folder import brings along', () => {
     renderForm();
-    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('Only SKILL.md is imported');
-    paste('---\nname: review-pr\ndescription: Review a PR\n---\nRun scripts/review.py.');
-    expect(screen.queryByTestId('skill-form-import-dropped')).not.toBeInTheDocument();
-    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent("aren't imported");
+    expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('scripts/ and references/');
+  });
+
+  it('imports a skill folder with its scripts and references and submits them', async () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [
+          inFolder('review-pr/SKILL.md', '---\nname: review-pr\ndescription: Review a PR\n---\nRun the script.'),
+          inFolder('review-pr/scripts/review.py', 'print("ok")'),
+          inFolder('review-pr/references/checklist.md', '- tests'),
+          inFolder('review-pr/README.md', 'readme'),
+          inFolder('review-pr/.DS_Store', 'junk'),
+        ],
+      },
+    });
+    await waitFor(() => expect(value('skill-name-input')).toBe('review-pr'));
+    expect(screen.getByTestId('skill-form-files')).toHaveTextContent('references/checklist.md');
+    expect(screen.getByTestId('skill-form-files-skipped')).toHaveTextContent('README.md');
+    expect(screen.getByTestId('skill-form-files-skipped')).not.toHaveTextContent('DS_Store');
+
+    fireEvent.submit(screen.getByTestId('skill-form'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [
+          { path: 'references/checklist.md', content: '- tests' },
+          { path: 'scripts/review.py', content: 'print("ok")' },
+        ],
+      })
+    );
+
+    fireEvent.click(screen.getByTestId('skill-form-files-remove'));
+    fireEvent.submit(screen.getByTestId('skill-form'));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ files: [] }));
+  });
+
+  it('refuses a folder with a binary script and leaves the form alone', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [
+          inFolder('s/SKILL.md', '---\nname: s\ndescription: d\n---\nbody'),
+          inFolder('s/scripts/tool.bin', new Uint8Array([0xff, 0xfe, 0x00])),
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent('scripts/tool.bin: only text files')
+    );
+    expect(value('skill-name-input')).toBe('');
+  });
+
+  it('keeps no supporting files from a folder whose SKILL.md is malformed', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: { files: [inFolder('s/SKILL.md', '---\nname: [\n---\nbody'), inFolder('s/scripts/a.py', 'x')] },
+    });
+    await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toBeInTheDocument());
+    expect(screen.queryByTestId('skill-form-files')).not.toBeInTheDocument();
   });
 
   it.each(['resolve', 'reject'] as const)(
@@ -102,8 +169,103 @@ describe('SkillForm SKILL.md import', () => {
     expect(value('skill-argument-hint-input')).toBe('[pr]');
     expect(value('skill-body-input')).toBe('Review $ARGUMENTS.');
     expect((screen.getByTestId('skill-disable-model-invocation') as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByTestId('skill-form-import-dropped')).toHaveTextContent('allowed-tools, hooks');
+    expect(screen.getByTestId('skill-form-import-dropped')).toHaveTextContent('hooks');
+    expect(screen.getByTestId('skill-form-import-dropped')).not.toHaveTextContent('allowed-tools');
+    expect(screen.getByTestId('skill-form-claude-code-tools')).toHaveTextContent('Claude Code tools: Bash.');
     expect(screen.queryByTestId('skill-form-import-from-b4m')).not.toBeInTheDocument();
+  });
+
+  it('submits allowed-tools as claudeCodeAllowedTools, leaving the B4M allowedTools alone', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    paste('---\nname: commit\ndescription: Commit\nallowed-tools: Bash(git:*), Read\n---\nCommit it.');
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] }));
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('allowedTools');
+  });
+
+  it('submits an imported model as claudeCodeModel and clears it on remove', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+      </CssVarsProvider>
+    );
+    paste('---\nname: commit\ndescription: Commit\nmodel: haiku\n---\nCommit it.');
+    expect(screen.getByTestId('skill-form-claude-code-model')).toHaveTextContent('haiku');
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeModel: 'haiku' }));
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-model-remove'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ claudeCodeModel: '' }));
+  });
+
+  it('removes imported Claude Code tools, submitting an empty list', () => {
+    const onSubmit = vi.fn();
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm
+          submitLabel="Save"
+          onSubmit={onSubmit}
+          onCancel={vi.fn()}
+          initialValue={{ name: 'commit', description: 'Commit', body: 'Commit it.', claudeCodeAllowedTools: ['Bash'] }}
+        />
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-tools-remove'));
+    expect(screen.queryByTestId('skill-form-claude-code-tools')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeAllowedTools: [] }));
+  });
+
+  it.each([
+    [
+      'a .zip upload',
+      () => upload('PK\u0003\u0004\u0000\u0000\u0008\u0000skills/x/SKILL.md'),
+      'This is a zip file, not a SKILL.md.',
+    ],
+    ['pasted text with no frontmatter', () => paste('Just some instructions.'), 'No frontmatter found'],
+  ])('rejects %s and leaves the fields untouched', async (_label, importIt, message) => {
+    renderForm();
+    paste('---\nname: kept\ndescription: Kept\n---\nKept body');
+    importIt();
+    await waitFor(() => expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(message));
+    expect(value('skill-name-input')).toBe('kept');
+    expect(value('skill-body-input')).toBe('Kept body');
+  });
+
+  it('does not warn about referenced files that a folder import brought along', async () => {
+    renderForm();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [
+          inFolder(
+            'lint/SKILL.md',
+            '---\nname: lint\ndescription: Lint\n---\nRun `scripts/foo.sh` and read reference.md.'
+          ),
+          inFolder('lint/scripts/foo.sh', 'echo ok'),
+        ],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('skill-form-import-supporting-files')).toHaveTextContent(
+        'files that were not imported: reference.md.'
+      )
+    );
+    expect(screen.getByTestId('skill-form-import-supporting-files')).not.toHaveTextContent('scripts/foo.sh');
+  });
+
+  it('warns about referenced supporting files even when no keys were dropped', () => {
+    renderForm();
+    paste('---\nname: lint\ndescription: Lint\n---\nRun `scripts/foo.sh` and read [the notes](reference.md).');
+    expect(screen.queryByTestId('skill-form-import-dropped')).not.toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-import-supporting-files')).toHaveTextContent(
+      'files that were not imported: reference.md, scripts/foo.sh'
+    );
   });
 
   it.each([
@@ -192,5 +354,269 @@ describe('SkillForm SKILL.md import', () => {
   it('hides the import strip unless enabled (edit mode)', () => {
     renderForm(false);
     expect(screen.queryByTestId('skill-form-import-skillmd')).not.toBeInTheDocument();
+  });
+
+  describe('friendlier errors, drop and zip', () => {
+    const SKILL = '---\nname: dropped\ndescription: From a drop\n---\nBody';
+
+    const makeZip = async (entries: Record<string, string>, name = 'skill.zip') => {
+      const zip = new JSZip();
+      for (const [path, content] of Object.entries(entries)) zip.file(path, content);
+      return new File([await zip.generateAsync({ type: 'uint8array' })], name, { type: 'application/zip' });
+    };
+
+    const drop = (files: File[]) =>
+      fireEvent.drop(screen.getByTestId('skill-form-import-skillmd'), { dataTransfer: { files, items: [] } });
+
+    it('mentions drop and zip in the limitations text', () => {
+      renderForm();
+      expect(screen.getByTestId('skill-form-import-file-limitations')).toHaveTextContent('drop a SKILL.md');
+    });
+
+    it('fills the form from a dropped SKILL.md', async () => {
+      renderForm();
+      drop([new File([SKILL], 'SKILL.md', { type: 'text/markdown' })]);
+      await waitFor(() => expect(value('skill-name-input')).toBe('dropped'));
+      expect(value('skill-description-input')).toBe('From a drop');
+    });
+
+    it('asks for one SKILL.md or folder when several unrelated files are dropped', async () => {
+      renderForm();
+      drop([new File(['a'], 'a.txt'), new File(['b'], 'b.txt')]);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(
+          'Drop one SKILL.md or one skill folder.'
+        )
+      );
+    });
+
+    it('imports a zip made by compressing a folder, ignoring macOS junk', async () => {
+      const onSubmit = vi.fn();
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <SkillForm submitLabel="Create" onSubmit={onSubmit} onCancel={vi.fn()} enableSkillMdImport />
+        </CssVarsProvider>
+      );
+      const zip = await makeZip({
+        'my-skill/SKILL.md': SKILL,
+        'my-skill/scripts/a.sh': 'echo hi',
+        'my-skill/README.md': 'readme',
+        '__MACOSX/my-skill/._SKILL.md': 'junk',
+        'my-skill/.DS_Store': 'junk',
+      });
+      drop([zip]);
+      await waitFor(() => expect(value('skill-name-input')).toBe('dropped'));
+      expect(screen.getByTestId('skill-form-files')).toHaveTextContent('scripts/a.sh');
+      fireEvent.change(screen.getByTestId('skill-body-input'), { target: { value: 'Body' } });
+      fireEvent.submit(screen.getByTestId('skill-form'));
+      expect(onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ files: [{ path: 'scripts/a.sh', content: 'echo hi' }] })
+      );
+    });
+
+    it('imports a zip chosen with Choose file', async () => {
+      renderForm();
+      const zip = await makeZip({ 'SKILL.md': SKILL });
+      fireEvent.change(screen.getByTestId('skill-form-import-file'), { target: { files: [zip] } });
+      await waitFor(() => expect(value('skill-name-input')).toBe('dropped'));
+    });
+
+    it('explains a zip with no SKILL.md', async () => {
+      renderForm();
+      drop([await makeZip({ 'a/readme.md': 'x', 'b/other.md': 'y' })]);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent(
+          'The zip has no SKILL.md at its top level or in a single top-level folder.'
+        )
+      );
+    });
+
+    it('explains a zip that cannot be read', async () => {
+      renderForm();
+      drop([new File(['not a zip'], 'broken.zip')]);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent("The zip couldn't be unzipped.")
+      );
+    });
+
+    it('warns when the imported description is over 500 characters but still applies it', async () => {
+      renderForm();
+      upload(`---\nname: long\ndescription: ${'a'.repeat(501)}\n---\nBody`);
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-description-length')).toHaveTextContent(
+          'The description is 501 characters; skills allow 500. Shorten it before saving.'
+        )
+      );
+      expect(value('skill-name-input')).toBe('long');
+      fireEvent.change(screen.getByTestId('skill-description-input'), { target: { value: 'short' } });
+      expect(screen.queryByTestId('skill-form-import-description-length')).not.toBeInTheDocument();
+    });
+
+    it('shows the raw YAML message behind a Details toggle', async () => {
+      renderForm();
+      upload("---\nname: a\ndescription: Applies the team's rules: TikTok-safe\n---\nBody");
+      await waitFor(() =>
+        expect(screen.getByTestId('skill-form-import-error')).toHaveTextContent('Line 3 (`description`)')
+      );
+      expect(screen.queryByTestId('skill-form-import-error-details')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('skill-form-import-error-details-toggle'));
+      expect(screen.getByTestId('skill-form-import-error-details')).toHaveTextContent('Nested mappings');
+    });
+  });
+});
+
+describe('SkillForm update from SKILL.md (edit mode)', () => {
+  const EXISTING = {
+    name: 'summarize',
+    description: 'Old description',
+    body: 'Old body',
+    argumentHint: '[file]',
+    files: [{ path: 'scripts/run.sh', content: 'echo old' }],
+  };
+  const NEW_MD = '---\nname: summarize\ndescription: New description\n---\nNew body';
+
+  const renderEdit = (initial: typeof EXISTING & { claudeCodeModel?: string } = EXISTING, onSubmit = vi.fn()) => {
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SkillForm
+          initialValue={initial}
+          submitLabel="Save changes"
+          onSubmit={onSubmit}
+          onCancel={vi.fn()}
+          updateFromSkillMd
+        />
+      </CssVarsProvider>
+    );
+    return onSubmit;
+  };
+
+  it('shows the changed fields and leaves the form alone until applied', async () => {
+    renderEdit();
+    upload(NEW_MD);
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-update-change-description')).toHaveTextContent('New description');
+    expect(screen.getByTestId('skill-form-update-change-body')).toBeInTheDocument();
+    expect(screen.getByTestId('skill-form-update-change-argument-hint')).toHaveTextContent('(none)');
+    expect(value('skill-description-input')).toBe('Old description');
+    expect(value('skill-body-input')).toBe('Old body');
+  });
+
+  it('applies on confirm and submits the updated fields with the same name', async () => {
+    const onSubmit = renderEdit();
+    upload(NEW_MD);
+    fireEvent.click(await screen.findByTestId('skill-form-update-apply'));
+    expect(value('skill-description-input')).toBe('New description');
+    expect(screen.queryByTestId('skill-form-update-preview')).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'summarize', description: 'New description', body: 'New body' })
+    );
+  });
+
+  it('discards without touching the form', async () => {
+    renderEdit();
+    upload(NEW_MD);
+    fireEvent.click(await screen.findByTestId('skill-form-update-discard'));
+    expect(screen.queryByTestId('skill-form-update-preview')).toBeNull();
+    expect(value('skill-description-input')).toBe('Old description');
+  });
+
+  it('warns on a name mismatch and keeps the existing name', async () => {
+    renderEdit();
+    upload('---\nname: other-name\ndescription: New description\n---\nNew body');
+    expect(await screen.findByTestId('skill-form-update-name-mismatch')).toHaveTextContent('other-name');
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    expect(value('skill-name-input')).toBe('summarize');
+  });
+
+  it('keeps edits made after the preview to fields the preview did not list', async () => {
+    renderEdit();
+    upload('---\nname: summarize\ndescription: New description\nargument-hint: "[file]"\n---\nOld body');
+    const apply = await screen.findByTestId('skill-form-update-apply');
+    fireEvent.change(screen.getByTestId('skill-body-input'), { target: { value: 'My later edit' } });
+    fireEvent.click(apply);
+    expect(value('skill-description-input')).toBe('New description');
+    expect(value('skill-body-input')).toBe('My later edit');
+  });
+
+  it('lists a model change in the preview and writes it on apply', async () => {
+    const onSubmit = renderEdit({ ...EXISTING, claudeCodeModel: 'opus' });
+    upload('---\nname: summarize\ndescription: Old description\nmodel: haiku\n---\nOld body');
+    expect(await screen.findByTestId('skill-form-update-change-claude-code-model')).toHaveTextContent('opus');
+    expect(screen.getByTestId('skill-form-update-change-claude-code-model')).toHaveTextContent('haiku');
+    expect(screen.getByTestId('skill-form-claude-code-model')).toHaveTextContent('opus');
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ claudeCodeModel: 'haiku' }));
+  });
+
+  it('keeps a model removed after the preview when the preview did not list the model', async () => {
+    const onSubmit = renderEdit({ ...EXISTING, claudeCodeModel: 'opus' });
+    upload('---\nname: summarize\ndescription: New description\nmodel: opus\n---\nOld body');
+    const apply = await screen.findByTestId('skill-form-update-apply');
+    expect(screen.queryByTestId('skill-form-update-change-claude-code-model')).toBeNull();
+    fireEvent.click(screen.getByTestId('skill-form-claude-code-model-remove'));
+    fireEvent.click(apply);
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ description: 'New description', claudeCodeModel: '' })
+    );
+  });
+
+  it('does not show the make-a-copy banner for a same-origin export on edit', async () => {
+    renderEdit();
+    upload(
+      toSkillMd(
+        { name: 'summarize', description: 'New description', body: 'New body' },
+        { sourceUrl: `${window.location.origin}/skills/1` }
+      )
+    );
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
+    expect(screen.queryByTestId('skill-form-import-from-b4m')).toBeNull();
+  });
+
+  it('says so when the file matches the skill', async () => {
+    renderEdit();
+    upload('---\nname: summarize\ndescription: Old description\nargument-hint: "[file]"\n---\nOld body');
+    expect(await screen.findByTestId('skill-form-update-preview')).toHaveTextContent('Nothing would change');
+    expect(screen.getByTestId('skill-form-update-apply')).toBeDisabled();
+  });
+
+  it('shows invalid files the same actionable error as create', async () => {
+    renderEdit();
+    upload('no frontmatter here');
+    expect(await screen.findByTestId('skill-form-import-error')).toHaveTextContent('No frontmatter found');
+    expect(screen.queryByTestId('skill-form-update-preview')).toBeNull();
+  });
+
+  it('previews a folder import, flags changed scripts and replaces files only on apply', async () => {
+    const onSubmit = renderEdit();
+    fireEvent.change(screen.getByTestId('skill-form-import-folder'), {
+      target: {
+        files: [inFolder('s/SKILL.md', NEW_MD), inFolder('s/scripts/run.sh', 'echo new')],
+      },
+    });
+    expect(await screen.findByTestId('skill-form-update-change-files')).toHaveTextContent('changed scripts/run.sh');
+    expect(screen.getByTestId('skill-form-update-scripts-note')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ files: [{ path: 'scripts/run.sh', content: 'echo new' }] })
+    );
+  });
+
+  it('keeps existing files when a lone SKILL.md is applied', async () => {
+    const onSubmit = renderEdit();
+    upload(NEW_MD);
+    fireEvent.click(await screen.findByTestId('skill-form-update-apply'));
+    fireEvent.click(screen.getByTestId('skill-form-submit'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ files: EXISTING.files }));
+  });
+
+  it('accepts a pasted SKILL.md', async () => {
+    renderEdit();
+    paste(NEW_MD);
+    expect(await screen.findByTestId('skill-form-update-preview')).toBeInTheDocument();
   });
 });

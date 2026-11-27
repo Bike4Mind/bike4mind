@@ -102,7 +102,9 @@
     "no_subscription": "Ingen abonnement",
     "x_members": "{{count}} medlemmer",
     "x_credits": "{{count}} credits",
-    "owner": "Ejer"
+    "roles": {
+      "owner": "Ejer"
+    }
   },
   "session": {
     "typeYourMessage": "Skriv din besked her",

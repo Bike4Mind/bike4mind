@@ -13,7 +13,7 @@ export interface Passkey {
   lastUsedAt: string | null;
 }
 
-const QUERY_KEY = ['passkeys'];
+export const PASSKEYS_QUERY_KEY = ['passkeys'] as const;
 
 export const passkeysSupported = (): boolean => browserSupportsWebAuthn();
 
@@ -40,7 +40,7 @@ export function describePasskeyMfaError(error: unknown): string {
 
 export function usePasskeys(enabled = true) {
   return useQuery({
-    queryKey: QUERY_KEY,
+    queryKey: PASSKEYS_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get<{ passkeys: Passkey[] }>('/api/auth/mfa/passkey');
       return response.data.passkeys;
@@ -49,16 +49,36 @@ export function usePasskeys(enabled = true) {
   });
 }
 
+/**
+ * What /api/auth/mfa/passkey/register answers. When the passkey was the user's first factor the
+ * server also returns the backup codes (shown once) and the fresh session it minted.
+ */
+export type PasskeyRegistration =
+  | { passkey: Passkey; backupCodes?: undefined }
+  | { passkey: Passkey; backupCodes: string[]; accessToken: string; user: IUserDocument };
+
+async function registerPasskey(name?: string): Promise<PasskeyRegistration> {
+  const { data: optionsJSON } = await api.post('/api/auth/mfa/passkey/register-options');
+  const response = await startRegistration({ optionsJSON });
+  const { data } = await api.post<PasskeyRegistration>('/api/auth/mfa/passkey/register', { response, name });
+  return data;
+}
+
+/** Adds a passkey to an account that already has MFA (settings). */
 export function useRegisterPasskey() {
   const queryClient = useQueryClient();
   return useMutation<Passkey, Error, { name?: string }>({
-    mutationFn: async ({ name }) => {
-      const { data: optionsJSON } = await api.post('/api/auth/mfa/passkey/register-options');
-      const response = await startRegistration({ optionsJSON });
-      const { data } = await api.post<{ passkey: Passkey }>('/api/auth/mfa/passkey/register', { response, name });
-      return data.passkey;
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    mutationFn: async ({ name }) => (await registerPasskey(name)).passkey,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PASSKEYS_QUERY_KEY }),
+  });
+}
+
+/** Enrolls a passkey as the account's first factor (MFA setup); resolves to the full registration. */
+export function useEnrollPasskeyFactor() {
+  const queryClient = useQueryClient();
+  return useMutation<PasskeyRegistration, Error, void>({
+    mutationFn: () => registerPasskey(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PASSKEYS_QUERY_KEY }),
   });
 }
 
@@ -69,7 +89,7 @@ export function useRemovePasskey() {
       const response = await api.delete(`/api/auth/mfa/passkey/${id}`);
       return response.data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PASSKEYS_QUERY_KEY }),
   });
 }
 

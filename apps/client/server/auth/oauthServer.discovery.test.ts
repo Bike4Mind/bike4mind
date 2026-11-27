@@ -32,6 +32,10 @@ describe('getOidcDiscovery', () => {
     expect(discovery.id_token_signing_alg_values_supported).toContain('RS256');
   });
 
+  it('advertises the RP-Initiated Logout page as the end_session_endpoint', () => {
+    expect(getOidcDiscovery().end_session_endpoint).toBe(`${APP_URL}/oauth/logout`);
+  });
+
   it('advertises offline_access and the refresh_token grant', () => {
     const discovery = getOidcDiscovery();
     expect(discovery.scopes_supported).toContain('offline_access');

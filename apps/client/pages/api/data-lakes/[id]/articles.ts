@@ -1,6 +1,6 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   adminSettingsRepository,
@@ -12,13 +12,25 @@ import {
   lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 import { fabFilesService } from '@bike4mind/services';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { getFileMembershipArm, type DataLakeMembershipArm, type IFabFileDocument } from '@bike4mind/common';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { adminBypassLakeIds } from '@bike4mind/server-utils/dataLakes/index';
+import {
+  dataLakeArticleListResponseSchema,
+  getFileMembershipArm,
+  readableGroupIds,
+  type DataLakeMembershipArm,
+  type IFabFileDocument,
+} from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
-import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
+import { resolveAuditPrincipal } from '@bike4mind/server-utils/dataLakes/resolveAuditPrincipal';
+import { firstQueryValue } from '@bike4mind/server-utils/dataLakes/firstQueryValue';
+import { respond } from '@server/utils/respond';
 
 interface ArticlesQuery {
   id: string;
@@ -46,7 +58,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // Single shared gate (org-aware; not-found-style denial).
     const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        settings: adminSettingsRepository,
+      },
+      logger: req.logger,
     });
 
     const datalakeTag = dataLake.datalakeTag;
@@ -106,17 +123,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           adminSettings: adminSettingsRepository,
         },
         storage: {
-          ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-          generateSignedUrl: async (path: string, expireInSeconds: number) => {
+          generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
             try {
-              return await getFilesStorage().getSignedUrl(path, 'get', {
-                expiresIn: expireInSeconds,
-                audience: 'browser',
-              });
+              return await signFabFileGet(path, expireInSeconds, options);
             } catch {
               return null;
             }
           },
+          contentUrl: fileContentUrl,
         },
       },
       {
@@ -124,7 +138,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         // what keeps buildOwnershipConditions' restrictToDataLake-with-no-lake-arm throw unreachable.
         lakeMemberships: [lakeMembership],
         includeShared: true,
-        userGroups: req.user.groups ?? [],
+        userGroups: readableGroupIds(req.user),
         // Single-lake browser: only this lake's files.
         restrictToDataLake: true,
         ...(uncategorizedOnly ? { lacksContentPrefixTags: [dataLake.fileTagPrefix] } : {}),
@@ -141,11 +155,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       membershipArm: getFileMembershipArm(file, lakeMembership) ?? undefined,
     }));
 
-    // Best-effort audit write, only when something was actually returned - an empty
-    // page reflects no lake content read. The lake is already resolved, so no attribution needed.
-    // Awaited (never rethrows): a per-request serverless route must not race a post-response
-    // freeze of the execution environment.
+    // Audit write, only when something was actually returned - an empty page reflects no lake
+    // content read. Awaited so a serverless route does not race a post-response freeze. Best-effort
+    // (never rethrows) except for an admin-bypass read, whose failed write fails the request.
     if (data.length > 0) {
+      const bypass = await adminBypassLakeIds(req, [dataLake.id]);
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
@@ -153,6 +167,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: (data as Array<{ id: string }>).map(f => f.id),
+          ...(bypass.length ? { adminBypassLakeIds: bypass } : {}),
           surface: 'data-lake-articles',
           ...(search ? { queryText: search } : {}),
         },
@@ -161,7 +176,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       );
     }
 
-    return res.json({ data, total: result.total, hasMore: result.hasMore });
+    return respond(res, dataLakeArticleListResponseSchema, { data, total: result.total, hasMore: result.hasMore });
   });
 
 export const config = {

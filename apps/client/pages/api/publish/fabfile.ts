@@ -1,3 +1,5 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile } from '@bike4mind/database';
 import {
@@ -88,7 +90,7 @@ async function sourceFabFileBody(file: {
   return { ok: false, status: 422, error: 'File has no readable content to publish' };
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi().post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -149,6 +151,8 @@ const handler = baseApi().post(async (req, res) => {
   if (!viz.ok) {
     return res.status(400).json({ error: viz.error, code: viz.code });
   }
+  if (viz.visibility === 'public')
+    await assertPublicationPublicLink({ tier, scopeId, source: { fabFileId: body.fabFileId } });
 
   // Sourcing runs before the quota check (inside settlePublication) because quota needs the
   // sourced byte length. The whole object is read into memory here; acceptable since the caller
@@ -163,6 +167,7 @@ const handler = baseApi().post(async (req, res) => {
   const settled = await settlePublication({
     ownerId: userId,
     isAdmin: req.user.isAdmin,
+    ownerCreatedAt: req.user.createdAt,
     source: { kind: 'fabfile', fabFileId: body.fabFileId },
     tier,
     scopeId,

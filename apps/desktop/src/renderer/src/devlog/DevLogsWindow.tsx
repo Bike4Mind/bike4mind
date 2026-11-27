@@ -114,10 +114,17 @@ export function DevLogsWindow() {
             {shown.length > mounted.length ? ` (showing last ${mounted.length})` : ''}
             {dropped > 0 ? ` - ${dropped} dropped` : ''}
           </Typography>
-          <Button size="sm" variant="plain" data-testid="devlogs-copy-btn" onClick={copy} disabled={shown.length === 0}>
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            data-testid="devlogs-copy-btn"
+            onClick={copy}
+            disabled={shown.length === 0}
+          >
             {copied ? 'Copied' : 'Copy shown'}
           </Button>
-          <Button size="sm" variant="plain" color="danger" data-testid="devlogs-clear-btn" onClick={clear}>
+          <Button size="sm" variant="outlined" color="danger" data-testid="devlogs-clear-btn" onClick={clear}>
             Clear
           </Button>
         </Stack>

@@ -3,6 +3,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, isPreviewStage } from './constants';
 import { appUrlForLambdaEnv } from './router';
 import { allSecrets, secrets } from './secrets';
 import { lambdaVpc } from './vpc';
+import { fabFileBucketNotification, fabFileChunkQueueSubscription, fabFileVectorizeQueueSubscription } from './queues';
 
 // Database migration function (equivalent to SST v2 onUpdate)
 // This runs database migrations on every deployment when in CI mode
@@ -78,14 +79,21 @@ const cleaner = isPreviewStage
 // web deploy strictly after migrations. See web.ts.
 const migratorInvocation =
   process.env.CI === 'true' && !$dev
-    ? new aws.lambda.Invocation('DatabaseMigratorInvocation', {
-        input: JSON.stringify({
-          stage: $app.stage,
-          timestamp: Date.now(),
-          action: 'migration',
-        }),
-        functionName: migrator.name,
-      })
+    ? new aws.lambda.Invocation(
+        'DatabaseMigratorInvocation',
+        {
+          input: JSON.stringify({
+            stage: $app.stage,
+            timestamp: Date.now(),
+            action: 'migration',
+          }),
+          functionName: migrator.name,
+        },
+        // A migration that writes FabFiles fires the S3 upload-complete handler and the chunk and
+        // vectorize workers. Running it before those Lambdas carry the new code lets the old code
+        // reject the new rows (e.g. a sourceType enum value it does not know yet).
+        { dependsOn: [fabFileBucketNotification, fabFileChunkQueueSubscription, fabFileVectorizeQueueSubscription] }
+      )
     : undefined;
 
 // Only run seeding on preview environments (PR deployments)

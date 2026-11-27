@@ -71,6 +71,7 @@ export class McpManager {
    * JSON.stringify is evaluated at run-time, always capturing the latest cache state.
    */
   private backgroundSaveQueue: Promise<void> = Promise.resolve();
+  private disposed = false;
 
   constructor(config: CliConfig) {
     this.config = config;
@@ -251,6 +252,15 @@ export class McpManager {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tools = await generateMcpTools(mcpData as any);
+    // disconnect() only closes clients it can see, so one that finishes connecting afterwards is closed here.
+    if (this.disposed) {
+      await client.disconnect().catch((error: unknown) => {
+        logger.debug(
+          `${String.fromCodePoint(0x26a0, 0xfe0f)}  Error closing ${serverConfig.name} after shutdown: ${error}`
+        );
+      });
+      throw new Error(`MCP manager shut down while ${serverConfig.name} was connecting`);
+    }
     return { client, tools };
   }
 
@@ -338,6 +348,7 @@ export class McpManager {
   }
 
   async disconnect(): Promise<void> {
+    this.disposed = true;
     if (this.servers.size === 0) return;
 
     logger.debug(`🔌 Disconnecting from ${this.servers.size} MCP server(s)...`);

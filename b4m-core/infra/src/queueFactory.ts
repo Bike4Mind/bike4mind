@@ -31,6 +31,7 @@ export interface QueueTransformArgs {
 }
 
 export interface DlqArgs {
+  visibilityTimeout?: string;
   transform?: { queue: QueueTransformArgs };
 }
 
@@ -50,6 +51,8 @@ export interface BuildQueuePairOptions {
    * the consumer Lambda's timeout (AWS recommends up to 6x for safety margin).
    */
   visibilityTimeout: string;
+  /** SQS visibility timeout for the DLQ, in the same form. Omit to keep the SQS default. */
+  dlqVisibilityTimeout?: string;
   /** Redrive attempts before a message lands in the DLQ. Defaults to 3. */
   retry?: number;
   /**
@@ -97,6 +100,7 @@ export function buildQueuePair<TArn = string>(options: BuildQueuePairOptions): Q
     name,
     dlqName = `${options.name}DLQ`,
     visibilityTimeout,
+    dlqVisibilityTimeout,
     retry = DEFAULT_QUEUE_RETRY,
     encryption = 'none',
     dlqEncryption = encryption === 'none' ? 'none' : 'kms',
@@ -124,7 +128,10 @@ export function buildQueuePair<TArn = string>(options: BuildQueuePairOptions): Q
   return {
     name,
     dlqName,
-    dlqArgs: { ...toTransform(dlqTransform) },
+    dlqArgs: {
+      ...(dlqVisibilityTimeout !== undefined ? { visibilityTimeout: dlqVisibilityTimeout } : {}),
+      ...toTransform(dlqTransform),
+    },
     queueArgs: (dlqArn: TArn) => ({
       visibilityTimeout,
       dlq: { queue: dlqArn, retry },

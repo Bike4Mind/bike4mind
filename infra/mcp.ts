@@ -13,12 +13,12 @@ import { secrets } from './secrets';
 // hashed in @bike4mind/infra, where the ways it can go quietly constant are testable; nothing
 // imports this file. See mcpContentHash.ts for which ways and why.
 const MCP_CONTENT_HASH = computeMcpContentHash({
-  paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth'],
+  paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth', 'b4m-core/observability'],
   readTree: path => execFileSync('git', ['ls-tree', '-r', 'HEAD', path]).toString(),
 });
 
 export const mcpHandler = new sst.aws.Function('mcpHandler', {
-  handler: 'apps/client/server/utils/mcpCall.handler',
+  handler: 'apps/workers/src/mcp/mcpCall.handler',
   runtime: 'nodejs24.x',
   vpc: lambdaVpc,
   // No provisioned concurrency: see the note on AgentExecutor in infra/agentExecutor.ts. This
@@ -31,9 +31,10 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     // relevant @bike4mind/mcp tool modules). copyFiles brings the workspace
     // *code*; `install` brings those packages' npm *deps* (SST installs them into
     // node_modules with their transitive deps). Keep in sync when a child gains a
-    // new runtime dependency. NOTE: @anthropic-ai/sdk is intentionally NOT here -
-    // it is a type-only import in the MCP client, erased at build.
-    install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'unzipper', 'axios'],
+    // new runtime dependency; infra/__tests__/mcpInstallCoverage.test.ts checks it
+    // against the copied packages' package.json; deps deliberately left out, and
+    // why, are its NOT_INSTALLED list.
+    install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'jszip', 'axios', 'yaml'],
     esbuild: {
       // Mark workspace packages as external to prevent bundling, allowing runtime resolution
       external: ['@bike4mind/mcp', '@bike4mind/common'],
@@ -76,6 +77,16 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     {
       from: 'b4m-core/hearth/package.json',
       to: 'node_modules/@bike4mind/hearth/package.json',
+    },
+    // Copied, not installed, for the same reason as hearth: the MCP stderr log writer imports
+    // redactLogValue from it, and it has no runtime dependencies of its own.
+    {
+      from: 'b4m-core/observability/dist',
+      to: 'node_modules/@bike4mind/observability/dist',
+    },
+    {
+      from: 'b4m-core/observability/package.json',
+      to: 'node_modules/@bike4mind/observability/package.json',
     },
   ],
 });

@@ -7,12 +7,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { DATA_LAKES, DataLakeResourceSchema, NotFoundError } from '@bike4mind/common';
 
-const { mockAssertLakeAccess, mockComputeStats, mockFeatureEnabled, mockRateLimitOptions } = vi.hoisted(() => ({
-  mockAssertLakeAccess: vi.fn(),
-  mockComputeStats: vi.fn(),
-  mockFeatureEnabled: { value: true },
-  mockRateLimitOptions: vi.fn(),
-}));
+const { mockAssertLakeAccess, mockListGrants, mockComputeStats, mockFeatureEnabled, mockRateLimitOptions } = vi.hoisted(
+  () => ({
+    mockAssertLakeAccess: vi.fn(),
+    mockListGrants: vi.fn(),
+    mockComputeStats: vi.fn(),
+    mockFeatureEnabled: { value: true },
+    mockRateLimitOptions: vi.fn(),
+  })
+);
 
 // Keeps next-connect's registrar shape and runs `.use()` middleware ahead of each handler, so the
 // feature-flag gate is exercised alongside the contract prelude.
@@ -49,28 +52,34 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
         ? next()
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 // Two DISTINCT contexts so a test can tell which builder the route actually called: the admin
 // context bypasses lake access and must never reach `assertLakeAccess` on this member-scoped route.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async () => ({ userId: 'u1', isAdmin: true, userTags: [], organizationIds: [] }),
   toMemberAccessContext: async () => ({ userId: 'u1', isAdmin: false, userTags: [], organizationIds: [] }),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  dataLakeAccessGrantRepository: {},
+  dataLakeAccessGrantRepository: { listByLake: mockListGrants },
   dataLakeRepository: {},
   fabFileRepository: { computeDataLakeStats: mockComputeStats },
 }));
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
-  return { ...actual, dataLakeService: { ...actual.dataLakeService, assertLakeAccess: mockAssertLakeAccess } };
+  // Stands in for the gate and its one grants read: `mockAssertLakeAccess` yields the lake and
+  // `mockListGrants` the grants, as the real service reads them through the same repository.
+  const assertLakeAccessWithGrants = async (...args: unknown[]) => ({
+    lake: await mockAssertLakeAccess(...args),
+    grants: await mockListGrants(),
+  });
+  return { ...actual, dataLakeService: { ...actual.dataLakeService, assertLakeAccessWithGrants } };
 });
 
 const { default: handler } = await import('@pages/api/v1/data-lakes/[id]/index');
@@ -106,6 +115,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockFeatureEnabled.value = true;
   mockAssertLakeAccess.mockResolvedValue(LAKE);
+  mockListGrants.mockResolvedValue([]);
   mockComputeStats.mockResolvedValue({ fileCount: 9, totalSizeBytes: 90, totalChunkedChars: 0 });
 });
 
@@ -126,6 +136,46 @@ describe('GET /api/v1/data-lakes/{id}', () => {
     expect(mockAssertLakeAccess).toHaveBeenCalledWith('handbook', expect.anything(), expect.anything());
     expect(mockComputeStats).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  describe('can_manage', () => {
+    const asCaller = (lake: Record<string, unknown>) => mockAssertLakeAccess.mockResolvedValue({ ...LAKE, ...lake });
+    const canManage = async () => (await run('handbook'))._getJSONData().can_manage;
+
+    it('is true for the creator', async () => {
+      asCaller({ createdByUserId: 'u1' });
+      expect(await canManage()).toBe(true);
+    });
+
+    it('is false for a read-only grantee', async () => {
+      asCaller({ createdByUserId: 'someone-else' });
+      mockListGrants.mockResolvedValue([{ principalType: 'user', principalId: 'u1', role: 'reader' }]);
+      expect(await canManage()).toBe(false);
+    });
+
+    it('is false for a public lake the caller does not manage', async () => {
+      asCaller({ createdByUserId: 'someone-else', isPublic: true });
+      expect(await canManage()).toBe(false);
+    });
+
+    it('is true for a curator grant and for a transferred-owner grant', async () => {
+      asCaller({ createdByUserId: 'someone-else' });
+      mockListGrants.mockResolvedValue([{ principalType: 'user', principalId: 'u1', role: 'curator' }]);
+      expect(await canManage()).toBe(true);
+      mockListGrants.mockResolvedValue([{ principalType: 'user', principalId: 'u1', role: 'owner' }]);
+      expect(await canManage()).toBe(true);
+    });
+
+    it('is false for a former creator once ownership moved to another user', async () => {
+      asCaller({ createdByUserId: 'u1' });
+      mockListGrants.mockResolvedValue([{ principalType: 'user', principalId: 'u2', role: 'owner' }]);
+      expect(await canManage()).toBe(false);
+    });
+
+    it('is false for a built-in lake', async () => {
+      mockAssertLakeAccess.mockResolvedValue({ ...DATA_LAKES[0], createdByUserId: 'u1' });
+      expect((await run(DATA_LAKES[0].id))._getJSONData().can_manage).toBe(false);
+    });
   });
 
   it('counts a built-in lake live', async () => {

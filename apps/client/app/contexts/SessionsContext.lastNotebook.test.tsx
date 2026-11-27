@@ -38,7 +38,6 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
         setLLM: vi.fn(),
         selectSessionModel: vi.fn(),
         tools: [],
-        isQuestMasterEnabled: false,
       };
       return selector ? selector(state) : state;
     },

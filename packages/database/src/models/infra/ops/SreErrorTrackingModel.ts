@@ -26,6 +26,8 @@ export interface ISreErrorTracking {
   id: string;
   /** Source-agnostic normalized hash */
   errorFingerprint: string;
+  accountingExecutionId?: string;
+  completedRevisionAccountingExecutionIds?: string[];
   /** Repository slug (owner/repo) - identifies which repo this error belongs to */
   repoSlug: string;
   /** Origin: CLOUDWATCH or GITHUB_ISSUE */
@@ -155,6 +157,8 @@ export interface ISreErrorTracking {
 const SreErrorTrackingSchema = new mongoose.Schema(
   {
     errorFingerprint: { type: String, required: true },
+    accountingExecutionId: { type: String },
+    completedRevisionAccountingExecutionIds: { type: [String], default: [] },
     repoSlug: { type: String, required: true, default: 'MillionOnMars/lumina5' },
     source: { type: String, required: true, enum: ['CLOUDWATCH', 'GITHUB_ISSUE'] },
     sourceRef: { type: String, required: true },
@@ -251,6 +255,8 @@ SreErrorTrackingSchema.index(
 );
 // TTL - auto-delete after 30 days
 SreErrorTrackingSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
+// Cross-repo status counts, e.g. the admin sidebar's count of failed pipelines.
+SreErrorTrackingSchema.index({ status: 1 });
 
 export const IN_FLIGHT_STATUSES = new Set<ISreErrorTracking['status']>([
   'detected',
@@ -356,6 +362,13 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
     this.model = sreErrorTrackingModel;
   }
 
+  /** Pipelines that failed and wait for an admin to retry or dismiss them, across repos; `limit` stops counting there. */
+  async countFailed(options: { limit?: number } = {}): Promise<number> {
+    return this.model
+      .countDocuments({ status: { $in: ['failed', 'dispatch_failed'] } }, { limit: options.limit })
+      .exec();
+  }
+
   /**
    * Atomic dedup: create-or-skip for concurrent Lambda invocations.
    * Returns the document if this invocation won the race, null otherwise.
@@ -448,6 +461,32 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
       }
       throw error;
     }
+  }
+
+  async hasCompletedRevisionAccounting(id: string, repoSlug: string, executionId: string): Promise<boolean> {
+    return Boolean(
+      await this.model.exists({
+        _id: id,
+        ...repoSlugFilter(repoSlug),
+        completedRevisionAccountingExecutionIds: executionId,
+      })
+    );
+  }
+
+  async completeRevisionAccounting(id: string, repoSlug: string, executionId: string): Promise<void> {
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        ...repoSlugFilter(repoSlug),
+        $or: [
+          { completedRevisionAccountingExecutionIds: executionId },
+          { $expr: { $lt: [{ $size: { $ifNull: ['$completedRevisionAccountingExecutionIds', []] } }, 16] } },
+        ],
+      },
+      { $addToSet: { completedRevisionAccountingExecutionIds: executionId } },
+      { runValidators: true }
+    );
+    if (result.matchedCount !== 1) throw new Error('SRE revision accounting tracking missing');
   }
 
   async updateStatus(
@@ -916,7 +955,7 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   }
 }
 
-const SreErrorTrackingModel =
+export const SreErrorTrackingModel =
   (mongoose.models['SreErrorTracking'] as unknown as mongoose.Model<ISreErrorTracking>) ||
   mongoose.model<ISreErrorTracking>('SreErrorTracking', SreErrorTrackingSchema);
 

@@ -15,16 +15,17 @@ import errorHandler, { buildErrorBody } from './errorHandler';
 function makeReqRes() {
   const json = vi.fn();
   const status = vi.fn(() => ({ json }));
-  // any: lightweight stand-ins for Express req/res - only the fields errorHandler() touches
-  const set = vi.fn();
-  const res = { status, json, set } as any;
+  // any: lightweight stand-ins for req/res - only the fields errorHandler() touches. Shaped like the
+  // Node ServerResponse Next.js API routes pass (no Express res.set), so an Express-only call fails here.
+  const setHeader = vi.fn();
+  const res = { status, json, setHeader } as any;
   const req = {
     method: 'POST',
     url: '/api/chat',
     requestId: 'trace-err-1',
     logger: { error: vi.fn(), warn: vi.fn() },
   } as any;
-  return { req, res, status, json, set };
+  return { req, res, status, json, setHeader };
 }
 
 describe('errorHandler — request_id in the error envelope', () => {
@@ -39,6 +40,41 @@ describe('errorHandler — request_id in the error envelope', () => {
     const { req, res, json } = makeReqRes();
     errorHandler('totally unknown', req, res);
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ request_id: 'trace-err-1' }));
+  });
+});
+
+describe('errorHandler - logged URL', () => {
+  it('logs the path without its query string', () => {
+    const { req, res } = makeReqRes();
+    req.url = '/api/auth/google?inviteCode=REF-123';
+    errorHandler('totally unknown', req, res);
+    expect(req.logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/^POST \/api\/auth\/google /),
+      'totally unknown'
+    );
+    expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain('REF-123');
+  });
+
+  describe('redacts a share-link token', () => {
+    const token = 'synthetic-share-token-0123456789';
+    const logged = (req: { logger: { error: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> } }) =>
+      JSON.stringify([req.logger.error.mock.calls, req.logger.warn.mock.calls]);
+
+    it.each([`/a/${token}`, `/api/publish/serve/a/${token}/index.html`])('from %s', url => {
+      const cases: unknown[] = [
+        new BadRequestError('bad'),
+        new ServiceUnavailableError('down'),
+        { name: 'CastError', message: 'Cast to ObjectId failed', path: '_id' },
+        'totally unknown',
+      ];
+      for (const error of cases) {
+        const { req, res } = makeReqRes();
+        req.url = url;
+        errorHandler(error, req, res);
+        expect(logged(req)).toContain('[redacted]');
+        expect(logged(req)).not.toContain(token);
+      }
+    });
   });
 });
 
@@ -245,7 +281,7 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     const body = json.mock.calls[0][0] as Record<string, unknown>;
     expect(body.name).toBe('UnprocessableEntityError');
     expect(String(body.error)).toContain('days');
-    // fromZodError() flattens to a readable sentence; the raw issue objects carry keys
+    // formatZodError() renders readable lines; the raw issue objects carry keys
     // (`code`, `expected`, `_zod`) that are not in the envelope and must not reach a body.
     expect(JSON.stringify(body)).not.toContain('_zod');
     for (const key of Object.keys(body)) {
@@ -253,9 +289,9 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     }
   });
 
-  // Pins the fromZodError() call itself, not just the status. Asserting only the status and
+  // Pins the formatZodError() call itself, not just the status. Asserting only the status and
   // the field name leaves the transformation unpinned: zod's raw `message` is a JSON dump of
-  // the issue array and happens to contain the field name too, so dropping fromZodError()
+  // the issue array and happens to contain the field name too, so dropping formatZodError()
   // would ship that dump on every 422 across baseApi with nothing failing.
   it('flattens the message rather than dumping the zod issue array', () => {
     const { req, res, json } = makeReqRes();
@@ -286,24 +322,25 @@ describe('errorHandler - expected upstream failures', () => {
 
 describe('errorHandler - rate-limit info on a 429', () => {
   it('sets Retry-After and the rate-limit headers, and keeps the body as it was', () => {
-    const { req, res, status, json, set } = makeReqRes();
+    const { req, res, status, json, setHeader } = makeReqRes();
     errorHandler(
       new TooManyRequestsError('slow down', { retryAfter: 12, rateLimitHeaders: { 'X-RateLimit-Limit-Minute': 10 } }),
       req,
       res
     );
     expect(status).toHaveBeenCalledWith(429);
-    expect(set).toHaveBeenCalledWith({ 'Retry-After': '12', 'X-RateLimit-Limit-Minute': '10' });
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '12');
+    expect(setHeader).toHaveBeenCalledWith('X-RateLimit-Limit-Minute', '10');
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ retryAfter: 12, error: 'slow down' }));
   });
 });
 
 describe('errorHandler - a 503 with retryAfter', () => {
   it('sets Retry-After so a machine client backs off instead of treating its key as bad', () => {
-    const { req, res, status, json, set } = makeReqRes();
+    const { req, res, status, json, setHeader } = makeReqRes();
     errorHandler(new ServiceUnavailableError('Authentication temporarily unavailable', { retryAfter: 5 }), req, res);
     expect(status).toHaveBeenCalledWith(503);
-    expect(set).toHaveBeenCalledWith({ 'Retry-After': '5' });
+    expect(setHeader).toHaveBeenCalledWith('Retry-After', '5');
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Authentication temporarily unavailable' }));
     expect(req.logger.error).toHaveBeenCalledTimes(1);
   });
@@ -323,5 +360,20 @@ describe('buildErrorBody', () => {
   it('adds the deprecated name only when given', () => {
     expect(Object.keys(buildErrorBody({ error: 'x', requestId: 'r' }))).toEqual(['error', 'request_id']);
     expect(buildErrorBody({ error: 'x', requestId: 'r', name: 'BadRequestError' }).name).toBe('BadRequestError');
+  });
+});
+
+describe('admin search error logging', () => {
+  it('omits identifier queries for rejected requests', () => {
+    const { req, res } = makeReqRes();
+    const secret = 'b4m_live_' + 'a'.repeat(32);
+    req.method = 'GET';
+    req.url = `/api/admin/search?q=${secret}`;
+    errorHandler(new BadRequestError('Use only the displayed API key prefix'), req, res);
+    expect(JSON.stringify(req.logger.warn.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(req.logger.error.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify([...req.logger.warn.mock.calls, ...req.logger.error.mock.calls])).toContain(
+      '/api/admin/search'
+    );
   });
 });

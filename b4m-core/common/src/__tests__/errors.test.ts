@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import {
+  formatZodError,
   HttpStatus,
   HTTPError,
   InternalServerError,
@@ -16,6 +18,8 @@ import {
   isChunkClaimLostError,
   DuplicateFabFileError,
   isDuplicateFabFileError,
+  UrlBlockedError,
+  isUrlBlockedError,
   StorageLimitError,
   describeStorageLimitError,
   isStorageLimitError,
@@ -94,6 +98,100 @@ describe('isZodError', () => {
   it('returns true for objects with name ZodError', () => {
     const fakeZod = { name: 'ZodError' };
     expect(isZodError(fakeZod)).toBe(true);
+  });
+});
+
+describe('formatZodError', () => {
+  const schema = z.object({ model: z.string(), messages: z.array(z.object({ role: z.string() })).min(1) });
+  const failure = (input: unknown, type: z.ZodType = schema) => {
+    const parsed = type.safeParse(input);
+    if (parsed.success) throw new Error('expected a parse failure');
+    return parsed.error;
+  };
+
+  it('joins issues on one line with the prefix and quoted dot paths', () => {
+    expect(formatZodError(failure({ model: 1, messages: [{ role: 2 }] }))).toBe(
+      'Validation error: Invalid input: expected string, received number at "model"; ' +
+        'Invalid input: expected string, received number at "messages[0].role"'
+    );
+  });
+
+  it('lists at most maxIssues issues', () => {
+    expect(formatZodError(failure({}), { maxIssues: 1 })).toBe(
+      'Validation error: Invalid input: expected string, received undefined at "model"'
+    );
+  });
+
+  it('names a root array index and omits the path for a root issue', () => {
+    expect(formatZodError(failure([1], z.array(z.string())))).toBe(
+      'Validation error: Invalid input: expected string, received number at index 0'
+    );
+    expect(formatZodError(failure(5, z.string()))).toBe(
+      'Validation error: Invalid input: expected string, received number'
+    );
+  });
+
+  it('lists each branch of a union of primitives joined by " or "', () => {
+    expect(formatZodError(failure({ v: true }, z.object({ v: z.union([z.string(), z.number()]) })))).toBe(
+      'Validation error: Invalid input: expected string, received boolean at "v" or ' +
+        'Invalid input: expected number, received boolean at "v"'
+    );
+  });
+
+  it('lists each branch of a union of objects with its full path', () => {
+    const union = z.object({ v: z.union([z.object({ a: z.string() }), z.object({ b: z.number() })]) });
+    expect(formatZodError(failure({ v: { a: 1, b: 'x' } }, union))).toBe(
+      'Validation error: Invalid input: expected string, received number at "v.a" or ' +
+        'Invalid input: expected number, received string at "v.b"'
+    );
+  });
+
+  it('collapses union branches that format identically', () => {
+    expect(formatZodError(failure(5, z.union([z.string(), z.string()])))).toBe(
+      'Validation error: Invalid input: expected string, received number'
+    );
+  });
+
+  it('names the bad discriminator of a discriminated union', () => {
+    const union = z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('a'), x: z.string() }),
+      z.object({ kind: z.literal('b'), y: z.number() }),
+    ]);
+    expect(formatZodError(failure({ kind: 'zzz' }, union))).toBe(
+      "Validation error: Invalid discriminator value. Expected 'a' | 'b' at \"kind\""
+    );
+  });
+
+  it('quotes keys that are not identifiers and escapes embedded quotes', () => {
+    const odd = z.object({ '1-2': z.object({ 'x"y': z.string() }) });
+    expect(formatZodError(failure({ '1-2': {} }, odd))).toBe(
+      'Validation error: Invalid input: expected string, received undefined at "["1-2"]["x\\"y"]"'
+    );
+  });
+
+  it('never carries the raw issue objects', () => {
+    const message = formatZodError(failure({}));
+    expect(message).not.toContain('invalid_type');
+    expect(message).not.toContain('"path"');
+  });
+});
+
+describe('isUrlBlockedError', () => {
+  it('returns true for a real UrlBlockedError, which is also a 400 BadRequestError', () => {
+    const err = new UrlBlockedError('URL blocked for security reasons');
+    expect(isUrlBlockedError(err)).toBe(true);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.statusCode).toBe(HttpStatus.BadRequest);
+  });
+
+  it('returns true for an error from another module realm that only carries the name', () => {
+    expect(isUrlBlockedError(Object.assign(new BadRequestError('blocked'), { name: 'UrlBlockedError' }))).toBe(true);
+  });
+
+  it('returns false for a plain BadRequestError and for non-errors', () => {
+    expect(isUrlBlockedError(new BadRequestError('Unsupported file type'))).toBe(false);
+    expect(isUrlBlockedError(undefined)).toBe(false);
+    expect(isUrlBlockedError(null)).toBe(false);
   });
 });
 

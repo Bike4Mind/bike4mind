@@ -150,7 +150,7 @@ IngestedEmailSchema.index({ embargoUntil: 1 }, { sparse: true });
 
 IngestedEmailSchema.plugin(softDeletePlugin);
 
-const IngestedEmailModel =
+const IngestedEmailModel: mongoose.Model<IIngestedEmail> =
   (mongoose.models['IngestedEmail'] as unknown as mongoose.Model<IIngestedEmail>) ||
   mongoose.model<IIngestedEmail>('IngestedEmail', IngestedEmailSchema);
 

@@ -19,7 +19,9 @@ import Typography from '@mui/joy/Typography';
 import { useMemo } from 'react';
 import { useMobileHeaderStore } from '@client/app/hooks/useMobileHeader';
 import { gearsMenuDot, useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
-import { rewardGreen } from '@client/app/components/common/gearRewardStyles';
+import { inviteBlue, rewardGreen } from '@client/app/components/common/gearRewardStyles';
+import { SessionHandoffButton } from '@client/app/components/Session/SessionHandoff';
+import { coachTopBar } from '@client/app/components/tutorial/coachCover';
 
 const NotebookHeader = () => {
   const [openSideNav, setOpenSideNav, showMessageCounts] = useNotebookLayout(
@@ -54,6 +56,7 @@ const NotebookHeader = () => {
     <Sheet
       component="header"
       className="notebook-header-container"
+      {...coachTopBar}
       sx={{
         display: { xs: 'flex', sm: 'none' },
         alignItems: 'center',
@@ -95,9 +98,8 @@ const NotebookHeader = () => {
               width: '10px',
               height: '10px',
               borderRadius: '50%',
-              // Start here's own tag is neutral, which a bare dot cannot be and still
-              // be seen - so it takes the text colour, and the reward its green.
-              backgroundColor: menuDot === 'claim' ? rewardGreen(theme).ink : theme.palette.text.primary,
+              // Each in its tag's ink: the reward's green, Start here's blue.
+              backgroundColor: menuDot === 'claim' ? rewardGreen(theme).ink : inviteBlue(theme).ink,
             })}
           />
         )}
@@ -137,6 +139,7 @@ const NotebookHeader = () => {
             sx={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}
           >
             <SearchBarWithToggle handleChange={setSearch} placeHolder={t('search')} />
+            <SessionHandoffButton compact key={headerSession.id} sessionId={headerSession.id} />
 
             {/* New Note Button */}
             <IconButton

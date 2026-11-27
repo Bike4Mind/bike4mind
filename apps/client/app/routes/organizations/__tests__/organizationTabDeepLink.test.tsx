@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -8,6 +8,7 @@ import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import en from '@client/app/locales/en.json';
 import { OrganizationTabs } from '../orgTabAccess';
 import OrganizationPage from '../$id';
+import i18next from 'i18next';
 
 /**
  * Both halves of the ?tab= round trip.
@@ -22,11 +23,24 @@ import OrganizationPage from '../$id';
  */
 
 const orgQuery = vi.hoisted(() => ({
-  current: { data: undefined as IOrganizationDocument | undefined, isLoading: true },
+  current: {
+    data: undefined as IOrganizationDocument | undefined,
+    isLoading: true,
+    isError: false,
+    error: undefined as unknown,
+  },
 }));
-const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string } }));
+const searchParams = vi.hoisted(() => ({ current: {} as { tab?: string; section?: string } }));
 const user = vi.hoisted(() => ({ current: { id: 'owner1' } as { id: string; isAdmin?: boolean } | null }));
 const navigateSpy = vi.hoisted(() => vi.fn());
+const seats = vi.hoisted(() => ({ current: { currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 } }));
+const libraryRender = vi.hoisted(() => vi.fn());
+vi.mock('@client/app/components/organizations/OrganizationLibrarySection', () => ({
+  default: () => {
+    libraryRender();
+    return <div data-testid="library-contents" />;
+  },
+}));
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useGetSubscriptionsByOwner: () => ({ data: [] }),
@@ -34,12 +48,18 @@ vi.mock('@client/app/hooks/data/subscriptions', () => ({
 
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useGetOrganization: () => orgQuery.current,
-  useOrganizationSeats: () => ({ currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 }),
+  useOrganizationSeats: () => ({
+    ...seats.current,
+    activeSeats: seats.current.currentSeats - seats.current.pendingSeats,
+  }),
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: user.current }) }));
 
+const mobile = vi.hoisted(() => ({ current: false }));
+vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => mobile.current }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => undefined }));
+vi.mock('@client/app/components/organizations/OrganizationAvatar', () => ({ default: () => null }));
 
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
@@ -48,25 +68,32 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@client/app/components/common/Breadcrumbs', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/TeamOnboardingChecklist', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/Member', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationGroups', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationBillingSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationSettingsSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgModelPolicySection', () => ({
+  default: () => <div data-testid="model-policy-editor" />,
+}));
+vi.mock('@client/app/components/organizations/OrganizationRetentionSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationUsageSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrganizationAnalysisSection', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgSlackIntegration', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgWebhookConfig', () => ({ default: () => null }));
 vi.mock('@client/app/components/organizations/OrgGitHubConnectionTab', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgCustomMcpPolicySection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgApiKeysSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgMemberApiKeysSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrganizationAuditSection', () => ({ default: () => null }));
+vi.mock('@client/app/components/organizations/OrgDomainsTab', () => ({ default: () => null }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    i18n: { language: 'en' },
-    t: (key: string) => {
-      const value = key.split('.').reduce<unknown>((node, part) => (node as never)?.[part], en);
-      return typeof value === 'string' ? value : key;
-    },
-  }),
-}));
+// A real i18next over en.json, so assertions pin the wording, plurals and interpolation users get.
+const i18n = vi.hoisted(() => ({ t: (key: string): string => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: i18n.t, i18n: { language: 'en' } }) }));
+const i18nInstance = i18next.createInstance();
+void i18nInstance.init({ lng: 'en', resources: { en: { translation: en } }, initAsync: false });
+i18n.t = i18nInstance.t.bind(i18nInstance) as (key: string) => string;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -82,9 +109,9 @@ const ORG = {
   storageLimit: 0,
   users: [
     { userId: 'owner1' },
-    // Holds manage permissions but is neither owner nor manager: the one caller for whom the two
-    // gates disagree, so a deep link must be honoured for Settings and refused for Usage.
+    // Holds update on the sharing ACL but is neither owner nor manager, so no admin tab opens.
     { userId: 'manager2', permissions: [Permission.read, Permission.update] },
+    { userId: 'reader1', permissions: [Permission.read] },
   ],
 } as unknown as IOrganizationDocument;
 
@@ -92,17 +119,17 @@ const wrapper = (children: ReactNode) => <CssVarsProvider theme={appTheme}>{chil
 
 /** Mounts while the org query is still in flight, then delivers the document, as a real load does. */
 const renderThroughLoad = () => {
-  orgQuery.current = { data: undefined, isLoading: true };
+  orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
   const { rerender } = render(wrapper(<OrganizationPage />));
-  orgQuery.current = { data: ORG, isLoading: false };
+  orgQuery.current = { data: ORG, isLoading: false, isError: false, error: undefined };
   rerender(wrapper(<OrganizationPage />));
   return rerender;
 };
 
 /** Feeds the last navigate() back in as the new URL and rerenders, which is all the router does. */
 const applyNavigation = (rerender: (ui: ReactNode) => void) => {
-  const last = navigateSpy.mock.calls.at(-1)?.[0] as { search?: { tab?: string } } | undefined;
-  searchParams.current = { tab: last?.search?.tab };
+  const last = navigateSpy.mock.calls.at(-1)?.[0] as { search?: { tab?: string; section?: string } } | undefined;
+  searchParams.current = { ...last?.search };
   rerender(wrapper(<OrganizationPage />));
 };
 
@@ -120,9 +147,55 @@ const selectedTabName = () =>
 
 describe('organization detail page - ?tab= deep link', () => {
   beforeEach(() => {
+    localStorage.clear();
     searchParams.current = {};
     user.current = { id: 'owner1' };
     navigateSpy.mockClear();
+  });
+
+  it('admits a read-only current manager to settings and renders exactly one audit tab', () => {
+    user.current = { id: 'read-manager' };
+    searchParams.current = { tab: 'settings' };
+    orgQuery.current = {
+      data: {
+        ...ORG,
+        adminUserIds: ['read-manager'],
+        users: [...ORG.users, { userId: 'read-manager', permissions: [Permission.read] }],
+      },
+      isLoading: false,
+      isError: false,
+      error: undefined,
+    };
+    render(wrapper(<OrganizationPage />));
+    expect(selectedTabName()).toContain('Settings');
+    expect(screen.getAllByTestId('organization-audit-tab')).toHaveLength(1);
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
+  });
+
+  it.each([404, 403, 500])('shows a way back instead of spinning after HTTP %s', status => {
+    orgQuery.current = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { isAxiosError: true, response: { status } },
+    };
+    render(wrapper(<OrganizationPage />));
+    expect(screen.getByTestId('organization-error-state')).toBeTruthy();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-back-btn'));
+    expect(navigateSpy).toHaveBeenCalledWith({ to: '/organizations' });
+  });
+
+  it('recognizes a revoked previously visited team despite the privacy-preserving 404', () => {
+    localStorage.setItem('team-recents:owner1', JSON.stringify(['org1']));
+    orgQuery.current = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { isAxiosError: true, response: { status: 404 } },
+    };
+    render(wrapper(<OrganizationPage />));
+    expect(screen.getByText('You no longer have access')).toBeTruthy();
   });
 
   it('opens the Usage tab for the owner, who may see it', () => {
@@ -147,6 +220,20 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Settings');
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
+  });
+
+  it('keeps the Library tab ARIA target mounted while loading its contents only when selected', () => {
+    libraryRender.mockClear();
+    orgQuery.current = { data: ORG, isLoading: false, isError: false, error: undefined };
+    const view = render(wrapper(<OrganizationPage />));
+    const target = screen.getByTestId('organization-library-tab').getAttribute('aria-controls');
+    expect(target).toBeTruthy();
+    expect(document.getElementById(target!)).toBeTruthy();
+    expect(libraryRender).not.toHaveBeenCalled();
+    searchParams.current = { tab: OrganizationTabs.Library };
+    view.rerender(wrapper(<OrganizationPage />));
+    expect(screen.getByTestId('library-contents')).toBeTruthy();
   });
 
   it('still falls back to Overview for a member who may not see Usage', () => {
@@ -159,15 +246,43 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(screen.queryByRole('tab', { name: 'Usage' })).toBeNull();
   });
 
-  // The same caller, the same load, opposite answers: honouring a deep link is per-gate, not a
-  // blanket "trust the URL once the org lands".
-  it('honours Settings but not Usage for a member who may manage the org', () => {
+  it('opens the Domains tab for the owner', () => {
+    searchParams.current = { tab: 'domains' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Domains');
+  });
+
+  it('falls back to Overview on ?tab=domains for a member who is not a manager', () => {
+    searchParams.current = { tab: 'domains' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Domains' })).toBeNull();
+  });
+
+  it('refuses Settings to a member whose only claim is update on the sharing ACL', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'manager2' };
 
     renderThroughLoad();
 
-    expect(selectedTabName()).toBe('Settings');
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+    expect(screen.queryByTestId('model-policy-editor')).toBeNull();
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Settings. Ask the owner if you need it.'
+    );
+  });
+
+  it('shows the policy editor to a platform administrator without requiring an organization ACL row', () => {
+    searchParams.current = { tab: 'settings' };
+    user.current = { id: 'platform-admin', isAdmin: true };
+    renderThroughLoad();
+    expect(screen.getByTestId('model-policy-editor')).toBeTruthy();
   });
 
   it('opens the Billing tab for the owner, the only caller its actions accept', () => {
@@ -178,10 +293,8 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Billing');
   });
 
-  // Same caller, same manage permissions, opposite answer to the Settings case above: Billing
-  // rides its own owner-only gate because Subscribe, Manage Seats and Billing Portal all reject a
-  // non-owner. Before the split this member got the whole tab and an error from every control.
-  it('refuses Billing for a member who may manage the org', () => {
+  // Billing rides its own owner-only gate: Subscribe, Manage Seats and Billing Portal all reject a non-owner.
+  it('refuses Billing for a member who is not the owner', () => {
     searchParams.current = { tab: 'billing' };
     user.current = { id: 'manager2' };
 
@@ -189,7 +302,71 @@ describe('organization detail page - ?tab= deep link', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(screen.queryByRole('tab', { name: 'Billing' })).toBeNull();
-    expect(screen.getByRole('tab', { name: 'Settings' })).toBeTruthy();
+  });
+
+  it('says why a refused deep link landed on Overview', () => {
+    searchParams.current = { tab: 'usage' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Usage. Ask the owner if you need it.'
+    );
+  });
+
+  it('tells a read-only member that Settings is for the owner and managers', () => {
+    searchParams.current = { tab: 'settings' };
+    user.current = { id: 'reader1' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner and managers can open Settings. Ask the owner if you need it.'
+    );
+    expect(searchParams.current).toEqual({ tab: 'settings' });
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('names the owner as the only one who can open Billing', () => {
+    searchParams.current = { tab: 'billing' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-tab-denied-notice').textContent).toBe(
+      'Only the team owner can open Billing. Ask the owner if you need it.'
+    );
+  });
+
+  it.each(['groups', 'domains'])('does not tell the owner of a personal team to ask the owner for %s', tab => {
+    searchParams.current = { tab };
+    orgQuery.current = { data: { ...ORG, personal: true }, isLoading: false, isError: false, error: undefined };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
+  it('does not tell a platform admin to ask the owner for Audit', () => {
+    searchParams.current = { tab: 'audit' };
+    user.current = { id: 'staff1', isAdmin: true };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+  });
+
+  it('shows no notice when the requested tab opens', () => {
+    searchParams.current = { tab: 'usage' };
+
+    renderThroughLoad();
+
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
   });
 
   it('falls back to Overview for a non-member', () => {
@@ -206,6 +383,118 @@ describe('organization detail page - ?tab= deep link', () => {
     renderThroughLoad();
 
     expect(selectedTabName()).toBe('Overview');
+  });
+});
+
+describe('organization detail page - what a manager cannot do', () => {
+  const managedOrg = {
+    ...ORG,
+    adminUserIds: ['mgr1'],
+    users: [...ORG.users, { userId: 'mgr1', permissions: [Permission.read] }],
+  } as unknown as IOrganizationDocument;
+
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'mgr1' };
+    seats.current = { currentSeats: 1, maxSeats: 5, pendingSeats: 0, availableSeats: 4 };
+    navigateSpy.mockClear();
+    orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
+  });
+
+  it('lists Billing as a locked entry rather than hiding it', () => {
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-tab-locked-billing')).toBeTruthy();
+  });
+
+  it('opens the locked Billing tab on a read-only summary with no billing controls', () => {
+    searchParams.current = { tab: 'billing' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(selectedTabName()).toContain('Billing');
+    expect(screen.queryByTestId('organization-tab-denied-notice')).toBeNull();
+    expect(screen.getByTestId('organization-billing-owner-only')).toBeTruthy();
+    expect(screen.getByTestId('organization-billing-locked-credits').textContent).toBe('100');
+    expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('1 of 5');
+    expect(screen.getByText('Credits and seats for this team, read-only.')).toBeTruthy();
+    expect(screen.queryByText('Subscription, seats and payment details.')).toBeNull();
+  });
+
+  it('shows only the seat count on a plan with no seat cap', () => {
+    searchParams.current = { tab: 'billing' };
+    seats.current = { currentSeats: 3, maxSeats: 0, pendingSeats: 0, availableSeats: 0 };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-billing-locked-seats').textContent).toBe('3');
+  });
+
+  it('explains the owner-only Integrations sections', () => {
+    searchParams.current = { tab: 'integrations' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.getByTestId('organization-integrations-owner-only').textContent).toContain(
+      'Setting up Slack, GitHub and webhooks'
+    );
+  });
+
+  it('gives a platform admin who is not the owner the real Billing tab, not a locked entry', () => {
+    user.current = { id: 'staff1', isAdmin: true };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.queryByTestId('organization-tab-locked-billing')).toBeNull();
+  });
+
+  it('does not show the owner a locked Billing entry or the Integrations note', () => {
+    user.current = { id: 'owner1' };
+    searchParams.current = { tab: 'integrations' };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(screen.queryByTestId('organization-tab-locked-billing')).toBeNull();
+    expect(screen.queryByTestId('organization-integrations-owner-only')).toBeNull();
+  });
+});
+
+describe('organization detail page - phone section picker', () => {
+  const managedOrg = {
+    ...ORG,
+    adminUserIds: ['mgr1'],
+    users: [...ORG.users, { userId: 'mgr1', permissions: [Permission.read] }],
+  } as unknown as IOrganizationDocument;
+
+  beforeEach(() => {
+    mobile.current = true;
+    searchParams.current = {};
+    navigateSpy.mockClear();
+    orgQuery.current = { data: managedOrg, isLoading: false, isError: false, error: undefined };
+  });
+
+  afterEach(() => {
+    mobile.current = false;
+  });
+
+  it('marks Billing as locked for a manager', () => {
+    user.current = { id: 'mgr1' };
+    render(wrapper(<OrganizationPage />));
+
+    fireEvent.click(screen.getByTestId('organization-tabs-select'));
+
+    expect(screen.getByTestId('organization-tabs-option-locked-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tabs-option-billing')).toBeNull();
+  });
+
+  it('leaves Billing plain for the owner', () => {
+    user.current = { id: 'owner1' };
+    render(wrapper(<OrganizationPage />));
+
+    fireEvent.click(screen.getByTestId('organization-tabs-select'));
+
+    expect(screen.getByTestId('organization-tabs-option-billing')).toBeTruthy();
+    expect(screen.queryByTestId('organization-tabs-option-locked-billing')).toBeNull();
   });
 });
 
@@ -256,25 +545,33 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
     expect(selectedTabName()).toBe('Members');
   });
 
-  it('writes ?tab=settings when the header Team Settings button is clicked', () => {
+  it('writes ?tab=settings when the header Settings button is clicked', () => {
     renderThroughLoad();
 
-    fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
+    fireEvent.click(screen.getByTestId('organization-header-settings-btn'));
 
     expect(navigateSpy).toHaveBeenCalledWith(navigationTo(OrganizationTabs.Settings));
   });
 
-  // The header grants its own button on isAdmin while the page's canManageOrg does not, so a
-  // platform admin who is not a member sees a button the page refuses to act on. That disagreement
-  // predates the URL sync and is left as found; what is pinned here is that the page-side guard is
-  // still what decides, and a refusal writes nothing.
-  it('leaves the URL alone when the page refuses the header settings click', () => {
+  // The header and the rail read one canManageOrg, so a caller who sees the button always reaches
+  // the tab it opens. A platform admin who is not a member gets both, as the update route allows.
+  it('gives a platform admin both the header button and the Settings tab', () => {
     user.current = { id: 'admin9', isAdmin: true };
 
-    renderThroughLoad();
-    fireEvent.click(screen.getByRole('button', { name: /Team Settings/ }));
+    const rerender = renderThroughLoad();
+    fireEvent.click(screen.getByTestId('organization-header-settings-btn'));
+    applyNavigation(rerender);
 
-    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(selectedTabName()).toBe('Settings');
+  });
+
+  it('shows neither the header button nor the Settings tab to a non-member', () => {
+    user.current = { id: 'stranger9' };
+
+    renderThroughLoad();
+
+    expect(screen.queryByTestId('organization-header-settings-btn')).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Settings' })).toBeNull();
   });
 
   // Rewriting ?tab=usage to ?tab=overview for a caller who may not see Usage destroys the link for
@@ -297,5 +594,178 @@ describe('organization detail page - a tab click writes ?tab= back', () => {
 
     expect(selectedTabName()).toBe('Overview');
     expect(navigateSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization detail page - Integrations tab', () => {
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'owner1' };
+    navigateSpy.mockClear();
+  });
+
+  it.each([
+    ['github', 'github'],
+    ['webhooks', 'webhooks'],
+    ['connectors', 'connectors'],
+  ])('redirects the old ?tab=%s link to its Integrations section', (tab, section) => {
+    searchParams.current = { tab };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Integrations');
+    expect(screen.getByTestId(`organization-integration-section-${section}`)).toBeTruthy();
+    expect(navigateSpy).toHaveBeenCalledWith({
+      to: '/organizations/$id',
+      params: { id: 'org1' },
+      search: { tab: OrganizationTabs.Integrations, section },
+      replace: true,
+    });
+  });
+
+  describe.each([
+    ['github', 'github'],
+    ['webhooks', 'webhooks'],
+  ])('a manager opening the old ?tab=%s link', tab => {
+    const MANAGER_ORG = {
+      ...ORG,
+      adminUserIds: ['mgr3'],
+      users: [...(ORG.users ?? []), { userId: 'mgr3', permissions: [Permission.read] }],
+    } as unknown as IOrganizationDocument;
+
+    const renderAsManager = () => {
+      searchParams.current = { tab };
+      user.current = { id: 'mgr3' };
+      orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
+      const { rerender } = render(wrapper(<OrganizationPage />));
+      orgQuery.current = { data: MANAGER_ORG, isLoading: false, isError: false, error: undefined };
+      rerender(wrapper(<OrganizationPage />));
+      return rerender;
+    };
+
+    it('lands on Connectors, the only section a manager sees', () => {
+      renderAsManager();
+
+      expect(selectedTabName()).toBe('Integrations');
+      expect(screen.getByTestId('organization-integration-section-connectors')).toBeTruthy();
+      expect(screen.queryByTestId(`organization-integration-section-${tab}`)).toBeNull();
+    });
+
+    it('rewrites the URL to the resolved section once the legacy rewrite has settled', () => {
+      const rerender = renderAsManager();
+      applyNavigation(rerender);
+
+      expect(navigateSpy).toHaveBeenLastCalledWith({
+        to: '/organizations/$id',
+        params: { id: 'org1' },
+        search: { tab: OrganizationTabs.Integrations, section: 'connectors' },
+        replace: true,
+      });
+
+      const calls = navigateSpy.mock.calls.length;
+      applyNavigation(rerender);
+      expect(navigateSpy).toHaveBeenCalledTimes(calls);
+    });
+  });
+
+  it('does not rewrite before the user and organization have loaded', () => {
+    searchParams.current = { tab: 'integrations', section: 'github' };
+    orgQuery.current = { data: undefined, isLoading: true, isError: false, error: undefined };
+
+    render(wrapper(<OrganizationPage />));
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite a section the caller can see, or an Integrations link with no section', () => {
+    searchParams.current = { tab: 'integrations', section: 'webhooks' };
+    renderThroughLoad();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  // A bare ?tab=integrations meant the Slack panel before the merge, and the Slack OAuth callback
+  // still returns there, so it must keep opening Slack.
+  it('opens Slack when no section is named, as the pre-merge link and the Slack OAuth return did', () => {
+    searchParams.current = { tab: 'integrations', slack_connected: 'true' } as { tab: string };
+
+    renderThroughLoad();
+
+    expect(screen.getByTestId('organization-integration-section-slack')).toBeTruthy();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes the picked section to the URL', () => {
+    searchParams.current = { tab: 'integrations' };
+
+    const rerender = renderThroughLoad();
+    fireEvent.click(screen.getByTestId('organization-integration-sections-webhooks'));
+    applyNavigation(rerender);
+
+    expect(screen.getByTestId('organization-integration-section-webhooks')).toBeTruthy();
+  });
+
+  it('hides Integrations from a member who may manage the org but is neither owner nor manager', () => {
+    searchParams.current = { tab: 'github' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Integrations' })).toBeNull();
+    expect(screen.queryByTestId('organization-tab-group-integrations')).toBeNull();
+  });
+});
+
+describe('organization detail page - grouped rail and tab headers', () => {
+  beforeEach(() => {
+    searchParams.current = {};
+    user.current = { id: 'owner1' };
+    navigateSpy.mockClear();
+  });
+
+  it('groups the owner rail into Team, Insights, Integrations and Admin', () => {
+    renderThroughLoad();
+
+    expect(screen.getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      'Overview',
+      'Members',
+      'Library',
+      'Groups',
+      'Usage',
+      'Analysis',
+      'Integrations',
+      'Domains',
+      'Billing',
+      'API keys',
+      'Audit',
+      'Settings',
+    ]);
+    for (const group of ['team', 'insights', 'integrations', 'admin']) {
+      expect(screen.getByTestId(`organization-tab-group-${group}`)).toBeTruthy();
+    }
+  });
+
+  it.each([
+    'overview',
+    'members',
+    'library',
+    'groups',
+    'usage',
+    'analysis',
+    'integrations',
+    'billing',
+    'api-keys',
+    'audit',
+    'settings',
+  ])('gives the %s tab the shared header with a description', tab => {
+    searchParams.current = { tab };
+
+    renderThroughLoad();
+
+    const header = screen.getByTestId('admin-page-header');
+    expect(header.querySelector('h2')?.textContent).toMatch(
+      new RegExp(`^${en.organization.tabs[tab as keyof typeof en.organization.tabs]}`)
+    );
+    expect(header.querySelector('p')?.textContent).toBeTruthy();
   });
 });

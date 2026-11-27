@@ -1,5 +1,6 @@
 import type { DevLogRecord, DevLogSnapshot } from '@shared/devLog';
 import { redact } from './redact';
+import { ERRORS_TAG } from './tags';
 
 /**
  * What a publisher hands over. Built lazily - see {@link DevLogSink.publish} - so a source on a
@@ -107,7 +108,23 @@ export class DevLogSink {
    */
   publish(build: () => DevLogDraft): void {
     if (this.listeners.size === 0) return;
+    this.record(build());
+  }
+
+  /**
+   * Record one failure, whether or not anyone is watching.
+   *
+   * The deliberate exception to "nothing is retained unless watched": the window is opened by a
+   * chord after the user has seen an error, so an error dropped while it was closed could never
+   * be found. Errors are rare, so the laziness is not needed; the caps, scrubbing and clipping
+   * are the same. The `errors` tag is added if the draft omits it.
+   */
+  publishError(build: () => DevLogDraft): void {
     const draft = build();
+    this.record(draft.tags.includes(ERRORS_TAG) ? draft : { ...draft, tags: [...draft.tags, ERRORS_TAG] });
+  }
+
+  private record(draft: DevLogDraft): void {
     const fields = safeFields(draft.fields);
     const record: DevLogRecord = {
       id: this.nextId++,
@@ -117,6 +134,7 @@ export class DevLogSink {
       ...(fields ? { fields } : {}),
     };
     this.retain(record);
+    if (this.listeners.size === 0) return;
     this.pending.push(record);
     this.timer ??= setTimeout(() => this.flush(), FLUSH_MS);
   }

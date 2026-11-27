@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FETCH_TIMEOUT_MS, main } from '../qa-report.mjs';
+import { QaRunIngestRequestSchema } from '../../b4m-core/common/src/schemas/qa.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ENV = {
@@ -33,6 +34,10 @@ const json = (status, body) => ({
 let dir;
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'qa-report-'));
+});
+
+afterEach(async () => {
+  await fs.rm(dir, { recursive: true, force: true });
 });
 
 async function writeFixture({ passing = false } = {}) {
@@ -291,6 +296,59 @@ describe('main', () => {
     ]);
   });
 
+  it('reads a per-prompt latency list beside single-cell summaries', async () => {
+    const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
+    report.stats.unexpected = 0;
+    await fs.mkdir(path.join(dir, 'dl', 'cell-a', 'playwright-report'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'playwright-report/spec-pw-results.json'),
+      JSON.stringify(report)
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-short-answers-results.json'),
+      JSON.stringify({ model: 'model-a', thresholdSec: 5, averageResponseTimeSec: 3 })
+    );
+    await fs.writeFile(
+      path.join(dir, 'dl', 'cell-a', 'ai-latency-doc-prompts-results.json'),
+      JSON.stringify([
+        {
+          aiModel: 'model-a',
+          promptName: 'Prompt A',
+          thresholdSec: 120,
+          actualResponseLatency: '51.67 secs.',
+          totalEndToEnd: '51.67 secs.',
+          exceedsThreshold: false,
+        },
+        {
+          aiModel: 'model-a',
+          promptName: 'Prompt B',
+          thresholdSec: 120,
+          actualResponseLatency: '130.50 secs.',
+          totalEndToEnd: '130.50 secs.',
+          exceedsThreshold: true,
+        },
+      ])
+    );
+    const { fetch, calls } = fakeFetch();
+    await main(
+      ['--results-dir', path.join(dir, 'dl'), '--latency-dir', path.join(dir, 'dl')],
+      { ...ENV, QA_LATENCY_BREACH: 'true' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    const body = runBody(calls);
+    expect(body.metrics.map(m => [m.label, m.value]).sort()).toEqual([
+      ['ai-latency-doc-prompts: Prompt A', 51.67],
+      ['ai-latency-doc-prompts: Prompt B', 130.5],
+      ['ai-latency-short-answers', 3],
+    ]);
+    const gates = body.tests.filter(t => t.test_key.startsWith('latency-gate'));
+    expect(gates.map(t => [t.test_key, t.status]).sort()).toEqual([
+      ['latency-gate::ai-latency-doc-prompts: Prompt A [model-a]', 'passed'],
+      ['latency-gate::ai-latency-doc-prompts: Prompt B [model-a]', 'failed'],
+      ['latency-gate::ai-latency-short-answers [model-a]', 'passed'],
+    ]);
+  });
+
   it('posts a latency breach as a failed gate test only when the workflow flags one', async () => {
     const report = JSON.parse(await fs.readFile(path.join(here, 'fixtures/pw-results.json'), 'utf8'));
     report.stats.unexpected = 0;
@@ -369,5 +427,117 @@ describe('main', () => {
       { fetch, sleep: noSleep, log: makeLog() }
     );
     expect(runBody(calls).counts.ran).toBe(0);
+  });
+});
+
+describe('latency identities fit the actual ingest contract', () => {
+  it.each(['true', 'false'])('preserves distinct stable keys for long prompt names with breach=%s', async breach => {
+    await writeFixture({ passing: true });
+    const latencyDir = path.join(dir, 'lat');
+    await fs.mkdir(latencyDir);
+    const prefix = 'P'.repeat(1_200);
+    const entries = ['left', 'right'].map((suffix, index) => ({
+      aiModel: 'model-a',
+      promptName: `${prefix}-${suffix}`,
+      thresholdSec: 120,
+      actualResponseLatency: '1 secs.',
+      totalEndToEnd: '1 secs.',
+      exceedsThreshold: breach === 'true' && index === 1,
+    }));
+    entries.push({ ...entries[0], promptName: 'Short', exceedsThreshold: false });
+    await fs.writeFile(path.join(latencyDir, 'prompts-results.json'), JSON.stringify(entries));
+    const args = ['--results', path.join(dir, 'pw-results.json'), '--latency-dir', latencyDir];
+    const keys = [];
+    const metricLabels = [];
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { fetch, calls } = fakeFetch();
+      await main(args, { ...ENV, QA_LATENCY_BREACH: breach }, { fetch, sleep: noSleep, log: makeLog() });
+      const body = runBody(calls);
+      expect(QaRunIngestRequestSchema.safeParse(body).success).toBe(true);
+      const gates = body.tests.filter(test => test.test_key.startsWith('latency-gate'));
+      expect(gates).toHaveLength(3);
+      const labels = body.metrics.map(metric => metric.label).sort();
+      expect(new Set(labels).size).toBe(3);
+      expect(labels.every(label => label.length <= 200)).toBe(true);
+      metricLabels.push(labels);
+      expect(gates.every(test => test.test_key.length <= 1_000 && test.title.length <= 1_000)).toBe(true);
+      expect(gates.find(test => test.title === 'Latency gate: prompts: Short [model-a]')?.test_key).toBe(
+        'latency-gate::prompts: Short [model-a]'
+      );
+      const longKeys = gates
+        .filter(test => test.title !== 'Latency gate: prompts: Short [model-a]')
+        .map(test => test.test_key)
+        .sort();
+      expect(new Set(longKeys).size).toBe(2);
+      keys.push(longKeys);
+    }
+    expect(keys[0]).toEqual(keys[1]);
+    expect(metricLabels[0]).toEqual(metricLabels[1]);
+  });
+
+  it.each([
+    ['true', 'list'],
+    ['false', 'list'],
+    ['true', 'summary'],
+    ['false', 'summary'],
+  ])('skips an oversized model without losing the run or breach fallback (%s, %s)', async (breach, format) => {
+    await writeFixture({ passing: true });
+    const latencyDir = path.join(dir, 'lat');
+    await fs.mkdir(latencyDir);
+    const invalid =
+      format === 'list'
+        ? [
+            {
+              aiModel: 'M'.repeat(201),
+              promptName: 'Prompt',
+              actualResponseLatency: '1 secs.',
+              totalEndToEnd: '1 secs.',
+              exceedsThreshold: true,
+            },
+          ]
+        : { model: 'M'.repeat(201), thresholdSec: 5, averageResponseTimeSec: 9 };
+    await fs.writeFile(path.join(latencyDir, 'prompts-results.json'), JSON.stringify(invalid));
+    const { fetch, calls } = fakeFetch();
+    await main(
+      ['--results', path.join(dir, 'pw-results.json'), '--latency-dir', latencyDir],
+      { ...ENV, QA_LATENCY_BREACH: breach },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    const body = runBody(calls);
+    expect(QaRunIngestRequestSchema.safeParse(body).success).toBe(true);
+    expect(body.metrics).toEqual([]);
+    const gates = body.tests.filter(test => test.test_key.startsWith('latency-gate'));
+    expect(gates).toEqual(
+      breach === 'true' ? [expect.objectContaining({ test_key: 'latency-gate', status: 'failed' })] : []
+    );
+  });
+
+  it('preserves a model identifier at the allowed limit exactly', async () => {
+    await writeFixture({ passing: true });
+    const latencyDir = path.join(dir, 'lat');
+    await fs.mkdir(latencyDir);
+    const model = 'M'.repeat(200);
+    await fs.writeFile(
+      path.join(latencyDir, 'prompts-results.json'),
+      JSON.stringify([
+        {
+          aiModel: model,
+          promptName: 'Prompt',
+          actualResponseLatency: '1 secs.',
+          totalEndToEnd: '1 secs.',
+          exceedsThreshold: false,
+        },
+      ])
+    );
+    const { fetch, calls } = fakeFetch();
+    await main(
+      ['--results', path.join(dir, 'pw-results.json'), '--latency-dir', latencyDir],
+      { ...ENV, QA_LATENCY_BREACH: 'false' },
+      { fetch, sleep: noSleep, log: makeLog() }
+    );
+    const body = runBody(calls);
+    expect(QaRunIngestRequestSchema.safeParse(body).success).toBe(true);
+    expect(body.metrics[0].model).toBe(model);
+    expect(body.tests.some(test => test.test_key === `latency-gate::prompts: Prompt [${model}]`)).toBe(true);
   });
 });

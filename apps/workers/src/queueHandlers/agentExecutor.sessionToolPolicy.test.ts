@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('@server/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated', () => ({
   premiumWorkspaceDeniedTools: {
     'example-workspace': ['tool_denied_by_surface'],
     // A surface that denies a delegation tool. Names cannot gate these two (they are pushed as
@@ -12,6 +12,7 @@ import {
   applySessionToolPolicy,
   delegationOffer,
   runHasAttachments,
+  runSessionKnowledgeIds,
   sessionDeniedTools,
   DELEGATION_TOOLS,
   type SessionToolPolicyInput,
@@ -195,6 +196,18 @@ describe('applySessionToolPolicy', () => {
 
     // Original relative order kept, guaranteed reader appended at the end.
     expect(result).toEqual(['optihashi_solve', 'create_mission', 'mission_status', 'retrieve_knowledge_content']);
+  });
+});
+
+describe('runSessionKnowledgeIds', () => {
+  it('drops the session knowledge for a run whose key may not read files', () => {
+    expect(runSessionKnowledgeIds({ scopeDeniedTools: ['retrieve_knowledge_content'] }, ['k1'])).toEqual([]);
+  });
+
+  it('keeps it for any other run', () => {
+    expect(runSessionKnowledgeIds({ scopeDeniedTools: ['create_data_lake'] }, ['k1'])).toEqual(['k1']);
+    expect(runSessionKnowledgeIds({}, ['k1'])).toEqual(['k1']);
+    expect(runSessionKnowledgeIds(undefined, undefined)).toEqual([]);
   });
 });
 

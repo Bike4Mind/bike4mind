@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
+import { ZodError } from 'zod';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+}));
 
 /**
  * GET /api/[type]/[id]/invites delegates listing to sharingService.listInvitesForDocument
@@ -13,6 +21,8 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
   deleteHandler: null as null | ((req: any, res: any) => unknown),
+  postMiddleware: [] as unknown[],
+  accounts: [] as Array<{ email: string }>,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -22,8 +32,9 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: (fn: any) => {
-      mockRefs.postHandler = fn;
+    post: (...fns: any[]) => {
+      mockRefs.postMiddleware = fns.slice(0, -1);
+      mockRefs.postHandler = fns[fns.length - 1];
       return chain;
     },
     delete: (fn: any) => {
@@ -42,8 +53,22 @@ vi.mock('@bike4mind/services', () => ({
   sharingService: { listInvitesForDocument, createInvite, cancelInvite },
 }));
 
+const tryAddWithinLimitFixedWindow = vi.hoisted(() => vi.fn());
+const decrementCounter = vi.hoisted(() => vi.fn());
+const rateLimit = vi.hoisted(() => vi.fn((options: unknown) => ({ rateLimitOptions: options })));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit }));
+
+const sendInviteNotificationEmails = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/utils/mailer/inviteNotificationEmail', () => ({
+  getInviteTypeName: () => 'file',
+  sendInviteNotificationEmails,
+}));
+
 vi.mock('@bike4mind/database', () => ({
-  FabFile: {},
+  spaceRepository: {},
+  cacheRepository: { tryAddWithinLimitFixedWindow, decrementCounter },
+  User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve(mockRefs.accounts) }) }) },
+  FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
   Group: { findById: groupFindById },
   Session: {},
   Project: {},
@@ -57,12 +82,18 @@ vi.mock('@bike4mind/database', () => ({
   inviteRepository: {},
 }));
 
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { recordOrganizationAuditEvent } from '@bike4mind/server-utils/utils/organizationAudit';
 import '@pages/api/[type]/[id]/invites/index';
+
+const isZodErrorOn = (field: string) => (error: unknown) =>
+  error instanceof ZodError && error.issues.some(issue => issue.path[0] === field);
 
 describe('GET /api/[type]/[id]/invites', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -138,7 +169,202 @@ describe('GET /api/[type]/[id]/invites', () => {
 describe('POST /api/[type]/[id]/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
+    createInvite.mockResolvedValue({
+      id: 'i1',
+      documentId: '507f1f77bcf86cd799439011',
+      recipients: { pending: [] },
+    });
+    mockRefs.accounts = [];
+    tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+  });
+
+  it('charges organization email invites and audits the canonical document id', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'organizations', id: '507F1F77BCF86CD799439011' },
+      body: { permissions: ['read'], recipients: ['new@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+    await mockRefs.postHandler!(req, res);
+    expect(recordOrganizationAuditEvent).toHaveBeenCalledWith({
+      organizationId: '507f1f77bcf86cd799439011',
+      actorUserId: 'u1',
+      action: 'invite.created',
+      targetId: 'i1',
+    });
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:project-invite-typed-address',
+      1,
+      20,
+      3600000
+    );
+  });
+
+  // Bulk share links send one request per item and mail nobody, so a request limit here would fail
+  // them partway; the mail is bounded per recipient instead.
+  it('applies no per-request limit and charges nothing for a share link', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockRefs.postMiddleware).toEqual([expect.any(Function)]);
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(createInvite).toHaveBeenCalledOnce();
+  });
+
+  // The project route enforces API-key scopes this route does not; only the raw value can reach
+  // here, since the static projects route shadows the alias.
+  it.each(['Project', 'projects'])('refuses to create a project invite via the %s segment', async pathType => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: pathType, id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/project invites/);
+    expect(createInvite).not.toHaveBeenCalled();
+    expect(tryAddWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('refuses more recipients than one request may name', async () => {
+    const recipients = Array.from({ length: 26 }, (_, i) => `507f1f77bcf86cd7994390${String(i).padStart(2, '0')}`);
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('recipients'));
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('refuses an over-long message, which would be mailed to every recipient', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'], description: 'x'.repeat(1001) },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toSatisfy(isZodErrorOn('description'));
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  // Only project invites can name an address with no account, so the typed-address budget is
+  // the project route's alone; charging it here would fail bulk shares to account holders.
+  it('charges the recipients against the shared budget but not the typed-address budget', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledOnce();
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:invite-recipients',
+      2,
+      200,
+      60 * 60 * 1000
+    );
+    expect(createInvite).toHaveBeenCalledOnce();
+  });
+
+  it('refuses the invite once the recipient budget is spent', async () => {
+    tryAddWithinLimitFixedWindow.mockResolvedValueOnce({ success: false, expiresAt: new Date(Date.now() + 60_000) });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Too many invitations/);
+    expect(createInvite).not.toHaveBeenCalled();
+  });
+
+  it('gives the budget back when the invite is not created', async () => {
+    createInvite.mockRejectedValueOnce(new Error('Could not find a user for: a@example.com'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com', 'b@example.com'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Could not find a user/);
+    expect(decrementCounter).toHaveBeenCalledTimes(2);
+    expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
+  });
+
+  it('surfaces an organization invite with no known role as a 400 and refunds the budget', async () => {
+    const { BadRequestError } = await import('@bike4mind/utils');
+    createInvite.mockRejectedValueOnce(new BadRequestError('Invalid role for organization invite'));
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'organizations', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['share'], recipients: ['new@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Invalid role for organization invite',
+    });
+    expect(createInvite).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: 'Organization', permissions: ['share'] }),
+      expect.anything()
+    );
+    expect(decrementCounter).toHaveBeenCalledWith('rate-limit:u1:invite-recipients');
+    expect(sendInviteNotificationEmails).not.toHaveBeenCalled();
+  });
+
+  // No type this route accepts puts an address with no account in `pending` today; this pins the
+  // shared mailer's fallback should the sharing service ever start to.
+  it('emails an address with no account the fixed template only, and an account holder the message', async () => {
+    createInvite.mockResolvedValue({
+      id: 'i1',
+      token: TOKEN,
+      recipients: { pending: ['member@example.com', 'stranger@example.com'] },
+    });
+    mockRefs.accounts = [{ email: 'Member@example.com' }];
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['member@example.com', 'stranger@example.com'], description: 'hi' },
+    });
+    (req as any).user = { id: 'u1', name: 'Ann', email: 'ann@example.com' };
+
+    await mockRefs.postHandler!(req, res);
+    await vi.waitFor(() => expect(sendInviteNotificationEmails).toHaveBeenCalledTimes(2));
+
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['member@example.com'],
+      'Ann',
+      'ann@example.com',
+      'report.pdf',
+      'file',
+      expect.stringContaining(TOKEN),
+      'hi'
+    );
+    expect(sendInviteNotificationEmails).toHaveBeenCalledWith(
+      ['stranger@example.com'],
+      'Ann',
+      'ann@example.com',
+      'report.pdf',
+      'file',
+      expect.stringContaining(TOKEN)
+    );
   });
 
   // The `link` is the one place the token belongs, and it is what the client reads. Echoing the bare
@@ -402,6 +628,28 @@ describe('DELETE /api/[type]/[id]/invites', () => {
     // This handler throws for the central errorHandler to map (400), rather than writing the
     // status itself the way the GET handler above does - hence rejects, not _getStatusCode.
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('Invalid cancel invite request');
+    expect(cancelInvite).not.toHaveBeenCalled();
+  });
+});
+
+describe('Space invites on the generic [type] route', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['GET', () => mockRefs.getHandler],
+    ['POST', () => mockRefs.postHandler],
+    ['DELETE', () => mockRefs.deleteHandler],
+  ])('refuses %s and points at the Space routes', async (method, handlerOf) => {
+    const { req, res } = createMocks({
+      method: method as 'GET',
+      query: { type: 'Space', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['a@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+
+    await expect(handlerOf()!(req, res)).rejects.toThrow(/space invites/);
+    expect(listInvitesForDocument).not.toHaveBeenCalled();
+    expect(createInvite).not.toHaveBeenCalled();
     expect(cancelInvite).not.toHaveBeenCalled();
   });
 });

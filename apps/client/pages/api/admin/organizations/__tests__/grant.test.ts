@@ -5,8 +5,8 @@ import { ApiKeyScope } from '@bike4mind/common';
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
 // registered with it is the only guard available at this level.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'POST']?.(req, res),
@@ -29,9 +29,10 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 const mockOrgCreate = vi.fn();
+const mockAddCredits = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   organizationService: { create: (...a: unknown[]) => mockOrgCreate(...a) },
-  creditService: { addCredits: vi.fn() },
+  creditService: { addCreditsWithLedgerRow: (...a: unknown[]) => mockAddCredits(...a) },
 }));
 
 let inTransaction = false;
@@ -53,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 const mockSubCreate = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: { create: (...a: unknown[]) => mockSubCreate(...a) },
 }));
 
@@ -61,19 +62,46 @@ vi.mock('@server/models/Subscription', () => ({
 vi.mock('@bike4mind/server-utils/services/teamPlanSettings', () => ({
   getTeamPlanSettings: vi.fn(async () => ({ minSeats: 4, maxSeats: 100, creditsPerSeat: 50000 })),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn() }));
 // parseAdminActionReason stays real so the reason 400s come from the route itself.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: vi.fn(async () => {
     insideTransactionAtAudit = inTransaction;
     return null;
   }),
 }));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { priceAffectsEntitlements } from '@bike4mind/server-utils/entitlements/paidStanding';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+const approvalMocks = vi.hoisted(() => ({
+  policy: vi.fn(async (_credits: number): Promise<unknown> => null),
+  request: vi.fn(),
+  gateOptions: vi.fn(),
+}));
+const DISABLED_POLICY = { enabled: false, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
+vi.mock('@server/admin/creditGrants/gate', () => ({
+  // Like the real gate, a held self-grant gets the policy even with approvals disabled.
+  creditGrantNeedsApproval: async (credits: number, _actorId: string, opts?: { heldSelfGrant?: boolean }) => {
+    approvalMocks.gateOptions(opts);
+    const policy = await approvalMocks.policy(credits);
+    if (opts?.heldSelfGrant) return { policy: policy ?? DISABLED_POLICY };
+    return policy ? { policy } : { policy: null, release: async () => undefined };
+  },
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  requestApproval: (...a: unknown[]) => approvalMocks.request(...a),
+}));
+const POLICY = { enabled: true, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
+const PENDING = { approvalId: 'approval-1', status: 'pending' };
+
 import handler from '../grant';
+import type { Request } from 'express';
+import { grantOrg } from '@server/admin/creditGrants/grantOrg';
+import type { AdminApproval } from '@bike4mind/common';
 
 const BODY = {
   name: 'Acme Corp',
@@ -100,6 +128,7 @@ describe('POST /api/admin/organizations/grant', () => {
     mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
     mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
     mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
   });
 
   it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
@@ -107,13 +136,7 @@ describe('POST /api/admin/organizations/grant', () => {
     // would skip baseApi's entire api-key chain (baseApi.ts's `if (resolvedOptions.auth)`)
     // and disable this gate while leaving requiredScopes untouched.
     const config = (handler as unknown as { _config?: unknown })._config;
-    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN] });
-  });
-
-  it('rejects a non-admin', async () => {
-    const { run } = call({ isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
-    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(config).toEqual({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } });
   });
 
   it('creates the organization with a subscription for an admin', async () => {
@@ -122,6 +145,33 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(mockOrgCreate).toHaveBeenCalled();
     expect(mockSubCreate).toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', name: 'Acme Corp' });
+  });
+
+  it('wakes the owner entitlement cache when the org plan price affects entitlements', async () => {
+    const { run } = call({});
+    await run();
+    expect(sendToClient).toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
+  it('skips the entitlements push when the price does not affect entitlements', async () => {
+    vi.mocked(priceAffectsEntitlements).mockReturnValueOnce(false);
+    const { run } = call({});
+    await run();
+    expect(sendToClient).not.toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
+  it('still answers success when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1' });
   });
 
   it('records org.credits.granted against the new organization', async () => {
@@ -135,7 +185,18 @@ describe('POST /api/admin/organizations/grant', () => {
         action: 'org.credits.granted',
         target: expect.objectContaining({ kind: 'organization', id: 'org-1', displayName: 'Acme Corp' }),
         reason: 'Sales-approved pilot',
+        related: { creditTransactionId: 'tx-grant' },
       })
+    );
+  });
+
+  it('records no related ledger link when there are no initial credits', async () => {
+    const { run } = call({ body: { ...BODY, initialCredits: 0 } });
+    await run();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ related: undefined })
     );
   });
 
@@ -157,8 +218,142 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        details: expect.objectContaining({ ownerId: 'owner-1', seats: 5, initialCredits: 1000, credits: 1000 }),
+        details: expect.objectContaining({
+          ownerId: 'owner-1',
+          seats: 5,
+          initialCredits: 1000,
+          credits: 1000,
+          subscriptionId: mockSubCreate.mock.calls[0][0].subscriptionId,
+        }),
       })
     );
+  });
+});
+
+describe('POST /api/admin/organizations/grant - approval gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    approvalMocks.request.mockResolvedValue(PENDING);
+  });
+
+  it('runs as before when the gate passes it through', async () => {
+    mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
+    const { res, run } = call({});
+    await run();
+    expect(approvalMocks.policy).toHaveBeenCalledWith(BODY.initialCredits);
+    expect(res._getStatusCode()).toBe(201);
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+
+  it('answers 202 over the threshold and creates nothing', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toEqual(PENDING);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.grant',
+        requiredPermission: 'credits:adjust',
+        requiresFullAdmin: false,
+        params: expect.objectContaining({ ownerEmail: BODY.ownerEmail, initialCredits: 1000, reason: BODY.reason }),
+      }),
+      POLICY
+    );
+    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('holds a grant to the admin own account for credits:approve_self_grant', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindByEmail.mockResolvedValue({ id: 'admin-1', email: 'owner@example.com' });
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.grant',
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+      }),
+      POLICY
+    );
+  });
+
+  it.each([
+    ['direct', undefined],
+    ['impersonated', { impersonatedBy: 'admin-2', adminPermissions: ['credits:self_grant'] }],
+  ])('holds a %s self-grant with approvals disabled and answers 202', async (_label, extra) => {
+    mockUserFindByEmail.mockResolvedValue({ id: 'admin-1', email: 'owner@example.com' });
+    const { req, res } = createMocks({ method: 'POST', body: BODY });
+    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1', username: 'admin', ...extra };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
+    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: true });
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
+      DISABLED_POLICY
+    );
+    expect(mockOrgCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown owner before storing a request', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindByEmail.mockResolvedValueOnce(null);
+    await expect(call({}).run()).rejects.toThrow('No user with email');
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('grantOrg executor - selfGrant audit flag', () => {
+  const params = {
+    name: 'Acme Corp',
+    ownerEmail: 'owner@example.com',
+    seats: 5,
+    initialCredits: 1000,
+    reason: 'Pilot',
+  };
+  const executorReq = (user: Record<string, unknown>) =>
+    ({ user, logger: { info: vi.fn(), warn: vi.fn() } }) as unknown as Request;
+  const approvalBy = (...selfIds: string[]) =>
+    ({
+      id: 'approval-1',
+      requiredPermission: 'credits:approve_self_grant',
+      requestedBy: { id: selfIds[0], name: 'R', selfIds },
+    }) as unknown as AdminApproval;
+  const auditDetails = () => vi.mocked(recordAdminActionFromRequest).mock.calls[0][1].details;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
+  });
+
+  it('flags a grant whose owner is the acting admin', async () => {
+    await grantOrg(executorReq({ id: 'owner-1', isAdmin: true, adminPermissions: ['credits:self_grant'] }), params);
+    expect(auditDetails()).toMatchObject({ selfGrant: true });
+  });
+
+  it('flags an approved grant whose owner is the requesting admin, run by a different approver', async () => {
+    await grantOrg(
+      executorReq({ id: 'admin-2', isAdmin: true, adminPermissions: ['credits:approve_self_grant'] }),
+      params,
+      approvalBy('owner-1')
+    );
+    expect(auditDetails()).toMatchObject({ selfGrant: true });
+  });
+
+  it('does not flag a grant to an owner who is neither the actor nor the requester', async () => {
+    await grantOrg(executorReq({ id: 'admin-1', isAdmin: true }), params, approvalBy('admin-3'));
+    expect(auditDetails()).toMatchObject({ selfGrant: false });
   });
 });

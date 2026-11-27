@@ -10,6 +10,7 @@ import Typography from '@mui/joy/Typography';
 import type { MouseEvent, ReactNode } from 'react';
 import type { PrBarState } from '@shared/pullRequest';
 import { CaretDownIcon, ChevronIcon, ExternalLinkIcon } from './icons';
+import { composerBarControlSx } from './layout';
 import { SYSTEM_BROWSER_HINT, routePrLink, type BuiltInBrowserOpener } from './prLinks';
 import { BUCKET_DOT, CI_DOT_COLOR, checkRows, ciDot, mergeLabel, reviewLabel, sortedChecks } from './prBarModel';
 
@@ -62,14 +63,14 @@ export function PrCiMenu({
         color="neutral"
         startDecorator={<CiDotMark state={state} />}
         endDecorator={<CaretDownIcon />}
-        sx={{ fontWeight: 'md', minHeight: 26, px: 1, '--Button-gap': '6px' }}
+        sx={{ ...composerBarControlSx, px: 1 }}
         slotProps={{ root: { 'data-testid': 'pr-bar-ci-btn' } }}
       >
         CI
       </MenuButton>
       <Menu
         size="sm"
-        placement="top-end"
+        placement="bottom-end"
         sx={{ minWidth: 300, maxWidth: 420, p: 1.25, gap: 0.75 }}
         data-testid="pr-ci-menu"
       >

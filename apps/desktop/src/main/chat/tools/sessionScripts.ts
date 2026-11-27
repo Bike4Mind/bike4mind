@@ -1,0 +1,719 @@
+import { stat } from 'node:fs/promises';
+import { basename, join, posix, relative, resolve } from 'node:path';
+import type { Node } from 'web-tree-sitter';
+import { parseWslPath, wslLocation } from '../../wsl/wslPath';
+import { directoryOptionValues } from './bashArity';
+import { parseBash } from './bashParser';
+import { listedSetting } from './gitTable';
+import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
+import {
+  expandHome,
+  findActions,
+  isWrapper,
+  pastWrapper,
+  programName,
+  scriptVariables,
+  packageCommand,
+  shellHome,
+  splitString,
+  unquote,
+  wordValue,
+  words,
+  wrapperEffects,
+} from './shellScan';
+import { repositoryRoot } from './shellWrites';
+import type { ToolContext } from './types';
+
+const MAX_FILES_PER_SESSION = 200;
+const MAX_SESSIONS = 50;
+const MAX_PENDING = 100;
+
+interface SessionWrites {
+  /** Physical path -> a number that changes on every write. */
+  files: Map<string, number>;
+  /** Folders whose contents a command may have rewritten (an archive extracted, `git checkout -- dir`), the same way. */
+  trees: Map<string, number>;
+  /** Repositories whose `.git` or `.husky` folder was written, so git there can run new hooks. */
+  hooks: Map<string, number>;
+  /** Some writes were forgotten, so any script run asks. */
+  overflowed: boolean;
+}
+
+/** A session's writes as kept on disk. */
+export interface StoredSessionWrites {
+  files: [string, number][];
+  trees: [string, number][];
+  hooks: [string, number][];
+  overflowed: boolean;
+}
+
+/** Where each session's writes are kept, so a resumed session still asks. See SessionStore. */
+export interface SessionWritesStore {
+  loadSessionWrites(sessionId: string): Promise<unknown>;
+  saveSessionWrites(sessionId: string, writes: StoredSessionWrites): Promise<void>;
+  deleteSessionWrites(sessionId: string): Promise<void>;
+}
+
+/**
+ * Files each session wrote, through the write tools or a shell command. Auto mode asks before a
+ * command runs one of them (see shellTools' shellApproval), so a script is never written and run
+ * unseen. Forgotten when the session is deleted (ChatService), kept across archive and, once a
+ * store is set, across restarts.
+ */
+const bySession = new Map<string, SessionWrites>();
+const evicted = new Set<string>();
+/** Shell prompts that would run git over written hooks, by prompt key, cleared once one runs. */
+const pendingHooks = new Map<string, { sessionId: string; hooks: [string, number][] }>();
+// From the clock, so a generation kept on disk by an earlier run never recurs and revives an "always".
+let writes = Date.now();
+let store: SessionWritesStore | null = null;
+/** Each session's disk reads and writes, in order. */
+const queues = new Map<string, Promise<unknown>>();
+const loading = new Map<string, Promise<SessionWrites | null>>();
+
+export function keepSessionWritesIn(target: SessionWritesStore | null): void {
+  store = target;
+}
+
+function enqueue<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+  const result = (queues.get(sessionId) ?? Promise.resolve()).then(work);
+  const tail = result.catch(() => undefined);
+  queues.set(sessionId, tail);
+  void tail.then(() => {
+    if (queues.get(sessionId) === tail) queues.delete(sessionId);
+  });
+  return result;
+}
+
+function entries(value: unknown): [string, number][] | null {
+  if (!Array.isArray(value)) return null;
+  const valid = value.every(entry => Array.isArray(entry) && typeof entry[0] === 'string' && Number.isFinite(entry[1]));
+  return valid ? (value as [string, number][]) : null;
+}
+
+/** A stored record that does not read back cleanly counts as overflowed, so every script run asks. */
+function fromStored(value: unknown): SessionWrites | null {
+  if (value === null || value === undefined) return null;
+  const stored = (typeof value === 'object' ? value : {}) as Partial<Record<keyof StoredSessionWrites, unknown>>;
+  const files = entries(stored.files);
+  const trees = entries(stored.trees ?? []);
+  const hooks = entries(stored.hooks);
+  const record: SessionWrites = {
+    files: new Map(files ?? []),
+    trees: new Map(trees ?? []),
+    hooks: new Map(hooks ?? []),
+    overflowed: stored.overflowed === true || !files || !trees || !hooks,
+  };
+  for (const map of [record.files, record.trees, record.hooks])
+    for (const value of map.values()) writes = Math.max(writes, value);
+  return record;
+}
+
+function remember(sessionId: string, record: SessionWrites): SessionWrites {
+  bySession.delete(sessionId);
+  bySession.set(sessionId, record);
+  if (bySession.size > MAX_SESSIONS) {
+    const oldest = bySession.keys().next().value as string;
+    bySession.delete(oldest);
+    // With a store the record is read back on next use; without one it is gone.
+    if (!store) evicted.add(oldest);
+  }
+  return record;
+}
+
+/** The session's record, read from the store when it is not in memory. Undefined when it wrote nothing. */
+async function sessionRecord(sessionId: string): Promise<SessionWrites | undefined> {
+  const cached = bySession.get(sessionId);
+  if (cached || !store) return cached;
+  const from = store;
+  let pending = loading.get(sessionId);
+  if (!pending) {
+    pending = enqueue(sessionId, async () => {
+      try {
+        return fromStored(await from.loadSessionWrites(sessionId));
+      } catch {
+        return { files: new Map(), trees: new Map(), hooks: new Map(), overflowed: true };
+      }
+    }).finally(() => loading.delete(sessionId));
+    loading.set(sessionId, pending);
+  }
+  const loaded = await pending;
+  return bySession.get(sessionId) ?? (loaded ? remember(sessionId, loaded) : undefined);
+}
+
+function save(sessionId: string, record: SessionWrites): Promise<void> {
+  const to = store;
+  if (!to) return Promise.resolve();
+  return enqueue(sessionId, () =>
+    to.saveSessionWrites(sessionId, {
+      files: [...record.files],
+      trees: [...record.trees],
+      hooks: [...record.hooks],
+      overflowed: record.overflowed,
+    })
+  ).catch(() => undefined);
+}
+
+async function recordWrite(context: ToolContext, target: string, kind: 'files' | 'trees'): Promise<void> {
+  const id = context.sessionId;
+  if (!id) return;
+  const physical = await hostPhysicalTarget(target).catch(() => resolve(target));
+  const record = remember(
+    id,
+    (await sessionRecord(id)) ?? {
+      files: new Map(),
+      trees: new Map(),
+      hooks: new Map(),
+      overflowed: evicted.has(id),
+    }
+  );
+  const generation = ++writes;
+  const paths = record[kind];
+  paths.delete(physical);
+  paths.set(physical, generation);
+  if (paths.size > MAX_FILES_PER_SESSION) {
+    paths.delete(paths.keys().next().value as string);
+    record.overflowed = true;
+  }
+  const repository = /^(.*?)[\\/]\.(git|husky)([\\/]|$)/.exec(physical)?.[1];
+  // `git config` from a subfolder is recorded as `<subfolder>/.git/config`; git means the enclosing repository.
+  if (repository !== undefined) record.hooks.set((await repositoryRoot(repository)) || '/', generation);
+  // The user's own git config applies in every repository.
+  if (/[\\/](\.gitconfig|\.config[\\/]git[\\/]config)$/.test(physical)) record.hooks.set('/', generation);
+  // An archive extracted over a repository can bring its own `.git/hooks`.
+  if (kind === 'trees' && (await stat(join(physical, '.git')).catch(() => null)))
+    record.hooks.set(physical, generation);
+  await save(id, record);
+}
+
+export function recordSessionWrite(context: ToolContext, target: string): Promise<void> {
+  return recordWrite(context, target, 'files');
+}
+
+/** A folder whose contents a command may have rewritten, so any file under it counts as written. */
+export function recordSessionTreeWrite(context: ToolContext, target: string): Promise<void> {
+  return recordWrite(context, target, 'trees');
+}
+
+export async function forgetSessionWrites(sessionId: string): Promise<void> {
+  bySession.delete(sessionId);
+  evicted.delete(sessionId);
+  for (const [key, pending] of pendingHooks) if (pending.sessionId === sessionId) pendingHooks.delete(key);
+  const from = store;
+  if (from) await enqueue(sessionId, () => from.deleteSessionWrites(sessionId)).catch(() => undefined);
+}
+
+/** Called when an approved shell command starts: the hooks it was asked about count as seen. */
+export function shellCommandRan(context: ToolContext): void {
+  const pending = context.approvedKey ? pendingHooks.get(context.approvedKey) : undefined;
+  if (!pending) return;
+  pendingHooks.delete(context.approvedKey as string);
+  const record = bySession.get(pending.sessionId);
+  if (!record) return;
+  for (const [repository, generation] of pending.hooks) {
+    if (record.hooks.get(repository) === generation) record.hooks.delete(repository);
+  }
+  void save(pending.sessionId, record);
+}
+
+export function expectShellRun(key: string, sessionId: string, hooks: [string, number][]): void {
+  if (hooks.length === 0) return;
+  pendingHooks.delete(key);
+  pendingHooks.set(key, { sessionId, hooks });
+  if (pendingHooks.size > MAX_PENDING) pendingHooks.delete(pendingHooks.keys().next().value as string);
+}
+
+/** Leading words that start another program: `npx tsx x.ts` runs `tsx x.ts`. */
+const LAUNCHERS: readonly (readonly string[])[] = [
+  ['uv', 'run'],
+  ['poetry', 'run'],
+];
+const INTERPRETER =
+  /^(sh|bash|zsh|dash|ksh|fish|source|\.|node|nodejs|bun|deno|tsx|ts-node|python[\d.]*|ruby|perl|php|lua|rscript|pwsh|powershell|osascript|make)$/;
+const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
+const CONFIGURED_RUNNERS = new Set(['vitest', 'jest', 'pytest', 'py.test']);
+const TEST_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'vitest', 'jest', 'pytest', 'py.test']);
+const JS_CONFIG = ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs'];
+const PACKAGE_FILES = ['package.json'];
+const PYTEST_FILES = ['conftest.py', 'pytest.ini', 'pyproject.toml', 'setup.cfg'];
+/** Programs that run code their config file in the working directory defines. */
+const PROJECT_FILES = new Map<string, readonly string[]>([
+  ['npm', PACKAGE_FILES],
+  ['pnpm', PACKAGE_FILES],
+  ['yarn', PACKAGE_FILES],
+  ['bun', PACKAGE_FILES],
+  ['make', ['Makefile', 'makefile', 'GNUmakefile']],
+  ['vitest', JS_CONFIG.map(extension => `vitest.config.${extension}`)],
+  ['jest', [...JS_CONFIG, 'json'].map(extension => `jest.config.${extension}`)],
+  ['pytest', PYTEST_FILES],
+  ['py.test', PYTEST_FILES],
+  ['uv', ['pyproject.toml']],
+  ['poetry', ['pyproject.toml']],
+  ['hatch', ['pyproject.toml']],
+  ['cargo', ['build.rs']],
+  ['just', ['justfile', 'Justfile', '.justfile']],
+  ['task', ['Taskfile.yml', 'Taskfile.yaml']],
+]);
+
+/** yarn's `--cwd`, which bashArity does not drop. */
+function cwdOptionValues(args: readonly string[]): string[] {
+  const values: string[] = [];
+  for (const [index, arg] of args.entries()) {
+    if (arg === '--cwd' && args[index + 1] !== undefined) values.push(args[index + 1]);
+    else if (arg.startsWith('--cwd=')) values.push(arg.slice('--cwd='.length));
+  }
+  return values;
+}
+
+/** Values of `options` among the options before the first operand, as `-m mod` or `-mmod`. */
+function leadingOptionValues(args: readonly string[], options: readonly string[]): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length && args[index].startsWith('-'); index++) {
+    const option = options.find(name => args[index].startsWith(name));
+    if (!option) continue;
+    const joined = args[index].slice(option.length);
+    if (joined) values.push(joined);
+    else if (args[index + 1] !== undefined) values.push(args[++index]);
+  }
+  return values;
+}
+
+/** Values of `options` anywhere in the arguments, as `--config x` or `--config=x`. */
+function optionValues(args: readonly string[], options: readonly string[]): string[] {
+  const values: string[] = [];
+  for (const [index, arg] of args.entries()) {
+    for (const option of options) {
+      if (arg === option && args[index + 1] !== undefined) values.push(args[index + 1]);
+      else if (arg.startsWith(`${option}=`)) values.push(arg.slice(option.length + 1));
+    }
+  }
+  return values;
+}
+
+/** The paths a word can name: itself, or the value of `--opt=value`, split on spaces. */
+function pathsIn(word: string): string[] {
+  return unquote(word)
+    .split(/\s+/)
+    .flatMap(piece => {
+      const equals = piece.indexOf('=');
+      if (equals !== -1) return [piece.slice(equals + 1)];
+      return piece.startsWith('-') ? [] : [piece];
+    })
+    .map(piece => piece.replace(/^['"]+|['"]+$/g, ''))
+    .filter(Boolean);
+}
+
+function launcherLength(tokens: readonly string[], start: number): number {
+  const launch = packageCommand(tokens.slice(start));
+  if (launch && !launch.unread) return launch.at;
+  const match = LAUNCHERS.find(words =>
+    words.every((word, index) =>
+      index === 0 ? programName(unquote(tokens[start] ?? '')) === word : tokens[start + index] === word
+    )
+  );
+  return match?.length ?? 0;
+}
+
+/** Where the program starts in `tokens` once leading wrappers and launchers (and their options) are skipped. */
+function skipWrappers(tokens: readonly string[]): {
+  start: number;
+  wrapped: boolean;
+  launched: boolean;
+  launchers: number[];
+} {
+  let start = 0;
+  let wrapped = false;
+  let launched = false;
+  const launchers: number[] = [];
+  for (;;) {
+    const launcher = launcherLength(tokens, start);
+    if (launcher > 0) {
+      launched = true;
+      launchers.push(start);
+      start += launcher;
+      while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+    } else if (start < tokens.length && isWrapper(tokens[start])) {
+      wrapped = true;
+      start = pastWrapper(tokens, start);
+    } else {
+      break;
+    }
+  }
+  return { start, wrapped, launched, launchers };
+}
+
+/** A git config key that names a program git runs, set on the command line, with the value given. */
+const GIT_PROGRAM_KEY = /(^|\s)(-c\s*|--config-env[=\s])(['"]?)core\.(fsmonitor|hookspath|sshcommand)(=(\S*))?/gi;
+
+/** The `-c core.*` setting that makes git run a program, which auto mode asks about; a value gitTable lists runs none. */
+export function gitRunsConfiguredProgram(commands: readonly { words: string }[]): string | null {
+  for (const { words: text } of commands) {
+    if (!/^\s*(\S+\s+)*?(\S*\/)?git\s/.test(text)) continue;
+    for (const [, , option = '', quote = '', name = '', , given] of text.matchAll(GIT_PROGRAM_KEY)) {
+      const value = quote && given?.endsWith(quote) ? given.slice(0, -1) : given;
+      const literal = option.startsWith('-c') && value !== undefined && !/['"$`\\]/.test(value);
+      if (!(literal && listedSetting(`core.${name}`, value))) return `core.${name}`;
+    }
+  }
+  return null;
+}
+
+/** Variables naming a folder git reads config or hooks from, a program it runs, or where it finds programs by name. */
+const GIT_READS = ['GIT_DIR', 'GIT_COMMON_DIR', 'XDG_CONFIG_HOME', 'EDITOR', 'VISUAL', 'PAGER', 'SSH_ASKPASS', 'PATH'];
+
+/**
+ * Each value the script gives a GIT_READS variable anywhere, as an export reaches every git after it; null for one
+ * bash decides as it runs (`read NAME`). Names match in any case on Windows, as its environment does.
+ */
+function gitAssignments(root: Node): Map<string, (string | null)[]> {
+  const assigned = new Map<string, (string | null)[]>();
+  const windows = process.platform === 'win32';
+  for (const { name, value } of scriptVariables(root).set) {
+    const key = windows ? name.toUpperCase() : name;
+    if (value !== undefined && GIT_READS.includes(key)) assigned.set(key, [...(assigned.get(key) ?? []), value]);
+  }
+  return assigned;
+}
+
+/** A file in a `bin` folder, which bash or git may run by name off PATH. */
+const BIN_FOLDER = /[\\/]\.?bin[\\/]/i;
+
+/** Where no file has an execute bit, a file named as a program git runs or with an extension Windows runs. */
+const WINDOWS_PROGRAM = /[\\/](git(-[^\\/]*)?|ssh|less|vi|sh|gpg|man)(\.exe)?$|\.(exe|cmd|bat|com)$/i;
+
+export interface SessionScriptRun {
+  /** The written files the command runs, as given on the command line. */
+  names: string[];
+  /** Repositories whose hooks or config this session wrote and the command runs git in. */
+  hooks: [string, number][];
+  /** True when some of the session's writes were forgotten, so the files may not be its own. */
+  untracked: boolean;
+  /** Changes whenever one of those files is written again, so a remembered answer can lapse with it. */
+  generation: string;
+}
+
+/**
+ * The files this session wrote that `command` would execute: as the program, as an operand or
+ * input of an interpreter or launcher, or as the config a package manager or test runner reads.
+ * Null when none.
+ */
+export async function sessionScriptRun(
+  command: string,
+  startDirectory: string,
+  sessionId: string | undefined
+): Promise<SessionScriptRun | null> {
+  const found: FoundRuns = new Map();
+  const hooks = new Map<string, number>();
+  await scanScripts(command, startDirectory, sessionId, found, hooks);
+  if (found.size === 0 && hooks.size === 0) return null;
+  const runs = [...found.values()];
+  return {
+    names: [...new Set(runs.map(run => run.name))],
+    hooks: [...hooks],
+    untracked: runs.some(run => run.generation === '*'),
+    generation: [...runs.map(run => run.generation), ...hooks.values()].join(','),
+  };
+}
+
+type FoundRuns = Map<string, { name: string; generation: number | '*' }>;
+
+const inSameDistro = (a: string, b: string): boolean =>
+  wslLocation(a)?.distro.toLowerCase() === wslLocation(b)?.distro.toLowerCase();
+
+/** `target` with every symlink followed, except one in a WSL distro other than `base`'s, which would have to be started to look. */
+async function physicalFrom(base: string, target: string): Promise<string> {
+  if (wslLocation(target) && !inSameDistro(base, target)) return target;
+  return hostPhysicalTarget(target).catch(() => target);
+}
+
+/** `path` as an operand of a command in `from`, relative to it; by Linux rules in a WSL folder. */
+function operandFrom(from: string, path: string): string {
+  const base = wslLocation(from);
+  const target = base && inSameDistro(from, path) ? parseWslPath(path) : null;
+  return base && target ? posix.relative(base.linuxPath, target.linuxPath) : relative(from, path);
+}
+
+/** Adds what `command` runs to `found` and `hooks`; a nested `sh -c` string adds to the same maps. */
+async function scanScripts(
+  command: string,
+  startDirectory: string,
+  sessionId: string | undefined,
+  found: FoundRuns,
+  hooks: Map<string, number>
+): Promise<void> {
+  const stored = sessionId ? await sessionRecord(sessionId) : undefined;
+  const record = stored ?? (sessionId && evicted.has(sessionId) ? undefined : null);
+  if (record === null) return;
+  const written = record?.files ?? new Map<string, number>();
+  const trees = record?.trees ?? new Map<string, number>();
+  const overflowed = record?.overflowed ?? true;
+  if (written.size === 0 && trees.size === 0 && !overflowed) return;
+  const tree = await parseBash(command);
+  // An unparsable command is already asked about by shellApproval.
+  if (!tree) return;
+
+  const { home } = await shellHome(startDirectory);
+  let cwd = startDirectory;
+  const gitAssigned = gitAssignments(tree.rootNode);
+
+  const newestWrite = (): number | '*' => {
+    let newest: number | undefined;
+    for (const generation of [...written.values(), ...trees.values()]) {
+      if (generation > (newest ?? -Infinity)) newest = generation;
+    }
+    return newest ?? '*';
+  };
+
+  const treeGeneration = async (physical: string): Promise<number | undefined> => {
+    let newest: number | undefined;
+    for (const [tree, generation] of trees) {
+      if (isWithin(tree, physical) && generation > (newest ?? -Infinity)) newest = generation;
+    }
+    return newest !== undefined && (await stat(physical).catch(() => null))?.isFile() ? newest : undefined;
+  };
+
+  // Also resolved from the starting folder, since a `cd` inside a subshell is not undone here.
+  const consider = async (raw: string, directory: string, exact = false): Promise<void> => {
+    const text = expandHome(unquote(raw), home);
+    if (!text || text.includes('$') || text.includes('`')) return;
+    for (const base of new Set(exact ? [directory] : [directory, startDirectory])) {
+      for (const target of operandTargets(base, text)) {
+        const physical = await physicalFrom(base, target);
+        if (found.has(physical)) continue;
+        const own = written.get(physical);
+        const inTree = await treeGeneration(physical);
+        const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
+        if (generation !== undefined) found.set(physical, { name: text, generation });
+        else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
+          found.set(physical, { name: text, generation: '*' });
+        }
+      }
+    }
+  };
+
+  /** Whether the script gives a file the session wrote an execute bit; the bit is not there yet when it is approved. */
+  const chmodsWrittenFile = async (): Promise<boolean> => {
+    for (const command of tree.rootNode.descendantsOfType('command')) {
+      if (command === null) continue;
+      const tokens = words(command).map(unquote);
+      const at = skipWrappers(tokens).start;
+      if (programName(tokens[at] ?? '') !== 'chmod') continue;
+      const operands = tokens.slice(at + 1).filter(arg => !/^(--|-[RfvcHLP]+$)/.test(arg) || arg.startsWith('--ref'));
+      const [mode = '', ...files] = operands;
+      const grants = /^[0-7]{1,4}$/.test(mode)
+        ? [...mode].some(digit => Number(digit) % 2 === 1)
+        : /[+=][rwXst]*x/.test(mode) || tokens.some(arg => arg.startsWith('--reference'));
+      if (!grants) continue;
+      for (const file of files) {
+        const text = expandHome(file, home);
+        if (text.includes('$') || text.includes('`')) return true;
+        for (const base of new Set([cwd, startDirectory])) {
+          for (const target of operandTargets(base, text)) {
+            const physical = await physicalFrom(base, target);
+            if (written.has(physical) || (await treeGeneration(physical)) !== undefined) return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  // Rewritten folders may hold any program.
+  let programs: Promise<boolean> | undefined;
+  const wroteProgram = (): Promise<boolean> => {
+    programs ??= (async () => {
+      if (overflowed || trees.size > 0 || [...written.keys()].some(file => BIN_FOLDER.test(file))) return true;
+      if (process.platform === 'win32') return [...written.keys()].some(file => WINDOWS_PROGRAM.test(file));
+      for (const file of written.keys()) {
+        const info = await stat(file).catch(() => null);
+        if (info?.isFile() && (info.mode & 0o111) !== 0) return true;
+      }
+      return chmodsWrittenFile();
+    })();
+    return programs;
+  };
+
+  /**
+   * Adds a written file or rewritten folder at or under `value`, a folder git reads config, hooks or programs from,
+   * given as bash passes it. A folder bash fills in may be any the session wrote to, or on PATH any holding a program.
+   */
+  const considerFolder = async (value: string, directory: string, onPath = false): Promise<void> => {
+    // `PATH="$PWD/bin:$PATH"` names a folder under the one git runs in.
+    const text = expandHome(value, home).replace(/^(\$PWD|\$\{PWD\}|\$\(\s*pwd\s*\)|`\s*pwd\s*`)(?=\/|$)/, '.');
+    if (!text) return;
+    if (text.includes('$') || text.includes('`')) {
+      if (!found.has(text) && (!onPath || (await wroteProgram())))
+        found.set(text, { name: text, generation: newestWrite() });
+      return;
+    }
+    for (const base of new Set([directory, startDirectory])) {
+      for (const target of operandTargets(base, text)) {
+        const physical = await physicalFrom(base, target);
+        for (const [file, generation] of written) {
+          if (!found.has(file) && isWithin(physical, file)) found.set(file, { name: text, generation });
+        }
+        for (const [tree, generation] of trees) {
+          if (!found.has(tree) && (isWithin(physical, tree) || isWithin(tree, physical))) {
+            found.set(tree, { name: text, generation });
+          }
+        }
+        if (overflowed && !found.has(physical) && (await stat(physical).catch(() => null))?.isDirectory()) {
+          found.set(physical, { name: text, generation: '*' });
+        }
+      }
+    }
+  };
+
+  const inputRedirects = (node: Node): string[] => {
+    const parent = node.parent;
+    if (parent?.type !== 'redirected_statement') return [];
+    return parent.namedChildren
+      .filter(child => child?.type === 'file_redirect' && child.text.trimStart().startsWith('<'))
+      .map(child => child?.childForFieldName('destination')?.text ?? '');
+  };
+
+  const gitHooks = async (directories: string[]): Promise<void> => {
+    for (const directory of directories) {
+      const physical = await hostPhysicalTarget(directory).catch(() => directory);
+      for (const [repository, generation] of record?.hooks ?? []) {
+        if (isWithin(repository, physical)) hooks.set(repository, generation);
+      }
+    }
+  };
+
+  /** What git, `command` as bash passes it from git on, run from `directory`, reads that the session may have written. */
+  const visitGit = async (command: readonly string[], directory: string): Promise<void> => {
+    const args = command.slice(1);
+    const named = directoryOptionValues(['git', ...args]).map(value => resolveOperand(directory, value));
+    const folders = [directory, ...named];
+    await gitHooks(folders);
+    for (const value of leadingOptionValues(args, ['-c'])) {
+      for (const path of pathsIn(value)) await consider(path, directory);
+    }
+    const assigned = (variable: string): (string | null)[] => gitAssigned.get(variable) ?? [];
+    // git reads config and hooks from its git dir, runs an editor, pager or askpass the environment names, and
+    // finds the programs it runs by name (`man`, `ssh`, `git-<name>`) through PATH, where an empty entry is `.`.
+    for (const folder of folders) {
+      for (const gitDir of [
+        ...optionValues(args, ['--git-dir']),
+        ...assigned('GIT_DIR'),
+        ...assigned('GIT_COMMON_DIR'),
+      ]) {
+        await considerFolder(gitDir ?? '$GIT_DIR', folder);
+      }
+      for (const config of assigned('XDG_CONFIG_HOME')) {
+        await considerFolder(config === null ? '$XDG_CONFIG_HOME' : posix.join(config, 'git'), folder);
+      }
+      for (const program of ['EDITOR', 'VISUAL', 'PAGER', 'SSH_ASKPASS'].flatMap(assigned)) {
+        for (const path of pathsIn(program ?? '')) await consider(path, folder);
+      }
+      for (const value of assigned('PATH')) {
+        const entries =
+          value === null ? ['$PATH'] : value.split(':').filter(entry => !/^\$(PATH|\{PATH\})$/.test(entry));
+        for (const entry of entries) await considerFolder(entry || '.', folder, true);
+      }
+    }
+  };
+
+  const visitCommand = async (node: Node, piped: boolean): Promise<void> => {
+    const tokens = words(node).map(unquote);
+    const split = splitString(words(node));
+    if (split) await scanScripts(split.command, cwd, sessionId, found, hooks);
+    const { start, wrapped, launched, launchers } = skipWrappers(tokens);
+    // `env -C DIR` runs the command from DIR.
+    const from = wrapperEffects(words(node)).folders.reduce(
+      (folder, value) => resolveOperand(folder, wordValue(value)),
+      cwd
+    );
+    // A launcher spelled as a path (`./npx`) may be a file this session wrote.
+    for (const index of launchers) if (/[/\\]/.test(tokens[index])) await consider(tokens[index], from);
+    const [executable, ...args] = tokens.slice(start);
+    if (executable === undefined) return;
+    const program = basename(executable);
+    if (!wrapped && (program === 'cd' || program === 'pushd')) {
+      const target = expandHome(args.find(arg => !arg.startsWith('-')) ?? '', home);
+      if (target && !target.includes('$')) cwd = resolveOperand(cwd, target);
+      return;
+    }
+    const name = programName(executable);
+    if (name === 'git') await visitGit(words(node).map(wordValue).slice(start), from);
+    if (name === 'find') {
+      for (const run of findActions(words(node).slice(start + 1)).runs) {
+        const command = run.map(wordValue);
+        const at = skipWrappers(command).start;
+        if (programName(command[at] ?? '') === 'git') await visitGit(command.slice(at), from);
+      }
+    }
+    if (executable.includes('/') || launched) await consider(executable, from);
+    const module = /^python[\d.]*$/.test(name) ? leadingOptionValues(args, ['-m'])[0] : undefined;
+    const runner = module ?? name;
+    if (CONFIGURED_RUNNERS.has(runner) || args.some(arg => CONFIGURED_RUNNERS.has(arg))) {
+      for (const value of optionValues(args, ['--config', '-c'])) await consider(value, cwd);
+      for (const plugin of optionValues(args, ['-p'])) {
+        for (const path of [plugin, `${plugin}.py`, `${plugin.replace(/\./g, '/')}.py`]) await consider(path, cwd);
+      }
+    }
+    // A test runner's operands are test files, which edit-and-rerun loops change all the time.
+    const runs = !TEST_RUNNERS.has(runner) && (wrapped || piped || INTERPRETER.test(name));
+    // A launcher's own tool (`npx prettier src.ts`) only reads its operands; an interpreter runs them.
+    const operands = wrapped ? tokens : args;
+    if (runs) {
+      // Behind a wrapper the program is not reliably the first word, so every word is a candidate.
+      for (const word of operands) for (const path of pathsIn(word)) await consider(path, from);
+      for (const target of inputRedirects(node)) await consider(target, cwd);
+    }
+    if (runs || PROJECT_FILES.has(name)) {
+      for (const child of node.namedChildren) {
+        if (child?.type !== 'variable_assignment') continue;
+        for (const path of pathsIn(child.childForFieldName('value')?.text ?? '')) await consider(path, from);
+      }
+    }
+    const inline = SHELLS.test(name) ? args.findIndex(arg => /^[-+][a-z]*c[a-z]*$/.test(arg)) : -1;
+    if (inline !== -1 && args[inline + 1] !== undefined) {
+      await scanScripts(args[inline + 1], cwd, sessionId, found, hooks);
+    }
+    const project = PROJECT_FILES.get(runner);
+    if (project) {
+      const named = [...directoryOptionValues(tokens.slice(start)), ...cwdOptionValues(args)];
+      for (const directory of [cwd, ...named.map(value => resolveOperand(cwd, value))]) {
+        for (const file of project)
+          await consider(operandFrom(startDirectory, join(directory, file)), startDirectory, true);
+      }
+      // pytest also loads a conftest.py from any folder below the one it starts in.
+      if (project === PYTEST_FILES) {
+        const below = await hostPhysicalTarget(cwd).catch(() => cwd);
+        for (const file of written.keys()) {
+          if (basename(file) === 'conftest.py' && isWithin(below, file)) {
+            await consider(operandFrom(startDirectory, file), startDirectory, true);
+          }
+        }
+      }
+    }
+    // `$(./x.sh)` and `<(cat x.sh)` run inside the command; a process substitution handed to an interpreter is its script.
+    const interprets = wrapped || INTERPRETER.test(name);
+    for (const substitution of node.descendantsOfType(['command_substitution', 'process_substitution'])) {
+      for (const child of substitution?.namedChildren ?? []) {
+        if (child) await visit(child, piped || (interprets && substitution?.type === 'process_substitution'));
+      }
+    }
+  };
+
+  const visit = async (node: Node, piped: boolean): Promise<void> => {
+    if (node.type === 'command') return visitCommand(node, piped);
+    // A file fed down a pipe into an interpreter runs as much as one named on its command line.
+    const feedsInterpreter =
+      node.type === 'pipeline' &&
+      node.namedChildren.some(child => {
+        if (child?.type !== 'command') return false;
+        const tokens = words(child).map(unquote);
+        return splitString(tokens) !== null || INTERPRETER.test(programName(tokens[skipWrappers(tokens).start] ?? ''));
+      });
+    for (const child of node.namedChildren) if (child) await visit(child, piped || feedsInterpreter);
+  };
+
+  try {
+    await visit(tree.rootNode, false);
+  } finally {
+    tree.delete();
+  }
+}

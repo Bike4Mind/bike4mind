@@ -10,20 +10,22 @@
  * - All values encrypted with AES-256-GCM before storage
  */
 
-import { systemSecretRepository } from '@bike4mind/database';
+import { systemSecretRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { encryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   clearSecretCache,
+  getResolvableSecrets,
   RESOLVABLE_SECRETS,
   resolveSecret,
   TIER1_SECRETS,
   type ResolvableSecretName,
 } from '@server/managers/systemSecretsManager';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * Mask a secret value for display (show only last 4 chars).
@@ -34,18 +36,23 @@ function maskSecretValue(value: string | undefined): string {
   return '****' + value.slice(-4);
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const dbSecrets = await systemSecretRepository.findAll();
+
+      // A stored override for a setting this stage does not read stays listed, so it can be removed.
+      const resolvable = getResolvableSecrets();
+      const listed = Object.entries(RESOLVABLE_SECRETS).filter(
+        ([secretName]) => secretName in resolvable || dbSecrets.some(s => s.secretName === secretName)
+      );
 
       // Build response with resolution status for each configurable secret
       const secretsStatus = await Promise.all(
-        Object.entries(RESOLVABLE_SECRETS).map(async ([secretName, config]) => {
+        listed.map(async ([secretName, config]) => {
           const dbSecret = dbSecrets.find(s => s.secretName === secretName);
           const resolution = await resolveSecret(secretName, true);
 
@@ -57,6 +64,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             source: resolution.source,
             maskedValue: maskSecretValue(resolution.value),
             isOverridable: !TIER1_SECRETS.has(secretName),
+            isUnused: !(secretName in resolvable),
             dbRecord: dbSecret
               ? {
                   id: dbSecret.id,
@@ -78,18 +86,11 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     } catch (error) {
       Logger.error('Error fetching system secrets status:', error);
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to fetch system secrets' });
     }
   })
   .post(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { secretName, value } = req.body;
 
       if (!secretName || typeof secretName !== 'string') {
@@ -109,7 +110,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
 
       // Check if this is a known secret
-      const secretConfig = RESOLVABLE_SECRETS[secretName as ResolvableSecretName];
+      const secretConfig = getResolvableSecrets()[secretName as ResolvableSecretName];
       if (!secretConfig) {
         throw new BadRequestError(`Unknown secret: ${secretName}. Only predefined secrets can be configured.`);
       }
@@ -121,30 +122,39 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       const encryptedValue = encryptSecret(value, encryptionKey);
 
-      // Check if secret already exists
-      const existingSecret = await systemSecretRepository.findBySecretName(secretName);
+      const existingSecret = await withTransaction(async () => {
+        const existing = await systemSecretRepository.findBySecretName(secretName);
 
-      if (existingSecret) {
-        // Update existing secret
-        await systemSecretRepository.updateSecret(existingSecret.id, {
-          encryptedValue,
-          source: 'gui_configured',
-          lastModifiedBy: req.user!.id,
+        if (existing) {
+          await systemSecretRepository.updateSecret(existing.id, {
+            encryptedValue,
+            source: 'gui_configured',
+            lastModifiedBy: req.user!.id,
+          });
+        } else {
+          await systemSecretRepository.upsertSecret(secretName, {
+            encryptedValue,
+            keyVersion: 1,
+            category: secretConfig.category,
+            source: 'gui_configured',
+            isOverridable: true,
+            description: secretConfig.description,
+            lastModifiedBy: req.user!.id,
+          });
+        }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.system_secret.upserted',
+          target: { kind: 'settings', id: secretName, displayName: secretName },
+          summary: `${existing ? 'updated' : 'created'} system secret ${secretName}`,
+          details: { created: !existing },
         });
-        Logger.info(`[System Secrets] Updated secret ${secretName} by user ${req.user!.id}`);
-      } else {
-        // Create new secret
-        await systemSecretRepository.upsertSecret(secretName, {
-          encryptedValue,
-          keyVersion: 1,
-          category: secretConfig.category,
-          source: 'gui_configured',
-          isOverridable: true,
-          description: secretConfig.description,
-          lastModifiedBy: req.user!.id,
-        });
-        Logger.info(`[System Secrets] Created secret ${secretName} by user ${req.user!.id}`);
-      }
+        return existing;
+      });
+
+      Logger.info(
+        `[System Secrets] ${existingSecret ? 'Updated' : 'Created'} secret ${secretName} by user ${req.user!.id}`
+      );
 
       // Clear cache so new value is used immediately
       clearSecretCache(secretName);
@@ -160,9 +170,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       });
     } catch (error) {
       Logger.error('Error creating/updating system secret:', error);
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }

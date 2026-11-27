@@ -4,6 +4,7 @@ import {
   FeedbackType,
   HelpFeedbackRating,
   HelpFeedbackReportType,
+  IFeedbackClientContext,
   IHelpFeedbackContext,
   truncateFeedbackContent,
 } from '@bike4mind/common';
@@ -81,6 +82,7 @@ export async function routeHelpCommentToFeedback({
   submitter,
   comment,
   helpContext,
+  clientContext,
   logger,
 }: {
   /** The authenticated session's own identity - the display fields are taken from here rather
@@ -88,6 +90,9 @@ export async function routeHelpCommentToFeedback({
   submitter: { id: string; username?: string | null; email?: string | null };
   comment: string;
   helpContext: RoutedCommentTarget;
+  /** Already validated by `parseFeedbackClientContext`. Stamped on insert only: a revision is the
+   * same submission edited, so it keeps the context it was written with. */
+  clientContext?: IFeedbackClientContext;
   logger: Pick<Logger, 'error' | 'warn'>;
 }): Promise<void> {
   const userId = submitter.id;
@@ -123,6 +128,7 @@ export async function routeHelpCommentToFeedback({
   const feedback = new FeedbackModel({
     _id: feedbackId,
     userId,
+    userIdVerified: true,
     status: FeedbackStatus.New,
     // `username` is required by the schema, so a submitter carrying neither display field would
     // fail validation on an otherwise valid report. `userId` is the last resort for exactly that
@@ -138,6 +144,7 @@ export async function routeHelpCommentToFeedback({
     type,
     subject: 'help',
     helpContext: { ...helpContext, reportType },
+    clientContext,
     contentStored,
   });
 

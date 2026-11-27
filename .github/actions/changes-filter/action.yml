@@ -3,11 +3,11 @@ description: >-
   Decide whether a workflow run touched deployable paths, and (separately)
   whether it touched the Docusaurus docs site. Evaluates the whole-PR diff vs
   its merge-base with the target branch on every pull_request event (the
-  "Files changed" three-dot semantics), the push range on push, and the
-  queue group's base..head range on merge_group. Returns deployable=false only
-  when every changed file matches the non-deployable pathspec list; returns
-  docs-changed=true when any changed file matches the docs pathspec list - the
-  docs-site/ corpus plus the help tooling in packages/scripts/help/; returns
+  "Files changed" three-dot semantics) and the push range on push. Returns
+  deployable=false only when every changed file matches the non-deployable
+  pathspec list; returns docs-changed=true when any changed file matches the
+  docs pathspec list - the docs-site/ corpus plus the help tooling in
+  packages/scripts/help/; returns
   published-changed=true when any changed file matches the published pathspec
   list - b4m-core, the SDK and its spec, the lockfile, the check, its fixture
   and the CI wiring.
@@ -21,9 +21,8 @@ description: >-
   Every event ci.yml triggers on needs its own arm in the case block below.
   An unhandled event falls through to the fail-open default on EVERY run of
   that trigger, so the gate it produces diverges from the one the same content
-  got elsewhere - merge_group did exactly that until it was handled. The arms
-  are cross-checked against ci.yml's trigger list by
-  packages/scripts/src/checkChangesFilterEvents.test.ts.
+  got elsewhere. The arms are cross-checked against ci.yml's trigger list by
+  packages/scripts/src/checkChangesFilterEvents.repo.test.ts.
 
   Requires the repo to be checked out first with fetch-depth: 0.
 
@@ -36,19 +35,22 @@ inputs:
       means "any depth" and '*' stops at '/' (default pathspec magic does NOT
       exclude a root README.md via '**/*.md').
 
-      Default note: markdown is excluded ONLY in docs locations (READMEs,
-      docs-site/, agents/, repo root). Do not blanket-exclude '**/*.md' if any
-      markdown is a runtime build input (e.g. @next/mdx, app/prompts/*.md,
-      app/content/*.md) - that would silently skip a real deploy. lumina5
-      serves docs from docs-site/ (Docusaurus) and uses .changeset/ for
-      version bumps; both are non-deployable to the app.
+      Default note: every .md/.mdx file is non-deployable wherever it lives,
+      EXCEPT the paths listed in `content-paths` below, which are markdown the
+      build or the tests read and so always count as deployable. Register any
+      new markdown build input there; an unregistered one is treated as docs
+      and silently skips a real deploy. lumina5 serves docs from docs-site/
+      (Docusaurus) and uses .changeset/ for version bumps; both are
+      non-deployable to the app.
     required: false
     default: |
       :(exclude,glob)docs-site/**
+      :(exclude,glob)docs/**
       :(exclude,glob)agents/**
-      :(exclude,glob)**/README.md
-      :(exclude,glob)**/CHANGELOG.md
-      :(exclude,glob)*.md
+      :(exclude,glob)apps/ios/**
+      :(exclude,glob)apps/android/**
+      :(exclude,glob)**/*.md
+      :(exclude,glob)**/*.mdx
       :(exclude)LICENSE
       :(exclude,glob)**/.env.example
       :(exclude,glob).vscode/**
@@ -61,6 +63,23 @@ inputs:
       :(exclude).github/CODEOWNERS
       :(exclude).github/dependabot.yml
       :(exclude,glob).changeset/**
+  content-paths:
+    description: >-
+      Newline-separated git pathspecs (INCLUDE form) of markdown that is a
+      build or test input rather than documentation. A change here is always
+      deployable, overriding the '**/*.md' / '**/*.mdx' excludes above: the
+      client's content tree, the CLI's built-in agent definitions (copied into
+      its dist by tsdown), the model-discovery parser fixtures and the lake RAG
+      eval corpus. Listing a directory rather than the markdown in it keeps a
+      new file there deployable without an edit here.
+    required: false
+    default: |
+      apps/client/content/**
+      packages/cli/src/agents/defaults/**
+      b4m-core/services/src/llm/evals/**
+      **/__fixtures__/**
+      .changeset/changelog-github-retry.cjs
+      .changeset/config.json
   docs-paths:
     description: >-
       Newline-separated git pathspecs (INCLUDE form) defining the docs site.
@@ -114,12 +133,8 @@ runs:
         PUSH_AFTER: ${{ github.event.after }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        # github.sha IS the merge-group head on this event, so the fallback is redundant when
-        # head_sha is present and the difference between a correct range and a permanent
-        # fail-open when it is not.
-        MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        CONTENT_PATHS: ${{ inputs.content-paths }}
         DOCS_PATHS: ${{ inputs.docs-paths }}
         PUBLISHED_PATHS: ${{ inputs.published-paths }}
       run: |
@@ -137,6 +152,9 @@ runs:
         EXCLUDES=()
         while IFS= read -r line; do EXCLUDES+=("$line"); done < <(parse_specs "$EXCLUDE_PATHS")
 
+        CONTENT=()
+        while IFS= read -r line; do CONTENT+=("$line"); done < <(parse_specs "$CONTENT_PATHS")
+
         DOCS=()
         while IFS= read -r line; do DOCS+=("$line"); done < <(parse_specs "$DOCS_PATHS")
 
@@ -146,7 +164,7 @@ runs:
         # Pick the diff range from the trigger that fired THIS run.
         case "$EVENT_NAME" in
           push)
-            # Direct push to main/prod: per-push range. No PR to scope to,
+            # Direct push to main: per-push range. No PR to scope to,
             # and each push is one deploy unit.
             BASE="$PUSH_BEFORE"; HEAD="$PUSH_AFTER" ;;
           pull_request)
@@ -160,14 +178,6 @@ runs:
             # An empty BASE (merge-base failed) trips the fail-open guard below.
             HEAD="$PR_HEAD_SHA"
             BASE="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)" ;;
-          merge_group)
-            # Merge-queue run: this entry's own base..head. base_sha is the commit this
-            # entry was built on (target-branch tip, or the previous entry's speculative
-            # head in a stacked group), so it is an ancestor of head_sha and two-dot
-            # equals three-dot. The range is this entry's own change: each queue entry is
-            # gated on exactly the diff its own PR CI evaluated, and a trailing entry that
-            # is wholly non-deployable skips the build legs - the batch is not re-tested.
-            BASE="$MERGE_GROUP_BASE_SHA"; HEAD="$MERGE_GROUP_HEAD_SHA" ;;
           *)
             BASE=""; HEAD="" ;;
         esac
@@ -193,7 +203,7 @@ runs:
         # under `set -e`, the step aborts without writing to GITHUB_OUTPUT and
         # every downstream job would interpret missing output as "skip". Force
         # an explicit deployable=true on error so a transient diff failure on a
-        # prod push doesn't silently drop a release.
+        # push to main doesn't silently drop a release.
         NON_DOC=$(git diff --name-only "$BASE" "$HEAD" -- . "${EXCLUDES[@]}") || {
           echo "git diff (deployable) failed unexpectedly after range validation; failing open."
           echo "deployable=true" >> "$GITHUB_OUTPUT"
@@ -201,9 +211,26 @@ runs:
           echo "published-changed=true" >> "$GITHUB_OUTPUT"
           exit 0
         }
-        if [ -z "$NON_DOC" ]; then
+        # Markdown the build or tests read is deployable even though '**/*.md' is excluded.
+        # Guarded on a non-empty list: `git diff -- ` with no pathspec would list every file.
+        CONTENT_HIT=""
+        if [ "${#CONTENT[@]}" -gt 0 ]; then
+          CONTENT_HIT=$(git diff --name-only "$BASE" "$HEAD" -- "${CONTENT[@]}") || {
+            echo "git diff (content) failed unexpectedly after range validation; failing open."
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+            echo "published-changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+        fi
+
+        if [ -z "$NON_DOC" ] && [ -z "$CONTENT_HIT" ]; then
           echo "All changed files match the non-deployable list; skipping test + deploy."
           echo "deployable=false" >> "$GITHUB_OUTPUT"
+        elif [ -z "$NON_DOC" ]; then
+          echo "Markdown build/test inputs changed (content-paths):"
+          echo "$CONTENT_HIT"
+          echo "deployable=true" >> "$GITHUB_OUTPUT"
         else
           echo "Deployable changes detected:"
           echo "$NON_DOC"

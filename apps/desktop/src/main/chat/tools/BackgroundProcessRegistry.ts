@@ -1,10 +1,16 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
-import { PARENT_WATCH_FD, wrapWithParentWatchdog } from './backgroundScript';
+import {
+  backgroundJobLabel,
+  type BackgroundProcessInfo,
+  type BackgroundProcessStatus,
+  type SessionBackgroundJobs,
+} from '@shared/chat';
+import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
-import { commandEnv, launchCommand } from './commandLaunch';
+import { commandEnv, launchCommand, spawnFailure, spawnsDetached } from './commandLaunch';
+import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 
 /** Retained per process. The tail is what matters for a watcher; see OutputBuffer. */
@@ -44,6 +50,8 @@ export interface StartRequest {
   cwd: string;
   roots: readonly string[];
   protectedPaths: readonly string[];
+  /** The agent started it, so its exit is worth telling the conversation about. See `exited`. */
+  wakeOnExit?: boolean;
 }
 
 /**
@@ -66,6 +74,7 @@ export interface AdoptRequest {
   launch: SandboxedCommand;
   /** What the foreground runner collected before the move, so none of it is lost on the way. */
   captured?: readonly { stream: OutputStream; text: string }[];
+  wakeOnExit?: boolean;
 }
 
 export interface ReadResult {
@@ -89,11 +98,19 @@ interface Tracked {
   emitTimer: NodeJS.Timeout | null;
   killTimer: NodeJS.Timeout | null;
   closed: Promise<void>;
+  wakeOnExit: boolean;
+  /** The model has already been shown this process as finished, so a notice would repeat it. */
+  exitSeen: boolean;
 }
 
 export interface BackgroundProcessEvents {
   output(sessionId: string, processId: string, stream: OutputStream, text: string): void;
   status(sessionId: string, info: BackgroundProcessInfo): void;
+  /**
+   * A `wakeOnExit` process ended on its own, before the model saw it end. Never for a kill:
+   * whoever stopped it already knows, and telling the model again would only cost a turn.
+   */
+  exited?(sessionId: string, processId: string): void;
 }
 
 export class BackgroundProcessLimit extends Error {
@@ -108,7 +125,9 @@ export class BackgroundProcessLimit extends Error {
  *
  * Three independent mechanisms enforce that guarantee, because each covers a hole in the others:
  *
- *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path.
+ *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path; on Windows
+ *     the first signal force-ends a Git Bash command's tagged tree, and a WSL command gets TERM,
+ *     then KILL after the grace period.
  *  2. `shutdownSync()` on `will-quit` - a synchronous SIGKILL sweep, because that handler cannot
  *     await and a quit that races the grace period must not leave anything behind.
  *  3. The in-child watchdog (see backgroundScript.ts) - the only one that survives main being
@@ -120,47 +139,55 @@ export class BackgroundProcessLimit extends Error {
  * stale handle the model could call `bash_output` on is worse than no handle at all.
  *
  * Signals go to the process GROUP (`-pgid`), never the bare pid: signalling the shell alone
- * would leave whatever it spawned running.
+ * would leave whatever it spawned running. Windows has no groups to signal: any signal force-ends
+ * a Git Bash command's tagged process tree, and a WSL command gets TERM, then KILL after the
+ * grace period (see commandTree.ts).
  */
 export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
   private shuttingDown = false;
 
-  constructor(private readonly events: BackgroundProcessEvents) {}
+  constructor(
+    private readonly events: BackgroundProcessEvents,
+    private readonly stdioDrainMs = STDIO_DRAIN_MS
+  ) {}
 
   async start(request: StartRequest): Promise<BackgroundProcessInfo> {
     if (this.shuttingDown) throw new Error('The app is shutting down; no new commands can be started.');
     this.enforceLimits(request.sessionId);
 
     const wrapped = wrapWithParentWatchdog(request.command);
-    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths);
+    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths, request.cwd);
 
     const info = this.newInfo(request.sessionId, request.command, request.cwd, new Date().toISOString());
 
+    const watchIndex = parentWatchStdioIndex();
     let child: ChildProcess;
     try {
-      const env = await commandEnv({ B4M_DESKTOP_BACKGROUND: '1' });
+      const env = await commandEnv(launch, { B4M_DESKTOP_BACKGROUND: '1' });
       child = spawn(launch.executable, launch.args, {
         cwd: request.cwd,
-        // Detached so the child leads its own process group: that is what makes one signal
-        // reach the command's whole tree rather than just the shell.
-        detached: true,
-        // fd 3 is the watch pipe the child blocks on. Its write end stays open in this process
-        // for exactly as long as this process lives, which is the entire mechanism.
-        stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+        // Detached so the child leads its own process group and one signal reaches the whole
+        // tree, except a WSL command, which stays attached (see `spawnsDetached`).
+        detached: spawnsDetached(launch),
+        windowsHide: true,
+        // The watch pipe the child blocks on. Its write end stays open in this process for
+        // exactly as long as this process lives, which is the entire mechanism.
+        stdio: watchIndex === 0 ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', 'pipe'],
         env,
       });
     } catch (err) {
       await launch.cleanup();
-      throw err;
+      // Node throws some spawn failures (ENOTDIR) synchronously instead of emitting 'error'.
+      throw err instanceof Error ? spawnFailure(err, request.cwd, launch) : err;
     }
 
-    const tracked = this.track(info, child, child.pid ?? null, launch);
+    const tracked = this.track(info, child, child.pid ?? null, launch, request.wakeOnExit === true);
 
     // Never written to, only held open. Unref'd so an idle pipe cannot be the thing keeping
     // the app alive at quit.
-    child.stdio[PARENT_WATCH_FD]?.on('error', () => undefined);
-    (child.stdio[PARENT_WATCH_FD] as { unref?(): void } | undefined)?.unref?.();
+    child.stdio[watchIndex]?.on('error', () => undefined);
+    (child.stdio[watchIndex] as { unref?(): void } | undefined)?.unref?.();
 
     this.processes.set(info.id, tracked);
     this.events.status(request.sessionId, { ...info });
@@ -188,7 +215,7 @@ export class BackgroundProcessRegistry {
     this.enforceLimits(request.sessionId);
 
     const info = this.newInfo(request.sessionId, request.command, request.cwd, request.startedAt);
-    const tracked = this.track(info, request.child, request.pgid, request.launch);
+    const tracked = this.track(info, request.child, request.pgid, request.launch, request.wakeOnExit === true);
 
     for (const chunk of request.captured ?? []) {
       if (chunk.text) tracked.buffer.push(chunk.stream, chunk.text);
@@ -218,7 +245,8 @@ export class BackgroundProcessRegistry {
     info: BackgroundProcessInfo,
     child: ChildProcess,
     pgid: number | null,
-    launch: SandboxedCommand
+    launch: SandboxedCommand,
+    wakeOnExit: boolean
   ): Tracked {
     const tracked: Tracked = {
       info,
@@ -232,6 +260,8 @@ export class BackgroundProcessRegistry {
       emitTimer: null,
       killTimer: null,
       closed: Promise.resolve(),
+      wakeOnExit,
+      exitSeen: false,
     };
 
     tracked.closed = new Promise<void>(resolve => {
@@ -241,12 +271,13 @@ export class BackgroundProcessRegistry {
         signal: NodeJS.Signals | null,
         error?: string
       ): void => {
-        this.finish(tracked, status, code, signal, error);
+        const exit = commandExit(code, signal, child);
+        this.finish(tracked, status, exit.code, exit.signal, error);
         resolve();
       };
       const ended = (): BackgroundProcessStatus => (tracked.info.status === 'killed' ? 'killed' : 'exited');
 
-      child.on('error', error => settle('failed', null, null, error.message));
+      child.on('error', error => settle('failed', null, null, spawnFailure(error, info.cwd, launch).message));
 
       // The better of the two when it comes: 'close' means the output has drained as well.
       child.on('close', (code, signal) => settle(ended(), code, signal));
@@ -258,7 +289,7 @@ export class BackgroundProcessRegistry {
       // ticking for the rest of the app's life, which is what made Stop look broken.
       child.on('exit', (code, signal) => {
         if (tracked.info.endedAt) return;
-        const drain = setTimeout(() => settle(ended(), code, signal), STDIO_DRAIN_MS);
+        const drain = setTimeout(() => settle(ended(), code, signal), this.stdioDrainMs);
         drain.unref?.();
       });
     });
@@ -305,6 +336,23 @@ export class BackgroundProcessRegistry {
     return sessions;
   }
 
+  /**
+   * The session's running commands whose exit wakes it, labelled by the newest; undefined when none.
+   * Only these keep an agent waiting: a dependency install or anything else the app started is not
+   * work the agent will come back for. See SessionActivity.backgroundChanged.
+   */
+  wakingJobs(sessionId: string): SessionBackgroundJobs | undefined {
+    let running = 0;
+    let newest: BackgroundProcessInfo | undefined;
+    for (const tracked of this.processes.values()) {
+      const { info } = tracked;
+      if (info.sessionId !== sessionId || info.status !== 'running' || !tracked.wakeOnExit) continue;
+      running += 1;
+      if (!newest || info.startedAt >= newest.startedAt) newest = info;
+    }
+    return newest ? { running, label: backgroundJobLabel(newest.command) } : undefined;
+  }
+
   list(sessionId: string): BackgroundProcessInfo[] {
     return [...this.processes.values()]
       .filter(tracked => tracked.info.sessionId === sessionId)
@@ -318,7 +366,32 @@ export class BackgroundProcessRegistry {
 
     const slice = tracked.buffer.read(fromStart ? 0 : tracked.modelCursor, maxChars);
     tracked.modelCursor = slice.cursor;
+    if (tracked.info.status !== 'running') tracked.exitSeen = true;
     return { info: { ...tracked.info }, text: slice.text, cursor: slice.cursor, missed: slice.missed };
+  }
+
+  /** bash_list has shown the model every finished process here, so none of them needs a notice. */
+  markExitsSeen(sessionId: string): void {
+    for (const tracked of this.processes.values()) {
+      if (tracked.info.sessionId === sessionId && tracked.info.status !== 'running') tracked.exitSeen = true;
+    }
+  }
+
+  /**
+   * A finished process the model has not yet seen finish, with its newest output, marked seen
+   * as it is handed over so one exit is only ever reported once. Null once anything else - a
+   * bash_output, a bash_list, an earlier notice - has shown it.
+   */
+  takeExitNotice(
+    id: string,
+    sessionId: string,
+    tailChars: number
+  ): { info: BackgroundProcessInfo; tail: string } | null {
+    const tracked = this.processes.get(id);
+    if (!tracked || tracked.info.sessionId !== sessionId) return null;
+    if (tracked.exitSeen || tracked.info.status === 'running' || tracked.info.status === 'killed') return null;
+    tracked.exitSeen = true;
+    return { info: { ...tracked.info }, tail: tracked.buffer.tail(tailChars) };
   }
 
   /** The newest output, for the UI, which has no cursor of its own to keep. */
@@ -328,7 +401,10 @@ export class BackgroundProcessRegistry {
     return tracked.buffer.tail(maxChars);
   }
 
-  /** SIGTERM the group, SIGKILL after a grace period. Resolves once it is actually gone. */
+  /**
+   * SIGTERM the group, SIGKILL after a grace period; on Windows a Git Bash command's tagged tree is
+   * force-ended at once, and a WSL command gets the same TERM then KILL. Resolves once it is gone.
+   */
   async kill(id: string, sessionId: string): Promise<BackgroundProcessInfo | null> {
     const tracked = this.processes.get(id);
     if (!tracked || tracked.info.sessionId !== sessionId) return null;
@@ -383,8 +459,11 @@ export class BackgroundProcessRegistry {
    */
   shutdownSync(): void {
     this.shuttingDown = true;
+    const trees = [...this.processes.values()]
+      .map(tracked => this.treeOf(tracked))
+      .filter((tree): tree is CommandTree => tree !== null);
+    signalCommandTreesSync(trees, 'SIGKILL');
     for (const tracked of this.processes.values()) {
-      this.signalGroup(tracked, 'SIGKILL');
       if (tracked.killTimer) clearTimeout(tracked.killTimer);
       if (tracked.emitTimer) clearTimeout(tracked.emitTimer);
     }
@@ -448,13 +527,13 @@ export class BackgroundProcessRegistry {
     tracked.killTimer.unref?.();
   }
 
+  private treeOf(tracked: Tracked): CommandTree | null {
+    return tracked.pgid === null ? null : { pid: tracked.pgid, child: tracked.child, launch: tracked.launch };
+  }
+
   private signalGroup(tracked: Tracked, signal: NodeJS.Signals): void {
-    if (tracked.pgid === null) return;
-    try {
-      process.kill(-tracked.pgid, signal);
-    } catch {
-      // ESRCH: already gone. Nothing to do, and nothing worth telling the user about.
-    }
+    const tree = this.treeOf(tracked);
+    if (tree) signalCommandTree(tree, signal);
   }
 
   private finish(
@@ -490,6 +569,9 @@ export class BackgroundProcessRegistry {
     void tracked.launch.cleanup();
     this.pruneFinished(tracked.info.sessionId);
     this.events.status(tracked.info.sessionId, { ...tracked.info });
+    if (tracked.wakeOnExit && status !== 'killed' && !tracked.exitSeen && !this.shuttingDown) {
+      this.events.exited?.(tracked.info.sessionId, tracked.info.id);
+    }
   }
 
   /** Keep the newest finished entries so their output stays readable; drop the rest. */

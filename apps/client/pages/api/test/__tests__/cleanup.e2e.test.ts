@@ -157,6 +157,7 @@ const seedChildren = async (userId: mongoose.Types.ObjectId) => {
 
 const callCleanup = async (query: Record<string, string>) => {
   const { req, res } = createMocks({ method: 'DELETE', query, headers: { 'x-e2e-cleanup-secret': 'right-secret' } });
+  (req as unknown as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await deleteHandler(req, res);
   return { status: res._getStatusCode(), body: res._getJSONData() as Record<string, unknown> };
 };

@@ -1,0 +1,274 @@
+import {
+  ApiKeyScope,
+  MODERATION_PAGE_READ,
+  assertCanActOnAdminTarget,
+  isFullAdmin,
+  SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS,
+  SIGNUP_RISK_AUTO_APPROVAL_LIST_LIMIT,
+  SIGNUP_RISK_REVIEW_LIST_LIMIT,
+  SignupRiskScoringSchema,
+  emailDomainOf,
+  signupRiskReviewDecisionResultSchema,
+  signupRiskReviewDecisionSchema,
+  signupRiskReviewListSchema,
+  type AdminAiSuggestionItem,
+  type SignupRiskAutoApprovalItem,
+  type SignupRiskReviewAdvisory,
+  type SignupRiskReviewItem,
+  type SignupRiskReviewState,
+} from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  usageEventRepository,
+  userApiKeyRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
+import { releaseRiskReviewedSignupGrant } from '@server/credits/riskReviewGrantRelease';
+import { findRiskReviewAdvisories } from '@server/security/abuseAssessment/riskReviewAdvisory';
+import { withAiSuggestionId } from '@server/admin/ai/audit';
+import {
+  recordUserAssessmentOverride,
+  userAssessmentSuggestion,
+  withSuggestionDecisions,
+} from '@server/admin/ai/assessmentSuggestion';
+import {
+  denySelfAdminAction,
+  isSelfOrImpersonator,
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+  userAuditTarget,
+} from '@bike4mind/server-utils/utils/adminAudit';
+import { respond } from '@server/utils/respond';
+
+const ONE_MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * ONE_MINUTE_MS;
+export const SIGNUP_RISK_REVIEWS_RATE_LIMIT = 30;
+
+// reopen is the undo of approve, offered by the admin tab's undo toast and on automatic approvals.
+const TRANSITIONS = {
+  approve: {
+    from: 'pending',
+    to: 'approved',
+    action: 'user.signup_risk.approved',
+    summary: 'approved a flagged signup',
+  },
+  reopen: {
+    from: 'approved',
+    to: 'pending',
+    action: 'user.signup_risk.reopened',
+    summary: 'reopened a signup risk review',
+  },
+} as const satisfies Record<
+  string,
+  { from: SignupRiskReviewState; to: SignupRiskReviewState; action: string; summary: string }
+>;
+
+const domainOf = (email: string | null | undefined) => {
+  const domain = email ? emailDomainOf(email) : null;
+  return domain ? (registrableDomain(domain) ?? domain) : null;
+};
+
+/**
+ * The signup risk review queue (admin Risk review tab). GET lists pending accounts with what a
+ * reviewer needs to decide, including any advisory model verdict (riskReviewAdvisory.ts), which no
+ * decision here reads, plus recent automatic approvals (riskReviewAutoApproval.ts) to reopen; POST
+ * approves them (or reopens an approval), one audited transaction
+ * per user. Approving also pays a signup tranche the signup grant policy withheld, which reopening
+ * does not take back. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
+ */
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ, POST: 'users:moderate' },
+})
+  .use(
+    rateLimit({ limit: SIGNUP_RISK_REVIEWS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-signup-risk-reviews' })
+  )
+  .get(
+    asyncHandler(async (req, res) => {
+      const [users, autoApprovedUsers] = await Promise.all([
+        userRepository.findPendingRiskReviews(SIGNUP_RISK_REVIEW_LIST_LIMIT + 1),
+        userRepository.findRiskAutoApprovals({
+          since: new Date(Date.now() - SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS * DAY_MS),
+          limit: SIGNUP_RISK_AUTO_APPROVAL_LIST_LIMIT,
+        }),
+      ]);
+      const listed = users.slice(0, SIGNUP_RISK_REVIEW_LIST_LIMIT);
+      const ids = listed.map(user => user.id);
+      const [creditsSpent, apiKeysCreated, settings, advisories] = await Promise.all([
+        usageEventRepository.creditsSpentByUsers(ids),
+        userApiKeyRepository.countCreatedByUserIds(ids),
+        getSettingsMap({ adminSettings: adminSettingsRepository }),
+        // Advisory only: a missing verdict must not fail the queue.
+        findRiskReviewAdvisories(ids, req.logger)
+          .then(found => withSuggestionDecisions('signupRiskReview', found))
+          .catch(error => {
+            req.logger.warn('Signup risk review advisories unavailable', { error });
+            return new Map<string, SignupRiskReviewAdvisory>();
+          }),
+      ]);
+      const { reviewThreshold } = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));
+      const data = listed.flatMap((user): SignupRiskReviewItem[] =>
+        user.riskScore
+          ? [
+              {
+                userId: user.id,
+                email: user.email ?? null,
+                username: user.username ?? null,
+                domain: domainOf(user.email),
+                createdAt: user.createdAt,
+                score: user.riskScore.score,
+                signals: user.riskScore.signals,
+                computedAt: user.riskScore.computedAt,
+                creditsSpent: creditsSpent[user.id] ?? 0,
+                apiKeysCreated: apiKeysCreated[user.id] ?? 0,
+                grantHeld: userService.isSignupGrantHeldForReview(user),
+                advisory: advisories.get(user.id) ?? null,
+              },
+            ]
+          : []
+      );
+      const autoApproved = autoApprovedUsers.flatMap((user): SignupRiskAutoApprovalItem[] =>
+        user.riskReviewAutoApproval
+          ? [
+              {
+                userId: user.id,
+                email: user.email ?? null,
+                username: user.username ?? null,
+                score: user.riskScore?.score ?? null,
+                policy: user.riskReviewAutoApproval.policy,
+                decidedAt: user.riskReviewAutoApproval.decidedAt,
+              },
+            ]
+          : []
+      );
+      res.setHeader('Cache-Control', 'private, no-store');
+      respond(res, signupRiskReviewListSchema, {
+        data,
+        autoApproved,
+        truncated: users.length > SIGNUP_RISK_REVIEW_LIST_LIMIT,
+        reviewThreshold,
+      });
+    })
+  )
+  .post(
+    asyncHandler(async (req, res) => {
+      const parsed = signupRiskReviewDecisionSchema.safeParse(req.body);
+      if (!parsed.success) throw new BadRequestError('Expected approve or reopen and 1 to 200 user ids');
+      const reason = parseAdminActionReason(parsed.data.reason);
+      const transition = TRANSITIONS[parsed.data.action];
+      // Approving pays out any signup grant the policy withheld.
+      if (parsed.data.action === 'approve') requireAdminPermission(req, 'credits:adjust');
+      const userIds = [...new Set(parsed.data.userIds)];
+      const aiDecision = parsed.data.aiDecision;
+      if (aiDecision && (parsed.data.action !== 'approve' || userIds.length !== 1)) {
+        throw new BadRequestError('An AI suggestion decision applies to approving one account');
+      }
+      const self = userIds.find(userId => isSelfOrImpersonator(req.user, userId));
+      if (self) {
+        await denySelfAdminAction(req, {
+          action: 'user.signup_risk.denied',
+          attempted: transition.action,
+          target: await userAuditTarget(self),
+          message: 'Admins cannot review their own account.',
+        });
+      }
+      if (!isFullAdmin(req.user)) {
+        for (const target of await userRepository.find({ _id: { $in: userIds } })) {
+          assertCanActOnAdminTarget(req.user, target, 'review the signup of');
+        }
+      }
+      // Checked before anything moves: an assessment that does not name the account is a 400, an
+      // already decided suggestion a 409.
+      const aiSuggestion = aiDecision
+        ? await userAssessmentSuggestion('signupRiskReview', userIds[0], aiDecision.assessmentId)
+        : null;
+
+      const updatedUserIds: string[] = [];
+      const skippedUserIds: string[] = [];
+      const failedUserIds: string[] = [];
+      const grantReleasedUserIds: string[] = [];
+      for (const userId of userIds) {
+        try {
+          // Pay before approving: a failed payout leaves the account pending, so the admin can retry it
+          // from this queue. A retry after a paid-but-unapproved attempt finds nothing held.
+          let paid = false;
+          if (parsed.data.action === 'approve') {
+            const credits = await releaseRiskReviewedSignupGrant(userId, {
+              reason,
+              audit: async ({ credits, creditTransactionId }) => {
+                await recordAdminActionFromRequest(req, {
+                  action: 'user.credits.adjusted',
+                  target: await userAuditTarget(userId),
+                  summary: 'released a signup grant held for risk review',
+                  reason,
+                  details: { credits, source: 'signup_unlock' },
+                  related: creditTransactionId ? { creditTransactionId } : undefined,
+                });
+              },
+            });
+            paid = credits > 0;
+          }
+          // A strict audit entry rides in the same transaction, so an unrecorded decision rolls back.
+          const moved = await withTransaction(async () => {
+            if (!(await userRepository.setRiskReviewState(userId, transition.from, transition.to))) return false;
+            await recordAdminActionFromRequest(req, {
+              action: transition.action,
+              target: await userAuditTarget(userId),
+              summary: transition.summary,
+              reason,
+              changes: [{ field: 'riskScore.reviewState', before: transition.from, after: transition.to }],
+              ...(aiSuggestion ? { details: withAiSuggestionId({}, aiSuggestion.id) } : {}),
+            });
+            return true;
+          });
+          (moved ? updatedUserIds : skippedUserIds).push(userId);
+          if (moved && aiSuggestion)
+            await recordApprovalOverride(req, aiSuggestion, aiDecision?.overrideReason ?? reason);
+          if (moved && paid) grantReleasedUserIds.push(userId);
+        } catch (error) {
+          req.logger.error('Signup risk review decision failed for user', { userId, error });
+          failedUserIds.push(userId);
+        }
+      }
+      respond(res, signupRiskReviewDecisionResultSchema, {
+        updatedUserIds,
+        skippedUserIds,
+        failedUserIds,
+        grantReleasedUserIds,
+      });
+    })
+  );
+
+/** The approval already committed, so a failed suggestion write is logged rather than failing it. */
+async function recordApprovalOverride(
+  req: Parameters<typeof recordAdminActionFromRequest>[0],
+  suggestion: AdminAiSuggestionItem,
+  overrideReason: string
+): Promise<void> {
+  try {
+    const decided = await recordUserAssessmentOverride(suggestion, {
+      overrideAction: { action: 'approve' },
+      overrideReason,
+      decidedBy: { userId: req.user.impersonatedBy ?? req.user.id, name: req.user.username || 'Admin' },
+    });
+    // Decided by a concurrent accept after the pre-check: the approval stands but is not recorded as an override.
+    if (!decided)
+      req.logger.warn('AI suggestion already decided; approval not recorded as an override', {
+        suggestionId: suggestion.id,
+      });
+  } catch (error) {
+    req.logger.error('AI suggestion override failed for signup risk approval', { suggestionId: suggestion.id, error });
+  }
+}
+
+export const config = { api: { externalResolver: true } };
+export default handler;

@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   findGrant: vi.fn(),
   upsertGrant: vi.fn(),
   decideConsent: vi.fn(),
+  creditOAuthSignup: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -37,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   oauthGrantRepository: { findGrant: h.findGrant, upsertGrant: h.upsertGrant },
 }));
 vi.mock('@server/auth/oauthConsent', () => ({ decideConsent: h.decideConsent }));
+vi.mock('@server/analytics/oauthSignupCredit', () => ({ creditOAuthSignup: h.creditOAuthSignup }));
 
 import handler from '../code';
 
@@ -309,5 +311,42 @@ describe('POST /api/oauth/code error logging', () => {
 
     expect(res.statusCode).toBe(200);
     expect(lines).toEqual([]);
+  });
+});
+
+describe('POST /api/oauth/code OAuth signup credit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.generateAuthCode as Mock).mockResolvedValue('the-code');
+    (h.creditOAuthSignup as Mock).mockResolvedValue([]);
+  });
+
+  it('offers the credit for every code it mints, with the signed-in user and the validated client', async () => {
+    const client = {
+      clientId: 'client-1',
+      tokenEndpointAuthMethod: 'none',
+      allowedScopes: ['openid', 'email', 'profile'],
+      overwatchProductId: 'some-product',
+    };
+    (h.validateClient as Mock).mockResolvedValue(client);
+
+    const res = await call({ ...baseBody, code_challenge: VALID_CHALLENGE, code_challenge_method: 'S256' });
+
+    expect(res.body?.code).toBe('the-code');
+    expect(h.creditOAuthSignup).toHaveBeenCalledOnce();
+    expect(h.creditOAuthSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', client }));
+  });
+
+  it('offers no credit when no code is minted', async () => {
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'none',
+      allowedScopes: ['openid', 'email', 'profile'],
+      overwatchProductId: 'some-product',
+    });
+
+    const res = await call({ ...baseBody });
+
+    expect(res.statusCode).toBe(400);
+    expect(h.creditOAuthSignup).not.toHaveBeenCalled();
   });
 });

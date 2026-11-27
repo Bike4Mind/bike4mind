@@ -1,25 +1,82 @@
-import { pendingOtcTokenRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  pendingOtcTokenRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import {
   OTC_LIMITS,
+  OTC_SEND_CHALLENGE_BUDGETS,
   OTC_SEND_EMAIL_BUDGETS,
+  chargeOtcEmailBudget,
   ipSubject,
   otcCounterLimit,
   otcDistinctEmailsPerIpLimit,
+  otcEmailKey,
   otcEmailBudgetRetryAfter,
   reserveOtcEmailBudget,
 } from '@server/utils/otcLimits';
-import { EmailEvents } from '@server/utils/eventBus';
+import { otcRecipientRefusal } from '@server/utils/otcRecipient';
+import { checkTurnstileToken, requireTurnstile } from '@server/middlewares/requireTurnstile';
+import { getTurnstileStepUpPolicy } from '@server/utils/auth/turnstile';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
+import type { Request } from 'express';
+import { TURNSTILE_ACTION_OTC_SEND, emailDomainOf, type UserRiskSignalType } from '@bike4mind/common';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { evaluateSignupSignals, verifiedSignupFormTokenId } from '@server/utils/signupBotChecks';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { Config, isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 
+// Bot-check signals for a send; empty when checks are off or evaluation fails. A failed reuse claim drops only that signal.
+async function collectSignupSignals(
+  body: Record<string, unknown>,
+  normalizedEmail: string,
+  logger: { warn: (...args: unknown[]) => void }
+): Promise<UserRiskSignalType[]> {
+  if (isE2EEnabled()) return [];
+  try {
+    const settings = await getSettingsMap(
+      { adminSettings: adminSettingsRepository },
+      { names: ['signupBotChecksEnabled', 'signupMinSubmitMs'] }
+    );
+    if (!getSettingsValue('signupBotChecksEnabled', settings, true)) return [];
+    const signals = evaluateSignupSignals({
+      formToken: body.formToken,
+      formExtra: body.formExtra,
+      nowMs: Date.now(),
+      minSubmitMs: getSettingsValue('signupMinSubmitMs', settings, 1500),
+    });
+    // A token is bound to the first email it is submitted with; resends for that email never flag.
+    try {
+      const tokenId = verifiedSignupFormTokenId(body.formToken);
+      if (!tokenId) return signals;
+      const emailKey = otcEmailKey(normalizedEmail);
+      const { claimed, existingData } = await cacheRepository.claimDedup(
+        `signup-form-token:${tokenId.jti}`,
+        { email: emailKey },
+        Math.max(1000, tokenId.expMs - Date.now())
+      );
+      return !claimed && existingData?.email !== emailKey ? [...signals, 'signup_token_reused'] : signals;
+    } catch (err) {
+      logger.warn('signup form token claim failed', err);
+      return signals;
+    }
+  } catch (err) {
+    logger.warn('signup signal evaluation failed', err);
+    return [];
+  }
+}
+
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(otcCounterLimit({ bucket: 'send-ip-daily', ...OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
-  .use(otcCounterLimit({ bucket: 'send-ip-total', ...OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
+  .use(requireTurnstile(TURNSTILE_ACTION_OTC_SEND))
+  .use(otcCounterLimit({ bucket: 'send-ip-daily', window: OTC_LIMITS.send.perIpDaily, subject: ipSubject }))
+  .use(otcCounterLimit({ bucket: 'send-ip-total', window: OTC_LIMITS.send.perIpTotal, subject: ipSubject }))
   .use(otcDistinctEmailsPerIpLimit())
   .post(async (req, res) => {
     const { email } = req.body;
@@ -45,6 +102,20 @@ const handler = baseApi({ auth: false })
       res.setHeader('Retry-After', String(budgetRetryAfter));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
+
+    const challenge = await challengePastBudget(req, normalizedEmail, ipBucket);
+    if (challenge) return res.status(challenge.status).json(challenge.body);
+
+    // A refused address with no account gets the same response and budgets but no mail. The account
+    // is looked up on every send so the work does not depend on the refusal; a failed lookup mails.
+    const [refusal, account] = await Promise.all([
+      otcRecipientRefusal(normalizedEmail, req.logger),
+      userRepository.findByEmail(normalizedEmail).catch((error: unknown) => {
+        req.logger.warn('otc-account-lookup-failed', error);
+        return undefined;
+      }),
+    ]);
+    const deliver = !refusal || account !== null;
 
     // Atomic per-recipient cooldown (keyed on PendingOtcToken, written for every send, so it never reveals whether an account exists).
     // tryReserveSlot atomically claims a reservation slot for this email; if the
@@ -76,6 +147,10 @@ const handler = baseApi({ auth: false })
       res.setHeader('Retry-After', String(budget.retryAfter));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
+    await chargeOtcEmailBudget(normalizedEmail, ipBucket, OTC_SEND_CHALLENGE_BUDGETS);
+
+    // Evaluated on every send, existing users included, so the response never reveals whether the email has an account.
+    const riskSignals = await collectSignupSignals(req.body, normalizedEmail, req.logger);
 
     const result = await userService
       .sendOTC(
@@ -83,6 +158,11 @@ const handler = baseApi({ auth: false })
         {
           mailer: {
             sendOTCEmail: async (toEmail: string, code: string) => {
+              if (!deliver) {
+                // Counted by a metric filter in infra/signupAlarms.ts; keep the message in sync.
+                req.logger.info('otc-code-suppressed', { reason: refusal, domain: emailDomainOf(toEmail) });
+                return;
+              }
               const logoUrl = getLogoUrl();
               const emailBody = `
 <!DOCTYPE html>
@@ -109,11 +189,16 @@ const handler = baseApi({ auth: false })
                 to: toEmail,
                 subject: 'Your sign-in code',
                 body: emailBody,
+                category: 'otc',
               });
+              // Count accepted email dispatches even if token confirmation later fails.
+              req.logger.info('otc-code-dispatched');
             },
           },
           signPendingToken: payload => {
-            return jwt.sign(payload, Config.JWT_SECRET, { algorithm: 'HS256' });
+            return jwt.sign({ ...payload, challengeVerified: wasTurnstileVerified(req) }, Config.JWT_SECRET, {
+              algorithm: 'HS256',
+            });
           },
         }
       )
@@ -133,7 +218,8 @@ const handler = baseApi({ auth: false })
         reservation.reservedAt,
         result.nonce,
         result.otcHash,
-        debugCode
+        debugCode,
+        riskSignals
       );
       if (!confirmed) {
         // A newer concurrent request for this email superseded our reservation before
@@ -149,5 +235,33 @@ const handler = baseApi({ auth: false })
       pendingToken: result.pendingToken,
     });
   });
+
+type ChallengeAnswer = { status: number; body: Record<string, string> };
+
+/**
+ * Past a challenge budget (OTC_SEND_CHALLENGE_BUDGETS) the send needs a Turnstile token, and a 403
+ * `challenge_required` names the site key to solve with. Null lets the send proceed, as it always
+ * does when no challenge can be offered: those budgets must never refuse on their own.
+ */
+async function challengePastBudget(req: Request, email: string, ip: string): Promise<ChallengeAnswer | null> {
+  if ((await otcEmailBudgetRetryAfter(email, ip, OTC_SEND_CHALLENGE_BUDGETS)) === undefined) return null;
+  const policy = await getTurnstileStepUpPolicy().catch((error: unknown) => {
+    req.logger.warn('turnstile-policy-unreadable', error);
+    return null;
+  });
+  if (!policy?.active) {
+    req.logger.warn('otc-send-challenge-budget-exceeded');
+    return null;
+  }
+  const token: unknown = req.body?.turnstileToken;
+  if (!token) {
+    return {
+      status: 403,
+      body: { error: 'Please complete the verification check.', code: 'challenge_required', siteKey: policy.siteKey },
+    };
+  }
+  const failure = await checkTurnstileToken(req, TURNSTILE_ACTION_OTC_SEND, policy, token);
+  return failure ? { status: failure.status, body: { error: failure.error, code: failure.code } } : null;
+}
 
 export default handler;

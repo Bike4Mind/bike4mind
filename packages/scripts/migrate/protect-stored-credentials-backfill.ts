@@ -2,9 +2,11 @@ import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
+import type { ObjectId } from 'mongodb';
 import { ApiKey, McpServer, SlackDevWorkspace, User, SecretRotation } from '@bike4mind/database';
 import {
   apiKeySecretContext,
+  ciphertextPatternSource,
   decryptAtRest,
   encryptAtRest,
   isContextBound,
@@ -14,12 +16,15 @@ import {
 } from '@bike4mind/utils/security';
 import { resolveMasterKey, rewrapLegacyDek } from '@bike4mind/server-utils/memory/factCipher';
 
-const slackFields = [
+export const slackFields = [
   'slackClientSecret',
   'slackOAuthSigningSecret',
   'slackVerificationToken',
   'appConfigurationToken',
 ] as const;
+
+/** bcrypt hash as stored for security answers; anything else is an unhashed legacy value. */
+export const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 
 /**
  * A row this run could not convert. Rows are independent, so one bad value must not stop the
@@ -47,6 +52,19 @@ function reportFailures(failures: BackfillFailure[]): void {
   throw new Error(
     `Stored credentials remain pending in ${failures.length} value(s); migration is incomplete:\n${rows}`
   );
+}
+
+/**
+ * Encrypts one legacy plaintext TOTP seed in the runtime's format (no AAD, so the model readers can
+ * decrypt it). Writes only the `mfa.totpSecret` path: a whole-`mfa` write would drop the backup codes.
+ * Conditioned on the plaintext that was read, so a seed replaced since then is left alone.
+ */
+export async function encryptLegacyTotpSecret(id: ObjectId, value: string): Promise<boolean> {
+  const result = await User.collection.updateOne(
+    { _id: id, 'mfa.totpSecret': value },
+    { $set: { 'mfa.totpSecret': encryptAtRest(value) } }
+  );
+  return result.modifiedCount === 1;
 }
 
 export async function protectStoredCredentials(): Promise<void> {
@@ -106,13 +124,11 @@ export async function protectStoredCredentials(): Promise<void> {
     const questions = z
       .array(z.object({ question: z.string(), answer: z.string() }))
       .parse(row.securityQuestions ?? []);
-    if (questions.every(question => /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(question.answer))) continue;
+    if (questions.every(question => BCRYPT_HASH_PATTERN.test(question.answer))) continue;
     const securityQuestions = await Promise.all(
       questions.map(async question => ({
         question: question.question,
-        answer: /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(question.answer)
-          ? question.answer
-          : await bcrypt.hash(question.answer, 12),
+        answer: BCRYPT_HASH_PATTERN.test(question.answer) ? question.answer : await bcrypt.hash(question.answer, 12),
       }))
     );
     await User.collection.updateOne(
@@ -120,6 +136,16 @@ export async function protectStoredCredentials(): Promise<void> {
       { $set: { securityQuestions } }
     );
   }
+  let totpEncrypted = 0;
+  const legacyTotp = {
+    'mfa.totpSecret': { $type: 'string', $ne: '', $not: new RegExp(ciphertextPatternSource, 'i') },
+  };
+  for await (const row of User.collection.find(legacyTotp, { projection: { 'mfa.totpSecret': 1 } })) {
+    const value = row.mfa?.totpSecret;
+    if (typeof value !== 'string' || !value || isEncrypted(value)) continue;
+    if (await encryptLegacyTotpSecret(row._id, value)) totpEncrypted++;
+  }
+  console.info(`TOTP seeds encrypted: ${totpEncrypted}`);
   for await (const row of SecretRotation.collection.find({ previousKey: { $exists: true } })) {
     if (!row.previousKey) continue;
     const plaintext = decryptStored(row.previousKey, failures, {

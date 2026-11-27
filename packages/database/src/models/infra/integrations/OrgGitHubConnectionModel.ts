@@ -11,8 +11,8 @@ import BaseRepository from '@bike4mind/db-core';
 /**
  * Organization-level GitHub API connection schema.
  *
- * Enables system-level GitHub API access for automation features like
- * LiveOps Triage without relying on per-user OAuth tokens.
+ * Enables system-level GitHub API access for automation features without
+ * relying on per-user OAuth tokens.
  *
  * Supports two authentication methods:
  * - GitHub App: Preferred for production (automatic token rotation, scoped permissions)

@@ -4,8 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { TerminalDataEvent, TerminalInfo, TerminalsChangedEvent } from '@shared/terminal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { desktopTheme } from '../theme';
+import { DARK_PALETTE, desktopTheme } from '../theme';
 import { TerminalPanel } from './TerminalPanel';
+import { xtermTheme } from './terminalTheme';
+// Loaded up front so the panel's lazy import resolves at once instead of during the first test.
+import './TerminalView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -275,5 +278,20 @@ describe('TerminalPanel', () => {
     await renderPanel();
     expect(host?.contains(el('terminal-panel'))).toBe(true);
     expect(Array.from(document.body.children)).toEqual([host]);
+  });
+});
+
+describe('the terminal theme', () => {
+  it('falls back to the dark palette when none of the CSS variables resolve', () => {
+    const theme = xtermTheme(document.createElement('div'), 'dark');
+    expect(theme.background).toBe(DARK_PALETTE.panel);
+    expect(theme.foreground).toBe(DARK_PALETTE.ink);
+    expect(theme.cursor).toBe(DARK_PALETTE.ink);
+    expect(theme.selectionBackground).toBe(DARK_PALETTE.selected);
+  });
+
+  it('falls back to the web light surface in light mode', () => {
+    const theme = xtermTheme(document.createElement('div'), 'light');
+    expect(theme.background?.toLowerCase()).toBe('#fbfcfe');
   });
 });

@@ -3,11 +3,22 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 
-const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), del: vi.fn() }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post, delete: h.del } }));
+const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: h.get, post: h.post, put: h.put, delete: h.del },
+}));
 
-import { useListingDetail, useReportListing, useWithdrawListing } from './skillMarket';
+import {
+  useDeleteSkillBundle,
+  useMarketListings,
+  useSkillBundles,
+  useListingDetail,
+  useReportListing,
+  useSaveSkillBundle,
+  useWithdrawListing,
+} from './skillMarket';
 
 const setup = () => {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -20,14 +31,22 @@ const setup = () => {
 describe('skillMarket hooks', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('keys the listing detail by token so a no-token 404 is not reused for a token fetch', async () => {
-    h.get.mockRejectedValueOnce(new Error('404')).mockResolvedValueOnce({ data: { listing: { id: 'l1' } } });
+  it('fetches by id without sending a token', async () => {
+    h.get.mockResolvedValue({ data: { listing: { id: 'l1' } } });
     const { wrapper } = setup();
-    const noToken = renderHook(() => useListingDetail({ id: 'l1' }), { wrapper });
-    await waitFor(() => expect(noToken.result.current.isError).toBe(true));
-    const withToken = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
-    await waitFor(() => expect(withToken.result.current.isSuccess).toBe(true));
-    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1?token=abc');
+    const byId = renderHook(() => useListingDetail({ id: 'l1', token: 'abc' }), { wrapper });
+    await waitFor(() => expect(byId.result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/l1');
+  });
+
+  it('fetches an unlisted listing by token alone through the header, not the URL', async () => {
+    h.get.mockResolvedValueOnce({ data: { listing: { id: 'l2' } } });
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useListingDetail({ token: 'xyz' }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenLastCalledWith('/api/skills/market/by-token', {
+      headers: { [SKILL_SHARE_TOKEN_HEADER]: 'xyz' },
+    });
   });
 
   it('invalidates the reports queue and listing detail after a report', async () => {
@@ -50,5 +69,97 @@ describe('skillMarket hooks', () => {
     await act(() => result.current.mutateAsync('l1'));
     expect(qc.getQueryState(['skill-market', 'me'])?.isInvalidated).toBe(false);
     expect(qc.getQueryState(['skill-market', 'mine'])?.isInvalidated).toBe(true);
+  });
+
+  describe('browse scope', () => {
+    const base = { q: '', tools: '', minRating: 0, sort: 'top', tags: [] } as const;
+    const browse = async (filters: Parameters<typeof useMarketListings>[0]) => {
+      h.get.mockResolvedValue({ data: { data: [], hasMore: false } });
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useMarketListings(filters), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      return h.get.mock.calls.at(-1)?.[0] as string;
+    };
+
+    it('sends spaceId with scope space', async () => {
+      const url = await browse({ ...base, scope: 'space', spaceId: 'sp1' });
+      expect(url).toContain('scope=space');
+      expect(url).toContain('spaceId=sp1');
+    });
+
+    it('drops a stale spaceId when the scope is not space', async () => {
+      expect(await browse({ ...base, scope: 'org', spaceId: 'sp1' })).not.toContain('spaceId');
+    });
+  });
+
+  describe('Space bundles', () => {
+    const input = { name: 'Pack', description: 'd', listingIds: ['l1'] };
+    const spaceKey = ['skill-market', 'bundles', 'space', 'sp1'];
+
+    it('lists with spaceId, keyed apart from an org', async () => {
+      h.get.mockResolvedValue({ data: { bundles: [], listings: [], canEdit: true } });
+      const { qc, wrapper } = setup();
+      const { result } = renderHook(() => useSkillBundles({ spaceId: 'sp1' }), { wrapper });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(h.get).toHaveBeenCalledWith('/api/skills/market/bundles', { params: { spaceId: 'sp1' } });
+      expect(qc.getQueryState(spaceKey)).toBeDefined();
+      expect(qc.getQueryState(['skill-market', 'bundles', 'sp1'])).toBeUndefined();
+    });
+
+    it('creates with a POST that names the Space, then refreshes its bundles', async () => {
+      h.post.mockResolvedValue({ data: { id: 'b1' } });
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useSaveSkillBundle({ spaceId: 'sp1' }), { wrapper });
+      await act(() => result.current.mutateAsync(input));
+      expect(h.post).toHaveBeenCalledWith('/api/skills/market/bundles', { ...input, spaceId: 'sp1' });
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(spaceKey);
+    });
+
+    it('deletes, then refreshes the Space bundles', async () => {
+      h.del.mockResolvedValue(undefined);
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useDeleteSkillBundle({ spaceId: 'sp1' }), { wrapper });
+      await act(() => result.current.mutateAsync('b1'));
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(spaceKey);
+    });
+  });
+
+  describe('skill bundles', () => {
+    const input = { name: 'Pack', description: 'd', listingIds: ['l1'] };
+    const bundlesKey = ['skill-market', 'bundles', 'org1'];
+
+    it('creates with a POST that names the org, then refreshes the bundles', async () => {
+      h.post.mockResolvedValue({ data: { id: 'b1' } });
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useSaveSkillBundle('org1'), { wrapper });
+      await act(() => result.current.mutateAsync(input));
+      expect(h.post).toHaveBeenCalledWith('/api/skills/market/bundles', { ...input, organizationId: 'org1' });
+      expect(h.put).not.toHaveBeenCalled();
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(bundlesKey);
+    });
+
+    it('edits with a PUT to the bundle, without the org, then refreshes the bundles', async () => {
+      h.put.mockResolvedValue({ data: { id: 'b1' } });
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useSaveSkillBundle('org1'), { wrapper });
+      await act(() => result.current.mutateAsync({ ...input, id: 'b1' }));
+      expect(h.put).toHaveBeenCalledWith('/api/skills/market/bundles/b1', input);
+      expect(h.post).not.toHaveBeenCalled();
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(bundlesKey);
+    });
+
+    it('deletes with a DELETE, then refreshes the bundles', async () => {
+      h.del.mockResolvedValue(undefined);
+      const { qc, wrapper } = setup();
+      const spy = vi.spyOn(qc, 'invalidateQueries');
+      const { result } = renderHook(() => useDeleteSkillBundle('org1'), { wrapper });
+      await act(() => result.current.mutateAsync('b1'));
+      expect(h.del).toHaveBeenCalledWith('/api/skills/market/bundles/b1');
+      expect(spy.mock.calls.map(c => c[0]?.queryKey)).toContainEqual(bundlesKey);
+    });
   });
 });

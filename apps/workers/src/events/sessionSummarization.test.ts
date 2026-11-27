@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
   quests: [{ _id: 'q1', prompt: 'hello', reply: 'world' }] as Record<string, unknown>[],
   modelMessages: vi.fn(),
+  modelChunks: [['A summary of the session.']] as (string | null)[][],
   findOne: vi.fn(),
   updateFabFile: vi.fn(),
   createFabFile: vi.fn(),
@@ -22,6 +23,7 @@ const h = vi.hoisted(() => ({
   findUpdateAccessById: vi.fn(async () => ({ id: 'session-1' }) as unknown),
   publishTag: vi.fn(),
   recordSessionOperationalUsage: vi.fn(),
+  payerCanFund: vi.fn(async () => true),
   logEvent: vi.fn(),
   upload: vi.fn(),
   findPrefixArmLakes: vi.fn(
@@ -39,7 +41,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Summarize: { schema: { parse: (properties: unknown) => properties } },
     Tag: { publish: h.publishTag },
@@ -98,7 +100,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'test-model',
@@ -108,10 +110,11 @@ vi.mock('@client/services/operationsModelService', () => ({
           _modelId: string,
           _messages: unknown,
           _options: unknown,
-          onChunk: (chunk: (string | null)[]) => Promise<void>
+          onChunk: (chunk: (string | null)[], completionInfo?: Record<string, unknown>) => Promise<void>
         ) => {
           h.modelMessages(_messages);
-          await onChunk(['A summary of the session.']);
+          for (const chunk of h.modelChunks) await onChunk(chunk);
+          await onChunk([], { stopReason: 'end_turn', outputTokens: 0 });
         },
       },
     }),
@@ -122,13 +125,15 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: h.upload, getSignedUrl: vi.fn(async () => 'https://example.test/signed') }),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));
 
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
+
 import { handler } from './sessionSummarization';
-import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@bike4mind/server-utils/utils/sessionOperationCounts';
 
 const OWNER = 'user-owner';
 const STRANGER = 'user-stranger';
@@ -138,6 +143,8 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), u
 
 beforeEach(() => {
   h.quests = [{ _id: 'q1', prompt: 'hello', reply: 'world' }];
+  h.modelChunks = [['A summary of the session.']];
+  h.payerCanFund.mockResolvedValue(true);
 });
 
 const run = (properties: Record<string, unknown> = {}) =>
@@ -161,6 +168,13 @@ describe('sessionSummarization summary-file lookup', () => {
     h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
   });
 
+  it('keeps the generated summary text out of the logs', async () => {
+    await run();
+
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('A summary of the session.');
+  });
+
   it('looks the summary file up by session id AND the session owner', async () => {
     await run();
 
@@ -174,6 +188,16 @@ describe('sessionSummarization summary-file lookup', () => {
       OWNER,
       expect.objectContaining({ fileName: '[Automatic summary] Notebook.txt' }),
       expect.anything()
+    );
+  });
+
+  it('creates the summary file as a server upload, not a client one', async () => {
+    await run();
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      OWNER,
+      expect.anything(),
+      expect.objectContaining({ serverUpload: true })
     );
   });
 
@@ -550,6 +574,23 @@ describe('sessionSummarization requester write-time re-check', () => {
     expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: SHAREE, payerId: undefined });
   });
 
+  it.each([OWNER, SHAREE, 'user-payer'])(
+    'skips queued AI work when %s is pending review at execution',
+    async heldId => {
+      h.userFindById.mockImplementation(async id => ({
+        id,
+        isAdmin: false,
+        ...(id === heldId ? { riskScore: { reviewState: 'pending' as const } } : {}),
+      }));
+      const requesterId = heldId === OWNER ? undefined : SHAREE;
+      await run({ requesterId, payerId: 'user-payer', callTagging: true });
+      expect(h.modelMessages).not.toHaveBeenCalled();
+      expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+      expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+      expect(h.publishTag).not.toHaveBeenCalled();
+    }
+  );
+
   it('bills the sharee who asked, not the owner', async () => {
     h.sessionUpdateWithUpdateAccess.mockResolvedValue({ id: SESSION_ID });
 
@@ -571,11 +612,23 @@ describe('sessionSummarization requester write-time re-check', () => {
     expect(h.publishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: undefined, payerId: 'user-admin' });
   });
 
+  it('bills once when a failed summary write is replayed', async () => {
+    h.sessionUpdateWithUpdateAccess.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run({ requesterId: SHAREE })).rejects.toThrow('write failed');
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+
+    await expect(run({ requesterId: SHAREE })).resolves.toBeUndefined();
+    expect(h.modelMessages).toHaveBeenCalledTimes(2);
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('stops before the FabFile, upload and tag job when the requester lost access mid-run', async () => {
     h.sessionUpdateWithUpdateAccess.mockResolvedValue(null);
 
     await run({ requesterId: SHAREE, callTagging: true });
 
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
     expect(h.sessionUpdate).not.toHaveBeenCalled();
     expect(h.createFabFile).not.toHaveBeenCalled();
     expect(h.updateFabFile).not.toHaveBeenCalled();
@@ -617,6 +670,18 @@ describe('sessionSummarization requester write-time re-check', () => {
     });
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+
+  it('runs no model and records no usage when the payer cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run({ callTagging: true });
+
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: OWNER }));
+    expect(h.modelMessages).not.toHaveBeenCalled();
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.publishTag).not.toHaveBeenCalled();
   });
 
   it('skips the run when the requester no longer exists', async () => {
@@ -728,5 +793,55 @@ describe('sessionSummarization stopped turns', () => {
     expect(h.session.summary).toBe('Existing summary');
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+});
+
+// A completed model call can carry no text (a declined input, an empty reply). That is an outcome
+// of the input, not a fault: throwing makes the async invoke retry it and then park it in the
+// session-enrichment DLQ, which pages as an unhandled failure.
+describe('sessionSummarization when the model returns no text', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  it.each([
+    ['no chunks at all', []],
+    ['only empty and null parts', [[''], [null], ['   ']]],
+  ])('resolves with a warning and writes nothing for %s', async (_label, chunks) => {
+    h.modelChunks = chunks as (string | null)[][];
+
+    await expect(run({ callTagging: true })).resolves.toBeUndefined();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no summary text'),
+      expect.objectContaining({ stopReason: 'end_turn', outputTokens: 0 })
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.publishTag).not.toHaveBeenCalled();
+  });
+
+  it('keeps the previous summary on the session object', async () => {
+    h.session = { ...h.session, summary: 'Earlier summary.' };
+    h.modelChunks = [];
+
+    await run();
+
+    expect(h.session.summary).toBe('Earlier summary.');
+  });
+
+  it('still records the usage of the completed call', async () => {
+    h.modelChunks = [];
+
+    await run();
+
+    expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 
 /**
  * Pins which files feed agent generation: the session's `knowledgeIds` and its messages' `fabFileIds`
@@ -28,18 +36,19 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { findAllBySessionId: vi.fn().mockResolvedValue([{ fabFileIds: ['message-file'] }]) },
   agentOpsSettingsRepository: { getSettings: vi.fn().mockResolvedValue(null) },
   fabFileRepository: { findAccessibleInIds: h.findAccessibleInIds, findAllByIds: h.findAllByIds },
-  agentRepository: {},
+  agentRepository: { countByUserId: vi.fn().mockResolvedValue(0) },
   apiKeyRepository: {},
   adminSettingsRepository: {},
   projectRepository: {},
 }));
 
-vi.mock('@server/dataLakes/attachmentLakeAccess', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: h.createAttachmentLakeAccess,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: vi.fn(), getLlmByModel: vi.fn() }));
-vi.mock('@bike4mind/services', () => ({ apiKeyService: {} }));
+vi.mock('@bike4mind/services', () => ({ apiKeyService: {}, meterCompletionBackend: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: vi.fn() }));
 
 await import('../create-from-context');
 

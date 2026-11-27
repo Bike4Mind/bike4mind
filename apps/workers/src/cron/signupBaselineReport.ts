@@ -4,7 +4,9 @@ import { baselineWindowSchema, DAY_MS } from '@bike4mind/server-utils/analytics/
 import { toUtcDay } from '@bike4mind/server-utils/analytics/externalActiveUsers';
 import { runSignupBaselineReport } from '@bike4mind/server-utils/analytics/signupBaselineReport';
 import { connectDB } from '@bike4mind/db-core';
+import { loadKeyringInBackground } from '@bike4mind/database';
 import { z } from 'zod';
+import { Logger } from '@bike4mind/observability';
 
 /** Emit events individually so a busy first day cannot overflow one log record. */
 export async function handler() {
@@ -16,18 +18,22 @@ export async function handler() {
     autoIndex: false,
     autoCreate: false,
   });
+  loadKeyringInBackground();
   const { census, ...summary } = await runSignupBaselineReport({
     ...window,
     staffDomains: process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS,
     testPattern: process.env.ANALYTICS_TEST_PATTERN,
   });
-  console.log(JSON.stringify({ report: 'signup-baseline', ...summary }));
+  Logger.info('signup baseline report', { report: 'signup-baseline', ...summary });
   for (const { timeline, ...account } of census) {
-    console.log(JSON.stringify({ report: 'signup-baseline-census', window: summary.window, ...account }));
+    Logger.info('signup baseline census', { report: 'signup-baseline-census', window: summary.window, ...account });
     for (const event of timeline) {
-      console.log(
-        JSON.stringify({ report: 'signup-baseline-event', window: summary.window, userId: account.userId, ...event })
-      );
+      Logger.info('signup baseline event', {
+        report: 'signup-baseline-event',
+        window: summary.window,
+        userId: account.userId,
+        ...event,
+      });
     }
   }
   return { status: 'success', signups: summary.total.signups };

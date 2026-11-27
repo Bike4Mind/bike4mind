@@ -2,7 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, parse, resolve } from 'node:path';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
-import { isWithin, PathAccessDenied } from './paths';
+import { guardForm, guardFormWithin, isWithin, PathAccessDenied, withinGuarded } from './paths';
 import { requireString, type ToolDefinition } from './types';
 
 /** Long enough for a real sentence, short enough that the card cannot be filled with prose. */
@@ -54,6 +54,8 @@ export interface DirectoryInspectionContext {
   roots: readonly string[];
   workingDirectory?: string;
   protectedPaths?: readonly string[];
+  /** Folders inside a protected path that may still be shared; the folder itself may not. Writes stay blocked by the file tools. */
+  shareableUnderProtected?: readonly string[];
   /** Real paths the user said "Not now" to earlier in this turn. */
   declined: readonly string[];
   /** Injected so tests do not depend on the machine's own home folder. */
@@ -119,7 +121,15 @@ export async function inspectDirectory(
       message: 'The filesystem root cannot be shared. Share the specific folder that is needed.',
     };
   }
-  if ((context.protectedPaths ?? []).some(entry => isWithin(resolve(entry), real))) {
+  const realShareable = await Promise.all(
+    (context.shareableUnderProtected ?? []).map(dir => realpath(dir).catch(() => resolve(dir)))
+  );
+  const candidate = guardForm(real);
+  const shareable = realShareable.some(dir => {
+    const root = guardForm(dir);
+    return candidate !== root && guardFormWithin(root, candidate);
+  });
+  if (!shareable && withinGuarded(context.protectedPaths ?? [], [real])) {
     return { kind: 'refused', message: `${requested} belongs to this app and cannot be shared.` };
   }
 

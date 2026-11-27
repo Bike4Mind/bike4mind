@@ -50,35 +50,70 @@ function OptionRow({
       data-checked={checked ? 'true' : 'false'}
       sx={{
         display: 'flex',
-        gap: 1,
+        gap: 1.25,
         alignItems: 'flex-start',
-        px: 1,
-        py: 0.75,
-        borderRadius: 'sm',
+        px: 1.5,
+        py: 1,
+        borderRadius: 'md',
         cursor: 'pointer',
-        bgcolor: checked ? 'primary.softActiveBg' : 'background.surface',
+        bgcolor: checked ? 'background.surface' : 'transparent',
         border: '1px solid',
-        borderColor: checked ? 'primary.solidBg' : 'transparent',
-        '&:hover': { bgcolor: checked ? 'primary.softActiveBg' : 'background.level1' },
+        borderColor: checked ? 'primary.solidBg' : 'divider',
+        boxShadow: checked ? theme => `0 0 0 1px ${theme.vars.palette.primary.solidBg}` : 'none',
+        transition: 'border-color 120ms, background-color 120ms, box-shadow 120ms',
+        '&:hover': {
+          bgcolor: 'background.surface',
+          borderColor: checked ? 'primary.solidBg' : 'neutral.outlinedHoverBorder',
+        },
+        '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.outlinedBorder', outlineOffset: 1 },
       }}
     >
-      <Typography level="body-xs" textColor="text.tertiary" sx={{ minWidth: 14, pt: '1px' }}>
-        {index}
-      </Typography>
       <Box
         aria-hidden
         sx={{
           flex: '0 0 auto',
-          width: 14,
-          height: 14,
-          mt: '2px',
-          borderRadius: multi ? '3px' : '50%',
+          display: 'grid',
+          placeItems: 'center',
+          width: 20,
+          height: 20,
+          mt: '1px',
+          borderRadius: 'sm',
+          fontSize: 11,
+          fontWeight: 'lg',
+          bgcolor: checked ? 'primary.solidBg' : 'background.level2',
+          color: checked ? 'primary.solidColor' : 'text.tertiary',
+        }}
+      >
+        {index}
+      </Box>
+      <Box sx={{ minWidth: 0, flex: 1 }}>{children}</Box>
+      <Box
+        aria-hidden
+        sx={{
+          flex: '0 0 auto',
+          display: 'grid',
+          placeItems: 'center',
+          width: 18,
+          height: 18,
+          mt: '1px',
+          borderRadius: multi ? '4px' : '50%',
           border: '2px solid',
           borderColor: checked ? 'primary.solidBg' : 'neutral.outlinedBorder',
           bgcolor: checked ? 'primary.solidBg' : 'transparent',
+          '&::after': {
+            content: '""',
+            width: multi ? 8 : 6,
+            height: multi ? 4 : 6,
+            borderRadius: multi ? 0 : '50%',
+            bgcolor: multi ? 'transparent' : 'primary.solidColor',
+            borderLeft: multi ? '2px solid' : 'none',
+            borderBottom: multi ? '2px solid' : 'none',
+            borderColor: 'primary.solidColor',
+            transform: multi ? 'rotate(-45deg) translate(1px,-1px)' : 'none',
+            opacity: checked ? 1 : 0,
+          },
         }}
       />
-      <Box sx={{ minWidth: 0, flex: 1 }}>{children}</Box>
     </Box>
   );
 }
@@ -155,13 +190,21 @@ export function QuestionCard({
     <Sheet
       ref={card}
       tabIndex={-1}
-      variant="soft"
+      variant="outlined"
       color="primary"
       onKeyDown={onKeyDown}
-      sx={{ borderRadius: 'sm', px: 1.5, py: 1.25, my: 0.5, outline: 'none' }}
+      sx={{
+        borderRadius: 'lg',
+        px: 2,
+        py: 1.75,
+        my: 0.5,
+        outline: 'none',
+        bgcolor: 'background.level1',
+        boxShadow: 'sm',
+      }}
       data-testid="chat-question-card"
     >
-      <Stack spacing={1.5}>
+      <Stack spacing={2.5}>
         {questions.map((question, q) => {
           const state = picks[q];
           return (
@@ -171,8 +214,19 @@ export function QuestionCard({
               data-testid={`chat-question-${q}`}
               data-active={q === active ? 'true' : 'false'}
             >
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
-                <Chip size="sm" variant="solid" color="primary" data-testid={`chat-question-header-${q}`}>
+              <Stack direction="row" spacing={1} useFlexGap alignItems="center" sx={{ mb: 0.75, flexWrap: 'wrap' }}>
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color="primary"
+                  slotProps={{
+                    label: {
+                      sx: { overflow: 'visible', textOverflow: 'clip', whiteSpace: 'normal', overflowWrap: 'anywhere' },
+                    },
+                  }}
+                  sx={{ maxWidth: '100%', fontWeight: 'lg', letterSpacing: '0.02em' }}
+                  data-testid={`chat-question-header-${q}`}
+                >
                   {question.header}
                 </Chip>
                 {question.multiSelect && (
@@ -181,10 +235,10 @@ export function QuestionCard({
                   </Typography>
                 )}
               </Stack>
-              <Typography level="body-sm" fontWeight="lg" sx={{ mb: 0.5 }}>
+              <Typography level="title-md" sx={{ mb: 1.25 }}>
                 {question.question}
               </Typography>
-              <Stack spacing={0.5} role={question.multiSelect ? 'group' : 'radiogroup'}>
+              <Stack spacing={0.75} role={question.multiSelect ? 'group' : 'radiogroup'}>
                 {question.options.map((option, o) => (
                   <OptionRow
                     key={option.label}
@@ -197,7 +251,7 @@ export function QuestionCard({
                     <Typography level="body-sm" fontWeight="lg">
                       {option.label}
                     </Typography>
-                    <Typography level="body-xs" textColor="text.tertiary">
+                    <Typography level="body-sm" textColor="text.tertiary" sx={{ mt: 0.25 }}>
                       {option.description}
                     </Typography>
                   </OptionRow>
@@ -236,15 +290,15 @@ export function QuestionCard({
         })}
       </Stack>
 
-      <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-        <Button size="sm" disabled={!complete} onClick={submit} data-testid="chat-question-submit">
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 2 }}>
+        <Button size="md" disabled={!complete} onClick={submit} data-testid="chat-question-submit">
           Submit
         </Button>
-        <Button size="sm" variant="plain" color="neutral" onClick={onSkip} data-testid="chat-question-skip">
+        <Button size="md" variant="outlined" color="neutral" onClick={onSkip} data-testid="chat-question-skip">
           Skip
         </Button>
         {!complete && picks.some(isAnswered) && (
-          <Typography level="body-xs" textColor="text.tertiary" sx={{ alignSelf: 'center' }}>
+          <Typography level="body-xs" textColor="text.tertiary">
             Answer every question to submit.
           </Typography>
         )}

@@ -1,11 +1,15 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { sharedTest } from '../../vitest.shared';
 
 export default defineConfig({
   test: {
     ...sharedTest,
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['**/*.repo.test.ts'] }
+      : { exclude: [...configDefaults.exclude, '**/*.repo.test.ts'] }),
     // Download MongoDB binary once before all tests to prevent race conditions
     globalSetup: './vitest.setup.ts',
+    setupFiles: ['./src/__test__/setupKeyring.ts'],
     // Increase timeout to allow for MongoDB binary download and operations
     hookTimeout: 60000,
     // Most suites here boot a real mongod (createMongoServer/createMongoReplSet/setupMongoTest), so

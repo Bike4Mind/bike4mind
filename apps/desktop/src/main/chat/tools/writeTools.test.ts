@@ -1,10 +1,12 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied } from './paths';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PathAccessDenied, physicalTarget, resolveWithinRoots, withRealPath } from './paths';
 import type { ToolContext } from './types';
-import { fileEdit, fileWrite } from './writeTools';
+import { fileEdit, fileWrite, resolveWritablePath } from './writeTools';
 
 describe('write tools', () => {
   let root: string;
@@ -54,6 +56,48 @@ describe('write tools', () => {
     });
   });
 
+  // The approval key names the exact change, so the stale-file check can hold the user to it;
+  // the chat allowance names the file, so "Allow in this chat" covers the next change to it.
+  describe('the chat allowance', () => {
+    const notes = () => join(root, 'notes.md');
+
+    it('is the same for every change to one file, whichever tool makes it', async () => {
+      const first = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
+      const second = await fileEdit.approval?.({ path: notes(), oldText: 'gamma', newText: 'G' }, context);
+      const rewrite = await fileWrite.approval?.({ path: notes(), content: 'new\n' }, context);
+
+      expect(second?.key).not.toBe(first?.key);
+      expect(first?.chatKey).toBeDefined();
+      expect(second?.chatKey).toBe(first?.chatKey);
+      expect(rewrite?.chatKey).toBe(first?.chatKey);
+      expect(first?.alwaysCovers).toBe(`changes to ${notes()}`);
+    });
+
+    it('differs for another file, including one whose path only extends this one', async () => {
+      await writeFile(join(root, 'notes.md.bak'), 'alpha\n', 'utf8');
+      const here = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
+      const near = await fileEdit.approval?.(
+        { path: join(root, 'notes.md.bak'), oldText: 'alpha', newText: 'A' },
+        context
+      );
+
+      expect(near?.chatKey).not.toBe(here?.chatKey);
+    });
+
+    it('names a relative path by the file it resolves to', async () => {
+      const absolute = await fileEdit.approval?.({ path: notes(), oldText: 'beta', newText: 'B' }, context);
+      const relative = await fileEdit.approval?.(
+        { path: 'notes.md', oldText: 'beta', newText: 'B' },
+        {
+          ...context,
+          workingDirectory: root,
+        }
+      );
+
+      expect(relative?.chatKey).toBe(absolute?.chatKey);
+    });
+  });
+
   describe('file_write', () => {
     it('describes a new file as a creation before writing anything', async () => {
       const input = { path: join(root, 'fresh.txt'), content: 'hello\n' };
@@ -92,6 +136,97 @@ describe('write tools', () => {
       const input = { path: join(root, 'vault', 'tokens.json'), content: '{}' };
       await expect(fileWrite.run(input, context)).rejects.toThrow(/protected location/);
     });
+
+    it('refuses the real path of a protected folder whose own path runs through a symlink', async () => {
+      await mkdir(join(root, 'config', 'App'), { recursive: true });
+      await symlink(join(root, 'config'), join(root, 'cfg-link'));
+      const guarded = { ...context, protectedPaths: withRealPath(join(root, 'cfg-link', 'App')) };
+      const input = { path: join(root, 'config', 'App', 'tokens.json'), content: '{}' };
+
+      await expect(fileWrite.run(input, guarded)).rejects.toThrow(/protected location/);
+      await expect(readFile(input.path, 'utf8')).rejects.toThrow();
+    });
+
+    it('refuses a link inside a protected folder reached through an alias, though its target is granted', async () => {
+      await mkdir(join(outside, 'prot'));
+      await writeFile(join(root, 'payload'), 'kept\n', 'utf8');
+      await symlink(outside, join(root, 'alias'));
+      await symlink(join(root, 'payload'), join(outside, 'prot', 'lnk'));
+      const guarded = { ...context, protectedPaths: [join(outside, 'prot')] };
+
+      await expect(resolveWritablePath(join(root, 'alias', 'prot', 'lnk'), guarded)).rejects.toThrow(
+        /protected location/
+      );
+      await expect(resolveWritablePath(join(root, 'payload'), guarded)).resolves.toBe(join(root, 'payload'));
+    });
+
+    it('refuses a path whose parent cannot be resolved', async () => {
+      await mkdir(join(root, 'locked'));
+      await writeFile(join(root, 'locked', 'file.txt'), 'x', 'utf8');
+      const native = realpathSync.native;
+      const spy = vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path) === join(root, 'locked')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return native(path, options);
+      });
+      try {
+        await expect(resolveWritablePath(join(root, 'locked', 'file.txt'), context)).rejects.toThrow(
+          /cannot be written to/
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('refuses a path that cannot be resolved itself, though its parent can', async () => {
+      const target = join(root, 'notes.md');
+      const native = realpathSync.native;
+      const spy = vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path) === target) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return native(path, options);
+      });
+      try {
+        await expect(resolveWritablePath(target, context)).rejects.toThrow(/cannot be written to/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('refuses every write while a protected folder cannot be resolved', async () => {
+      const pending = { ...context, unresolvedProtectedPaths: [join(outside, 'App')] };
+      const input = { path: join(root, 'notes.md'), content: 'changed\n' };
+
+      await expect(fileWrite.run(input, pending)).rejects.toThrow(
+        `while Desktop cannot resolve the protected folder ${join(outside, 'App')}`
+      );
+      await expect(readFile(input.path, 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
+      await expect(resolveWritablePath(input.path, context)).resolves.toBe(input.path);
+    });
+
+    // Past PATH_MAX readlink fails with ENAMETOOLONG, which must not read as "not a link".
+    it.skipIf(process.platform !== 'linux')(
+      'refuses a link reached through a short alias whose physical path exceeds PATH_MAX',
+      async () => {
+        let deep = join(root, 'deep');
+        for (let left = 4093 - Buffer.byteLength(deep); left > 0; left = 4093 - Buffer.byteLength(deep)) {
+          deep = join(deep, 'd'.repeat(left > 256 ? 200 : left - 1));
+        }
+        await mkdir(deep, { recursive: true });
+        await symlink(deep, join(root, 's'));
+        await writeFile(join(outside, 'x'), 'protected\n', 'utf8');
+        await symlink(join(outside, 'x'), join(root, 's', 'lnk'));
+        const guarded = { ...context, protectedPaths: [outside] };
+        const input = { path: join(root, 's', 'lnk'), content: 'overwritten\n' };
+        try {
+          await expect(physicalTarget(input.path)).rejects.toThrow(PathAccessDenied);
+          await expect(resolveWithinRoots(input.path, [root])).rejects.toThrow(PathAccessDenied);
+          await expect(resolveWritablePath(input.path, guarded)).rejects.toThrow(PathAccessDenied);
+          await expect(fileWrite.run(input, guarded)).rejects.toThrow();
+          await expect(readFile(join(outside, 'x'), 'utf8')).resolves.toBe('protected\n');
+        } finally {
+          await rm(input.path, { force: true });
+        }
+      }
+    );
 
     // The containment check runs again in `run`, against the resolved real path: the prompt the
     // user answered was about a plain file, and a symlink swapped in behind it must not be followed.
@@ -706,7 +841,7 @@ describe('write tools', () => {
     let project: string;
 
     beforeEach(async () => {
-      claude = join(await realpath(homedir()), '.claude');
+      claude = join(await realpath(sandboxedHome()), '.claude');
       await mkdir(join(claude, 'skills', 'x'), { recursive: true });
       await writeFile(join(claude, 'skills', 'x', 'SKILL.md'), 'old\n', 'utf8');
       await writeFile(join(claude, 'settings.json'), '{}\n', 'utf8');

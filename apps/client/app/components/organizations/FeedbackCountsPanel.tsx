@@ -38,7 +38,7 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
   if (report.totals.count === 0) {
     return (
       <Typography level="body-md" data-testid="org-analysis-empty">
-        No feedback from this organization in the selected window.
+        No feedback from this team in the selected window.
       </Typography>
     );
   }
@@ -93,8 +93,8 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
                 OrgMemberPopulation. Wording that claimed authorship contradicted the by-member
                 table above, because an owner whose pointer names their personal org lands here. */}
             <Typography level="body-sm">
-              The organization roster and the accounts pointed at this organization do not agree, so some of these
-              counts rest on one source alone.
+              The team roster and the accounts pointed at this team do not agree, so some of these counts rest on one
+              source alone.
             </Typography>
             {membership.aclOnly.length > 0 && (
               <Typography level="body-sm" data-testid="org-analysis-acl-only">

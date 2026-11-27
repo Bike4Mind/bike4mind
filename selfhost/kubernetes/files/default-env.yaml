@@ -9,8 +9,13 @@ HISTORY_IMPORT_BUCKET: b4m-history-import
 PUBLISHED_ARTIFACTS_BUCKET: b4m-published-artifacts
 SLACK_EXPORT_BUCKET: b4m-slack-export
 NEXT_PUBLIC_CDN_URL: /api/app-files/serve
+ACCOUNT_DATA_EXPORT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/accountDataExportQueue
+ACCOUNT_DATA_EXPORT_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/accountDataExportQueueDLQ
+ACCOUNT_ERASURE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/accountErasureQueue
+ACCOUNT_ERASURE_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/accountErasureQueueDLQ
 AGENT_CONTINUATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/agentContinuationQueue
 AGENT_PROACTIVE_MESSAGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/agentProactiveMessageQueue
+CALLABLE_FUNCTION_CALL_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/callableFunctionCallQueue
 DATA_LAKE_RESEARCH_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeResearchQueue
 DATA_LAKE_TAXONOMY_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeTaxonomyQueue
 DEEP_AGENT_WAKE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/deepAgentWakeQueue
@@ -29,10 +34,11 @@ GENERATION_JOB_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/generatio
 IMAGE_EDIT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/imageEditQueue
 IMAGE_GENERATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/imageGenerationQueue
 LAKE_INCONSISTENCY_MODEL_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/lakeInconsistencyModelQueue
+GENERATED_MEDIA_PURGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/generatedMediaPurgeQueue
 DATA_LAKE_CLEANUP_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeCleanupQueue
 DATA_LAKE_CLEANUP_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/dataLakeCleanupQueueDLQ
 LAKE_MEMORY_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/lakeMemoryQueue
-LIVE_OPS_TRIAGE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/liveOpsTriageQueue
+RISK_EVIDENCE_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/riskEvidenceQueue
 NOTEBOOK_CURATION_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/notebookCurationQueue
 NOTEBOOK_CURATION_QUEUE_DLQ: http://{{ .Release.Name }}-sqs:9324/000000000000/notebookCurationQueueDLQ
 QUEST_EXPORT_QUEUE: http://{{ .Release.Name }}-sqs:9324/000000000000/questExportQueue
@@ -51,7 +57,7 @@ MCP_HANDLER: mcp-handler
 MONGODB_URI: mongodb://{{ .Release.Name }}-mongo-0.{{ .Release.Name }}-mongo:27017/bike4mind?replicaSet=rs0
 AWS_ENDPOINT_URL_S3: http://{{ .Release.Name }}-minio:9000
 AWS_ENDPOINT_URL_SQS: http://{{ .Release.Name }}-sqs:9324
-WEBSOCKET_MANAGEMENT_ENDPOINT: http://{{ .Release.Name }}-ws:3001
+WEBSOCKET_MANAGEMENT_ENDPOINT: http://{{ .Release.Name }}-ws-management:3002
 CHAT_COMPLETION: http://{{ .Release.Name }}-chatcompletion:8080
 MAIL_HOST: '{{ .Release.Name }}-mail'
 MAIL_PORT: '1025'

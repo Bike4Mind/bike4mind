@@ -206,3 +206,55 @@ export function shownSuggestion(input: {
   if (input.disabled || input.text.length > 0) return null;
   return input.suggestion || null;
 }
+
+/** What the shell puts in the composer: a suggestion that replaces the draft, or text added after it. */
+export type ComposerFill = { id: number; text: string; append?: boolean };
+
+/** `text` after the draft, a space between them unless the draft already ends in whitespace. */
+export function appendToDraft(draft: string, text: string): string {
+  if (!draft || /\s$/.test(draft)) return draft + text;
+  return `${draft} ${text}`;
+}
+
+/** A prompt Up-arrow put in the draft: its place in the history (0 is the newest) and its text. */
+export interface PromptRecall {
+  index: number;
+  text: string;
+}
+
+/**
+ * Up/Down-arrow recall of the prompts sent in this conversation, as a terminal does.
+ *
+ * Up, with the caret at the very start of an empty draft (or of a prompt recall itself put
+ * there), fills in the previous prompt; Down, with the caret on the last line, moves forward
+ * again and past the newest back to an empty box. The draft is only ever replaced when it is
+ * empty or still exactly what recall put there: once the user has typed, the arrows are theirs
+ * and move the caret as usual. Null means the key is not recall's.
+ *
+ * `history` is newest first (promptHistory); `recall` is the last thing this returned, which a
+ * draft that no longer matches it simply ignores.
+ */
+export function recallPromptAction(
+  event: { key: string; shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean },
+  draft: { text: string; selectionStart: number; selectionEnd: number },
+  history: readonly string[],
+  recall: PromptRecall | null
+): { text: string; recall: PromptRecall | null } | null {
+  if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return null;
+  const showing = recall !== null && draft.text === recall.text ? recall : null;
+  if (draft.text !== '' && !showing) return null;
+
+  if (event.key === 'ArrowUp') {
+    if (draft.selectionStart !== 0 || draft.selectionEnd !== 0) return null;
+    const index = showing ? showing.index + 1 : 0;
+    const text = history[index];
+    return text === undefined ? null : { text, recall: { index, text } };
+  }
+  if (event.key === 'ArrowDown') {
+    if (!showing || draft.text.slice(draft.selectionEnd).includes('\n')) return null;
+    const index = showing.index - 1;
+    const text = history[index];
+    return text === undefined ? { text: '', recall: null } : { text, recall: { index, text } };
+  }
+  return null;
+}

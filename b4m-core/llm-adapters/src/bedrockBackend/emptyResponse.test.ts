@@ -70,6 +70,28 @@ describe('BaseBedrockBackend empty-response guard', () => {
     await expect(run(withBody(streamBody([])))).rejects.toThrow(/us-east-2/); // default region
   });
 
+  it('does not claim the stream stalled when the adapter cannot tell a stall from an empty answer', async () => {
+    const err = await run(withBody(streamBody([]))).catch((e: Error) => e);
+
+    expect((err as Error).message).not.toMatch(/stream timeout/i);
+    expect((err as Error).message).not.toContain('without a terminal event');
+  });
+
+  it('does NOT throw when the request was aborted before the first token', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const backend = withBody(streamBody([]));
+
+    await expect(
+      backend.complete(
+        TEST_MODEL,
+        [{ role: 'user', content: 'hi' }],
+        { stream: true, abortSignal: controller.signal } as Partial<ICompletionOptions>,
+        cb
+      )
+    ).resolves.not.toThrow();
+  });
+
   it('does NOT throw when the stream produces real text', async () => {
     await expect(run(withBody(streamBody([textChunk('hello there')])))).resolves.not.toThrow();
   });

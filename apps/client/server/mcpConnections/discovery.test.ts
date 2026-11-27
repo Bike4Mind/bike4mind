@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConflictError, type IMcpConnectionTool, type McpDiscoveryUpdate } from '@bike4mind/common';
+import { ConflictError, NotFoundError, type IMcpConnectionTool, type McpDiscoveryUpdate } from '@bike4mind/common';
 import type { RemoteMcpListToolsResult } from '@bike4mind/mcp/remote';
 
 interface StoredConnection {
@@ -70,7 +70,7 @@ vi.mock('@bike4mind/database', () => ({
       ? Buffer.byteLength(JSON.stringify(tools))
       : 2 + tools.length * state.toolBytes + Math.max(tools.length - 1, 0),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: (context: { action: string; metadata: Record<string, unknown> }) => ({
       success: () => state.audits.push({ action: context.action, metadata: context.metadata }),
@@ -78,7 +78,7 @@ vi.mock('@server/integrations/integrationAuditLogger', () => ({
   },
 }));
 const invokeMock = vi.hoisted(() => vi.fn());
-vi.mock('./invokeRemoteMcp', () => ({ invokeRemoteMcp: invokeMock }));
+vi.mock('@bike4mind/server-utils/mcpConnections/invokeRemoteMcp', () => ({ invokeRemoteMcp: invokeMock }));
 
 const { discoverConnectionTools, DISCOVERY_MAX_ATTEMPTS } = await import('./discovery');
 
@@ -274,5 +274,26 @@ describe('discoverConnectionTools', () => {
     );
     expect(state.doc!.status).toBe('pending_auth');
     expect(state.doc!.tools).toEqual([]);
+  });
+
+  it('discovers a platform connector only for a caller that names the platform owner', async () => {
+    const platform = { ownerType: 'platform' as const, ownerKey: 'platform' };
+    Object.assign(state.doc!, platform);
+    state.listed = listed([{ name: 'search', description: 'Search', inputSchema: { type: 'object' } }]);
+
+    await expect(discoverConnectionTools('c1', 'admin-1')).rejects.toBeInstanceOf(NotFoundError);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      { action: 'listTools', connectionId: 'c1', userId: 'admin-1', owner: { ownerType: 'user', ownerKey: 'admin-1' } },
+      expect.anything()
+    );
+    expect(state.doc!.tools).toEqual([]);
+
+    const outcome = await discoverConnectionTools('c1', 'admin-1', {}, platform);
+    expect(invokeMock).toHaveBeenLastCalledWith(
+      { action: 'listTools', connectionId: 'c1', userId: 'admin-1', owner: platform },
+      expect.anything()
+    );
+    expect(outcome.added).toEqual(['search']);
+    expect(state.audits).toMatchObject([{ action: 'tools_discovered', metadata: { ownerType: 'platform' } }]);
   });
 });

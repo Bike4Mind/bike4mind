@@ -1,5 +1,5 @@
 import { createMocks } from 'node-mocks-http';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The route answers "will this attachment reach the model", so what matters here is that it measures
@@ -65,11 +65,14 @@ const LLAMA_8K = { contextWindow: 8000, maxOutputTokens: 2048, requestedMaxToken
 
 const csv = (chars: number) => 'x'.repeat(chars);
 
+type Handler = (req: unknown, res: unknown) => Promise<unknown>;
+let handler: Handler;
+// Imported after the module body runs: the baseApi mock writes to baseApiOptions at import time.
+beforeAll(async () => {
+  handler = (await import('../context-dry-run')).default as unknown as Handler;
+});
+
 const run = async (body: Record<string, unknown>) => {
-  const handler = (await import('../context-dry-run')).default as unknown as (
-    req: unknown,
-    res: unknown
-  ) => Promise<unknown>;
   const { req, res } = createMocks({ method: 'POST', body });
   (req as unknown as { user: unknown; logger: unknown }).user = { id: 'u1' };
   (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), log: vi.fn(), debug: vi.fn(), info: vi.fn() };

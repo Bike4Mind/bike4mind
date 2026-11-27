@@ -1,6 +1,5 @@
 import {
   GRAPH_STATE_VALUES,
-  IQuestGraph,
   IQuestGraphDocument,
   IQuestGraphRepository,
   IQuestNode,
@@ -15,13 +14,12 @@ import {
   QuestNodeStatusExtra,
   REVIEW_VERDICT_VALUES,
   RUNNABLE_NODE_STATUS_VALUES,
-  GraphState,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 
-const QuestGraphSchema = new Schema<IQuestGraph>(
+const QuestGraphSchema = new Schema<IQuestGraphDocument>(
   {
     goal: { type: String, required: true, maxlength: 4000 },
     userId: { type: String, required: true },
@@ -40,7 +38,7 @@ const QuestGraphSchema = new Schema<IQuestGraph>(
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-const QuestNodeSchema = new Schema<IQuestNode>(
+const QuestNodeSchema = new Schema<IQuestNodeDocument>(
   {
     graphId: { type: String, required: true },
     parentId: { type: String, default: null },
@@ -83,8 +81,10 @@ QuestGraphSchema.index({ userId: 1, updatedAt: -1 });
 QuestGraphSchema.plugin(softDeletePlugin);
 QuestNodeSchema.plugin(softDeletePlugin);
 
-export const QuestGraph = mongoose.models.QuestGraph ?? mongoose.model('QuestGraph', QuestGraphSchema);
-export const QuestNode = mongoose.models.QuestNode ?? mongoose.model('QuestNode', QuestNodeSchema);
+export const QuestGraph: Model<IQuestGraphDocument> =
+  mongoose.models.QuestGraph ?? mongoose.model<IQuestGraphDocument>('QuestGraph', QuestGraphSchema);
+export const QuestNode: Model<IQuestNodeDocument> =
+  mongoose.models.QuestNode ?? mongoose.model<IQuestNodeDocument>('QuestNode', QuestNodeSchema);
 
 /**
  * Detect a cycle in a directed dependency graph via DFS coloring. `edges` maps a
@@ -180,10 +180,6 @@ class QuestGraphRepository extends BaseRepository<IQuestGraphDocument> implement
 
   async findByUserId(userId: string): Promise<IQuestGraphDocument[]> {
     return this.questGraphModel.find({ userId }).sort({ updatedAt: -1 });
-  }
-
-  async updateState(id: string, state: GraphState): Promise<IQuestGraphDocument | null> {
-    return this.questGraphModel.findByIdAndUpdate(id, { $set: { state } }, { new: true });
   }
 
   async addRootNode(graphId: string, nodeId: string): Promise<IQuestGraphDocument | null> {

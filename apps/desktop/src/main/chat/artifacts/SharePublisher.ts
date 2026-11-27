@@ -5,6 +5,8 @@ import {
   ALLOWED_MIME_EXACT,
   ArtifactTypeSchema,
   PUBLISH_LIMITS,
+  PUBLISH_RATE_LIMITED,
+  publishRateLimitMessage,
   SCOPE_URL_PREFIX,
   type ArtifactType,
   ValidationViolationSchema,
@@ -118,14 +120,14 @@ export class SharePublisher {
 
     this.onProgress({ artifactId: request.artifactId, step: 'uploading' });
     try {
-      // Plain fetch, no app auth header: the URL carries its own capability either way. A
-      // self-hosted server answers step 1 with a same-origin PATH, which a browser would
-      // resolve implicitly and this process has to resolve explicitly - that is URL
-      // resolution, not a branch on the deployment.
+      // Plain fetch, no app auth header: the capability is the presigned URL itself, or on self-host
+      // the token in the entry's `headers`. A self-hosted server answers step 1 with a same-origin
+      // PATH, which a browser would resolve implicitly and this process has to resolve explicitly -
+      // that is URL resolution, not a branch on the deployment.
       const target = new URL(upload.url, axios.defaults.baseURL ?? undefined);
       const response = await fetch(target, {
         method: 'PUT',
-        headers: { 'Content-Type': INDEX_MIME },
+        headers: { ...upload.headers, 'Content-Type': INDEX_MIME },
         body: content,
       });
       if (!response.ok) {
@@ -304,17 +306,23 @@ function toViolations(data: unknown): ValidationViolation[] | undefined {
 }
 
 /**
- * `checkPublishQuota` answers 4xx with a `code`, and reaching a cap is a normal thing to have
- * happened rather than something that went wrong, so it reads as one.
+ * `checkPublishQuota` and the daily publish allowance answer 4xx with a `code`, and reaching a cap
+ * is a normal thing to have happened rather than something that went wrong, so it reads as one.
  */
 function toQuotaRejection(err: unknown): ChatArtifactPublish | null {
   if (!isAxiosError(err)) return null;
   const body = asRecord(err.response?.data);
   const code = typeof body?.code === 'string' ? body.code : undefined;
+  if (code === PUBLISH_RATE_LIMITED) {
+    const retryAfter = typeof body?.retryAfter === 'number' ? body.retryAfter : undefined;
+    const fallback =
+      retryAfter === undefined ? "You've published a lot today. Try again later." : publishRateLimitMessage(retryAfter);
+    return { status: 'quota', reason: serverMessage(err) ?? fallback };
+  }
   if (!code?.toLowerCase().includes('quota')) return null;
   return {
     status: 'quota',
-    reason: serverMessage(err) ?? 'You have reached your published-artifact limit. Remove a publication to make room.',
+    reason: serverMessage(err) ?? 'You have reached your published-storage limit. Remove a publication to make room.',
   };
 }
 

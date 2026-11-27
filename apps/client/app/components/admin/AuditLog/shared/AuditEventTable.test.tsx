@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -38,6 +38,52 @@ describe('AuditEventTable', () => {
     });
     expect(screen.getByText('Erased user')).toBeTruthy();
     expect(screen.queryByTestId('audit-table-actor-filter-btn')).toBeNull();
+  });
+
+  it('links the affected record without opening its audit drawer', () => {
+    const onSelectEntry = vi.fn();
+    render(<AuditEventTable {...baseProps} entries={[makeAuditEntry()]} onSelectEntry={onSelectEntry} />, {
+      wrapper: TestWrapper,
+    });
+    const link = screen.getByTestId('audit-table-target-link');
+    expect(link).toHaveAttribute('href', '/admin/users/user-1');
+    fireEvent.click(link);
+    expect(onSelectEntry).not.toHaveBeenCalled();
+  });
+
+  it('shows recorded reasons and paginates the loaded events', () => {
+    const entries = Array.from({ length: 26 }, (_, index) =>
+      makeAuditEntry({ id: `entry-${index}`, reason: `Recorded reason ${index}` })
+    );
+    render(<AuditEventTable {...baseProps} entries={entries} />, { wrapper: TestWrapper });
+    expect(screen.getByText('Recorded reason 0')).toBeVisible();
+    expect(screen.queryByTestId('audit-table-row-entry-25')).toBeNull();
+    fireEvent.click(screen.getByTestId('admin-table-next-btn'));
+    expect(screen.getByTestId('audit-table-row-entry-25')).toBeVisible();
+  });
+
+  it('puts the full reason on the clamped cell title, and none on a missing reason', () => {
+    const longReason = 'Escalated after repeated failed sign-ins from a new region. '.repeat(6).trim();
+    const entries = [
+      makeAuditEntry({ id: 'entry-long', reason: longReason }),
+      makeAuditEntry({ id: 'entry-none', reason: undefined }),
+    ];
+    render(<AuditEventTable {...baseProps} entries={entries} />, { wrapper: TestWrapper });
+    const [withReason, withoutReason] = screen.getAllByTestId('audit-table-reason');
+    expect(withReason).toHaveAttribute('title', longReason);
+    expect(withoutReason.textContent).toBe('No reason recorded');
+    expect(withoutReason).not.toHaveAttribute('title');
+  });
+
+  it('retries a failed query rather than loading the next cursor', () => {
+    const onRetry = vi.fn();
+    const onLoadMore = vi.fn();
+    render(<AuditEventTable {...baseProps} errorMessage="Could not load" onRetry={onRetry} onLoadMore={onLoadMore} />, {
+      wrapper: TestWrapper,
+    });
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onLoadMore).not.toHaveBeenCalled();
   });
 
   it('offers actor and target filters only when handlers are given', () => {
@@ -127,5 +173,43 @@ describe('AuditEventTable', () => {
     expect(onSelectEntry).toHaveBeenCalledTimes(2);
     fireEvent.keyDown(screen.getAllByTestId('audit-table-actor-filter-btn')[0], { key: 'Enter' });
     expect(onSelectEntry).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders extra columns before Severity and trailing row actions without opening the entry', () => {
+    const onSelectEntry = vi.fn();
+    const onAction = vi.fn();
+    render(
+      <AuditEventTable
+        {...baseProps}
+        onSelectEntry={onSelectEntry}
+        extraColumns={[{ id: 'extra', label: 'Extra', render: entry => `extra-${entry.id}` }]}
+        rowActions={entry => (
+          <button type="button" data-testid={`row-action-${entry.id}`} onClick={() => onAction(entry.id)}>
+            Act
+          </button>
+        )}
+      />,
+      { wrapper: TestWrapper }
+    );
+    const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
+    expect(headers.indexOf('Extra')).toBe(headers.indexOf('Severity') - 1);
+    expect(screen.getByText('extra-entry-1')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('row-action-entry-1'));
+    expect(onAction).toHaveBeenCalledWith('entry-1');
+    expect(onSelectEntry).not.toHaveBeenCalled();
+  });
+
+  it('selects rows when selection props are given', () => {
+    const onSelectionChange = vi.fn();
+    render(
+      <AuditEventTable
+        {...baseProps}
+        selection={{ mode: 'explicit', ids: [] }}
+        onSelectionChange={onSelectionChange}
+      />,
+      { wrapper: TestWrapper }
+    );
+    fireEvent.click(within(screen.getByTestId('audit-table-row-entry-1')).getByRole('checkbox'));
+    expect(onSelectionChange).toHaveBeenCalledWith({ mode: 'explicit', ids: ['entry-1'] });
   });
 });

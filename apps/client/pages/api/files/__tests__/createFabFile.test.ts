@@ -1,5 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  ApiKeyScope,
+  DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+  KnowledgeType,
+  createModalVideoSchema,
+} from '@bike4mind/common';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
@@ -18,6 +23,9 @@ const h = vi.hoisted(() => ({
   // The acting principal's org-admin set, as a test input rather than a Mongo read. The gates that
   // consume it are the real ones.
   administeredOrgIds: [] as string[],
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
+  pendingBytes: new Map<string | undefined, number>(),
+  admitPendingUploads: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -31,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/utils/browserUploadUrl', () => ({ resolveBrowserUploadUrl: (_id: string, url: string) => url }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: h.signUrl }),
@@ -46,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: h.listByLake },
   fabFileRepository: { update: vi.fn() },
-  userRepository: {},
+  userRepository: { findById: h.userFindById },
   FabFile: { create: h.fabFileCreate },
   User: { findById: h.userFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -55,7 +63,7 @@ vi.mock('@bike4mind/database', () => ({
 // The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
 // entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
 // comes from req.user (never the body), preserving the security property the route depends on.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,
@@ -72,9 +80,15 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   return { ...actual, getSettingsMap: vi.fn(async () => ({})) };
 });
 
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+vi.mock('@server/files/pendingUploads', () => ({ admitPendingUploads: h.admitPendingUploads }));
+
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret' } }));
 
 import handler from '../createFabFile';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 
 const LAKE = {
   id: 'lake-1',
@@ -121,12 +135,134 @@ const body = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   h.listByLake.mockResolvedValue([]);
   h.administeredOrgIds = [];
+  h.pendingBytes.clear();
+  h.admitPendingUploads.mockImplementation(async () => ({
+    count: 0,
+    bytesFor: (organizationId: string | undefined) => h.pendingBytes.get(organizationId) ?? 0,
+  }));
+});
+
+describe('POST /api/files/createFabFile - in-flight uploads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.signUrl.mockResolvedValue('https://s3.test/put');
+  });
+
+  it.each([0, -1])('rejects declared size %i before admission or allowance consumption', async fileSize => {
+    await expect(run(body({ fileSize }), makeRes().res)).rejects.toThrow('File size must be positive');
+    expect(h.admitPendingUploads).not.toHaveBeenCalled();
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a create without content as one pending upload in the personal pool', async () => {
+    await run(body(), makeRes().res);
+
+    expect(h.admitPendingUploads).toHaveBeenCalledWith(expect.anything(), 1, [undefined]);
+  });
+
+  it('admits it against the org pool of the org lake it joins', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, organizationId: 'org-1', createdAt: new Date() });
+
+    await run(body({ tags: [{ name: LAKE.datalakeTag, strength: 1 }] }), makeRes().res);
+
+    expect(h.admitPendingUploads).toHaveBeenCalledWith(expect.anything(), 1, ['org-1']);
+  });
+
+  it('leaves a create with content, whose bytes are written server-side, uncapped', async () => {
+    await run(body({ content: 'inline text' }), makeRes().res);
+
+    expect(h.admitPendingUploads).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses before spending the allowance or creating a file when the cap refuses', async () => {
+    h.admitPendingUploads.mockRejectedValueOnce(new Error('uploads in progress'));
+
+    await expect(run(body(), makeRes().res)).rejects.toThrow('uploads in progress');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps an org quota refusal ahead of hourly allowance consumption', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, organizationId: 'org-1', createdAt: new Date() });
+    const pendingBytes = DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB * 1_000_000;
+    h.pendingBytes.set('org-1', pendingBytes);
+
+    await expect(run(body({ tags: [{ name: LAKE.datalakeTag, strength: 1 }] }), makeRes().res)).rejects.toMatchObject({
+      info: { errorCode: 'org_storage_limit_exceeded', used_bytes: pendingBytes },
+    });
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.signUrl).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it("counts the owner's in-flight bytes against the quota", async () => {
+    // 1 MB personal quota, all but 5 bytes already promised to uploads in flight.
+    h.pendingBytes.set(undefined, 999_995);
+
+    await expect(run(body(), makeRes().res)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', used_bytes: 999_995, requested_bytes: 10 },
+    });
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.signUrl).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
 });
 
 const tagNamesOf = (callIndex = 0) => {
   const persisted = h.fabFileCreate.mock.calls[callIndex][0] as { tags?: { name: string }[] };
   return persisted.tags?.map(t => t.name).sort();
 };
+
+describe('POST /api/files/createFabFile - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('spends one unit of the allowance for the file', async () => {
+    await run(body(), makeRes().res);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('creates no file when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(run(body(), makeRes().res)).rejects.toThrow('Upload limit reached');
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the allowance on a request an earlier gate refuses', async () => {
+    h.lakeFind.mockResolvedValue([LAKE]);
+
+    await expect(
+      run(body({ tags: [{ name: 'acme:legal', strength: 1 }] }), makeRes().res, {
+        apiKeyInfo: { scopes: ['files:write'] },
+      })
+    ).rejects.toThrow(/datalake:write is required/);
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+  });
+
+  // Deliberate: the type, size and quota checks live inside fabFilesService.createFabFile, which runs
+  // in the route's transaction, and the allowance counter must not (see fileUploadBudget.ts).
+  it('spends the allowance before the service refuses an unsupported file type', async () => {
+    await expect(run(body({ fileName: 'a.exe', mimeType: 'application/x-msdownload' }), makeRes().res)).rejects.toThrow(
+      /is not supported/
+    );
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/files/createFabFile - data-lake tags', () => {
   beforeEach(() => {
@@ -378,6 +514,61 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
   });
 });
 
+describe('POST /api/files/createFabFile - admin-owned API keys', () => {
+  const OTHER_LAKE = { ...LAKE, createdByUserId: 'someone-else', organizationId: 'org-1' };
+  const lakeTag = body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] });
+  const keyCaller = (scopes: ApiKeyScope[]) => {
+    const user = { id: 'u2', isAdmin: true };
+    return {
+      user: scopes.includes(ApiKeyScope.ADMIN) ? user : withholdAdminRole(user),
+      apiKeyInfo: { keyId: 'k1', scopes },
+    };
+  };
+  const callAs = (overrides: Record<string, unknown>, res: unknown) =>
+    (handler as (req: unknown, res: unknown) => Promise<void>)(req(lakeTag, 'u2', overrides), res);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(OTHER_LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u2', isAdmin: true, storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+  });
+
+  it('refuses a key without the admin scope', async () => {
+    const { res } = makeRes();
+
+    await expect(callAs(keyCaller([ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses it in the service re-check as well', async () => {
+    vi.mocked(toAccessContext).mockResolvedValueOnce({
+      userId: 'u2',
+      isAdmin: true,
+      userTags: [],
+      entitlementKeys: [],
+      administeredOrgIds: [],
+    } as never);
+    const { res } = makeRes();
+
+    await expect(callAs(keyCaller([ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res)).rejects.toThrow(
+      /permission to change this data lake's files/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a key holding the admin scope', async () => {
+    const { res } = makeRes();
+
+    await callAs(keyCaller([ApiKeyScope.ADMIN, ApiKeyScope.WRITE_FILES, ApiKeyScope.DATALAKE_WRITE]), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('POST /api/files/createFabFile - scope gate', () => {
   it('requires files:write, or release-notes:write for the narrowed form below, at the baseApi route gate', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write', 'release-notes:write'] });
@@ -385,8 +576,11 @@ describe('POST /api/files/createFabFile - scope gate', () => {
 });
 
 describe('POST /api/files/createFabFile - signing boundaries', () => {
+  // A browser URL distinct from the cached private one is only minted on split-endpoint deploys.
+  afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('S3_PRESIGN_ENDPOINT', 'https://public.test');
     h.findByDatalakeTag.mockResolvedValue(null);
     h.lakeFind.mockResolvedValue([]);
     h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
@@ -396,12 +590,13 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     );
   });
 
-  it('persists a private GET URL for inline content and returns a separate browser GET', async () => {
+  it('returns the stable content URL for inline content without persisting any URL', async () => {
     const { res, json } = makeRes();
     await run(body({ content: 'owned text' }), res);
-    expect(h.fabFileCreate.mock.calls[0][0].fileUrl).toBe('https://private.test/get');
-    expect(json.mock.calls[0][0].fileUrl).toBe('https://public.test/get');
-    expect(h.signUrl.mock.calls[0][1]).toBe('get');
+    expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('fileUrl');
+    expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('fileUrlExpireAt');
+    expect(json.mock.calls[0][0].fileUrl).toMatch(/\/api\/files\/f1\/content\?exp=\d+&sig=[A-Za-z0-9_-]{43}$/);
+    expect(h.signUrl.mock.calls.some(call => call[2]?.audience === 'browser')).toBe(false);
   });
 
   it.each(['tmp', 'temp', 'x/backups', 'text-edit-backups'])(
@@ -420,10 +615,31 @@ describe('POST /api/files/createFabFile - signing boundaries', () => {
     await run(body(), res);
     expect(json.mock.calls[0][0].presignedUrl).toBe('https://private.test/put');
     expect(json.mock.calls[0][0].fileUrl).toBeUndefined();
+    expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('presignedUrl');
     expect(h.signUrl).toHaveBeenCalledTimes(1);
     expect(h.signUrl.mock.calls[0][1]).toBe('put');
     // Bound to the declared fileSize, so S3 refuses a PUT of any other length.
     expect(h.signUrl.mock.calls[0][2]).toMatchObject({ ContentLength: 10 });
+  });
+
+  it('signs a session upload as create-only', async () => {
+    const { res } = makeRes();
+    await run(body(), res);
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ IfNoneMatch: '*' });
+  });
+
+  // S3Storage.presign.test.ts proves the storage signer binds IfNoneMatch into X-Amz-SignedHeaders.
+  it('signs an API-key upload as create-only', async () => {
+    const { res } = makeRes();
+    await run(body(), res, { apiKeyInfo: { keyId: 'k1', scopes: ['files:write'] } });
+    expect(h.signUrl.mock.calls[0][1]).toBe('put');
+    expect(h.signUrl.mock.calls[0][2]).toMatchObject({ IfNoneMatch: '*' });
+  });
+
+  it('never adds the create-only condition to a GET', async () => {
+    const { res } = makeRes();
+    await run(body({ content: 'owned text' }), res);
+    expect(h.signUrl.mock.calls.every(call => !call[2]?.IfNoneMatch)).toBe(true);
   });
 });
 
@@ -476,6 +692,15 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
     expect(schema.safeParse({ landscapeUrl: sent.mediaUrl }).success).toBe(true);
   });
 
+  it('returns a mediaUrl for a settings:manage delegate, who may edit modals', async () => {
+    const { res, json } = makeRes();
+    await run(mp4(), res, { user: { id: 'u1', isAdmin: false, adminPermissions: ['settings:manage'] } });
+
+    const sent = json.mock.calls[0][0] as { mediaUrl: string; filePath: string };
+    expect(sent.filePath).toMatch(/^modals\//);
+    expect(sent.mediaUrl.endsWith(sent.filePath)).toBe(true);
+  });
+
   it('omits mediaUrl for a normal upload', async () => {
     const { res, json } = makeRes();
     await run(body(), res, asAdmin);
@@ -485,6 +710,11 @@ describe('POST /api/files/createFabFile - admin modal video', () => {
 
   it.each([
     ['a non-admin', mp4(), { user: { id: 'u1', isAdmin: false } }],
+    [
+      'a delegate without settings:manage',
+      mp4(),
+      { user: { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] } },
+    ],
     ['an admin naming the prefix instead of the purpose', mp4({ purpose: undefined, prefix: 'modals' }), asAdmin],
     ['an admin claiming another video type', mp4({ mimeType: 'video/quicktime' }), asAdmin],
     ['an admin with a non-mp4 name', mp4({ fileName: 'demo.mov' }), asAdmin],
@@ -521,6 +751,12 @@ describe('POST /api/files/createFabFile - release-notes:write key', () => {
     const persisted = h.fabFileCreate.mock.calls[0][0] as { filePath: string };
     expect(persisted.filePath).toMatch(/^modals\/.+\.mp4$/);
     expect(json.mock.calls[0][0]).toHaveProperty('mediaUrl');
+  });
+
+  it("uploads What's New media for a key whose admin owner has the role withheld", async () => {
+    const { res } = makeRes();
+    await run(mp4(), res, { ...releaseKey, user: withholdAdminRole({ id: 'u1', isAdmin: true }) });
+    expect(h.fabFileCreate).toHaveBeenCalled();
   });
 
   it.each([

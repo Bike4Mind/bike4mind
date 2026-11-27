@@ -1,21 +1,24 @@
 import type { Request, Response } from 'express';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { resolveStage } from '@bike4mind/server-utils/security/resolveStage';
-import { getWafTrafficOverview, resolveDefaultPeriod, type WafTrafficPeriod } from '@server/security/wafTraffic';
-import { parseRangeParam } from '@server/security/wafApiHelpers';
+import {
+  getWafTrafficOverview,
+  resolveDefaultPeriod,
+  type WafTrafficPeriod,
+} from '@bike4mind/server-utils/security/wafTraffic';
+import { parseRangeParam, wafQueryRateLimit, isWafDebugRequest } from '@server/security/wafApiHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
 
 function isWafTrafficPeriod(value: unknown): value is WafTrafficPeriod {
   return value === '1m' || value === '5m' || value === '1h';
 }
 
-const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
-  async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
+const handler = adminApi<Request, Response>({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
+  .use(wafQueryRateLimit('admin-waf-traffic'))
+  .get(async (req: Request, res: Response) => {
     const stage = resolveStage();
 
     const { range, error } = parseRangeParam(req);
@@ -29,13 +32,11 @@ const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN]
     }
     const period: WafTrafficPeriod = isWafTrafficPeriod(rawPeriod) ? rawPeriod : resolveDefaultPeriod(range);
     const includeRules = req.query.includeRules === 'true';
-    // Debug mode is gated to non-production to prevent leaking internal metadata.
-    const debug = stage !== 'production' && req.query.debug === 'true';
+    const debug = isWafDebugRequest(req, stage);
 
     const overview = await getWafTrafficOverview({ stage, range, period, includeRules, debug });
     return res.status(200).json(overview);
-  }
-);
+  });
 
 export const config = {
   api: {

@@ -14,9 +14,10 @@ import { IMongoDocument } from './common';
 // @bike4mind/database - the same split DataLakeAccessGrantModel and DataLakeSpendNotificationModel use.
 
 /**
- * A proposal is pending until a human rules on it, and then terminal. There is deliberately no
- * `auto_approved` (#1658 decision 10): a confidence score on generated content is a number with no
- * validated meaning, so shipping it as a safety control would be worse than shipping none.
+ * A proposal is pending until it is ruled on, and then terminal. There is deliberately no
+ * `auto_approved` status: an automatic admission is an `approved` row carrying `autoAdmission`.
+ * Admission is automatic only by source tier (a trusted-site entry), never by score: a confidence
+ * score on generated content has no validated meaning, so it is never a safety control.
  *
  * A `declined` row is also the TOMBSTONE for its source - see `IDataLakeProposal.excerpt` for what
  * a decline strips and why the row itself is kept.
@@ -33,6 +34,13 @@ export const DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS = 500;
 /** How many tags a producer may propose for one candidate. */
 export const DATA_LAKE_PROPOSAL_MAX_TAGS = 20;
 
+/** Why a trusted result was proposed instead of auto-admitted by an item rule. Never copied onto an admitted file. */
+export interface DataLakeProposalReviewReason {
+  kind: 'rule_match' | 'rule_undetermined' | 'rule_check_failed';
+  /** The review-rule conditions behind it. Absent for a failed check. */
+  conditions?: string[];
+}
+
 /** Where a proposal came from and when - carried onto the file an approval admits. */
 export interface DataLakeProposalProvenance {
   /** The producer kind, e.g. `research_run`. Free-form so a new producer needs no schema change. */
@@ -41,8 +49,14 @@ export interface DataLakeProposalProvenance {
   runId?: string;
   /** The question the run was answering, when it had one. Shown to the reviewer as context. */
   query?: string;
+  /** The feed the candidate was read from, when it came from one. Never copied onto an admitted file. */
+  feedUrl?: string | null;
   /** When the producer actually retrieved the candidate - not when the row was written. */
   retrievedAt: Date;
+  /** The source tier the producer routed this candidate under. Absent for other producers and older rows. */
+  sourceTier?: 'trusted' | 'review';
+  /** Set when an item rule took this trusted result out of auto-admit. */
+  reviewReason?: DataLakeProposalReviewReason;
 }
 
 export interface IDataLakeProposal {
@@ -92,7 +106,7 @@ export interface IDataLakeProposal {
   /**
    * The producer's own 0..1 confidence in the candidate. ADVISORY DISPLAY ONLY. Nothing in this
    * system may gate, filter out or auto-approve on it; there is no threshold lever, by design.
-   * Ordering the review list by it is fine - every proposal still needs its own human decision.
+   * Ordering the review list by it is fine. Admission rests on source tier, never on this value.
    */
   confidence?: number | null;
   /**
@@ -107,8 +121,14 @@ export interface IDataLakeProposal {
    * suppressed silently - the tombstone informs the human, it does not decide for them.
    */
   priorDisposition?: DataLakeProposalStatus | null;
+  /** Null on a row admitted by a source rule: no human reviewed it. See `autoAdmission`. */
   reviewedByUserId?: string | null;
   reviewedAt?: Date | null;
+  /**
+   * Set when a research config's trusted-site rule admitted this row without a reviewer. Cleared if
+   * the claim is released, so a released row reads as plain pending.
+   */
+  autoAdmission?: { configId: string; trustedDomain?: string } | null;
   /** The reviewer's reason for declining. Part of the tombstone. */
   declineReason?: string | null;
   /** The file an approval admitted. Absent while pending, and on every declined row. */
@@ -141,6 +161,14 @@ export type RestoreDataLakeProposalResult =
   | { restored: false; reason: 'not_declined' | 'pending_exists' };
 
 /**
+ * What `unapprove` reports. `not_approved` means the row is not approved any more; `pending_exists`
+ * means a newer proposal for the same source already holds the lake's one pending slot for it.
+ */
+export type UnapproveDataLakeProposalResult =
+  | { unapproved: true; proposal: IDataLakeProposalDocument; previous: IDataLakeProposalDocument }
+  | { unapproved: false; reason: 'not_approved' | 'pending_exists' };
+
+/**
  * What `createProposal` reports. `created: false` is the LOST side of a create race: a concurrent
  * producer run's pending row for the same source landed first, so this candidate is the duplicate
  * open question the caller already has an outcome for. Not an error - the caller reports it as
@@ -152,9 +180,11 @@ export type CreateDataLakeProposalResult =
 /** The compare-and-set a review performs. `pending -> approved | declined`, once. */
 export interface ReviewDataLakeProposalInput {
   status: Extract<DataLakeProposalStatus, 'approved' | 'declined'>;
-  reviewedByUserId: string;
+  /** Null for a rule admission: the config named in `autoAdmission` is the authority, not a person. */
+  reviewedByUserId: string | null;
   reviewedAt: Date;
   declineReason?: string;
+  autoAdmission?: { configId: string };
 }
 
 export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakeProposalDocument> {
@@ -175,7 +205,11 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
   /** The review queue for a lake, newest first, optionally narrowed to one status. */
   listByLake(
     dataLakeId: string,
-    options?: { status?: DataLakeProposalStatus; limit?: number }
+    options?: {
+      status?: DataLakeProposalStatus;
+      limit?: number;
+      after?: { createdAt: Date; id: string };
+    }
   ): Promise<IDataLakeProposalDocument[]>;
   /**
    * Atomically move a PENDING proposal to a terminal status, stamping the reviewer. Returns the
@@ -191,11 +225,27 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
    * rationale stay gone - a decline stripped them, and restoring does not re-fetch the source.
    */
   restoreDeclined(id: string): Promise<RestoreDataLakeProposalResult>;
-  /** Record the file an approval admitted, once the ingestion door has created it. */
-  recordAdmission(id: string, fabFileId: string): Promise<void>;
+  /**
+   * Atomically move an APPROVED proposal back to pending, clearing the reviewer stamp, the admitted
+   * file pointer and any `autoAdmission`. Conditioned on `status: 'approved'`, so two undoes cannot
+   * both succeed. Reports the row as it stood, so a failed follow-up can `rollbackUnapprove`.
+   */
+  unapprove(id: string): Promise<UnapproveDataLakeProposalResult>;
+  /** Put a row `unapprove` reset back as it was, only while it is still pending. */
+  rollbackUnapprove(previous: IDataLakeProposalDocument): Promise<void>;
+  /**
+   * Record the file an approval admitted, once the ingestion door has created it. `trustedDomain`
+   * is the source-rule entry a rule admission matched on the final URL.
+   */
+  recordAdmission(id: string, fabFileId: string, trustedDomain?: string): Promise<void>;
+  /** True when a declined row in this lake carries the text fingerprint, whatever its URL. */
+  hasDeclinedWithTextHash(dataLakeId: string, textHash: string): Promise<boolean>;
+  /** True when an approved row other than `excludeId` already holds this source in the lake. */
+  hasApprovedForSourceKey(dataLakeId: string, canonicalSourceKey: string, excludeId: string): Promise<boolean>;
   /**
    * Return a claimed proposal to the queue, used only when admission FAILED after the claim. Clears
-   * the reviewer stamp so the row reads as untouched rather than as approved-but-empty.
+   * the reviewer stamp and any `autoAdmission` so the row reads as untouched rather than as
+   * approved-but-empty.
    */
   releaseClaim(id: string): Promise<void>;
   /**

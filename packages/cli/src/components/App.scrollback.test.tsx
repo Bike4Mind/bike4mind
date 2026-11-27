@@ -21,6 +21,7 @@ import { App } from './App';
 import { useCliStore } from '../store';
 import type { Message } from '../storage';
 import type { AgentStep } from '@bike4mind/agents';
+import { fromCliTodos } from '@bike4mind/common';
 
 const ROWS = 24;
 const COLUMNS = 100;
@@ -158,6 +159,34 @@ describe('App does not clobber scrollback while thinking', () => {
     expect(duringRun).not.toContain(ERASE_SCROLLBACK);
   });
 
+  describe('with a write_todos plan', () => {
+    const planOf = (count: number, content = (i: number) => `step ${i} of the plan`) =>
+      fromCliTodos(
+        Array.from({ length: count }, (_, i) => ({ content: content(i), status: i === 0 ? 'in_progress' : 'pending' }))
+      ).plan.items;
+
+    afterEach(() => {
+      useCliStore.setState({ plan: [] });
+    });
+
+    it.each([
+      ['five or more items', planOf(8), ROWS],
+      ['a 50-item plan', planOf(50), ROWS],
+      ['long items', planOf(3, () => 'a very long plan item '.repeat(12)), ROWS],
+      ['a short terminal', planOf(8), 12],
+    ])('never erases scrollback with %s', async (_name, plan, rows) => {
+      stdout.rows = rows;
+      useCliStore.setState({ plan });
+
+      const instance = renderApp();
+      await runTurn(GROWING_TURN);
+      const duringRun = stdout.all;
+      instance.unmount();
+
+      expect(duringRun).not.toContain(ERASE_SCROLLBACK);
+    });
+  });
+
   it('never erases scrollback on a short terminal', async () => {
     stdout.rows = 12;
 
@@ -181,7 +210,12 @@ describe('App does not clobber scrollback while thinking', () => {
   });
 
   it('never erases scrollback with queued messages taking rows', async () => {
-    useCliStore.setState({ messageQueue: ['first queued message', 'second queued message'] });
+    useCliStore.setState({
+      messageQueue: [
+        { text: 'first queued message', kind: 'steer' },
+        { text: 'second queued message', kind: 'followUp' },
+      ],
+    });
 
     const instance = renderApp();
     await runTurn(GROWING_TURN);

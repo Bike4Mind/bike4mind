@@ -3,12 +3,22 @@ import type {
   ILakeConfigChangeEventDocument,
   ILakeConfigChangeEventRepository,
   ILakeConfigFieldChange,
+  ILakeConfigUndoClaimRepository,
+  ILakeMembershipChangeEventDocument,
+  ILakeMembershipChangeEventRepository,
+  IDataLakeResearchConfigRepository,
+  IFabFileRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  LakeConfigHistoryConfigEntry,
   LakeConfigHistoryEntry,
+  LakeConfigHistoryFileEntry,
   LakeConfigHistoryFieldChange,
   LakeConfigHistoryView,
 } from '@bike4mind/common';
+import { classifyConfigUndo, classifyFileUndo, type UndoClassification } from './lakeChangeUndoability';
+import { satisfiesMembershipScope } from './lakeMembership';
+import { resolveLakeMembershipScope } from './lakeMembershipScope';
 
 /**
  * Default cap on config-change events read for one history view. Deliberately small: config writes
@@ -68,10 +78,22 @@ const userDisplayName = (u: { name?: string; username?: string } | undefined): s
 export function toLakeConfigHistoryEntry(
   event: Pick<
     ILakeConfigChangeEventDocument,
-    'id' | 'createdAt' | 'principalKind' | 'principalId' | 'onBehalfOfUserId' | 'manageRung' | 'action' | 'changes'
+    | 'id'
+    | 'createdAt'
+    | 'principalKind'
+    | 'principalId'
+    | 'onBehalfOfUserId'
+    | 'manageRung'
+    | 'action'
+    | 'changes'
+    | 'target'
+    | 'leverChanges'
+    | 'admittedFabFileId'
+    | 'undoesEventId'
   >
-): LakeConfigHistoryEntry {
+): LakeConfigHistoryConfigEntry {
   return {
+    kind: 'config',
     eventId: event.id,
     changedAt: event.createdAt,
     principalKind: event.principalKind,
@@ -80,8 +102,47 @@ export function toLakeConfigHistoryEntry(
     manageRung: event.manageRung,
     action: event.action,
     changes: event.changes.map(toHistoryFieldChange),
+    target: event.target,
+    leverChanges: event.leverChanges,
+    admittedFabFileId: event.admittedFabFileId,
+    undoesEventId: event.undoesEventId,
   };
 }
+
+/** A membership event as a History row: the file is the target, and the log carries no rung or prose. */
+export function toLakeFileHistoryEntry(
+  event: Pick<
+    ILakeMembershipChangeEventDocument,
+    | 'id'
+    | 'createdAt'
+    | 'principalKind'
+    | 'principalId'
+    | 'onBehalfOfUserId'
+    | 'fabFileId'
+    | 'action'
+    | 'origin'
+    | 'undoesEventId'
+    | 'causedByEventId'
+  >
+): LakeConfigHistoryFileEntry {
+  return {
+    kind: 'file',
+    eventId: event.id,
+    changedAt: event.createdAt,
+    principalKind: event.principalKind,
+    principalId: event.principalId,
+    onBehalfOfUserId: event.onBehalfOfUserId,
+    action: event.action === 'added' ? 'file-added' : 'file-removed',
+    target: { kind: 'file', id: event.fabFileId },
+    origin: event.origin,
+    undoesEventId: event.undoesEventId,
+    causedByEventId: event.causedByEventId,
+  };
+}
+
+/** Newest first. The sort is stable, so same-millisecond rows keep each repository's own order. */
+const byNewest = (a: LakeConfigHistoryEntry, b: LakeConfigHistoryEntry): number =>
+  b.changedAt.getTime() - a.changedAt.getTime();
 
 /**
  * Narrow a stored change to its wire form, dropping the fingerprint hash.
@@ -111,11 +172,22 @@ function toHistoryFieldChange(change: ILakeConfigFieldChange): LakeConfigHistory
 export interface AssembleLakeConfigHistoryAdapters {
   db: {
     lakeConfigChangeEvents: Pick<ILakeConfigChangeEventRepository, 'listByLake'>;
+    lakeMembershipChangeEvents: Pick<ILakeMembershipChangeEventRepository, 'listByLake'>;
     users: Pick<IUserRepository, 'findByIds'>;
     userApiKeys: Pick<IUserApiKeyRepository, 'find'>;
+    /** Absent on a caller that predates Undo: no row is then marked undoable or undone. */
+    lakeConfigUndoClaims?: Pick<ILakeConfigUndoClaimRepository, 'listForEvents'>;
+    /** Absent: every created config is assumed to still exist, so its Undo is offered. */
+    dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'find'>;
+    /** Absent: file rows carry no name. */
+    fabFiles?: Pick<IFabFileRepository, 'find'>;
   };
+  /** The reader: a file they own is named even after it left the lake. */
+  viewerUserId?: string;
   /** Page size; clamped through `clampLakeConfigHistoryLimit`. */
   limit?: number;
+  /** Also return file add/remove rows. Off by default: callers that predate them expect config rows only. */
+  includeFiles?: boolean;
   /** Injectable clock so `generatedAt` is deterministic in tests. */
   now?: Date;
 }
@@ -154,18 +226,108 @@ function identityValueIds(changes: readonly LakeConfigHistoryFieldChange[]): str
 }
 
 export async function assembleLakeConfigHistory(
-  lake: Pick<IDataLakeDocument, 'id' | 'name'>,
-  { db, limit, now = new Date() }: AssembleLakeConfigHistoryAdapters
+  lake: Pick<IDataLakeDocument, 'id' | 'name' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
+  { db, limit, includeFiles = false, viewerUserId, now = new Date() }: AssembleLakeConfigHistoryAdapters
 ): Promise<LakeConfigHistoryView> {
   const pageSize = clampLakeConfigHistoryLimit(limit);
   // One row MORE than the page, purely as a probe: fetching exactly `pageSize` cannot distinguish
   // "this lake has exactly that many events" from "there are more behind this page", and calling a
   // complete history truncated makes a consumer caption the lake's whole life as "changes since
   // <date>". The extra row is never returned - it is sliced off below.
-  const events = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 });
-  const truncated = events.length > pageSize;
-  const windowEvents = truncated ? events.slice(0, pageSize) : events;
-  const entries = windowEvents.map(toLakeConfigHistoryEntry);
+  const configProbe = await db.lakeConfigChangeEvents.listByLake(lake.id, { limit: pageSize + 1 });
+  const configTruncated = configProbe.length > pageSize;
+  const configWindow = configProbe.slice(0, pageSize);
+  const configEntries = configWindow.map(toLakeConfigHistoryEntry);
+  // One read for every config a create row targets. A config that was deleted, or deleted and
+  // restored under a new id, leaves its create row with nothing to undo.
+  const createdConfigIds = [
+    ...new Set(
+      configWindow
+        .filter(e => e.action === 'create-research-config' && e.target?.kind === 'researchConfig')
+        .map(e => e.target!.id)
+        .filter(isObjectIdShaped)
+    ),
+  ];
+  const liveConfigIds =
+    db.dataLakeResearchConfigs && createdConfigIds.length > 0
+      ? new Set(
+          (await db.dataLakeResearchConfigs.find({ dataLakeId: lake.id, _id: { $in: createdConfigIds } })).map(
+            c => c.id
+          )
+        )
+      : undefined;
+  const undoFacts = new Map<string, UndoClassification>(
+    configWindow.map(event => [
+      event.id,
+      classifyConfigUndo(
+        event,
+        now,
+        !liveConfigIds || event.target?.kind !== 'researchConfig' || liveConfigIds.has(event.target.id)
+      ),
+    ])
+  );
+
+  let fileEntries: LakeConfigHistoryFileEntry[] = [];
+  let filesTruncated = false;
+  if (includeFiles) {
+    // Config rows own the window: file rows older than the oldest kept config row are dropped, so a
+    // burst of file events (a connector sync writes one per file) can never evict a config row.
+    const oldestConfigAt = configTruncated ? configEntries[configEntries.length - 1]?.changedAt : undefined;
+    const fileProbe = (await db.lakeMembershipChangeEvents.listByLake(lake.id, { limit: pageSize + 1 }))
+      .map(toLakeFileHistoryEntry)
+      .filter(entry => !oldestConfigAt || entry.changedAt >= oldestConfigAt);
+    filesTruncated = fileProbe.length > pageSize;
+    fileEntries = fileProbe.slice(0, pageSize);
+    // Classified from the entry: the file row carries every field the classifier reads.
+    for (const entry of fileEntries) {
+      undoFacts.set(
+        entry.eventId,
+        classifyFileUndo(
+          {
+            action: entry.action === 'file-added' ? 'added' : 'removed',
+            causedByEventId: entry.causedByEventId,
+            createdAt: entry.changedAt,
+          },
+          now
+        )
+      );
+    }
+  }
+
+  const entries: LakeConfigHistoryEntry[] = [...configEntries, ...fileEntries].sort(byNewest);
+
+  // The claim is the source of truth for "undone"; the undoing row is only a convenience link, and
+  // may be outside the window or never have persisted.
+  const claims = db.lakeConfigUndoClaims
+    ? await db.lakeConfigUndoClaims.listForEvents(
+        lake.id,
+        entries.map(entry => entry.eventId)
+      )
+    : [];
+  const claimByEvent = new Map(claims.map(claim => [claim.eventId, claim]));
+  const inWindow = new Set(entries.map(entry => entry.eventId));
+  const undoerByEvent = new Map<string, string>();
+  for (const entry of entries) if (entry.undoesEventId) undoerByEvent.set(entry.undoesEventId, entry.eventId);
+  for (const entry of entries) {
+    if (!db.lakeConfigUndoClaims) break;
+    const facts = undoFacts.get(entry.eventId);
+    const claim = claimByEvent.get(entry.eventId);
+    entry.undone = !!claim;
+    entry.undoable = !claim && !!facts?.plan;
+    const undoer =
+      undoerByEvent.get(entry.eventId) ??
+      (claim?.undoEventId && inWindow.has(claim.undoEventId) ? claim.undoEventId : undefined);
+    if (undoer) entry.undoneByEventId = undoer;
+    if (!claim && !facts?.plan && facts?.note) entry.undoNote = facts.note;
+  }
+
+  const truncated = configTruncated || filesTruncated;
+  // History is complete only from the later of the two streams' cut-offs.
+  const cutoffs = [
+    configTruncated ? configEntries[configEntries.length - 1]?.changedAt : undefined,
+    filesTruncated ? fileEntries[fileEntries.length - 1]?.changedAt : undefined,
+  ].filter((d): d is Date => d !== undefined);
+  const windowStartsAt = cutoffs.length > 0 ? new Date(Math.max(...cutoffs.map(d => d.getTime()))) : undefined;
 
   // One batched name resolution across every id worth looking up. Only USER-kind principals and the
   // on-behalf human are candidates - a system/agent/apiKey principalId names no user record - and
@@ -182,14 +344,29 @@ export async function assembleLakeConfigHistory(
     // comes here for - unresolved it reads as two opaque hex strings in the column that exists to
     // say what changed. Folded into the SAME batch as the principals, so this costs no extra round
     // trip however many rows reference an identity.
-    for (const id of identityValueIds(entry.changes)) userIds.add(id);
+    if (entry.kind === 'config') for (const id of identityValueIds(entry.changes)) userIds.add(id);
   }
-  const [users, keys] = await Promise.all([
+  const fileIds = [
+    ...new Set(
+      entries.flatMap(entry => (entry.kind === 'file' && isObjectIdShaped(entry.target.id) ? [entry.target.id] : []))
+    ),
+  ];
+  const [users, keys, files] = await Promise.all([
     userIds.size > 0 ? db.users.findByIds(Array.from(userIds)) : [],
     // The soft-delete plugin's find hook skips deleted keys, so a deleted key falls back to its id.
     // Do not pass `includeDeleted` here.
     keyIds.size > 0 ? db.userApiKeys.find({ _id: { $in: Array.from(keyIds) } }) : [],
+    // A deleted file has no row to name, so its entry keeps showing the id.
+    db.fabFiles && fileIds.length > 0 ? db.fabFiles.find({ _id: { $in: fileIds } }) : [],
   ]);
+  // Managing the lake entitles the reader to its current members, not to files that have left it.
+  const membership = resolveLakeMembershipScope(lake);
+  const fileNameById = new Map(
+    files
+      .filter(f => !f.deletedAt && f.fileName)
+      .filter(f => satisfiesMembershipScope(membership, f) || (!!viewerUserId && f.userId === viewerUserId))
+      .map(f => [f.id, f.fileName])
+  );
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
   const keyNameById = new Map(keys.map(k => [k.id, k.name || undefined]));
 
@@ -198,6 +375,9 @@ export async function assembleLakeConfigHistory(
     lakeName: lake.name,
     entries: entries.map(entry => ({
       ...entry,
+      ...(entry.kind === 'file' && fileNameById.has(entry.target.id)
+        ? { fileName: fileNameById.get(entry.target.id) }
+        : {}),
       principalName:
         entry.principalKind === 'user'
           ? userNameById.get(entry.principalId)
@@ -207,9 +387,8 @@ export async function assembleLakeConfigHistory(
       onBehalfOfName: entry.onBehalfOfUserId ? userNameById.get(entry.onBehalfOfUserId) : undefined,
     })),
     truncated,
-    // The window's oldest event, so a consumer can say "changes since <date>" instead of implying
-    // the list is all-time. Events come back newest-first, so that is the last element.
-    windowStartsAt: truncated ? entries[entries.length - 1]?.changedAt : undefined,
+    // So a consumer can say "changes since <date>" instead of implying the list is all-time.
+    windowStartsAt,
     generatedAt: now,
     // Only the ids that actually resolved to a NAME. Absent covers both "no user record" and "a user
     // with neither name nor username" - userDisplayName deliberately never falls back to email - and

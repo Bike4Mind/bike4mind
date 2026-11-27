@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Mock slackPackageInit to prevent transitive imports of @bike4mind/database and @server/*
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({
   initializeSlackPackage: vi.fn(),
 }));
 
@@ -49,7 +49,7 @@ vi.mock('@bike4mind/database', () => ({
 const mockAuditSuccess = vi.fn();
 const mockAuditFailure = vi.fn();
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn().mockReturnValue({
       success: (...args: any[]) => mockAuditSuccess(...args),

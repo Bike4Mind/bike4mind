@@ -1,33 +1,24 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { redactSettingSecrets, type AdminSettingDoc } from '@bike4mind/common';
-import { decryptAtRest } from '@bike4mind/utils/security';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { type AdminSettingDoc } from '@bike4mind/common';
+import { redactStoredSetting } from '@server/utils/redactStoredSetting';
+import { adminApi } from '@server/middlewares/adminApi';
 
-// Get Admin Settings - returns the FULL AdminSettings collection, and is admin-only.
+// Get Admin Settings - returns the FULL AdminSettings collection, and needs settings:manage.
 //
 // A CASL `req.ability.can('read', AdminSettings)` check is NOT sufficient here: every
 // authenticated user holds a *conditional* read rule for feature-flag settings
-// (see server/auth/ability.ts), and CASL evaluates a subject-*type* check (the model class,
+// (see packages/server-utils/src/auth/ability.ts), and CASL evaluates a subject-*type* check (the model class,
 // not a document instance) as true whenever any conditional rule exists - the condition is
 // never applied. That leaked every secret to any logged-in non-admin.
 //
 // Sensitive values are masked on the way out (the same redactor /api/settings/fetch uses):
 // the stored value is encrypted at rest, and only the mask (real last-4) is returned for
-// any setting tagged `isSensitive` in settingsMap, or for a `settingName` with no entry
-// there at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
-const handler = baseApi().get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+// any setting tagged `isSensitive` in the merged core/contributed definitions, or for a
+// `settingName` with no definition at all (fail closed - an orphaned/renamed key defaults to masked, not plaintext).
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' } }).get(async (_req, res) => {
   const settings = await AdminSettings.find().lean();
 
-  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting => {
-    const decrypted =
-      typeof setting.settingValue === 'string'
-        ? { ...setting, settingValue: decryptAtRest(setting.settingValue) }
-        : setting;
-    return redactSettingSecrets(decrypted as unknown as AdminSettingDoc);
-  });
+  const redacted: AdminSettingDoc[] = (settings ?? []).map(redactStoredSetting);
 
   return res.json(redacted);
 });

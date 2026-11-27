@@ -4,9 +4,13 @@ import { prepareSandbox, cleanupSandboxFiles } from './stages/sandbox.js';
 import { resolveInteractionMode, planModeRefusal } from './stages/planMode.js';
 import { assessCommandRisk } from './stages/commandRisk.js';
 import { bindEditPlan, isFuzzyEditPlan, resolveFuzzyEditGate } from './stages/fuzzyEdit.js';
-import { applyPromptResponse, canRunWithoutPrompt } from './stages/permissionDecision.js';
+import { applyPromptResponse, canRunWithoutPrompt, promptSessionScope } from './stages/permissionDecision.js';
+import { commandTextOf } from './toolPolicy.js';
 import { buildPromptPreview } from './stages/preview.js';
 import { executeAndRecord } from './stages/execution.js';
+
+import { SESSION_ENDED_MESSAGE } from './sessionCancellation.js';
+export { SESSION_ENDED_MESSAGE } from './sessionCancellation.js';
 
 /**
  * The args handed to execution, minus any gateSnapshot or confirmedFuzzyHash. Only the
@@ -39,6 +43,8 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
   const { permissionManager, showPermissionPrompt, allowedDirectories } = deps;
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
+  const isMcpTool = tool._isMcpTool === true;
+  if (isMcpTool) permissionManager.catalog.markMcpTool(toolName);
 
   return {
     ...tool,
@@ -77,6 +83,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
           sandboxOrchestrator: deps.sandboxOrchestrator,
           allowedDirectories,
           checkpointStore: deps.checkpointStore,
+          isCancelled: deps.isCancelled,
         });
 
       try {
@@ -91,7 +98,19 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
         const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
         execArgs = bindEditPlan(toolName, execArgs, effectiveArgs, editPlan);
 
-        if (canRunWithoutPrompt({ toolName, forcePrompt, isSandboxed, interactionMode, permissionManager })) {
+        const command = commandTextOf(descriptor, args);
+        if (
+          canRunWithoutPrompt({
+            toolName,
+            isMcpTool,
+            forcePrompt,
+            isSandboxed,
+            command,
+            interactionMode,
+            permissionManager,
+          })
+        ) {
+          if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
           return await run();
         }
 
@@ -103,9 +122,13 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
           editPlan,
           forcingRisk: forcePromptForRisk ? commandRisk : null,
         });
+        const sessionScope = promptSessionScope(toolName, args, permissionManager);
         // Waits indefinitely for the user's answer.
-        const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
+        const response = await showPermissionPrompt(toolName, effectiveArgs, preview, undefined, { sessionScope });
+        // An answer arriving after the session ended must neither record trust nor run the tool.
+        if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
         await applyPromptResponse(toolName, args, response.action, permissionManager, deps.configStore);
+        if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
         return await run();
       } finally {
         cleanupSandboxFiles(sandboxCleanupPaths);

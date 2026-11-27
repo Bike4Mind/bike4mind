@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/joy';
 import { type ReactArtifact, type HtmlArtifact, type SvgArtifact } from '@bike4mind/common';
-import DOMPurify from 'dompurify';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
+import SafeSvgImage from '@client/app/components/common/SafeSvgImage';
+import SvgPlate from '@client/app/components/common/SvgPlate';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { useReactArtifactSandbox } from '@client/app/hooks/useReactArtifactSandbox';
 
@@ -14,6 +15,8 @@ interface InlineArtifactPreviewProps {
   type: ArtifactType;
   maxHeight?: number;
   onError?: (error: string) => void;
+  /** React only: sibling files the artifact's relative imports resolve against. */
+  files?: Record<string, string>;
 }
 
 // Generate sanitized HTML. The inline preview renders into the same
@@ -43,65 +46,6 @@ const generateSanitizedHTML = (htmlContent: string) => {
 </html>`;
 };
 
-const generateSanitizedSVG = (svgContent: string) => {
-  return DOMPurify.sanitize(svgContent, {
-    USE_PROFILES: { svg: true, svgFilters: true },
-    ALLOWED_TAGS: [
-      'svg',
-      'path',
-      'circle',
-      'rect',
-      'line',
-      'ellipse',
-      'polygon',
-      'polyline',
-      'g',
-      'defs',
-      'use',
-      'text',
-      'tspan',
-      'clipPath',
-      'mask',
-      'filter',
-      'linearGradient',
-      'radialGradient',
-      'stop',
-      'animate',
-      'animateTransform',
-    ],
-    ALLOWED_ATTR: [
-      'viewBox',
-      'xmlns',
-      'width',
-      'height',
-      'fill',
-      'stroke',
-      'stroke-width',
-      'stroke-linecap',
-      'stroke-linejoin',
-      'd',
-      'cx',
-      'cy',
-      'r',
-      'rx',
-      'ry',
-      'x',
-      'y',
-      'x1',
-      'y1',
-      'x2',
-      'y2',
-      'points',
-      'transform',
-      'opacity',
-      'id',
-      'class',
-      'style',
-    ],
-    FORBID_ATTR: ['onclick', 'onload', 'onerror', 'onmouseover', 'xlink:href'],
-  });
-};
-
 /** Ceiling for a self-sized React preview - generous, so it only catches runaways. */
 const REACT_PREVIEW_MAX_HEIGHT = 640;
 // The ceiling on an expanded HTML frame. The height arrives by postMessage from a window
@@ -110,7 +54,13 @@ const REACT_PREVIEW_MAX_HEIGHT = 640;
 // page is never cut short by it.
 const HTML_PREVIEW_MAX_HEIGHT = 2400;
 
-const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact, type, maxHeight = 400, onError }) => {
+const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({
+  artifact,
+  type,
+  maxHeight = 400,
+  onError,
+  files,
+}) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,7 +73,7 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
     src: reactSandboxSrc,
     isLoading: reactPreviewLoading,
     error: reactRuntimeError,
-  } = useReactArtifactSandbox(reactArtifact?.content ?? null, reactArtifact?.metadata?.dependencies ?? []);
+  } = useReactArtifactSandbox(reactArtifact?.content ?? null, reactArtifact?.metadata?.dependencies ?? [], files);
 
   // HTML artifacts use /api/artifact-sandbox + postMessage so the per-route
   // CSP (style-src https:) applies instead of the global app policy.
@@ -137,8 +87,7 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
         const htmlArtifact = artifact as HtmlArtifact;
         return { content: generateSanitizedHTML(htmlArtifact.content), generationError: null };
       } else if (type === 'svg') {
-        const svgArtifact = artifact as SvgArtifact;
-        return { content: generateSanitizedSVG(svgArtifact.content), generationError: null };
+        return { content: (artifact as SvgArtifact).content, generationError: null };
       }
       return { content: null, generationError: null };
     } catch (err) {
@@ -260,20 +209,9 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
   // SVG renders directly without iframe
   if (type === 'svg' && renderedContent) {
     return (
-      <Box
-        sx={{
-          maxHeight,
-          overflow: 'auto',
-          borderRadius: 'sm',
-          bgcolor: 'background.surface',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          p: 1,
-        }}
-        dangerouslySetInnerHTML={{ __html: renderedContent }}
-        data-testid="inline-svg-preview"
-      />
+      <SvgPlate testId="inline-svg-preview" sx={{ maxHeight, overflow: 'auto', alignItems: 'center' }}>
+        <SafeSvgImage svg={renderedContent} alt={artifact.title || 'SVG preview'} sx={{ maxHeight: '100%' }} />
+      </SvgPlate>
     );
   }
 

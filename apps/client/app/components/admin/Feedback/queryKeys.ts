@@ -1,11 +1,17 @@
 /**
  * React Query keys for the admin feedback tab, in one place because three surfaces read the same
  * records and every mutation has to refresh all of them: the paged list, the unfiltered
- * organization facet, and the single record a deep link pins above the list. A mutation that
- * invalidates only the list leaves the focused card showing the pre-mutation status.
+ * organization facet, and the single record the detail drawer reads by id. A mutation that
+ * invalidates only the list leaves the drawer showing the pre-mutation status.
  */
 export const FEEDBACK_LIST_QUERY_KEY = ['admin', 'feedback', 'list'] as const;
 export const FEEDBACK_ORGANIZATIONS_QUERY_KEY = ['admin', 'feedback', 'organizations'] as const;
 export const FEEDBACK_RECORD_QUERY_KEY = ['admin', 'feedback', 'record'] as const;
+/** The trend strip's counts; a status change or delete moves the open count. */
+export const FEEDBACK_TRENDS_QUERY_KEY = ['admin', 'feedback', 'trends'] as const;
+
+/** The drawer's reporter facts, keyed by report id because the earlier-report count anchors on that report. */
+export const FEEDBACK_REPORTER_QUERY_KEY = ['admin', 'feedback', 'reporter'] as const;
 
 export const feedbackRecordQueryKey = (feedbackId: string) => [...FEEDBACK_RECORD_QUERY_KEY, feedbackId];
+export const feedbackReporterQueryKey = (feedbackId: string) => [...FEEDBACK_REPORTER_QUERY_KEY, feedbackId];

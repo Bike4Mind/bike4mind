@@ -26,11 +26,13 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
+  FeedbackAiModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
+  FeedbackNoteModel: { deleteMany: vi.fn().mockResolvedValue({ deletedCount: 0 }) },
   FeedbackModel: { findById: mockFindById, deleteOne: vi.fn() },
   FeedbackTextModel: { deleteOne: vi.fn() },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 import '../delete';
 

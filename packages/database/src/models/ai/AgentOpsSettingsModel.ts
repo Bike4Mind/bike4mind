@@ -33,7 +33,6 @@ export interface IAgentOpsSettingsRepository {
   addMetaPromptVersion(content: string, createdBy: string, description?: string): Promise<IAgentOpsSettingsDocument>;
   activateMetaPromptVersion(versionNumber: number): Promise<IAgentOpsSettingsDocument>;
   getActiveMetaPrompt(): Promise<IMetaPromptVersion | null>;
-  incrementGenerationCount(): Promise<void>;
 }
 
 /**
@@ -248,20 +247,10 @@ class AgentOpsSettingsRepository
 
     return settings.versions.find((v: IMetaPromptVersion) => v.isActive) || null;
   }
-
-  async incrementGenerationCount(): Promise<void> {
-    await this.model.updateOne(
-      {},
-      {
-        $inc: { totalGenerationsCount: 1 },
-        $set: { lastGenerationAt: new Date() },
-      }
-    );
-  }
 }
 
 // Reuse existing model to avoid overwrite errors on hot reload
-const AgentOpsSettings =
+const AgentOpsSettings: Model<IAgentOpsSettingsDocument> =
   mongoose.models.AgentOpsSettings || model<IAgentOpsSettingsDocument>('AgentOpsSettings', AgentOpsSettingsSchema);
 
 const agentOpsSettingsRepository = new AgentOpsSettingsRepository(AgentOpsSettings);

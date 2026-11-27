@@ -98,3 +98,90 @@ export const UpdateArtifactRequestSchema = z
   })
   .strict();
 export type UpdateArtifactRequest = z.infer<typeof UpdateArtifactRequestSchema>;
+
+/** Strict like the other bodies. `content` is required: an empty version marker has nothing to publish. */
+export const CreateArtifactVersionRequestSchema = z
+  .object({
+    content: z.string().min(1).describe("The new version's content."),
+    change_description: z.string().max(500).optional().describe('A short note on what changed.'),
+    version_tag: z.string().max(100).optional().describe('A label for this version, such as `v2`.'),
+  })
+  .strict();
+export type CreateArtifactVersionRequest = z.infer<typeof CreateArtifactVersionRequestSchema>;
+
+export const SearchArtifactsQuerySchema = PaginationQuerySchema.extend({
+  q: z.string().min(1).max(200).describe('The text to search for.'),
+  type: ArtifactTypeSchema.optional().describe('Only artifacts of this type.'),
+});
+
+export const ArtifactTypeInfoSchema = z.object({
+  type: ArtifactTypeSchema,
+  name: z.string(),
+  description: z.string(),
+  category: z.string(),
+  mime_type: z.string(),
+});
+
+export const ListArtifactTypesResponseSchema = z.object({
+  types: z.array(ArtifactTypeInfoSchema),
+  categories: z.array(z.string()),
+});
+export type ListArtifactTypesResponse = z.infer<typeof ListArtifactTypesResponseSchema>;
+
+const PUBLISH_VISIBILITIES = ['private', 'organization', 'public'] as const;
+
+/** Lowercase kebab-case. Reserved words such as `api` and `admin` are rejected by the handler. */
+const PublishSlugSchema = z
+  .string()
+  .min(3)
+  .max(64)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'slug must be lowercase kebab-case');
+
+/**
+ * The gate a page is published behind. A passphrase is sent in plaintext once and stored only as a
+ * hash; `allowed_domains` admits a viewer whose verified email is on one of the domains or their
+ * subdomains.
+ */
+export const PublishAccessGateRequestSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('passphrase'), passphrase: z.string().min(8).max(128) }).strict(),
+  z
+    .object({
+      kind: z.literal('domain'),
+      allowed_domains: z.array(z.string().min(1).max(253)).min(1).max(20),
+    })
+    .strict(),
+]);
+export type PublishAccessGateRequest = z.infer<typeof PublishAccessGateRequestSchema>;
+
+/** Strict like the other bodies. Everything is optional: an empty body publishes publicly under a generated slug. */
+export const PublishArtifactRequestSchema = z
+  .object({
+    slug: PublishSlugSchema.optional().describe(
+      'The page address, unique within your pages. Omitted: one is generated from the title.'
+    ),
+    visibility: z
+      .enum(PUBLISH_VISIBILITIES)
+      .default('public')
+      .describe('Who can open the page. `private` is visible to you only.'),
+    access_gate: PublishAccessGateRequestSchema.optional().describe(
+      'Put the page behind a passphrase or an email-domain list. Applied together with the visibility, so ' +
+        'the page is never reachable without it. Requires `visibility: "public"`.'
+    ),
+  })
+  .strict();
+export type PublishArtifactRequest = z.infer<typeof PublishArtifactRequestSchema>;
+
+export const PublishedArtifactResourceSchema = z.object({
+  artifact_id: z.string(),
+  public_id: z.string().describe('The id of the published page. Stable across republishes.'),
+  url: z.string().describe('The absolute URL of the page.'),
+  slug: z.string(),
+  visibility: z.enum(PUBLISH_VISIBILITIES),
+  access_gate: z
+    .object({ kind: z.enum(['passphrase', 'domain']) })
+    .nullable()
+    .describe('The kind of gate on the page, or `null` when it has none. The passphrase is never returned.'),
+  published_version: z.number().int().describe('The artifact version whose content the page shows.'),
+  published_at: z.string().describe('ISO 8601 timestamp of the latest publish.'),
+});
+export type PublishedArtifactResource = z.infer<typeof PublishedArtifactResourceSchema>;

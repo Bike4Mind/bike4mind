@@ -1,11 +1,20 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { ApiKeyScope, CreditHolderType, SettingKeySchema, SettingScopeLevel, settingsMap } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  SettingKeySchema,
+  SettingScopeLevel,
+  settingsMap,
+  type SettingKey,
+} from '@bike4mind/common';
+import { adminSettingsRepository, cacheRepository, withTransaction } from '@bike4mind/database';
 import { scopedSettingsRepository } from '@bike4mind/database/infra';
 import { scopedSettingsService } from '@bike4mind/services';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured';
+import { recordAdminSettingChange } from '@bike4mind/server-utils/utils/adminSettingsAudit';
 
 /**
  * Admin write surface for the scoped-settings overlay - the org/owner/lake OVERRIDES read by
@@ -16,8 +25,7 @@ import { refuseFloorAboveMeasured } from '@server/utils/refuseFloorAboveMeasured
  * is the platform operator rather than a lake manager.
  *
  * Session/admin route, not a public API-key endpoint, so it carries no api-contract definition.
- * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key before req.user
- * exists, so `ensureAdmin` still has to run per method for the session path.
+ * adminApi gates the permission per method; requiredScopes gates the API-key path.
  */
 
 // The override altitudes only. Rejecting `platform` structurally (rather than with a hand-written
@@ -60,6 +68,20 @@ export type ScopedOverrideDeleteQuery = z.infer<typeof ScopeAddressSchema>;
  */
 const SERVICE_REJECTION_PREFIX = '[scopedSettings]';
 
+const scopedOverrideWriteDb = {
+  scopedSettings: scopedSettingsRepository,
+  changeCooldown: {
+    adminSettings: adminSettingsRepository,
+    cache: cacheRepository,
+    scopedSettings: scopedSettingsRepository,
+  },
+};
+
+const asBadRequestIfRejection = (error: unknown): unknown =>
+  error instanceof Error && error.message.startsWith(SERVICE_REJECTION_PREFIX)
+    ? new BadRequestError(error.message)
+    : error;
+
 /**
  * The write service signals a rejection by throwing a plain `Error`, and `errorHandler` maps a plain
  * `Error` to 500 AND logs it at `error` level - which is what the LiveOps CloudWatch filter keys on.
@@ -67,20 +89,49 @@ const SERVICE_REJECTION_PREFIX = '[scopedSettings]';
  * back as a 400 with its own wording intact. Anything else (a driver or connection failure) is a
  * real server error and is rethrown untouched.
  */
-const runWrite = async (write: () => Promise<void>): Promise<void> => {
+const runWrite = async (
+  claimRef: { scopeLevel: ScopeLevel; scopeId: string },
+  settingName: SettingKey,
+  nextValue: string | null,
+  logger: Request['logger'],
+  write: (claim: scopedSettingsService.ScopedSettingChangeClaim | null) => Promise<void>
+): Promise<void> => {
+  let claim: scopedSettingsService.ScopedSettingChangeClaim | null = null;
   try {
-    await write();
+    // Taken once, outside the transaction below: withTransaction re-runs its callback on a transient
+    // commit failure, and a second claim would be refused by the first.
+    claim = await scopedSettingsService.claimScopedSettingChange(
+      settingName,
+      claimRef,
+      nextValue,
+      scopedOverrideWriteDb.changeCooldown,
+      { logger }
+    );
+    await write(claim);
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith(SERVICE_REJECTION_PREFIX)) {
-      throw new BadRequestError(error.message);
-    }
-    throw error;
+    await claim?.release().catch(() => undefined);
+    throw asBadRequestIfRejection(error);
   }
 };
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+type ScopeLevel = z.infer<typeof ScopeLevelSchema>;
+
+const readOverrideValue = async (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: string) => {
+  const [existing] = await scopedSettingsRepository.findOverrides([{ scopeLevel, scopeId }], [settingName]);
+  return existing?.settingValue ?? null;
+};
+
+// One target per override address, so the Audit Log groups an override's history apart from the platform value.
+const scopedTarget = (settingName: SettingKey, scopeLevel: ScopeLevel, scopeId: string) => ({
+  id: `${settingName}@${scopeLevel}:${scopeId}`,
+  displayName: `${settingName} (${scopeLevel} ${scopeId})`,
+});
+
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     // The whole collection in one read. It is small by design - a row exists only where an operator
     // actually set an override - and both questions the admin UI asks ("which rungs override setting
     // X" and "what is overridden at scope Y") are answered from the same inventory. The soft-delete
@@ -88,7 +139,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     return res.json(await scopedSettingsRepository.find({}));
   })
   .put(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     const { settingName, scopeLevel, scopeId, ownerType, value, confirmAboveMeasuredFloor } = parseOrBadRequest(
       PutBodySchema,
       req.body
@@ -97,6 +147,14 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // The overlay stores the raw string and the resolver re-parses it through the setting's own
     // schema (pickOverride), so String() is the exact round trip for all three scalar types.
     const settingValue = typeof value === 'string' ? value : String(value);
+
+    // Before the cooldown claim in runWrite, so a rejected value never opens a cooldown window and
+    // a value sent during one still gets its validation error.
+    try {
+      scopedSettingsService.assertScopedOverrideWritable(settingName, { scopeLevel, scopeId, ownerType }, settingValue);
+    } catch (error) {
+      throw asBadRequestIfRejection(error);
+    }
 
     // Validate against the setting's own schema BEFORE the floor check, so an out-of-range value
     // (150, 70.5) reports its range error rather than first being refused as above the floor - the
@@ -111,31 +169,58 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       await refuseFloorAboveMeasured(Number(parsedSetting.data), req.logger);
     }
 
-    await runWrite(() =>
-      scopedSettingsService.writeScopedOverride(
-        settingName,
-        { scopeLevel, scopeId, ownerType },
-        settingValue,
-        { scopedSettings: scopedSettingsRepository },
-        { logger: req.logger }
-      )
+    await runWrite({ scopeLevel, scopeId }, settingName, settingValue, req.logger, claim =>
+      withTransaction(async () => {
+        const before = await readOverrideValue(settingName, scopeLevel, scopeId);
+        await scopedSettingsService.writeScopedOverride(
+          settingName,
+          { scopeLevel, scopeId, ownerType },
+          settingValue,
+          scopedOverrideWriteDb,
+          {
+            logger: req.logger,
+            claim,
+            afterWrite: () =>
+              recordAdminSettingChange(req, {
+                settingName,
+                before,
+                after: settingValue,
+                summary: `set the ${settingName} override at ${scopeLevel} ${scopeId}`,
+                target: scopedTarget(settingName, scopeLevel, scopeId),
+                details: { scopeLevel, scopeId, ownerType },
+              }),
+          }
+        );
+      })
     );
 
     return res.json({ settingName, scopeLevel, scopeId, ownerType, settingValue });
   })
   .delete(async (req: Request, res: Response) => {
-    ensureAdmin(req.user?.isAdmin);
     // Address comes from the query, not a body: a DELETE body is awkward to send through axios and
     // next-connect.
     const { settingName, scopeLevel, scopeId } = parseOrBadRequest(ScopeAddressSchema, req.query);
 
-    await runWrite(() =>
-      scopedSettingsService.clearScopedOverride(
-        settingName,
-        { scopeLevel, scopeId },
-        { scopedSettings: scopedSettingsRepository },
-        { logger: req.logger }
-      )
+    await runWrite({ scopeLevel, scopeId }, settingName, null, req.logger, claim =>
+      withTransaction(async () => {
+        const before = await readOverrideValue(settingName, scopeLevel, scopeId);
+        await scopedSettingsService.clearScopedOverride(settingName, { scopeLevel, scopeId }, scopedOverrideWriteDb, {
+          logger: req.logger,
+          claim,
+          // Clearing an address that holds no override changes nothing, so it is not an admin change.
+          afterWrite: async () => {
+            if (before === null) return;
+            await recordAdminSettingChange(req, {
+              settingName,
+              before,
+              after: null,
+              summary: `cleared the ${settingName} override at ${scopeLevel} ${scopeId}`,
+              target: scopedTarget(settingName, scopeLevel, scopeId),
+              details: { scopeLevel, scopeId },
+            });
+          },
+        });
+      })
     );
 
     return res.json({ cleared: true });

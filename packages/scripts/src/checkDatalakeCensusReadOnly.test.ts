@@ -6,7 +6,7 @@ import path from 'node:path';
 /**
  * Guards the read-only contract of the pre-merge prefix-only-member census: it audits data lake
  * membership across every tenant and MUST never be able to write. Mirrors the source-level guard
- * in checkNoRawS3Client.test.ts - a mechanical check the census cannot regress into a script that
+ * in checkNoRawS3Client.repo.test.ts - a mechanical check the census cannot regress into a script that
  * mutates a lake or a file while an owner is only expecting a report.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');

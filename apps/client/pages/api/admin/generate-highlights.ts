@@ -1,19 +1,20 @@
 import { Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
+import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { Resource } from 'sst';
-import type { WhatsNewHighlightsPayload } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
+import type { WhatsNewHighlightsJob } from '@bike4mind/server-utils/whatsNew/whatsNewHighlights.types';
 import { Logger } from '@bike4mind/observability';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import {
   HIGHLIGHTS_NOTE_LIMIT,
   loadHighlightsReleaseNotes,
   parseHighlightsEndDate,
-} from '@server/whatsNew/releaseNoteHighlights';
+} from '@bike4mind/server-utils/whatsNew/releaseNoteHighlights';
 
 // Rate limiting - 1 request per minute to prevent abuse
 const GENERATE_RATE_LIMIT = 1;
@@ -21,14 +22,9 @@ const ONE_MINUTE_MS = 60 * 1000;
 
 const SETTING_NAME = 'whatsNewHighlightsConfig';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: GENERATE_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
-    // Check if user is admin
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       // Get configuration
       const setting = await AdminSettings.findOne({ settingName: SETTING_NAME });
@@ -117,7 +113,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         });
       }
 
-      const payload: WhatsNewHighlightsPayload = {
+      const payload: WhatsNewHighlightsJob = {
+        kind: 'highlights',
         correlationId,
         environment: Resource.App.stage === 'production' ? 'production' : 'dev',
         startDate: startDateStr,
@@ -127,14 +124,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         manualTrigger: true,
       };
 
-      // Dispatch to queue
-      // Type assertion needed: SST types are generated after first deploy
-      const queueResource = (Resource as unknown as Record<string, { url: string } | undefined>)
-        .whatsNewHighlightsQueue;
-      if (!queueResource?.url) {
-        return res.status(500).json({ error: 'whatsNewHighlightsQueue not deployed — SQS queue URL unavailable' });
-      }
-      await sendToQueue(queueResource.url, payload);
+      // The web Lambda reaches this queue through the sourceQueueUrls Linkable, not a direct link,
+      // so reading Resource.whatsNewGenerationQueue would throw (infra/web.ts).
+      await sendToQueue(getSourceQueueUrl('whatsNewGenerationQueue'), payload);
 
       // Update settings with dispatch info
       await AdminSettings.findOneAndUpdate(
@@ -149,6 +141,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         },
         { upsert: true }
       );
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.whats_new.generation_triggered',
+        target: { kind: 'settings', id: SETTING_NAME, displayName: "What's New highlights" },
+        summary: `generated What's New highlights for ${startDateStr} to ${endDateStr}`,
+        details: { job: 'highlights', correlationId, startDate: startDateStr, endDate: endDateStr },
+      });
 
       return res.json({
         success: true,

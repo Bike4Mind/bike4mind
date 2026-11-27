@@ -87,6 +87,20 @@ describe('holdTranscriptionCredits', () => {
     });
   });
 
+  it('puts the authenticating API key in the freeze subject without moving the payer', async () => {
+    mocks.holdPreflightCredits.mockResolvedValue({ ownerId: 'u1', settle: vi.fn(), release: vi.fn() });
+
+    await holdTranscriptionCredits(user, 7, logger, 'key-1');
+
+    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith({
+      req: { user, logger },
+      requiredCredits: 7,
+      featureLabel: 'transcription',
+      billingOrganizationId: null,
+      spendFreezeApiKey: { keyId: 'key-1' },
+    });
+  });
+
   it('maps an insufficient-credit refusal to the established 400', async () => {
     mocks.holdPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
     await expect(holdTranscriptionCredits(user, 7, logger)).rejects.toBeInstanceOf(BadRequestError);

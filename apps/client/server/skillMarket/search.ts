@@ -1,7 +1,11 @@
 import type { PipelineStage } from 'mongoose';
 import { SkillListing, SkillListingImport, skillRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { marketVisibilityFilter, serializeListing } from './market';
+import {
+  marketVisibilityFilter,
+  serializeListing,
+  type MarketAudience,
+} from '@bike4mind/server-utils/skillMarket/market';
 
 /**
  * Market search and the rule-based recommendation rails. Every query starts from
@@ -17,7 +21,9 @@ export type MarketSort = 'relevance' | 'top' | 'imports' | 'new' | 'updated';
 
 export type MarketSearchParams = {
   q?: string;
-  scope?: 'public' | 'org';
+  scope?: 'public' | 'org' | 'space';
+  /** With `scope: 'space'`: only this Space. A Space the caller is not in matches nothing. */
+  spaceId?: string;
   tags?: string[];
   tools?: 'with' | 'without';
   minRating?: number;
@@ -33,13 +39,17 @@ const SORTS: Record<Exclude<MarketSort, 'relevance'>, Record<string, 1 | -1>> = 
   updated: { publishedAt: -1, _id: -1 },
 };
 
-export async function searchListings(memberOrgIds: string[], params: MarketSearchParams) {
-  const match: Record<string, unknown> = { ...marketVisibilityFilter(memberOrgIds) };
+export async function searchListings(audience: MarketAudience, params: MarketSearchParams) {
+  const match: Record<string, unknown> = { ...marketVisibilityFilter(audience) };
   const q = params.q?.trim().slice(0, 200);
   // $text must sit in the pipeline's first $match.
   if (q) match.$text = { $search: q };
   if (params.scope === 'public') match.visibility = 'public';
   if (params.scope === 'org') match.visibility = 'organization';
+  if (params.scope === 'space') {
+    match.visibility = 'space';
+    if (params.spaceId) match.spaceId = params.spaceId;
+  }
   if (params.tags?.length) match.tags = { $in: params.tags };
   if (params.tools === 'with') match.usesTools = true;
   if (params.tools === 'without') match.usesTools = { $ne: true };
@@ -91,13 +101,13 @@ async function topImported(since: Date, userIds?: string[]): Promise<string[]> {
 const textQueryFor = (name: string): string => name.replace(/-/g, ' ').slice(0, 100);
 
 /** "Recommended for you": popular in your orgs, similar to what you use, then trending. */
-export async function recommendListings(userId: string, memberOrgIds: string[]): Promise<Recommendation[]> {
+export async function recommendListings(userId: string, audience: MarketAudience): Promise<Recommendation[]> {
   const myImports = await SkillListingImport.find({ userId }).select('listingId stars').lean();
   const excluded = new Set(myImports.map(i => i.listingId));
 
   const candidates: Array<{ id: string; reason: string }> = [];
 
-  for (const orgId of memberOrgIds.slice(0, 3)) {
+  for (const orgId of audience.orgIds.slice(0, 3)) {
     const [org, members] = await Promise.all([
       organizationRepository.findById(orgId),
       organizationRepository.findMemberUserIds(orgId),
@@ -118,7 +128,7 @@ export async function recommendListings(userId: string, memberOrgIds: string[]):
   ].slice(0, 5);
   for (const anchor of anchors) {
     const similar = await SkillListing.find(
-      { ...marketVisibilityFilter(memberOrgIds), $text: { $search: textQueryFor(anchor) } },
+      { ...marketVisibilityFilter(audience), $text: { $search: textQueryFor(anchor) } },
       { score: { $meta: 'textScore' } }
     )
       .sort({ score: { $meta: 'textScore' } })
@@ -138,7 +148,7 @@ export async function recommendListings(userId: string, memberOrgIds: string[]):
 
   // Re-check every candidate through the visibility gate; own listings are not recommendations.
   const visible = await SkillListing.find({
-    ...marketVisibilityFilter(memberOrgIds),
+    ...marketVisibilityFilter(audience),
     _id: { $in: [...reasonById.keys()] },
     authorUserId: { $ne: userId },
   });
@@ -156,12 +166,12 @@ export async function recommendListings(userId: string, memberOrgIds: string[]):
 export async function similarListings(
   listing: { id: string; name: string; tags: string[] },
   userId: string,
-  memberOrgIds: string[]
+  audience: MarketAudience
 ): Promise<Recommendation[]> {
   // Already-imported listings (which include everything this user rated) are not suggestions.
   const imported = await SkillListingImport.find({ userId }).select('listingId').lean();
   const exclude = [listing.id, ...imported.map(r => r.listingId)];
-  const base = { ...marketVisibilityFilter(memberOrgIds), _id: { $nin: exclude } };
+  const base = { ...marketVisibilityFilter(audience), _id: { $nin: exclude } };
 
   const out: Recommendation[] = [];
   if (listing.tags.length) {

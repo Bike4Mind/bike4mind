@@ -47,13 +47,21 @@ describe('captureUtmParams', () => {
 
   it('writes nothing when utm_source is absent', () => {
     setSearch('?foo=bar&utm_medium=email');
-    captureUtmParams();
+    expect(captureUtmParams()).toBe(false);
+    expect(readUtmCookie()).toBeNull();
+  });
+
+  it('reports a campaign landing even when consent holds the write', () => {
+    localStorage.removeItem('cookie_consent');
+    document.cookie = 'b4m-region=eu; path=/';
+    setSearch('?utm_source=newsletter');
+    expect(captureUtmParams()).toBe(true);
     expect(readUtmCookie()).toBeNull();
   });
 
   it('captures source only when just utm_source is present', () => {
     setSearch('?utm_source=newsletter');
-    captureUtmParams();
+    expect(captureUtmParams()).toBe(true);
     expect(readUtmCookie()).toEqual({ source: 'newsletter' });
   });
 

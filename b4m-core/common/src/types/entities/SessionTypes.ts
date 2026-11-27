@@ -14,12 +14,37 @@ import type { GenerationJobRef } from './GenerationJobTypes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
 import type { SuggestedChoices } from '../../utils/replyChoices';
 
+/**
+ * How long a pending action stays answerable (ms). Shared by the web and public-API resolver, the brief
+ * composer and the brief serializer so the three agree on when an approval has lapsed.
+ */
+export const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+export const PENDING_ACTION_OUTCOMES = ['approved', 'denied', 'lapsed'] as const;
+export type PendingActionResolutionOutcome = (typeof PENDING_ACTION_OUTCOMES)[number];
+
+/** The last pending action taken off a quest, kept so a brief can report what became of it. */
+export interface IPendingActionResolution {
+  ts: number;
+  outcome: PendingActionResolutionOutcome;
+  at: Date;
+}
+
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
   tool: string;
   params: Record<string, unknown>;
   /** Unix timestamp in milliseconds for 15-min expiration check */
   ts: number;
+  /** Set when `tool` is a custom connector tool: names the connection the confirm call runs against. */
+  customConnector?: CustomConnectorPendingRef;
+}
+
+export interface CustomConnectorPendingRef {
+  connectionId: string;
+  slug: string;
+  displayName: string;
+  urlHost: string;
 }
 
 /**
@@ -88,20 +113,37 @@ export type SessionProps = {
 /**
  * Machine-readable error classifiers for `type: 'error'` quests. Set server-side
  * so the client can branch to a targeted error UI (see `IChatHistoryItem.errorCode`).
- * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
- * derives its values from this tuple, so the two can never drift.
+ * These are the billing classifiers a thrown error resolves to; the published
+ * quest schemas derive from QUEST_OUTCOME_ERROR_CODES below, which adds the one
+ * non-billing code.
  *
  * SSE-frame scoped, and a NARROWING of the platform-wide `API_ERROR_CODES`: a
- * quest fails for billing reasons, never for the provider-configuration reasons
- * the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
+ * thrown quest error is classified for billing reasons, never for the
+ * provider-configuration reasons the HTTP surface reports. The `satisfies` is what keeps it a narrowing rather
  * than a second vocabulary - a code added here that is not in `API_ERROR_CODES`
- * fails the build.
+ * fails the build. `run_budget_exhausted` lands on an image generation quest whose `run` budget
+ * could not cover the render's credit hold (ImageGeneration.process).
  */
 export const QUEST_ERROR_CODES = [
   'insufficient_credits',
   'spend_cap_exceeded',
+  'spend_frozen',
+  'free_quest_limit_reached',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
+
+/**
+ * Every classifier a stored quest's `errorCode` can hold: the billing codes above plus
+ * `content_blocked`, set when prompt moderation refuses the turn. A separate tuple because
+ * getQuestErrorCode and resolveQuestErrorCode read QUEST_ERROR_CODES off thrown errors to pick
+ * the billing branches, which a moderation refusal must never take.
+ */
+export const QUEST_OUTCOME_ERROR_CODES = [
+  ...QUEST_ERROR_CODES,
+  'content_blocked',
+] as const satisfies readonly ApiErrorCode[];
+export type QuestOutcomeErrorCode = (typeof QUEST_OUTCOME_ERROR_CODES)[number];
 
 /**
  * Single source of truth for `IChatHistoryItem.type` / quest `type`. Restated by hand in
@@ -141,8 +183,8 @@ export interface IAttachmentDelivery {
 
 /**
  * Why a turn's LLM call was retried. Timeouts we raise ourselves are classified ahead of
- * overload, because their error text says "may be overloaded" and would otherwise read as a
- * provider fault. Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
+ * overload so they never read as a provider fault (older backends worded them "may be
+ * overloaded"). Must stay in sync with classifyTurnRetryReason in @bike4mind/services.
  */
 export const TURN_RETRY_REASONS = [
   'stream_idle_timeout',
@@ -257,7 +299,7 @@ export interface IChatHistoryItem {
   /** Legacy: video jobs started before `generationJobs`; read through questGenerationJobs, never written. */
   videoJobIds?: string[];
 
-  /** Generation jobs (video, music) this quest started, one live card each. Read through questGenerationJobs. */
+  /** Generation jobs (video, music, image) this quest started, one live card each. Read through questGenerationJobs. */
   generationJobs?: GenerationJobRef[];
 
   /** Agent-mode video clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
@@ -265,6 +307,18 @@ export interface IChatHistoryItem {
 
   /** Agent-mode songs this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
   agentMusicTracksClaimed?: number;
+
+  /** Agent-mode images this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentImagesClaimed?: number;
+
+  /** Agent-mode speech clips this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSpeechClipsClaimed?: number;
+
+  /** Agent-mode sound effects this run has claimed; the per-run cap's counter (QuestRepository.claimAgentGenerationSlot). */
+  agentSoundEffectsClaimed?: number;
+
+  /** save_content_to_data_lake saves this turn has claimed; the per-turn cap's counter (QuestRepository.claimLakeSaveSlot). */
+  lakeSaveCount?: number;
 
   /** TODO unclear purpose: Possibly out-of-band data such as link to website? */
   oob?: string;
@@ -277,16 +331,21 @@ export interface IChatHistoryItem {
   /**
    * Machine-readable classifier for an `type: 'error'` quest, set server-side so
    * the client can render a targeted error state instead of the raw `reply` text.
-   * Currently only `insufficient_credits` (drives the inline "Add Credits" CTA in
-   * the reply bubble); extend the union as other errors gain bespoke UI.
+   * `insufficient_credits` drives the inline "Add Credits" CTA in the reply bubble;
+   * `content_blocked` marks a turn prompt moderation refused.
    */
-  errorCode?: QuestErrorCode;
+  errorCode?: QuestOutcomeErrorCode;
 
   /**
    * Completion callback armed by an API caller's `callbackUrl` (generation jobs only). Never
    * part of any client or poll payload: it names the caller's endpoint and signing key.
    */
   callback?: IQuestCallback;
+
+  /** Set with `oauthClientId` when a federated exchange key created the quest; absent for every other caller. */
+  apiKeyId?: string;
+  /** Connected app of the exchange key that created the quest. */
+  oauthClientId?: string;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item
@@ -441,6 +500,9 @@ export interface IChatHistoryItem {
    *   - other: MCP tool confirmation (params contain tool arguments)
    */
   pendingAction?: IPendingAction;
+
+  /** Written by the claim that takes `pendingAction` off the quest (pendingActionExecutor.claimPendingAction). */
+  pendingActionResolution?: IPendingActionResolution;
 
   /**
    * Slack notification info for async message editing
@@ -663,7 +725,7 @@ export interface IConversationContext {
 ////////
 
 /** Where a session was created. Absent on sessions that predate the field; render those as 'web'. */
-export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'agent'] as const;
+export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'desktop', 'agent'] as const;
 export type SessionOriginChannel = (typeof SESSION_ORIGIN_CHANNELS)[number];
 
 export interface ISessionOrigin {
@@ -673,6 +735,8 @@ export interface ISessionOrigin {
    * client (see redactSessionForClient), so a viewer the session is shared with cannot see it.
    */
   apiKeyId?: string;
+  /** Created by a Slack workflow step; only such notebooks can be named by a later workflow step. */
+  slackWorkflow?: boolean;
 }
 
 /** List filters on top of the existing search/surface/pagination params (see searchOwnSessions). */
@@ -684,6 +748,28 @@ export interface SessionListFilters {
   /** true: only sessions with generated images; false: only sessions without. */
   hasImages?: boolean;
 }
+
+/** Largest page GET /api/sessions serves; a larger `pagination[limit]` is clamped, not rejected. */
+export const MAX_SESSION_LIST_LIMIT = 100;
+
+/** Orders searchByUserId can resume by keyset. Any other `orderBy.field` pages by offset only. */
+export const SESSION_LIST_KEYSET_FIELDS = ['lastUpdated', '_id'] as const;
+export type SessionListKeysetField = (typeof SESSION_LIST_KEYSET_FIELDS)[number];
+
+export function isSessionListKeysetField(field: string): field is SessionListKeysetField {
+  return (SESSION_LIST_KEYSET_FIELDS as readonly string[]).includes(field);
+}
+
+/** The last row a searchByUserId page served. `at` is its sort value when ordered by lastUpdated. */
+export type SessionListKeyset = { id: string; at?: Date };
+
+export interface SessionListPageOptions {
+  /** Resume after this row (keyset) instead of skipping to `pagination.page`. */
+  after?: SessionListKeyset;
+}
+
+/** `last` is set when another page exists and the order supports keyset paging. */
+export type SessionListPage = { data: ISessionDocument[]; hasMore: boolean; last?: SessionListKeyset };
 
 /** Keyset page of a user's own sessions, newest first by id (GET /api/v1/sessions). */
 export type ListSessionsByUserQuery = {
@@ -698,10 +784,29 @@ export type ListSessionsByUserQuery = {
   limit: number;
 };
 
+/**
+ * listChangesByUserId: the same own-list filters, but every session changed at or after `since`,
+ * deleted ones included, ordered by (updatedAt, _id) ascending.
+ */
+export type ListSessionChangesByUserQuery = Omit<ListSessionsByUserQuery, 'beforeId'> & {
+  since: Date;
+  /** Exclusive keyset position: the previous page's last (updatedAt, _id). */
+  after?: { at: Date; id: string };
+};
+
+/** Set by the server on a session walking a core tutorial; no request schema carries it. */
+export interface SessionTutorialMarker {
+  owner: 'core';
+  moduleId: string;
+}
+
 export interface ISession {
   id: string;
   name: string;
   userId: string;
+  /** Immutable ownership at creation; absent means personal or legacy, never inferred for deletion. */
+  retentionOrganizationId?: string;
+  organizationId?: string;
   lastUpdated: Date;
   firstCreated: Date;
   language?: string;
@@ -738,6 +843,13 @@ export interface ISession {
    * names. Mirrors how `systemPromptText` scopes a session without a project.
    */
   enabledTools?: string[];
+  /**
+   * The Studio production this notebook directs, set by the agent start of a Direct launch after the server
+   * checks the caller owns the composition and has Productions open. While set, every turn runs in agent mode
+   * with the director tools and system context (client: useSendMessage; executor: agentExecutor.directedSession).
+   * Not copied by clone/fork/snip.
+   */
+  productionCompositionId?: string;
   /**
    * Tools that must NOT be offered to the model for this session, even if the
    * request or global auto-adds include them. Applied as a denylist after all
@@ -794,6 +906,8 @@ export interface ISession {
    * pre-existing behavior; resolve it through effectiveIncludeLibraryFiles, never read it raw.
    */
   includeLibraryFiles?: boolean;
+  /** Prompt-cache lifetime chosen for this chat; unset follows the user's default. */
+  promptCacheTtl?: '5m' | '1h';
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
    * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
@@ -876,6 +990,8 @@ export interface ISession {
    * Neutral default (unset) = only the core placeholder names apply.
    */
   autoNamePlaceholder?: string;
+  /** Null once the walk ends; the stored write is a $set, which drops undefined. */
+  tutorial?: SessionTutorialMarker | null;
   openaiConversationId?: string;
   claudeConversationId?: string;
   summary?: string;
@@ -953,6 +1069,12 @@ export interface ISession {
    * refund and debit against the hold goes to this user, never to whoever sends the closing frame.
    */
   voiceHoldUserId?: string | null;
+
+  /**
+   * The UserApiKey that opened the voice hold, set and cleared with voiceHoldUserId. Stamped on every
+   * ledger row billed against the hold, for per-key spend rollups; absent for a JWT caller.
+   */
+  voiceHoldApiKeyId?: string | null;
 }
 
 ///////////
@@ -960,11 +1082,11 @@ export interface ISession {
 /**
  * How long a notebook whose tagging completion produced no usable tags stays ineligible.
  *
- * The tagging handler bills `recordSessionOperationalUsage` BEFORE it parses, so a notebook the
- * model can never produce tags for costs one operations-model call per grooming run. Stamping
- * `taggedAt` on that failure would bound the spend but close the gate forever on a notebook that
- * was never tagged: no operator or automated path clears `taggedAt`, only a user re-importing that
- * one notebook. A cooldown bounds the spend without that, the same trade
+ * A parse failure still spends (and bills) an operations-model call, so a notebook the model can
+ * never produce tags for costs one call per grooming run. Stamping `taggedAt` on that failure
+ * would bound the spend but close the gate forever on a notebook that was never tagged: no
+ * operator or automated path clears `taggedAt`, only a user re-importing that one notebook. A
+ * cooldown bounds the spend without that, the same trade
  * `apps/client/server/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
  * give-up state is unrecoverable when there is no operator re-run route.
  *
@@ -1133,8 +1255,9 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     userId: string,
     options: SearchOptions<ISessionDocument>,
     surface?: string,
-    filters?: SessionListFilters
-  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+    filters?: SessionListFilters,
+    page?: SessionListPageOptions
+  ) => Promise<SessionListPage>;
 
   /**
    * Cursor-paginated twin of searchByUserId: ordered by `_id` descending and bounded by `limit`,
@@ -1142,6 +1265,8 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * not). Callers pass `limit + 1` to learn whether another page exists without a count query.
    */
   listByUserId: (query: ListSessionsByUserQuery) => Promise<ISessionDocument[]>;
+
+  listChangesByUserId: (query: ListSessionChangesByUserQuery) => Promise<ISessionDocument[]>;
 
   /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
   incrementImageCount: (sessionId: string, count: number) => Promise<void>;
@@ -1162,6 +1287,16 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
    * @returns The sessions
    */
   findAllByIds: (ids: string[], options?: { includeDeleted?: boolean }) => Promise<ISessionDocument[]>;
+
+  /**
+   * One ascending-by-`_id` page of these ids (live rows only), resuming strictly after `afterId`.
+   * `hasMore` is true when a row exists past the page. Rows carry only the public session fields
+   * (see toPublicSession), so they are for rendering, never for writing back.
+   */
+  findPageByIds: (
+    ids: string[],
+    options: { afterId?: string; limit: number }
+  ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
 
   /**
    * Find all session IDs by user ID
@@ -1314,7 +1449,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     sessionId: string,
     startedAt: Date,
     options?: { realtimeOnly?: boolean }
-  ) => Promise<{ billedCredits: number | null; payerId: string | null } | null>;
+  ) => Promise<{ billedCredits: number | null; payerId: string | null; apiKeyId: string | null } | null>;
 
   /**
    * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
@@ -1324,6 +1459,12 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   openVoiceHold: (
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+    hold: {
+      voiceReservedCredits: number | null;
+      voiceSessionStartedAt: Date;
+      realtime: boolean;
+      payerId: string;
+      apiKeyId?: string;
+    }
   ) => Promise<boolean>;
 }

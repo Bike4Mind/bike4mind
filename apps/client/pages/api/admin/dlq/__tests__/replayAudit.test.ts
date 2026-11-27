@@ -1,0 +1,479 @@
+// @vitest-environment node
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+
+const h = vi.hoisted(() => ({
+  audit: vi.fn(),
+  receiveFromQueue: vi.fn(),
+  sendToQueue: vi.fn(),
+  deleteFromQueue: vi.fn(),
+  changeMessageVisibility: vi.fn(),
+  countAttempts: vi.fn(),
+  logReplay: vi.fn(),
+  getDlqByLabel: vi.fn(),
+  getDlqUrl: vi.fn(() => 'dlq-url'),
+  getSourceQueueUrl: vi.fn(() => 'source-url'),
+  suggestion: vi.fn(),
+  transition: vi.fn(),
+}));
+
+type Route = (req: unknown, res: unknown) => unknown;
+
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    const routes: Record<string, Route> = {};
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain: Record<string, unknown> & Route = Object.assign(
+      async (req: unknown, res: unknown) => {
+        for (const middleware of middlewares) middleware(req, res, () => undefined);
+        return routes[(req as { method?: string }).method ?? 'GET']?.(req, res);
+      },
+      {
+        use: (middleware: (req: unknown, res: unknown, next: () => void) => void) => (
+          middlewares.push(middleware),
+          chain
+        ),
+        post: (fn: Route) => ((routes.POST = fn), chain),
+      }
+    );
+    return chain;
+  },
+}));
+vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
+  getDlqByLabel: h.getDlqByLabel,
+  getDlqUrl: h.getDlqUrl,
+  getSourceQueueUrl: h.getSourceQueueUrl,
+}));
+vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
+  receiveFromQueue: h.receiveFromQueue,
+  sendToQueue: h.sendToQueue,
+  deleteFromQueue: h.deleteFromQueue,
+  changeMessageVisibility: h.changeMessageVisibility,
+}));
+vi.mock('@bike4mind/database', () => ({
+  dlqReplayLogRepository: { countAttempts: h.countAttempts, logReplay: h.logReplay },
+  adminAiSuggestionRepository: { transition: h.transition },
+  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@bike4mind/server-utils/admin/dlq/triage', () => ({ visibleDlqSuggestion: h.suggestion }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
+
+import { Logger } from '@bike4mind/observability';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import handler from '../replay';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.getDlqByLabel.mockReturnValue({
+    label: 'quest',
+    displayName: 'Quest queue',
+    sourceQueue: 'questQueue',
+    replay: 'safe',
+  });
+  h.audit.mockResolvedValue(null);
+  h.sendToQueue.mockResolvedValue(undefined);
+  h.deleteFromQueue.mockResolvedValue(undefined);
+  h.countAttempts.mockResolvedValue(0);
+  h.logReplay.mockResolvedValue(undefined);
+});
+
+describe('POST /api/admin/dlq/replay admin audit', () => {
+  it('claims approval once and audits the approving admin before SQS work', async () => {
+    const id = 'a'.repeat(24);
+    h.suggestion.mockResolvedValue({
+      id,
+      proposedAction: {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'replay',
+        risk: 'safe-transient',
+        reason: 'Recorded transient failure',
+      },
+    });
+    h.transition.mockResolvedValueOnce({ id, status: 'accepted' }).mockResolvedValue(null);
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+    const invoke = async () => {
+      const { req, res } = createMocks({
+        method: 'POST',
+        body: { queueLabel: 'quest', messageIds: ['m1'], aiSuggestionId: id, reason: 'Reviewed transient failure' },
+      });
+      (req as unknown as Record<string, unknown>).user = {
+        id: 'admin-1',
+        name: 'Admin',
+        username: 'admin',
+        isAdmin: true,
+      };
+      return (handler as unknown as Route)(req, res);
+    };
+    await invoke();
+    expect(h.transition).toHaveBeenCalledWith(id, ['pending'], 'accepted', {
+      decidedBy: { userId: 'admin-1', name: 'Admin' },
+    });
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.triage.accepted',
+      reason: 'Reviewed transient failure',
+      details: { aiSuggestionId: id },
+    });
+    expect(h.audit.mock.invocationCallOrder[0]).toBeLessThan(h.sendToQueue.mock.invocationCallOrder[0]);
+    expect(h.logReplay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        aiSuggestionId: id,
+        messageId: 'm1',
+        queueLabel: 'quest',
+        operation: 'replay',
+        status: 'success',
+      })
+    );
+    await expect(invoke()).rejects.toThrow('already been decided');
+    expect(h.sendToQueue).toHaveBeenCalledOnce();
+  });
+  it('requires a reason for suggestion approval even on a safe queue', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        queueLabel: 'quest',
+        messageIds: ['m1'],
+        aiSuggestionId: 'a'.repeat(24),
+      },
+    });
+    Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+    await expect((handler as unknown as Route)(req, res)).rejects.toThrow('reason');
+    expect(h.transition).not.toHaveBeenCalled();
+    expect(h.receiveFromQueue).not.toHaveBeenCalled();
+  });
+  it.each(['missing', 'id', 'action', 'queueLabel', 'messageId', 'malformed'])(
+    'rejects a %s recommendation mismatch before claiming or SQS work',
+    async mismatch => {
+      const id = 'a'.repeat(24);
+      const action = {
+        queueLabel: 'quest',
+        messageId: 'm1',
+        action: 'replay',
+        risk: 'safe-transient',
+        reason: 'Recorded failure',
+      };
+      h.suggestion.mockResolvedValue(
+        mismatch === 'missing'
+          ? null
+          : {
+              id: mismatch === 'id' ? 'b'.repeat(24) : id,
+              proposedAction:
+                mismatch === 'malformed'
+                  ? {}
+                  : {
+                      ...action,
+                      ...(mismatch === 'action' ? { action: 'discard' } : {}),
+                      ...(mismatch === 'queueLabel' ? { queueLabel: 'other' } : {}),
+                      ...(mismatch === 'messageId' ? { messageId: 'other' } : {}),
+                    },
+            }
+      );
+      const { req, res } = createMocks({
+        method: 'POST',
+        body: {
+          queueLabel: 'quest',
+          messageIds: ['m1'],
+          aiSuggestionId: id,
+          reason: 'Reviewed failure',
+        },
+      });
+      Object.assign(req, { user: { id: 'admin-1', isAdmin: true } });
+      await expect((handler as unknown as Route)(req, res)).rejects.toThrow('does not match');
+      expect(h.transition).not.toHaveBeenCalled();
+      expect(h.receiveFromQueue).not.toHaveBeenCalled();
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    { replay: 'safe', sourceQueue: null },
+    { replay: 'side-effects', sourceQueue: null },
+    { replay: 'unsafe', sourceQueue: null },
+    { replay: undefined, sourceQueue: null },
+  ])('rejects a blocked destination %j before SQS operations', async entry => {
+    h.getDlqByLabel.mockReturnValue({ label: 'quest', displayName: 'Quest queue', ...entry });
+    for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
+      const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody } });
+      (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+      await expect((handler as unknown as Route)(req, res)).rejects.toThrow('Replay is not available');
+    }
+    for (const operation of [h.getDlqUrl, h.getSourceQueueUrl, h.receiveFromQueue, h.sendToQueue, h.deleteFromQueue]) {
+      expect(operation).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['safe', 'side-effects', 'unsafe', undefined])(
+    'keeps non-null destinations replayable with advisory class %s',
+    async replay => {
+      h.getDlqByLabel.mockReturnValue({
+        label: 'quest',
+        displayName: 'Quest queue',
+        sourceQueue: 'questQueue',
+        replay,
+      });
+      h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+      for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
+        const { req, res } = createMocks({
+          method: 'POST',
+          body: { queueLabel: 'quest', reason: 'Reviewed side effects', ...replayBody },
+        });
+        (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+        await (handler as unknown as Route)(req, res);
+        expect(res._getStatusCode()).toBe(200);
+      }
+      expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+      expect(h.receiveFromQueue).toHaveBeenCalledWith(expect.anything(), 1, 60, 2);
+      expect(h.getSourceQueueUrl).toHaveBeenCalledWith('questQueue');
+    }
+  );
+
+  it.each(['side-effects', 'unsafe', 'future-class', undefined])(
+    'requires and audits a reason for %s in both replay paths',
+    async replay => {
+      h.getDlqByLabel.mockReturnValue({
+        label: 'quest',
+        displayName: 'Quest queue',
+        sourceQueue: 'questQueue',
+        replay,
+      });
+      h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }]);
+      for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
+        for (const reason of [undefined, '', '    ', 'four', 'x'.repeat(501)]) {
+          const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', ...replayBody, reason } });
+          (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+          await expect((handler as unknown as Route)(req, res)).rejects.toThrow();
+        }
+      }
+      expect(h.sendToQueue).not.toHaveBeenCalled();
+      expect(h.receiveFromQueue).not.toHaveBeenCalled();
+      expect(h.audit).not.toHaveBeenCalled();
+      for (const replayBody of [{ batchSize: 1 }, { messageIds: ['m1'] }]) {
+        const { req, res } = createMocks({
+          method: 'POST',
+          body: { queueLabel: 'quest', ...replayBody, reason: '  Reviewed side effects  ' },
+        });
+        (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+        await (handler as unknown as Route)(req, res);
+        expect(h.audit).toHaveBeenLastCalledWith(req, expect.objectContaining({ reason: 'Reviewed side effects' }));
+      }
+    }
+  );
+
+  it('rejects a client-supplied message body without touching any queue', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        queueLabel: 'quest',
+        reason: 'Replay a forged message',
+        messages: [{ messageId: 'm1', receiptHandle: 'r1', body: '{"forged":true}' }],
+      },
+    });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    const error = await (handler as unknown as Route)(req, res).then(
+      () => null,
+      (rejected: unknown) => rejected
+    );
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as Error).message).toBe(
+      'Unsupported field(s): messages. Accepted fields: queueLabel, aiSuggestionId, batchSize, messageIds, reason'
+    );
+    for (const operation of [h.receiveFromQueue, h.sendToQueue, h.deleteFromQueue, h.logReplay, h.audit]) {
+      expect(operation).not.toHaveBeenCalled();
+    }
+  });
+
+  it('replays the body stored in the DLQ, not one from the request', async () => {
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{"stored":true}' }]);
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { queueLabel: 'quest', messageIds: ['m1'], body: '{"forged":true}' },
+    });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await expect((handler as unknown as Route)(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+
+    const ok = createMocks({ method: 'POST', body: { queueLabel: 'quest', messageIds: ['m1'] } });
+    (ok.req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await (handler as unknown as Route)(ok.req, ok.res);
+    expect(h.sendToQueue).toHaveBeenCalledExactlyOnceWith('source-url', { stored: true });
+  });
+
+  it('records ops.dlq.replayed with the queue and count but no message bodies', async () => {
+    h.receiveFromQueue.mockResolvedValue([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{"secret":"payload"}' }]);
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { queueLabel: 'quest', messageIds: ['m1'] },
+    });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][0]).toBe(req);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.replayed',
+      target: { kind: 'system', id: 'dlq-replay' },
+      details: { queueLabel: 'quest', messageCount: 1, replayedMessageIds: ['m1'] },
+    });
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
+    expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('records the queued replay path with counts and ids but no message bodies', async () => {
+    h.receiveFromQueue.mockResolvedValue([
+      { MessageId: 'm1', ReceiptHandle: 'r1', Body: '{"secret":"payload"}' },
+      { MessageId: 'm2', ReceiptHandle: 'r2', Body: 'not json' },
+    ]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 2 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.dlq.replayed',
+      details: { queueLabel: 'quest', messageCount: 1, failed: 1, skipped: 0, total: 2, replayedMessageIds: ['m1'] },
+    });
+    expect(JSON.stringify(h.audit.mock.calls[0][1])).not.toContain('payload');
+    expect(h.sendToQueue.mock.invocationCallOrder[0]).toBeLessThan(h.audit.mock.invocationCallOrder[0]);
+  });
+
+  it('keeps receiving past a short batch and stops at the first empty receive', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([
+        { MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' },
+        { MessageId: 'm2', ReceiptHandle: 'r2', Body: '{}' },
+      ])
+      .mockResolvedValueOnce([{ MessageId: 'm3', ReceiptHandle: 'r3', Body: '{}' }])
+      .mockResolvedValueOnce([]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 10 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(3);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(1, 'dlq-url', 10, 60, 2);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(2, 'dlq-url', 8, 60, 2);
+    expect(h.receiveFromQueue).toHaveBeenNthCalledWith(3, 'dlq-url', 7, 60, 2);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(h.audit.mock.calls[0][1]).toMatchObject({
+      details: { messageCount: 3, replayedMessageIds: ['m1', 'm2', 'm3'] },
+    });
+  });
+
+  it('replays a message received twice in one run once, deleting it with its latest receipt handle', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([{ MessageId: 'm1', ReceiptHandle: 'r1', Body: '{}' }])
+      .mockResolvedValueOnce([{ MessageId: 'm1', ReceiptHandle: 'r1-latest', Body: '{}' }])
+      .mockResolvedValueOnce([]);
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', batchSize: 10 } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+
+    await (handler as unknown as Route)(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.deleteFromQueue).toHaveBeenCalledTimes(1);
+    expect(h.deleteFromQueue).toHaveBeenCalledWith('dlq-url', 'r1-latest');
+  });
+});
+
+describe('POST /api/admin/dlq/replay by message ID', () => {
+  const msg = (id: string) => ({ MessageId: id, ReceiptHandle: `rh-${id}`, Body: '{"a":1}' });
+  const post = async (messageIds: string[]) => {
+    const { req, res } = createMocks({ method: 'POST', body: { queueLabel: 'quest', messageIds } });
+    (req as unknown as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+    await (handler as unknown as Route)(req, res);
+    return res._getJSONData();
+  };
+
+  beforeEach(() => {
+    h.changeMessageVisibility.mockResolvedValue(undefined);
+  });
+
+  it('keeps receiving until the target turns up, then releases the other messages', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([msg('other-1')])
+      .mockResolvedValueOnce([msg('other-2')])
+      .mockResolvedValueOnce([msg('target')]);
+
+    const body = await post(['target']);
+
+    expect(body).toMatchObject({ replayed: 1, notFound: 0 });
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(3);
+    expect(h.receiveFromQueue).toHaveBeenCalledWith('dlq-url', 10, 60, 1);
+    expect(h.deleteFromQueue).toHaveBeenCalledWith('dlq-url', 'rh-target');
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.changeMessageVisibility.mock.calls).toEqual([
+      ['dlq-url', 'rh-other-1', 0],
+      ['dlq-url', 'rh-other-2', 0],
+    ]);
+  });
+
+  it('uses the latest receipt handle when a target is delivered again during the search', async () => {
+    h.receiveFromQueue
+      .mockResolvedValueOnce([{ ...msg('first'), ReceiptHandle: 'old-first' }])
+      .mockResolvedValueOnce([{ ...msg('first'), ReceiptHandle: 'new-first' }, msg('second')]);
+
+    const body = await post(['first', 'second']);
+
+    expect(body).toMatchObject({ replayed: 2, notFound: 0 });
+    expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+    expect(h.deleteFromQueue.mock.calls).toEqual([
+      ['dlq-url', 'new-first'],
+      ['dlq-url', 'rh-second'],
+    ]);
+  });
+
+  it('releases all acquired messages if a later receive fails, preserving the receive error', async () => {
+    const failure = new Error('receive unavailable');
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other'), msg('first')]).mockRejectedValueOnce(failure);
+    h.changeMessageVisibility.mockRejectedValue(new Error('release unavailable'));
+
+    await expect(post(['first', 'second'])).rejects.toBe(failure);
+
+    expect(h.changeMessageVisibility.mock.calls).toEqual([
+      ['dlq-url', 'rh-other', 0],
+      ['dlq-url', 'rh-first', 0],
+    ]);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.deleteFromQueue).not.toHaveBeenCalled();
+  });
+
+  it('reports not found once the queue has nothing left, and still releases what it received', async () => {
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other-1')]).mockResolvedValue([]);
+
+    const body = await post(['target']);
+
+    expect(body).toMatchObject({ replayed: 0, notFound: 1 });
+    expect(h.receiveFromQueue).toHaveBeenCalledTimes(2);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.changeMessageVisibility).toHaveBeenCalledWith('dlq-url', 'rh-other-1', 0);
+  });
+
+  it('still replays the target when releasing another message fails', async () => {
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other-1'), msg('target')]);
+    h.changeMessageVisibility.mockRejectedValue(new Error('boom'));
+
+    const body = await post(['target']);
+
+    expect(body).toMatchObject({ replayed: 1, notFound: 0 });
+  });
+
+  it('logs why the release failed, once per distinct error', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    h.receiveFromQueue.mockResolvedValueOnce([msg('other-1'), msg('other-2'), msg('target')]);
+    h.changeMessageVisibility.mockRejectedValue(new Error('not authorized to perform: sqs:ChangeMessageVisibility'));
+
+    await post(['target']);
+
+    expect(warn).toHaveBeenCalledWith('[DLQ Replay] Could not release 2 untargeted messages early', {
+      queueLabel: 'quest',
+      errors: ['not authorized to perform: sqs:ChangeMessageVisibility'],
+    });
+  });
+});

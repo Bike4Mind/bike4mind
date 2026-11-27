@@ -13,10 +13,7 @@ import { fileURLToPath } from 'url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ALARMS_SOURCE = readFileSync(path.join(REPO_ROOT, 'infra/alarms.ts'), 'utf8');
-const EMITTER_SOURCE = readFileSync(
-  path.join(REPO_ROOT, 'apps/workers/src/cron/questTimeoutSweep.ts'),
-  'utf8'
-);
+const EMITTER_SOURCE = readFileSync(path.join(REPO_ROOT, 'apps/workers/src/cron/questTimeoutSweep.ts'), 'utf8');
 
 /** Each alarm's SST id and the QUEST_METRICS key it must watch. */
 const ALARMS = [

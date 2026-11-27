@@ -16,6 +16,17 @@ export interface CanceledForNonPaymentEmailInput {
   organizationName?: string | null;
 }
 
+export interface PaymentActionRequiredEmailInput {
+  /** Where the owner finishes the payment: the Pay now button on the billing page. */
+  billingUrl: string;
+  organizationName?: string | null;
+}
+
+export interface UnpaidEmailInput {
+  billingUrl: string;
+  organizationName?: string | null;
+}
+
 export interface EmailContent {
   subject: string;
   body: string;
@@ -104,7 +115,7 @@ const layout = (brand: string, heading: string, content: string): string => `
 
 /**
  * The first-failure notice for a subscription renewal. Access is paused from this point, not at
- * cancellation: `past_due` grants no entitlements (server/entitlements/index.ts), so the copy
+ * cancellation: `past_due` grants no entitlements (packages/server-utils/src/entitlements/index.ts), so the copy
  * must not promise otherwise.
  */
 export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailContent => {
@@ -122,7 +133,7 @@ export const buildPaymentFailedEmail = (input: PaymentFailedEmailInput): EmailCo
           <p>Hello,</p>
           <p>We could not charge the renewal payment for ${plan}.</p>
           ${reason}
-          <p>Paid features are paused until the payment goes through. Updating your payment method restores them as soon as the charge succeeds.</p>
+          <p>Paid features are paused until the payment goes through. To restore them now, update your payment method if needed, then select Pay now on your billing page.</p>
           <div style="text-align: center;">
             <a href="${escapeHtml(input.billingUrl)}" class="cta-button">Update payment method</a>
           </div>
@@ -152,5 +163,45 @@ export const buildCanceledForNonPaymentEmail = (input: CanceledForNonPaymentEmai
   return {
     subject: toSubject(`${capitalize(planNoun(brand, input.organizationName))} has been cancelled`),
     body: layout(brand, 'Your subscription was cancelled', content),
+  };
+};
+
+/** Sent once per invoice when the bank needs the owner to confirm (3DS) a renewal charge. */
+export const buildPaymentActionRequiredEmail = (input: PaymentActionRequiredEmailInput): EmailContent => {
+  const brand = process.env.APP_NAME || '';
+  const plan = escapeHtml(planNoun(brand, input.organizationName));
+
+  const content = `
+          <p>Hello,</p>
+          <p>Your bank needs you to confirm the renewal payment for ${plan} before it can go through.</p>
+          <p>Select Pay now on your billing page and follow your bank's prompts to confirm. Until the payment is confirmed, paid features stay paused.</p>
+          <div style="text-align: center;">
+            <a href="${escapeHtml(input.billingUrl)}" class="cta-button">Confirm payment</a>
+          </div>
+  `;
+
+  return {
+    subject: toSubject(`Action needed: confirm the payment for ${planNoun(brand, input.organizationName)}`),
+    body: layout(brand, 'Confirm your payment', content),
+  };
+};
+
+/** Sent once when Stripe's retry schedule ends by marking the subscription unpaid rather than cancelling it. */
+export const buildUnpaidEmail = (input: UnpaidEmailInput): EmailContent => {
+  const brand = process.env.APP_NAME || '';
+  const plan = escapeHtml(planNoun(brand, input.organizationName));
+
+  const content = `
+          <p>Hello,</p>
+          <p>We were unable to collect payment for ${plan} after several attempts, so it is now unpaid and paid features are paused.</p>
+          <p>To restore access, update your payment method if needed, then select Pay now on your billing page.</p>
+          <div style="text-align: center;">
+            <a href="${escapeHtml(input.billingUrl)}" class="cta-button">Pay now</a>
+          </div>
+  `;
+
+  return {
+    subject: toSubject(`${capitalize(planNoun(brand, input.organizationName))} is unpaid`),
+    body: layout(brand, 'Your subscription is unpaid', content),
   };
 };

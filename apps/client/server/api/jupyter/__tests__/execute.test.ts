@@ -21,7 +21,7 @@ vi.mock('sst', () => ({
   },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: vi.fn(),
 }));
 
@@ -46,7 +46,7 @@ vi.mock('crypto', async importOriginal => {
   };
 });
 
-import { sendToConnection } from '@server/websocket/utils';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { Connection } from '@bike4mind/database/social';
 import { Quest } from '@bike4mind/database/content';
 
@@ -54,6 +54,7 @@ describe('/api/jupyter/execute', () => {
   let mockReq: {
     body: Record<string, unknown>;
     user: { id: string } | null;
+    logger: Record<string, Mock>;
   };
   let mockRes: {
     status: Mock;
@@ -76,6 +77,7 @@ describe('/api/jupyter/execute', () => {
     mockReq = {
       body: {},
       user: { id: 'user-123' },
+      logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
     };
 
     mockRes = {

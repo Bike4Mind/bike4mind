@@ -41,7 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test', SECRET_ENCRYPTION_KEY: 'key' },
 }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ decryptSecret: () => TOKEN }));
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreFixSuccessMessage: mocks.postSreFixSuccessMessage,
   postSreFixFailureMessage: vi.fn(),
   postSreAlreadyFixedMessage: vi.fn(),
@@ -49,9 +49,12 @@ vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: vi.fn() }));
-vi.mock('@server/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({ GitHubService: { forSystem: vi.fn() } }));
 
 import handler from '../workflow-callback';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 function makeRes() {
   const res = { status: vi.fn(), json: vi.fn() };

@@ -11,12 +11,12 @@ import {
   LLMModelConfig,
 } from '@bike4mind/common';
 import { WebsocketContextValue } from '../contexts/WebsocketContext';
-import { ImageEditCommandArgs, ImageGenerationCommandArgs } from '../components/commands/ImageGenerationCommand';
+import type { ChatImageEditArgs, ChatImageSendArgs } from '../components/Session/chatImageSend';
 import { LLMSettings } from '../components/commands/LLMCommand';
 import { QueryClient } from '@tanstack/react-query';
 import { terminalQuests } from '../hooks/chatCompletionState';
 
-type CommandArgs = CommandArgExtra & ImageGenerationCommandArgs & ImageEditCommandArgs & LLMSettings;
+export type CommandArgs = CommandArgExtra & ChatImageSendArgs & ChatImageEditArgs & LLMSettings;
 
 export type CommandArgExtra = {
   userId: string;
@@ -41,7 +41,6 @@ export type CommandArgExtra = {
   // Correct-and-retry target. Distinct from `questId`: that re-runs a quest in place, this
   // sends a new turn carrying the user's correction and links it to the answer it corrects.
   correctsQuestId?: string;
-  enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
   enableAgents?: boolean;
@@ -69,6 +68,8 @@ export type CommandArgExtra = {
   setChatCompletion?: (updater: (prev: any) => any) => void;
   userTags?: string[];
   mcpServers?: string[];
+  disabledMcpConnections?: string[];
+  enabledPlatformMcpConnections?: string[];
   addMessageToSession?: (message: IChatHistoryItemDocument) => void;
   // Client-generated tmpId set by useSendMessage during /new pre-navigation.
   // Command handlers MUST use this when keying optimistic placeholders so the
@@ -77,8 +78,7 @@ export type CommandArgExtra = {
   optimisticSessionId?: string;
 };
 
-export type CommandKey =
-  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/edit_image' | '/create_agent' | '/feedback';
+export type CommandKey = '/llm' | '/roll' | '/key' | '/models' | '/create_agent' | '/feedback';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;
@@ -89,7 +89,7 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
   const handler = commandHandlers[command as CommandKey];
   if (handler) {
     // A re-run restarts an existing quest in place; its earlier terminal frame must not mark
-    // the new run's chunks stale. Image payloads carry no updatedAt to prove recency.
+    // the new run's chunks stale.
     if (rest.questId) terminalQuests.forget(rest.questId);
     return await handler({ userId, params, ...rest });
   } else {
@@ -102,47 +102,44 @@ export function isImageModel(model: string): model is ImageModelName {
   return imageModel;
 }
 
+// Input that starts with one of these is a command and is sent as typed.
+const KNOWN_COMMANDS = ['/create_agent', '/feedback', '/llm', '/roll', '/key', '/models', '/admin', '/more'];
+
+const startsWithKnownCommand = (input: string) => KNOWN_COMMANDS.some(cmd => input.startsWith(cmd));
+
+/**
+ * Whether a send is a chat image send (chatImageSend.ts) rather than a command: with live AI on and no typed command,
+ * an image edit is one, and so is any send with an image model selected. Its prompt goes as typed, without the
+ * history and context prefixes a /llm send carries.
+ */
+export function chatImageSendMode(
+  liveAI: boolean,
+  model: string,
+  input: string,
+  imageEdit?: boolean
+): 'generate' | 'edit' | undefined {
+  if (!liveAI || startsWithKnownCommand(input)) return undefined;
+  if (imageEdit) return 'edit';
+  return isImageModel(model) ? 'generate' : undefined;
+}
+
 export const extractCommandAndParams = (
   liveAI: boolean,
   model: string,
   lines: number,
   input: string,
-  enabledFiles: string[],
-  imageEdit?: boolean
+  enabledFiles: string[]
 ): [string, string] => {
   let modifiedChatInputValue = input;
 
-  // Check if input starts with a known command - if so, don't modify it
-  const knownCommands = [
-    '/create_agent',
-    '/feedback',
-    '/llm',
-    '/roll',
-    '/key',
-    '/models',
-    '/gen_image',
-    '/edit_image',
-    '/admin',
-    '/more',
-  ];
-  const startsWithCommand = knownCommands.some(cmd => input.startsWith(cmd));
-
-  if (liveAI && !startsWithCommand) {
+  if (liveAI && !startsWithKnownCommand(input)) {
     modifiedChatInputValue = `[History:${lines}] ${modifiedChatInputValue}`;
     if (enabledFiles.length > 0) {
       enabledFiles.forEach(fileName => {
         modifiedChatInputValue = `[Context:${fileName}] ${modifiedChatInputValue}`;
       });
     }
-
-    if (isImageModel(model)) {
-      modifiedChatInputValue = `/gen_image ${input}`;
-    } else {
-      modifiedChatInputValue = `/llm ${modifiedChatInputValue}`;
-    }
-    if (imageEdit) {
-      modifiedChatInputValue = `/edit_image ${input}`;
-    }
+    modifiedChatInputValue = `/llm ${modifiedChatInputValue}`;
   }
 
   const firstSpaceIndex = modifiedChatInputValue.indexOf(' ');

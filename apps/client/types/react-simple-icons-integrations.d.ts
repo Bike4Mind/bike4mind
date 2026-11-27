@@ -58,19 +58,6 @@ declare module '@icons-pack/react-simple-icons/icons/SiJupyter' {
   export { SiJupyter as default, defaultColor };
 }
 
-declare module '@icons-pack/react-simple-icons/icons/SiGooglecalendar' {
-  import type React from 'react';
-  const SiGooglecalendar: React.ForwardRefExoticComponent<
-    React.SVGProps<SVGSVGElement> & {
-      title?: string;
-      color?: string;
-      size?: string | number;
-    } & React.RefAttributes<SVGSVGElement>
-  >;
-  const defaultColor: string;
-  export { SiGooglecalendar as default, defaultColor };
-}
-
 declare module '@icons-pack/react-simple-icons/icons/SiHubspot' {
   import type React from 'react';
   const SiHubspot: React.ForwardRefExoticComponent<

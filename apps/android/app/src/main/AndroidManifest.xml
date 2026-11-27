@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16+: lets the running-agent notification (push/AgentRunNotifications.kt) show as a Live Update. -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- push/AgentRunKeepAlive.kt: keeps a followed agent run polling after the user leaves the app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Dictation records a short voice note and sends it for transcription. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
+    <!-- Lets MainActivity find a browser for pages with no native screen (package visibility, Android 11+). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+
+    <!-- allowBackup is off: the encrypted tokens are useless without their Keystore key, which never leaves the device. -->
+    <application
+        android:name=".B4MApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <!-- Fetches the on-device text recognition model at install, so the first scan on a fresh install reads text. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr" />
+
+        <!-- FCM: a notification message shown while the app is backgrounded uses this channel (created in B4MApplication). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="b4m_default" />
+
+        <service
+            android:name=".push.B4MMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- dataSync: it fetches a run's state from the server for as long as the run lasts (an hour at most). -->
+        <service
+            android:name=".push.AgentRunKeepAlive"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- singleTask so the OAuth redirect returns to the running activity (onNewIntent) instead of a new one. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Long-press launcher shortcuts (Ask, Capture note, Start quest), routed by kit AppShortcut. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
+            <!-- Non-production OAuth redirect (OAuthConfiguration.nonProduction). The production App Link
+                 (https, autoVerify) is added once the server registers an Android OAuth client. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.bike4mind.app" android:host="auth-callback" />
+            </intent-filter>
+
+            <!-- App links for the paths with a native screen (kit DeepLinkRouter). Verification needs the server's
+                 /.well-known/assetlinks.json; until then Android opens these links in the browser by default. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="app.bike4mind.com" />
+                <data android:pathPrefix="/sessions" />
+                <data android:pathPrefix="/notebooks" />
+                <data android:pathPrefix="/briefs" />
+            </intent-filter>
+        </activity>
+
+        <!-- "Share to Bike4Mind": text, links, images and files from other apps (share/ShareActivity). -->
+        <activity
+            android:name=".share.ShareActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="@string/share_target_label"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Hands the camera app a file to write the photo into (capture/ in the cache). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/capture_paths" />
+        </provider>
+    </application>
+</manifest>

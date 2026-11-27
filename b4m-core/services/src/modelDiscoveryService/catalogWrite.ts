@@ -1,4 +1,5 @@
 import {
+  API_SURFACE_KEYS,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   DEFAULT_MAX_OUTPUT_TOKENS,
   FIELD_GROUPS,
@@ -8,11 +9,20 @@ import {
   ModelBackend,
   ModelRecordWrite,
   groupsTouchedByPatch,
+  isDiscoveryVerdict,
+  inheritApiSurface,
   lifecycleStatusRank,
+  parseClaudeModelId,
+  seedApiSurface,
+  seedDescribes,
+  statedApiSurface,
+  type AdapterFamily,
+  type ApiSurface,
   type FieldGroup,
   type ICatalogContributor,
   type IModelCatalogRowInput,
   type ModelRecord,
+  type ParsedClaudeModelId,
 } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import isEqual from 'lodash/isEqual.js';
@@ -78,8 +88,33 @@ export function isIntroducibleModelId(modelId: string): boolean {
   return !DATED_SNAPSHOT_ID.test(modelId);
 }
 
+/** "gpt-4.1" for "gpt-4.1-2025-04-14"; undefined for an id that is not a dated snapshot. */
+export const snapshotAliasOf = (modelId: string): string | undefined =>
+  DATED_SNAPSHOT_ID.test(modelId) ? modelId.replace(DATED_SNAPSHOT_ID, '') : undefined;
+
+/**
+ * The ids that are a dated snapshot's alias ("gpt-4.1" for a held "gpt-4.1-2025-04-14").
+ * Discovery must not introduce one: the read path matches rows to adapter literals by
+ * exact id, so the alias would list as a second "GPT-4.1" next to the snapshot. Aliases
+ * already in the catalog are retired through the queue instead (snapshotAliasSuggestions
+ * in lifecyclePlan.ts). The set is deliberately backend-blind: unlike that suggestion, which
+ * requires the alias and snapshot to share a backend, an introduction is refused whatever
+ * backend holds the snapshot.
+ */
+export function datedSnapshotAliases(heldModelIds: Iterable<string>): Set<string> {
+  const aliases = new Set<string>();
+  for (const id of heldModelIds) {
+    const alias = snapshotAliasOf(id);
+    if (alias) aliases.add(alias);
+  }
+  return aliases;
+}
+
 /** Provenance for a dispatch field the resolver derived rather than a feed reporting it. */
 export const DISPATCH_SEED_CONTRIBUTOR = 'seed';
+
+/** Contributor for an apiSurface group copied from a sibling model: `sibling:<modelId>`. */
+export const SIBLING_CONTRIBUTOR_PREFIX = 'sibling:';
 
 export interface CatalogWriteInput {
   /**
@@ -98,6 +133,11 @@ export interface CatalogWriteInput {
   probedProfiles?: ReadonlyMap<string, ProbedDispatchAnswer>;
   /** Belief per model from the NON-operator rows in force. */
   base: ReadonlyMap<string, ResolvedCatalogRecord>;
+  /**
+   * Belief per model from every row in force, operator rows included. The sibling an apiSurface is
+   * inherited from is chosen here, so an operator's lifecycle or apiSurface correction counts. Defaults to base.
+   */
+  inForce?: ReadonlyMap<string, ResolvedCatalogRecord>;
   /**
    * Backends a PROVIDER source listed successfully this run. A model whose own
    * backend is missing here has no authoritative voice in the run, which is what
@@ -122,12 +162,27 @@ export interface CatalogWriteInput {
    */
   providerSourceNames: ReadonlySet<string>;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /**
+   * Every id the static adapter tables ship. A dated one makes its alias refused an
+   * introduction (datedSnapshotAliases), since the seed holds the snapshot and not the
+   * alias. An alias the tables ship themselves (gpt-5.4-mini) is curated and exempt.
+   */
+  staticModelIds?: ReadonlySet<string>;
   /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
   presentationOwnedElsewhere?: ReadonlySet<string>;
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
   knownPricedModelIds?: ReadonlySet<string>;
-  /** Models the build's adapter tables price in any unit; changes the denial wording only, never a verdict. */
+  /**
+   * pricePlan's consensusPricedModelIds over the same contributions. When given it
+   * REPLACES the source-quote half of hasTrustedPrice, so a model promotes only on
+   * a price row that is in force or that this run's price plan will write.
+   */
+  consensusPricedModelIds?: ReadonlySet<string>;
+  /**
+   * Models the build's static adapter tables price in any unit (adapterBuildPricedModelIds). For a non-text model this
+   * is the only trusted price; a text model's literal already arrives in knownPricedModelIds.
+   */
   buildPricedModelIds?: ReadonlySet<string>;
   runStartedAt: Date;
   runId?: string;
@@ -168,6 +223,11 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
   const diff: CatalogDiffEntry[] = [];
   const rows: IModelCatalogRowInput[] = [];
   const sightedModelIds = new Set<string>();
+  const aliasesOfHeldSnapshots = datedSnapshotAliases([
+    ...input.base.keys(),
+    ...input.operatorOwnedModelIds,
+    ...(input.staticModelIds ?? []),
+  ]);
 
   for (const candidate of candidates.values()) {
     // Only a provider listing is a sighting. litellm and models.dev keep retired
@@ -194,6 +254,15 @@ export function planCatalogWrites(input: CatalogWriteInput): CatalogWritePlan {
         source: candidate.sourceNames.join('+'),
         modelId: candidate.modelId,
         reason: 'id is a dated snapshot or a fine-tune, not a model to introduce',
+      });
+      continue;
+    }
+
+    if (!existing && aliasesOfHeldSnapshots.has(candidate.modelId) && !input.staticModelIds?.has(candidate.modelId)) {
+      dropped.push({
+        source: candidate.sourceNames.join('+'),
+        modelId: candidate.modelId,
+        reason: 'id is the alias of a dated snapshot the catalog already holds',
       });
       continue;
     }
@@ -375,6 +444,28 @@ function sourceDisabledReasonOf(contributed: ReadonlyMap<string, unknown>): stri
   if (contributed.get('autoDisabled') !== true) return undefined;
   const reason = contributed.get('autoDisabledReason');
   return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+}
+
+/**
+ * The disable reason in force, when it is a provider's answer this run could not re-ask. A Bedrock
+ * availability call that fails arrives as null by contract, so such a run contributes nothing about
+ * availability; replacing the reason with promotion's verdict would erase a fact discovery only
+ * reported, and the read path would then reclaim the group as a placeholder of its own.
+ */
+function providerDisableInForce(
+  contributed: ReadonlyMap<string, unknown>,
+  base: Record<string, unknown>,
+  prior: readonly ICatalogContributor[] | undefined
+): string | undefined {
+  if (contributed.has('autoDisabled') || contributed.has('autoDisabledReason')) return undefined;
+  if (base.autoDisabled !== true) return undefined;
+  const reason = base.autoDisabledReason;
+  const supplier = prior?.find(entry => entry.group === 'availability')?.source;
+  // A legacy writer could restamp a provider disable with discovery's wording while keeping its
+  // supplier. The credit takes precedence; only uncredited rows rely on the wording.
+  if (supplier === DISCOVERY_CONTRIBUTOR) return undefined;
+  if (supplier) return typeof reason === 'string' && reason.length > 0 ? reason : 'disabled by its source';
+  return typeof reason === 'string' && reason.length > 0 && !isDiscoveryVerdict(reason) ? reason : undefined;
 }
 
 /**
@@ -605,17 +696,21 @@ function planOne(
   // uncorroborated docs kind first - so the status is a source's claim rather
   // than a parse artifact.
   if (decides && !LIFECYCLE_SUNSET_STATUSES.has(record.lifecycle?.status ?? '')) {
+    const sourceDisabledReason =
+      sourceDisabledReasonOf(contributed) ??
+      providerDisableInForce(contributed, base, input.priorContributors?.get(candidate.modelId));
     decision = evaluatePromotion({
       record,
       policy: input.policy,
       credentials: input.credentials,
-      hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
-      awaitingPrice: input.buildPricedModelIds?.has(candidate.modelId)
-        ? 'build-literal'
-        : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
-          ? 'aggregator-quote'
-          : 'none',
-      sourceDisabledReason: sourceDisabledReasonOf(contributed),
+      hasTrustedPrice: hasTrustedPrice(candidate, record.type, input),
+      awaitingPrice:
+        record.type !== 'text'
+          ? 'no-build-literal'
+          : candidate.pricesByKind.some(entry => entry.kind === 'aggregator')
+            ? 'aggregator-quote'
+            : 'none',
+      sourceDisabledReason,
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
     // reads as a removed key in the diff instead of a key that is still there.
@@ -643,14 +738,58 @@ function planOne(
         };
     ownedGroups.add('lifecycle');
     ownedGroups.add('availability');
+    // The read path reads the `availability` credit as who disabled the model, so a verdict is
+    // credited to discovery only when this run decided the disable: the row was not disabled
+    // before, or this run cleared the source's own disable first (whose clearance would otherwise
+    // take the credit). A row already disabled that got no availability answer keeps its carried
+    // credit, whatever its wording: a pre-change writer restamped provider disables to verdicts.
+    const decidedThisRun = base.autoDisabled !== true || clearsSourceDisable;
+    if (record.autoDisabled === true && decidedThisRun && isDiscoveryVerdict(record.autoDisabledReason)) {
+      derivedGroups.add('availability');
+    }
   }
 
-  if (ownedGroups.size === 0) return { unchanged: true };
+  const priorContributors = input.priorContributors?.get(candidate.modelId);
+  const credited = new Map<FieldGroup, string>();
+  const sourceStatesApiSurface = API_SURFACE_KEYS.some(key => contributed.has(key));
+  // Group provenance cannot distinguish carried sibling flags from fresh source claims, so release the
+  // carried flags when a source starts speaking for the model. Build-described models release them too.
+  const releasedKeys =
+    inheritedFromSibling(priorContributors) && (describedByBuild(record.id, input) || sourceStatesApiSurface)
+      ? API_SURFACE_KEYS.filter(key => record[key] !== undefined && !contributed.has(key))
+      : [];
+  if (releasedKeys.length > 0) {
+    record = omit(record, releasedKeys) as ModelRecord;
+  } else {
+    // Any run, not only the promotion window: a model promoted before this group existed gets its copy once.
+    const inherited = inheritedApiSurface(record, input);
+    if (inherited) {
+      record = { ...record, ...inherited.values };
+      ownedGroups.add('apiSurface');
+      credited.set('apiSurface', `${SIBLING_CONTRIBUTOR_PREFIX}${inherited.siblingId}`);
+    }
+  }
+
+  if (ownedGroups.size === 0 && releasedKeys.length === 0) return { unchanged: true };
 
   const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
     group => !(presentationElsewhere && group === 'presentation')
   );
-  const changedKeys = changedWithinGroups(base, record, owned);
+  if (owned.length === 0) return { unchanged: true };
+  const contributors = contributorsFor(candidate, contributed, owned, priorContributors, derivedGroups, credited);
+  const changedKeys = [...new Set([...changedWithinGroups(base, record, owned), ...releasedKeys])].sort();
+  // Provenance affects curation of disables and release of sibling copies, even if values stay equal.
+  const availabilitySource = (credits: readonly ICatalogContributor[] | undefined) =>
+    credits?.find(entry => entry.group === 'availability')?.source;
+  const sourceReplacedSibling = inheritedFromSibling(priorContributors) && sourceStatesApiSurface;
+  if (
+    existing &&
+    (sourceReplacedSibling ||
+      (record.autoDisabled === true && availabilitySource(contributors) !== availabilitySource(priorContributors)))
+  ) {
+    changedKeys.push('contributors');
+    changedKeys.sort();
+  }
   if (existing && changedKeys.length === 0) return { unchanged: true };
 
   const lifecycleStatus = record.lifecycle?.status ?? 'discovered';
@@ -671,13 +810,7 @@ function planOne(
     patch: record,
     ownedGroups: owned,
     effectiveFrom: input.runStartedAt,
-    contributors: contributorsFor(
-      candidate,
-      contributed,
-      owned,
-      input.priorContributors?.get(candidate.modelId),
-      derivedGroups
-    ),
+    contributors,
     note: `discovery:${candidate.sourceNames.join('+')}@${input.runStartedAt.toISOString()}`,
     runId: input.runId,
   };
@@ -862,6 +995,85 @@ function withholdsOpenAiTools(
   return introducing || base.supportsTools === false;
 }
 
+/**
+ * The apiSurface flags a Claude model that states none copies from its newest active sibling no newer than
+ * itself: same vendor, adapterFamily and product line, at or below its version, so a new release never
+ * rewrites what an older model was copied from. A sibling's flags are what its rows state over what the
+ * seed tables say for it, and inheritApiSurface (common claudeToolCapabilities.ts) keeps a copied forced
+ * tool_choice or prefill from widening the model's own answer and never copies refusal fallback. Skipped
+ * for an id with no Claude version and for a model the build already describes, where a copied discovery
+ * value would outrank the build's own answer. An operator row still overrides each flag (PER_KEY_GROUPS in
+ * llm-adapters mergeCatalog.ts).
+ */
+function inheritedApiSurface(
+  record: ModelRecord,
+  input: CatalogWriteInput
+): { values: Partial<ApiSurface>; siblingId: string } | undefined {
+  if (Object.keys(statedApiSurface(record)).length > 0 || describedByBuild(record.id, input)) return undefined;
+  const version = parseClaudeModelId(record.id);
+  const family = adapterFamilyOf(record, input);
+  if (!version || !family) return undefined;
+
+  let newest: { id: string; releaseDate?: string; values: Partial<ApiSurface> } | undefined;
+  for (const [id, resolved] of input.inForce ?? input.base) {
+    const sibling = resolved.record;
+    if (id === record.id || sibling.vendor !== record.vendor || statusOf(sibling) !== 'active') continue;
+    const siblingVersion = parseClaudeModelId(id);
+    if (siblingVersion?.family !== version.family || compareVersions(siblingVersion, version) > 0) continue;
+    if (adapterFamilyOf(sibling, input) !== family) continue;
+    const seeded =
+      typeof sibling.backend === 'string'
+        ? seedApiSurface({ id, backend: sibling.backend as ModelRecord['backend'], adapterFamily: family })
+        : undefined;
+    const values = { ...seeded, ...statedApiSurface(sibling) };
+    delete values.refusalFallback;
+    if (Object.keys(values).length === 0) continue;
+    const releaseDate = typeof sibling.releaseDate === 'string' ? sibling.releaseDate : undefined;
+    const contender = { id, releaseDate, values };
+    if (!newest || newerModel(contender, newest) < 0) newest = contender;
+  }
+  if (!newest) return undefined;
+  const own = {
+    id: record.id,
+    backend: record.backend,
+    adapterFamily: family,
+    thinkingStyle: record.reasoning?.style === 'anthropic-adaptive' ? ('adaptive' as const) : undefined,
+  };
+  return { values: inheritApiSurface(own, newest.values), siblingId: newest.id };
+}
+
+/** The adapter tables ship the model, or the seed tables give it a full apiSurface verdict. */
+function describedByBuild(modelId: string, input: CatalogWriteInput): boolean {
+  return input.staticModelIds?.has(modelId) === true || seedDescribes({ id: modelId });
+}
+
+const inheritedFromSibling = (contributors: readonly ICatalogContributor[] | undefined): boolean =>
+  contributors?.some(entry => entry.group === 'apiSurface' && entry.source.startsWith(SIBLING_CONTRIBUTOR_PREFIX)) ===
+  true;
+
+/** The record's adapterFamily, or the one the resolver would give it (seed rows carry none). */
+function adapterFamilyOf(record: Record<string, unknown>, input: CatalogWriteInput): AdapterFamily | undefined {
+  if (typeof record.adapterFamily === 'string') return record.adapterFamily as AdapterFamily;
+  if (typeof record.id !== 'string' || typeof record.backend !== 'string') return undefined;
+  return input.resolveDispatch?.(record as unknown as ModelRecord)?.adapterFamily;
+}
+
+type ClaudeVersion = Pick<ParsedClaudeModelId, 'major' | 'minor'>;
+
+/** Negative when `a` is the older version; a bare major (`claude-opus-5`) is its `.0`. */
+const compareVersions = (a: ClaudeVersion, b: ClaudeVersion): number =>
+  a.major - b.major || (a.minor ?? 0) - (b.minor ?? 0);
+
+/** Sort order, newest first: the Claude version, then releaseDate, then id. */
+function newerModel(a: { id: string; releaseDate?: string }, b: { id: string; releaseDate?: string }): number {
+  const versionA = parseClaudeModelId(a.id);
+  const versionB = parseClaudeModelId(b.id);
+  const byVersion = versionA && versionB ? compareVersions(versionB, versionA) : 0;
+  if (byVersion !== 0) return byVersion;
+  const released = (b.releaseDate ?? '').localeCompare(a.releaseDate ?? '');
+  return released !== 0 ? released : a.id.localeCompare(b.id);
+}
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -894,7 +1106,9 @@ function contributorsFor(
   prior: readonly ICatalogContributor[] | undefined,
   // Groups this module computed a value for rather than took from a feed. Crediting the feed for a
   // number we invented would make the row claim the provider reported it.
-  derived?: ReadonlySet<FieldGroup>
+  derived?: ReadonlySet<FieldGroup>,
+  // Groups this run filled from a named origin (an inherited apiSurface names its sibling).
+  credited?: ReadonlyMap<FieldGroup, string>
 ): ICatalogContributor[] {
   const bySource = new Map<FieldGroup, string>();
   for (const key of contributed.keys()) {
@@ -906,14 +1120,17 @@ function contributorsFor(
   // A group re-claimed but not re-observed keeps the provenance of the row it
   // supersedes; crediting discovery would erase which feed the data came from.
   const carried = new Map((prior ?? []).map(entry => [entry.group, entry.source] as const));
-  return owned.map(group => ({
-    group,
-    source: derived?.has(group)
-      ? DISCOVERY_CONTRIBUTOR
-      : (bySource.get(group) ??
-        carried.get(group) ??
-        (group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR)),
-  }));
+  return owned.flatMap(group => {
+    const origin = credited?.get(group);
+    if (origin) return [{ group, source: origin }];
+    if (derived?.has(group)) return [{ group, source: DISCOVERY_CONTRIBUTOR }];
+    const source = bySource.get(group) ?? carried.get(group);
+    if (source) return [{ group, source }];
+    // An unknown `availability` supplier is left uncredited: the read path takes a discovery credit
+    // as proof discovery invented the disable, and without one it falls back to the reason's wording.
+    if (group === 'availability') return [];
+    return [{ group, source: group === 'dispatch' ? DISPATCH_SEED_CONTRIBUTOR : DISCOVERY_CONTRIBUTOR }];
+  });
 }
 
 /**
@@ -976,12 +1193,25 @@ export function claimedGroups(
  * agreement band, or a price row in force or an adapter price literal (both
  * arriving as `knownPricedModelIds`). A lone
  * aggregator is a flag, not a price; promotion words that denial separately.
+ * With `consensusPricedModelIds` the source-quote clauses defer to pricePlan's
+ * consensus, which also refuses a provider quote no mirror corroborates.
+ *
+ * A non-text model is billed from code catalogs, never from price rows, so its only
+ * trusted price is a literal in this build's static adapter tables. BFL and video ids
+ * are never in them, so those stay unpromoted under the `priced` policy.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,
-  knownPricedModelIds?: ReadonlySet<string>
+  type: string,
+  {
+    knownPricedModelIds,
+    consensusPricedModelIds,
+    buildPricedModelIds,
+  }: Pick<CatalogWriteInput, 'knownPricedModelIds' | 'consensusPricedModelIds' | 'buildPricedModelIds'>
 ): boolean {
+  if (type !== 'text') return buildPricedModelIds?.has(candidate.modelId) === true;
   if (knownPricedModelIds?.has(candidate.modelId)) return true;
+  if (consensusPricedModelIds) return consensusPricedModelIds.has(candidate.modelId);
   if (candidate.pricesByKind.some(entry => entry.kind === 'provider')) return true;
 
   const aggregated = candidate.pricesByKind.filter(entry => entry.kind === 'aggregator').map(entry => entry.price);

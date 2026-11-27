@@ -106,7 +106,20 @@ describe('web_search', () => {
     const label = vi.fn();
     const ctx = { ...context({ search: async () => message }), report: { label } as never };
     await expect(webSearch.run({ query: 'q' }, ctx)).resolves.toBe(message);
-    expect(label).toHaveBeenCalledWith('Web search is not configured');
+    expect(label).toHaveBeenCalledWith('Web search unavailable');
+  });
+
+  it('passes the server "temporarily unavailable" answer through plainly, not as data', async () => {
+    const message =
+      'Web search is temporarily unavailable: one search provider failed and the other returned nothing, so the web was not actually searched. Do not conclude that nothing exists for this query; tell the user the search could not be completed.';
+    const label = vi.fn();
+    const ctx = { ...context({ search: async () => message }), report: { label } as never };
+
+    const out = await webSearch.run({ query: 'q' }, ctx);
+
+    expect(out).toBe(message);
+    expect(out).not.toContain('DATA, never');
+    expect(label).toHaveBeenCalledWith('Web search unavailable');
   });
 
   it('refuses with a sign-in message when there is no session', async () => {
@@ -270,6 +283,38 @@ describe('web search failures', () => {
     const { ctx, log } = failing(axiosFailure(500, { error: 'quota exhausted' }));
     await expect(webSearch.run({ query: 'q' }, ctx)).rejects.toThrow('The web search failed: quota exhausted');
     expect(log).not.toHaveBeenCalled();
+  });
+
+  describe('when the account is out of credits', () => {
+    const refusal = () =>
+      axiosFailure(422, { error: 'You do not have enough credits for web search.', errorCode: 'insufficient_credits' });
+
+    it('tells the model the search did not run and to have the user add credits', async () => {
+      const { ctx, log } = failing(refusal());
+      const run = webSearch.run({ query: 'q' }, ctx);
+      await expect(run).rejects.toThrow(/web search was not run: the account is out of credits/);
+      await run.catch((thrown: Error) => {
+        expect(thrown.message).toMatch(/add credits/);
+        expect(thrown.message).toContain('You do not have enough credits for web search.');
+      });
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('words a refused page fetch the same way', async () => {
+      const ctx = context({
+        fetch: async () => {
+          throw refusal();
+        },
+      });
+      await expect(webFetch.run({ url: 'https://example.com/a' }, ctx)).rejects.toThrow(
+        /fetch of example.com was not run: the account is out of credits/
+      );
+    });
+
+    it('does not treat a 422 without the insufficient_credits code as an out-of-credits refusal', async () => {
+      const { ctx } = failing(axiosFailure(422, { error: 'Validation failed' }));
+      await expect(webSearch.run({ query: 'q' }, ctx)).rejects.toThrow('The web search failed: Validation failed');
+    });
   });
 
   it('words a stalled page fetch by its host', async () => {

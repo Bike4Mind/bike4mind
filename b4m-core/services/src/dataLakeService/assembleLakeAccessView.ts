@@ -9,8 +9,9 @@ import type {
   LakeAccessChannel,
   LakeAccessGrantView,
   LakeAccessHistoryEntry,
+  LakeAccessHistoryEntryWithAdminBypass,
   LakeAccessSurface,
-  LakeAccessView,
+  LakeAccessViewWithAdminBypass,
   LakeCandidateCapPressure,
   LakeGrantStatus,
   LakeSupersessionPressure,
@@ -105,6 +106,32 @@ export function aggregateAccessHistory(
   return Array.from(byPrincipal.values())
     .map(({ entry, surfaces }) => ({ ...entry, surfaces: Array.from(surfaces).sort() }))
     .sort((a, b) => b.lastAccessedAt.getTime() - a.lastAccessedAt.getTime());
+}
+/** Compute the additional bypass metric only with an explicit lake scope. */
+export function aggregateLakeAccessHistory(
+  events: Pick<
+    ILakeAccessEventDocument,
+    | 'principalKind'
+    | 'principalId'
+    | 'onBehalfOfUserId'
+    | 'surface'
+    | 'createdAt'
+    | 'servedNothing'
+    | 'adminBypassLakeIds'
+  >[],
+  lakeId: string
+): LakeAccessHistoryEntryWithAdminBypass[] {
+  if (typeof lakeId !== 'string' || !lakeId) throw new Error('A lake id is required to compute admin-bypass history');
+  const bypassByPrincipal = new Map<string, number>();
+  for (const event of events) {
+    if (!event.adminBypassLakeIds?.includes(lakeId)) continue;
+    const key = `${event.principalKind}:${event.principalId}`;
+    bypassByPrincipal.set(key, (bypassByPrincipal.get(key) ?? 0) + 1);
+  }
+  return aggregateAccessHistory(events).map(entry => ({
+    ...entry,
+    adminBypassReadCount: bypassByPrincipal.get(`${entry.principalKind}:${entry.principalId}`) ?? 0,
+  }));
 }
 
 /**
@@ -214,7 +241,7 @@ export async function assembleLakeAccessView(
     'id' | 'name' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement' | 'isPublic'
   >,
   { db, historyLimit = LAKE_ACCESS_VIEW_HISTORY_LIMIT, now = new Date() }: AssembleLakeAccessViewAdapters
-): Promise<LakeAccessView> {
+): Promise<LakeAccessViewWithAdminBypass> {
   // All-grants read (no activeAsOf): the view must render lapsed rows too, tagging each active/expired.
   // One event MORE than the window, purely as a probe: fetching exactly `historyLimit` cannot
   // distinguish "this lake has exactly that many reads" from "there are more behind the window", and
@@ -229,7 +256,7 @@ export async function assembleLakeAccessView(
   const historyTruncated = fetchedEvents.length > historyLimit;
   const events = historyTruncated ? fetchedEvents.slice(0, historyLimit) : fetchedEvents;
 
-  const history = aggregateAccessHistory(events);
+  const history = aggregateLakeAccessHistory(events, lake.id);
   // Same already-sliced window as the history above - a projection of rows already in hand, never
   // a second listByLake read.
   const candidateCapPressure = aggregateCandidateCapPressure(events);

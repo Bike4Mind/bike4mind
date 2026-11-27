@@ -166,4 +166,82 @@ describe('ReActAgent drainFeedback', () => {
     ]);
     expect(result.step).toMatchObject({ type: 'final_answer', content: 'fixed answer' });
   });
+
+  it('does not drain turn feedback after the last allowed iteration, when no request would carry it', async () => {
+    const { llm, callMessages } = createScriptedLlm([TOOL_CALL, TOOL_CALL]);
+    const agent = new ReActAgent(createContext(llm, { maxIterations: 2 }));
+    const drainFeedback = createDrain({ turn: ['first', 'too late'] });
+
+    await agent.run('edit the file', { drainFeedback });
+
+    expect(callMessages).toHaveLength(2);
+    expect(drainFeedback).toHaveBeenCalledOnce();
+    expect(String(lastMessage(callMessages[1]).content)).toMatch(/\n\nfirst$/);
+  });
+
+  it('does not drain turn feedback once the token ceiling ends the run', async () => {
+    const { llm, callMessages } = createScriptedLlm([TOOL_CALL, 'done']);
+    const agent = new ReActAgent(createContext(llm));
+    const drainFeedback = createDrain({ turn: ['too late'] });
+
+    await agent.run('edit the file', { drainFeedback, maxTotalTokens: 5 });
+
+    expect(callMessages).toHaveLength(1);
+    expect(drainFeedback).not.toHaveBeenCalled();
+  });
+
+  describe('after the run is cancelled', () => {
+    /** A tool that cancels the run while it executes, standing in for the user pressing Esc mid-tool. */
+    function abortingTool(controller: AbortController) {
+      return {
+        toolFn: async () => {
+          controller.abort();
+          return 'ok';
+        },
+        toolSchema: noopTool.toolSchema,
+      };
+    }
+
+    it('does not drain feedback into a run cancelled mid-tool, so queued input stays with the host', async () => {
+      const { llm, callMessages } = createScriptedLlm([TOOL_CALL, 'done']);
+      const controller = new AbortController();
+      const agent = new ReActAgent(createContext(llm, { tools: [abortingTool(controller)] }));
+      const drainFeedback = createDrain({ turn: ['steer'] });
+
+      const result = await agent.run('edit the file', { signal: controller.signal, drainFeedback });
+
+      expect(drainFeedback).not.toHaveBeenCalled();
+      expect(callMessages).toHaveLength(1);
+      expect(result.finalAnswer).toBe('Interrupted');
+    });
+
+    it('does not drain feedback into a runIteration() cancelled mid-tool', async () => {
+      const { llm } = createScriptedLlm([TOOL_CALL, 'done']);
+      const controller = new AbortController();
+      const agent = new ReActAgent(createContext(llm, { tools: [abortingTool(controller)] }));
+      const drainFeedback = createDrain({ turn: ['steer'] });
+
+      await agent.runIteration('edit the file', { signal: controller.signal, drainFeedback });
+
+      expect(drainFeedback).not.toHaveBeenCalled();
+    });
+
+    it('does not reopen a final answer once the run is cancelled', async () => {
+      const controller = new AbortController();
+      const { llm, callMessages } = createScriptedLlm(['answer']);
+      const complete = llm.complete.bind(llm);
+      llm.complete = async (...args) => {
+        await complete(...args);
+        controller.abort();
+      };
+      const agent = new ReActAgent(createContext(llm));
+      const drainFeedback = createDrain({ final: ['steer'] });
+
+      const result = await agent.run('hi', { signal: controller.signal, drainFeedback });
+
+      expect(drainFeedback).not.toHaveBeenCalled();
+      expect(callMessages).toHaveLength(1);
+      expect(result.finalAnswer).toBe('answer');
+    });
+  });
 });

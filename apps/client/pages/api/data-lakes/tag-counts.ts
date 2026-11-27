@@ -1,8 +1,12 @@
 import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
-import { resolveAccessibleLakes, queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from '@server/dataLakes';
-import { narrowAccessibleLakes } from '@server/dataLakes/narrowAccessibleLakes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import {
+  resolveAccessibleLakes,
+  queryDataLakeTagCounts,
+  queryScopedDataLakeTagCounts,
+} from '@bike4mind/server-utils/dataLakes/index';
+import { narrowAccessibleLakes } from '@bike4mind/server-utils/dataLakes/narrowAccessibleLakes';
 
 /**
  * GET /api/data-lakes/tag-counts

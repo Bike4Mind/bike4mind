@@ -7,6 +7,7 @@ import { RemoteSkillSource } from '@bike4mind/cli/skills';
 import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, type ChatServiceDeps } from './ChatService';
+import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { remoteSkillsKey } from './skills/accountSkills';
@@ -14,8 +15,16 @@ import { SkillCatalog, type RemoteSkills } from './skills/SkillCatalog';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
 // Skill authorization tests must not depend on the user's login-shell startup.
-vi.mock('./tools/userPath', () => ({ resolveUserPath: async () => process.env.PATH ?? '' }));
+vi.mock('./tools/userPath', async importOriginal => ({
+  ...(await importOriginal<typeof import('./tools/userPath')>()),
+  resolveLoginShellVariables: async () => ({}),
+  resolveUserPath: async () => process.env.PATH ?? '',
+}));
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -30,7 +39,7 @@ async function skill(project: string, name: string, lines: readonly string[]): P
 /**
  * The half the renderer never sees: what the MODEL is told about skills, and what it may call.
  *
- * Expansion itself is covered by expand.test.ts and the gate by SkillCatalog.test.ts; what is
+ * Expansion itself is covered by skills.test.ts and the gate by SkillCatalog.test.ts; what is
  * proven here is that the two reach a real turn - the list in the system prompt and the tool in
  * the declared set - and that neither carries a project the user has not trusted.
  */
@@ -41,6 +50,7 @@ describe('ChatService and skills', () => {
   let streams: PassThrough[];
   let project: string;
   let catalog: SkillCatalog;
+  let queue: MessageQueue;
   /** Mutated per test: the service holds this object, so a test can shrink a budget before it runs. */
   const turnLimits: NonNullable<ChatServiceDeps['turnLimits']> = {};
 
@@ -104,6 +114,7 @@ describe('ChatService and skills', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     post = calls;
+    queue = new MessageQueue(() => undefined);
     service = new ChatService({
       store: new SessionStore(join(base, 'sessions'), 'test-model'),
       access: { list: async () => [] } as unknown as AccessStore,
@@ -111,11 +122,13 @@ describe('ChatService and skills', () => {
       getApiClient: () =>
         ({
           get: vi.fn().mockResolvedValue({}),
+          post: vi.fn().mockResolvedValue({ result: 'Public page fixture.' }),
           getAxiosInstance: () => ({ post: calls }),
         }) as unknown as AuthenticatedApiClient,
       getEnvironmentUrl: () => 'http://localhost:3000',
       userInstructionsRoot: join(base, 'user'),
       skills: catalog,
+      queue,
       approvals: new ApprovalGate(),
       turnLimits,
       emit: event => emitted.push(event),
@@ -178,6 +191,37 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'hello', 1))).not.toContain('ship-it');
   });
 
+  it('does not trust a saved session rebound to a different project than the picker displayed', async () => {
+    const id = await session();
+    const displayed = await service.listSkills({ sessionId: id });
+    expect(displayed.untrustedProject).toBe(project);
+    const other = join(project, '..', 'other');
+    await mkdir(other);
+    await skill(other, 'other-skill', ['---', 'description: Other project.', '---', '', 'Other.']);
+    expect(
+      await service.updateProject({ sessionId: id, directory: other, branch: '', workspace: false })
+    ).toMatchObject({ ok: true });
+
+    const refreshed = await service.setProjectSkillsTrusted({ sessionId: id }, true, displayed.untrustedProject!);
+    expect(refreshed.untrustedProject).toBe(other);
+    expect((await catalog.state(project)).untrustedProject).toBe(project);
+    expect((await catalog.state(other)).untrustedProject).toBe(other);
+    const trusted = await service.setProjectSkillsTrusted({ sessionId: id }, true, other);
+    expect(trusted.untrustedProject).toBeNull();
+    expect(trusted.skills.some(entry => entry.name === 'other-skill')).toBe(true);
+    expect((await catalog.state(project)).untrustedProject).toBe(project);
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('requires the displayed draft root for trust and still supports revocation', async () => {
+    const scope = { draftDirectory: project };
+    expect((await service.setProjectSkillsTrusted(scope, true, join(project, 'wrong'))).untrustedProject).toBe(project);
+    expect((await catalog.state(project)).untrustedProject).toBe(project);
+    expect((await service.setProjectSkillsTrusted(scope, true, project)).untrustedProject).toBeNull();
+    expect((await service.setProjectSkillsTrusted(scope, false, project)).untrustedProject).toBe(project);
+    expect(post).not.toHaveBeenCalled();
+  });
+
   /** Runs `skill`, then `next`, in one reply, and returns the call that stopped to ask, if any. */
   async function afterSkill(skillName: string, next: { name: string; input: Record<string, unknown> }) {
     const id = await session();
@@ -207,86 +251,16 @@ describe('ChatService and skills', () => {
     return { asked, id };
   }
 
-  /** Runs one skill in a reply that then runs out of budget, continues it, and returns any call that asks. */
-  async function resumedAfterSkill(skillName: string) {
-    turnLimits.rounds = 1;
-    const id = await session();
-    await service.send(id, 'go');
-    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
-    streams[0].write(
-      frame({ type: 'tool_use', tools: [{ id: 'c1', name: 'skill', arguments: JSON.stringify({ skill: skillName }) }] })
-    );
-    streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(() => events.some(event => event.type === 'done' && event.stopReason === 'tool_turn_limit'), {
-      timeout: 5000,
-      interval: 5,
-    });
-
-    events.length = 0;
-    await expect(service.continueReply(id)).resolves.toMatchObject({ ok: true });
-    await vi.waitUntil(() => streams.length === 2, { timeout: 5000, interval: 5 });
-    streams[1].write(
-      frame({
-        type: 'tool_use',
-        tools: [
-          { id: 'c2', name: 'bash_execute', arguments: JSON.stringify({ command: 'node --version', cwd: project }) },
-        ],
-      })
-    );
-    streams[1].write(frame('[DONE]'));
-    await vi.waitUntil(
-      () =>
-        events.some(event => event.type === 'tool-end' && event.call.id === 'c2') ||
-        events.some(
-          event => event.type === 'tool-start' && event.call.id === 'c2' && event.call.status === 'awaiting-approval'
-        ),
-      { timeout: 5000, interval: 5 }
-    );
-    return events
-      .map(event => (event.type === 'tool-start' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
-  }
-
-  it('asks in "Approve for me" before an outbound call that follows an account skill', async () => {
-    const { asked } = await afterSkill('web-summary', {
+  it.each(['web-summary', 'ship-it'])('runs an outbound call after the %s skill in Approve for me', async name => {
+    await catalog.setTrusted(project, true);
+    const { asked } = await afterSkill(name, {
       name: 'web_fetch',
       input: { url: 'https://example.com/' },
     });
-
-    expect(asked?.name).toBe('web_fetch');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
-  });
-
-  it('does not count a skill from a project the user trusted as untrusted content', async () => {
-    await catalog.setTrusted(project, true);
-    const { asked, id } = await afterSkill('ship-it', {
-      name: 'bash_execute',
-      input: { command: 'node --version', cwd: project },
-    });
-
     expect(asked).toBeUndefined();
-    // The card was skipped because the call said its content is the user's own, and that flag
-    // has to survive into the stored turn: a resumed reply replays it. See the tests below.
-    const emitted = events
-      .map(event => (event.type === 'tool-end' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.id === 'c1');
-    expect(emitted?.ownContent).toBe(true);
-    const stored = (await service.getSession(id))?.messages
-      .flatMap(message => message.toolCalls ?? [])
-      .find(call => call.id === 'c1');
-    expect(stored?.ownContent).toBe(true);
-  });
-
-  it('does not start a resumed reply tainted when it replays a trusted project skill', async () => {
-    await catalog.setTrusted(project, true);
-    expect(await resumedAfterSkill('ship-it')).toBeUndefined();
-  });
-
-  it('keeps a resumed reply tainted when it replays an account skill', async () => {
-    const asked = await resumedAfterSkill('web-summary');
-
-    expect(asked?.name).toBe('bash_execute');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
+    expect(events.find(event => event.type === 'tool-end' && event.call.id === 'c2')).toMatchObject({
+      call: { status: 'done' },
+    });
   });
 
   it('keeps the system prompt byte-identical across turns, so the cached prefix holds', async () => {
@@ -298,7 +272,7 @@ describe('ChatService and skills', () => {
     expect(systemText(await turn(id, 'second', 2))).toBe(first);
   });
 
-  it('sends a /name Skill Market import wrapped as untrusted, and taints the reply it starts', async () => {
+  it('sends a /name Skill Market import wrapped as untrusted', async () => {
     const id = await session();
     await service.send(id, '/market-pick https://example.com/');
     await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
@@ -308,22 +282,6 @@ describe('ChatService and skills', () => {
     expect(sent).toContain('shared by a Skill Market author');
     expect(sent).toMatch(/<<<UNTRUSTED_SKILL_CONTENT [0-9a-f]{16}>>>\\nFetch https:\/\/example.com\//);
     expect((await service.getSession(id))?.messages[0]?.skill).toMatchObject({ name: 'market-pick', imported: true });
-
-    streams[0].write(
-      frame({
-        type: 'tool_use',
-        tools: [{ id: 'c1', name: 'web_fetch', arguments: JSON.stringify({ url: 'https://example.com/' }) }],
-      })
-    );
-    streams[0].write(frame('[DONE]'));
-    await vi.waitUntil(
-      () => events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
-      { timeout: 5000, interval: 5 }
-    );
-    const asked = events
-      .map(event => (event.type === 'tool-start' ? event.call : null))
-      .find((call): call is ChatToolCall => call?.status === 'awaiting-approval');
-    expect(asked?.approvalDetail).toContain('read content from a skill (skill)');
   });
 
   it('sends a skill named mid-message as typed, with a note telling the model to run it', async () => {
@@ -340,6 +298,26 @@ describe('ChatService and skills', () => {
       content: 'the build is green, so /ship-it please',
     });
     expect((await service.getSession(id))?.messages[0]?.skill).toBeUndefined();
+  });
+
+  it('takes a relay that starts with /name into a running turn as text, while a typed /name waits', async () => {
+    const id = await session();
+    await catalog.setTrusted(project, true);
+
+    await service.send(id, 'a long task');
+    await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 5000, interval: 5 });
+    queue.enqueueRelay(id, '/ship-it now', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+    queue.enqueue(id, '/ship-it');
+    streams[0].write(frame({ type: 'tool_use', tools: [{ id: 'step', name: 'no_such_tool', arguments: '{}' }] }));
+    streams[0].write(frame('[DONE]'));
+    await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 5000, interval: 5 });
+
+    const messages = post.mock.calls[1][1].messages as { role: string; content: unknown }[];
+    const sent = JSON.stringify(messages[messages.length - 1].content);
+    expect(sent).toContain('[Message from another conversation');
+    expect(sent).toContain('/ship-it now');
+    expect(sent).not.toContain('Ship.');
+    expect(queue.list(id).map(entry => entry.text)).toEqual(['/ship-it']);
   });
 
   it('refuses a user-only skill named mid-message instead of sending it as literal text', async () => {

@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { makeContributedStringSetting, registerContributedSettings, resetContributedSettings } from '@bike4mind/common';
 import { configureSecretsAtRest, encryptSecret, generateEncryptionKey, isEncrypted } from '@bike4mind/utils/security';
 import { setupMongoTest } from '../../../__test__/utils';
 import { AdminSettings, adminSettingsRepository } from './AdminSettingsModel';
@@ -46,6 +47,44 @@ describe('AdminSettingsRepository decrypt-on-read', () => {
     expect(typeof raw?.settingValue).toBe('string');
     expect(isEncrypted(raw?.settingValue as string)).toBe(true);
     expect(raw?.settingValue).not.toBe(plaintext);
+  });
+});
+
+describe('AdminSettingsRepository decrypt-on-read for contributed and unknown names', () => {
+  setupMongoTest();
+
+  beforeAll(() => {
+    configureSecretsAtRest(KEY);
+  });
+
+  afterEach(() => resetContributedSettings());
+
+  it('decrypts a registered sensitive contributed key on findOne', async () => {
+    registerContributedSettings([
+      makeContributedStringSetting({
+        key: 'extensionSecret',
+        name: 'Extension secret',
+        description: 'A contributed secret',
+        defaultValue: undefined,
+        isSensitive: true,
+      }),
+    ]);
+    await AdminSettings.create({ settingName: 'extensionSecret', settingValue: encryptSecret('plain-ext', KEY) });
+    const setting = await adminSettingsRepository.findOne({ settingName: 'extensionSecret' });
+    expect(setting?.settingValue).toBe('plain-ext');
+  });
+
+  it('decrypts an unregistered name holding ciphertext instead of returning it raw', async () => {
+    const ciphertext = encryptSecret('plain-unknown', KEY);
+    await AdminSettings.create({ settingName: 'unregisteredSecret', settingValue: ciphertext });
+    const setting = await adminSettingsRepository.findOne({ settingName: 'unregisteredSecret' });
+    expect(setting?.settingValue).toBe('plain-unknown');
+  });
+
+  it('passes an unregistered plaintext string through unchanged', async () => {
+    await AdminSettings.create({ settingName: 'unregisteredText', settingValue: 'just text' });
+    const setting = await adminSettingsRepository.findOne({ settingName: 'unregisteredText' });
+    expect(setting?.settingValue).toBe('just text');
   });
 });
 

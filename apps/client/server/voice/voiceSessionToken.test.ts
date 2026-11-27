@@ -24,3 +24,46 @@ describe('voice session token authOrigin claim', () => {
     expect(verifyVoiceSessionToken(legacy({})).authOrigin).toBe('internal');
   });
 });
+
+describe('voice session token apiKeyBillingOwnerType claim', () => {
+  it('round-trips the billing owner type of the minting key', () => {
+    const token = signVoiceSessionToken(
+      { ...claims, authOrigin: 'apiKey', apiKeyId: 'k1', apiKeyBillingOwnerType: 'Organization' },
+      60
+    );
+    expect(verifyVoiceSessionToken(token).apiKeyBillingOwnerType).toBe('Organization');
+  });
+
+  it('still verifies a token minted before the claim existed', () => {
+    const token = jwt.sign({ ...claims, apiKeyId: 'k1' }, 'test-secret', {
+      audience: 'voice-v2-llm-proxy',
+      expiresIn: 60,
+    });
+    expect(verifyVoiceSessionToken(token).apiKeyBillingOwnerType).toBeUndefined();
+  });
+
+  it('rejects an unknown billing owner type', () => {
+    const token = jwt.sign({ ...claims, apiKeyBillingOwnerType: 'bogus' }, 'test-secret', {
+      audience: 'voice-v2-llm-proxy',
+      expiresIn: 60,
+    });
+    expect(() => verifyVoiceSessionToken(token)).toThrow();
+  });
+});
+
+describe('voice session token trusted file-input admission', () => {
+  it.each([false, true])('preserves signed admission %s through verification', allowed => {
+    const token = signVoiceSessionToken(
+      { ...claims, authOrigin: 'apiKey', apiKeyId: 'k1', fileInputsAllowed: allowed },
+      60
+    );
+    expect(verifyVoiceSessionToken(token).fileInputsAllowed).toBe(allowed);
+  });
+  it('leaves a legacy key token without affirmative admission', () => {
+    const token = jwt.sign({ ...claims, apiKeyId: 'k1' }, 'test-secret', {
+      audience: 'voice-v2-llm-proxy',
+      expiresIn: 60,
+    });
+    expect(verifyVoiceSessionToken(token).fileInputsAllowed).toBeUndefined();
+  });
+});

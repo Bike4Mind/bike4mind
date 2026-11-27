@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { InternalServerError } from '@bike4mind/common';
+import { InternalServerError, hasAdminPermission } from '@bike4mind/common';
 import { MfaAttemptRejectedError } from '@bike4mind/auth/mfaService';
-import { SECRET_USER_FIELDS, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 
-const { mockFindWithSecrets, mockRecordFailed, mockVerifyMFASetup, mockIssueSession } = vi.hoisted(() => ({
-  mockFindWithSecrets: vi.fn(),
-  mockRecordFailed: vi.fn(),
-  mockVerifyMFASetup: vi.fn(),
-  mockIssueSession: vi.fn(),
-}));
+const { mockFindWithSecrets, mockRecordFailed, mockVerifyMFASetup, mockIssueSession, mockFindRoles } = vi.hoisted(
+  () => ({
+    mockFindWithSecrets: vi.fn(),
+    mockRecordFailed: vi.fn(),
+    mockVerifyMFASetup: vi.fn(),
+    mockIssueSession: vi.fn(),
+    mockFindRoles: vi.fn(),
+  })
+);
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -26,12 +29,15 @@ vi.mock('@bike4mind/database', () => ({
   authSessionRepository: {},
   realtimeConnectionRepository: {},
   passkeyCredentialRepository: { removeAllForUser: vi.fn() },
+  adminRoleRepository: { findByIds: (...a: unknown[]) => mockFindRoles(...a) },
 }));
 vi.mock('@bike4mind/services', async () => {
   const { isMfaAttemptRejectedError, recordFailedMfaAttempt } =
     await vi.importActual<typeof import('@bike4mind/auth/mfaService')>('@bike4mind/auth/mfaService');
   return {
     mfaService: {
+      userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+        !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
       verifyMFASetup: (...a: unknown[]) => mockVerifyMFASetup(...a),
       isUserLockedOut: (user: { mfa?: { lockedUntil?: Date } }) => !!user?.mfa?.lockedUntil,
       getLockoutTimeRemaining: () => 15,
@@ -78,13 +84,13 @@ describe('POST /api/auth/mfa/verify-setup - response boundary', () => {
   });
 
   it('strips secrets and undeclared fields from the user in the response', async () => {
-    mockVerifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1', ...SECRET_USER_FIELDS } });
+    mockVerifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1', ...secretUserFields() } });
     mockIssueSession.mockResolvedValue({ accessToken: 'tok' });
     const { res, promise } = run();
     await promise;
     const body = res._getJSONData();
     expect(body.accessToken).toBe('tok');
-    expectSelfUserStripped(body.user, body);
+    expectSelfUserStripped(body.user, body, 'u1');
   });
 
   it('surfaces a schema failure after the session is issued as a 500 without booking a failed MFA attempt', async () => {
@@ -133,5 +139,73 @@ describe('POST /api/auth/mfa/verify-setup - response boundary', () => {
     await promise;
     expect(res._getStatusCode()).toBe(400);
     expect(mockRecordFailed).toHaveBeenCalledWith('u1');
+  });
+});
+
+const ROLE_ID = 'a'.repeat(24);
+const DELETED_ROLE_ID = 'c'.repeat(24);
+
+describe('POST /api/auth/mfa/verify-setup - role-held admin permissions', () => {
+  const setupWith = async (adminRoleIds: unknown[]) => {
+    mockFindWithSecrets.mockResolvedValue({ id: 'u1', adminRoleIds, mfa: { totpEnabled: true } });
+    mockVerifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1', adminRoleIds } });
+    mockIssueSession.mockResolvedValue({ accessToken: 'tok' });
+    const { res, promise } = run();
+    await promise;
+    return res._getJSONData().user;
+  };
+
+  beforeEach(() => {
+    mockFindRoles.mockReset();
+    mockFindWithSecrets.mockReset().mockResolvedValue({ id: 'u1', mfa: { totpEnabled: true } });
+    mockVerifyMFASetup.mockReset();
+    mockIssueSession.mockReset();
+  });
+
+  it('counts a permission held only through a role', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+
+    const user = await setupWith([ROLE_ID]);
+
+    expect(user.roleAdminPermissions).toEqual(['support:read']);
+    expect(hasAdminPermission(user, 'support:read')).toBe(true);
+  });
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+    expect(hasAdminPermission(await setupWith([ROLE_ID]), 'support:read')).toBe(true);
+    mockFindRoles.mockClear();
+
+    const after = await setupWith([]);
+
+    expect(after.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(after, 'support:read')).toBe(false);
+    expect(mockFindRoles).not.toHaveBeenCalled();
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+
+    const user = await setupWith([DELETED_ROLE_ID, 'not-an-id']);
+
+    expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(user.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(user, 'support:read')).toBe(false);
+  });
+
+  it('mints no session and books no failed MFA attempt when the role lookup fails', async () => {
+    mockRecordFailed.mockReset();
+    mockFindRoles.mockRejectedValue(new Error('roles unavailable'));
+    mockFindWithSecrets.mockResolvedValue({ id: 'u1', adminRoleIds: [ROLE_ID], mfa: { totpEnabled: true } });
+    mockVerifyMFASetup.mockResolvedValue({ success: true, user: { id: 'u1', adminRoleIds: [ROLE_ID] } });
+    mockIssueSession.mockResolvedValue({ accessToken: 'tok' });
+    const { res, promise } = run();
+
+    await expect(promise).rejects.toThrow('roles unavailable');
+
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(mockVerifyMFASetup).not.toHaveBeenCalled();
+    expect(mockRecordFailed).not.toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
   });
 });

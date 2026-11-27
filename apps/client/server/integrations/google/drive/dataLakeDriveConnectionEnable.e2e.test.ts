@@ -13,7 +13,7 @@ import {
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: 'test-client-id', GOOGLE_CLIENT_SECRET: 'test-client-secret' },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (v?: string | null) => (v ? `enc(${v})` : null),
   decryptToken: (v?: string | null) => {
     if (!v) return null;
@@ -38,7 +38,10 @@ vi.mock('googleapis', () => ({
 }));
 
 import { DataLakeModel, OrgGoogleDriveConnection, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import { disableDriveConnectionForLake, enableDriveConnectionForLake } from './common';
+import {
+  disableDriveConnectionForLake,
+  enableDriveConnectionForLake,
+} from '@bike4mind/server-utils/integrations/google/drive/common';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

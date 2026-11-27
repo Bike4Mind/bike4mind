@@ -72,4 +72,12 @@ describe('toAnthropicContent', () => {
     ];
     expect(toAnthropicContent(content as never)).toEqual(content);
   });
+
+  it('drops Gemini thought_signature from a tool_use block and keeps the rest', () => {
+    expect(
+      toAnthropicContent([
+        { type: 'tool_use', id: 'call_1', name: 'web_search', input: { q: 'x' }, thought_signature: 'sig' },
+      ] as never)
+    ).toEqual([{ type: 'tool_use', id: 'call_1', name: 'web_search', input: { q: 'x' } }]);
+  });
 });

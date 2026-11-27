@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const updateDocumentSharing = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({ sharingService: { updateDocumentSharing } }));
-vi.mock('@bike4mind/database', () => ({ sessionRepository: {}, fabFileRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ sessionRepository: {}, fabFileRepository: {}, organizationRepository: {} }));
 
 import '@pages/api/[type]/[id]/updateSharing';
 

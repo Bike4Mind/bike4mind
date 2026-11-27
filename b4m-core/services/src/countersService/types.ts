@@ -29,6 +29,10 @@ export interface UserActivityMetrics {
     _id?: string;
     email: string;
     interactions: number;
+    /** Daily leaderboard only: ledger spend in the window. */
+    creditsSpent?: number;
+    /** Daily leaderboard only: the account is under 7 days old. */
+    isNew?: boolean;
     rankChange?: 'up' | 'down' | 'new' | 'same';
     lastWeekRank?: number | 'new' | '>#20';
   }>;

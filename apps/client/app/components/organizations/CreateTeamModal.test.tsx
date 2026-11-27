@@ -8,6 +8,11 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import CreateTeamModal, { useCreateTeamModal } from './CreateTeamModal';
 
+// CreateTeamModal reads NODE_ENV once at import; a file that ran earlier in the same worker can leave it as 'development'.
+vi.hoisted(() => {
+  process.env.NODE_ENV = 'test';
+});
+
 const mutateAsync = vi.fn();
 
 vi.mock('@client/app/hooks/data/subscriptions', () => ({

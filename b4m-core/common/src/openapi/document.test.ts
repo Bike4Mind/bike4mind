@@ -4,15 +4,21 @@ import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { registerContracts } from './operations';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
-import { API_KEY_RATE_LIMIT_DEFAULTS, ApiKeyScope } from '../types/entities/UserApiKeyTypes';
-import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
-import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import {
+  API_KEY_RATE_LIMIT_DEFAULTS,
+  ApiKeyScope,
+  PUBLIC_DOC_API_KEY_SCOPES,
+  UNDOCUMENTED_API_KEY_SCOPES,
+} from '../types/entities/UserApiKeyTypes';
+import { CONTRACTS, chatContract, getMeContract, synthesizeSpeechContract } from '../api-contract';
+import { QUEST_OUTCOME_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
 const completions = doc.paths['/api/ai/v1/completions'].post;
 const tools = doc.paths['/api/ai/v1/tools'].post;
 const chat = doc.paths['/api/chat'].post;
+const me = doc.paths['/api/v1/me'].get;
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
 describe('buildOpenApiDocument', () => {
@@ -77,6 +83,11 @@ describe('buildOpenApiDocument', () => {
     expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
+  it('publishes the completions message minimum from the shared request schema', () => {
+    const requestSchema = doc.components.schemas.createCompletionRequest;
+    expect(requestSchema.properties.messages.minItems).toBe(1);
+  });
+
   it('provides request AND response examples for both operations', () => {
     expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
     expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();
@@ -114,29 +125,50 @@ describe('buildOpenApiDocument', () => {
   });
 
   it('auto-injects 401 (and 403 for scoped ops) on authenticated endpoints, streaming included', () => {
-    // Guards the central auth-response injection in registerContract. chatContract
-    // declares neither 401 nor 403 itself, so both come purely from the injection;
-    // dropping it silently narrows /api/chat's published spec and generated SDKs
+    // Guards the central auth-response injection in registerContract. getMeContract
+    // is scoped and declares neither 401 nor 403 itself, so both come purely from the
+    // injection; dropping it silently narrows the published spec and generated SDKs
     // stop modelling the missing-credential / under-scoped-key paths.
-    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(getMeContract.scopes?.length).toBeGreaterThan(0);
+    expect(getMeContract.responses).not.toHaveProperty('401');
+    expect(getMeContract.responses).not.toHaveProperty('403');
+    expect(me.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     // The scope 403 extends the envelope with the route's required scopes (apiKeyAuth.ts).
-    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
-    // Completions authenticates before it opens its stream, so it gets the same pair.
+    expect(me.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+    // Chat and completions declare their own 403 (it also carries spend_frozen), which
+    // replaces the injected one; their 401 is still injected. Completions
+    // authenticates before it opens its stream, so the streaming op gets it too.
+    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(completions.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(completions.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+  });
+
+  it('publishes the organization policy and spend freeze refusals on the chat and completions 403s', () => {
+    const errorCodes = (op: string) => doc.components.schemas[op].properties.errorCode.enum;
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('sendChatMessageResponse403'));
+    expect(errorCodes('sendChatMessageResponse403')).toEqual(
+      expect.arrayContaining(['account_suspended', 'org_model_not_allowed', 'org_tool_not_allowed', 'spend_frozen'])
+    );
+    expect(completions.responses['403'].content['application/json'].schema).toEqual(ref('createCompletionResponse403'));
+    expect(errorCodes('createCompletionResponse403')).toEqual(
+      expect.arrayContaining(['account_suspended', 'org_model_not_allowed', 'spend_frozen'])
+    );
   });
 
   it('documents every pre-stream completions failure as a JSON error with a real status', () => {
     const json = (status: string) => completions.responses[status].content['application/json'].schema;
     expect(json('400')).toEqual(ref('createCompletionResponse400'));
     expect(doc.components.schemas.createCompletionResponse400.properties.errorCode.enum).toEqual([
+      'invalid_request',
       'unknown_model',
+      'assistant_prefill_unsupported',
       'tool_search_unsupported',
       'all_tools_deferred',
       'deferred_tool_cache_control',
       'unknown_tool_reference',
       'tool_changes_unsupported',
       'invalid_tool_change',
+      'end_user_id_not_allowed',
+      'invalid_end_user_id',
     ]);
     expect(json('413')).toEqual(ref('ErrorResponse'));
     expect(json('422')).toEqual(ref('createCompletionResponse422'));
@@ -168,6 +200,18 @@ describe('buildOpenApiDocument', () => {
       // Answered ahead of apiKeyRateLimit, so the limiter never sets its headers on it.
       expect(op.responses['405'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     }
+  });
+
+  it('auto-injects the client-version 426 on every operation, streaming and Lambda-served included', () => {
+    // Every transport runs the gate: nextRouteForContract's prelude, defineLambdaRoute, and the
+    // completions route in chatCompletion/external/sseRoute.ts.
+    for (const op of [chat, completions, tools]) {
+      expect(op.responses['426'].content['application/json'].schema).toEqual(ref('UpgradeRequiredResponse'));
+    }
+    const component = doc.components.schemas.UpgradeRequiredResponse;
+    expect(component.required).toEqual(
+      expect.arrayContaining(['error', 'errorCode', 'client_name', 'minimum_version'])
+    );
   });
 
   it('documents OR semantics for required scopes in info.description', () => {
@@ -245,8 +289,27 @@ describe('buildOpenApiDocument', () => {
   it('publishes the real ApiKeyScope vocabulary in info.description', () => {
     expect(doc.info.description).toContain(ApiKeyScope.AI_CHAT);
     expect(doc.info.description).toContain(ApiKeyScope.READ_FILES);
+    const section = doc.info.description.split('\n## Scopes\n')[1].split('\n## ')[0];
+    const listed = section
+      .split('\n')
+      .filter((line: string) => line.startsWith('- '))
+      .map((line: string) => line.slice(3, -1));
+    expect(listed).toEqual([...PUBLIC_DOC_API_KEY_SCOPES]);
+    for (const scope of UNDOCUMENTED_API_KEY_SCOPES) expect(doc.info.description).not.toContain(`\`${scope}\``);
     // The aspirational vocab from the issue must NOT leak in (Decision 2).
     expect(doc.info.description).not.toContain('ai.completions:write');
+  });
+
+  it('publishes every scope any operation requires', () => {
+    const required = new Set<string>();
+    for (const item of Object.values(doc.paths)) {
+      for (const op of Object.values(item)) {
+        for (const scope of op?.['x-required-scopes'] ?? []) required.add(scope);
+      }
+    }
+    expect(required.size).toBeGreaterThan(0);
+    const published = new Set<string>(PUBLIC_DOC_API_KEY_SCOPES);
+    expect([...required].filter(scope => !published.has(scope))).toEqual([]);
   });
 
   it('quotes the enforced rate-limit defaults and every published rate-limit header in info.description', () => {
@@ -288,8 +351,24 @@ describe('buildOpenApiDocument', () => {
       .filter(([, item]) => Object.values(item).some(op => op.responses && '202' in op.responses))
       .map(([path]) => path);
     expect(queued.length).toBeGreaterThan(0);
+    // Sync audio routes whose 202 (a clip that outlasted the request, opt-in via `Prefer: respond-async`) has no poll
+    // route yet; named instead, until the GET routes land in a later step.
+    const unpollable = new Set(['/api/ai/tts', '/api/ai/sound-effects']);
+    // A 202 that starts work on another resource is polled there, so both routes must be named.
+    // A run is polled at a path whose own id segment is named, because the lake already owns `{id}`.
+    const polledElsewhere: Record<string, string> = {
+      '/api/v1/briefs/{id}/decisions/{decisionId}/reply': '/api/v1/agent-executions/{id}',
+      '/api/v1/briefs/follow-ups': '/api/v1/briefs/{id}',
+      '/api/v1/data-lakes/{id}/research/runs': '/api/v1/data-lakes/{id}/research/runs/{run_id}',
+      '/api/v1/functions/{id}/invoke': '/api/v1/functions/calls/{call_id}',
+    };
     for (const path of queued) {
-      expect(asyncJobs).toContain(`GET ${path}/{id}`);
+      if (path in polledElsewhere) {
+        expect(asyncJobs).toContain(`POST ${path}`);
+        expect(asyncJobs).toContain(`GET ${polledElsewhere[path]}`);
+        continue;
+      }
+      expect(asyncJobs).toContain(unpollable.has(path) ? `POST ${path}` : `GET ${path}/{id}`);
     }
   });
 
@@ -388,11 +467,13 @@ describe('buildOpenApiDocument', () => {
   });
 
   it('excludes rate-limit headers from the INJECTED 401/403 but keeps them on a contract-declared 401', () => {
-    // chat declares neither status: both come from registerContract's auth injection
+    // getMe declares neither status: both come from registerContract's auth injection
     // and mean "apiKeyAuth rejected the credential", which happens before
-    // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers.
-    expect(chat.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
-    expect(chat.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers,
+    // even though the route's own 200 does.
+    expect(me.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeDefined();
+    expect(me.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(me.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     // tts declares its OWN 401 (provider_not_configured), thrown from the handler
     // long after the middleware set all six. A status-keyed exclusion would have
     // published it as header-less, which is the same spec-vs-runtime drift as the
@@ -414,16 +495,16 @@ describe('buildOpenApiDocument', () => {
 
     const component = doc.components.schemas.sendChatMessage200PollResult;
     expect(component.properties.type.enum).toContain('error');
-    // The same vocabulary the synchronous 422s classify with, not a chat-local one.
-    expect(component.properties.errorCode.enum).toEqual([...QUEST_ERROR_CODES]);
+    // The stored quest-outcome vocabulary includes billing failures and moderation refusals.
+    expect(component.properties.errorCode.enum).toEqual([...QUEST_OUTCOME_ERROR_CODES]);
     expect(doc.components.schemas.generateMusicResponse422.properties.errorCode.enum).toContain('insufficient_credits');
   });
 
   it('tells a caller that type, not errorCode, is the failure signal', () => {
     // The failure text lands in `reply`, the same field an answer uses, so the
     // instruction is the difference between a handled failure and a consumed one.
-    // errorCode is reachable for only ONE failure class (billing), so the contract
-    // must say `type` is checked first and `errorCode`'s absence is not success.
+    // errorCode refines billing failures and moderation refusals; other failures remain unclassified.
+    // The contract must say `type` is checked first and `errorCode`'s absence is not success.
     expect(chat.description).toContain('insufficient_credits');
     expect(chat.description).toMatch(/type.*is the failure signal/i);
     expect(chat.responses['200'].description).toMatch(/errorCode/);

@@ -12,7 +12,7 @@ This is the sequence that avoids that, and the mechanism that supports it.
 
 1. **Add the enum value** to `ApiKeyScope`
    (`b4m-core/common/src/types/entities/UserApiKeyTypes.ts`).
-2. **Register it in a mint catalog** (`apps/client/app/constants/apiKeyScopes.ts`).
+2. **Register it in a mint catalog** (`packages/server-utils/src/app/constants/apiKeyScopes.ts`).
    An enum value that is in no catalog is unmintable, so no key can ever hold it and
    every route requiring it is permanently 403. `apiKeyScopes.test.ts` fails the build
    on an unregistered value; the three homes are `USER_API_KEY_SCOPES` (self-service),
@@ -26,22 +26,54 @@ land on their own: a scope nobody requires yet changes no request's outcome.
 
 Two generated/declared files trail step 1 and are gated in CI, not locally:
 
-- `apps/client/public/openapi.json` is committed, and its `info.description` publishes
-  the enum verbatim (`ALL_API_KEY_SCOPES`). Adding a value drifts the snapshot - run
-  `pnpm turbo:openapi:generate` and commit the result, or the `OpenAPI Spec` job fails.
+- `apps/client/public/openapi.json` is committed, and its `info.description` publishes the documented
+  scopes (`PUBLIC_DOC_API_KEY_SCOPES`, the enum minus `UNDOCUMENTED_API_KEY_SCOPES`). Adding a value drifts the
+  snapshot - run `pnpm turbo:openapi:generate` and commit the result, or the `OpenAPI Spec` job fails. Classify
+  the new scope as published or undocumented too: the test in `UserApiKeyTypes.test.ts` fails until you do.
 - `infra/deploy-contract.json` must name any `process.env` that `infra/` reads at deploy
   time. Threading a new lever through `infra/web.ts` alone fails `Core Build`.
+
+## Scopes contributed by an overlay package
+
+An overlay package can add self-service scopes without touching the enum or the catalog, by declaring literal `b4mContributions.apiKeyScopes` data in its `package.json`:
+
+```json
+{
+  "b4mContributions": {
+    "apiKeyScopes": [
+      {
+        "value": "example:read",
+        "label": "Read example data",
+        "description": "Read-only access to the example endpoints.",
+        "endpoints": ["GET /api/example/items"],
+        "requiredEntitlement": "example:pro"
+      }
+    ]
+  }
+}
+```
+
+Run `pnpm --filter @bike4mind/client codegen` after changing the declaration. The generator (`apps/client/scripts/generate-premium-glue.mjs`) validates the rows and writes `packages/server-utils/src/premium-generated/premiumApiKeyScopes.generated.ts`, which `constants/apiKeyScopes.ts` merges into the catalog, the route gate's known set and both mint routes. With no overlay the list is empty. The contract type is `PremiumApiKeyScope` in `@bike4mind/common` (re-exported from `apps/client/app/premiumContract.ts`).
+
+- `value` is `<resource>:<action>`, lowercase, at most 100 characters, matching `^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$`. Wildcard actions (`<res>:*`) are built-in only.
+- The `admin`, `cc-bridge`, `embed` and `datalake` resources are reserved. A value that collides with a built-in scope is dropped at load time; built-ins always win.
+- `label` is at most 64 characters, `description` at most 200; `endpoints` is at most 50 `METHOD /path` lines, shown in the scope docs only and never used for routing. Unknown fields fail codegen.
+- `requiredEntitlement` (optional, a lowercase entitlement key) limits who is offered and may mint the scope to users holding that key, **plus every admin and developer-tagged user**. A route serving a paid feature must check the entitlement itself rather than trusting the scope alone.
+- A contributed scope is never confined and always self-mintable; the contract has no field for either.
+- Two packages giving one value different rows fail codegen; an identical repeat collapses. Rows rejected at load time are logged as `[api-keys] dropped contributed scope rows`.
+
+Steps 3 and 4 above apply unchanged: declare `requiredScopes` with the contributed value and stage the gate before enforcing it.
 
 ## Confined scopes (default-deny)
 
 Three scopes -- `embed:chat`, `cc-bridge:connect` and `overwatch-ingest:write` -- are
-*confined*: each exists to authorize exactly one flow, so a key carrying any of them is
+_confined_: each exists to authorize exactly one flow, so a key carrying any of them is
 rejected on every `baseApi` route that does not explicitly name it, rather than falling
 through the opt-in default above. `CONFINED_SCOPES` / `decideScopeGate`
-(`apps/client/server/middlewares/apiKeyScopeGate.ts`) is where that denial lives.
+(`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`) is where that denial lives.
 
 For a confined scope, step 3 is neither optional nor local. Declaring `requiredScopes`
-on *every* route the credential is expected to reach is mandatory, **including routes
+on _every_ route the credential is expected to reach is mandatory, **including routes
 that are not in this repository** -- a downstream deployment can mount additional route
 files into `pages/api` through the same `baseApi` at build time, and one that omits
 `requiredScopes` will 403 a legitimate confined key the minute the gate ships. There is
@@ -51,7 +83,7 @@ missed route is a hard outage with no backfill, only a revert.
 
 The sequence is therefore: land the `requiredScopes` declaration on all routes the
 credential touches -- in this repo and any downstream one, where the declaration is a
-no-op against a `main` that already carries the enum value -- *before* the confinement
+no-op against a `main` that already carries the enum value -- _before_ the confinement
 gate deploys. A route that also serves ordinary session or personal-key callers cannot
 declare the scope file-wide (`requiredScopes` is per-`baseApi` chain, not per-method, so
 it would newly deny those callers): split the methods, or check the scope in the handler.
@@ -63,7 +95,7 @@ broad opt-in scopes only.
 ## Splitting read from spend
 
 Where a surface both reads state and commissions billable work, give it two scopes,
-not one. A key that only reads is then *structurally* unable to spend - which is what
+not one. A key that only reads is then _structurally_ unable to spend - which is what
 lets an agent hold one. `optihashi:read` / `optihashi:compute` is the reference pair;
 `datalake:read` / `datalake:query` (semantic-search, rlm-answer) is the same split for
 data lakes, and `bob:read` / `bob:run` (site reads, comparisons and re-checks) for Bob.
@@ -85,10 +117,10 @@ write does not imply read) declare the read-or-write gate (`FILES_READ_OR_WRITE_
 or a write-only key is refused at the door before its write assert runs. Assert at the top
 of each handler -
 `assertDataLakeWriteScope` / `assertDataLakeShareScope`
-(`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
-`assertFilesReadScope` / `assertFilesWriteScope` (`apps/client/server/files/fileScopes.ts`)
+(`packages/server-utils/src/dataLakes/dataLakeScopes.ts`) for data lakes,
+`assertFilesReadScope` / `assertFilesWriteScope` (`packages/server-utils/src/files/fileScopes.ts`)
 for the `/api/files` doors. Build a new family's asserts on `assertApiKeyScope`
-(`apps/client/server/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
+(`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
 an assert in this family has to follow:
 
 - **Let a caller with no `apiKeyInfo` through.** That is a JWT/browser caller, for whom
@@ -111,6 +143,45 @@ is in its grace period only while EVERY scope it accepts is staged, and `admin:*
 never be staged - one mention leaves the family with no grace period at all. Admin keys
 calling those routes are part of the same re-mint list as any other key.
 
+## Grandfathering legacy keys (preferred for routes keys already reach)
+
+Give the route its scopes with `grandfatherLegacyKeys: true` next to `requiredScopes`:
+
+```ts
+baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true });
+```
+
+A legacy key (see `LEGACY_API_KEY_WINDOW` and `isLegacyApiKey` in
+`packages/server-utils/src/middlewares/apiKeyScopeGate.ts`) that misses the scopes is still
+admitted, and the pass logs `API key scope check missed but legacy key grandfathered -
+allowing` with its `keyId`, at most once per key and route per hour in each server process.
+That log is the list of owners who still need to create a scoped
+key. A key created after the cutoff, a confined key, and a key missing an `alsoRequiredScopes`
+entry are refused as usual. A method narrowed in the handler passes the same option:
+`assertApiKeyScope(req, [scope], message, { grandfatherLegacyKeys: true })`.
+
+Rules:
+
+- **Only on a route keys could reach before it declared scopes.** A route that already enforced
+  a scope must never opt in: old keys would gain access they do not have today.
+- **No re-mint and no preflight gate before merging.** Grandfathering is per route, so unlike
+  `API_KEY_SCOPE_STAGING` it never re-opens other routes that enforce the same scope, and it
+  works for scopes that already enforce elsewhere. Run the preflight anyway to see who relies on
+  the window.
+- **The window:** only keys created before `cutoff` (2026-11-26) are legacy; a key minted after
+  it holds exactly the scopes it was minted with. A route that gains scopes after the cutoff
+  therefore cannot rely on grandfathering for keys minted since: stage its scope instead (see
+  below). Once `endsAt` is set and announced to the owners of legacy keys, grandfathering stops
+  at that instant with no deploy. Rotating a key keeps its creation date, so a rotated key keeps
+  its status.
+- **Who still has to move:** `getApiKeyLegacyStatus` (same file) is what owners and admins see.
+  It is `isLegacyApiKey` minus confined and exchange keys, which the gate never grandfathers.
+  The owner key list (`GET /api/user-api-keys`) returns `legacy` and `legacyEndsAt` per key, and
+  Profile > API Keys badges a legacy key with its end date once `endsAt` is set (no badge before
+  that, as there is no date to show). Admin > Legacy API keys
+  (`GET /api/admin/api-keys/legacy`) pages through recently used legacy keys with their owners'
+  emails, which is the audience for the end-date announcement.
+
 ## Staging the gate
 
 `API_KEY_SCOPE_STAGING` is a comma-separated list of scopes whose gates are still
@@ -128,7 +199,7 @@ logs `API key scope check missed but staged - allowing` with the key id, the hel
 scopes, and the endpoint. Every hit is a production key that will start failing the
 day the entry is removed.
 
-That log is a *confirmation* of the backlog, not the way to discover it. Discovery by
+That log is a _confirmation_ of the backlog, not the way to discover it. Discovery by
 traffic is incomplete on its own: a key that fires monthly never appears in a
 two-week staging window, so a quiet log cannot distinguish "everyone re-minted" from
 "the quarterly job has not run yet". Size the population up front with the
@@ -172,7 +243,7 @@ Two things it deliberately will not do:
   reading as "that gate is staged".
 
 Staging is all-or-nothing per route. `requiredScopes` is OR semantics, so a route is
-in its grace period only while *every* alternative it accepts is staged - if even one
+in its grace period only while _every_ alternative it accepts is staged - if even one
 is already enforced, a key that legitimately needs the route could have been minted
 with it, and holding none of them is a real miss.
 
@@ -187,7 +258,7 @@ Unset (the default) means every declared gate enforces. Enforcement is the defau
 state; staging is the temporary one.
 
 Staging applies to the `baseApi` gate only. The other scope check - `verifyApiKey`
-(`apps/client/server/cli/auth.ts`), behind public contract routes, the cc-bridge, and
+(`packages/server-utils/src/cli/auth.ts`), behind public contract routes, the cc-bridge, and
 embed keys - always enforces. It needs no staging: every gate it runs is bound to a
 credential minted with that exact scope, or to an endpoint that shipped with its scope
 from the start, so nothing there was ever grandfathered. A contract route declaring a
@@ -205,7 +276,7 @@ to a question it cannot see.
 
 1. Land the enum value and the catalog registration.
 2. Run the **scope preflight** against the routes you are about to gate, at the full
-   90-day window. If it returns no keys *and* the run met both preconditions above -
+   90-day window. If it returns no keys _and_ the run met both preconditions above -
    full 90-day window, and a prefix under the `baseApi` gate - skip to step 6 and
    enforce in one step: there is nobody to grandfather, and staging a gate with no
    population to protect just means it never enforces. An empty result that misses
@@ -272,9 +343,9 @@ never once enforced.
 
 ## Troubleshooting
 
-| Symptom | Cause |
-|---|---|
-| A key with the right scope still gets 403 | The feature's entitlement check refused, not the scope gate. Scopes authorize; they do not entitle. Look for the feature's own gate. |
-| A new scope never appears in the New-Key modal | It is registered in `ADMIN_ONLY_API_KEY_SCOPES` or `NON_MINTABLE_API_KEY_SCOPES`, or it is in `DEDICATED_FLOW_SCOPES` (which the generic modals filter out). |
-| Staging seems to have no effect | Check the log for `Ignoring unstageable or unknown API key scopes in staging list`, and confirm every scope the route accepts is listed - one unstaged alternative enforces the whole gate. |
-| The browser UI breaks after declaring `requiredScopes` | It should not: the gate runs only for requests authenticated by an API key, never for JWT/session callers. A UI break points at something other than the scope gate. |
+| Symptom                                                | Cause                                                                                                                                                                                       |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A key with the right scope still gets 403              | The feature's entitlement check refused, not the scope gate. Scopes authorize; they do not entitle. Look for the feature's own gate.                                                        |
+| A new scope never appears in the New-Key modal         | It is registered in `ADMIN_ONLY_API_KEY_SCOPES` or `NON_MINTABLE_API_KEY_SCOPES`, or it is in `DEDICATED_FLOW_SCOPES` (which the generic modals filter out).                                |
+| Staging seems to have no effect                        | Check the log for `Ignoring unstageable or unknown API key scopes in staging list`, and confirm every scope the route accepts is listed - one unstaged alternative enforces the whole gate. |
+| The browser UI breaks after declaring `requiredScopes` | It should not: the gate runs only for requests authenticated by an API key, never for JWT/session callers. A UI break points at something other than the scope gate.                        |

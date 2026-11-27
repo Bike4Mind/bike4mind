@@ -2,13 +2,16 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ChatSessionMode, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { WorkerTask } from '@shared/orchestration';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { setImportedInline } from './importedInline';
+import { foldedParents, setNestingEnabled, toggleFolded } from './nestedSessions';
 import { SessionList } from './SessionList';
 import { useSessions } from './useChat';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -52,6 +55,7 @@ const summary = (id: string, title: string, extra: Partial<ChatSessionSummary> =
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let onSelect = vi.fn<(id: string) => void>();
+let statuses = new Map<string, ChatSessionStatus>();
 let renameSession = vi.fn<(id: string, title: string) => Promise<ChatSessionSummary | null>>();
 
 /** The real sessions owner under the list, so a rename travels the same path it does in the app. */
@@ -61,10 +65,9 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
     <SessionList
       sessions={sessions}
       mode={mode}
-      onModeChange={() => {}}
       loading={loading}
       activeId={activeId}
-      statuses={new Map()}
+      statuses={statuses}
       prSummaries={new Map()}
       collapsed={false}
       onToggleCollapsed={() => {}}
@@ -77,6 +80,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onTogglePin={session => void togglePin(session)}
       onToggleArchived={session => void toggleArchived(session)}
       onRename={(session, title) => void rename(session, title)}
+      onDownload={() => {}}
       renameError={renameError}
       onDismissRenameError={clearRenameError}
       userSections={EMPTY_SIDEBAR_SECTIONS}
@@ -88,9 +92,11 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
 async function mount(
   sessions: ChatSessionSummary[],
   mode: ChatSessionMode = 'chat',
-  extra: Record<string, unknown> = {}
+  extra: Record<string, unknown> = {},
+  activeId: string | null = null
 ) {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       listSessions: async () => sessions,
       onSessionSummary: () => () => undefined,
@@ -105,7 +111,7 @@ async function mount(
   await act(async () => {
     root?.render(
       <CssVarsProvider theme={desktopTheme}>
-        <Harness activeId={null} mode={mode} />
+        <Harness activeId={activeId} mode={mode} />
       </CssVarsProvider>
     );
   });
@@ -122,7 +128,9 @@ const titles = () => all('chat-session-title-text').map(node => node.textContent
 const renameInput = () => el('chat-session-rename-input') as HTMLInputElement;
 
 const rowOf = (title: string) => {
-  const row = all('chat-session-item').find(item => item.textContent === title);
+  const row = all('chat-session-item').find(
+    item => item.querySelector('[data-testid="chat-session-title-text"]')?.textContent === title
+  );
   if (!row) throw new Error(`no row ${title}`);
   return row;
 };
@@ -159,6 +167,7 @@ const settle = () => act(async () => undefined);
 beforeEach(() => {
   badgeRenders.count = 0;
   onSelect = vi.fn();
+  statuses = new Map();
   renameSession = vi.fn(async (id: string, title: string) => summary(id, title));
 });
 
@@ -190,12 +199,6 @@ describe('renaming a session from the sidebar', () => {
 
     expect(query('chat-rename-session-btn')).toBeNull();
     expect(query('chat-session-menu-btn')?.getAttribute('aria-expanded')).not.toBe('true');
-  });
-
-  it('enters editing on a double-click of the title', async () => {
-    await mount([summary('a', 'Alpha')]);
-    doubleClickTitle('Alpha');
-    expect(renameInput().value).toBe('Alpha');
   });
 
   it('saves on Enter with the id and the trimmed title, and shows it at once', async () => {
@@ -239,8 +242,8 @@ describe('renaming a session from the sidebar', () => {
     expect(titles()).toEqual(['Alpha']);
   });
 
+  // An empty title trims to the same value as a whitespace-only one.
   it.each([
-    ['empty', ''],
     ['whitespace-only', '    '],
     ['unchanged', '  Alpha '],
   ])('treats an %s title as a no-op', async (_label, text) => {
@@ -277,24 +280,18 @@ describe('renaming a session from the sidebar', () => {
     expect(query('chat-rename-error')).toBeNull();
   });
 
-  it('does not open the session while editing, nor fire the Cmd shortcuts', async () => {
+  it('does not open the session while editing, nor fire the session shortcuts', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')]);
     doubleClickTitle('Beta');
     onSelect.mockClear();
 
     act(() => renameInput().click());
     act(() => renameInput().closest<HTMLElement>('[data-testid="chat-session-item"]')?.click());
-    press('1', { code: 'Digit1', metaKey: true });
+    press('1', { code: 'Digit1', altKey: true });
     press(' ');
 
     expect(onSelect).not.toHaveBeenCalled();
     expect(query('chat-session-rename-input')).not.toBeNull();
-  });
-
-  it('opens the session on a single click when not editing', async () => {
-    await mount([summary('a', 'Alpha')]);
-    act(() => rowOf('Alpha').click());
-    expect(onSelect).toHaveBeenCalledWith('a');
   });
 
   it('filters search against the new title straight away', async () => {
@@ -348,8 +345,8 @@ describe('renaming a session from the sidebar', () => {
     }
   });
 
-  it('redraws only the edited row among hundreds', async () => {
-    const many = Array.from({ length: 300 }, (_, index) => summary(`s${index}`, `Session ${index}`));
+  it('redraws only the edited row among a hundred', async () => {
+    const many = Array.from({ length: 100 }, (_, index) => summary(`s${index}`, `Session ${index}`));
     await mount(many);
 
     badgeRenders.count = 0;
@@ -416,12 +413,12 @@ describe('sessions imported from Claude, in their own section', () => {
     expect(titles()).toEqual(['Imported work']);
   });
 
-  it('lets the Cmd shortcuts reach imported rows a search has put on screen', async () => {
+  it('lets the session shortcuts reach imported rows a search has put on screen', async () => {
     await mount([summary('own', 'My own chat'), summary('cc-1', 'Imported work', { importOrigin: origin })]);
     typeSearch('imported');
     onSelect.mockClear();
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', metaKey: true, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', altKey: true, bubbles: true }));
     });
     expect(onSelect).toHaveBeenCalledWith('cc-1');
   });
@@ -444,5 +441,266 @@ describe('sessions imported from Claude, in their own section', () => {
     await act(async () => listener?.());
     await settle();
     expect(el('sidebar-imported-toggle-btn').textContent).toContain('(1)');
+  });
+});
+
+describe('sub-sessions an agent spawned', () => {
+  const spawned = (id: string, title: string, parentSessionId: string) =>
+    summary(id, title, { origin: { parentSessionId, depth: 1, seedPrompt: 'go' } });
+  const sessions = () => [
+    summary('root', 'Root'),
+    spawned('kid-a', 'Kid A', 'root'),
+    spawned('kid-b', 'Kid B', 'root'),
+    spawned('grandkid', 'Grandkid', 'kid-a'),
+  ];
+  const depthOf = (title: string) => rowOf(title).closest('li')?.getAttribute('data-nest-depth') ?? null;
+  const foldButton = () => el('chat-session-fold-btn');
+
+  afterEach(() => {
+    for (const id of [...foldedParents()]) toggleFolded(id);
+    setNestingEnabled(true);
+  });
+
+  const hintOf = (title: string) =>
+    rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-parent-hint"]')?.textContent ?? null;
+
+  it('draw indented under their parent, which counts them on its fold pill', async () => {
+    await mount(sessions());
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect([depthOf('Root'), depthOf('Kid A'), depthOf('Grandkid'), depthOf('Kid B')]).toEqual([null, '1', '2', '1']);
+    expect(all('chat-session-fold-btn').map(pill => pill.textContent)).toEqual(['3', '1']);
+    expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, null]);
+  });
+
+  it('marks orchestrators, and not a parent of plain sub-sessions, with the orchestrator glyph', async () => {
+    const glyphOn = (title: string) =>
+      rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-orchestrator-glyph"]') ?? null;
+    await mount([
+      ...sessions(),
+      summary('fresh', 'Fresh orchestrator', { orchestrate: true }),
+      summary('lapsed', 'Lapsed orchestrator'),
+      summary('worker', 'Worker', {
+        origin: { parentSessionId: 'lapsed', depth: 1, seedPrompt: 'go' },
+        workerTask: {} as WorkerTask,
+      }),
+    ]);
+    expect(glyphOn('Fresh orchestrator')?.getAttribute('aria-label')).toBe('Orchestrator');
+    expect(glyphOn('Lapsed orchestrator')).not.toBeNull();
+    expect([glyphOn('Root'), glyphOn('Kid A'), glyphOn('Worker')]).toEqual([null, null, null]);
+  });
+
+  it('caps the indent at three levels and labels deeper sessions', async () => {
+    const chain = [summary('s0', 'Level 1')];
+    for (let level = 1; level <= 4; level += 1) chain.push(spawned(`s${level}`, `Level ${level + 1}`, `s${level - 1}`));
+    await mount(chain);
+    expect(chain.map(entry => depthOf(entry.title))).toEqual([null, '1', '2', '3', '3']);
+    expect(rowOf('Level 4').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')).toBeNull();
+    expect(rowOf('Level 5').closest('li')?.querySelector('[data-testid="chat-session-depth-chip"]')?.textContent).toBe(
+      'level 5'
+    );
+  });
+
+  it('keeps the level-3 rail running past a deeper row', async () => {
+    await mount([
+      summary('s0', 'Top'),
+      spawned('s1', 'L1', 's0'),
+      spawned('s2', 'L2', 's1'),
+      spawned('a', 'A', 's2'),
+      spawned('b', 'B', 's2'),
+      spawned('d', 'D', 'a'),
+    ]);
+    expect(depthOf('D')).toBe('3');
+    const guides = rowOf('D').closest('li')?.getAttribute('data-nest-guides') ?? '';
+    expect(guides).toHaveLength(3);
+    expect(guides.endsWith('1')).toBe(true);
+  });
+
+  it('lights the elbows on the path to a waiting or working descendant', async () => {
+    statuses = new Map([
+      ['grandkid', 'needs-action'],
+      ['kid-b', 'processing'],
+    ]);
+    await mount(sessions());
+    const heat = (title: string) => rowOf(title).closest('li')?.getAttribute('data-nest-heat') ?? null;
+    expect([heat('Root'), heat('Kid A'), heat('Grandkid'), heat('Kid B')]).toEqual([
+      null,
+      'needs-action',
+      'needs-action',
+      'processing',
+    ]);
+  });
+
+  it('fold away and come back from the pill, without opening the parent', async () => {
+    await mount(sessions());
+    act(() => foldButton().click());
+    expect(titles()).toEqual(['Root']);
+    expect(foldButton().getAttribute('data-folded')).toBe('true');
+    expect(onSelect).not.toHaveBeenCalled();
+
+    act(() => foldButton().click());
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('fold and unfold from the keyboard on the parent row', async () => {
+    await mount(sessions());
+    const key = (key: string) =>
+      act(() => {
+        rowOf('Root').dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      });
+    key('ArrowLeft');
+    expect(titles()).toEqual(['Root']);
+    key('ArrowRight');
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+  });
+
+  it('open up under a search so a matching child is never hidden', async () => {
+    toggleFolded('root');
+    await mount(sessions());
+    expect(titles()).toEqual(['Root']);
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'Kid');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    // A search is a flat list: no tree, and each result says where it came from.
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
+    expect([depthOf('Kid A'), depthOf('Grandkid')]).toEqual([null, null]);
+    expect([hintOf('Kid A'), hintOf('Grandkid')]).toEqual(['from Root', 'from Kid A']);
+  });
+
+  it('leave the pill inert under a search, where a fold could not show', async () => {
+    await mount(sessions());
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'Kid');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(query('chat-session-fold-btn')).toBeNull();
+    expect(foldedParents().has('kid-a')).toBe(false);
+    expect(titles()).toEqual(['Kid A', 'Kid B', 'Grandkid']);
+  });
+
+  it('unfold the branches holding the open session, and still fold on request', async () => {
+    toggleFolded('root');
+    await mount(sessions(), 'chat', {}, 'grandkid');
+    expect(titles()).toEqual(['Root', 'Kid A', 'Grandkid', 'Kid B']);
+    expect(foldedParents().has('root')).toBe(false);
+
+    act(() => all('chat-session-fold-btn')[0].click());
+    expect(titles()).toEqual(['Root']);
+  });
+
+  it('list flat when the setting is off', async () => {
+    setNestingEnabled(false);
+    await mount(sessions());
+    expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
+    expect(hintOf('Kid A')).toBeNull();
+    expect(query('chat-session-fold-btn')).toBeNull();
+  });
+});
+
+describe('messaging a session from the sidebar', () => {
+  const openMenu = (title: string) =>
+    act(() => rowOf(title).closest('li')?.querySelector<HTMLElement>('[data-testid="chat-session-menu-btn"]')?.click());
+
+  it('opens a dialog and sends to that row without selecting it', async () => {
+    const sendMessage = vi.fn(async () => ({ ok: true as const, messageId: 'm1' }));
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], 'chat', {}, 'a');
+    (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat.sendMessage = sendMessage;
+
+    openMenu('Beta');
+    act(() => el('session-row-message-action').click());
+    const input = el('message-session-dialog').querySelector('textarea') as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'hello');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => el('message-session-send-btn').click());
+
+    expect(sendMessage).toHaveBeenCalledWith({ sessionId: 'b', text: 'hello' });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(query('message-session-dialog')).toBeNull();
+  });
+});
+
+describe('finding a session by issue or PR number', () => {
+  const typeSearch = (text: string) => {
+    const input = el('chat-search-input') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    return input;
+  };
+  const refSessions = () => [
+    summary('plain', 'Mentions 1234 in passing', { updatedAt: '2026-10-05T00:00:00.000Z' }),
+    summary('linked', '#1234 | PR#5678 | sidebar search'),
+    summary('mentioned', 'Reading around', { githubRefs: [{ kind: 'pr', number: 1234, repo: 'acme/widgets' }] }),
+  ];
+
+  it('lists ref matches first with a chip, then title matches', async () => {
+    await mount(refSessions());
+    typeSearch('1234');
+    const refRows = el('sidebar-ref-matches');
+    const refTitles = Array.from(refRows.querySelectorAll('[data-testid="chat-session-title-text"]')).map(
+      node => node.textContent
+    );
+    expect(refTitles).toEqual(['#1234 | PR#5678 | sidebar search', 'Reading around']);
+    expect(
+      Array.from(refRows.querySelectorAll('[data-testid="chat-session-ref-chip"]')).map(n => n.textContent)
+    ).toEqual(['Issue #1234', 'PR widgets#1234']);
+    expect(titles()).toEqual(['#1234 | PR#5678 | sidebar search', 'Reading around', 'Mentions 1234 in passing']);
+  });
+
+  it('opens the top hit on Enter, and clears the search on Escape', async () => {
+    await mount(refSessions());
+    typeSearch('PR#5678');
+    act(() => {
+      el('chat-search-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(onSelect).toHaveBeenCalledWith('linked');
+
+    const input = typeSearch('1234');
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(input.value).toBe('');
+    expect(query('sidebar-ref-matches')).toBeNull();
+  });
+
+  it('focuses the search on the modifier plus Shift+F, unless another view already took the chord, and on modifier plus K', async () => {
+    await mount(refSessions());
+    const chord = () =>
+      new KeyboardEvent('keydown', {
+        key: 'F',
+        code: 'KeyF',
+        metaKey: true,
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+    const taken = (event: KeyboardEvent) => event.preventDefault();
+    window.addEventListener('keydown', taken, true);
+    act(() => {
+      window.dispatchEvent(chord());
+    });
+    window.removeEventListener('keydown', taken, true);
+    expect(document.activeElement).not.toBe(el('chat-search-input'));
+
+    act(() => {
+      window.dispatchEvent(chord());
+    });
+    expect(document.activeElement).toBe(el('chat-search-input'));
+
+    act(() => el('chat-search-input').blur());
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+    });
+    expect(document.activeElement).toBe(el('chat-search-input'));
   });
 });

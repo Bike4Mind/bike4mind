@@ -4,6 +4,7 @@ const INGEST_TOKEN = 'ingest-token';
 
 const h = vi.hoisted(() => ({
   persistRateLimitEvents: vi.fn(),
+  token: 'ingest-token',
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -11,8 +12,16 @@ vi.mock('@server/middlewares/baseApi', () => ({
     post: (fn: (req: unknown, res: unknown) => unknown) => (req: unknown, res: unknown) => fn(req, res),
   }),
 }));
-vi.mock('@server/utils/mcpRateLimitSnapshots', () => ({ persistRateLimitEvents: h.persistRateLimitEvents }));
-vi.mock('sst', () => ({ Resource: { RATE_LIMIT_INGEST_TOKEN: { value: 'ingest-token' } } }));
+vi.mock('@bike4mind/server-utils/utils/mcpRateLimitSnapshots', () => ({
+  persistRateLimitEvents: h.persistRateLimitEvents,
+}));
+vi.mock('sst', () => ({
+  Resource: {
+    get RATE_LIMIT_INGEST_TOKEN() {
+      return { value: h.token };
+    },
+  },
+}));
 
 import handler from '../ingest';
 
@@ -38,7 +47,7 @@ function mockRes(): Res {
 
 async function post(body: unknown, token = INGEST_TOKEN): Promise<Res> {
   const res = mockRes();
-  const req = { headers: { 'x-rate-limit-ingest-token': token }, body };
+  const req = { headers: { 'x-rate-limit-ingest-token': token }, body, logger: { warn: vi.fn() } };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
   return res;
 }
@@ -48,6 +57,7 @@ const EVENT = { type: 'RATE_LIMIT_WARNING', integration: 'github', usagePercent:
 describe('POST /api/admin/rate-limits/ingest', () => {
   beforeEach(() => {
     h.persistRateLimitEvents.mockReset().mockResolvedValue(1);
+    h.token = INGEST_TOKEN;
   });
 
   it('stores the events under the posting tenant, not a platform-wide bucket', async () => {
@@ -69,6 +79,15 @@ describe('POST /api/admin/rate-limits/ingest', () => {
     const res = await post({ events: [], tenantKey: 'user-1' });
 
     expect(res.statusCode).toBe(400);
+  });
+
+  it('refuses a placeholder ingest token as not configured, even when the request presents it', async () => {
+    h.token = 'not-configured';
+    const res = await post({ events: [EVENT], tenantKey: 'user-1' }, 'not-configured');
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body?.error).not.toContain('not-configured');
+    expect(h.persistRateLimitEvents).not.toHaveBeenCalled();
   });
 
   it('rejects a wrong ingest token before reading the body', async () => {

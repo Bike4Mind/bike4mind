@@ -1,6 +1,5 @@
 import FirecrawlDefault from '@mendable/firecrawl-js';
-import { UnsafeScrapeTargetError } from './errors';
-import { resolveAndVetUrl } from './ssrfGuard';
+import { refuseFetch, resolveAndVetUrl } from './ssrfGuard';
 
 type FirecrawlAppCtor = new (config: FirecrawlAppConfig) => FirecrawlClient;
 
@@ -30,10 +29,12 @@ export interface FirecrawlAppConfig {
 }
 
 export interface FirecrawlScrapeParams {
-  formats?: ('markdown' | 'html')[];
+  formats?: ('markdown' | 'html' | 'screenshot')[];
   timeout?: number;
   onlyMainContent?: boolean;
   maxAge?: number;
+  /** Render as a phone (affects the screenshot's viewport). */
+  mobile?: boolean;
   storeInCache?: boolean;
   actions?: ({ type: 'wait'; milliseconds: number } | { type: 'scroll'; direction: 'up' | 'down'; pixels: number })[];
 }
@@ -42,6 +43,8 @@ export interface FirecrawlScrapeResult {
   error?: string;
   markdown?: string;
   html?: string;
+  /** Hosted URL of the first-screen (viewport) screenshot; present only when 'screenshot' was requested. */
+  screenshot?: string;
   metadata?: { title?: string; [key: string]: unknown };
 }
 
@@ -70,13 +73,9 @@ export function createFirecrawlApp(config: FirecrawlAppConfig): FirecrawlClient 
     // an SSRF. Pre-flight only - Firecrawl re-resolves DNS itself, which we cannot pin.
     scrapeUrl: async (url, params) => {
       const vetted = await resolveAndVetUrl(new URL(url));
-      if (!vetted.safe) {
-        // A private or protocol-refused target is permanent (no retry); a DNS hiccup is not, so it
-        // keeps the caller's normal retry path by staying a plain Error.
-        const message = `Refusing to fetch ${url}: ${vetted.reason}`;
-        if (vetted.retryable) throw new Error(message);
-        throw new UnsafeScrapeTargetError(message);
-      }
+      // A private or protocol-refused target is permanent (no retry); a DNS hiccup is not, so it
+      // keeps the caller's normal retry path (see refuseFetch).
+      if (!vetted.safe) throw refuseFetch(url, vetted);
       return app.scrapeUrl(url, params);
     },
     search: query => app.search(query),

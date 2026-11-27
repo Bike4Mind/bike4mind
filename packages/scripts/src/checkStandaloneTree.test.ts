@@ -158,6 +158,7 @@ describe('check-standalone-tree', () => {
     // have one now in next.config.mjs, see checkHelpTracingIncludes.test.ts.
     makeHealthyTree();
     expect(fs.existsSync(path.join(appDir, 'app', 'generated', 'help-embeddings.json'))).toBe(false);
+    expect(fs.existsSync(path.join(appDir, 'app', 'generated', 'help-embeddings.bin'))).toBe(false);
 
     const { status, output } = runGuard(appDir);
     expect(status, output).toBe(0);

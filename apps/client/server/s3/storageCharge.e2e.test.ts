@@ -19,7 +19,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { fabFilesService, notebookImportService } from '@bike4mind/services';
-import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import { createChatHistoryWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 import {
   chargeStampedKnowledgeStorage,
   chargeUploadedObject,
@@ -32,7 +32,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 /**
  * The import's quota gate reads `currentStorageSize`, and nothing on the import path used to charge
  * it, so every import measured against the same headroom. Drives the REAL service (built dist - run
- * `pnpm --filter @bike4mind/services build` first) against a replica set, since the row stamp joins the
+ * `pnpm --filter @bike4mind/services-core build` first) against a replica set, since the row stamp joins the
  * import's transaction.
  */
 
@@ -119,6 +119,7 @@ const makeService = () =>
     createArtifact: async () => null,
     toolRepository: { create: async () => null },
     agentRepository: { create: async () => null },
+    findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
     userRepository: { findById: async (id: string) => User.findById(id) },
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: { uploadFile: async () => {}, deleteFile: async () => {} },
@@ -381,6 +382,26 @@ describe('notebook import storage charge', () => {
 
     expect(await claimStorageCharge(row?._id, eventTime, 1234, row?.status)).toBeNull();
     expect(await storedSize()).toBe(BASELINE_BYTES + (await fabFileRepository.sumFileSizeByUserId(USER)));
+  });
+
+  it('never claims a storage-exempt row', async () => {
+    await seedUser();
+    const [row] = await FabFile.create([
+      {
+        userId: USER,
+        fileName: 'x',
+        mimeType: 'text/plain',
+        fileSize: 5,
+        filePath: 'knowledge/x',
+        type: 'FILE',
+        storageExempt: true,
+      },
+    ]);
+
+    expect(await s3Event(row._id, new Date(), 5)).toBeNull();
+    const after = await FabFile.collection.findOne({ _id: row._id });
+    expect(after?.storageChargedAt ?? null).toBeNull();
+    expect(await storedSize()).toBe(BASELINE_BYTES);
   });
 
   it('charges a redelivered S3 event once', async () => {

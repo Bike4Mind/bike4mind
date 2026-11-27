@@ -1,13 +1,18 @@
 import {
   IProjectRepository,
+  IFabFileRepository,
   ISessionRepository,
   IUserRepository,
   secureParameters,
   BadRequestError,
+  ForbiddenError,
+  NotFoundError,
 } from '@bike4mind/common';
 import { z } from 'zod';
 import { canonicalId } from '../utils/objectIds';
 import { usableObjectIds } from '@bike4mind/db-core';
+import { createGrantLossCleanup } from '../sharingService/grantLoss';
+import type { SharedItem } from '../sharingService/projectGrantor';
 
 const removeProjectSessionsSchema = z.object({
   projectId: z.string(),
@@ -21,7 +26,9 @@ interface RemoveProjectSessionsAdapters {
     projects: IProjectRepository;
     sessions: ISessionRepository;
     users: IUserRepository;
+    fabFiles?: IFabFileRepository;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 export const removeSessions = async (
@@ -33,10 +40,10 @@ export const removeSessions = async (
   const { projectId, sessionIds } = secureParameters(params, removeProjectSessionsSchema);
 
   const user = await db.users.findById(userId);
-  if (!user) throw new Error('User not found');
+  if (!user) throw new NotFoundError('User not found');
 
   const project = await db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  if (!project) throw new NotFoundError('Project not found');
 
   const sessions = await db.sessions.shareable.findAllAccessibleByIds(user, sessionIds);
   // BadRequestError, not a bare Error - see addFiles.
@@ -51,26 +58,56 @@ export const removeSessions = async (
   // Non-hex is NOT folded: two legacy entries differing only in case are different rows.
   const resolvedIds = new Set(sessions.map(s => canonicalId(String(s.id))));
   const addressable = new Set(usableObjectIds(sessionIds, 'projectService.removeSessions').map(canonicalId));
-  if (sessionIds.some(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)))) {
+  // The project owner may still clear an id the project holds whose row is gone (deleted, or never
+  // there): nothing else can take it out of the list. A live row the owner cannot read stays refused,
+  // because removing it here could not revoke the access the project granted on it.
+  const unresolved = sessionIds.filter(id => addressable.has(canonicalId(id)) && !resolvedIds.has(canonicalId(id)));
+  const ownerHeld = new Set(project.userId === userId ? project.sessionIds.map(canonicalId) : []);
+  const heldUnresolved = unresolved.filter(id => ownerHeld.has(canonicalId(id)));
+  const found =
+    heldUnresolved.length > 0 ? await db.sessions.findAllByIds(heldUnresolved, { includeDeleted: true }) : [];
+  const live = new Set(found.filter(s => !s.deletedAt).map(s => canonicalId(String(s.id))));
+  if (unresolved.some(id => !ownerHeld.has(canonicalId(id)) || live.has(canonicalId(id)))) {
     throw new BadRequestError('Some sessions are not accessible');
   }
-  if (project.userId !== userId && sessions.some(s => s.userId !== userId)) {
-    throw new Error('You are not authorized to remove sessions from this project');
+  // A soft-deleted row is hidden from the reads above but keeps its project-tagged grants, which a
+  // restore would bring back; only an id with no row at all needs no revoke.
+  const softDeleted = found.filter(session => session.deletedAt);
+
+  if (project.userId !== userId) {
+    const ownedIds = new Set(sessions.filter(s => s.userId === userId).map(s => canonicalId(String(s.id))));
+    if (sessionIds.some(id => !ownedIds.has(canonicalId(id)))) {
+      throw new ForbiddenError('You are not authorized to remove sessions from this project');
+    }
   }
 
   // Canonical on both sides here too: a stored id is lowercase, so an uppercase request id
   // would match nothing and the call would answer 200 having removed nothing at all.
   const removing = new Set(sessionIds.map(canonicalId));
+  const removedIds = project.sessionIds.filter(id => removing.has(canonicalId(id)));
+  if (removedIds.length === 0) return { project, removedIds };
   project.sessionIds = project.sessionIds.filter(id => !removing.has(canonicalId(id)));
   project.updatedAt = new Date();
 
-  // Revoke all project users access to the session
-  for (const session of sessions) {
-    session.users = session.users.filter(u => u.projectId !== project.id);
-    await db.sessions.update({ id: session.id, users: session.users });
+  const cleanup = createGrantLossCleanup({ db, onAccessRemoved: adapters.onAccessRemoved });
+  const current = cleanup.trackProject(project, false);
+  const detachedIds = new Set(removedIds.map(canonicalId));
+  for (const session of [...sessions, ...softDeleted]) {
+    const item = cleanup.track('sessions', session as SharedItem);
+    cleanup.removeRows(item, row => !!row.projectId && canonicalId(row.projectId) === canonicalId(project.id));
+    if (detachedIds.has(canonicalId(session.id))) await cleanup.detachSessionKnowledge(item.document, current);
   }
+  await cleanup.drain();
+  await cleanup.flush();
 
-  await db.projects.update({ id: project.id, sessionIds: project.sessionIds, updatedAt: project.updatedAt });
+  await db.projects.update({
+    id: project.id,
+    sessionIds: project.sessionIds,
+    fileIds: project.fileIds,
+    systemPrompts: project.systemPrompts,
+    updatedAt: project.updatedAt,
+  });
 
-  return project;
+  // removedIds are the stored ids actually taken out, so callers can skip side effects for a no-op.
+  return { project, removedIds };
 };

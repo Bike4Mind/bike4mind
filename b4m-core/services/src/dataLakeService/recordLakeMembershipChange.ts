@@ -6,6 +6,7 @@ import type {
 } from '@bike4mind/common';
 import type { ManageActor } from './manageRule';
 import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
+import { Logger } from '@bike4mind/observability';
 
 /** Reuses the config-audit logger shape (rather than declaring a near-duplicate) so a single
  * `{ db, logger }` can satisfy both audit adapters' interfaces without a cast at every call site
@@ -32,6 +33,12 @@ export interface RecordLakeMembershipChangeParams {
   /** Who drove the write - see `LakeMembershipChangeOrigin`'s own doc comment for why this must
    * come from the call site rather than being inferred here. */
   origin: LakeMembershipChangeOrigin;
+  /** This row reverses that event. */
+  undoesEventId?: string;
+  /** This row is a side effect of that event, so it has no Undo of its own. */
+  causedByEventId?: string;
+  /** A pre-minted id, for a caller that must name the row before it is written. */
+  eventId?: string;
 }
 
 /**
@@ -41,7 +48,7 @@ export interface RecordLakeMembershipChangeParams {
  * of truth), so throwing here would report a failed join/leave that in fact succeeded.
  */
 export async function recordLakeMembershipChange(
-  { actor, lake, fabFileId, action, origin }: RecordLakeMembershipChangeParams,
+  { actor, lake, fabFileId, action, origin, undoesEventId, causedByEventId, eventId }: RecordLakeMembershipChangeParams,
   { db, logger }: LakeMembershipAuditAdapters
 ): Promise<void> {
   const events = db.lakeMembershipChangeEvents;
@@ -50,7 +57,7 @@ export async function recordLakeMembershipChange(
   const logAuditLoss = (msg: string, meta: Record<string, unknown>) => {
     if (logger?.error) return logger.error(msg, meta);
     if (logger?.warn) return logger.warn(msg, meta);
-    return console.error(msg, meta);
+    return Logger.error(msg, meta);
   };
 
   try {
@@ -73,6 +80,9 @@ export async function recordLakeMembershipChange(
       fabFileId,
       action,
       origin,
+      undoesEventId,
+      causedByEventId,
+      eventId,
     });
   } catch (err) {
     logAuditLoss('[dataLakes] lake membership changed but the audit event did not persist', {

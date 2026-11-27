@@ -1,4 +1,5 @@
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { limitConcurrency } from '@bike4mind/common';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository, slackExportJobRepository } from '@bike4mind/database';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
@@ -6,12 +7,12 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { Resource } from 'sst';
-import pLimit from 'p-limit';
 import {
   isSlackUserValidationError,
   isSlackUserValidationErrorByMessage,
-} from '@server/integrations/slack/slackExportErrors';
-import { decryptToken } from '@server/security/tokenEncryption';
+} from '@bike4mind/server-utils/integrations/slack/slackExportErrors';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { escapeCsvField } from '@bike4mind/server-utils/integrations/slack/slackExportCsv';
 
 const PayloadSchema = z.object({
   jobId: z.string(),
@@ -145,21 +146,6 @@ function getSlackErrorMessage(errorCode: string | undefined): string {
   };
 
   return (errorCode && errorMessages[errorCode]) || `Slack API error: ${errorCode}`;
-}
-
-/**
- * Escape CSV field to prevent formula injection
- */
-function escapeCsvField(field: string): string {
-  if (!field) return '';
-
-  if (field.startsWith('=') || field.startsWith('+') || field.startsWith('-') || field.startsWith('@')) {
-    field = "'" + field;
-  }
-
-  field = field.replace(/"/g, '""').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-
-  return field;
 }
 
 /**
@@ -385,7 +371,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       if (threadParents.length > 0) {
         await updateProgress(55, `Fetching ${threadParents.length} threads...`);
 
-        const limit = pLimit(10); // Lower concurrency to avoid rate limits
+        const limit = limitConcurrency(10); // Lower concurrency to avoid rate limits
 
         const threadPromises = threadParents.map((parent, index) =>
           limit(async () => {
@@ -461,7 +447,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
 
       if (userIds.size > 0) {
-        const limit = pLimit(5); // Very conservative for user lookups
+        const limit = limitConcurrency(5); // Very conservative for user lookups
 
         const userPromises = Array.from(userIds).map(userId =>
           limit(async () => {

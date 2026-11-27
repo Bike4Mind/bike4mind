@@ -2,7 +2,7 @@ import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
-import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
+import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer, randomUuid } from '@bike4mind/common';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
@@ -131,6 +131,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const didUnmount = useRef(false);
   const setLastJsonMessage = useLastJsonMessage(useShallow(s => s.setLastJsonMessage));
   const accessToken = useAccessToken(useCallback(state => state.accessToken, []));
+  const impersonating = useAccessToken(useCallback(state => state.impersonating, []));
   const queryClient = useQueryClient();
   // True once `onOpen` has fired for the CURRENT connect attempt; reset on each close.
   // Mirrors the same flag in the CLI's WebSocketConnectionManager.
@@ -180,7 +181,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // The token the current connect ticket was minted with; a refresh that lands while the socket
   // is still CONNECTING is reconciled on open (see onOpen).
   const ticketTokenRef = useRef<string | null>(null);
-  const [clientId] = useState(() => crypto.randomUUID().slice(0, 8));
+  const [clientId] = useState(() => randomUuid().slice(0, 8));
 
   // Pulsed true-then-false to force react-use-websocket to tear down and reconnect with a
   // fresh backoff budget (see the visibilitychange effect below). react-use-websocket only
@@ -194,7 +195,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
 
   // Only connect when we have both a valid URL and access token
   // URL validation guards against build-time env vars that were undefined
-  const shouldConnect = !forceDisconnected && !!accessToken && isValidWebsocketUrl(url);
+  const shouldConnect = !impersonating && !forceDisconnected && !!accessToken && isValidWebsocketUrl(url);
 
   // Mint a fresh single-use connect ticket per (re)connect and carry it in the
   // URL instead of the session JWT, so the long-lived credential never lands in
@@ -210,8 +211,9 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     // the store itself may have moved on again while the POST was in flight, so it is not used.
     const sentToken = String(response.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
     ticketTokenRef.current = sentToken || null;
-    return `${url}?ticket=${encodeURIComponent(response.data.ticket)}`;
-  }, [url]);
+    const desktop = navigator.userAgent.includes('B4M-Server-Conversations');
+    return `${url}?ticket=${encodeURIComponent(response.data.ticket)}&handoffPlatform=${desktop ? 'desktop' : 'web'}&handoffName=${desktop ? 'Desktop%20server%20conversations' : 'Web%20browser'}&handoffClientId=${encodeURIComponent(clientId)}`;
+  }, [url, clientId]);
 
   const { sendJsonMessage, sendMessage, readyState } = useBaseWebsocket(shouldConnect ? getWebsocketUrl : null, {
     shouldReconnect: () => !didUnmount.current,

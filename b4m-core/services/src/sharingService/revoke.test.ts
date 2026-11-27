@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { UnauthorizedError, NotFoundError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { Permission } from '@bike4mind/common';
 import { revoke } from './revoke';
 import { pushShareable } from './accept';
@@ -14,7 +14,7 @@ describe('sharingService - revoke', () => {
     db: {
       sessions: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
       fabFiles: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
-      projects: { shareable: { findAccessibleById: Mock }; updateGuarded: Mock };
+      projects: { shareable: { findAccessibleById: Mock }; findAccessibleReferencing: Mock; updateGuarded: Mock };
       users: { findById: Mock };
     };
   };
@@ -25,7 +25,11 @@ describe('sharingService - revoke', () => {
       db: {
         sessions: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
         fabFiles: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
+        projects: {
+          shareable: { findAccessibleById: vi.fn() },
+          findParticipatingReferencing: vi.fn(async () => []),
+          updateGuarded: vi.fn(),
+        },
         users: { findById: vi.fn() },
       },
     };
@@ -94,7 +98,7 @@ describe('sharingService - revoke', () => {
 
     await expect(
       revoke(attackerId, { id: documentId, type: 'files', userId: sharedUserId }, mockAdapters as any)
-    ).rejects.toThrow(UnauthorizedError);
+    ).rejects.toThrow(ForbiddenError);
 
     expect(mockAdapters.db.fabFiles.updateGuarded).not.toHaveBeenCalled();
   });
@@ -128,7 +132,12 @@ describe('sharingService - revoke (project-scoped grants)', () => {
       db: {
         sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        projects: {
+          shareable: { findAccessibleById: vi.fn() },
+          findParticipatingReferencing: vi.fn(async () => []),
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+        },
         users: { findById: vi.fn() },
       },
     };
@@ -219,8 +228,15 @@ describe('sharingService - revoke (session knowledgeIds cascade)', () => {
           update: vi.fn(),
           updateGuarded: vi.fn(),
           findAllByIds: vi.fn(),
+          find: vi.fn(async () => []),
+          findSharingGrantFilesBySession: vi.fn(async () => []),
         },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        projects: {
+          shareable: { findAccessibleById: vi.fn() },
+          findParticipatingReferencing: vi.fn(async () => []),
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+        },
         users: { findById: vi.fn() },
       },
     };
@@ -383,7 +399,12 @@ describe('sharingService - revoke (cross-project grants)', () => {
       db: {
         sessions: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
         fabFiles: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
-        projects: { shareable: { findAccessibleById: vi.fn() }, update: vi.fn(), updateGuarded: vi.fn() },
+        projects: {
+          shareable: { findAccessibleById: vi.fn() },
+          findParticipatingReferencing: vi.fn(async () => []),
+          update: vi.fn(),
+          updateGuarded: vi.fn(),
+        },
         users: { findById: vi.fn() },
       },
     };
@@ -524,7 +545,11 @@ describe('sharingService - revoke on a project', () => {
           findAllByIds: vi.fn(async () => []),
           updateGuarded: vi.fn(),
         },
-        projects: { shareable: { findAccessibleById: vi.fn() }, updateGuarded: vi.fn() },
+        projects: {
+          shareable: { findAccessibleById: vi.fn() },
+          findParticipatingReferencing: vi.fn(async () => []),
+          updateGuarded: vi.fn(),
+        },
         users: { findById: vi.fn(async () => ({ id: memberId })) },
       },
     };
@@ -593,7 +618,7 @@ describe('sharingService - revoke on a project', () => {
     adapters.db.projects.shareable.findAccessibleById.mockResolvedValue(project);
 
     await expect(revoke(coMemberId, { id: projectId, type: 'projects', userId: memberId }, adapters)).rejects.toThrow(
-      UnauthorizedError
+      ForbiddenError
     );
     expect(adapters.db.projects.updateGuarded).not.toHaveBeenCalled();
   });

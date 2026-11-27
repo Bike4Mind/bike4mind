@@ -1,3 +1,4 @@
+import type { ModelStanding } from '../generation/modelRanking';
 // Each provider adapter PR appends its id here.
 export const MUSIC_PROVIDER_IDS = ['test', 'gemini-lyria', 'elevenlabs'] as const;
 export type MusicProviderId = (typeof MUSIC_PROVIDER_IDS)[number];
@@ -25,7 +26,7 @@ export type MusicDurationCapability =
 /** `per_song` is flat whatever the length (a 30 s clip is a song); `per_second` bills the output length. */
 export type MusicPricing = { unit: 'per_song'; usd: number } | { unit: 'per_second'; usd: number };
 
-export type MusicModelCapabilities = {
+export type MusicModelCapabilities = ModelStanding & {
   provider: MusicProviderId;
   displayName: string;
   /** 'optional': sings unless the request sets instrumental; 'never': instrumental only. */
@@ -37,8 +38,6 @@ export type MusicModelCapabilities = {
   // Rough wall-clock render time, only used to set the agent's and the studio's expectation. Not billed on.
   typicalRenderSeconds: number;
   pricing: MusicPricing;
-  // Labelled preview by its provider: may change or be retired at short notice.
-  preview: boolean;
   // Admin setting `musicGeneration.enabledModels[id]` overrides this.
   defaultEnabled: boolean;
   deprecationDate?: string;

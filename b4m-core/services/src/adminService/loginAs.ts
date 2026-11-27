@@ -1,4 +1,11 @@
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IUserDocument,
+  IUserRepository,
+  assertCanActOnAdminTarget,
+  hasAdminPermission,
+  missingAdminPermissionMessage,
+  type ResolveAdminRoles,
+} from '@bike4mind/common';
 import { NotFoundError, ForbiddenError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -19,31 +26,35 @@ type LoginAsAdapters = {
   notify: {
     send: (targetUser: IUserDocument) => Promise<void>;
   };
+  /** Resolves the admin's role permissions on the fresh record below. */
+  resolveAdminRoles?: ResolveAdminRoles;
 };
 
 export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParameters, adapters: LoginAsAdapters) => {
   const { db, notify } = adapters;
   const { targetUserId, mfaToken } = secureParameters(parameters, loginAsSchema);
 
-  if (!adminUser.isAdmin) {
-    throw new ForbiddenError('Admin privileges required');
+  if (!hasAdminPermission(adminUser, 'users:impersonate')) {
+    throw new ForbiddenError(missingAdminPermissionMessage('users:impersonate'));
   }
 
-  // MFA is required for loginAs - compromised admin account must not enable free impersonation
-  if (!adminUser.mfa?.totpEnabled) {
-    throw new ForbiddenError('MFA must be enabled to use loginAs');
+  // MFA is required for loginAs - compromised admin account must not enable free impersonation.
+  // Authenticator app specifically: the code is verified below as a TOTP, so a passkey cannot serve.
+  if (!mfaService.userHasTotpConfigured(adminUser)) {
+    throw new ForbiddenError('An authenticator app must be enabled to use loginAs');
   }
 
   // Get fresh admin user data (incl. select:false MFA secrets) for the MFA verification below;
   // req.user is a decoded JWT and never carries totpSecret/backupCodes.
-  const freshAdmin = await db.users.findByIdWithMfaSecrets(adminUser.id);
-  if (!freshAdmin) {
+  const storedAdmin = await db.users.findByIdWithMfaSecrets(adminUser.id);
+  if (!storedAdmin) {
     throw new NotFoundError('Admin user not found');
   }
+  const freshAdmin = adapters.resolveAdminRoles ? await adapters.resolveAdminRoles(storedAdmin) : storedAdmin;
 
-  // Re-verify admin status on fresh record - JWT may be stale if privileges were revoked
-  if (!freshAdmin.isAdmin) {
-    throw new ForbiddenError('Admin privileges required');
+  // Re-verify on the fresh record - JWT may be stale if privileges were revoked
+  if (!hasAdminPermission(freshAdmin, 'users:impersonate')) {
+    throw new ForbiddenError(missingAdminPermissionMessage('users:impersonate'));
   }
 
   if (mfaService.isUserLockedOut(freshAdmin)) {
@@ -74,6 +85,13 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
   if (targetUser.isSystem) {
     throw new ForbiddenError('Cannot loginAs a system user');
   }
+
+  if (targetUser.deletion) {
+    throw new ForbiddenError('Cannot loginAs an account that is scheduled for deletion');
+  }
+
+  // Must stay before any approval request: a delegate never stores a pending impersonation of an admin.
+  assertCanActOnAdminTarget(freshAdmin, targetUser, 'impersonate');
 
   await notify.send(targetUser);
 

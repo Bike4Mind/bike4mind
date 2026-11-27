@@ -14,6 +14,10 @@ export const SST_PLACEHOLDER_VALUE = 'my-secret-placeholder-value';
  */
 export const NOT_CONFIGURED_PLACEHOLDER = 'not-configured';
 
+/** Where a self-host operator sets a missing setting. Shown by the mailer, resend-verification and System Health. */
+export const SELF_HOST_SETTINGS_HINT =
+  'Set each one in .env.selfhost (Docker Compose) or the chart config values / runtime Secret (Kubernetes), then restart the app.';
+
 /**
  * Check if a value is a placeholder (not configured or SST default).
  * Uses case-insensitive comparison and trims whitespace to prevent bypass attempts.
@@ -25,6 +29,30 @@ export function isPlaceholderValue(value: string | undefined | null): boolean {
   if (!value) return true;
   const normalized = value.trim().toLowerCase();
   return normalized === SST_PLACEHOLDER_VALUE.toLowerCase() || normalized === NOT_CONFIGURED_PLACEHOLDER.toLowerCase();
+}
+
+// Values shipped in example env files (.env.selfhost.example, selfhost/kubernetes/runtime.env.example)
+// and the generic literals @bike4mind/infra tier1Secrets also rejects.
+const EXAMPLE_SECRET_PREFIXES = ['change-me', 'change_me', 'changeme', 'replace-with', 'replace-me', 'replace_me'];
+const EXAMPLE_SECRET_VALUES = new Set(['your_secret_here', 'your-secret-key', 'xxx', 'todo', 'fixme']);
+
+/** True for an empty, SST-placeholder or example-env-file secret: each is public, so it counts as unset. */
+export function isUnconfiguredSecret(value: string | undefined | null): boolean {
+  if (isPlaceholderValue(value)) return true;
+  const normalized = (value ?? '').trim().toLowerCase();
+  return (
+    normalized === '' ||
+    EXAMPLE_SECRET_VALUES.has(normalized) ||
+    EXAMPLE_SECRET_PREFIXES.some(prefix => normalized.startsWith(prefix))
+  );
+}
+
+/** Returns `value`, or throws naming only `name` when isUnconfiguredSecret(value). */
+export function requireConfiguredSecret(name: string, value: string | undefined | null): string {
+  if (isUnconfiguredSecret(value)) {
+    throw new Error(`${name} is not configured: refusing to use an empty or placeholder value.`);
+  }
+  return value as string;
 }
 
 /**

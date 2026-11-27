@@ -74,6 +74,7 @@ Tags provide fine-grained permission control and user categorization:
 
 ### Storage Limits
 - **Storage Limit**: Maximum storage allocation in MB
+- **Source**: a manual override wins over the plan limit, which wins over the default. The plan limit comes from the `storageLimitMb` metadata on the subscribed Stripe price and updates when the subscription changes.
 - **Current Usage**: Real-time storage consumption
 
 ### Date Fields

@@ -3,7 +3,8 @@
 import React, { createContext, useContext, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from './ApiContext';
-import { settingsMap } from '@bike4mind/common';
+import { allSettingDefinitions } from '@bike4mind/common';
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import { ADMIN_SETTINGS_QUERY_KEY } from '@client/app/hooks/data/queryKeys';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
@@ -74,11 +75,11 @@ interface PublicSettingsArtifact {
 const toSettingValue = (value: AdminSetting['settingValue']): string | object =>
   typeof value === 'object' && value !== null ? value : typeof value === 'string' ? value : String(value);
 
-// Merge a list of settings over the settingsMap defaults into a flat key/value map.
+// Merge a list of settings over the core and contributed setting defaults into a flat key/value map.
 const mergeIntoDefaults = (list: AdminSetting[]): Record<string, string | object> => {
-  const merged = Object.entries(settingsMap).reduce(
-    (acc, [key, config]) => {
-      acc[key] = toSettingValue(config.defaultValue as AdminSetting['settingValue']);
+  const merged = allSettingDefinitions().reduce(
+    (acc, config) => {
+      acc[config.key] = toSettingValue(config.defaultValue as AdminSetting['settingValue']);
       return acc;
     },
     {} as Record<string, string | object>
@@ -94,7 +95,7 @@ const fetchAdminSettings = async (): Promise<Record<string, string | object>> =>
   const mergedSettings = mergeIntoDefaults(response.data);
   const fetchTime = Date.now() - startTime;
   console.log(
-    `✅ [AdminSettings] Fetched ${response.data.length} settings from DB, merged with ${Object.keys(settingsMap).length} defaults (${fetchTime}ms)`
+    `[AdminSettings] Fetched ${response.data.length} settings from DB, merged with ${allSettingDefinitions().length} defaults (${fetchTime}ms)`
   );
   return mergedSettings;
 };
@@ -135,7 +136,7 @@ export const AdminSettingsProvider: React.FC<AdminSettingsProviderProps> = ({
 
   // Public CDN artifact (M2.5): ungated, runs immediately without a token, served in ms
   // from CloudFront. Seeds startup-critical publicSafe settings (e.g. enforceMFA) so the
-  // "Checking security settings..." gate resolves before the authenticated fetch returns.
+  // MFA gate (MFAEnforcementWrapper) resolves before the authenticated fetch returns.
   const { data: publicSettings } = useQuery({
     queryKey: PUBLIC_SETTINGS_QUERY_KEY,
     queryFn: fetchPublicSettingsArtifact,

@@ -14,11 +14,11 @@ import {
   KnowledgeType,
   ResearchTaskStatus,
   ResearchTaskType,
+  limitConcurrency,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError, FunctionQueueRunner } from '@bike4mind/utils';
 import { createSendStatusUpdate } from './utils';
 import { z } from 'zod';
-import plimit from 'p-limit';
 import { ssrfSafeDownload } from '@bike4mind/fab-pipeline';
 import { fileTypeFromBuffer } from 'file-type';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
@@ -69,8 +69,12 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
 // TODO: have this as an admin settings
 const BATCH_SIZE = 3;
 // Safety net only; createFabFile still enforces the MaxFileSize admin setting afterwards.
-const MAX_LINK_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+export const MAX_LINK_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const LINK_DOWNLOAD_TIMEOUT_MS = 60_000;
+// Count of links downloaded per research task (highest relevance first).
+export const MAX_LINKS_PER_RESEARCH_TASK = 25;
+// Total bytes downloaded per research task (250 MiB), shared by all its links.
+export const MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK = 250 * 1024 * 1024;
 
 export const downloadRelevantLinks = async (
   parameters: IResearchTaskDownloadRelevantLinks,
@@ -91,8 +95,17 @@ export const downloadRelevantLinks = async (
   const user = await db.users.findById(researchTask.userId);
   if (!user) throw new NotFoundError(`Research Task Download Relevant Links - User ${researchTask.userId} not found`);
 
-  const relevantLinks = researchTask.discoveredLinks?.filter(l => l.isDownloadable && l.relevance && l.relevance > 0.7);
-  if (!relevantLinks?.length) return;
+  const eligibleLinks = researchTask.discoveredLinks?.filter(l => l.isDownloadable && l.relevance && l.relevance > 0.7);
+  if (!eligibleLinks?.length) return;
+
+  const relevantLinks = [...eligibleLinks]
+    .sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0))
+    .slice(0, MAX_LINKS_PER_RESEARCH_TASK);
+  if (relevantLinks.length < eligibleLinks.length) {
+    logger?.info(
+      `[DOWNLOAD] Capped ${eligibleLinks.length} eligible links to the ${relevantLinks.length} most relevant`
+    );
+  }
 
   const queueRunner = new FunctionQueueRunner(2000);
   const { sendToClient } = adapters.jobs.researchTasks || {};
@@ -104,7 +117,7 @@ export const downloadRelevantLinks = async (
     currentProgress: currentProgressTracker,
   });
 
-  const limit = plimit(BATCH_SIZE);
+  const limit = limitConcurrency(BATCH_SIZE);
   function getIndex(url: string) {
     return (researchTask as IResearchTaskScrape).urls.findIndex(url => url === url);
   }
@@ -117,19 +130,47 @@ export const downloadRelevantLinks = async (
 
   let downloadCount = 0;
   let keptPreviousCount = 0;
+  let budgetSkippedCount = 0;
+  // Bytes are reserved synchronously before each await, so concurrent downloads cannot overshoot the budget.
+  let remainingBytes = MAX_DOWNLOAD_BYTES_PER_RESEARCH_TASK;
+  // Reserved bytes of downloads still running; they come back unused if a download is smaller or fails.
+  let inFlightBytes = 0;
+  let settleWaiters: Array<() => void> = [];
+  const settle = (reservedBytes: number, usedBytes: number) => {
+    remainingBytes += reservedBytes - usedBytes;
+    inFlightBytes -= reservedBytes;
+    const waiters = settleWaiters;
+    settleWaiters = [];
+    waiters.forEach(wake => wake());
+  };
   const files: IFabFileDocument[] = [];
   const progressPerDownload = Math.floor(18 / relevantLinks.length); // Reserve 18% for downloads (within 29% range)
 
   await Promise.all(
     relevantLinks?.map(link =>
       limit(async () => {
+        let reserved = 0;
         try {
+          // Skip or shrink the reservation only once no in-flight download can still refund bytes.
+          while (remainingBytes < MAX_LINK_DOWNLOAD_BYTES && inFlightBytes > 0) {
+            await new Promise<void>(wake => settleWaiters.push(wake));
+          }
+          if (remainingBytes <= 0) {
+            budgetSkippedCount++;
+            await sendStatusUpdate(`\u23ed\ufe0f Skipped (download budget reached): ${link.text}`, progressPerDownload);
+            return;
+          }
+          reserved = Math.min(MAX_LINK_DOWNLOAD_BYTES, remainingBytes);
+          remainingBytes -= reserved;
+          inFlightBytes += reserved;
           logger?.info(`📥 [DOWNLOAD] Starting download: ${link.url}`);
           // Scraped page links are attacker-influenced: fetch through the full SSRF guard.
           const { data: buffer } = await ssrfSafeDownload(link.url, {
-            maxBytes: MAX_LINK_DOWNLOAD_BYTES,
+            maxBytes: reserved,
             timeoutMs: LINK_DOWNLOAD_TIMEOUT_MS,
           });
+          settle(reserved, buffer.length);
+          reserved = 0;
           const fileType = await fileTypeFromBuffer(buffer);
           const index = getIndex(link.url) + 1;
 
@@ -190,6 +231,12 @@ export const downloadRelevantLinks = async (
               db: adapters.db,
               storage: adapters.storage,
             });
+            if (existingDownloadResult) {
+              await db.researchDatas.update({
+                id: existingDownloadResult.researchData.id,
+                fabFileId: downloadedFile.id,
+              });
+            }
             logger?.info(
               `✅ [DOWNLOAD_${index + 1}] File created: ${downloadedFile.id} ${
                 downloadedFile.mimeType
@@ -221,6 +268,7 @@ export const downloadRelevantLinks = async (
             progressPerDownload
           );
         } catch (error) {
+          if (reserved > 0) settle(reserved, 0);
           logger?.error(`❌ [DOWNLOAD_ERROR] Failed to download file from ${link.url}: ${(error as Error).message}`);
           // Generic on purpose: the guard's message can name the private address a hostname resolved
           // to, which is logged above, not surfaced to the task owner.
@@ -229,6 +277,10 @@ export const downloadRelevantLinks = async (
       })
     )
   );
+
+  if (budgetSkippedCount > 0) {
+    await db.researchTasks.addWarning(researchTask.id, `Download budget reached: skipped ${budgetSkippedCount} links`);
+  }
 
   // Auto-trigger chunking for files
   if (files.length > 0) {
@@ -256,8 +308,9 @@ export const downloadRelevantLinks = async (
   }
 
   const keptNote = keptPreviousCount ? `, ${keptPreviousCount} kept their previous copy (storage limit reached)` : '';
+  const budgetNote = budgetSkippedCount ? `, ${budgetSkippedCount} skipped (download budget reached)` : '';
   await sendStatusUpdate(
-    `\u{1F389} Research task completed with ${downloadCount - keptPreviousCount} files downloaded${keptNote}`,
+    `\u{1F389} Research task completed with ${downloadCount - keptPreviousCount} files downloaded${keptNote}${budgetNote}`,
     100
   );
 

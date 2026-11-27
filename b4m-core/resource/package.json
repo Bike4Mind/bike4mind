@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/resource",
-  "version": "1.0.1",
+  "version": "3.6.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -27,9 +27,11 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit --types node",
+    "typecheck:tsc": "tsc --noEmit",
     "dev": "tsdown --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:repo": "REPO_TEST_LANE=repo vitest run"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",

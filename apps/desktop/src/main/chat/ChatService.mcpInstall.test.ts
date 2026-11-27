@@ -8,10 +8,15 @@ import type { ChatApprovalMode, ChatStreamEvent, ChatToolCall } from '@shared/ch
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ChatService } from './ChatService';
 import { McpManager } from './mcp/McpManager';
-import { McpServerStore, type SecretCipher, type StoreFile } from './mcp/McpServerStore';
+import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 /**
  * The assistant installing an MCP server: the card only a click answers, the secret that never

@@ -1,5 +1,5 @@
 import { referService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { RegInviteEvents } from '@bike4mind/common';

@@ -3,7 +3,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { buildRequestFileScope } from '@server/utils/userFileScope';
 import { fabFileRepository } from '@bike4mind/database';
-import { FILES_READ_SCOPES } from '@server/files/fileScopes';
+import { FILES_READ_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
+import { isCoreTutorialSheetNamespace, isCoreTutorialSheetTag } from '@bike4mind/server-utils/tutorials/sheetTags';
 
 const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -32,7 +33,20 @@ const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
       fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id, workspaceScope),
     ]);
 
-    return res.json({ tagCounts, workspaceTagCounts, namespaceCounts });
+    // The tutorial sheet's bookkeeping tags are not folders the user made; listed, the File Browser would show
+    // them as folders beside the sample file the tutorial asks the user to pick.
+    const shown = <T extends { tag: string }>(rows: T[]) => rows.filter(row => !isCoreTutorialSheetTag(row.tag));
+    const shownWorkspaceTags = shown(workspaceTagCounts);
+    // A namespace the user also tags into keeps its folder; its count then still includes the sheet copies.
+    const holdsUserTags = (namespace: string) =>
+      shownWorkspaceTags.some(row => row.tag === namespace || row.tag.startsWith(`${namespace}:`));
+    return res.json({
+      tagCounts: shown(tagCounts),
+      workspaceTagCounts: shownWorkspaceTags,
+      namespaceCounts: namespaceCounts.filter(
+        row => !isCoreTutorialSheetNamespace(row.namespace) || holdsUserTags(row.namespace)
+      ),
+    });
   })
 );
 

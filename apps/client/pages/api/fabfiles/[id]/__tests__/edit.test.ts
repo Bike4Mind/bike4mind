@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
 import type { Request, Response } from 'express';
 import { NotFoundError, StorageLimitError } from '@bike4mind/common';
 
@@ -42,7 +46,17 @@ vi.mock('@bike4mind/llm-adapters', () => ({
       cb([h.edited]),
   }),
 }));
-vi.mock('@client/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async () => ({
+  ...(await import('@bike4mind/services/billing/completionMeter')),
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+  resolveShadowSubstitute: async () => undefined,
+  completionRequestCeilingUsd: () => 0,
+  reserveCompletionCredits: async () => ({ reservedCredits: 0, refund: async () => {} }),
+  latchUsage: () => {},
+  completionUsd: () => 0,
+  settleCompletion: async () => {},
+}));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   applyEditedText: h.applyEditedText,
@@ -70,7 +84,7 @@ const call = () =>
       query: { id: 'ff1' },
       user,
       body: { instruction: 'edit it', applyImmediately: true, model: 'm' },
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as Request,
     { json: vi.fn() } as unknown as Response
   );
@@ -146,6 +160,8 @@ describe('POST /api/fabfiles/[id]/edit (applyImmediately) storage accounting', (
       const [args] = h.commitContentRewrite.mock.calls[0];
       expect(args).toMatchObject({ fabFileId: 'ff1', newSize: 30, filter: { filePath: 'files/u1/doc' } });
       expect(args.set.filePath).toEqual(h.upload.mock.calls[0][1]);
+      expect(args.set).not.toHaveProperty('fileUrl');
+      expect(args.set).not.toHaveProperty('fileUrlExpireAt');
     });
 
     it('refuses growth past the quota before uploading the new version', async () => {

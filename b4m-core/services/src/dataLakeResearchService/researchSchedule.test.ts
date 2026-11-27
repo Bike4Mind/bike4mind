@@ -34,6 +34,9 @@ const scheduledConfig = (overrides: Partial<IDataLakeResearchConfigDocument> = {
     query: 'coastal erosion',
     maxResults: 10,
     maxProposals: 5,
+    trustedDomains: [],
+    reviewDomains: [],
+    unlistedSources: 'review',
     allowedDomains: [],
     blockedDomains: [],
     minRelevance: 0.6,
@@ -51,6 +54,7 @@ const makeAdapters = (
     pending?: Record<string, number>;
     active?: number;
     ownerCredits?: number;
+    freeze?: { scopeType: 'User' | 'Organization' | 'apiKey'; frozenAt: Date } | null;
     enqueue?: ResearchScheduleAdapters['enqueue'];
     recordScheduleOutcome?: ReturnType<typeof vi.fn>;
   } = {}
@@ -83,6 +87,7 @@ const makeAdapters = (
       adminSettings: {},
       users: { findById: vi.fn(async () => ({ id: 'user-1', currentCredits: overrides.ownerCredits ?? 1_000_000 })) },
       organizations: { findById: vi.fn(async () => null) },
+      spendFreezes: { findActiveForSubject: vi.fn(async () => overrides.freeze ?? null) },
     },
     enqueue,
     logger,
@@ -167,6 +172,22 @@ describe('runDueResearchSchedules', () => {
       new Date('2026-03-11T09:00:00.000Z')
     );
     expect(summary.skipped).toBe(1);
+  });
+
+  it('records a paused periodic start as skipped and writes the next regular slot, not the lease or a retry', async () => {
+    const { adapters, configs, runs, enqueue } = makeAdapters({ due: [scheduledConfig({ schedulePaused: true })] });
+
+    const summary = await runDueResearchSchedules(adapters);
+
+    expect(runs.createRun).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(configs.recordScheduleOutcome).toHaveBeenCalledWith(
+      'config-1',
+      'daily',
+      { outcome: 'skipped', at: NOW, reason: 'schedule_paused' },
+      new Date('2026-03-11T09:00:00.000Z')
+    );
+    expect(summary).toEqual({ claimed: 1, started: 0, skipped: 1, failed: 0 });
   });
 
   it('lets the next due run go ahead once the queue drops below the limit', async () => {
@@ -281,6 +302,24 @@ describe('runDueResearchSchedules', () => {
       'config-1',
       'daily',
       { outcome: 'skipped', at: NOW, reason: 'insufficient_credits' },
+      new Date(NOW.getTime() + RESEARCH_SCHEDULE_RETRY_MS)
+    );
+    expect(summary).toEqual({ claimed: 1, started: 0, skipped: 1, failed: 0 });
+  });
+
+  // A paused owner is a skip, not a fault, for the same reason as a broke one: it clears when the
+  // pause is lifted, and the next tick within the hour picks the schedule back up.
+  it('skips and retries within the hour when spending is paused for the owner', async () => {
+    const { adapters, configs, runs, enqueue } = makeAdapters({ freeze: { scopeType: 'User', frozenAt: NOW } });
+
+    const summary = await runDueResearchSchedules(adapters);
+
+    expect(runs.createRun).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(configs.recordScheduleOutcome).toHaveBeenCalledWith(
+      'config-1',
+      'daily',
+      { outcome: 'skipped', at: NOW, reason: 'spend_frozen' },
       new Date(NOW.getTime() + RESEARCH_SCHEDULE_RETRY_MS)
     );
     expect(summary).toEqual({ claimed: 1, started: 0, skipped: 1, failed: 0 });

@@ -2,10 +2,10 @@
 
 import { BYTES_PER_STORAGE_MB } from '@bike4mind/common';
 import { connectDB, User } from '@bike4mind/database';
-import * as dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import { Resource } from 'sst';
 
-dotenv.config({ path: '../../.env' });
+if (existsSync('../../.env')) process.loadEnvFile('../../.env');
 
 async function listUsers() {
   try {

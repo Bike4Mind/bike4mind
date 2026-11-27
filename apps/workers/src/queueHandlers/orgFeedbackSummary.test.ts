@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ChatModels, CreditHolderType, ModelBackend, type IUsageEventInput, type ModelInfo } from '@bike4mind/common';
+import { LlmTimeoutError, SafetyRefusalError, type ICompletionBackend } from '@bike4mind/llm-adapters';
 
 /**
  * The org feedback summary worker. Two things here are worth a test rather than a reading:
@@ -17,7 +19,11 @@ const h = vi.hoisted(() => ({
   updateOne: vi.fn(async () => ({})),
   orgFeedbackReport: vi.fn(),
   findMemberUserIds: vi.fn(async () => ({ userIds: ['u1'], aclOnly: [], stampOnly: [] })),
-  complete: vi.fn(),
+  complete: vi.fn<ICompletionBackend['complete']>(),
+  createUsageStore: vi.fn(),
+  findUsageUser: vi.fn(),
+  findUsageOrganization: vi.fn(),
+  recordUsage: vi.fn<(event: IUsageEventInput) => Promise<null>>(),
   upload: vi.fn(async () => undefined),
   sendToClient: vi.fn(async () => undefined),
 }));
@@ -26,7 +32,8 @@ vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, { get: () => new Proxy({}, { get: () => 'mock' }) }),
 }));
 
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku', CLAUDE_4_5_HAIKU: 'anthropic-haiku' },
   ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
   ORG_FEEDBACK_SUMMARY_TAG_LIMIT: 20,
@@ -39,16 +46,22 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
 }));
 
+vi.mock('@bike4mind/database/zero-credit-operational-usage', () => ({
+  createBoundedZeroCreditOperationalUsageStore: h.createUsageStore,
+}));
+
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findMemberUserIds: h.findMemberUserIds },
 }));
 
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
 }));
-vi.mock('@bike4mind/llm-adapters', () => ({
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   buildApiKeyTable: h.buildApiKeyTable,
   getAvailableModels: h.getAvailableModels,
   getLlmByModel: h.getLlmByModel,
@@ -58,7 +71,7 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
     upload = h.upload;
   },
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.sendToClient }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.sendToClient }));
 
 import { runOrgFeedbackSummary, summaryS3Key } from './orgFeedbackSummary';
 
@@ -103,7 +116,12 @@ beforeEach(() => {
   h.getEffectiveLLMApiKeys.mockResolvedValue({ anthropic: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'claude-haiku' }, { id: 'anthropic-haiku' }]);
   h.getLlmByModel.mockReturnValue({ complete: h.complete });
-  h.findOne.mockResolvedValue({ summaryJobId: SUMMARY_JOB_ID, status: 'pending' });
+  h.findOne.mockResolvedValue({
+    summaryJobId: SUMMARY_JOB_ID,
+    organizationId: ORG_ID,
+    requestedBy: message.userId,
+    status: 'pending',
+  });
   h.orgFeedbackReport.mockResolvedValue(REPORT);
   h.complete.mockImplementation(async (_model, _messages, _opts, onText) => {
     await onText(['Feedback was steady across the window.']);
@@ -355,7 +373,7 @@ it('releases the persisted hold when the cooperative budget expires before work'
   );
 });
 
-it.each([2, 3])('releases the active window and suppresses the next side effect at checkpoint %s', async index => {
+it.each([2, 4])('releases the active window and suppresses the next side effect at checkpoint %s', async index => {
   let check = 0;
   await expect(
     runOrgFeedbackSummary(message, makeLogger() as never, () => {
@@ -367,4 +385,407 @@ it.each([2, 3])('releases the active window and suppresses the next side effect 
     { summaryJobId: SUMMARY_JOB_ID },
     { status: 'failed', activeKey: SUMMARY_JOB_ID, errorMessage: 'run budget exhausted' }
   );
+});
+
+describe('org feedback summary usage', () => {
+  const model: ModelInfo = {
+    id: ChatModels.CLAUDE_4_5_HAIKU_BEDROCK,
+    name: 'Test model',
+    type: 'text',
+    backend: ModelBackend.Bedrock,
+    contextWindow: 100_000,
+    max_tokens: 4096,
+    pricing: {
+      100: { input: 1e-6, output: 2e-6, cache_read: 0.1e-6, cache_write: 1.25e-6 },
+      100000: { input: 3e-6, output: 5e-6, cache_read: 0.3e-6, cache_write: 3.75e-6 },
+    },
+    priceSource: 'catalog',
+    priceRowId: 'fixture-rate',
+  };
+
+  const actualUsage = {
+    inputTokens: 60,
+    outputTokens: 10,
+    cacheReadInputTokens: 35,
+    cacheCreationInputTokens: 20,
+    cacheWrite1hInputTokens: 5,
+    stopReason: 'end_turn',
+  };
+
+  beforeEach(() => {
+    h.updateOne.mockReset().mockResolvedValue({});
+    h.sendToClient.mockReset().mockResolvedValue(undefined);
+    h.upload.mockReset().mockResolvedValue(undefined);
+    h.recordUsage.mockReset().mockResolvedValue(null);
+    h.findUsageUser.mockReset().mockResolvedValue({ id: message.userId, organizationId: 'other-organization' });
+    h.findUsageOrganization.mockReset().mockResolvedValue({ id: ORG_ID });
+    h.createUsageStore.mockReturnValue({
+      findUserById: h.findUsageUser,
+      findOrganizationById: h.findUsageOrganization,
+      usageEvents: { record: h.recordUsage },
+    });
+    h.getAvailableModels.mockResolvedValue([model]);
+    h.complete.mockImplementation(async (_model, _messages, _options, onText) => {
+      await onText(['Feedback was steady.'], actualUsage);
+    });
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('prices the whole prompt and attributes the actual requester and target organization', async () => {
+    await run();
+
+    expect(h.createUsageStore).toHaveBeenCalledExactlyOnceWith({ lookupTimeoutMS: 10_000, writeTimeoutMS: 20_000 });
+    expect(h.findUsageUser).toHaveBeenCalledExactlyOnceWith(message.userId);
+    expect(h.findUsageOrganization).toHaveBeenCalledExactlyOnceWith(ORG_ID);
+    expect(h.recordUsage).toHaveBeenCalledOnce();
+    const [[row]] = h.recordUsage.mock.calls;
+    expect(row).toMatchObject({
+      feature: 'operations',
+      source: 'system',
+      userId: message.userId,
+      ownerId: ORG_ID,
+      ownerType: CreditHolderType.Organization,
+      model: model.id,
+      provider: 'bedrock',
+      inputTokens: 60,
+      outputTokens: 10,
+      cachedInputTokens: 35,
+      cacheWriteTokens: 20,
+      cacheWrite1hTokens: 5,
+      creditsCharged: 0,
+      priceSource: 'catalog',
+      priceRowId: 'fixture-rate',
+      rates: { tierKey: 100000 },
+      requestMeta: { stopReason: 'end_turn' },
+    });
+    expect(row.costUsd).toBeCloseTo(326.75 / 1_000_000, 12);
+    expect(row.requestId).toMatch(/^[a-f\d-]{36}$/);
+    expect(JSON.stringify(row)).not.toMatch(/Feedback was steady|window|job-1|2026-08|Casey Member/);
+  });
+
+  it('prices provider turns in their own tiers without double-counting aggregate snapshots', async () => {
+    h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => {
+      await onText(['Feedback was steady.'], actualUsage);
+      await onText([], {
+        turnUsage: [
+          { inputTokens: 50, outputTokens: 20, cacheReadInputTokens: 10, cacheCreationInputTokens: 10 },
+          {
+            inputTokens: 90,
+            outputTokens: 15,
+            cacheReadInputTokens: 20,
+            cacheCreationInputTokens: 15,
+            cacheWrite1hInputTokens: 4,
+          },
+        ],
+      });
+    });
+    await run();
+    const [[row]] = h.recordUsage.mock.calls;
+    expect(row).toMatchObject({
+      inputTokens: 140,
+      outputTokens: 35,
+      cachedInputTokens: 30,
+      cacheWriteTokens: 25,
+      cacheWrite1hTokens: 4,
+      turnUsage: [{ tierKey: 100 }, { tierKey: 100000 }],
+    });
+    expect(row.costUsd).toBeCloseTo(519.75 / 1_000_000, 12);
+  });
+
+  it('records cache-only usage even when the model is priced at zero', async () => {
+    h.getAvailableModels.mockResolvedValue([{ ...model, pricing: {}, freeToRun: true }]);
+    h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => {
+      await onText(['Feedback was steady.'], { cacheReadInputTokens: 18 });
+    });
+
+    await run();
+
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cachedInputTokens: 18, costUsd: 0, creditsCharged: 0 })
+    );
+  });
+
+  it('joins provider settlement after the deadline, latches late usage, and awaits the insert before failing', async () => {
+    vi.useFakeTimers();
+    const inFlight = Promise.withResolvers<void>();
+    const insert = Promise.withResolvers<null>();
+    h.recordUsage.mockReturnValueOnce(insert.promise);
+    h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => {
+      await inFlight.promise;
+      await onText(['Must not be uploaded'], actualUsage);
+    });
+    const outcome = vi.fn();
+    const pending = run().catch(outcome);
+    await vi.advanceTimersByTimeAsync(59_999);
+    const [, , options] = h.complete.mock.calls[0];
+    expect(options).toMatchObject({ stream: false, retryMode: 'abort-aware', maxTokens: 2000 });
+    expect(options.abortSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(options.abortSignal?.aborted).toBe(true);
+    expect(outcome).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+
+    inFlight.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 60,
+        providerOutputTokens: 10,
+        settledBasis: 'provider',
+        status: 'timeout',
+        creditsCharged: 0,
+      })
+    );
+    expect(outcome).not.toHaveBeenCalled();
+    expect(h.updateOne).toHaveBeenCalledTimes(1);
+
+    insert.resolve(null);
+    await pending;
+    expect(outcome).toHaveBeenCalledExactlyOnceWith(options.abortSignal?.reason);
+    expect(options.abortSignal?.reason).toMatchObject({ message: 'Summary generation timeout after 60000ms' });
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.updateOne).toHaveBeenLastCalledWith(
+      { summaryJobId: SUMMARY_JOB_ID },
+      { status: 'failed', activeKey: SUMMARY_JOB_ID, errorMessage: 'Summary generation timeout after 60000ms' }
+    );
+  });
+
+  it('disarms the provider deadline before waiting on owner reads and the usage write', async () => {
+    vi.useFakeTimers();
+    const provider = Promise.withResolvers<void>();
+    const user = Promise.withResolvers<{ id: string }>();
+    const insert = Promise.withResolvers<null>();
+    h.findUsageUser.mockReturnValueOnce(user.promise);
+    h.recordUsage.mockReturnValueOnce(insert.promise);
+    h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => {
+      await provider.promise;
+      await onText(['Feedback was steady.'], actualUsage);
+    });
+
+    const pending = run();
+    await vi.advanceTimersByTimeAsync(59_999);
+    provider.resolve();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.findUsageUser).toHaveBeenCalledOnce();
+    expect(h.findUsageOrganization).toHaveBeenCalledOnce();
+    expect(h.complete.mock.calls[0][2].abortSignal?.aborted).toBe(false);
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+
+    user.resolve({ id: message.userId });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.recordUsage).toHaveBeenCalledOnce();
+    expect(h.upload).not.toHaveBeenCalled();
+    insert.resolve(null);
+    await pending;
+    expect(h.upload).toHaveBeenCalledOnce();
+    expect(frames().at(-1)?.status).toBe('completed');
+  });
+
+  it('joins both owner reads even when one rejects', async () => {
+    vi.useFakeTimers();
+    const otherRead = Promise.withResolvers<null>();
+    h.findUsageUser.mockRejectedValueOnce(new Error('database fault'));
+    h.findUsageOrganization.mockReturnValueOnce(otherRead.promise);
+    const pending = run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    otherRead.resolve(null);
+    await pending;
+    expect(h.upload).toHaveBeenCalledOnce();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('records callback usage before rethrowing an ordinary provider error', async () => {
+    vi.useFakeTimers();
+    const originalError = new Error('provider unavailable');
+    const insert = Promise.withResolvers<null>();
+    h.recordUsage.mockReturnValueOnce(insert.promise);
+    h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => {
+      await onText([], actualUsage);
+      throw originalError;
+    });
+    const outcome = vi.fn();
+    const pending = run().catch(outcome);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ inputTokens: 60 }));
+    expect(outcome).not.toHaveBeenCalled();
+    expect(h.updateOne).toHaveBeenCalledTimes(1);
+    insert.resolve(null);
+    await pending;
+    expect(outcome).toHaveBeenCalledExactlyOnceWith(originalError);
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('uses typed refusal usage and preserves the original error after a failed insert', async () => {
+    const refusal = new SafetyRefusalError(model.id, {
+      inputTokens: 18,
+      outputTokens: 2,
+      cacheReadInputTokens: 5,
+      cacheCreationInputTokens: 0,
+    });
+    h.complete.mockRejectedValueOnce(refusal);
+    h.recordUsage.mockRejectedValueOnce(new Error('private driver message'));
+
+    const logger = makeLogger();
+    await expect(run(logger)).rejects.toBe(refusal);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ inputTokens: 18, outputTokens: 2, cachedInputTokens: 5, status: 'refusal' })
+    );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('private driver message');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/usage event failed/), expect.any(Error));
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(frames().at(-1)?.status).toBe('failed');
+  });
+
+  it('completes the job after an isolated usage write failure', async () => {
+    h.recordUsage.mockRejectedValueOnce(new Error('private driver message'));
+    const logger = makeLogger();
+    await run(logger);
+    expect(h.recordUsage).toHaveBeenCalledOnce();
+    expect(h.upload).toHaveBeenCalledOnce();
+    expect(frames().at(-1)?.status).toBe('completed');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/usage event failed/), expect.any(Error));
+  });
+
+  it.each(['owner-mismatch', 'missing-user', 'missing-organization', 'no-usage', 'zero-only'] as const)(
+    'still completes without creating a usage event for %s',
+    async scenario => {
+      if (scenario === 'owner-mismatch') {
+        h.findOne.mockResolvedValue({
+          summaryJobId: SUMMARY_JOB_ID,
+          requestedBy: 'someone-else',
+          organizationId: ORG_ID,
+        });
+      }
+      if (scenario === 'missing-user') h.findUsageUser.mockResolvedValue(null);
+      if (scenario === 'missing-organization') h.findUsageOrganization.mockResolvedValue(null);
+      if (scenario === 'no-usage' || scenario === 'zero-only') {
+        h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => {
+          await onText(
+            ['Feedback was steady.'],
+            scenario === 'zero-only' ? { turnUsage: [{ inputTokens: 0, outputTokens: 0 }] } : undefined
+          );
+        });
+      }
+      await run();
+      expect(h.recordUsage).not.toHaveBeenCalled();
+      if (scenario === 'owner-mismatch' || scenario === 'no-usage' || scenario === 'zero-only') {
+        expect(h.createUsageStore).not.toHaveBeenCalled();
+      }
+      expect(h.upload).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('does not fabricate a row for an ordinary provider failure with no usage', async () => {
+    const error = new Error('provider unavailable');
+    h.complete.mockRejectedValueOnce(error);
+    await expect(run()).rejects.toBe(error);
+    expect(h.createUsageStore).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('records an empty provider response before upload validation rejects', async () => {
+    h.complete.mockImplementationOnce(async (_model, _messages, _options, onText) => onText([], actualUsage));
+    await expect(run()).rejects.toThrow('Empty summary response from LLM');
+    expect(h.recordUsage).toHaveBeenCalledOnce();
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('gives each paid redelivery its own usage row while completed and expired replays remain free', async () => {
+    h.upload.mockRejectedValueOnce(new Error('object write failed'));
+    await expect(run()).rejects.toThrow('object write failed');
+    const job = { summaryJobId: SUMMARY_JOB_ID, requestedBy: message.userId, organizationId: ORG_ID };
+    h.findOne.mockResolvedValue({ ...job, status: 'failed' });
+    await run();
+    h.findOne.mockResolvedValue({ ...job, status: 'completed' });
+    await run();
+    h.findOne.mockResolvedValue(null);
+    await run();
+
+    expect(h.complete).toHaveBeenCalledTimes(2);
+    expect(h.recordUsage).toHaveBeenCalledTimes(2);
+    expect(new Set(h.recordUsage.mock.calls.map(([row]) => row.requestId)).size).toBe(2);
+  });
+
+  it('prices usage carried by a provider timeout error', async () => {
+    const timeout = new LlmTimeoutError('request', 1000, 'provider timeout', {
+      usage: { inputTokens: 40, cacheReadInputTokens: 10, cacheCreationInputTokens: 0, outputTokens: 4 },
+    });
+    h.complete.mockRejectedValueOnce(timeout);
+    await expect(run()).rejects.toBe(timeout);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        inputTokens: 0,
+        outputTokens: 0,
+        providerInputTokens: 40,
+        providerOutputTokens: 4,
+        cachedInputTokens: 10,
+        status: 'timeout',
+        settledBasis: 'provider',
+        creditsCharged: 0,
+      })
+    );
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('preserves the job outcome when the usage store cannot be created', async () => {
+    h.createUsageStore.mockImplementationOnce(() => {
+      throw new Error('store unavailable');
+    });
+    await run();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.upload).toHaveBeenCalledOnce();
+  });
+
+  it('prices a refusal that carries per-turn usage from the turns', async () => {
+    const refusal = new SafetyRefusalError(model.id, {
+      inputTokens: 18,
+      outputTokens: 2,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      turnUsage: [
+        { inputTokens: 11, outputTokens: 1 },
+        { inputTokens: 7, outputTokens: 1 },
+      ],
+    });
+    h.complete.mockRejectedValueOnce(refusal);
+    await expect(run()).rejects.toBe(refusal);
+    expect(h.recordUsage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ inputTokens: 18, outputTokens: 2, status: 'refusal' })
+    );
+  });
+
+  it('does not record usage when the job row belongs to another organization', async () => {
+    h.findOne.mockResolvedValue({
+      summaryJobId: SUMMARY_JOB_ID,
+      organizationId: 'other-organization',
+      requestedBy: message.userId,
+      status: 'pending',
+    });
+    await run();
+    expect(h.findUsageUser).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+  });
+
+  it('requires the summary reserve immediately before inference', async () => {
+    const checkBudget = vi.fn((minimumRemainingMs?: number) => {
+      if (minimumRemainingMs) throw new Error('reserve unavailable');
+    });
+    await expect(runOrgFeedbackSummary(message, makeLogger() as never, checkBudget)).rejects.toThrow(
+      'reserve unavailable'
+    );
+    expect(checkBudget.mock.calls).toEqual([[], [], [120_000]]);
+    expect(h.getLlmByModel).toHaveBeenCalledOnce();
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(frames().at(-1)?.status).toBe('failed');
+  });
 });

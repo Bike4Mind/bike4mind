@@ -6,6 +6,7 @@ export interface IProjectMethods {}
 
 export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
   shareable: IShareableStaticMethods<IProjectDocument>;
+  setOwnedGroupReadAccess: (projectId: string, ownerId: string, groupId: string, enabled: boolean) => Promise<boolean>;
   /**
    * Partial update that re-checks update access and not-deleted in the write filter; null when the
    * project is gone, deleted, or no longer writable by `user`.
@@ -50,6 +51,20 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
     options: { afterId?: string; limit: number }
   ) => Promise<{ data: IProject[]; hasMore: boolean }>;
 
+  /**
+   * Readable projects (same arms as `listAccessibleAfterId`) that reference the file, in `fileIds` or
+   * `systemPrompts`, or the session, in `sessionIds`.
+   */
+  findAccessibleReferencing: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ref: { fileId: string } | { sessionId: string }
+  ) => Promise<IProjectDocument[]>;
+  /** Internal grant cleanup includes direct participants who do not hold read permission. */
+  findParticipatingReferencing: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    ref: { fileId: string } | { sessionId: string }
+  ) => Promise<IProjectDocument[]>;
+
   removeSession: (sessionId: string) => Promise<void>;
 
   /**
@@ -59,6 +74,8 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
    * deliberately no unscoped form, since neither file-id field is indexed.
    */
   pullFileReferences: (fileIds: string[], scope: { projectId: string } | { userIds: string[] }) => Promise<void>;
+  /** Remove only these stored session references from one project, preserving concurrent additions. */
+  pullSessionReferences: (sessionIds: string[], scope: { projectId: string }) => Promise<void>;
 
   /**
    * Find all projects by session ID
@@ -79,6 +96,7 @@ export interface IProject {
   name: string;
   description: string;
   userId: string;
+  organizationId?: string;
 
   sessionIds: string[];
   fileIds: string[];

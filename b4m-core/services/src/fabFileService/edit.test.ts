@@ -28,6 +28,7 @@ describe('editFabFile (narrowed write on apply)', () => {
       },
     };
     llm = { complete: vi.fn().mockResolvedValue('edited text') };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, text: async () => 'original text' }));
     storage = {
       upload: vi.fn().mockResolvedValue(undefined),
       generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed'),
@@ -36,6 +37,7 @@ describe('editFabFile (narrowed write on apply)', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it('writes only the content-rewrite fields when applyImmediately is true', async () => {
@@ -50,12 +52,11 @@ describe('editFabFile (narrowed write on apply)', () => {
     );
 
     expect(result.applied).toBe(true);
+    expect(fetch).toHaveBeenCalledWith('https://s3.example.com/signed');
     expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
     expect(db.fabFiles.update.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
-        fileUrl: 'https://s3.example.com/signed',
-        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         filePath: 'uploads/notes.txt',
         updatedAt: NOW,
         ...FAB_FILE_CONTENT_REWRITE_PATCH,

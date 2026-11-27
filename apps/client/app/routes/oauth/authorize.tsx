@@ -269,11 +269,11 @@ const OAuthAuthorizePage = () => {
             You can revoke this access at any time from{' '}
             <Link
               to="/profile"
-              search={{ tab: 'settings', section: 'security' }}
+              search={{ tab: 'security' }}
               style={{ textDecoration: 'underline', color: 'inherit' }}
               data-testid="oauth-consent-revoke-hint-link"
             >
-              Settings &rsaquo; Security &rsaquo; Approved Apps
+              Security &rsaquo; Approved apps
             </Link>
             .
           </Typography>

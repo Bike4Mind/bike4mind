@@ -164,6 +164,68 @@ if (isMonitoredStage) {
             },
           },
         },
+        {
+          type: 'metric',
+          x: 0,
+          y: 18,
+          width: 12,
+          height: 6,
+          properties: {
+            // Chat turns whose scope was cut to forced retrieval's 100-file cap, including a single
+            // lake listed at the cap. Average is the share cut by file name rather than by relevance;
+            // the Reason series say which fallback fired.
+            title: 'Forced Retrieval: By-Name Cut Rate',
+            metrics: [
+              [NAMESPACE, 'ForcedRetrievalByNameCut', 'Stage', $app.stage, { stat: 'Average', label: 'By-name share' }],
+              [
+                {
+                  expression: `SEARCH('{${NAMESPACE},Reason,Stage} MetricName="ForcedRetrievalByNameCut" Stage="${$app.stage}"', 'Sum', 300)`,
+                  id: 'by_name_reasons',
+                  label: 'By reason',
+                  yAxis: 'right',
+                },
+              ],
+            ],
+            view: 'timeSeries',
+            region,
+            period: 300,
+            yAxis: { left: { min: 0, max: 1, label: 'Share' }, right: { min: 0, label: 'Turns' } },
+          },
+        },
+        {
+          type: 'metric',
+          x: 12,
+          y: 18,
+          width: 12,
+          height: 6,
+          properties: {
+            // A pick at the deadline line fell back by name; the keep-warm cron should hold it under it.
+            title: 'Forced Retrieval: ANN Candidate Pick Duration',
+            metrics: [
+              [
+                NAMESPACE,
+                'ForcedRetrievalAnnPickDurationMs',
+                'Stage',
+                $app.stage,
+                { stat: 'Maximum', label: 'Slowest pick' },
+              ],
+              [
+                NAMESPACE,
+                'ForcedRetrievalAnnPickDurationMs',
+                'Stage',
+                $app.stage,
+                { stat: 'Average', label: 'Average pick' },
+              ],
+            ],
+            view: 'timeSeries',
+            region,
+            period: 300,
+            yAxis: { left: { min: 0, label: 'Milliseconds' } },
+            annotations: {
+              horizontal: [{ value: 3000, label: 'Deadline: by-name fallback', color: '#d62728' }],
+            },
+          },
+        },
       ],
     })
   );

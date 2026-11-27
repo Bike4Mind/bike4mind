@@ -1,13 +1,26 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { apiKeyService } from '@bike4mind/services';
-import { ApiKeyType } from '@bike4mind/common';
+import { ApiKeyType, estimateTtsCreditCost, resolveAudioVendorBackend, type ApiErrorCode } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { apiKeyRepository, adminSettingsRepository, spendFreezeRepository } from '@bike4mind/database';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import {
+  holdPreflightCredits,
+  InsufficientCreditsPreflightError,
+  type PreflightCreditHold,
+} from '@server/utils/creditPreflight';
+import { createModelAdmission, isCreditsEnforced } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { resolveAudioBillingOrgId } from '@server/billing/resolveAudioBillingOrgId';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+
+const TTS_MODEL = 'tts-1-hd';
 
 // Test real-time voice by creating a temporary session
 const handler = baseApi().post(async (req, res) => {
-  console.log('[DEBUG] Test Realtime Voice API - Request received');
+  assertAiAccessAllowed(req.user);
 
   const validatedBody = z
     .object({
@@ -17,7 +30,6 @@ const handler = baseApi().post(async (req, res) => {
     .parse(req.body);
 
   const { text, voice } = validatedBody;
-  console.log('[DEBUG] Test Realtime Voice - Text:', text.substring(0, 50) + '...', 'Voice:', voice);
 
   // Get voice settings from admin settings
   const settings = await getSettingsMap(
@@ -37,7 +49,7 @@ const handler = baseApi().post(async (req, res) => {
   );
 
   if (!openaiApiKey) {
-    console.log('[ERROR] Test Realtime Voice - No OpenAI API key found');
+    req.logger.error('No OpenAI API key found');
     return res.status(401).json({ error: 'OpenAI API key not configured' });
   }
 
@@ -45,7 +57,33 @@ const handler = baseApi().post(async (req, res) => {
   const adminVoice = getSettingsValue('voiceSessionAiVoice', settings) || 'alloy';
   const selectedVoice = voice || req.user?.preferredVoice || adminVoice;
 
-  console.log('[DEBUG] Test Realtime Voice - Selected voice:', selectedVoice);
+  // Same durable hold as pages/api/ai/tts.ts: reserve before the provider call, settle after it. Unlike
+  // tts.ts the charge is skipped when enforceCredits is off, so a credits-off deployment moves no balance.
+  const userId = req.user?.id;
+  const billingOrganizationId = await resolveAudioBillingOrgId(req, undefined, 'user');
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: billingOrganizationId })
+  ).assert(TTS_MODEL, { orgModelBackend: resolveAudioVendorBackend('openai') });
+  // The hold below runs only when credits are enforced; the freeze applies either way.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, billingOrganizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
+  let hold: PreflightCreditHold | undefined;
+  if (userId && req.user && (await isCreditsEnforced())) {
+    try {
+      hold = await holdPreflightCredits({
+        req: { user: req.user, apiKeyInfo: req.apiKeyInfo, logger: req.logger },
+        requiredCredits: estimateTtsCreditCost('openai', TTS_MODEL, text.length),
+        featureLabel: 'voice preview',
+        billingOrganizationId,
+      });
+    } catch (error) {
+      if (error instanceof InsufficientCreditsPreflightError) {
+        return res.status(422).json({ error: error.message, errorCode: 'insufficient_credits' satisfies ApiErrorCode });
+      }
+      throw error;
+    }
+  }
 
   try {
     // For now, fallback to TTS API since real-time API requires WebRTC
@@ -58,25 +96,39 @@ const handler = baseApi().post(async (req, res) => {
     const openai = new OpenAI({ apiKey: openaiApiKey });
 
     const response = await openai.audio.speech.create({
-      model: 'tts-1-hd', // Use HD model for better quality matching real-time
+      model: TTS_MODEL, // Use HD model for better quality matching real-time
       voice: selectedVoice as any,
       input: text,
       response_format: 'mp3',
       speed: 1.0, // Normal speed to match real-time API
     });
 
-    // Convert response to buffer
+    if (hold && userId) {
+      const settling = hold;
+      hold = undefined;
+      await deductTtsCredits({
+        hold: settling,
+        userId,
+        vendor: 'openai',
+        model: TTS_MODEL,
+        characters: text.length,
+        logger: req.logger,
+      });
+    }
+
+    // Synthesis already incurred its cost, even if reading or delivering the response fails.
     const buffer = Buffer.from(await response.arrayBuffer());
 
     // Set appropriate headers for audio response
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', buffer.length);
-    res.setHeader('X-Voice-Model', 'tts-1-hd'); // Indicate this is TTS, not real real-time
+    res.setHeader('X-Voice-Model', TTS_MODEL); // Indicate this is TTS, not real real-time
     res.setHeader('X-Voice-Selected', selectedVoice);
 
     return res.send(buffer);
   } catch (error: any) {
-    console.error('Test Realtime Voice error:', error);
+    await hold?.release();
+    req.logger.error('Test Realtime Voice error', { error });
 
     if (error.status === 400) {
       return res.status(400).json({ error: 'Invalid request parameters' });

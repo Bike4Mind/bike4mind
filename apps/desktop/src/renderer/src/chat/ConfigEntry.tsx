@@ -23,6 +23,7 @@ export interface ConfigEntry {
   label: string;
   /** Current state in one line, so the section answers the easy question before it is read. */
   summary: string;
+  description?: string;
   /** Set only when the entry needs the user; also surfaced on its screen's nav row. */
   attention?: string;
   /**
@@ -60,7 +61,7 @@ export function EntrySection({ entry }: { entry: ConfigEntry }) {
         )}
         {/* An entry with no control of its own keeps the button it used to have in the list. */}
         {!entry.control && entry.onOpen && (
-          <Button size="sm" variant="soft" color="neutral" onClick={entry.onOpen} data-testid="config-entry-btn">
+          <Button size="sm" variant="outlined" color="neutral" onClick={entry.onOpen} data-testid="config-entry-btn">
             Open
           </Button>
         )}
@@ -68,6 +69,88 @@ export function EntrySection({ entry }: { entry: ConfigEntry }) {
 
       {entry.control && <Box sx={{ mt: 1.25 }}>{entry.control}</Box>}
     </Sheet>
+  );
+}
+
+/**
+ * The flash a deep-linked setting gets. Padded out to the side so the tint does not touch the
+ * text; the fade out is skipped for reduced motion.
+ */
+export function settingHighlightSx(highlighted: boolean) {
+  return {
+    px: 1.5,
+    mx: -1.5,
+    transition: 'background-color 600ms ease, box-shadow 600ms ease',
+    '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
+    ...(highlighted
+      ? {
+          borderRadius: 'sm',
+          bgcolor: 'var(--joy-palette-primary-softBg)',
+          boxShadow: 'inset 0 0 0 1px var(--joy-palette-primary-outlinedBorder)',
+        }
+      : {}),
+  } as const;
+}
+
+export function SettingsRow({
+  entry,
+  expanded = false,
+  highlighted = false,
+  action,
+}: {
+  entry: ConfigEntry;
+  expanded?: boolean;
+  highlighted?: boolean;
+  /** Beside the label, e.g. a search result's way to its page. */
+  action?: ReactNode;
+}) {
+  const labelId = `settings-label-${entry.id}`;
+  return (
+    <Box
+      component="section"
+      aria-labelledby={labelId}
+      data-testid="config-section"
+      data-entry={entry.id}
+      data-highlighted={highlighted ? 'true' : undefined}
+      sx={{
+        ...settingHighlightSx(highlighted),
+        display: 'flex',
+        flexDirection: expanded ? 'column' : { xs: 'column', md: 'row' },
+        alignItems: expanded ? 'stretch' : { xs: 'stretch', md: 'center' },
+        gap: 2.5,
+        py: 2.5,
+        borderBottom: '1px solid',
+        borderColor: 'divider',
+        '&:last-child': { borderBottom: 0 },
+      }}
+    >
+      <Stack spacing={0.75} sx={{ flex: 1, minWidth: 0 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Typography id={labelId} level="title-sm" sx={{ fontWeight: 500 }}>
+            {entry.label}
+          </Typography>
+          {entry.attention && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color={entry.attentionColor ?? 'danger'}
+              data-testid="config-entry-attention"
+            >
+              {entry.attention}
+            </Chip>
+          )}
+          {action}
+        </Stack>
+        <Typography level="body-sm" textColor="text.tertiary" data-testid="config-entry-summary">
+          {entry.description ?? entry.summary}
+        </Typography>
+      </Stack>
+      {entry.control && (
+        <Box sx={{ flexShrink: 0, minWidth: 0, maxWidth: expanded ? '100%' : { xs: '100%', md: 300 } }}>
+          {entry.control}
+        </Box>
+      )}
+    </Box>
   );
 }
 

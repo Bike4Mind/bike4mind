@@ -1,11 +1,7 @@
 import VerifyEmail from '@client/app/components/VerifyEmail';
-import { useSearch } from '@tanstack/react-router';
+import { getEmailLinkToken, VERIFY_EMAIL_PATH } from '@client/app/utils/emailLinkToken';
 
-const VerifyEmailPage = () => {
-  const search = useSearch({ strict: false });
-  const { token } = search as any;
-
-  return <VerifyEmail token={token as string} />;
-};
+// router.tsx has already moved the link's token out of the address (utils/emailLinkToken.ts).
+const VerifyEmailPage = () => <VerifyEmail token={getEmailLinkToken(VERIFY_EMAIL_PATH) ?? ''} />;
 
 export default VerifyEmailPage;

@@ -4,7 +4,11 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Cache, cacheRepository } from '@bike4mind/database';
-import { buildRateLimitKeys, checkApiKeyRateLimit, resetApiKeyRateLimit } from './apiKeyRateLimitCheck';
+import {
+  buildRateLimitKeys,
+  checkApiKeyRateLimit,
+  resetApiKeyRateLimit,
+} from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -90,10 +94,9 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
 
       await resetApiKeyRateLimit(keyId);
 
-      // findByKey yields undefined (not null) for a missing doc, so assert falsy/truthy.
       const target = buildRateLimitKeys(keyId);
-      expect(await cacheRepository.findByKey(target.minuteKey)).toBeFalsy();
-      expect(await cacheRepository.findByKey(target.dayKey)).toBeFalsy();
+      expect(await cacheRepository.findByKey(target.minuteKey)).toBeNull();
+      expect(await cacheRepository.findByKey(target.dayKey)).toBeNull();
 
       const other = buildRateLimitKeys(otherKeyId);
       expect(await cacheRepository.findByKey(other.minuteKey)).toBeTruthy();

@@ -8,8 +8,8 @@ import {
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { Session, User } from '@bike4mind/database';
 import type { IUserDocument } from '@bike4mind/database';
-import defineAbilitiesFor from '@server/auth/ability';
-import { __resetResolvedPromptCache } from '@server/utils/sessionSystemPromptResolver';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
+import { __resetResolvedPromptCache } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 
 /**
  * POST /api/ai/llm with a real session from Mongo. llm.integration.test.ts mocks the session
@@ -46,7 +46,7 @@ vi.mock('@bike4mind/utils', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   SQSService: class {},
 }));
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
 }));
@@ -55,7 +55,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage:
 
 // Only the identity loader is stubbed, so its call is the observable for the skip. The rest of the
 // module stays real: sessionWillInjectAuthoredPrompt resolves a systemPromptId through it.
-vi.mock('@server/utils/systemPrompts/loader', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/loader', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   loadBaseIdentitySystemPromptMessages: (...a: unknown[]) => mockLoadIdentityPrompts(...a),
 }));

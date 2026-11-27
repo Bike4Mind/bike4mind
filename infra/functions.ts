@@ -1,15 +1,17 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from './constants';
-import { eventBus } from './eventBus';
+import { completionEventsDeadLetter, eventBus } from './eventBus';
 import { generationJobQueue } from './queues';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { providerFederation } from './providerFederation';
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
 import { toolRuntimeAssets } from './toolRuntimeAssets';
 import { searxngUrl } from './searxng';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 
 // Re-export imageProcessor for other files that import from functions.ts
 export { imageProcessor };
@@ -44,13 +46,16 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     generationJobQueue,
   ],
   environment: {
+    ...mailBodyEnvironment(appFilesBucket),
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
+    ...providerFederation.environment,
   },
   permissions: [
+    mailBodyPutPermission(appFilesBucket),
     { actions: ['bedrock:*'], resources: ['*'] },
     // Content moderation for images produced by the image_generation/edit_image tools
     // (closes an agent-tool moderation bypass; the queue-handler imageGeneration/
@@ -74,6 +79,11 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
       resources: ['*'],
     },
     { actions: ['events:PutEvents'], resources: ['*'] },
+    completionEventsDeadLetter.sendPermission,
+    ...providerFederation.permissions,
   ],
+  // Invoked asynchronously by the slack-completion-start rule (infra/llm.ts); see
+  // infra/eventBusDeadLetter.ts for why the function needs its own dead letter.
+  transform: completionEventsDeadLetter.functionTarget,
   copyFiles: toolRuntimeAssets(),
 });

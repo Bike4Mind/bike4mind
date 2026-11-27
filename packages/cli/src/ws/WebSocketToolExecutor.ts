@@ -1,10 +1,11 @@
 import { WebSocketConnectionManager } from './WebSocketConnectionManager';
-import { v4 as uuidv4 } from 'uuid';
 
 interface ToolResult {
   success: boolean;
   content?: unknown;
   error?: string;
+  /** Billing classifier on a failure, e.g. `insufficient_credits`. */
+  errorCode?: string;
 }
 
 /**
@@ -34,7 +35,7 @@ export class WebSocketToolExecutor {
       throw new Error('No access token available');
     }
 
-    const requestId = uuidv4();
+    const requestId = crypto.randomUUID();
 
     return new Promise<ToolResult>((resolve, reject) => {
       let settled = false;
@@ -85,6 +86,7 @@ export class WebSocketToolExecutor {
             success: message.success as boolean,
             content: message.content,
             error: message.error as string | undefined,
+            errorCode: message.errorCode as string | undefined,
           });
         }
       });

@@ -9,13 +9,13 @@
  */
 
 import { deleteArtifactContract, getArtifactContract, updateArtifactContract } from '@bike4mind/common';
-import { artifactContentRepository } from '@bike4mind/database';
 import { artifactService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toPublicArtifact } from '@server/artifacts/toPublicArtifact';
-import { ARTIFACT_DB, hideArtifactDenial } from '@server/artifacts/artifactAccess';
+import { isSupersededSave, readPointedContent } from '@server/artifacts/supersededSave';
+import { ARTIFACT_DB, hideArtifactDenial } from '@bike4mind/server-utils/artifacts/artifactAccess';
 
 const getRoute = nextRouteForContract(getArtifactContract, {
   exemptReadsFromDailyRateLimit: true,
@@ -38,7 +38,7 @@ const updateRoute = nextRouteForContract(updateArtifactContract, {
   const { id } = req.validatedParams;
   const { title, description, content, tags } = req.validated;
 
-  const { artifact } = await hideArtifactDenial(
+  const { artifact, version } = await hideArtifactDenial(
     artifactService.update(
       req.user.id,
       {
@@ -53,15 +53,12 @@ const updateRoute = nextRouteForContract(updateArtifactContract, {
     )
   );
 
-  // Answer from the update, not a read-gated re-read: a write-only sharee may PATCH but not GET, and
-  // must not get a 404 for a write that committed. Sent content is the current content whether or
-  // not it changed (an unchanged hash writes no new row); otherwise load the latest row, but only for a
-  // caller who passes get's read rule, so a write-only sharee gets content: null.
+  // No-row saves must read the returned pointer too: another save may have moved it since hashing.
+  // Keep write-only saves successful without disclosing loaded content.
   const current =
-    content ??
-    (artifactService.canUserReadArtifact(req.user.id, artifact)
-      ? ((await artifactContentRepository.findLatestContent(artifact.id))?.content ?? null)
-      : null);
+    !version || isSupersededSave(artifact, version)
+      ? await readPointedContent(req.user.id, artifact)
+      : (content ?? (await readPointedContent(req.user.id, artifact)));
   res.setHeader('Cache-Control', 'private, no-store');
   return res.json(toPublicArtifact(artifact, current));
 });

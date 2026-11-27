@@ -4,6 +4,8 @@ import type { Server } from 'http';
 import express from 'express';
 
 // Real @bike4mind/common (pure SSE + origin helpers). Only the seams below are mocked.
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -71,7 +73,7 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 vi.mock('@bike4mind/llm-adapters', () => ({
-  // adapterFamily is what the embed reasoning gate reads; a catalog row always carries one.
+  // The embed reasoning gate reads adapterFamily, else backend (adapter-literal models carry no family).
   getAvailableModels: vi
     .fn()
     .mockResolvedValue([{ id: 'test-model', backend: 'anthropic', adapterFamily: 'anthropic-messages' }]),
@@ -101,6 +103,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: { findById: mockOrgFindById },
+  cacheRepository: {},
   agentRepository: { findById: mockAgentFindById },
   userApiKeyRepository: mockUserApiKeyRepository,
   projectRepository: { findById: mockProjectFindById },
@@ -112,8 +115,10 @@ vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: {},
   scopedSettingsRepository: {},
   embedConversationRepository: mockEmbedConversationRepository,
+  spendFreezeRepository: { findActiveForSubject: (...args: unknown[]) => mockFindActiveFreeze(...args) },
 }));
 
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockReauthorizeIdentifiedSession = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/identifiedEmbedUser', () => ({
   reauthorizeIdentifiedSession: mockReauthorizeIdentifiedSession,
@@ -121,7 +126,7 @@ vi.mock('@server/embed/identifiedEmbedUser', () => ({
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
 const mockVerifyEmbedKeyById = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyEmbedApiKey: mockVerifyEmbedApiKey,
   verifyEmbedKeyById: mockVerifyEmbedKeyById,
 }));
@@ -131,7 +136,9 @@ vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: moc
 
 const mockGetEffectiveLLMApiKeys = vi.hoisted(() => vi.fn());
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({ checkApiKeyRateLimit: mockCheckApiKeyRateLimit }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', () => ({
+  checkApiKeyRateLimit: mockCheckApiKeyRateLimit,
+}));
 
 const mockCheckEmbedSessionRateLimit = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/embedSessionRateLimit', () => ({ checkEmbedSessionRateLimit: mockCheckEmbedSessionRateLimit }));
@@ -145,10 +152,12 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+const mockRecordUserLimitEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@bike4mind/server-utils/billing/userLimitEvents', () => ({ recordUserLimitEvent: mockRecordUserLimitEvent }));
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const VALID_INFO = {
@@ -169,7 +178,7 @@ beforeAll(async () => {
   const app = express();
   registerEmbedRoutes(app, () => {});
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       resolve();
     });
@@ -348,8 +357,37 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('treats Origin: null (sandboxed iframe) as absent rather than 403', async () => {
+  it('denies an opaque origin when the key restricts origins', async () => {
     const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('denies an opaque origin when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as Record<string, unknown>).error_description).toBe(
+      'Origin not allowed for this embed key'
+    );
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('serves a request without an Origin header when the key has no allowed origins', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves an origin on the key allow-list', async () => {
+    const res = await post(CHAT, { origin: 'https://example.com' });
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('still serves a request that carries no Origin header', async () => {
+    const res = await post(CHAT);
     expect(res.status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
   });
@@ -394,6 +432,12 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('rejects a whitespace-only message (400)', async () => {
+    const res = await post({ messages: [{ role: 'user', content: '   ' }] });
+    expect(res.status).toBe(400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('returns 403 when the embed key organization no longer exists', async () => {
     mockOrgFindById.mockResolvedValue(null);
     const res = await post(CHAT);
@@ -433,6 +477,7 @@ describe('POST /api/embed/chat', () => {
       error_description: 'This embed key has reached its spend cap',
       code: 'spend_cap_exceeded',
     });
+    expect(mockRecordUserLimitEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'api_key_spend_cap' }));
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
@@ -481,6 +526,49 @@ describe('POST /api/embed/chat', () => {
       body: JSON.stringify(CHAT),
     });
   }
+
+  it('gates the session-token path on the live key allow-list, not the token copy', async () => {
+    // Only the stale token lists this origin, so reading the token's list instead would let it through.
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+      allowedOrigins: ['https://stale.example'],
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue(VALID_INFO);
+    const res = await fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer session.jwt.token',
+        origin: 'https://stale.example',
+      },
+      body: JSON.stringify(CHAT),
+    });
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('denies an opaque origin on the session-token path when the live key lists no origins', async () => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
+    const res = await fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer session.jwt.token', origin: 'null' },
+      body: JSON.stringify(CHAT),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as Record<string, unknown>).error_description).toBe(
+      'Origin not allowed for this embed key'
+    );
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
 
   it('rejects a session token whose bound agent no longer matches the live key (post-rebind replay)', async () => {
     mockVerifyEmbedSessionToken.mockReturnValue({
@@ -692,6 +780,18 @@ describe('POST /api/embed/chat - server-side tools', () => {
     ]);
     expect(params.maxToolCalls).toBe(5);
     expect(params.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  // sharedToolBuilder.mcpNarrowing.test.ts proves orgToolPolicy is what refuses a disallowed tool model.
+  it("hands the embed org's model policy to the tool builder, so a tool's own model calls are governed", async () => {
+    const modelPolicy = { allowedProviders: ['openai'] };
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', users: [], modelPolicy });
+    hydrateWith();
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    const opts = mockBuildSharedTools.mock.calls[0][2] as { orgToolPolicy: unknown };
+    expect(opts.orgToolPolicy).toEqual(expect.objectContaining({ allowedProviders: ['openai'] }));
   });
 
   it('a tool outside the curated universe never materializes, even when explicitly allowed', async () => {
@@ -920,20 +1020,63 @@ describe('POST /api/embed/chat - server-side tools', () => {
   });
 
   it.each([
-    ['deepseek', 'a family that wraps reasoning in the text channel'],
-    ['ollama', 'a family that wraps reasoning in the text channel'],
-    [undefined, 'a model the catalog cannot describe'],
-  ])('refuses %s before opening the stream (%s)', async (adapterFamily, _why) => {
+    [
+      'a family that wraps reasoning in the text channel',
+      { id: 'test-model', backend: 'anthropic', adapterFamily: 'deepseek' },
+    ],
+    [
+      'a family that wraps reasoning in the text channel',
+      { id: 'test-model', backend: 'anthropic', adapterFamily: 'ollama' },
+    ],
+    [
+      'a family this build does not know',
+      { id: 'test-model', backend: 'anthropic', adapterFamily: 'some-future-provider' },
+    ],
+    ['a family-less model on a backend that inlines reasoning', { id: 'test-model', backend: 'xai' }],
+    ['a family-less Bedrock model that is not Claude', { id: 'test-model', backend: 'bedrock' }],
+    ['a family-less model with no backend', { id: 'test-model' }],
+  ])('refuses %s before opening the stream', async (_why, row) => {
     const { getAvailableModels } = await import('@bike4mind/llm-adapters');
-    vi.mocked(getAvailableModels).mockResolvedValueOnce([
-      { id: 'test-model', backend: 'anthropic', adapterFamily } as never,
-    ]);
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([row as never]);
 
     const res = await post(CHAT);
 
     expect(res.status).toBe(422);
     expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
     // Pre-stream refusal: nothing was billed and no SSE frame was written.
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'bedrock'],
+    ['global.anthropic.claude-sonnet-5', 'bedrock'],
+    ['claude-sonnet-5', 'anthropic'],
+    ['gpt-4.1-mini-2025-04-14', 'openai'],
+    ['gemini-2.5-flash', 'gemini'],
+  ])('accepts adapter-literal model %s, which carries a backend and no adapterFamily', async (id, backend) => {
+    // Only a model the catalog resolved carries adapterFamily. Every built-in model
+    // routes on backend alone, so a family-only gate refuses all of them.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([{ id, backend } as never]);
+    hydrateWith({ model: id });
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalled();
+  });
+
+  it('refuses a Claude-shaped id that the model list does not contain', async () => {
+    // reasoningChannelOf reads a bare Claude id as opt-in; the gate must not admit an
+    // id on its spelling when no row describes how it is served.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([{ id: 'other-model', backend: 'anthropic' } as never]);
+    hydrateWith({ model: 'claude-sonnet-5' });
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
@@ -1035,6 +1178,17 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(mockGetEffectiveLLMApiKeys.mock.calls[0][0]).toBe(END_USER.id);
   });
 
+  it("carries the embed org's model policy onto the personally billed turn", async () => {
+    const modelPolicy = { allowedModels: ['other-model'] };
+    mockOrgFindById.mockResolvedValue({ ...ORG, modelPolicy });
+    const res = await postIdentified(CHAT);
+    await res.text();
+
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.billingOrganizationId).toBeUndefined();
+    expect(params.governingOrgModelPolicy).toEqual(modelPolicy);
+  });
+
   it("refuses a broke identified user instead of falling back to the org's pool", async () => {
     mockAssertOwnerHasCredits.mockImplementation((owner: { id: string }) => {
       if (owner.id === END_USER.id) throw new MockInsufficientCreditsError('Host User has insufficient credits');
@@ -1043,6 +1197,30 @@ describe('POST /api/embed/chat - identified mode', () => {
     expect(res.status).toBe(422);
     expect((await res.json()).error).toBe('insufficient_credits');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a frozen identified user with 403 spend_frozen before any stream bytes', async () => {
+    mockFindActiveFreeze.mockResolvedValueOnce({
+      scopeType: 'User',
+      frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+      reason: 'internal',
+    });
+    const res = await postIdentified(CHAT);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: 'spend_frozen', code: 'spend_frozen', frozenScope: 'user' });
+    expect(JSON.stringify(body)).not.toContain('internal');
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(expect.objectContaining({ userId: END_USER.id }));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('checks the org, the key and the key user for an anonymous visitor', async () => {
+    const res = await post(CHAT);
+    await res.text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', apiKeyId: expect.any(String) })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeChecked: true }));
   });
 
   it("is not blocked by the org key's spend cap, which bounds only org-paid turns", async () => {
@@ -1150,5 +1328,24 @@ describe('POST /api/embed/chat - anonymous mode stays stateless', () => {
       { role: 'assistant', content: 'b' },
       { role: 'user', content: 'c' },
     ]);
+  });
+});
+
+describe('POST /api/embed/chat - admin role on the key owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const scopeActorOf = async (res: Response): Promise<ScopeActor> => {
+    expect(res.status).toBe(200);
+    await res.text();
+    return mockExecuteCompletion.mock.calls[0][0].scopeActor;
+  };
+
+  it('withholds an admin owner role for an anonymous visitor', async () => {
+    const scopeActor = await scopeActorOf(await post(CHAT));
+    expect(scopeActor?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key that holds the admin scope', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, scopes: ['embed:chat', 'admin:*'] });
+    expect(await scopeActorOf(await post(CHAT))).toBeUndefined();
   });
 });

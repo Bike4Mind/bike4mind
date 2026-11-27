@@ -6,7 +6,7 @@ import { type MigrationFile } from './index';
  * due-config scan (`claimDueConfigs`) reads every tick.
  *
  * Migration rather than autoIndex for the same reason as 20260902000000_ensure-quest-retrieval-index:
- * prod runs DocumentDB, where an index build takes a foreground collection lock on whichever cold
+ * autoIndex builds are fire-and-forget (a failure is silent) and would start on whichever cold
  * boot touches the collection first.
  *
  * The id sorts below 20260921130000 and 20260922000001 on purpose: both are fail-closed backfills

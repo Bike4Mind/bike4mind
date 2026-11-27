@@ -2,18 +2,45 @@ import { describe, it, expect } from 'vitest';
 import {
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
   AGENT_LIMIT_REACHED_ERROR_CODE,
+  INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
   API_ERROR_CODES,
   API_KEY_USER_CAP_ERROR_CODE,
   UNKNOWN_MODEL_ERROR_CODE,
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
+  ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
+  API_KEY_TRUST_REQUIRED_ERROR_CODE,
+  TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
+  API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+  API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  UPGRADE_REQUIRED_ERROR_CODE,
+  ACCOUNT_SUSPENDED_ERROR_CODE,
+  RUN_NOT_FOUND_ERROR_CODE,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  RUN_BUDGET_NOT_RAISED_ERROR_CODE,
+  FUNCTION_REVIEW_REQUIRED_ERROR_CODE,
 } from './apiErrorCodes';
 import { QUEST_ERROR_CODES } from './types/entities/SessionTypes';
 import { TTS_ERROR_CODES, ttsErrorResponseSchema } from './voiceGeneration';
-import { COMPLETION_TOOL_ERROR_CODES, CompletionSseErrorEventSchema } from './schemas/cliCompletions';
+import {
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
+  COMPLETION_SSE_ERROR_CODES,
+  COMPLETION_TOOL_ERROR_CODES,
+  CompletionSseErrorEventSchema,
+} from './schemas/cliCompletions';
 import { VIDEO_GENERATION_API_ERROR_CODES, VIDEO_JOB_PUBLIC_ERROR_CODES } from './schemas/videoGenerations';
 import { MUSIC_GENERATION_API_ERROR_CODES, MUSIC_JOB_PUBLIC_ERROR_CODES } from './schemas/musicGenerations';
+import { IMAGE_JOB_API_ERROR_CODES, IMAGE_JOB_PUBLIC_ERROR_CODES } from './schemas/imageJobs';
 import { DECISIONS_ERROR_CODES } from './schemas/decisions';
 import { STORAGE_ERROR_CODES } from './errors';
+import { SKILL_MARKET_IMPORT_ERROR_CODES } from './schemas/skillMarketPublic';
+import { PENDING_ACTION_ERROR_CODES } from './schemas/pendingActions';
+import { BRIEF_DECISION_ERROR_CODES, BRIEF_REPLY_ERROR_CODES } from './schemas/brief';
+import { SLACK_MESSAGE_ERROR_CODES } from './schemas/slackMessagesApi';
 
 /**
  * The `satisfies readonly ApiErrorCode[]` on each narrowing tuple is what actually
@@ -46,22 +73,74 @@ describe('API_ERROR_CODES', () => {
       VIDEO_JOB_PUBLIC_ERROR_CODES,
       MUSIC_GENERATION_API_ERROR_CODES,
       MUSIC_JOB_PUBLIC_ERROR_CODES,
+      IMAGE_JOB_API_ERROR_CODES,
+      IMAGE_JOB_PUBLIC_ERROR_CODES,
       DECISIONS_ERROR_CODES,
       STORAGE_ERROR_CODES,
       COMPLETION_TOOL_ERROR_CODES,
+      SKILL_MARKET_IMPORT_ERROR_CODES,
+      SLACK_MESSAGE_ERROR_CODES,
+      COMPLETION_SSE_ERROR_CODES,
+      PENDING_ACTION_ERROR_CODES,
+      BRIEF_REPLY_ERROR_CODES,
+      BRIEF_DECISION_ERROR_CODES,
     ];
     // API_KEY_USER_CAP_ERROR_CODE has no narrowing tuple; its emission is proven by userApiKeyService/__tests__/create.test.ts (the additionalInfo assertion).
     // AGENT_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/server/agents/createAgent.test.ts.
+    // INSTRUCTION_LIMIT_REACHED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/assistant/instructions/__tests__/instructions.route.test.ts.
     // UNKNOWN_MODEL_ERROR_CODE likewise; proven by b4m-core/services/src/cliCompletions.modelAlias.test.ts.
     // BILLING_ORGANIZATION_MISMATCH_ERROR_CODE likewise; proven by apps/client/server/billing/resolveMediaBillingOrgId.test.ts.
     // REQUEST_TIMEOUT_ERROR_CODE likewise; proven by apps/client/pages/api/__tests__/chat.integration.test.ts (over the wait=true deadline).
+    // API_KEY_TRUST_REQUIRED_ERROR_CODE likewise; proven by userApiKeyService/__tests__/trust.test.ts.
+    // ACCOUNT_TRUST_REQUIRED_ERROR_CODE likewise; proven by apps/client/server/auth/assertOutboundActionAllowed.test.ts.
+    // TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE and CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
+    // packages/server-utils/src/utils/untrustedCompletionQuota.test.ts.
+    // API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE and API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE likewise; proven by
+    // packages/server-utils/src/utils/apiKeyRateLimitCheck.test.ts.
+    // MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
+    // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by packages/server-utils/src/billing/freeTierDailyCapGate.test.ts.
+    // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.
+    // ACCOUNT_SUSPENDED_ERROR_CODE likewise; proven by packages/server-utils/src/auth/assertAccountStateUsable.test.ts.
+    // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
+    // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
+    // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
+    // RUN_BUDGET_EXHAUSTED_ERROR_CODE likewise; proven by apps/client/server/billing/completionCreditHolds.test.ts.
+    // RUN_BUDGET_NOT_RAISED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/completion-runs/[runId]/__tests__/budget.test.ts.
+    // 'input_file_not_found' likewise; proven by services/src/sceneJobs/sceneJobHandler.test.ts.
+    // The evaluation_* codes likewise; proven by apps/client/server/completionRuns/evaluation.test.ts
+    // ('evaluation_identity_conflict' by packages/database/src/models/billing/CompletionRunModel.test.ts).
+    // FUNCTION_REVIEW_REQUIRED_ERROR_CODE likewise; proven by apps/client/pages/api/v1/functions/__tests__/functions.routes.test.ts.
     const emitted = new Set<string>([
       ...NARROWING_TUPLES.flat(),
       UNKNOWN_MODEL_ERROR_CODE,
+      MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
       API_KEY_USER_CAP_ERROR_CODE,
       AGENT_LIMIT_REACHED_ERROR_CODE,
+      INSTRUCTION_LIMIT_REACHED_ERROR_CODE,
       BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
       REQUEST_TIMEOUT_ERROR_CODE,
+      ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
+      API_KEY_TRUST_REQUIRED_ERROR_CODE,
+      ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
+      TOKEN_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+      CONCURRENCY_LIMIT_EXCEEDED_ERROR_CODE,
+      API_KEY_RATE_LIMIT_EXCEEDED_ERROR_CODE,
+      API_KEY_DAILY_LIMIT_EXCEEDED_ERROR_CODE,
+      DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      UPGRADE_REQUIRED_ERROR_CODE,
+      ACCOUNT_SUSPENDED_ERROR_CODE,
+      RUN_NOT_FOUND_ERROR_CODE,
+      ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+      RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      RUN_BUDGET_NOT_RAISED_ERROR_CODE,
+      'input_file_not_found',
+      'evaluation_not_enabled',
+      'evaluation_identity_conflict',
+      'evaluation_request_exists',
+      'evaluation_receipt_outstanding',
+      'evaluation_budget_exhausted',
+      FUNCTION_REVIEW_REQUIRED_ERROR_CODE,
     ]);
     expect(API_ERROR_CODES.filter(code => !emitted.has(code))).toEqual([]);
   });

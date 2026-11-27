@@ -47,6 +47,12 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # ── Builder: build all @bike4mind/* packages, then the Next app (shim active) ─
 FROM deps AS builder
+# The install above ran codegen without infra/, so the runtime glue lacks the core resource
+# names it needs before it registers any contributed secret. Regenerate with infra/ present.
+COPY infra ./infra
+RUN node apps/client/scripts/generate-premium-glue.mjs
+# @bike4mind/local-models bundles the Curated models list from catalog/model-hub.
+COPY catalog ./catalog
 # Build every workspace package except the client (incl. @bike4mind/resource).
 RUN pnpm turbo:build
 # The client `prebuild` regenerates the help index and bundles the help markdown from
@@ -93,6 +99,8 @@ RUN groupadd -r nodejs && useradd -r -g nodejs nextjs
 COPY --from=builder --chown=nextjs:nodejs /app/apps/client/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/client/.next/static ./apps/client/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/apps/client/public ./apps/client/public
+# Startup check run by the self-host Compose validate-secrets service.
+COPY --chown=nextjs:nodejs selfhost/kubernetes/files/validate-secrets.cjs ./selfhost/validate-secrets.cjs
 
 USER nextjs
 EXPOSE 3000

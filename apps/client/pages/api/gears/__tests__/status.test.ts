@@ -4,11 +4,13 @@ import { createMocks } from 'node-mocks-http';
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     projectExists: vi.fn(),
+    projectAggregate: vi.fn(),
     agentCount: vi.fn(),
     dataLakeFindOne: vi.fn(),
     fabFileExists: vi.fn(),
     publishedExists: vi.fn(),
     txFind: vi.fn(),
+    heldFind: vi.fn(),
     addCredits: vi.fn(),
     artifactExists: vi.fn(),
     apiKeyExists: vi.fn(),
@@ -19,6 +21,9 @@ const { mocks } = vi.hoisted(() => ({
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
     hearthHasAnyChannel: vi.fn(),
+    userFindById: vi.fn(),
+    gearMinAgeSetting: vi.fn(),
+    projectCollaboratorQualifies: vi.fn(),
   },
 }));
 
@@ -41,13 +46,19 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  Project: { exists: (...a: unknown[]) => mocks.projectExists(...a) },
+  Project: {
+    exists: (...a: unknown[]) => mocks.projectExists(...a),
+    aggregate: (...a: unknown[]) => mocks.projectAggregate(...a),
+  },
   FabFile: { exists: (...a: unknown[]) => mocks.fabFileExists(...a) },
   PublishedArtifact: { exists: (...a: unknown[]) => mocks.publishedExists(...a) },
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
   ApiKey: { exists: (...a: unknown[]) => mocks.apiKeyExists(...a) },
   UsageEvent: { distinct: (...a: unknown[]) => mocks.usageDistinct(...a) },
-  User: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  User: {
+    exists: (...a: unknown[]) => mocks.miscExists(...a),
+    findById: (...a: unknown[]) => mocks.userFindById(...a),
+  },
   Session: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Agent: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   Memento: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
@@ -56,10 +67,12 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
+  heldCreditRewardRepository: { findByTransactionIds: (...a: unknown[]) => mocks.heldFind(...a) },
   gearStampRepository: {
     stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
   },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
+  adminSettingsRepository: { getSettingsValue: (...a: unknown[]) => mocks.gearMinAgeSetting(...a) },
   hearthRepository: { hasAnyChannelForUser: (...a: unknown[]) => mocks.hearthHasAnyChannel(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -67,10 +80,27 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
-  creditService: { addCredits: (...a: unknown[]) => mocks.addCredits(...a) },
+  creditService: {
+    addCredits: (...a: unknown[]) => mocks.addCredits(...a),
+    // Stand-in for the payout gate (the real services bundle cannot load under the common mock below).
+    isRewardRecipientBlocked: (party: {
+      isBanned?: boolean;
+      moderation?: { status?: string };
+      signupGrant?: { blocked?: unknown; unlockForfeited?: unknown };
+    }) =>
+      !!party.isBanned ||
+      party.moderation?.status === 'suspend_pending' ||
+      !!party.signupGrant?.blocked ||
+      !!party.signupGrant?.unlockForfeited,
+  },
 }));
 vi.mock('@bike4mind/common', () => ({
+  ApiKeyScope: { ME_READ: 'me:read', ADMIN: 'admin:*' },
   CreditHolderType: { User: 'User' },
+}));
+
+vi.mock('@server/services/gears/socialParty', () => ({
+  hasQualifyingProjectCollaborator: (...a: unknown[]) => mocks.projectCollaboratorQualifies(...a),
 }));
 
 import handler from '../status';
@@ -89,6 +119,7 @@ const run = (user?: { id: string }) => {
 
 const lockEverything = () => {
   mocks.projectExists.mockResolvedValue(null);
+  mocks.projectAggregate.mockResolvedValue([]);
   mocks.agentCount.mockResolvedValue(0);
   mocks.dataLakeFindOne.mockResolvedValue(null);
   mocks.fabFileExists.mockResolvedValue(null);
@@ -103,6 +134,12 @@ const lockEverything = () => {
   mocks.overridesByKey.mockResolvedValue(new Map());
   mocks.hearthHasAnyChannel.mockResolvedValue(false);
   mocks.txFind.mockResolvedValue([]);
+  mocks.heldFind.mockResolvedValue([]);
+  mocks.projectCollaboratorQualifies.mockResolvedValue(false);
+  // Default: trusted account so existing status tests continue to pass.
+  mocks.userFindById.mockReturnValue({
+    lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: true }),
+  });
 };
 
 beforeEach(() => {
@@ -112,10 +149,34 @@ beforeEach(() => {
 });
 
 describe('GET /api/gears/status', () => {
+  it('propagates a failed trust lookup without reporting eligibility', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    const lookupError = new Error('User lookup unavailable');
+    mocks.userFindById.mockReturnValue({ lean: () => Promise.reject(lookupError) });
+
+    const { res, promise } = run({ id: 'u1' });
+
+    await expect(promise).rejects.toBe(lookupError);
+    expect(res._isEndCalled()).toBe(false);
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
   it('401s without a user', async () => {
     const { res, promise } = run();
     await promise;
     expect(res._getStatusCode()).toBe(401);
+  });
+
+  it('403s a key minted for a connected app without evaluating gears', async () => {
+    const { req, res } = createMocks({ method: 'GET' });
+    Object.assign(req, {
+      user: { id: 'u1' },
+      apiKeyInfo: { keyId: 'k1', scopes: ['me:read'], oauthExchangeClientId: 'c1' },
+    });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mocks.projectExists).not.toHaveBeenCalled();
   });
 
   it('reports all gears locked for a brand-new user and grants nothing', async () => {
@@ -123,6 +184,17 @@ describe('GET /api/gears/status', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
+    expect(mocks.userFindById).toHaveBeenCalledExactlyOnceWith('u1', {
+      createdAt: 1,
+      emailVerified: 1,
+      isBanned: 1,
+      disputePending: 1,
+      moderation: 1,
+      deletedAt: 1,
+      isSynthetic: 1,
+      'signupGrant.blocked': 1,
+      'signupGrant.unlockForfeited': 1,
+    });
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
     expect(body.gears).toHaveLength(GEAR_DEFAULTS.length);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
@@ -142,6 +214,84 @@ describe('GET /api/gears/status', () => {
     expect(projects.claimable).toBe(true);
     // Read-only: the payout is POST /api/gears/claim's job.
     expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('a reward queued for the trickle pool reads as claimed and queued, not claimable', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.heldFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects', status: 'held' }]);
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; claimable?: boolean; claimed?: boolean; rewardQueued?: boolean }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects).toMatchObject({ claimed: true, rewardQueued: true });
+    expect(projects.claimable).toBeUndefined();
+  });
+
+  it('a reward voided at release is not claimable and reads as unavailable', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.heldFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects', status: 'void' }]);
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; claimable?: boolean; rewardPending?: boolean; pendingReason?: string }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.claimable).toBeUndefined();
+    expect(projects).toMatchObject({ rewardPending: true, pendingReason: 'unavailable' });
+  });
+
+  it('a ledger row wins over a queued row left behind by a losing concurrent claim', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
+    mocks.heldFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects', status: 'held' }]);
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; claimed?: boolean; claimable?: boolean; rewardQueued?: boolean }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.claimed).toBe(true);
+    expect(projects.rewardQueued).toBeUndefined();
+    expect(projects.claimable).toBeUndefined();
+  });
+
+  it.each([
+    { label: 'a suspend_pending moderation status', account: { moderation: { status: 'suspend_pending' } } },
+    { label: 'a ban', account: { isBanned: true } },
+    { label: 'an admin grant block', account: { signupGrant: { blocked: { at: new Date() } } } },
+    {
+      label: 'a forfeited signup unlock',
+      account: { signupGrant: { unlockForfeited: { cause: 'refund', at: new Date() } } },
+    },
+  ])('an account with $label sees an unlocked gear as unavailable, not claimable', async ({ account }) => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.userFindById.mockReturnValue({
+      lean: () =>
+        Promise.resolve({
+          createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+          emailVerified: true,
+          ...account,
+        }),
+    });
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; unlocked: boolean; claimable?: boolean; pendingReason?: string }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.unlocked).toBe(true);
+    expect(projects.claimable).toBeUndefined();
+    expect(projects.pendingReason).toBe('unavailable');
   });
 
   it('a gear already in the ledger is not claimable', async () => {
@@ -176,6 +326,98 @@ describe('GET /api/gears/status', () => {
     await promise;
     const body = res._getJSONData() as { gears: Array<{ claimable?: boolean }> };
     expect(body.gears.some(g => g.claimable)).toBe(false);
+  });
+
+  it('untrusted account sees an unlocked gear as rewardPending, not claimable', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{
+        key: string;
+        unlocked: boolean;
+        rewardPending?: boolean;
+        pendingReason?: string;
+        claimable?: boolean;
+      }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.unlocked).toBe(true);
+    expect(projects.rewardPending).toBe(true);
+    expect(projects.pendingReason).toBe('unverified');
+    expect(projects.claimable).toBeUndefined();
+  });
+
+  it('a verified account younger than 7 days sees pendingReason too_new', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), emailVerified: true }),
+    });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{
+        key: string;
+        rewardPending?: boolean;
+        pendingReason?: string;
+        minAccountAgeDays?: number;
+        claimable?: boolean;
+      }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.rewardPending).toBe(true);
+    expect(projects.pendingReason).toBe('too_new');
+    expect(projects.minAccountAgeDays).toBe(7);
+    expect(projects.claimable).toBeUndefined();
+  });
+
+  it.each([
+    { setting: 10, ageInDays: 8, pendingReason: 'too_new', minAccountAgeDays: 10, claimable: undefined },
+    { setting: 0, ageInDays: 0.1, pendingReason: undefined, minAccountAgeDays: undefined, claimable: true },
+  ])(
+    'gearRewardMinAccountAgeDays $setting decides too_new for a $ageInDays-day account',
+    async ({ setting, ageInDays, pendingReason, minAccountAgeDays, claimable }) => {
+      mocks.gearMinAgeSetting.mockResolvedValue(setting);
+      mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+      mocks.userFindById.mockReturnValue({
+        lean: () =>
+          Promise.resolve({ createdAt: new Date(Date.now() - ageInDays * 24 * 60 * 60 * 1000), emailVerified: true }),
+      });
+      const { res, promise } = run({ id: 'u1' });
+      await promise;
+
+      const body = res._getJSONData() as {
+        gears: Array<{ key: string; pendingReason?: string; minAccountAgeDays?: number; claimable?: boolean }>;
+      };
+      const projects = body.gears.find(g => g.key === 'projects')!;
+      expect(mocks.gearMinAgeSetting).toHaveBeenCalledWith('gearRewardMinAccountAgeDays');
+      expect(projects.pendingReason).toBe(pendingReason);
+      expect(projects.minAccountAgeDays).toBe(minAccountAgeDays);
+      expect(projects.claimable).toBe(claimable);
+    }
+  );
+
+  it('a paid gear stays claimed with no pendingReason on an untrusted account', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
+    mocks.userFindById.mockReturnValue({
+      lean: () => Promise.resolve({ createdAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), emailVerified: false }),
+    });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; claimed?: boolean; rewardPending?: boolean; pendingReason?: string }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.claimed).toBe(true);
+    expect(projects.rewardPending).toBeUndefined();
+    expect(projects.pendingReason).toBeUndefined();
   });
 
   it('unlock by receipt: project membership (not just ownership) is queried', async () => {
@@ -274,10 +516,46 @@ describe('GET /api/gears/status - reward schedule', () => {
   });
 });
 
+describe('GET /api/gears/status - Team Up reward waits for a qualifying collaborator', () => {
+  type Body = {
+    gears: Array<{
+      key: string;
+      unlocked: boolean;
+      rewardPending?: boolean;
+      pendingReason?: string;
+      claimable?: boolean;
+    }>;
+  };
+
+  it('sharing unlocks the gear but the payout stays pending without a qualifying collaborator', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const team = (res._getJSONData() as Body).gears.find(g => g.key === 'shareproject')!;
+    expect(mocks.projectCollaboratorQualifies).toHaveBeenCalledWith('u1');
+    expect(team.unlocked).toBe(true);
+    expect(team.rewardPending).toBe(true);
+    expect(team.pendingReason).toBe('reward_check');
+    expect(team.claimable).toBeUndefined();
+  });
+
+  it('becomes claimable once a qualifying collaborator is on a project', async () => {
+    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    mocks.projectCollaboratorQualifies.mockResolvedValue(true);
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const team = (res._getJSONData() as Body).gears.find(g => g.key === 'shareproject')!;
+    expect(team.claimable).toBe(true);
+    expect(team.rewardPending).toBeUndefined();
+  });
+});
+
 describe('GET /api/gears/status - published reward waits for a non-owner view', () => {
   it('publishing unlocks the gear but the payout stays pending until an external view', async () => {
-    mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
-      Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
+    mocks.publishedExists.mockImplementation((q: { verifiedExternalViewCount?: unknown }) =>
+      Promise.resolve(q.verifiedExternalViewCount ? null : { _id: 'a1' })
     );
     const { res, promise } = run({ id: 'u1' });
     await promise;

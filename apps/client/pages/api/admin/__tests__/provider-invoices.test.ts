@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -11,8 +12,15 @@ import { ApiKeyScope } from '@bike4mind/common';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: ((req: unknown, res: unknown, next: () => void) => unknown)[] = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (middleware: (typeof middlewares)[number]) => {
+      middlewares.push(middleware);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -26,6 +34,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
 const mockNewest = vi.fn();
 const mockAppend = vi.fn();
 vi.mock('@bike4mind/database', () => ({
@@ -34,6 +43,8 @@ vi.mock('@bike4mind/database', () => ({
     append: (...a: unknown[]) => mockAppend(...a),
   },
 }));
+
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../provider-invoices';
 
@@ -58,7 +69,7 @@ describe('GET /api/admin/provider-invoices', () => {
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockNewest).not.toHaveBeenCalled();
   });
 
@@ -75,7 +86,7 @@ describe('POST /api/admin/provider-invoices', () => {
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'POST', isAdmin: false, body: BODY });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockAppend).not.toHaveBeenCalled();
   });
 
@@ -114,5 +125,29 @@ describe('POST /api/admin/provider-invoices', () => {
     const { run } = call({ method: 'POST', body: { ...BODY, note: '  INV-1, Jun 1-30  ' } });
     await run();
     expect(mockAppend).toHaveBeenCalledWith({ ...BODY, enteredBy: 'admin-1' });
+  });
+});
+
+describe('POST /api/admin/provider-invoices admin audit', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('records a provider_invoice.recorded entry after the append', async () => {
+    mockAppend.mockResolvedValue({ ...BODY, enteredBy: 'admin-1' });
+    await call({ method: 'POST', body: BODY }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.provider_invoice.recorded',
+      target: { kind: 'settings', id: '2026-06:openai' },
+      details: { month: '2026-06', provider: 'openai', invoiceUsd: 412.3 },
+    });
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not audit a rejected request', async () => {
+    await expect(call({ method: 'POST', body: { ...BODY, month: 'June' } }).run()).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

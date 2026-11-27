@@ -9,6 +9,8 @@ import {
   dataLakeResearchRunRepository,
   lakeMembershipDecisionRepository,
   lakeSkippedFileRepository,
+  lakeConfigSnapshotRepository,
+  lakeConfigUndoClaimRepository,
   fabFileRepository,
   fabFileChunkRepository,
   memoryLedgerRepository,
@@ -17,16 +19,16 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { shredPrincipalMemory } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
-import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
-import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { releaseDriveConnectionForLake } from '@bike4mind/server-utils/integrations/google/drive/common';
+import { releaseGitHubLakeConnectionForLake } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { BadRequestError } from '@bike4mind/utils';
 import { ZodError } from 'zod';
 import { CleanupPayload } from '@bike4mind/server-utils/dataLakes/dataLakeCleanupPayload';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -62,6 +64,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         dataLakeResearchRuns: dataLakeResearchRunRepository,
         lakeMembershipDecisions: lakeMembershipDecisionRepository,
         lakeSkippedFiles: lakeSkippedFileRepository,
+        lakeConfigSnapshots: lakeConfigSnapshotRepository,
+        lakeConfigUndoClaims: lakeConfigUndoClaimRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,

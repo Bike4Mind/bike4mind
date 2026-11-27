@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { PromptMeta } from '@bike4mind/common';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
+import { promptCacheExpiresAt } from '@client/app/utils/promptCacheExpiry';
 
 type ContextWindowUsage = NonNullable<NonNullable<PromptMeta['context']>['contextWindowUsage']>;
 
@@ -22,6 +23,14 @@ export interface SessionContextUsage {
   actualInputTokens: number;
   /** Model whose tokenizer sized the assembled input, before any generation fallback. */
   inputModelId?: string;
+  /** Model that answered the last turn, so the one holding this conversation's prompt cache. */
+  answeredModelId?: string;
+  /**
+   * The last turn's prompt as the answering model's provider counted it (uncached + cache read + cache
+   * write). Absent when settlement fell back to the local estimate, and for a turn that called tools,
+   * whose usage sums every model call.
+   */
+  providerInputTokens?: number;
   /** The model's full context window. */
   contextLimit: number;
   /** Input budget after reserving output + safety buffer (the real ceiling). */
@@ -42,12 +51,21 @@ export interface SessionContextUsage {
    * summary) instead of re-sending verbatim. > 0 means compaction just ran.
    */
   compactedTurns: number;
+  /** When the prompt cache the last turn left expires (epoch ms); see promptCacheExpiresAt. */
+  cacheExpiresAt: number | null;
 }
 
 function bandFor(pct: number, overflow: boolean): ContextUsageBand {
   if (overflow || pct >= CONTEXT_DANGER_THRESHOLD) return 'danger';
   if (pct >= CONTEXT_WARN_THRESHOLD) return 'warning';
   return 'normal';
+}
+
+function providerPromptTokens(promptMeta: PromptMeta | undefined): number | undefined {
+  const usage = promptMeta?.tokenUsage;
+  if (usage?.settledBasis !== 'provider' || usage.actualInputTokens == null) return undefined;
+  if (promptMeta?.functionCalls?.length) return undefined;
+  return usage.actualInputTokens + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0);
 }
 
 /** Compact token count for display, e.g. 86000 -> "86K". */
@@ -75,7 +93,10 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     let latestId = '';
     let latest: ContextWindowUsage | null = null;
     let latestCacheReadTokens = 0;
+    let latestCacheExpiresAt: number | null = null;
     let latestInputModelId: string | undefined;
+    let latestAnsweredModelId: string | undefined;
+    let latestProviderInputTokens: number | undefined;
 
     for (const page of data?.pages ?? []) {
       for (const quest of page.data) {
@@ -85,7 +106,15 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
           latestId = quest.id;
           latest = usage;
           latestInputModelId = quest.fallbackInfo?.primaryModel ?? quest.promptMeta?.model?.name;
+          latestAnsweredModelId = quest.promptMeta?.model?.name;
           latestCacheReadTokens = quest.promptMeta?.tokenUsage?.cacheReadInputTokens ?? 0;
+          const tokenUsage = quest.promptMeta?.tokenUsage;
+          // A turn that neither read nor wrote the cache left nothing to expire.
+          latestCacheExpiresAt =
+            tokenUsage?.cacheReadInputTokens || tokenUsage?.cacheCreationInputTokens
+              ? promptCacheExpiresAt(quest)
+              : null;
+          latestProviderInputTokens = providerPromptTokens(quest.promptMeta);
         }
       }
     }
@@ -98,6 +127,8 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
     return {
       actualInputTokens: latest.actualInputTokens,
       inputModelId: latestInputModelId,
+      answeredModelId: latestAnsweredModelId,
+      providerInputTokens: latestProviderInputTokens,
       contextLimit: latest.contextLimit,
       safeMaxInputTokens: latest.safeMaxInputTokens,
       utilizationPercentage: pct,
@@ -106,6 +137,7 @@ export function useSessionContextUsage(sessionId: string | null): SessionContext
       overflowDetected,
       cachingIneffective: latest.actualInputTokens >= CACHE_NOTE_MIN_INPUT_TOKENS && latestCacheReadTokens === 0,
       compactedTurns: latest.verbatimTurnsExcluded ?? 0,
+      cacheExpiresAt: latestCacheExpiresAt,
     };
   }, [data?.pages]);
 }

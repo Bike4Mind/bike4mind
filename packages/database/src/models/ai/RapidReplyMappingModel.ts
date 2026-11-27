@@ -1,6 +1,7 @@
 import mongoose, { Document, Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { RapidReplyResponseStyleCommon, RapidReplyResponseStylesCommon } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 export interface IRapidReplyMappingDocument extends Document {
   id: string;
@@ -133,7 +134,7 @@ class RapidReplyMappingRepository
       await this.model.bulkWrite(bulkOps);
       return true;
     } catch (error) {
-      console.error('Bulk update failed:', error);
+      Logger.error('Rapid reply mapping bulk update failed', { error });
       return false;
     }
   }

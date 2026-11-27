@@ -1,8 +1,9 @@
 import { fabFileRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { verifyOrgAdminRead } from '@server/utils/orgAccess';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { verifyOrgAdminRead } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 
 // One `$group` over the org's rows; the cap only matters for an org with a very large file count,
 // where a slow answer is worse than a failed one the UI can retry.
@@ -13,7 +14,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 /**
  * GET /api/organizations/:id/storage-usage - the org's storage pool: the counter quota checks enforce,
  * the effective limit in bytes, and the charged rows by uploader (OrganizationStorageUsage). Read tier
- * (verifyOrgAdminRead): owner, manager, appointed admin or platform admin; anyone else gets 404.
+ * (verifyOrgAdminRead): owner, manager (with a users[] row) or platform admin; anyone else gets 404.
  * First-party only (`jwtOnly`), like users/me/storage-breakdown, so it needs no public API contract.
  */
 const handler = baseApi({ auth: 'jwtOnly' })
@@ -21,6 +22,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .get(async (req, res) => {
     const organizationId = typeof req.query.id === 'string' ? req.query.id : '';
     const { org } = await verifyOrgAdminRead(req.user!, organizationId);
+    await recordOrganizationRead(req, [org], { view: 'storage_usage' });
 
     const usage = await organizationService.getOrganizationStorageUsage(
       org,

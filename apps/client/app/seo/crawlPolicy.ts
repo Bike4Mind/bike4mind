@@ -50,7 +50,7 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/serwist/',
   // Account and session flows. `/verify-` covers both verify-email and verify-change;
   // `/admin` covers admin-emergency; `/agent` covers agents and agent-executions;
-  // `/quests` covers quests-v5. Matching is prefix-based, so one entry does for each.
+  // Matching is prefix-based, so one entry does for each.
   '/login',
   '/register',
   '/activate',
@@ -58,6 +58,8 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/verify-',
   '/auth',
   '/oauth',
+  // Share links: a referral code is public by design and grants nothing, and the path only redirects to /register.
+  '/r/',
   // Authenticated product surfaces.
   '/admin',
   '/agent',
@@ -74,7 +76,6 @@ export const CORE_DISALLOWED_PATHS: readonly string[] = [
   '/organizations',
   '/profile',
   '/projects',
-  '/quests',
   '/skills',
   '/status',
   '/studio',
@@ -154,6 +155,19 @@ export function buildSitemapPaths(overlays: readonly PremiumRouteIndexing[]): st
   return normalize(overlays.flatMap(o => o.sitemapPaths ?? [])).filter(
     path => !disallowed.some(pattern => path.startsWith(pattern))
   );
+}
+
+/**
+ * Whether a build for this SST stage publishes the crawl policy above. Production does,
+ * and so does a build with no stage at all (self-host, a plain `next build`), which keeps
+ * the operator's own host crawlable. Every other stage is a preview, staging or personal
+ * deploy whose robots.txt disallows everything.
+ *
+ * Must stay in step with noindexResponseInjection in infra/routerFunctionCode.ts, which
+ * sets `X-Robots-Tag: noindex, nofollow` on the same stages.
+ */
+export function isCrawlableStage(stage: string): boolean {
+  return stage === '' || stage === 'production';
 }
 
 /** Trailing slashes would double up when a path is appended. */

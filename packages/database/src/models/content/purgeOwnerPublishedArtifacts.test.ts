@@ -61,6 +61,19 @@ describe('purgeOwnerPublishedArtifacts', () => {
     expect(await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter('tok-1') })).toBeNull();
   });
 
+  it('drops the owner-only thumbnail record of every artifact it removes', async () => {
+    const thumbnail = { key: 'publish-thumbnails/x/y.webp', versionId: 'a'.repeat(64), renderedAt: new Date() };
+    const a = await makeArtifact('owner1', { thumbnail });
+    const kept = await makeArtifact('owner2', { thumbnail });
+
+    await purgeOwnerPublishedArtifacts('owner1', { deletedBy: 'admin1' });
+
+    expect((await PublishedArtifact.findOne({ publicId: a.publicId }).lean())?.thumbnail).toBeUndefined();
+    expect((await PublishedArtifact.findOne({ publicId: kept.publicId }).lean())?.thumbnail).toMatchObject({
+      key: thumbnail.key,
+    });
+  });
+
   it('cleans up annotations, open reports and view audits on those artifacts', async () => {
     const a = await makeArtifact('owner1');
     await seedChildren(a.publicId);
@@ -251,6 +264,55 @@ describe('purgeOwnerPublishedArtifactsBySource', () => {
       { kind: 'reply', sessionIds: ['s1'] },
       { deletedBy: 'owner1' }
     );
+    expect(rerun).toEqual({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+  });
+
+  it("takes down only the owner's replies published from the given messages, with their children", async () => {
+    const hit = await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's1', messageId: 'm1' } });
+    await seedChildren(hit.publicId);
+    const sibling = await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's1', messageId: 'm2' } });
+    await seedChildren(sibling.publicId);
+    const otherOwner = await makeArtifact('owner2', { source: { kind: 'reply', sessionId: 's1', messageId: 'm1' } });
+    const otherNotebook = await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's2', messageId: 'm1' } });
+    const file = await makeArtifact('owner1', { source: { kind: 'fabfile', fabFileId: 'm1' } });
+    const bundle = await makeArtifact('owner1');
+
+    const result = await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'replyMessage', sessionId: 's1', messageIds: ['m1'] },
+      { deletedBy: 'owner1' }
+    );
+
+    expect(result).toMatchObject({ annotations: 1, reports: 1, viewAudits: 1 });
+    expect(result.artifacts.map(a => a.publicId)).toEqual([hit.publicId]);
+    const live = await PublishedArtifact.find({ deletedAt: null }).lean();
+    expect(live.map(a => a.publicId).sort()).toEqual(
+      [sibling.publicId, otherOwner.publicId, otherNotebook.publicId, file.publicId, bundle.publicId].sort()
+    );
+    expect(await Annotation.countDocuments({ publicId: sibling.publicId, deletedAt: null })).toBe(1);
+    expect(await PublishedArtifactReport.countDocuments({ publicId: sibling.publicId, status: 'open' })).toBe(1);
+    expect(await PublishedArtifactViewAuditModel.countDocuments({ publicId: sibling.publicId })).toBe(1);
+  });
+
+  it('never widens an empty message list to the whole notebook, and is idempotent', async () => {
+    await makeArtifact('owner1', { source: { kind: 'reply', sessionId: 's1', messageId: 'm1' } });
+
+    const empty = await purgeOwnerPublishedArtifactsBySource(
+      'owner1',
+      { kind: 'replyMessage', sessionId: 's1', messageIds: [] },
+      { deletedBy: 'owner1' }
+    );
+    expect(empty).toEqual({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
+    expect(await PublishedArtifact.countDocuments({ deletedAt: null })).toBe(1);
+
+    const purge = () =>
+      purgeOwnerPublishedArtifactsBySource(
+        'owner1',
+        { kind: 'replyMessage', sessionId: 's1', messageIds: ['m1'] },
+        { deletedBy: 'owner1' }
+      );
+    expect((await purge()).artifacts).toHaveLength(1);
+    const rerun = await purge();
     expect(rerun).toEqual({ artifacts: [], annotations: 0, reports: 0, viewAudits: 0 });
   });
 });

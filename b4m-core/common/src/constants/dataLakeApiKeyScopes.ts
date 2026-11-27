@@ -2,7 +2,7 @@ import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 
 /**
  * The read/write/query API-key scope sets the data-lake doors accept (OR semantics), shared by the
- * SPA routes (`apps/client/server/dataLakes/dataLakeScopes.ts` re-exports these) and the public
+ * SPA routes (`packages/server-utils/src/dataLakes/dataLakeScopes.ts` re-exports these) and the public
  * `/api/v1/data-lakes/*` contracts, so the two families cannot drift on which key opens which door.
  * The share set stays in dataLakeScopes.ts: no public contract accepts `datalake:share`.
  *

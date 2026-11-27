@@ -29,8 +29,20 @@ function reviewed(
 
 const gap = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'pending', signals);
+// A gap whose reason is specific to the entry: who reaches it on self-host and what wiring it needs.
+// The registered-but-unconsumed ones must stay in sync with REGISTERED_WITHOUT_CONSUMER in
+// b4m-core/resource/src/manifestCoverage.repo.test.ts.
+const gapBecause = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
+  ...reviewed(id, fingerprint, 'pending', signals),
+  reason,
+});
 const broker = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'excluded', signals);
+// Excluded because the capability only exists on the hosted deployment, so the reason is per entry.
+const hostedOnly = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
+  ...reviewed(id, fingerprint, 'excluded', signals),
+  reason,
+});
 const wired = (
   id: string,
   fingerprint: string,
@@ -40,132 +52,315 @@ const wired = (
 
 // Reviewed snapshots, never automatically refreshed by CI. Portable means wiring only.
 export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
-  gap('event:infra/eventBus.ts:email-send', 'dc02074bef62eff726cebf1a226ea2788040941b8db0e3dec3e672a5b1fd347f'),
-  gap(
-    'event:infra/eventBus.ts:notebook-curation-complete-analytics',
-    'f9919e513644fa6c9609ef01d57f90e51f3673b32a3b02c70a61bce2b1e960a4'
+  broker(
+    'queue:infra/dlqTriageSweepDeadLetter.ts:dlqTriageSweepDlq',
+    '8f974196323d71a6029e7255756ddbdb5aa7d14e75e50a745de4d75a1fdff72d'
+  ),
+  hostedOnly(
+    'schedule:infra/cron.ts:dlqTriageSweep',
+    '8c353c2b1713c580d01f4faaac7374b02b0dffc6f32f4da70ccdfcfb5d291dd2',
+    'Hosted CloudWatch alarm and SQS dead-letter sampling; portable deployments do not run the hosted alarm sweep.',
+    ['cloudwatch:DescribeAlarms', 'import:@aws-sdk/client-cloudwatch', 'lambda:ListEventSourceMappings']
+  ),
+  broker(
+    'queue:infra/organizationRetention.ts:organizationRetentionDlq',
+    'ac4a28905799e117ee2ab119fd37de18b424e94ff7d5cdad2a86d248d914f5cf'
   ),
   wired(
-    'event:infra/eventBus.ts:notebook-curation-start',
-    'cab051f1d3bc732ab76434d7bade46b4376f5333f0ac097eaa5571bbed1118ac',
+    'schedule:infra/organizationRetention.ts:organizationRetention',
+    '0fb306579a0b977f7ee58ca8e26fb88e205497e7c705c4b22088fc48510088e4',
+    {
+      source: 'apps/workers/src/selfhost/organizationRetention.ts',
+      symbol: 'registerOrganizationRetention',
+      fingerprint: '0690084e4c9c0d8804272a8837ccf4775a4551c65f0388c2850cf02569b82a3b',
+    }
+  ),
+  broker(
+    'queue:infra/adminMorningBrief.ts:adminMorningBriefDlq',
+    '02f77874c10969d8ede24d54d660f8722b34b4826b403446b8a06ca17bceae54'
+  ),
+  gapBecause(
+    'schedule:infra/adminMorningBrief.ts:adminMorningBrief',
+    '8b04cc470d7a155f76bd9a6dab0591f8e4b8abef60be3ee972e62ed60fa8b834',
+    'Opt-in admin brief uses hosted CloudWatch alarms and the LiveOps destination; self-host scheduling and alternate alarm capability are not wired.',
+    ['cloudwatch:DescribeAlarms']
+  ),
+  hostedOnly(
+    'eventRule:infra/accountCreationAlarms.ts:AccountCreationMetricsSchedule',
+    '9ecd499546afefc96b5204f91ccaa0292f7eaf73bce58d0bf91a30adda3497e7',
+    'Hosted CloudWatch account census on monitored stages; no local notification destination is configured.',
+    ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
+    'queue:infra/accountDeletionSweepDeadLetter.ts:accountDeletionSweepDlq',
+    '981813c22390623a538fe68a3b6bd1445b4a6aad7164a0485c95a687bad287a5'
+  ),
+  broker(
+    'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
+    'aa48c95e91e528e37c56987140eb2432dc050caa462b4c8f28e9043bf22d4a77'
+  ),
+  hostedOnly(
+    'eventRule:infra/analyticsRollup.ts:AnalyticsRollupSchedule',
+    'ed227e7eb331eab93a361fb1ed64533da7ec06fe7e659b7adf747e794bab7abe',
+    'Hosted nightly product-analytics rollup; the self-host worker runner does not schedule it yet.'
+  ),
+  broker(
+    'queue:infra/analyticsRollup.ts:AnalyticsRollupDlq',
+    'ed51b5ae85080c544b6e72f1d517d7c42a55271b0cc262036b31cc42a2669c39'
+  ),
+  broker(
+    'queue:infra/businessMetricAlerts.ts:businessMetricAlertsDLQ',
+    '673c6f139ed9d3c3cb6695ec42bdf0f2da000f8d79e5ed17a00060cdc353549e'
+  ),
+  hostedOnly(
+    'schedule:infra/businessMetricAlerts.ts:businessMetricAlerts',
+    'adefc948b7d3d294130f0779b41459e704613218450a612f4f424d4f7ddcf97e',
+    'Hosted business analytics and Stripe receipts; not applicable to a portable deployment.'
+  ),
+  broker(
+    'queue:infra/sideAppHealthAlerts.ts:sideAppHealthAlertsDLQ',
+    'fb350c04edf256a7f3dbdd2e2897229530d8ecd9fda5e7d251f9a6f8e9f7ea8e'
+  ),
+  hostedOnly(
+    'schedule:infra/sideAppHealthAlerts.ts:sideAppHealthAlerts',
+    '18f792d2b462b13828669cb6c228fc81357bd0fd1e8942de644488d1ddd60401',
+    'Hosted operator alerting on connected-app traffic; not applicable to a portable deployment.'
+  ),
+  wired(
+    'event:infra/eventBus.ts:brief-compose',
+    '0f16644c119df424cd402aacc1d5d2555431124b9a76de5b27333ae4486498b5',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
-      symbol: 'event:notebook.curation.start',
-      fingerprint: 'd663ba075abfda9ac7d23d199b524d788380ffa8f915da8ba18b76501b20f57a',
+      symbol: 'event:brief.compose',
+      fingerprint: 'ea0c848c3a5ab33205828c86daa343c861e9870d848d27ebe37ea571ffcf5a5b',
     },
     ['bedrock:*']
   ),
   wired(
+    'event:infra/eventBus.ts:delegation-process',
+    '991a20385f2f5cec6d9964eb37680b8d5da15440c3514c6475d6537ebc77364e',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:delegation.process',
+      fingerprint: 'fe26655906a5ee7f0c34fb0217931ab014a959978e199404af1db6366df8a1d0',
+    },
+    ['bedrock:*']
+  ),
+  gap('event:infra/eventBus.ts:email-send', 'eff6a03a091efa68ad9d1ba70e8635b7604c2f33ebb57f307db27b70d8940314'),
+  gap(
+    'event:infra/eventBus.ts:moderation-escalation-alert',
+    'f4299c61eaf67b9ece980f6321d71fa95378cba3efb8def5e95c279e4b5bb9a7',
+    ['ssm:GetParameter']
+  ),
+  gap(
+    'event:infra/eventBus.ts:notebook-curation-complete-analytics',
+    'edb3c20d2fa6c4458775d9ce778381de6df19f4b599315630b954d34757f97d1'
+  ),
+  wired(
+    'event:infra/eventBus.ts:notebook-curation-start',
+    '620f735868e93844621860f9eaec1d76ffa9c9fd1b0f35d5bdba18110a26adb7',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:notebook.curation.start',
+      fingerprint: '13f4af25b4f9fd230d32db0d114ccc974fbc69fa23f49da6f53f1512ca9fd912',
+    },
+    ['bedrock:*']
+  ),
+  wired(
+    'event:infra/eventBus.ts:notification-push',
+    '9519e9e215d2cb081c5045d865c7f1e1cec1176b2c167edbb5d72b13aee4743f',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:notification.push',
+      fingerprint: '69bb11478b79cf26dc283f1d7d33e39453a4d9a9c4bb5ad4a7c09bcae4ce5249',
+    }
+  ),
+  wired(
+    'event:infra/eventBus.ts:RiskEvidenceCompletion',
+    '4c061c91603a4206bb0f27ee214d9da78c94c628f5826975077f50a2ea6b77f6',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:completion.completed',
+      fingerprint: 'c0ac369d7d2401651a598cc4ac6ea604ffd220693026038d38799be04a9f52f8',
+    }
+  ),
+  wired(
     'event:infra/eventBus.ts:session-auto-name',
-    '3d2c328c2a6f007311411986fdc6a6ee6b5c5308caf6cac358b39d9b13b3929f',
+    '13f4575da5f844ed716606723e68feffa8b43dacff844d3b0585954df6a0bc62',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.auto_name',
-      fingerprint: '1c744f91e1ce4f1765bf04aa91c12ab6fa099bcb2b77c4d31d23367c9649ec89',
+      fingerprint: 'e8d113fe481e3278c8fbcc2a19766a80b213e7e2d0320754b5e8537a00c9300a',
     },
     ['bedrock:*']
   ),
   wired(
     'event:infra/eventBus.ts:session-context-summarize',
-    'a8161a1b002dcd12a06fcdbfe10ee3d5140310650191ee4cdcfd81c7a4b255ca',
+    '21c3122839f1ec7fae9bfd35d32f9bf533ce187c6695f5aaba441a51d07e360e',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.context_summarize',
-      fingerprint: '8c0471c08765553599360b35043bdb754706e94de04888debe86819074b8f1aa',
+      fingerprint: '90cbf2926796ba816d8a629551133c65c120299a06adf380e7fc60648ac30af6',
     },
     ['bedrock:*']
   ),
   wired(
     'event:infra/eventBus.ts:session-summarize',
-    '1a656a158853877359594a6685a0b5de9cba8c8136cf8983707382b0801fce52',
+    '6c58dbef5f5b0c3c5fd3abc21a926091d9f538bb1e0ab18f479e8ee0b9e20da6',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.summarize',
-      fingerprint: '8e17e080302a8214d65343e9a9de1c1ca9233dc5a74a5de4f39038762122a589',
+      fingerprint: '10e91ee72728446510951ddff24d5d837edb97c35839502fc53a0a6aa466b6f6',
     },
     ['bedrock:*']
   ),
   wired(
     'event:infra/eventBus.ts:session-tag',
-    '94ced1c3e69d023eb0ed95cf3ed3320d381cf1814df773bd4daa3ab4ffda49ae',
+    'de364abf492c03e7c7cdc146858e4c967e9e38748bff6d03c169a806a246e438',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:session.tag',
-      fingerprint: 'c929c56131db90fe534e9c2f3370c050a294b960953008a178f7ce06186ccb90',
+      fingerprint: '703f157442db801169e5f9b492680818fcff5ef1e9f7eab5526a362f170760a1',
     },
     ['bedrock:*']
   ),
-  gap('event:infra/eventBus.ts:spider-start', 'e98531ff4418a86b9df57341a45ee0b66d1f05c29a04b7e3619453faf2360136', [
+  gap('event:infra/eventBus.ts:spider-start', '4e7fd24c48425f1e501280414b3fc4d2f595733652d7f0e356e1cb0ab3d61d18', [
     'bedrock:*',
   ]),
   gap('event:infra/eventBus.ts:SreFixDispatch', 'fa1122e45e2de82ee4a61c73ce860a679f2f5ce735bc628dd56a35c82977a648'),
-  gap(
+  wired(
     'event:infra/eventBus.ts:stripe-customer-subscription-updated',
-    '9323d25fdf383adea905680d672974564d4822f6ca0460835a48c2467546f876',
+    '44bf45830bf653949d90bdbd9bbfb5f5a81a5c0ad65542caeecf34292af61904',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:stripe.cus.sub.updated',
+      fingerprint: 'd90193ad176754a1c4dd233b8226ed83f31271f96d0560ce005893fc5c46505a',
+    },
     ['cloudwatch:PutMetricData']
   ),
-  gap(
+  wired(
     'event:infra/eventBus.ts:stripe-invoice-payment-succeeded',
-    '316503ee48b058f3c6ee3ae0baf0484d05d8f14f04109919374f7d08fb5faffc',
+    'ccfae9478ec73f70417a3dcca9ebcbf8a313e901c7602efccb06a87447aad16c',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:stripe.invoice.payment_succeeded',
+      fingerprint: '9900e1b970c970efcd8bae97566d735b7a9195c51e46ca958069863945ff8902',
+    },
     ['cloudwatch:PutMetricData']
   ),
-  gap('event:infra/eventBus.ts:telemetry-alert', 'a84bb98b72fccf9647ea90dd53ccff2db7ca562a064dabdf4355e211990ffaa5', [
+  wired(
+    'event:infra/eventBus.ts:studio-job-completed',
+    'e7beedb18fcf2c36291fb67fe8d8ec21c1a82a090c5f38da6e72ffdce458ce93',
+    {
+      source: 'apps/workers/src/selfhost/eventDispatch.ts',
+      symbol: 'event:studio.job.completed',
+      fingerprint: '2bfca4af51020b41347de4b897420245d732369f68cdabb23818b4620ab363d6',
+    }
+  ),
+  gap('event:infra/eventBus.ts:telemetry-alert', 'def925f78cc4e8633002a7696fe56a7e2e075a2e420f0bb8099ee9d2e8b327c0', [
     'bedrock:*',
   ]),
+  gap(
+    'schedule:infra/imageModerationReviewSweep.ts:imageModerationReviewSweep',
+    '788cdc3161acdbdfcd3223d138849e9106fa61c7f7b185b4a64b43a1b2a7c5b9',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
+    'queue:infra/imageModerationReviewSweepDeadLetter.ts:imageModerationReviewSweepDlq',
+    'b037ad8cb00f13fbfcf4e7f6b014898d1b338a2227839f59f3fe8811d5fb8e75'
+  ),
   wired(
     'event:infra/llm.ts:create-memento',
-    'fa32f692e2414afdd751b6900f04f08e71b6b31493dad8ef9a7f25cc970cd2a6',
+    '5b17c92749a15d48ede31049684581cea9f72aaa98f0c3e0892a67b281c0e84a',
     {
       source: 'apps/workers/src/selfhost/eventDispatch.ts',
       symbol: 'event:completion.completed',
-      fingerprint: 'f3dbfd8d59e1d0554032f2a99b85c2d5c104a24312d88de9b96172070a99aea3',
+      fingerprint: 'c0ac369d7d2401651a598cc4ac6ea604ffd220693026038d38799be04a9f52f8',
     },
     ['bedrock:*']
   ),
-  gap('event:infra/llm.ts:slack-completion-start', '85862130d364d5941062f725e70ea29d94e3ff6c5635c57afaed05ab130a9671', [
+  gap('event:infra/llm.ts:slack-completion-start', '7cfedef3ce297637f3f09f3a7a26f9a50b8494dab8c1d6444f41ca43aad263df', [
     'bedrock:*',
     'cloudwatch:PutMetricData',
     'events:PutEvents',
   ]),
+  gapBecause(
+    'event:infra/llm.ts:slack-quick-ask',
+    '20e58bb73110c033f97509a353aaf0430ef5740745d1dd562ccc0052942823b7',
+    'Slack DM completions are not wired on self-host; see slack-completion-start.'
+  ),
   gap(
     'eventRule:infra/serviceHealthAlarms.ts:EcsTaskFailedToStartRule',
-    '01f62b8ab1bf553612fc628bc26d6241b1c4eafcb75c213306a47abc62679d7e'
+    '2b68b75cf6843e937ae8e8686a3eb7d2a5b68a5f3ff785b117d5cab8364b0a2f'
+  ),
+  hostedOnly(
+    'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
+    '4ad2a9c06c430743b7ea5dfd109510fd24fa948cfce64597f74096b5127e62cd',
+    'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
+    ['cloudwatch:PutMetricData']
+  ),
+  hostedOnly(
+    'eventRule:infra/providerSpend.ts:ProviderAdminKeyKmsChangeRule',
+    'ea7836c85a2e65eaef391a4ff35cde8708bcc7ba1edff3f35077801fba7f36ca',
+    'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
+    ['cloudwatch:PutMetricData']
+  ),
+  hostedOnly(
+    'eventRule:infra/providerSpend.ts:ProviderAdminKeyReadRule',
+    'a8d4ca3aacaa82b9fc18b4b0b1c246a6d09000acc10144e1a7031c5880fd9043',
+    'Records access to the provider admin key store, which exists only on hosted stages that run scheduled jobs; self-host reads the keys from its own configuration.',
+    ['cloudwatch:PutMetricData']
   ),
   gap(
     'function:infra/agentExecutor.ts:AgentExecutor',
-    '259167e53b4f21e52b64f1a2154ba55e5547f459deda85b7305028337d5b0755',
+    '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
+  ),
+  hostedOnly(
+    'function:infra/callableFunctionSourceFetch.ts:callableFunctionSourceFetch',
+    '1509db58716ac7ef24d43c1a3f1bee9334f5ea9f18403fc1815ce458a8a2d0b5',
+    'Isolates hosted callable function source fetches outside the VPC with no secrets; self-host runs the same pinned fetch in-process when no fetch function is named.'
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
   gap(
     'function:infra/database.ts:DatabaseMigrator',
-    'ddc9d611ee11a49f55806b0dbbae33183546cbeb610550c0d228435fd7691db1'
+    'deaa5e5949f03f6a05443336a28fecd2d822df40c28258a52384de92a29b8d71'
   ),
-  gap('function:infra/database.ts:DatabaseSeeder', 'aaf2ea29aae4258be24385977537d2273fa8306215ad0744040ef4cc65b9a91e', [
+  gap('function:infra/database.ts:DatabaseSeeder', '6efe8fb05923a55b4e32d30847250969d87bd367292b12e893ba9fcd6c4aa7f4', [
     'ssm:GetParameter',
   ]),
-  gap('function:infra/dataSyncer.ts:DataSyncer', '6b34c84dc682604d934700c4c8156e0127c4779ea369a3de7a3d02649fae6b9b'),
+  gap('function:infra/dataSyncer.ts:DataSyncer', '3c215ebb7ff8e4c86aef66974ee68f921878325b54610d1c5774f18da50ef5bb'),
   gap(
     'function:infra/imageProcessor.ts:ImageProcessor',
-    '7fd2b40ddb22e4265c76224cd77f1cef0bf20dff5af7cae37d3b81a3994c315a'
+    'f7bbbefdca6ac5807469cafe56cb856206b6ffdfe08dcb2ba2bd16bb4937ea15'
   ),
-  gap('function:infra/mcp.ts:mcpHandler', 'e3bfed090995364d360c725c2215d1295cff7f6e64722943495293d1899b6334'),
+  gap('function:infra/mcp.ts:mcpHandler', 'b106329f68d1d3225ec735b12aff58943f1bdf1ae1b87d2c21fb8b2ac57d921e'),
+  hostedOnly(
+    'function:infra/remoteMcp.ts:remoteMcpHandler',
+    '69d7d937077e31281f43012e903c58d74513036fd50296b764855fc6c90e1b70',
+    'Isolates hosted custom-MCP egress outside the VPC; self-host runs the same RemoteMcpClient in-process by design.'
+  ),
+  hostedOnly(
+    'function:infra/queues.ts:PublishThumbnailRenderer',
+    'a250460c0bc75a4ff9c0176e6dd4655883ec598578667051d5ae2de9c911d441',
+    'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
+  ),
   gap(
-    'logSubscription:infra/logMonitor.ts:createLogSubscriptions()',
-    '235e9ebbdccd1202b354d558a713998832b152cf9093cb995f23e12e2c091997',
+    'logSubscription:infra/logMonitor.ts:forwardErrorLogs()',
+    '9212883df5ec6e0a3f1a1ce73c5fd24cb37ab67ac51d1b966d48306d142840a0',
     ['lambda:InvokeFunction']
   ),
   gap(
     'notification:infra/buckets.ts:appFilesBucket.uploadComplete',
-    'e6911e53b6221ad9574148fb4eb4b3df625f7d1196d74c7ca0a90202c7b825fb'
+    '473f2f1a55c650ff22780d274eb8cee26c2358527d9d53e14f07efa465b5ac60'
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.notebookImportCompleted',
-    'e0430fe0d505fc221ff49d6ca4b6558155c0d315053a5ac1c55e5a95cd977288'
+    'f98dd31eb2e21830384bf361ac1bd4d7cc5d9de6e4c094a16bd65c4f5a219ac2'
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.uploadComplete',
-    'cafb42f2be005c1fb985fdc35d09701ad622c349c1f709c956fe3e9c44dbcafe'
+    'bff5a3458c45157d822d9f024567909a59363aae663deff22d3a248313a53834'
   ),
   gap(
     'notification:infra/emailIngestion.ts:emailIngestionBucket.emailReceived',
@@ -173,45 +368,67 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'notification:infra/queues.ts:fabFileBucket.uploadComplete',
-    '00c285e858f18b475acbfe6548243c3a0e40101c4724768c9d486e2671adc420'
+    '3a9ff85b25c7ca1d977e78f699d80bf29b54f6a6e4a9d1c3385cbecaa12637f2'
   ),
   broker(
-    'queue:infra/dlqAlarms.ts:DlqAlarmHandlerDlq',
-    'a39800cfa48e2ecb2ab17d226bb6fde51c9222a75c61f822abe291e9692d938e'
+    'queue:infra/dlqAlarmHandlerDeadLetter.ts:DlqAlarmHandlerDlq',
+    '1f154dd82d798f8212508c571b43a3326554ae0b9c1946887a067df54d053c17'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailIngestion.ts:emailAnalysisQueue',
-    '6c62105a65f9ac4086f0c1e39897dfa3cdbfe0edd50f11015ec29cf46142963d',
+    'a02abd3f0b12c1f4057875aa1658668ce997a6c09d95ca632a9bd9a36ed55b87',
+    'Enqueued only by the inbound-email parser, which consumes emailIngestionQueue, so nothing produces it on self-host. Wire both together if inbound email is ever supported.',
     ['bedrock:InvokeModel']
   ),
   broker(
     'queue:infra/emailIngestion.ts:emailAnalysisQueueDLQ',
     '3293f56dff623e68c9514a4305754db7930dabcab9adbc52eb71e63ccecc7c7b'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailIngestion.ts:emailIngestionQueue',
-    'fbd4b12a562c4f7010ad6f3d94b4ae9b13baf2e780d7c8b2a6f768ccd487924a',
+    '470d3dc2f83160742089dc27032ae07782edd97ccd48bad12006e3514a789f5b',
+    'Filled only by the SES inbound-mail bucket notification, which self-host has no equivalent of. Registered in the manifest, but nothing produces or consumes it locally.',
     ['bedrock:*']
   ),
   broker(
     'queue:infra/emailIngestion.ts:emailIngestionQueueDLQ',
     'f44858b26f2ee8f4fb254d41d172e76694252114fb45ab805e510e34c3897f1a'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    '5bcd555047666fb024bab6c014880add8acd0dfeb992b4202ec6925ad4a961b8'
+    '5bf17f11c35d5235b8f6b504a61b4ad231aeae08614ecd4f0c325be098a1642d',
+    'Fed only by the email job orchestrator (the emailJobQueue consumer), so it stays empty until emailJobQueue is wired. Wire the two together.'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailBatchQueueDLQ',
     'ff7a3dc9d711600848964bb4825fac5af480800f91d5018d6e02b08064a17d73'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailMarketing.ts:emailJobQueue',
-    '648fa6cac293707c33df0637127074ca85826a4cdf7b90d56437c5e3a26f670b'
+    'b2c76c1b7a98c20402863db9c1b25502526341372920d9a07e8b39f6cf9b966a',
+    'The admin email-job start and send routes enqueue here, but no self-host consumer runs the email job orchestrator, so a started job never sends. Needs a consumer and an outbound mail provider decision.'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailJobQueueDLQ',
     '6d6a3df0afbdc622c4cac46865a7875da157e26a9f0d4295a491faf9ec1d2968'
+  ),
+  broker(
+    'queue:infra/eventBus.ts:billingEventsDLQ',
+    '26fa49be8bc393fcf3f9a55544b329a8cd750d920cade399bac04c8f662adc5f'
+  ),
+  broker(
+    'queue:infra/eventBus.ts:completionEventsDLQ',
+    '11ef24fc602f2961d178ba5a11d9e77451952305f129f4023a8d5b33882eedeb'
+  ),
+  broker('queue:infra/eventBus.ts:emailEventsDLQ', '89640933adf55a7c4b2f652b0af642da349c22f08b15a76086b9526925b2b277'),
+  broker('queue:infra/eventBus.ts:pushEventsDLQ', '9675205f30ba0e4475576666a8df72743d21b4a07d58fc35474bdded3ac4ecbe'),
+  broker(
+    'queue:infra/eventBus.ts:moderationAlertsDLQ',
+    '122aa6633fc75c70c1e6ade17d4ccf2eb13159ee43723a49ad48c4e805a29a46'
+  ),
+  broker(
+    'queue:infra/eventBus.ts:notebookEventsDLQ',
+    '6d141bd0d7ffdd58bd3868b5b89ce62a6aa5d3b2102ff88ae5a09215d74ec9ce'
   ),
   broker(
     'queue:infra/eventBus.ts:sessionEnrichmentDLQ',
@@ -223,30 +440,31 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:agentContinuationQueue',
-    'ce1f8e331afd2ceb72371d7acf8e04627891ae787024b0b1b0fa9618fcffcd3b',
+    '5ebca7cdcb9170ef166585b6c8a9f78ae695df60a67779d6500b988185737d8f',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
   ),
   broker(
     'queue:infra/queues.ts:agentContinuationQueueDLQ',
     '6a36ae54a4e5ea35b9c34a06d407cee8281bcd6284eeeecf35d7c530dd0c6ffb'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:agentProactiveMessageQueue',
-    '0b94b20489d09d3b025b60ea63731a98bba17cafbbaaf07a7641c91d2fa6fbec',
+    'b99fc057b49f1a93842d2d146f1aa50145b4f9edae9b3f0b35fabfcf90df0f33',
+    'The session trigger-proactive-messages route enqueues here and no self-host consumer drains it, so triggered messages are never sent. The handler is in open core: candidate to wire.',
     ['bedrock:*', 'cloudwatch:PutMetricData']
   ),
   broker(
     'queue:infra/queues.ts:agentProactiveMessageQueueDLQ',
     '1990fa893bed28bef2523e156f10d9e0a787552590a76489415b59814359c2a9'
   ),
-  gap('queue:infra/queues.ts:bobRunQueue', '118171ae230701e80947605002d7bfa04f5dad654c2dc7ea30731e64d799f767', [
+  gap('queue:infra/queues.ts:bobRunQueue', '6bd402d264994779792034bcdd606330585468567fb62b716abdea14f849afba', [
     'cloudwatch:PutMetricData',
     'execute-api:ManageConnections',
   ]),
   broker('queue:infra/queues.ts:bobRunQueueDLQ', '992ea82e88afb9edee954915d02a11a851268dc0059930f226609026a42b34aa'),
   wired(
     'queue:infra/queues.ts:dataLakeCleanupQueue',
-    'cc6196e589d3a38e768150a53533070628984f5aebeda7e2404a941d95bce777',
+    'd5ed8a1649f322b1e9b5e015588f2ed033a1f24d893737feb798cb407602dfed',
     {
       source: 'apps/workers/src/selfhost/dataLakeCleanupQueue.ts',
       symbol: 'registerDataLakeCleanupQueue',
@@ -259,11 +477,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:dataLakeResearchQueue',
-    'f1285e4b4696ab261bf776cdebc2423fd4c6d152be1727f5e8733b2673f45d1e',
+    '4e84877452a06b0b9cafb657703e0a791e8930eed20357ccd8b2ba687d36cab3',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeResearchQueue',
-      fingerprint: '702a030220e5615752033da263a8952ee1111c0d66132c93c5f70ca8c9b5105c',
+      fingerprint: 'c6cc49f18bb919ae9e396c6b2cff1659d8fe3434ec21016a43803d144122f27b',
     }
   ),
   broker(
@@ -272,32 +490,34 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:dataLakeTaxonomyQueue',
-    '0dfae2cc4151bc331069aac84670e2922cb007457b377d22e4cbdcf1cf80c047',
+    '11448d0703ae18f0100557d8459c01ef342d9a6feff42e0b4320c9d436f3aacf',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeTaxonomyQueue',
-      fingerprint: '8146b1d5d3d6d7589f7b389c25299b0d54cc3ef615a9e2a338e40e83fb1dd27d',
+      fingerprint: '1739fd90defe91eae3c52824b9ba883e488ddc3386540e71e719341a992993d2',
     }
   ),
   broker(
     'queue:infra/queues.ts:dataLakeTaxonomyQueueDLQ',
     '09d613eb6bffdc733600b1b2dbb9a68496671babcfb7a2b8769c84b5d65d9bbd'
   ),
-  gap('queue:infra/queues.ts:deepAgentWakeQueue', 'ad7960fb51a1a1a1adaea99a351dfd9e8750c8dbacf62b597a34aa64300dbaec', [
-    'bedrock:InvokeModel',
-    'cloudwatch:PutMetricData',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:deepAgentWakeQueue',
+    '69126f266075c0909904ac978dc8455577bc679ccaedfaf6a5826b4cf6fabbca',
+    'Deep agent enrollment (/api/deep-agent/spin) enqueues wakes, and self-host runs neither this consumer nor the wake cron, so an enrolled agent never wakes. The handler is in open core: candidate to wire.',
+    ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
+  ),
   broker(
     'queue:infra/queues.ts:deepAgentWakeQueueDLQ',
     '2daf534b0ed080ebdbaf3f323032db39f5ab06e345ebc0df5a73babd0f8c1bb8'
   ),
   wired(
     'queue:infra/queues.ts:driveDisconnectPurgeQueue',
-    '86b190a884485ccff58aff70d6fe1dc30e846589c279f70a5664d6acc9e74cad',
+    '2f0cfde1581ba6382ce839ae51ae11a3ea783f1e28435d474018bab2cf4536bd',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:driveDisconnectPurgeQueue',
-      fingerprint: 'dfdc789272936b136c7ae41fe775c8c9f803689c6b7cef1a76bc2eaed9cda186',
+      fingerprint: 'ccf40dcfb92ddb7bfbcc75eb3056f1273be0ddc9336fb05569b1e54a98cd7f7b',
     }
   ),
   broker(
@@ -306,11 +526,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:driveLakeIngestQueue',
-    '7721a951a8cb50b5ad8a842b53ef18c1445c51b4ac79a245f2a6ef75a2be5a21',
+    '8841bbefd901daffa2b2c9d69c0562b9800c3322fea89f623743780cdeecbc5f',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:driveLakeIngestQueue',
-      fingerprint: 'eadc042fb294dce64dc6a99aed438c9def2a74e04055ae0f0779cc4cffce1bea',
+      fingerprint: '107c41da6dee4f6ba0293a18f7845b7ae23c4d6f51ebafce96568447f404aa65',
     }
   ),
   broker(
@@ -319,11 +539,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:fabFileChunkQueue',
-    'f9e2b169cbc9baa999fde9b36a8106fcf19d58ed292b417bd229306d74b0b855',
+    '03d7a4aec250e5c2c7c9fb00ec695b28a0263762acddca9db258f4b790701942',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileChunkQueue',
-      fingerprint: 'c97f9bbdcbf5c78a2a356c3cfb9ea79d8f199a9e307880d6e1021ed8c55f820e',
+      fingerprint: '897a485f265f7fd4c782c224a4e04d4178ec4aeca0318ecfc3d1f2ad15b351fa',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -337,11 +557,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:fabFileVectorizeQueue',
-    'e063ef89a646677bd54a4bb35d210b8be67c6d45b4c7a77a619277313fc2ee72',
+    '0bac1fdf98538cddbcb124db2ea6181f29f3cc9ed08897230624776fdfe4528a',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileVectorizeQueue',
-      fingerprint: '731feca644713bcfd60142035776f8d3c7787ade05e316599b86d47da1e3e435',
+      fingerprint: 'b1e2ccd43b423e136f09376a690e1f2070fd40493c7717abe8b40314ad4617f1',
     },
     ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
   ),
@@ -351,11 +571,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:generationCallbackQueue',
-    'ae237051ce20715e8fb67ecc582b289287c4d90d7c94344344f2f9fedbef8ba7',
+    '0a07c4175a2e9407483a75962577ed64429a317a6ded0f023e1e7d05c85c8d51',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationCallbackQueue',
-      fingerprint: 'b8e07d0f19c08b7c6a94490e8c21ca19102b272f08e2b59ead0bdc1d621e8a82',
+      fingerprint: '0ab11e57b1bb4b30c5ff918b1158392970afb67da256bfbe8db70924ac87cf83',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -366,20 +586,20 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:generationJobDLQ', '0eb29387a6952921e713298ba6acf3cd1aef5f60d84e67cffe177843b714f38f'),
   wired(
     'queue:infra/queues.ts:generationJobQueue',
-    '0d42d959085700123e83ffac8104c2907b47ba917463a6e7fe57c005734b9cb4',
+    '13d966d1e0c14eb72f2b8cfab3505d975e7602c70375551e58f45cc0e9bb5bf9',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
-      fingerprint: 'd094a0fe2c6b094e226d008d9e94ab59d663b09e9b12f8410e0b891bf9e46d03',
+      fingerprint: 'ea0d61421db2f82f29cf9cec649d9b685ccdefffd910d6f8d75d96d7539162fc',
     }
   ),
   wired(
     'queue:infra/queues.ts:githubLakeIngestQueue',
-    '5f3ce84b16696c185dcba949eb89c5a4b8697f12ded52d3ecb963539c6cc6df4',
+    'd5bf9dcf09ef16cf0bea531a9d03eceb4e58f8c7a35e95e219f94cdabd59236c',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeIngestQueue',
-      fingerprint: 'd91c7034c66a1f1c2d9923a9562dc73902dd3ee76a78aebe2aeec5a5ae135255',
+      fingerprint: '1aa0aed02bda3f3d30e1ed4a85c5a9ea8333a227b38d833488da427fc87ab0db',
     }
   ),
   broker(
@@ -388,18 +608,27 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:githubLakeRevokeQueue',
-    '13d2cfcd61adf0413f13cb18e0acc2a4287097c1a60c50b17ec13bd69ac77078',
+    '70755d8fb0016af113da6842cc1335e83461923fedffb0ef0835501f6ed90e54',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeRevokeQueue',
-      fingerprint: '4a86fb425d1995f9fcee4a98bc819ac35f1da1652c803ba5703b6a4109af3d24',
+      fingerprint: 'fe423a08a34dba667c034126aa24ab5f9647e62b2982eaf477abf45e7ec4ef8d',
     }
   ),
   broker(
     'queue:infra/queues.ts:githubLakeRevokeQueueDLQ',
     '4491856037e8f9226cdeb137466706aa7bc84abb90e191d01aef7f42424825d1'
   ),
-  gap('queue:infra/queues.ts:githubWebhookQueue', '1fd350d8f6b75d525f18203c803be134a8ef8e450b32630a8ab60f9f5bd4e837', [
+  gapBecause(
+    'queue:infra/queues.ts:generatedMediaPurgeQueue',
+    '88d7e61becc82c064bd8cd57edf3f171a1f2c810534b623961e1b1dadce88276',
+    'Optional. Notebook and message deletes hand it the generated media their request budget did not reach; with no URL set the leftovers are logged and dropped. The self-host templates declare it with a URL, as queue parity requires, but no self-host consumer is wired yet, so leftovers wait in the broker until one is.'
+  ),
+  broker(
+    'queue:infra/queues.ts:generatedMediaPurgeQueueDLQ',
+    'c2d58c32249e95e85b54c27855e71c6dc8512ff1fc4965a78013fd5eee539abc'
+  ),
+  gap('queue:infra/queues.ts:githubWebhookQueue', '6fed8fe8e418c474e7615d1a3090ec7344536e15f8864f1c86479c63d18620e9', [
     'import:@aws-sdk/client-cloudwatch',
   ]),
   broker(
@@ -409,11 +638,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:imageEditDLQ', '10c1a0580567d9b39e1c9547b6edccdbf9e9e6a71ea74c050e73f8da63190074'),
   wired(
     'queue:infra/queues.ts:imageEditQueue',
-    '73fc0a1f2c5d93808b6171f38e94ca684cb5d4ea66ad3dd522f518e78f55ca6b',
+    'd2a31074b8c1cf356db896a58290649f278e7542f91b81e2e622a7b19bb202d4',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageEditQueue',
-      fingerprint: 'cae519a2870f50dc927f2e9afe18079cb1d86dfa1c568f95e8b2d6f7e07ea00f',
+      fingerprint: 'ccb4df2f650f35ceea3ba6ddc6aca1417bc641d32e37fbf622f74c12e36bdffe',
     },
     ['bedrock:*']
   ),
@@ -423,23 +652,24 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:imageGenerationQueue',
-    'f37dce3291f1223a70275df06e37299ea54902484d8c83f3a3d5743fb1b07d2e',
+    'ff941a4b38d70a60d3bc4bbe2e28936dd32df2baf7500727e565fe53dc50b0f8',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageGenerationQueue',
-      fingerprint: '3ed2f49eab22afd9a7d1c18b82f6c2382b4c26965f73551bf32afb4c55c1ba4e',
+      fingerprint: '6a995e6afe3bdf7dc3cde09b1ac0b8d4d367ba2f4fa4009d422f028802ed3226',
     },
     ['bedrock:*']
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:lakeInconsistencyModelQueue',
-    '82b674f574d0ff242f5406af8d87f29fff05254d71b43aeb112e1049d0e3d474'
+    'b9b68e4035cfa152983a37c7507f735e7497bbdfee2c5ba5fc7df5a26a6320d1',
+    'Optional. Reached only from the inconsistencies route behind the off-by-default EnableLakeModelInconsistencyDetection flag, which refuses the run when no URL is set. Leave it unset on self-host until a consumer is wired.'
   ),
   broker(
     'queue:infra/queues.ts:lakeInconsistencyModelQueueDLQ',
     'cd3631e1e06de7bbf8bef82bac2e6c518b0f9a2cedd0881211fad77de5b969f7'
   ),
-  wired('queue:infra/queues.ts:lakeMemoryQueue', '42d5fb4292d07449df36f80d86bc13bd685eb436de096c412575d4a4d65404f7', {
+  wired('queue:infra/queues.ts:lakeMemoryQueue', '35e0dcaa10684e6d3956da990b8f30a4ef0467fd14d0fac09d9fe9e4b3c3230f', {
     source: 'apps/workers/src/selfhost/lakeMemoryQueue.ts',
     symbol: 'registerLakeMemoryQueue',
     fingerprint: 'f98f5ba76b35cde5bd0bf1761073dbe768a4d2fece50367293e1b6fee8fe2ea1',
@@ -450,23 +680,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:libreoncologyAudioRenderQueue',
-    '078f01816ba8d075dc651c11f7770556aad52461e9c5bf97a5165d9062d1c536'
+    '08339b274b3dfb667e2ec7747bec95ff084ea38f2108f9e06d3a423ea716c205'
   ),
   broker(
     'queue:infra/queues.ts:libreoncologyAudioRenderQueueDLQ',
     '2ee2385d94d02b314ad0029cadb2c26a937f5a674ff43eb5a82816c228b00b6c'
   ),
-  gap('queue:infra/queues.ts:liveOpsTriageQueue', '7d14b53739c606943d497cb1d9dfc22035f29d8793c7ee5511556f2fb81d6ad9', [
-    'cloudwatch:PutMetricData',
-    'import:@aws-sdk/client-cloudwatch',
-  ]),
-  broker(
-    'queue:infra/queues.ts:liveOpsTriageQueueDLQ',
-    '396277d7176e9e4839b55c3f4f43ba8107c46a9262e8cfa5859bff0b50bba37b'
-  ),
   wired(
     'queue:infra/queues.ts:notebookCurationQueue',
-    'd3d5002ff3132b6da6a514e1a1f52c5c1e82aa01661726df6b1481353fb977c6',
+    'e373b5d8e5bc82b36c1bcf964226289fdca8ccfd82b23a5826d7f816d810ac4c',
     {
       source: 'apps/workers/src/selfhost/notebookCurationQueue.ts',
       symbol: 'registerNotebookCurationQueue',
@@ -480,7 +702,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:optihashiRunCompletionQueue',
-    '9f43268abec33c309b1020cff8c27e3d35e17f990b715e9aec1cbf32feb8af4a',
+    '22030c6b30647690914a99ed325f112dbccad064066f394778eea81a0c7ef4ce',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
@@ -494,16 +716,36 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'queue:infra/queues.ts:overwatchAnalyticsQueue',
-    '921f75ce14fc521f6806e111509b3e8a8af480d0b9e43ff061bfe17cd7f3d5f2',
+    '9cb823c8171933b2ca00cd9023fde24c5bcb4faa73db7965b29d60bed7737b22',
     ['cloudwatch:PutMetricData']
   ),
   broker(
     'queue:infra/queues.ts:overwatchAnalyticsQueueDLQ',
     '48d2eb528668fa78a4afbc6df9740bd92ac527dc969f20966da54ac373072e04'
   ),
+  hostedOnly(
+    'queue:infra/queues.ts:publishThumbnailQueue',
+    'cd0a21e4bdc25554952cb0936950b08f620f25d0780273ca7ffde985c2a209b4',
+    'Owner-only publish thumbnails render in a Lambda-packaged headless Chromium; the self-host worker image ships no browser, so publish skips the enqueue and cards keep their generated cover.',
+    ['lambda:InvokeFunction']
+  ),
+  broker(
+    'queue:infra/queues.ts:publishThumbnailQueueDLQ',
+    'a1b84e4b8d1c2da1390507f0e1bdd7a567c77e5390ede903ca583acdfdbe87d2'
+  ),
+  gapBecause(
+    'queue:infra/queues.ts:callableFunctionCallQueue',
+    '167794254bb0e6d0e3ee82478574e2130cd7a61461d9bcfc0b7e1a97fe59bc95',
+    'Asynchronous function calls are not wired on self-host: the broker declares the queue but nothing consumes it, so an async invoke answers 503 and a synchronous call still runs.'
+  ),
+  gapBecause(
+    'queue:infra/queues.ts:callableFunctionCallQueueDLQ',
+    'f939d07fd88701b31fed10da4b2388692f410bd56fa4884c4711c95514c92140',
+    'Dead-letter queue of callableFunctionCallQueue, which is not wired on self-host.'
+  ),
   wired(
     'queue:infra/queues.ts:questExportQueue',
-    'daebcc2d0b1021e4c650792ebae48c616d8705525dc24c24db6cf634c604c420',
+    'f400bd268ecb6064015ec5c99a1e93e90c91c5bc02bc8768aa3daef45d252ed0',
     {
       source: 'apps/workers/src/selfhost/questExportQueue.ts',
       symbol: 'registerQuestExportQueue',
@@ -511,17 +753,50 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:InvokeModel']
   ),
+  wired(
+    'queue:infra/queues.ts:accountDataExportQueue',
+    'd5f1b02a432b3df3ba1699234547a7654213bcb9f67308ae90dbe9b31e50f356',
+    {
+      source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
+      symbol: 'registerAccountDataExportQueue',
+      fingerprint: 'de56c6ae60e8ab28932b6554f84f5ff06d4e4ee1558c9bff95592c25fee263fb',
+    }
+  ),
+  broker(
+    'queue:infra/queues.ts:accountDataExportQueueDLQ',
+    '8234bb46aa2d71c0b2303134eb96ad2918c4735483c21631faa46b1b27736d60'
+  ),
+  // The erasure also deletes callable function data: the data bucket when hosted, the files bucket on self-host.
+  wired(
+    'queue:infra/queues.ts:accountErasureQueue',
+    '6592ca979ba828be45ab32a65f80719b001971c31f416d43c2f2d19e7f7f1c5e',
+    {
+      source: 'apps/workers/src/selfhost/accountErasureQueue.ts',
+      symbol: 'registerAccountErasureQueue',
+      fingerprint: '68698ad5077ecc9136ef3aecb7aa9ccf78d47607ed2c5cb832ce8dd873551668',
+    }
+  ),
+  broker(
+    'queue:infra/queues.ts:accountErasureQueueDLQ',
+    'da82b9fa7a98f66e46005d88d97905d0c836e11b20ff2a737e08aa3b948594b6'
+  ),
   broker(
     'queue:infra/queues.ts:questExportQueueDLQ',
     '25de3f067cc3dbb3aa93798220af65df41849f0baad7ef6cd008e56706335966'
   ),
+  broker('queue:infra/queues.ts:renderJobDLQ', 'e1f19aaf06fd6c17528906c2932480b7f10810779ba40ac2bad84885cd2c40f6'),
+  gapBecause(
+    'queue:infra/queues.ts:renderJobQueue',
+    '7c16ef5e8436376ea6e5b246f1965979fe7c60e0034b0d5db07c7cb0a4093e41',
+    'Drained by the render worker (apps/workers/src/render/main.ts) as its own process: the hosted RenderWorker Fargate service, the render-worker compose profile or the chart renderWorker Deployment, not the self-host worker.'
+  ),
   wired(
     'queue:infra/queues.ts:researchEngineQueue',
-    'cec2e9f8803bd72ddd7870878c2fc23338857b4e332fcf968c56acca9c2e6437',
+    '7f50a7a5a03ac7ec1b2ce387d08e4592374370c29622efa3389921aaf07d90dc',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:researchEngineQueue',
-      fingerprint: 'c6319d69ec2e1f2ea436c80c81b7f6a7225342c3df7633122e0aab117f4e0490',
+      fingerprint: '3b7e917a66306ed0d6f45ec7091632360da305dae25fdf0759a55d1f22bdf040',
     },
     ['bedrock:*']
   ),
@@ -529,43 +804,67 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:researchEngineQueueDLQ',
     'fc9787d34e6471af94a399dd6b53d266f1dd1d037fb591d7731ef8edec35d78d'
   ),
-  gap('queue:infra/queues.ts:secopsTriageQueue', 'bc049373065cb81c2b82cda626c8f12107080671831fa7b0f0f27bdda8917ade', [
-    'cloudwatch:PutMetricData',
-    'import:@aws-sdk/client-cloudwatch',
-  ]),
+  wired(
+    'queue:infra/queues.ts:riskEvidenceQueue',
+    '744a05c568e64c7906e08892f3738cb30eb4511f45007108e4bb2f14dbb46fd8',
+    {
+      source: 'apps/workers/src/selfhost/riskEvidenceQueue.ts',
+      symbol: 'registerRiskEvidenceQueue',
+      fingerprint: '50eb5a8edbe03609e3a1c82a890052768effa06caf7cdac531dc833eafd1f8d3',
+    },
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
+    'queue:infra/queues.ts:riskEvidenceQueueDLQ',
+    'c0f2898d8395eaa08e1c942c2697bdb2180b5d7ea4ce4cb969ae1411db1659fc'
+  ),
+  gapBecause(
+    'queue:infra/queues.ts:secopsTriageQueue',
+    'fea6f0e8a658e19e6e59e7ba9a6bf4369acb6d8f5220c0367839422cf4d4a14c',
+    'Not registered. The admin security-dashboard ingest routes enqueue here; triage works on Prowler and AWS security findings that self-host does not produce.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   broker(
     'queue:infra/queues.ts:secopsTriageQueueDLQ',
     '5dae60c15cdbc4e123e5ffaafcfdfecbe658a3ac123be20c976beab0dd4f3c2a'
   ),
-  gap('queue:infra/queues.ts:slackExportQueue', 'd2d9a72bbace7d56db6248d534f8ca707658562179bef30b6b62f900afc2968c'),
+  gap('queue:infra/queues.ts:slackExportQueue', '68f38e363a04f80f675d884ee4a292ff84353add86a6efc0018ebcff9ea5cc29'),
   broker(
     'queue:infra/queues.ts:slackExportQueueDLQ',
     'e6f709c7a77ad92a6420578b8802c7199d3580045da4a245ec379dca2b2f2a84'
   ),
-  gap('queue:infra/queues.ts:sreFixQueue', '664687478c4e22ca8c1227a4dd0e74027f5c4a542309159ed59ff544908c5ebb'),
+  gapBecause(
+    'queue:infra/queues.ts:sreFixQueue',
+    '64900b939f9aa0cd7b750efeb1cdda2e374a2aeef2e08aaffd8f23dc4cd20aa2',
+    'Reached from the SRE Slack approval path and, on hosted, an EventBridge rule. Part of the SRE pipeline with sreJobQueue, which self-host does not run; decide the two together.'
+  ),
   broker('queue:infra/queues.ts:sreFixQueueDLQ', '209afa13455584e3d213f4664f8bb372f97c4047b441a13c140c10a2d3b9950c'),
-  gap('queue:infra/queues.ts:sreJobQueue', '3f517494149694c0f546b1e7656feaf7ab0b3559b91b19e4bcce2666a956192c', [
-    'bedrock:InvokeModel',
-    'cloudwatch:PutMetricData',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:sreJobQueue',
+    'dcedce8d2a640076d0a90810734ad6368f78257b091c93fcf76e0b8eb20e8096',
+    'Not registered. The admin SRE rerun/retry routes and the GitHub SRE webhook enqueue here; the handler needs Bedrock and CloudWatch, which self-host does not provide.',
+    ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
+  ),
   broker('queue:infra/queues.ts:sreJobQueueDLQ', '37a9ace9b78c31a34324c565734ddad57f611e999c69c55b2052ed020cca1435'),
   gap('queue:infra/queues.ts:tavernHeartbeatQueue', '5ece4ce114a9900aeb8e5ce9f67c415d42d1623c8a3bdf99098e93ee613294f4'),
   broker(
     'queue:infra/queues.ts:tavernHeartbeatQueueDLQ',
     '3f2e2017042d9cc8ad66385424a377b2e04b2f1d137b3fcd2b229f1d277966b7'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:webhookDeliveryQueue',
-    '9e5d9070b68a991e80c6cd5155d8d49fe0970ea526b0e76b4ac7f87cd73fba15',
+    'e81661d58bda4809d7f7ec3c594958d0c666c67be6691b0ee50ca0bf0cbd9704',
+    'Not registered, so the webhook retry and replay-dlq admin routes answer 503. The handler is in open core: it needs a self-host consumer before the queue is registered.',
     ['cloudwatch:PutMetricData']
   ),
   broker(
     'queue:infra/queues.ts:webhookDeliveryQueueDLQ',
     '489b16bdceaf15867423fcbfab9344b5e36cefcdbd6473c595f6604d440ad271'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:whatsNewGenerationQueue',
-    '80c11bad2510eb54d0f6ae650b18419bbfd5aee82215996530018f880212107a',
+    '235245848c15e940229884146d1cb811139d034deb10813936101c0435ff8ce5',
+    'Not registered. whatsNewJob.dispatch consumes release notes and admin-triggered highlights; self-host has no release-notes pipeline or highlights consumer.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
@@ -577,36 +876,65 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:whatsNewGenerationQueueDLQ',
     'e57a7345766ccd52531a45ce89ad2c994bc132aae123cf9664c62a15dad70b47'
   ),
-  gap(
-    'queue:infra/queues.ts:whatsNewHighlightsQueue',
-    '3ca8f7a777542df98b25d8dc4e2435f8b88647a9022c79516118e7458c2121ec',
-    [
-      'bedrock:InvokeModel',
-      'bedrock:InvokeModelWithResponseStream',
-      'cloudwatch:PutMetricData',
-      'import:@aws-sdk/client-cloudwatch',
-    ]
+  broker(
+    'queue:infra/revenueSnapshotDeadLetter.ts:revenueSnapshotDlq',
+    'fd103df5f8b6caa0d4d0e1b4397e7324565612ed1e7ac29cc5c7facecb6fdec9'
   ),
   broker(
-    'queue:infra/queues.ts:whatsNewHighlightsQueueDLQ',
-    '132ea676c87ab70c72d8f1f1e6fa195c3f0ecac4af6383acd0ea59e22c4427fc'
+    'queue:infra/subscriptionReconciliationDeadLetter.ts:subscriptionReconciliationDlq',
+    'b84252bf5bb727b63bc13381e878d877e2d33ce431c80243b0ba479c90fcb8c4'
   ),
   broker(
     'queue:infra/serviceHealthAlarms.ts:ServiceHealthAlarmHandlerDlq',
-    '6b4dee3c8d196df99d5167e3b8e68c215c9cd5ec5a1d2b482027edb7ab444870'
+    'e4bb21872791c985702b536156f97761b31bd8076566645850b9e6d87646ab6f'
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
-    'ee5e561d5e093f20865aaaf04031d5d2bacc15d51df52b80ef817abac8f36723'
+    'f2961ff5df989be1ef7ddf10631fe2499d4458ea709faca15171de84142a2fd5',
+    ['ssm:GetParameter']
   ),
-  wired('schedule:infra/cron.ts:adminAuditAlerts', '3d29c77c0415f6c9a1df4c5844222d599f060b9cc59f38fddcf9878c6882ec47', {
+  broker(
+    'queue:infra/youngAccountSpendAlertDeadLetter.ts:youngAccountSpendAlertDlq',
+    '7c55bfdeaea409d972ba757cc5e3c8d50a5a0d1e8fd8629afab3473284bbbd6e'
+  ),
+  broker(
+    'queue:infra/cloudScanDeadLetter.ts:cloudSecurityScanDlq',
+    'ebb4d665a7729e8eeb32f3e0230f05cdc2ed1a459808e761e14f28e85502fa83'
+  ),
+  broker(
+    'queue:infra/apiProbeDetectorDeadLetter.ts:apiProbeDetectorDlq',
+    'f353ac779308cb585b976a6bd5e80854661ced29c7569618b666faf1fb7e6d61'
+  ),
+  broker(
+    'queue:infra/spendMonitorDeadLetter.ts:spendMonitorDlq',
+    '1cf26770977879e377a4c62a5d06cc22ad09892a0a144d012deb4070368f2223'
+  ),
+  broker(
+    'queue:infra/signupGrantHeldReleaseDeadLetter.ts:signupGrantHeldReleaseDlq',
+    '1856afc8013710101dc260617d02b2feca7f30a05c0a2444f823a5e1ae6b21c8'
+  ),
+  gap(
+    'schedule:infra/cron.ts:accountCampaignSweep',
+    'fbf102bff1f9fb5a03579c16cfb667e3fa6ac242a68535d2e33de491e50def17',
+    ['cloudwatch:PutMetricData']
+  ),
+  wired('schedule:infra/cron.ts:adminAuditAlerts', 'affe75eb1ea58ec7de19131925c6c8907a82f258f187996331f5df4183eb3ab0', {
     source: 'apps/workers/src/selfhost/adminAuditAlerts.ts',
     symbol: 'registerAdminAuditAlerts',
     fingerprint: 'c3d09ab1645e180de73018af05a50b748c27dffcb699ccd1535be774c1359ab6',
   }),
   wired(
+    'schedule:infra/cron.ts:oauthAbuseAutoBlockCron',
+    '2a10f226e089ea8c82d6b54acf304b96fc0b8bc860a7dc699382095311a55b18',
+    {
+      source: 'apps/workers/src/selfhost/oauthAbuseAutoBlock.ts',
+      symbol: 'registerOauthAbuseAutoBlock',
+      fingerprint: 'f421e8a8e1984b196879bc7706dd98c72e4e4f181c08d64f0a6cee857fb5c304',
+    }
+  ),
+  wired(
     'schedule:infra/cron.ts:agentExecutionAbandonedSweep',
-    '9a52354f7105669b1d7801c105eda9fa65205775a9ca6cf3b87c88c79e3e423a',
+    '231133ed8a07a894c6302ef73e91f887c3fe15d0f6440ce1ff7646802b1dea68',
     {
       source: 'apps/workers/src/selfhost/abandonedExecutionSweep.ts',
       symbol: 'registerAbandonedExecutionSweep',
@@ -616,25 +944,34 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'schedule:infra/cron.ts:agentProactiveMessageCron',
-    '91b6b69947f28cbfcfcf0a02ceffade3f4f321725a23ad48a723e91e7834ff67'
+    'a3a4b54741874e42badb485d6e9a0d412375149b86f6dc7289327a318470c46e'
   ),
   wired(
     'schedule:infra/cron.ts:apiKeyBaselineCalculation',
-    'd7da5b363930eba0108ccc9e78d0c9572e88ad1949b7f2fb724ff2dca9e163c4',
+    'ca680d8a038544620ab0bbdc9570ed2d42f55fae714c495c6c279f6d0019bca0',
     {
       source: 'apps/workers/src/selfhost/apiKeyBaselineCalculation.ts',
       symbol: 'registerApiKeyBaselineCalculation',
       fingerprint: '0c849457ddc4e06c07e6ad9a52d4098359838ad885f25824720da1795e75e606',
     }
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:attackSimulationCron',
-    '493f4ece19e6b0e52c0e9c8fb43fc08245e69c98fb763ce06c8ed67c474e85e8'
+    '7d81c82a55e65d4d9869afed1fc3edfee51f467023b30f305c45009b4fffa731',
+    'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
-  gap('schedule:infra/cron.ts:CloudSecurityScan', 'e4c54adf04e623e4ddabdc158aa2d3304bf8d0a29fd6c68cd9018f3e1893194b'),
+  hostedOnly(
+    'schedule:infra/cron.ts:CloudSecurityScan',
+    '4f2fd97b93060d4477a8e915dc58c8f4f98695c0fc12ee678afa94122657ef55',
+    'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
+  ),
+  gap(
+    'schedule:infra/cron.ts:completionSequenceSweep',
+    'afd282ecb4669d8158a19fd9cb3a8f2fd9d43f4ffa5e5a7b632b79aa15ed2cc2'
+  ),
   wired(
     'schedule:infra/cron.ts:creditHoldSweep',
-    '89a0eb8abf6a7ec5b2e6ce52e61b52df542e3e62b422a9ef03952b1abadaf0ce',
+    'bc1661185b11bb9dcdd5ef519bf44716500ce9de4e669b5123025dad85086c84',
     {
       source: 'apps/workers/src/selfhost/creditHoldSweep.ts',
       symbol: 'registerCreditHoldSweep',
@@ -642,48 +979,62 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  wired('schedule:infra/cron.ts:creditLotSweep', 'a8cd3c545b8da400b647c4f02385ccf90a2097d181d8dfc548f6acb0c0bec615', {
+  wired('schedule:infra/cron.ts:creditLotSweep', '988f2cffba7c1ae6c5c1394aa26f0fa09058d09f0a191847c24eed6bcd326eff', {
     source: 'apps/workers/src/selfhost/creditLotSweep.ts',
     symbol: 'registerCreditLotSweep',
     fingerprint: 'a8c89b47317a1c5821c18a6b5769c2bb20b64c1bafe69660994db5827757c7bd',
   }),
-  gap(
+  wired(
     'schedule:infra/cron.ts:creditPurchaseReconciliation',
-    'ff04c893f2101dd6edb7d0ca04a576b7ff75fb28cb45fcf3add98cd6f1948032',
+    '8455f96cc2ce815f18eab081597232ffd8b01ab372d4c04fa6a8d19fcbe3aef3',
+    {
+      source: 'apps/workers/src/selfhost/creditPurchaseReconciliation.ts',
+      symbol: 'registerCreditPurchaseReconciliation',
+      fingerprint: 'c22db348c12bb6a0d38bf36e8568a868cc26baa9cc64a4e5cb68fda52aa87124',
+    },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:dailyUserActivityReport',
-    '25dad0aee60758280848e2628a46a060b37d86cfc642c5082b03c41684992fbc'
+    'c8a18208501187549670f14edb67aea76c2c5dced73c8595ffc5749407c7c0b0',
+    'Hosted production analytics report; not applicable to a portable deployment.'
   ),
   wired(
     'schedule:infra/cron.ts:dataLakeBatchReconcile',
-    '073ff27f64a51a09a60ac88c579fadb18eba7425879a8055d88424b24642355f',
+    '823b7825df5b342867ef933b8b86c569b2521f9022d9196da88073835750bb48',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeBatchReconcile',
-      fingerprint: '01d46d22b2f231c3233a5929da8da6c9a3be75305b41bf21451b0974aee700c8',
+      fingerprint: '28d228e8c7fef991c0fbac8f0c1ee984a021c898c0113e154e956eefcbd294fb',
     },
     ['cloudwatch:PutMetricData']
   ),
   wired(
     'schedule:infra/cron.ts:dataLakeResearchScheduleCron',
-    '881ef4c8f240fb5405433ba8c4adb17373409eb11d16873ada0bda7117d38c6c',
+    'efd5553c06745990f5b45129ea61538c9cf20bd35a1850bb2345a154f931d5d3',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeResearchSchedule',
-      fingerprint: '2ad538bc8a1cc13f558998f429d9a1e71748afe503e072200398a829eb52cf50',
+      fingerprint: 'a1feb2ba8de9a1b89c6742ef764fe9cfda09652d298a575e73c777e1f4ee2059',
     }
   ),
-  gap('schedule:infra/cron.ts:deepAgentWakeCron', 'c312aea3eea5a3c2c729f63f32cf587cab67ec0ccaa793a3e140f9ce23a0e11e'),
-  gap('schedule:infra/cron.ts:driveLakeResyncPoll', '964dba267ccb03cb766b96add16e29da5d8715dd031bc9cac8b46e115d59ad8d'),
+  gap('schedule:infra/cron.ts:deepAgentWakeCron', 'b05e0f009dc9cacd227b7fc7a75120981412ec2ba9273c1717f1a175411dbed7'),
+  wired(
+    'schedule:infra/cron.ts:driveLakeResyncPoll',
+    '4a57ab417b18829b4b1806e6f4a1dc4485de044404647b3ca108dac020552bd7',
+    {
+      source: 'apps/workers/src/selfhost/driveLakeResyncPoll.ts',
+      symbol: 'registerDriveLakeResyncPoll',
+      fingerprint: 'c64f9756d199dc8adebf0f39e59614318deb2b456bf65c929b3f73268b1c3ad3',
+    }
+  ),
   gap(
     'schedule:infra/cron.ts:emailCampaignScheduler',
-    'f2deaa920d4137e7056c6966a0e04fb0c400bb0cde1859e67bf2725dd9bc050e'
+    'ee247038b12ce49f0d07d034f5133583aa94a27246159b623fa2101184eaecd8'
   ),
   wired(
     'schedule:infra/cron.ts:generationJobSweep',
-    'bed54c4902eec6117df761d3703d7ec701e17c9d9b01d78ba112574fc2b5c415',
+    '271a3c910b238b8cb993ab8105a7cb6b3b4bf1e03fd88ef58013d8513f1e5c22',
     {
       source: 'apps/workers/src/selfhost/generationJobSweep.ts',
       symbol: 'registerGenerationJobSweep',
@@ -692,24 +1043,36 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:githubLakeReconcile',
-    'b6a3478ff3c433bca6d96e6980b050e9c2eec0cedf0ca9822951b8109874a17d',
+    '20ca232bfee1e87547ce919a334890dee7dbaf0b2cf3b19286d5a0364e720a96',
     {
       source: 'apps/workers/src/selfhost/githubLakeReconcile.ts',
       symbol: 'registerGitHubLakeReconcile',
       fingerprint: '28fa72e17231df491e249d4e4d5fd0d19023022e7e4e52fde5f9f16e1781cecd',
     }
   ),
-  gap('schedule:infra/cron.ts:helpDatalakeIngest', 'c0028172649b6d280beab0768f5f79214893e9818b3d8aafb7a851a74a1a7e04', [
-    'bedrock:InvokeModel',
-  ]),
-  gap(
+  wired(
+    'schedule:infra/cron.ts:helpDatalakeIngest',
+    '730ccd34ff9f62c9a9d40425c834c4a409a0710624664f18d2b27e97faac0a7e',
+    {
+      source: 'apps/workers/src/selfhost/helpDatalakeIngest.ts',
+      symbol: 'registerHelpDatalakeIngest',
+      fingerprint: 'ca737f233283cb1a64a2bddd0baad7bc5b2f47b6eb1cdd1e5f0cee226e01c2dc',
+    },
+    ['bedrock:InvokeModel']
+  ),
+  wired(
     'schedule:infra/cron.ts:integrationHealthCheck',
-    'a5f8162f9f58cac2eae48f0b4d612ff670eb4f41f490cbb9dfc05b09c31ac520',
+    'e32811bfe25a37db6f804d58dca89956b809c85ba1cd48b8ad8ae057f520bb54',
+    {
+      source: 'apps/workers/src/selfhost/integrationHealthCheck.ts',
+      symbol: 'registerIntegrationHealthCheck',
+      fingerprint: '8db42864301d582151bd835a485f99e2d3c5a5a48241e198a9d7e09089f07523',
+    },
     ['cloudwatch:PutMetricData']
   ),
   wired(
     'schedule:infra/cron.ts:lakeConnectorOrphanReap',
-    '5135129242da6f0b07b8c1fec5e587ffbe4913c8a66177c0620b29c31299b65d',
+    '552a7fe36d0a43a890f868d3168c3bf8ce4ef66625f3473b153db88fc87a2a14',
     {
       source: 'apps/workers/src/selfhost/lakeConnectorOrphanReap.ts',
       symbol: 'registerLakeConnectorOrphanReap',
@@ -718,7 +1081,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:lakeHealthSweep',
-    '475503899c233b3a4c2d25b96ddf21bbd8356ab548c5b455119214f93db08b5f',
+    '049b7f3c434102e26e045a9c303edeb1a1ec1c965369eeecc596de8cddd32825',
     {
       source: 'apps/workers/src/selfhost/lakeHealthSweep.ts',
       symbol: 'registerLakeHealthSweep',
@@ -728,7 +1091,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:lakeInconsistencySweep',
-    '1c97472d179b1fcb9fb916ac35a344335aa72e3e7267e1be94f4938603da9565',
+    'db78ff28482aa8e97c37f84077e902059b4b2f686b4d1c26574286a9e078dd9d',
     {
       source: 'apps/workers/src/selfhost/lakeInconsistencySweep.ts',
       symbol: 'registerLakeInconsistencySweep',
@@ -736,29 +1099,44 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
-    'schedule:infra/cron.ts:liveopsTriageDispatcherCron',
-    '48ebe9d6b063f00792cc820bb1c2c6557b0649273addde5bf55be7034722fe39',
-    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
-  ),
   wired(
     'schedule:infra/cron.ts:modelDiscoveryCron',
-    'ea8a12d710cc3e6ac97e6256cd287c57386a8d498a5a58fb38f1f3a57eac53c1',
+    '7f54c87d76d28adbb51b23f078e98f3a064f2d7fca9c4017ced0b640f4c018bf',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:modelDiscovery',
-      fingerprint: '19e7df33c533d0f8954f8c4e636e80c11b99d79c241b51f1b90a660af79d0470',
+      fingerprint: '7bb8572e582e2ead0c777271c9b9c41c51001d2ce2f358b19ecde4c4345226e0',
     },
     ['bedrock:GetFoundationModelAvailability', 'bedrock:ListFoundationModels', 'cloudwatch:PutMetricData']
   ),
   gap(
+    'schedule:infra/cron.ts:dataLakeVectorIndexKeepWarm',
+    'e52a55016d4e296fad2509ece2c328abb3a75afb574308f221762ab2049e8d45'
+  ),
+  gap(
+    'schedule:infra/cron.ts:disposableDomainRefresh',
+    'd4acc4d47d84373b51e0aaf008c3f5e4a263bd3a1d99510c1f42628710ca99a0',
+    ['cloudwatch:PutMetricData']
+  ),
+  // Works the holds the refresh above makes possible (rule, then the advisory assessment), so it ports with it.
+  gap(
+    'schedule:infra/cron.ts:signupDomainHoldTriage',
+    '56a0ed993d2dc81d57c25b4702f9a884eddce8577c7a873638f2d5691c7bf3c8'
+  ),
+  gap(
     'schedule:infra/cron.ts:modelDiscoveryStalenessCron',
-    '8f17755858a749f29b24d3ddfdb46fd237d5f89769b8853225e077af2ad94d29',
+    'f906894c42c72f63c47bff4cd0214d9803e241702098291f3a30a67204b0da99',
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  hostedOnly(
+    'schedule:infra/cron.ts:providerUsagePoll',
+    '245d08b5ccee4a98d3261e769cb8f0c409bfd1d6ada0fc1cde7b87eacaeeb5c7',
+    'Publishes provider-reported spend to hosted CloudWatch alarms on monitored stages; no local metric or alarm destination is configured.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
   ),
   wired(
     'schedule:infra/cron.ts:questTimeoutSweep',
-    '912e9c3a3430885071153f51bf886db3e7e2664b1e25c4e6f4096d26d97db31e',
+    'd139c008ae202db6723c79bce5a00857e3ef35cde2c7a7501e52ce7846456889',
     {
       source: 'apps/workers/src/selfhost/questTimeoutSweep.ts',
       symbol: 'registerQuestTimeoutSweep',
@@ -768,7 +1146,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:realtimeConnectionSweep',
-    'ef44ce959dc20b02bc5cd5bcf0cde41d0fa0dec94e67cffc429ab09b32f7db91',
+    'bf66e36c3cbd4db57c4a212cee8521ba98d9fc3baf15c168560229e045209f7d',
     {
       source: 'apps/workers/src/selfhost/realtimeConnectionSweep.ts',
       symbol: 'registerRealtimeConnectionSweep',
@@ -777,55 +1155,158 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     ['execute-api:ManageConnections']
   ),
   wired(
-    'schedule:infra/cron.ts:scheduleTaskCron',
-    '4792978953745b7ea8c9c384086e3be84d182f00db2252b3b61745af65096def',
+    'schedule:infra/cron.ts:referralRewardRelease',
+    '656f40b737d457721ff3a417c7711858a608eb7f462d408e0f37ae534c6a0cf9',
     {
-      source: 'apps/workers/src/selfhost/taskScheduler.ts',
-      symbol: 'registerTaskScheduler',
-      fingerprint: 'f394d8b0c0847bf801d80443d57e8f46a220a037cc7a0484d9f9d39365c5206e',
-    },
-    ['events:*']
+      source: 'apps/workers/src/selfhost/referralRewardRelease.ts',
+      symbol: 'registerReferralRewardRelease',
+      fingerprint: 'f09c7a4636a708ef49fae2c8166825ab51457c5abf7a5b017b216b4c458e3200',
+    }
   ),
+  gap('schedule:infra/cron.ts:revenueSnapshot', '7362008fcc90113d2b09beb4abced26b05b1bb41a3e933cb5d2535ac7e07f6cd'),
+  gap(
+    'schedule:infra/cron.ts:subscriptionReconciliation',
+    '5ecf7b3d61f56bc8e5713af17065c9c7b48b1a66ca5688f6ad0d5b7c72d16f19',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  wired('schedule:infra/cron.ts:scheduleTaskCron', 'e54147287d6495b6bd8026e41cc0ff88788bdbceb50c22dbc1365671f2381007', {
+    source: 'apps/workers/src/selfhost/taskScheduler.ts',
+    symbol: 'registerTaskScheduler',
+    fingerprint: 'f394d8b0c0847bf801d80443d57e8f46a220a037cc7a0484d9f9d39365c5206e',
+  }),
   gap(
     'schedule:infra/cron.ts:secretRotationNotifier',
-    '53ce6957dc65b2898314c65405ebf7a4b16a7471bedb6ccd8ed642e0ced5ed2e'
+    'e113c8515bc8c5b1a38928a22e4d50fb139855e8d2b5b2ec55fa93c1696a2971'
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:securityScanScheduler',
-    '937c351074f20bfa1f240fab190968f89b0acecae4f8e6cf38620b97ba44ff21',
-    ['events:*']
+    '5088f620c550e6393774f65106df2b3d6fec646c913d92434b6d0e33ed5ff734',
+    'Inspects the hosted cloud account or dispatches hosted CI; not applicable to a portable deployment.'
   ),
+  gap('schedule:infra/cron.ts:signupRiskSweep', '0605877b1fee8aca08729e2137c078eb36f8b21b4fb20549761d5b60c151e6fe', [
+    'cloudwatch:PutMetricData',
+    'import:@aws-sdk/client-cloudwatch',
+  ]),
   wired(
     'schedule:infra/cron.ts:skillMarketReviewSla',
-    'a9e0bcc6e7296cb0b9fa36ad4fdc2ab94c1a7a45b5342263e164967b16fc48e7',
+    '697ac5832f8ddde3e173f89d1b8dde98f233da8187f3babf59abe26f215867c9',
     {
       source: 'apps/workers/src/selfhost/skillMarketReviewSla.ts',
       symbol: 'registerSkillMarketReviewSla',
-      fingerprint: '9f57dd7788c58e8c80541ed80e9def95959a8ab62567866fe35d4c9ca6b98ec9',
+      fingerprint: 'ae0a54d14fe11d85386d43d6724cd8b56cb98f3639f1433ae32e24561e0dabdd',
     }
   ),
-  gap('schedule:infra/cron.ts:spendReconciliation', '7c16e45ebde04b25819b6fb67b67021d2e962e3a5bb4f57c4f62841a192f2050'),
-  gap(
+  wired(
+    'schedule:infra/cron.ts:spendReconciliation',
+    '56a292793783e8a4c1463f31d9606391eee1e6a999ce1fcc5f7f55bc483a521d',
+    {
+      source: 'apps/workers/src/selfhost/spendReconciliation.ts',
+      symbol: 'registerSpendReconciliation',
+      fingerprint: 'ca9cbea76249daab2f0359e7faecad3f4dcd80c3269a0481a74e9a69a41a6d8b',
+    },
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
+  ),
+  wired(
     'schedule:infra/cron.ts:storageReconciliation',
-    '57c3ffee025c3ca6cc34b1a3659e0b3997e4dab02136a084c5a67da657c75624',
+    '5d1eb362eae9f41ec77081db00b41f18e7af165448331a564ad5634f09e9932f',
+    {
+      source: 'apps/workers/src/selfhost/storageReconciliation.ts',
+      symbol: 'registerStorageReconciliation',
+      fingerprint: 'da6c5ac52b4df8ea3674b0f3c367e1e367ccc43dc282edea6730a2cca21d68de',
+    },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
+    'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
+    'a1ce4a578e7e46c5a53e3e9bbceafcc7e2c76e93a435a1b28e8da355d0303abd',
+    'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
+    [
+      'bedrock:*',
+      'cloudwatch:DescribeAlarms',
+      'cloudwatch:GetMetricData',
+      'cloudwatch:ListMetrics',
+      'cloudwatch:PutMetricData',
+      'events:PutEvents',
+      'lambda:InvokeFunction',
+      'lambda:ListEventSourceMappings',
+    ]
+  ),
+  hostedOnly(
+    'schedule:infra/youngAccountSpendAlert.ts:youngAccountSpendAlert',
+    'c7844fc8ec21721907300874349c2c0677aef7cb092f3041136af6b32f9bf2e9',
+    'Hosted production abuse alert to Slack and hosted CloudWatch alarm threshold sync; not applicable to a portable deployment.',
+    ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
+  ),
+  hostedOnly(
+    'schedule:infra/cron.ts:spendMonitor',
+    'd9b098e7dc3e30b070b148a13625050b057541918960ed8259c2901866c22096',
+    'Hosted spend alerting to Slack; not applicable to a portable deployment.',
+    ['ssm:GetParameter']
+  ),
+  hostedOnly(
     'schedule:infra/cron.ts:signupBaselineReport',
-    'c5e21ed10e3d8b48ba363af2d0422119287414d2a0fce925897b7925e55b1a27'
+    '23843dfc0cbc0e87175ddce54aa8f3a5779ced62846f39daedf56b322f03ee08',
+    'Hosted production analytics report; not applicable to a portable deployment.'
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:SreStaleDispatchCron',
-    '40b5809d38bd8ac7c195c309c64f592d07dfed93c9fad1541765c4d94cc70dbd'
+    '91bbf43d2f4288d039b17b5258fb32e0998597ed586df3b174b32311ee131ad6',
+    'Hosted error triage and auto-fix dispatch; not applicable to a portable deployment.'
   ),
-  wired('schedule:infra/cron.ts:telemetryCleanup', '720c1dfcfd8c320446a2334585ef3b6d08af343aae67c8b6f3a12bc2388cff9d', {
+  gap('schedule:infra/cron.ts:personaExpirySweep', '6994be0fdcb6a4252ee07d551f5bed1b35ddef6a986b68bd49b1c7736bc5d2cd'),
+  wired(
+    'schedule:infra/cron.ts:signupIpRetention',
+    'b90d6f8f8b7bdc5640a0de6c90b64dcdc176e9170da8d595b5aa6a52328cb312',
+    {
+      source: 'apps/workers/src/selfhost/signupIpRetention.ts',
+      symbol: 'registerSignupIpRetention',
+      fingerprint: '969bed6cde6dafb23b320883c779caff4c30686bce073f671c27da06190f92a6',
+    }
+  ),
+  // The sweep also deletes callable function data: the data bucket when hosted, the files bucket on self-host.
+  wired(
+    'schedule:infra/cron.ts:accountDeletionSweep',
+    'f17522d8779b0a87c5e15914ac358c662109fafa58ad839818f92175c42d400e',
+    {
+      source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
+      symbol: 'registerAccountDeletionSweep',
+      fingerprint: '066c963d8fc050105d384918d3f371392af41fbf65dcc1bc653ed65e72023146',
+    },
+    // Hosted-only overdue-deletion metric; the self-host runner passes emitMetrics: false.
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  wired(
+    'schedule:infra/cron.ts:signupGrantHeldRelease',
+    '690cb86f66b18eb610e50cfa052ee0e4da2b5b86f6bd7a9803dd62c56f4848be',
+    {
+      source: 'apps/workers/src/selfhost/signupGrantHeldRelease.ts',
+      symbol: 'registerSignupGrantHeldRelease',
+      fingerprint: 'd219f930b821a44c4a28c40e3ac31f890b387145fbdeb3176ea0cda1a5eb8bc2',
+    }
+  ),
+  wired('schedule:infra/cron.ts:telemetryCleanup', 'acff554d296fc87f3f7725212e16ba2c11d5490fd1cdc7251b95b6e78c51c140', {
     source: 'apps/workers/src/selfhost/telemetryCleanup.ts',
     symbol: 'registerTelemetryCleanup',
     fingerprint: 'da6450a4a59ea6ac4f91f4b6adc5e7c54586164f920952bb76654f03b4b0e228',
   }),
+  gap(
+    'schedule:infra/cron.ts:abuseAssessmentSweep',
+    'd6e32f3fbe83d61fe3b30767b34354f69c92ec481e30bc81c02b6d2f1c1f8b45',
+    ['cloudwatch:PutMetricData']
+  ),
+  gap('schedule:infra/cron.ts:usagePatternSignals', '066edef1ae0b959ca2c6049626beb3c8630d5c22f99aed2b3bca1430f1f05766'),
+  wired(
+    'schedule:infra/cron.ts:briefScheduleReconcile',
+    '6dd141487c31b6bdafe7341f833f13f1b19b28f5700694c4660cddffc89b0a95',
+    {
+      source: 'apps/workers/src/selfhost/briefScheduleReconcile.ts',
+      symbol: 'registerBriefScheduleReconcile',
+      fingerprint: 'b1f618f6a89c1a4d0923de630873242781fd0154b7cf94527d59daae981ea065',
+    }
+  ),
   wired(
     'schedule:infra/cron.ts:voiceHoldSweep',
-    '89b2864330246aeafc0f6771aff6bf74ca90a0f22df1ddd72409f718fc0edb45',
+    '595f6930f39b7886ff6aeef3816bbb8acf214f81f330b3ece125304ca9908328',
     {
       source: 'apps/workers/src/selfhost/voiceHoldSweep.ts',
       symbol: 'registerVoiceHoldSweep',
@@ -833,56 +1314,62 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
-  gap(
+  hostedOnly(
     'schedule:infra/cron.ts:weeklyUserActivityReport',
-    '1b96e0c9771ef7c02e7791e814f07c88cf23e8c02f0408d10d3de9b583111f70'
+    '02a3fe8ea7ca78f392c4bb41313cbf98cbbd98f8da7d085761e1c7b33131e30f',
+    'Hosted production analytics report; not applicable to a portable deployment.'
   ),
-  gap(
-    'schedule:infra/cron.ts:whatsNewHighlightsCron',
-    'be68c74f51033aa9ad7f4a49c7d85ec9acdb9d88e202eb00dbfe96cf0953063c',
-    ['cloudwatch:PutMetricData']
-  ),
-  gap('schedule:infra/cron.ts:whatsNewSyncCron', 'c22c6f1da3086a35aef715f6e018e820751605f3b9bd9015ec3066fb890198cd', [
-    'cloudwatch:PutMetricData',
-  ]),
   gap(
     'schedule:infra/securityAlerts.ts:SecurityAlertsSchedule',
-    'aa4dee6442687bf18f254f1de11a4180049760781332890f006025e80f059ca6',
+    'f6d1104ad23019a998cff839ce029a6e0736637cf62587efb351826e0a9fc778',
     ['events:PutEvents']
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'd010e126ee4819fef1099d145e4d7084c80f4060bb0c85aebcd71d7ce1cc2a82',
+    'c01849c37004687a89c06c1a60dd1dbe1ed290d89c7b5842c09389a10483e2ca',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
-  gap('service:infra/searxng.ts:Searxng', '16fc0b23bc4d075e5c4e98cbb502ff6dfc37aac7fbf9bd4f7429cd4202b2f370'),
+  gapBecause(
+    'service:infra/renderWorker.ts:RenderWorker',
+    '45dc01b107b094d7b2b7a3f5e2490002b0083b7cc20f2fdb0e8cb2dc7365d355',
+    'Hosted Fargate twin of the render worker; self-host runs the same image through the chart renderWorker Deployment or the render-worker compose profile (both opt-in).'
+  ),
+  gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
-    '02cdd6b4926dc3c12f7ecff7a1975b25750d24d10b5e84b4f007f6a38a44092f'
+    '93a5312a4a0ff8b50927169d7801ec022068b8f1c7aa5f6b75afff7f1c3451ba'
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',
-    '149ae3de5b22c02958053d3325afe648873ca141260f64d4b5b46168534b2f42'
+    '05b3592ffe98bceb32dc139bdfd95f5ecde2d2f3d5b1f8eca9b51e78c28c68dd'
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:DlqAlarmTopic',
-    '72c73c3b941630cbb9ce8a14ce9cb58cfe634edb348042fe981bf64c1668e64c'
+    '5e2b51e155fca8780f1b5a2b76d04559750bb1aca7bbe0a8b14384fe97bf8ce3',
+    [
+      'cloudwatch:DescribeAlarms',
+      'cloudwatch:GetInsightRuleReport',
+      'lambda:ListEventSourceMappings',
+      'ssm:GetParameter',
+    ]
   ),
   gap(
     'snsSubscription:infra/dlqAlarms.ts:OobAlarmTopicEmailSub',
-    '84d8a753d4398b1923cd6967f312436fd05f265f181f553686da48001a40fc31'
+    '74a62b4123aa86855c94deee69bae3c79722c4f170f78ff0b06e2a45c43d6644'
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    '4a94d420bc77dfef23c15ac8f1525ed923d651749c86aae9fb7e52ad2c267b18'
+    '236d9e12c4b910de67db48aac7c6cd3b3d208f78b378c167a33f48c9f90c63d0',
+    ['ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafAlarmSlackHandlerSubscription',
-    'f12eafd92daf91c7f1df0593fd5f6545bfd4fe8e50b77a0a50ad6e791665a18d',
-    ['lambda:InvokeFunction']
+    'cc4e60428fac88be1d07e98d03a3c7db89cb6c48f8ee7d61df00a2a336817381',
+    ['lambda:InvokeFunction', 'ssm:GetParameter']
   ),
   gap(
     'snsSubscription:infra/waf.ts:WafOobAlarmTopicEmailSub',
-    '773e060944d0c679ae3ac61c166a94850695a68936544361eb597a35f3470a3a'
+    '7ec141237e2361d750e23d941542e3370946c5f9a835bdc2f5ca6b0413256dc9',
+    ['ssm:GetParameter']
   ),
 ];

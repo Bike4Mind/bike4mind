@@ -14,13 +14,31 @@ import {
   type QaSuiteSummary,
   type QaTestStatus,
 } from '@bike4mind/common';
-import type { QaFilters } from './filters';
+import type { QaFilters, QaSummaryFilters } from './filters';
 import { diffTests, median, type QaDiffTest, type QaRunDiff } from './runInsights';
 import type { QaMediaStorage } from './storage';
 import { leadingNonPassing, stateKeyFilter } from './streak';
+import {
+  SCHEDULED_TRIGGER,
+  summarizeQaRuns,
+  type QaE2eStats,
+  type QaLatencyStats,
+  type QaProductSummary,
+  type QaSummary,
+  type QaSummaryRunInput,
+} from './summary';
 
 /** Read models for the admin /status page (app/hooks/data/qaStatus.ts imports these types). */
-export type { QaFilters, QaDiffTest, QaRunDiff };
+export type {
+  QaFilters,
+  QaSummaryFilters,
+  QaDiffTest,
+  QaRunDiff,
+  QaE2eStats,
+  QaLatencyStats,
+  QaProductSummary,
+  QaSummary,
+};
 
 const DAY_MS = 86_400_000;
 const STREAK_LOOKBACK = 50;
@@ -28,6 +46,8 @@ export const QA_SERIES_MAX_RUNS = 2000;
 const FLAKY_ROWS = 10;
 const HISTORY_LIMIT = 50;
 export const QA_RUNS_PAGE_SIZE = 50;
+/** Per product; a full 366-day range of scheduled runs holds well under this today. */
+export const QA_SUMMARY_MAX_RUNS = 5000;
 const BASELINE_DAYS = 7;
 const BASELINE_MAX_RUNS = 200;
 /** Earlier runs findPreviousRun inspects for test rows before giving up. */
@@ -177,11 +197,10 @@ export interface QaRunDetailDeps {
   now?: Date;
 }
 
-const strings = (values: unknown[]): string[] =>
-  values
-    .filter((v): v is string => typeof v === 'string' && v.length > 0)
-    .sort()
-    .slice(0, 200);
+const normalizedStrings = (values: unknown[]): string[] =>
+  values.filter((v): v is string => typeof v === 'string' && v.length > 0).sort();
+
+const strings = (values: unknown[]): string[] => normalizedStrings(values).slice(0, 200);
 
 function runMatch(f: QaFilters): Record<string, unknown> {
   return {
@@ -222,9 +241,8 @@ export async function getQaFacets(product?: string): Promise<QaFacets> {
   return { products: strings(products), tenants: strings(tenants), envs: strings(envs), branches: strings(branches) };
 }
 
-export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promise<QaOverview> {
+export async function getQaOverview(f: QaFilters): Promise<QaOverview> {
   const match = runMatch(f);
-  const since = new Date(now.getTime() - f.rangeDays * DAY_MS);
 
   const latest = await QaRun.aggregate<{ run: LeanRun }>([
     { $match: match },
@@ -259,7 +277,7 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
 
   // Newest first so the cap drops the oldest runs, then back to chart order.
   const runs = (
-    await QaRun.find({ ...match, startedAt: { $gte: since } })
+    await QaRun.find({ ...match, startedAt: { $gte: f.from, $lt: f.to } })
       .sort({ startedAt: -1 })
       .limit(QA_SERIES_MAX_RUNS)
       .lean<LeanRun[]>()
@@ -297,10 +315,53 @@ export async function getQaOverview(f: QaFilters, now: Date = new Date()): Promi
   return { tiles, series, flaky };
 }
 
-/** Cursor is `startedAt`; runs sharing the boundary timestamp can be skipped, which is acceptable here. */
+/**
+ * Every product's scheduled runs in the filter's date range, any suite, for the weekly ops summary.
+ * Queries per product so each uses the { product, startedAt } index. Latency suites are looked up
+ * over all of the product's runs, any branch, env or date, so a range where every latency run
+ * crashed (no metrics) still counts them as latency rather than E2E.
+ */
+export async function getQaSummary(f: QaSummaryFilters): Promise<QaSummary> {
+  const products = normalizedStrings(await QaRun.distinct('product'));
+  let truncated = false;
+  const latencySuites = new Map<string, Set<string>>();
+  const perProduct = await Promise.all(
+    products.map(async product => {
+      const [runs, suites] = await Promise.all([
+        QaRun.find({
+          product,
+          branch: f.branch,
+          ...(f.env ? { env: f.env } : {}),
+          trigger: SCHEDULED_TRIGGER,
+          startedAt: { $gte: f.from, $lt: f.to },
+        })
+          .sort({ startedAt: -1 })
+          .limit(QA_SUMMARY_MAX_RUNS)
+          .select('product suite status counts metrics')
+          .lean<QaSummaryRunInput[]>(),
+        QaRun.distinct('suite', { product, 'metrics.kind': 'latency' }),
+      ]);
+      if (runs.length === QA_SUMMARY_MAX_RUNS) truncated = true;
+      latencySuites.set(product, new Set(normalizedStrings(suites)));
+      return runs;
+    })
+  );
+  return {
+    from: f.from.toISOString(),
+    to: f.to.toISOString(),
+    products: summarizeQaRuns(perProduct.flat(), latencySuites),
+    truncated,
+  };
+}
+
+/**
+ * Runs in the filter's date range, newest first. Cursor is `startedAt`; runs sharing the boundary
+ * timestamp can be skipped, which is acceptable here.
+ */
 export async function listQaRuns(f: QaFilters, opts: { before?: Date; limit?: number } = {}): Promise<QaRunPage> {
   const limit = Math.min(opts.limit ?? QA_RUNS_PAGE_SIZE, QA_RUNS_PAGE_SIZE);
-  const runs = await QaRun.find({ ...runMatch(f), ...(opts.before ? { startedAt: { $lt: opts.before } } : {}) })
+  const end = opts.before && opts.before < f.to ? opts.before : f.to;
+  const runs = await QaRun.find({ ...runMatch(f), startedAt: { $gte: f.from, $lt: end } })
     .sort({ startedAt: -1 })
     .limit(limit + 1)
     .lean<LeanRun[]>();

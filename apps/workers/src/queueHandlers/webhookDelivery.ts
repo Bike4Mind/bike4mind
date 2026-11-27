@@ -15,7 +15,7 @@
  */
 
 import { z } from 'zod';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   cacheRepository,
   webhookDeliveryRepository,
@@ -24,8 +24,8 @@ import {
 } from '@bike4mind/database';
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
+import { fetchPinned, SsrfError, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import {
   buildSignedWebhookHeaders,
@@ -110,8 +110,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     maxRetries: MAX_RETRIES,
   });
 
-  // 1. SSRF Protection - validate target URL with DNS resolution
-  // Uses async validation to prevent DNS rebinding attacks
+  // 1. SSRF Protection - validate target URL with DNS resolution; the send in step 7 re-checks the dialed address
   const urlValidation = await validateTargetUrl(payload.targetUrl);
   if (!urlValidation.valid) {
     logger.error('SECURITY: SSRF attempt blocked', {
@@ -187,30 +186,30 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       );
       return; // Don't retry - configuration must be fixed first
     }
-    secret = decryptSecret(orgConfig.secret, encryptionKey);
+    secret = decryptStoredSecret(orgConfig.secret);
   } catch (error) {
-    // Differentiate between configuration errors and potential tampering
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-    // Check for authentication tag failures (indicates tampered ciphertext)
-    const isTamperingIndicator =
+    // An authentication failure means no configured key opens the value. The cipher cannot tell
+    // a key that was rotated out too early from altered ciphertext, so the message names both.
+    const isAuthenticationFailure =
       errorMessage.includes('authentication tag') ||
       errorMessage.includes('Unsupported state') ||
       errorMessage.includes('bad decrypt');
 
-    if (isTamperingIndicator) {
-      // Potential security incident - log at critical level
-      logger.error('SECURITY: Potential secret tampering detected', {
+    if (isAuthenticationFailure) {
+      logger.error('SECURITY: Webhook secret failed authentication under every configured key', {
         error: errorMessage,
         orgId: payload.orgId,
         subscriptionId: payload.subscriptionId,
+        hint: 'key rotated out before stored values were re-encrypted, or altered ciphertext',
       });
       await recordDelivery(
         payload,
         startTime,
         WebhookDeliveryStatus.Failed,
         0,
-        'Security error: Secret verification failed - possible tampering'
+        'Security error: Secret verification failed - key mismatch or altered ciphertext'
       );
       // TODO: Send security alert to ops team
     } else {
@@ -239,16 +238,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_HTTP_TIMEOUT_MS);
 
   try {
-    const response = await fetch(payload.targetUrl, {
-      method: 'POST',
-      headers,
-      body: payloadString,
-      signal: controller.signal,
-      // Step 1 vetted targetUrl only; following a redirect would let a public host bounce this signed
-      // POST to an address it never checked.
-      redirect: 'manual',
-    });
+    const response = await fetchPinned(
+      payload.targetUrl,
+      {
+        method: 'POST',
+        headers,
+        body: payloadString,
+        signal: controller.signal,
+        // Step 1 vetted targetUrl only; following a redirect would let a public host bounce this signed
+        // POST to an address it never checked.
+        redirect: 'manual',
+      },
+      { allowHttp: true, discardBody: true }
+    );
     clearTimeout(timeoutId);
+    await response.body?.cancel().catch(() => undefined);
 
     const processingDurationMs = Date.now() - startTime;
 
@@ -340,6 +344,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     clearTimeout(timeoutId);
 
     const processingDurationMs = Date.now() - startTime;
+
+    if (error instanceof SsrfError) {
+      logger.error('SECURITY: SSRF attempt blocked', {
+        targetUrl: payload.targetUrl,
+        error: error.message,
+        subscriptionId: payload.subscriptionId,
+        userId: payload.userId,
+      });
+      await recordDelivery(payload, startTime, WebhookDeliveryStatus.Failed, 0, `Security error: ${error.message}`);
+      return;
+    }
 
     // Handle abort (timeout)
     if (error instanceof Error && error.name === 'AbortError') {

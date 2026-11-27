@@ -1,4 +1,4 @@
-import { ModelBackend } from '@bike4mind/common';
+import { ModelBackend, isDiscoveryVerdict } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
 import {
@@ -6,6 +6,7 @@ import {
   AWAITING_PRICE_REASON,
   NOT_INVOCABLE_REASON,
   PRICED_IN_BUILD_REASON,
+  LEGACY_PRICED_IN_BUILD_REASON,
   UNCORROBORATED_PRICE_REASON,
   evaluatePromotion,
 } from './promotion';
@@ -81,19 +82,24 @@ describe('evaluatePromotion', () => {
     expect(decision.autoDisabledReason).toBe(UNCORROBORATED_PRICE_REASON);
   });
 
-  it('words the denial as priced in this build when only a non-per-token literal stands behind it', () => {
-    const decision = evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' });
+  it("words a non-text model's denial as missing from this build's model tables", () => {
+    const decision = evaluate({
+      hasTrustedPrice: false,
+      awaitingPrice: 'no-build-literal',
+      record: testRecord({ type: 'image' }),
+    });
 
     expect(decision.blockedBy).toEqual(['no-trusted-price']);
     expect(decision.autoDisabledReason).toBe(PRICED_IN_BUILD_REASON);
+    expect(PRICED_IN_BUILD_REASON).toBe("discovered, no price in this build's model tables");
   });
 
-  it('does not let the priced-in-build flag change a verdict', () => {
-    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'build-literal' })).toEqual({
+  it('does not let the no-build-literal flag change a verdict', () => {
+    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'no-build-literal' })).toEqual({
       promote: true,
       blockedBy: [],
     });
-    expect(evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' }).promote).toBe(false);
+    expect(evaluate({ hasTrustedPrice: false, awaitingPrice: 'no-build-literal' }).promote).toBe(false);
   });
 
   it('does not let the uncorroborated flag change a verdict', () => {
@@ -114,11 +120,32 @@ describe('evaluatePromotion', () => {
     expect(decision.autoDisabledReason).toBe(AWAITING_APPROVAL_REASON);
   });
 
+  it('still requires a price for an unpriced text model under the all policy', () => {
+    const decision = evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'text' }) });
+
+    expect(decision.promote).toBe(false);
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(AWAITING_PRICE_REASON);
+  });
+
+  it('promotes a priced or free text model under the all policy', () => {
+    expect(evaluate({ policy: 'all', hasTrustedPrice: true, record: testRecord({ type: 'text' }) }).promote).toBe(true);
+    expect(
+      evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'text', freeToRun: true }) }).promote
+    ).toBe(true);
+  });
+
+  it('waives the price for a non-text model under the all policy', () => {
+    expect(evaluate({ policy: 'all', hasTrustedPrice: false, record: testRecord({ type: 'image' }) }).promote).toBe(
+      true
+    );
+  });
+
   it('still refuses a missing dispatch profile under the all policy', () => {
     const decision = evaluate({
       policy: 'all',
       hasTrustedPrice: false,
-      record: testRecord({ dispatchProfile: undefined }),
+      record: testRecord({ type: 'image', dispatchProfile: undefined }),
     });
 
     expect(decision.blockedBy).toEqual(['no-dispatch-profile']);
@@ -162,5 +189,24 @@ describe('evaluatePromotion', () => {
       'no-trusted-price',
       'no-credential-for-backend',
     ]);
+  });
+
+  // mergeCatalog recognises discovery's own disable by this prefix; a reworded verdict keeps the
+  // disable in force over a curated record and the model stays disabled.
+  it('words every denial off the prefix the catalog merge recognises as discovery-owned', () => {
+    const constants = [
+      AWAITING_PRICE_REASON,
+      UNCORROBORATED_PRICE_REASON,
+      PRICED_IN_BUILD_REASON,
+      LEGACY_PRICED_IN_BUILD_REASON,
+      AWAITING_APPROVAL_REASON,
+      NOT_INVOCABLE_REASON,
+    ];
+    for (const reason of constants) expect(isDiscoveryVerdict(reason), reason).toBe(true);
+
+    // The fallback branch, reached when no named clause explains the denial.
+    const decision = evaluate({ credentials: testCredentials({ openai: null }) });
+    expect(decision.blockedBy).toEqual(['no-credential-for-backend']);
+    expect(isDiscoveryVerdict(decision.autoDisabledReason)).toBe(true);
   });
 });

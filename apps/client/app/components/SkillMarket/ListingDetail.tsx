@@ -38,6 +38,7 @@ import type { SkillListingReportReason } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import ClaudeCodeExportDialog from '@client/app/components/SkillsManagement/ClaudeCodeExportDialog';
+import type { MarketplaceOwner } from '@client/app/components/SkillsManagement/ClaudeCodeMarketplaceTab';
 import {
   conflictInfo,
   useImportListing,
@@ -51,6 +52,7 @@ import {
 import MarketCard from './MarketCard';
 import {
   BodyBlock,
+  SupportingFiles,
   HonestSummaryPanel,
   MismatchAlert,
   StarInput,
@@ -58,7 +60,9 @@ import {
   TierChip,
   VisibilityChip,
   formatCount,
+  isEscapeFromOpenListbox,
 } from './parts';
+import { SELF_APPROVED_LABEL } from './ScanResult';
 
 const REPORT_REASONS: Array<{ value: SkillListingReportReason; label: string }> = [
   { value: 'malicious', label: 'Malicious or unsafe behaviour' },
@@ -266,7 +270,13 @@ const ReportDialog: FC<{ listingId: string; token?: string; onClose: () => void 
     }
   };
   return (
-    <Modal open onClose={onClose}>
+    <Modal
+      open
+      onClose={(event, reason) => {
+        if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+        onClose();
+      }}
+    >
       <ModalDialog sx={{ width: 460, maxWidth: '95vw' }} data-testid="market-report-dialog">
         <ModalClose />
         <DialogTitle>Report this skill</DialogTitle>
@@ -420,8 +430,14 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
   const { listing, version, ratings, viewer, similar } = data;
   const live = listing.status === 'approved' && !listing.hiddenByReports;
   const shareUrl = listing.shareToken ? `${window.location.origin}/skills/market/u/${listing.shareToken}` : null;
-  const marketplaceOrg =
-    listing.visibility === 'organization' ? me?.organizations.find(o => o.id === listing.organizationId) : undefined;
+  const marketplaceOwner: MarketplaceOwner | undefined = (() => {
+    if (listing.visibility === 'organization') {
+      const org = me?.organizations.find(o => o.id === listing.organizationId);
+      return org && { kind: 'organization', ...org };
+    }
+    const space = listing.visibility === 'space' ? me?.spaces?.find(sp => sp.id === listing.spaceId) : undefined;
+    return space && { kind: 'space', ...space };
+  })();
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', ...scrollbarStyles }} data-testid="market-listing-page">
@@ -465,7 +481,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
               <Typography level="body-sm" textColor="text.secondary">
                 by {listing.authorName || 'a Bike4Mind user'}
               </Typography>
-              <VisibilityChip visibility={listing.visibility} />
+              <VisibilityChip visibility={listing.visibility} spaceId={listing.spaceId} />
               {version ? (
                 <Chip size="sm" variant="outlined">
                   v{version.version}
@@ -477,7 +493,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 </Chip>
               ) : live ? (
                 <Chip size="sm" variant="soft" color="success" startDecorator={<VerifiedUserIcon />}>
-                  Reviewed by a person
+                  {version?.selfApproved ? SELF_APPROVED_LABEL : 'Reviewed by a person'}
                 </Chip>
               ) : null}
               {viewer.canReview || viewer.isAuthor ? <TierChip tier={listing.riskTier} /> : null}
@@ -581,6 +597,7 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 <BodyBlock body={version.snapshot.body} testId="market-listing-body" />
               </Box>
             ) : null}
+            <SupportingFiles files={version?.snapshot.files} />
 
             {listing.tags.length ? (
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
@@ -649,6 +666,21 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
                 </Stack>
               </Card>
             ) : null}
+            {version?.snapshot.claudeCodeAllowedTools?.length ? (
+              <Card variant="soft" sx={{ gap: 1 }} data-testid="market-claude-code-tools">
+                <Typography level="title-sm">Claude Code tools</Typography>
+                <Typography level="body-xs" textColor="text.tertiary">
+                  Granted when installed in Claude Code; not used in Bike4Mind.
+                </Typography>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {version.snapshot.claudeCodeAllowedTools.map(t => (
+                    <Chip key={t} size="sm" variant="outlined">
+                      {t}
+                    </Chip>
+                  ))}
+                </Stack>
+              </Card>
+            ) : null}
           </Stack>
         </Box>
 
@@ -681,7 +713,11 @@ const ListingDetail: FC<{ listingId?: string; token?: string }> = ({ listingId, 
           version={version.version}
           thirdParty={!viewer.isAuthor}
           showImportHint={viewer.canImport && !data.myImport?.skill}
-          marketplace={marketplaceOrg ? { org: marketplaceOrg, pluginName: listing.claudePluginName } : undefined}
+          marketplace={
+            marketplaceOwner
+              ? { owner: marketplaceOwner, pluginName: listing.claudePluginName, skillName: listing.name }
+              : undefined
+          }
         />
       ) : null}
     </Box>

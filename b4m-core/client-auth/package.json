@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client-auth",
-  "version": "0.2.1",
+  "version": "0.5.0",
   "description": "Client-side OAuth 2.0 device-flow authentication shared by the B4M CLI and desktop app",
   "publishConfig": {
     "access": "restricted"
@@ -34,18 +34,17 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "axios": "1.18.0"
+    "axios": "1.20.0"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.12"
   }
 }

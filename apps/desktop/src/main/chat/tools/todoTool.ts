@@ -1,4 +1,4 @@
-import { countTodos, MAX_TODOS, parseTodos, TODO_TOOL_NAME } from '@shared/todos';
+import { MAX_TODOS, parseTodos, TODO_TOOL_NAME } from '@shared/todos';
 import type { ToolDefinition } from './types';
 
 /**
@@ -20,9 +20,10 @@ export const todoWrite: ToolDefinition = {
       'investigation, a piece of research, a single fix or a small edit: answer those directly.',
       '',
       'Mark a todo "in_progress" before you start it, with only one in progress at a time, and',
-      '"completed" as soon as it is done and checked - not in a batch at the end. Drop todos that',
-      'turn out to be unnecessary. Never mark something completed while tests are failing or the',
-      'work is partial.',
+      '"completed" as soon as it is done and checked - not in a batch at the end. Give each todo an',
+      '"activeForm", the present-continuous phrase shown while it runs. Mark a todo the user has',
+      'already seen "cancelled" when it turns out to be unnecessary, rather than deleting it. Never',
+      'mark something completed while tests are failing or the work is partial.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -34,7 +35,14 @@ export const todoWrite: ToolDefinition = {
             type: 'object',
             properties: {
               content: { type: 'string', description: 'What needs doing, in a short imperative sentence.' },
-              status: { type: 'string', description: '"pending", "in_progress" or "completed".' },
+              status: {
+                type: 'string',
+                description: '"pending", "in_progress", "completed" or "cancelled".',
+              },
+              activeForm: {
+                type: 'string',
+                description: 'Present-continuous form shown while the item is in progress, e.g. "Running the tests".',
+              },
             },
             required: ['content', 'status'],
           },
@@ -48,11 +56,14 @@ export const todoWrite: ToolDefinition = {
     const parsed = parseTodos(input.todos);
     if ('error' in parsed) throw new Error(parsed.error);
 
-    const counts = countTodos(parsed.todos);
-    const warning =
-      counts.in_progress > 1 ? ' More than one is in progress; keep it to one and finish it before the next.' : '';
+    // Counted from the raw input: parseTodos demotes a second in_progress item, which would hide it.
+    const count = (status: string) => (input.todos as { status: string }[]).filter(t => t.status === status).length;
+    const [done, current, pending, cancelled] = ['completed', 'in_progress', 'pending', 'cancelled'].map(count);
+    const warning = current > 1 ? ' More than one is in progress; keep it to one and finish it before the next.' : '';
     return (
-      `Plan updated: ${counts.completed} done, ${counts.in_progress} in progress, ${counts.pending} pending.` + warning
+      `Plan updated: ${done} done, ${current} in progress, ${pending} pending` +
+      `${cancelled > 0 ? `, ${cancelled} cancelled` : ''}.` +
+      warning
     );
   },
 };

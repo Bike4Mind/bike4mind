@@ -1,5 +1,5 @@
 import { Box, CircularProgress, Typography } from '@mui/joy';
-import { AutoAwesome as QuestIcon } from '@mui/icons-material';
+import QuestIcon from '@mui/icons-material/AutoAwesome';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
 
 /**

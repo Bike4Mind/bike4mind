@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CreditHolderType, UnprocessableEntityError } from '@bike4mind/common';
+import { CreditHolderType, RUN_BUDGET_EXHAUSTED_ERROR_CODE, UnprocessableEntityError } from '@bike4mind/common';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
@@ -13,7 +13,7 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@server/billing/reserveRequestCredits', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
   reserveRequestCredits: (...a: unknown[]) => mocks.reserve(...a),
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -102,6 +102,12 @@ describe('holdPreflightCredits', () => {
     );
   });
 
+  it('hands a key that only joins the freeze subject through to the reservation', async () => {
+    await hold({ spendFreezeApiKey: { keyId: 'key-1' } });
+
+    expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ spendFreezeApiKey: { keyId: 'key-1' } }));
+  });
+
   it('settles the measured cost against the reservation and reports who was billed', async () => {
     const reservation = held({ ownerId: 'org1', ownerType: CreditHolderType.Organization });
     mocks.reserve.mockResolvedValue(reservation);
@@ -126,6 +132,46 @@ describe('holdPreflightCredits', () => {
     mocks.reserve.mockRejectedValue(new UnprocessableEntityError('not enough credits'));
 
     await expect(hold()).rejects.toBeInstanceOf(InsufficientCreditsPreflightError);
+  });
+
+  describe('with a completion run', () => {
+    const run = { runId: 'run-1', role: 'root' as const, purpose: 'tool' as const };
+
+    it('forwards the run to the reservation so the whole hold is claimed from it', async () => {
+      await hold({ billingOrganizationId: 'org1', run });
+
+      expect(mocks.reserve).toHaveBeenCalledWith(expect.objectContaining({ run, billingOrganizationId: 'org1' }));
+    });
+
+    it('lets a run budget refusal reach the route as its own 422, not as a credit refusal', async () => {
+      const refusal = new UnprocessableEntityError('run is spent', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+      mocks.reserve.mockRejectedValue(refusal);
+
+      await expect(hold({ run })).rejects.toBe(refusal);
+    });
+
+    it('records the run on a direct charge, where no reservation settles it', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+      mocks.reserve.mockResolvedValue(held({ reservedCredits: 0 }));
+      const preflight = await hold({ run });
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ credits: 25, run }),
+        expect.anything()
+      );
+    });
+
+    it('leaves a direct charge without a run untouched', async () => {
+      mocks.getSettingsMap.mockResolvedValue({ enforceCredits: 'false' });
+      mocks.reserve.mockResolvedValue(held({ reservedCredits: 0 }));
+      const preflight = await hold();
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport.mock.calls[0][0]).not.toHaveProperty('run');
+    });
   });
 
   it('passes a non-billing failure through untouched', async () => {
@@ -155,6 +201,21 @@ describe('holdPreflightCredits', () => {
         expect.anything()
       );
       expect(mocks.reservedSettle).not.toHaveBeenCalled();
+    });
+
+    it('records the authenticating API key on the direct charge', async () => {
+      const preflight = await holdPreflightCredits({
+        req: { user: user as never, logger: logger as never, apiKeyInfo: { keyId: 'key-1' } as never },
+        requiredCredits: 100,
+        featureLabel: 'text-to-speech',
+      });
+
+      await preflight.settle(25, { type: 'text_to_speech_usage', model: 'tts-1', sessionId: 's1' });
+
+      expect(mocks.deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKeyId: 'key-1' }),
+        expect.anything()
+      );
     });
 
     it('logs the billing miss and resolves when the direct charge fails', async () => {

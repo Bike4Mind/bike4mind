@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { usdToCredits, VideoModelSchema, type VideoProviderId } from '@bike4mind/common';
+import {
+  usdToCredits,
+  VIDEO_MODEL_CATALOG,
+  VIDEO_MODEL_STRENGTHS,
+  VideoModelSchema,
+  type VideoModelId,
+  type VideoProviderId,
+} from '@bike4mind/common';
 import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
-import { hasUsableKey, listUsableVideoModels } from './listUsableVideoModels';
+import { hasUsableKey, listUsableVideoModels, toPublicVideoModel } from './listUsableVideoModels';
 
 // The real Gemini adapter is registered by a later task; the listing only needs a provider that serves its catalog model.
 const fakeGemini = (): VideoProvider => ({
@@ -13,14 +20,28 @@ const fakeGemini = (): VideoProvider => ({
   fetchOutput: vi.fn(),
 });
 
+const fakeVeo = (): VideoProvider => ({
+  mode: 'async',
+  id: 'veo',
+  models: ['veo-3.1-fast-generate-preview'],
+  submit: vi.fn(),
+  poll: vi.fn(),
+  fetchOutput: vi.fn(),
+});
+
 const deps = (
   overrides: {
     enabled?: Record<string, boolean>;
     keys?: Partial<Record<VideoProviderId, string | null>>;
     withTest?: boolean;
+    withVeo?: boolean;
   } = {}
 ) => ({
-  providers: createVideoProviderRegistry([fakeGemini(), ...(overrides.withTest ? [new TestVideoProvider()] : [])]),
+  providers: createVideoProviderRegistry([
+    fakeGemini(),
+    ...(overrides.withTest ? [new TestVideoProvider()] : []),
+    ...(overrides.withVeo ? [fakeVeo()] : []),
+  ]),
   getSettings: vi.fn(async () => ({
     enforceCredits: true,
     videoGeneration: { enabledModels: overrides.enabled ?? {} },
@@ -36,6 +57,11 @@ describe('listUsableVideoModels', () => {
     expect(models.map(m => m.id)).toEqual(['gemini-omni-1.1-flash']);
     expect(VideoModelSchema.parse(models[0])).toEqual(models[0]);
     expect(models[0].credits_per_second).toEqual({ '720p': usdToCredits(0.1014) });
+    expect(models[0].input_roles).toEqual([{ role: 'first_frame', max: 1 }]);
+    expect(models[0]).toMatchObject({
+      provider_label: 'Google',
+      blurb: VIDEO_MODEL_STRENGTHS['gemini-omni-1.1-flash'],
+    });
   });
 
   it('omits an unregistered provider, a disabled model and a provider without a key', async () => {
@@ -56,12 +82,44 @@ describe('listUsableVideoModels', () => {
     expect(d.resolveApiKey).not.toHaveBeenCalledWith('gemini-omni', 'u1');
   });
 
+  // Every surface that picks a video model (agent tool, desktop, voice, Slack, Studio) reads this listing.
+  it('never lists a retired model, even when its provider is registered and an admin enabled it', async () => {
+    const d = deps({ withVeo: true, enabled: { 'veo-3.1-fast-generate-preview': true } });
+    expect((await listUsableVideoModels('u1', d)).map(m => m.id)).toEqual(['gemini-omni-1.1-flash']);
+    expect(d.resolveApiKey).not.toHaveBeenCalledWith('veo', 'u1');
+  });
+
   it('resolves one key per registered provider for the listing user', async () => {
     const d = deps({ withTest: true });
     await listUsableVideoModels('u1', d);
     expect(d.resolveApiKey).toHaveBeenCalledTimes(2);
     expect(d.resolveApiKey).toHaveBeenCalledWith('test', 'u1');
     expect(d.resolveApiKey).toHaveBeenCalledWith('gemini-omni', 'u1');
+  });
+});
+
+describe('toPublicVideoModel card copy', () => {
+  it('publishes keyframe support and HD draft pricing only for capable models', () => {
+    const model = toPublicVideoModel('flux-3-video');
+    expect(VideoModelSchema.parse(model)).toEqual(model);
+    expect(model).toMatchObject({
+      keyframes: { max: 10 },
+      draft: {
+        resolutions: ['720p'],
+        credits_per_second: usdToCredits(0.06),
+      },
+    });
+    expect(toPublicVideoModel('gemini-omni-1.1-flash')).toMatchObject({ keyframes: null, draft: null });
+  });
+
+  it('pins a non-empty blurb and provider label on every catalog model', () => {
+    for (const id of Object.keys(VIDEO_MODEL_CATALOG) as VideoModelId[]) {
+      const model = toPublicVideoModel(id);
+      expect(model.blurb, id).toEqual(expect.any(String));
+      expect(model.blurb?.length, id).toBeGreaterThan(0);
+      expect(model.provider_label, id).toEqual(expect.any(String));
+      expect(model.provider_label?.length, id).toBeGreaterThan(0);
+    }
   });
 });
 

@@ -4,15 +4,31 @@ import { randomUUID } from 'crypto';
 import { counterService } from '@bike4mind/services';
 import { getSettingsMap } from '@bike4mind/utils';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
-import axios from 'axios';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
-import { resolveSlackWebhookUrl } from '@server/integrations/slack/slack';
+import utc from 'dayjs/plugin/utc';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
+import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 
 dayjs.extend(isoWeek);
+dayjs.extend(utc);
+
+/**
+ * The last completed ISO week (Monday..Sunday, UTC) as of `now`. The weekly cron fires Monday
+ * 05:00 UTC (infra/cron.ts), so the current week would hold only a few hours of data.
+ */
+export function previousIsoWeek(now: dayjs.Dayjs): { startDate: string; endDate: string } {
+  const lastWeek = now.utc().subtract(1, 'week');
+  return {
+    startDate: lastWeek.startOf('isoWeek').format('YYYY-MM-DD'),
+    endDate: lastWeek.endOf('isoWeek').format('YYYY-MM-DD'),
+  };
+}
 
 const contextToLogs = (context: Context) => ({
   requestId: context.awsRequestId ?? randomUUID(),
@@ -43,12 +59,9 @@ export async function handler(event: UserActivityReportEvent, context: Context) 
     let displayDate: string;
 
     if (isWeeklyReport) {
-      const today = dayjs();
-      const startDate = today.startOf('isoWeek').format('YYYY-MM-DD'); // Monday
-      const endDate = today.endOf('isoWeek').format('YYYY-MM-DD'); // Sunday
-      const processDate = today.format('YYYY-MM-DD HH:mm:ss.SSS');
+      const { startDate, endDate } = previousIsoWeek(dayjs());
 
-      reportParams = { date: processDate, startDate, endDate };
+      reportParams = { date: startDate, startDate, endDate };
       displayDate = `${startDate} to ${endDate}`;
       logger.log('Generating weekly report for:', displayDate);
     } else {
@@ -122,6 +135,7 @@ export async function handler(event: UserActivityReportEvent, context: Context) 
         aiInsights,
         date: reportParams.date,
         usageBySource: report.usageBySource,
+        appUrl: process.env.APP_URL?.trim(),
       });
     }
 
@@ -142,7 +156,12 @@ export async function handler(event: UserActivityReportEvent, context: Context) 
     }
 
     try {
-      await axios.post(slackWebhookUrl, { text: message });
+      const response = await fetch(slackWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: message }),
+      });
+      if (!response.ok) throw new Error(`Slack webhook responded with status ${response.status}`);
       logger.log(`${reportType} Slack report sent successfully`);
 
       return { status: 'success', reportType, date: displayDate };

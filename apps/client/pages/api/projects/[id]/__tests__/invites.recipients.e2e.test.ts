@@ -45,7 +45,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return { ...actual, withTransaction: (fn: () => unknown) => fn() };
 });
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const oid = () => new mongoose.Types.ObjectId();
 const INVITER = oid();

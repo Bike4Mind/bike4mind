@@ -10,6 +10,7 @@ const HEADINGS: Record<string, string> = {
   notebooks: 'Chat',
   profile: 'Profile',
   skills: 'Skills',
+  artifacts: 'Artifacts',
   organizations: 'Teams',
   agents: 'Agents',
   'agent-executions': 'Agent executions',
@@ -21,7 +22,6 @@ const HEADINGS: Record<string, string> = {
   hearth: 'Hearth',
   'deep-agents': 'Deep agents',
   report: 'Report',
-  'quests-v5': 'Quests',
   hud: 'The Keep',
 };
 

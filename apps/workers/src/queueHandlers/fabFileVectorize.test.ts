@@ -1,10 +1,31 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  embeddingBackendForModel: vi.fn(() => 'openai'),
+  resolveEmbeddingCredentials: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
+
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 1000,
+    embed: async (inputs: readonly string[]) => ({ vectors: await Promise.all(inputs.map(text => h.getVector(text))) }),
+  }),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
+import {
+  ACCOUNT_BANNED_MESSAGE,
+  ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  ACCOUNT_SUSPENDED_MESSAGE,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+} from '@bike4mind/services/userService/accountState';
 
 // Mirror of fabFileChunk.test.ts, scoped to the batchId log-metadata attach. We drive the raw
 // handler with a fully-vectorized FabFile so it hits the idempotency early-return right after the
 // updateMetadata call - no embedding path is exercised.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
   // Declared, not spread from the real module: this mock exists to keep `utils`' import-time
   // Config/DB wiring out of the test. Any NEW export the handler starts importing has to be added
@@ -17,6 +38,7 @@ const h = vi.hoisted(() => ({
   findAccessibleById: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   getVector: vi.fn(),
+  getVectors: vi.fn(),
   getEmbedding: vi.fn(),
   updateFileStatus: vi.fn(),
   incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
@@ -24,6 +46,7 @@ const h = vi.hoisted(() => ({
   markFailureCounted: vi.fn(async () => undefined),
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
+  returnRecordForRedelivery: vi.fn(async () => ({ batchItemFailures: [{ itemIdentifier: 'm1' }] })),
   fabFileUpdate: vi.fn(),
   advanceVectorizeProgress: vi.fn(async () => true),
   computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
@@ -42,7 +65,18 @@ const h = vi.hoisted(() => ({
   confirmRetrievalIndexed: vi.fn(async () => undefined),
   clearRetrievalIndexConfirmed: vi.fn(async () => undefined),
   selfHostOpenSearchEnabled: vi.fn(() => false),
-  enforceEmbeddingSpendGate: vi.fn(async () => undefined),
+  enforceEmbeddingSpendGate: vi.fn(async () => ({
+    owner: { type: 'user', id: 'owner-1' } as { type: string; id: string } | undefined,
+  })),
+  releaseOwnerEmbeddingSpend: vi.fn(async () => undefined),
+  fileWindowRelease: vi.fn(async () => undefined),
+  enforceFileEmbeddingSpendWindow: vi.fn(),
+  FileEmbeddingSpendDeniedError: class FileEmbeddingSpendDeniedError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'FileEmbeddingSpendDeniedError';
+    }
+  },
   // Mirrors the real resolver's rule closely enough for the handler's branch: batch uploads and
   // tag-joined members are both lake work, everything else is not. Its own decision table is
   // pinned in resolveIngestSpendScope.test.ts.
@@ -55,9 +89,14 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   organizationFindById: vi.fn(async () => null),
   recordOperationalUsage: vi.fn(async () => undefined),
+  isOperationalBillingEnabled: vi.fn(async () => false),
+  reserveRequestCredits: vi.fn(),
+  reservationRefund: vi.fn(async () => undefined),
+  reservationSettle: vi.fn(async () => 1),
   spendNotifier: vi.fn(async () => undefined),
   notifySlackIndexingComplete: vi.fn(async () => undefined),
   claimIndexNotification: vi.fn(async () => true),
+  assertSpendNotFrozen: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -76,6 +115,7 @@ vi.mock('@bike4mind/database', () => ({
   // built eagerly on every message.
   dataLakeRepository: { releaseEmbeddingSpend: h.lakeReleaseSpend, findById: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
+  spendFreezeRepository: {},
   cacheRepository: {},
   embeddingCacheRepository: {},
   fabFileChunkRepository: {
@@ -99,33 +139,54 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
-vi.mock('@server/managers/fabFileManager', () => ({ getVector: h.getVector }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({
+  getVector: h.getVector,
+  getVectors: h.getVectors,
+}));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
   fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
   recordOperationalUsage: h.recordOperationalUsage,
+  isOperationalBillingEnabled: h.isOperationalBillingEnabled,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
+    releaseOwnerEmbeddingSpend: h.releaseOwnerEmbeddingSpend,
     resolveIngestSpendScope: h.resolveIngestSpendScope,
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
     EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
       retryable: boolean;
-      constructor(reason: string, options?: { retryable?: boolean }) {
+      retryAfterMs?: number;
+      constructor(reason: string, options?: { retryable?: boolean; retryAfterMs?: number }) {
         super(reason);
         this.name = 'EmbeddingSpendDeniedError';
         this.retryable = options?.retryable ?? false;
+        this.retryAfterMs = options?.retryAfterMs;
       }
     },
   },
+  fileEmbeddingService: {
+    enforceFileEmbeddingSpendWindow: h.enforceFileEmbeddingSpendWindow,
+    FileEmbeddingSpendDeniedError: h.FileEmbeddingSpendDeniedError,
+    FileEmbeddingLimitResolutionError: class FileEmbeddingLimitResolutionError extends Error {},
+  },
   scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
+  spendFreezeService: { assertSpendNotFrozen: h.assertSpendNotFrozen },
 }));
-vi.mock('@server/dataLakes/dataLakeBatchProgress', () => ({
+vi.mock('@bike4mind/server-utils/billing/reserveRequestCredits', () => ({
+  reserveRequestCredits: h.reserveRequestCredits,
+}));
+const activePlanResolver = vi.hoisted(() => ({ hasActivePlan: vi.fn() }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({ activePlanResolver }));
+vi.mock('@bike4mind/server-utils/dataLakes/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@bike4mind/server-utils/utils/sqsRedelivery', () => ({
+  returnRecordForRedelivery: (...a: unknown[]) => h.returnRecordForRedelivery(...a),
+}));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
 // chain and every skip case - mocked here so this suite doesn't have to exercise the real thing.
 vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
@@ -133,13 +194,23 @@ vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
 }));
 vi.mock('@workers/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
+vi.mock('@bike4mind/server-utils/utils/errors', async () => ({
+  NotFoundError: class NotFoundError extends Error {},
+  ForbiddenError: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')).ForbiddenError,
+}));
 // Module-load zod schemas used by VectorizePayload.
 vi.mock('@bike4mind/common', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
   return {
     SupportedEmbeddingModelSchema: z.string(),
     getEmbeddingModelCost: vi.fn(() => 0.0001),
+    getQuestErrorCode: actual.getQuestErrorCode,
+    CreditHolderType: actual.CreditHolderType,
+    ModelBackend: actual.ModelBackend,
+    isTerminalCreditRefusal: actual.isTerminalCreditRefusal,
+    usdToCredits: actual.usdToCredits,
+    // Pinned: settlement rounding is a coin flip.
+    usdToCreditsStochastic: vi.fn(() => 1),
     // Real enum, not a stub: the sourceType gate around the Slack notification claim compares
     // against this directly, so a fake value here would make every test pass for the wrong reason.
     FabFileSourceType: actual.FabFileSourceType,
@@ -156,13 +227,6 @@ vi.mock('@bike4mind/common', async () => {
 });
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { getModelInfo: () => ({ contextWindow: 1000 }) };
-    }
-  },
-  getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
   EmbeddingAuthError: class extends Error {
     constructor(
       readonly provider: string,
@@ -195,9 +259,14 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
-import { sendToClient } from '@server/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@bike4mind/server-utils/utils/sqsDelivery';
-import { dispatch } from './fabFileVectorize';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+import {
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC,
+  FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC,
+} from '@bike4mind/server-utils/utils/sqsDelivery';
+import { embeddingBackendForModel } from '@bike4mind/utils/embeddingProviders';
+import { dispatch, rateDenialRedeliveryDelaySeconds } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -331,6 +400,47 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     h.markFailedIfNotAlready.mockResolvedValue(true);
   });
 
+  it('keeps single cache misses on the safe embedding path', async () => {
+    const text = 'hello '.repeat(9000);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text,
+      tokenCount: 5,
+    });
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.getVector).toHaveBeenCalledWith(expect.objectContaining({ model: expect.any(String) }), text);
+  });
+
+  it('embeds many non-OpenAI cache misses in one batched provider call, in chunk order', async () => {
+    const chunkIds = Array.from({ length: 40 }, (_, i) => `c${i}`);
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), chunkCount: chunkIds.length });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockImplementation(async (id: string) => ({
+      id,
+      text: `text ${id}`,
+      tokenCount: 5,
+    }));
+    h.getVectors.mockImplementation(async (_bound: unknown, texts: readonly string[]) =>
+      texts.map(() => [0.1, 0.2, 0.3])
+    );
+    vi.mocked(embeddingBackendForModel).mockReturnValue('voyage' as never);
+    try {
+      await dispatch(makeEvent({ ...payload, chunkIds }), {} as never, mockLogger);
+    } finally {
+      vi.mocked(embeddingBackendForModel).mockReturnValue('openai' as never);
+    }
+
+    expect(h.getVectors).toHaveBeenCalledTimes(1);
+    expect(h.getVectors).toHaveBeenCalledWith(
+      expect.objectContaining({ model: expect.any(String) }),
+      chunkIds.map(id => `text ${id}`)
+    );
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
   it('persists user-safe copy for a turn-attached file on an embedding-auth failure', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockRejectedValue(authError());
@@ -393,6 +503,30 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
   });
 });
 
+describe('fabFileVectorize handler - file deleted mid-run', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+  });
+
+  it('skips quietly instead of throwing when the file disappears before finalization', async () => {
+    h.findAccessibleById
+      .mockResolvedValueOnce({ id: 'ff1', vectorized: false, chunkCount: 1, vectorizedChunkCount: 0 })
+      .mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect((mockLogger as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+});
+
 describe('fabFileVectorize handler - spend gate', () => {
   const unvectorizedFile = (batchId?: string) => ({
     id: 'ff1',
@@ -418,7 +552,7 @@ describe('fabFileVectorize handler - spend gate', () => {
     h.markFailedIfNotAlready.mockResolvedValue(true);
     // clearAllMocks resets calls but not replaced implementations - re-grant so a
     // denial mocked in one test can never leak into later describes.
-    h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.enforceEmbeddingSpendGate.mockResolvedValue({ owner: { type: 'user', id: 'owner-1' } });
     h.resolveIngestSpendScope.mockImplementation(async (file: { batchId?: string }) =>
       file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
     );
@@ -479,7 +613,7 @@ describe('fabFileVectorize handler - spend gate', () => {
     expect(h.getVector).not.toHaveBeenCalled();
   });
 
-  it('releases the reservation from the run and lake meters when the provider call fails', async () => {
+  it('releases the reservation from the run, lake and owner meters when the provider call fails', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockRejectedValueOnce(new Error('openai 500'));
 
@@ -488,6 +622,9 @@ describe('fabFileVectorize handler - spend gate', () => {
     // getEmbeddingModelCost is mocked to 0.0001 USD -> ceil(100) microUSD for the message.
     expect(h.batchReleaseSpend).toHaveBeenCalledWith('batch-1', 100);
     expect(h.lakeReleaseSpend).toHaveBeenCalledWith('lake-1', 100);
+    expect(h.releaseOwnerEmbeddingSpend).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: { type: 'user', id: 'owner-1' }, estimatedMicroUsd: 100 })
+    );
   });
 
   it('does NOT release when embeddings succeeded and a later step fails (money truly spent)', async () => {
@@ -499,6 +636,7 @@ describe('fabFileVectorize handler - spend gate', () => {
 
     expect(h.batchReleaseSpend).not.toHaveBeenCalled();
     expect(h.lakeReleaseSpend).not.toHaveBeenCalled();
+    expect(h.releaseOwnerEmbeddingSpend).not.toHaveBeenCalled();
   });
 
   it('a release failure is logged, never masks the provider error', async () => {
@@ -509,14 +647,67 @@ describe('fabFileVectorize handler - spend gate', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
   });
 
-  it('a retryable (rate-limit) denial keeps the normal SQS retry path', async () => {
+  it('still releases the owner window when the run release throws', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
-    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('rate limit stayed exhausted', true));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.batchReleaseSpend.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+
+    expect(h.releaseOwnerEmbeddingSpend).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: { type: 'user', id: 'owner-1' }, estimatedMicroUsd: 100 })
+    );
+  });
+
+  it('a retryable (rate-limit) denial on a non-final attempt is handed back for a delayed redelivery, not thrown', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    const rateDenial = await denial('rate limit stayed exhausted', true);
+    Object.assign(rateDenial, { retryAfterMs: 42_100 });
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(rateDenial);
     h.deferFailureIfRetryable.mockResolvedValue(true);
 
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    const result = await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: 'm1' }] });
     expect(h.deferFailureIfRetryable).toHaveBeenCalled();
+    expect(h.returnRecordForRedelivery).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ delaySeconds: FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC, jitterSeconds: 60 })
+    );
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect((mockLogger as { error: ReturnType<typeof vi.fn> }).error).not.toHaveBeenCalled();
+  });
+
+  it('floors the redelivery delay so the delivery budget spans what a thrown failure spanned', () => {
+    // A thrown failure waits out the visibility timeout (pinned to infra/queues.ts by
+    // sqsDelivery.test.ts); a near-reset window must not bring the message back sooner, or the
+    // deliveries burn out in a couple of minutes.
+    expect(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC).toBeGreaterThanOrEqual(
+      FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC
+    );
+    expect(rateDenialRedeliveryDelaySeconds(1)).toBe(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC);
+    expect(rateDenialRedeliveryDelaySeconds(undefined)).toBe(FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC);
+    // A reset beyond the floor is still honoured (rounded up to whole seconds).
+    expect(rateDenialRedeliveryDelaySeconds(400_100)).toBe(401);
+  });
+
+  it('a retryable denial on the final attempt marks the file failed and throws to the DLQ', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('rate limit stayed exhausted', true));
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('rate limit stayed exhausted');
+    expect(h.returnRecordForRedelivery).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit stayed exhausted');
+  });
+
+  it('a non-spend failure on a non-final attempt still throws for SQS to retry', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+    expect(h.returnRecordForRedelivery).not.toHaveBeenCalled();
   });
 });
 
@@ -537,7 +728,7 @@ describe('fabFileVectorize handler - usage ledger', () => {
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null); // cache miss -> the ledger call is in play
-    h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.enforceEmbeddingSpendGate.mockResolvedValue({ owner: { type: 'user', id: 'owner-1' } });
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
   });
 
@@ -560,12 +751,17 @@ describe('fabFileVectorize handler - usage ledger', () => {
     );
   });
 
-  it('never records for a turn-attached file (no batchId, no lake)', async () => {
+  it('records a turn-attached file unbilled when operational billing does not apply', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
-    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', inputTokens: 5, costUsd: 0.0001, settledCredits: undefined }),
+      expect.anything()
+    );
+    expect(h.recordOperationalUsage.mock.calls[0][1].db.creditTransactions).toBeUndefined();
   });
 
   it('never records on a cache hit (no spend occurred)', async () => {
@@ -1460,5 +1656,448 @@ describe('fabFileVectorize handler - keyless substitute on a deployment that has
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
     expect(h.hasVectorizedFileInEmbeddingSpace).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - credit billing outside a data lake', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.isOperationalBillingEnabled.mockResolvedValue(true);
+    h.reserveRequestCredits.mockResolvedValue({ refund: h.reservationRefund, settle: h.reservationSettle });
+    h.reservationSettle.mockResolvedValue(1);
+    h.deferFailureIfRetryable.mockReset().mockResolvedValue(false);
+    h.enforceFileEmbeddingSpendWindow.mockResolvedValue({ release: h.fileWindowRelease });
+  });
+
+  it('gives the window reservation back when the provider call fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('provider 503'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('provider 503');
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the window reservation back when the holder cannot cover the credit hold', async () => {
+    h.reserveRequestCredits.mockRejectedValueOnce(
+      Object.assign(new Error('insufficient credits'), { additionalInfo: { errorCode: 'insufficient_credits' } })
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'insufficient credits');
+  });
+
+  it('keeps the provider error when giving the window reservation back also fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('provider 503'));
+    h.fileWindowRelease.mockRejectedValueOnce(new Error('cache down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('provider 503');
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('failed to release reservation'));
+  });
+
+  it('defers, without failing the file, when the window limits cannot be read on a non-final delivery', async () => {
+    const { fileEmbeddingService } = await import('@bike4mind/services');
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new fileEmbeddingService.FileEmbeddingLimitResolutionError('could not resolve file embedding limits')
+    );
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'could not resolve file embedding limits'
+    );
+
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('gives the window reservation back, and rethrows for a retry, when the billing check fails', async () => {
+    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('plan lookup down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'File indexing is temporarily unavailable'
+    );
+
+    expect(h.fileWindowRelease).toHaveBeenCalledTimes(1);
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('keeps the window reservation once the embedding succeeded', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.fileWindowRelease).not.toHaveBeenCalled();
+  });
+
+  it('stores user-safe copy when the window limits cannot be read on the last delivery', async () => {
+    const { fileEmbeddingService } = await import('@bike4mind/services');
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new fileEmbeddingService.FileEmbeddingLimitResolutionError('could not resolve file embedding limits')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger).catch(() => undefined);
+
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith(
+      'ff1',
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
+    );
+  });
+
+  it("reserves the uploader's file embedding window before any credit hold", async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceFileEmbeddingSpendWindow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'u1',
+        estimatedTokens: 5,
+        reservationId: expect.stringMatching(/^ff1:.+:[0-9a-f]{64}$/),
+      })
+    );
+    expect(h.enforceFileEmbeddingSpendWindow.mock.invocationCallOrder[0]).toBeLessThan(
+      h.reserveRequestCredits.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('names a redelivery of the same job with the same reservation id', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const [first, second] = h.enforceFileEmbeddingSpendWindow.mock.calls.map(
+      ([params]) => (params as { reservationId: string }).reservationId
+    );
+    expect(second).toBe(first);
+  });
+
+  it('fails the file with the window message, without billing, embedding or retrying, on a window denial', async () => {
+    h.enforceFileEmbeddingSpendWindow.mockRejectedValueOnce(
+      new h.FileEmbeddingSpendDeniedError('file indexing limit reached')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'file indexing limit reached');
+  });
+
+  it('does not apply the file window to data-lake work', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceFileEmbeddingSpendWindow).not.toHaveBeenCalled();
+  });
+
+  it('asks the billing policy about the uploader with the plan resolver', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.isOperationalBillingEnabled).toHaveBeenCalledWith(expect.anything(), mockLogger, {
+      user: expect.objectContaining({ id: 'u1' }),
+      organization: null,
+      activePlans: activePlanResolver,
+    });
+  });
+
+  it('reserves before embedding, settles after, and records the settled credits', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reserveRequestCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: 1, enforceCredits: true, featureLabel: 'file indexing' })
+    );
+    expect(h.reserveRequestCredits.mock.invocationCallOrder[0]).toBeLessThan(h.getVector.mock.invocationCallOrder[0]);
+    expect(h.reservationSettle).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ type: 'text_generation_usage', inputTokens: 5 })
+    );
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', settledCredits: 1 }),
+      expect.anything()
+    );
+  });
+
+  it('attributes the indexing charge to the API key that uploaded the file', async () => {
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), apiKeyId: 'key-1' });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reservationSettle).toHaveBeenCalledWith(1, expect.objectContaining({ apiKeyId: 'key-1' }));
+  });
+
+  it('attributes no API key to the indexing charge of a JWT upload', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reservationSettle.mock.calls[0][1]).not.toHaveProperty('apiKeyId');
+  });
+
+  it('fails the file without embedding, and consumes the message, when the holder cannot cover it', async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    h.reserveRequestCredits.mockRejectedValue(
+      actual.insufficientCreditsError('You do not have enough credits for file indexing.')
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'You do not have enough credits for file indexing.');
+  });
+
+  it('fails the file without a retry deferral, and consumes the message, on the free-tier daily cap', async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    const message = 'Daily free limit reached';
+    h.reserveRequestCredits.mockRejectedValue(
+      new actual.TooManyRequestsError(message, { errorCode: 'daily_free_limit_reached', retryAfter: 3600 })
+    );
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', message);
+  });
+
+  it('refunds the reservation when the provider call fails', async () => {
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+
+    expect(h.reservationRefund).toHaveBeenCalledTimes(1);
+    expect(h.reservationSettle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['banned', ACCOUNT_BANNED_MESSAGE],
+    ['dispute-pending', ACCOUNT_DISPUTE_PENDING_MESSAGE],
+    ['suspended', ACCOUNT_SUSPENDED_MESSAGE],
+    ['deletion-pending', AI_ACCESS_DELETION_PENDING_MESSAGE],
+    ['moderated', AI_ACCESS_REVOKED_MESSAGE],
+    ['review-held', AI_ACCESS_PENDING_REVIEW_MESSAGE],
+  ])('fails the file once and consumes the message when a %s account is refused AI access', async (_, message) => {
+    const { ForbiddenError } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    h.reserveRequestCredits.mockRejectedValueOnce(new ForbiddenError(message));
+    h.markFailedIfNotAlready.mockResolvedValueOnce(true);
+    h.deferFailureIfRetryable.mockResolvedValueOnce(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', message);
+    expect(h.reservationSettle).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('AI access'));
+  });
+
+  it.each(['billing store unavailable', 'unrelated forbidden request'])(
+    'keeps retrying a reservation failure: %s',
+    async message => {
+      const { ForbiddenError } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+      const error = message === 'unrelated forbidden request' ? new ForbiddenError(message) : new Error(message);
+      h.reserveRequestCredits.mockRejectedValueOnce(error);
+      h.deferFailureIfRetryable.mockResolvedValueOnce(true);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toBe(error);
+
+      expect(h.getVector).not.toHaveBeenCalled();
+      expect(h.deferFailureIfRetryable).toHaveBeenCalledTimes(1);
+      expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still completes the file when settlement fails after the embeddings were paid for', async () => {
+    h.reservationSettle.mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalled();
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ settledCredits: 0 }),
+      expect.anything()
+    );
+  });
+
+  it.each(['billing policy', 'organization lookup'])(
+    'retries a failed %s before reserving or embedding, then completes after recovery',
+    async source => {
+      const error = new Error('store unavailable');
+      if (source === 'billing policy') {
+        h.isOperationalBillingEnabled.mockRejectedValueOnce(error);
+      } else {
+        (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
+        h.organizationFindById.mockRejectedValueOnce(error);
+      }
+      h.deferFailureIfRetryable.mockResolvedValueOnce(true);
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toMatchObject({ cause: error });
+
+      expect(mockLogger.warn).toHaveBeenCalledWith('embedding-billing-check-retry', {
+        fabFileId: 'ff1',
+        error: 'store unavailable',
+      });
+      expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(
+        expect.anything(),
+        FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+        expect.objectContaining({ fabFileId: 'ff1', action: 'Vectorization' })
+      );
+      expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+      expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+      expect(h.getVector).not.toHaveBeenCalled();
+      expect(h.chunkUpdate).not.toHaveBeenCalled();
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+      if (source === 'organization lookup') {
+        expect(h.isOperationalBillingEnabled).not.toHaveBeenCalled();
+      }
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+      expect(h.reserveRequestCredits).toHaveBeenCalledTimes(1);
+      expect(h.getVector).toHaveBeenCalledTimes(1);
+      expect(h.chunkUpdate).toHaveBeenCalled();
+      expect(h.reservationSettle).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('marks the file failed with safe retry advice when billing checks exhaust deliveries', async () => {
+    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('internal store details'));
+    h.markFailedIfNotAlready.mockResolvedValueOnce(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
+    );
+
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith(
+      'ff1',
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
+    );
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('never reserves for data-lake work, which its own spend gate governs', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.isOperationalBillingEnabled).not.toHaveBeenCalled();
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+  });
+
+  it('never reserves on a cache hit', async () => {
+    h.getEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - spend freeze', () => {
+  const unvectorizedFile = (batchId?: string, apiKeyId?: string) => ({
+    id: 'ff1',
+    batchId,
+    apiKeyId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+  const frozen = async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+    return actual.spendFrozenError({ scopeType: 'User', frozenAt: new Date('2026-06-08T12:00:00.000Z') });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    h.isOperationalBillingEnabled.mockResolvedValue(false);
+    h.enforceEmbeddingSpendGate.mockResolvedValue({ owner: { type: 'user', id: 'owner-1' } });
+    h.enforceFileEmbeddingSpendWindow.mockResolvedValue({ release: h.fileWindowRelease });
+    h.resolveIngestSpendScope.mockImplementation(async (file: { batchId?: string }) =>
+      file.batchId ? { batchId: file.batchId, dataLakeId: 'lake-1' } : null
+    );
+    h.deferFailureIfRetryable.mockReset().mockResolvedValue(true);
+    h.assertSpendNotFrozen.mockReset().mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ['a data-lake file', 'batch-1'],
+    ['a non-billable file outside a lake', undefined],
+  ])('fails %s once, without embedding or reserving, and consumes the message', async (_, batchId) => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(batchId));
+    const error = await frozen();
+    h.assertSpendNotFrozen.mockRejectedValueOnce(error);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
+    expect(h.enforceFileEmbeddingSpendWindow).not.toHaveBeenCalled();
+    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', error.message);
+  });
+
+  it('checks the uploader, their organization and the upload key', async () => {
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined, 'key-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.assertSpendNotFrozen).toHaveBeenCalledWith(
+      { userId: 'u1', organizationId: 'org-1', apiKeyId: 'key-1' },
+      expect.anything()
+    );
+    expect(h.getVector).toHaveBeenCalled();
+  });
+
+  it('retries, rather than failing the file, when the freeze cannot be read', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.assertSpendNotFrozen.mockRejectedValueOnce(new Error('freeze store down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('freeze store down');
+
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).toHaveBeenCalledTimes(1);
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('skips the check when every chunk is a cache hit', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.assertSpendNotFrozen).not.toHaveBeenCalled();
   });
 });

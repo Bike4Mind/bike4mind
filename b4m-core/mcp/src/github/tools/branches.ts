@@ -9,9 +9,12 @@ import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, paginationParams, confirmationParams } from '../helpers/schemas.js';
-import { getErrorMessage, hasStatus, isRateLimitError } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { getErrorMessage, errorLogFields, hasStatus, isRateLimitError } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_LIST_BRANCHES, TOOL_CREATE_BRANCH } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 export function registerBranchTools(server: McpServer) {
   // LIST BRANCHES - View all branches in a repository
@@ -97,9 +100,10 @@ export function registerBranchTools(server: McpServer) {
         } catch (error) {
           // 404 means branch doesn't exist - that's good, we can create it
           if (!hasStatus(error, 404)) {
-            console.error(
-              `[${TOOL_CREATE_BRANCH}] Warning: Could not check if branch exists: ${getErrorMessage(error)}`
-            );
+            log.warn('could not check if branch exists', {
+              toolName: TOOL_CREATE_BRANCH,
+              ...errorLogFields(error),
+            });
           }
         }
 
@@ -119,9 +123,6 @@ export function registerBranchTools(server: McpServer) {
       }
 
       // EXECUTE MODE
-      console.error(
-        `[${TOOL_CREATE_BRANCH}] Attempting to create branch: ${fullRepoName}/${branch_name} from ${fromBranch}`
-      );
 
       try {
         // Step 1: Resolve the source branch to a commit SHA
@@ -150,7 +151,7 @@ export function registerBranchTools(server: McpServer) {
           sha: baseSha,
         });
 
-        console.error(`[${TOOL_CREATE_BRANCH}] SUCCESS: Branch "${branch_name}" created from "${fromBranch}"`);
+        log.info('succeeded', { toolName: TOOL_CREATE_BRANCH });
 
         return createSuccessResponse({
           branch: {
@@ -162,7 +163,7 @@ export function registerBranchTools(server: McpServer) {
           },
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_BRANCH}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_BRANCH, ...errorLogFields(error) });
 
         // Handle rate limiting
         if (isRateLimitError(error)) {

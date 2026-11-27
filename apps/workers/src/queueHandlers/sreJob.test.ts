@@ -4,6 +4,11 @@ import { ZodError } from 'zod';
 // Spy on the extracted logic functions - the merged handler's job is purely to
 // validate + route, so the handlers themselves are mocked out.
 const mockRunSreAnalysis = vi.fn();
+const mockAccounting = { attribution: { executionId: 'test-execution' } };
+vi.mock('@bike4mind/services/sreAgentService', () => ({
+  isSreAccountingError: (error: unknown) => error instanceof Error && 'reason' in error,
+}));
+vi.mock('./sreQueueAccounting', () => ({ createSreQueueAccounting: () => mockAccounting }));
 const mockRunSreRevision = vi.fn();
 
 vi.mock('./sreAnalysis', () => ({
@@ -14,7 +19,7 @@ vi.mock('./sreRevision', () => ({
 }));
 
 // Passthrough so `dispatch` is the raw (event, ctx, logger) handler.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -64,7 +69,7 @@ describe('sreJob handler', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("routes jobType: 'analysis' to runSreAnalysis", async () => {
-    await dispatch(makeSqsEvent(analysisBody), {} as never, mockLogger);
+    await dispatch(makeSqsEvent(analysisBody), { getRemainingTimeInMillis: () => 480000 } as never, mockLogger);
 
     expect(mockRunSreAnalysis).toHaveBeenCalledTimes(1);
     expect(mockRunSreRevision).not.toHaveBeenCalled();
@@ -74,7 +79,7 @@ describe('sreJob handler', () => {
   });
 
   it("routes jobType: 'revision' to runSreRevision", async () => {
-    await dispatch(makeSqsEvent(revisionBody), {} as never, mockLogger);
+    await dispatch(makeSqsEvent(revisionBody), { getRemainingTimeInMillis: () => 480000 } as never, mockLogger);
 
     expect(mockRunSreRevision).toHaveBeenCalledTimes(1);
     expect(mockRunSreAnalysis).not.toHaveBeenCalled();
@@ -85,14 +90,33 @@ describe('sreJob handler', () => {
 
   it('rejects an unknown jobType discriminator', async () => {
     await expect(
-      dispatch(makeSqsEvent({ ...analysisBody, jobType: 'bogus' }), {} as never, mockLogger)
+      dispatch(
+        makeSqsEvent({ ...analysisBody, jobType: 'bogus' }),
+        { getRemainingTimeInMillis: () => 480000 } as never,
+        mockLogger
+      )
     ).rejects.toThrow(ZodError);
     expect(mockRunSreAnalysis).not.toHaveBeenCalled();
     expect(mockRunSreRevision).not.toHaveBeenCalled();
   });
 
   it('rejects a message missing required payload fields', async () => {
-    await expect(dispatch(makeSqsEvent({ jobType: 'analysis' }), {} as never, mockLogger)).rejects.toThrow(ZodError);
+    await expect(
+      dispatch(makeSqsEvent({ jobType: 'analysis' }), { getRemainingTimeInMillis: () => 480000 } as never, mockLogger)
+    ).rejects.toThrow(ZodError);
     expect(mockRunSreAnalysis).not.toHaveBeenCalled();
   });
+});
+
+it.each(['analysis', 'revision'])('propagates %s accounting failures to the queue', async jobType => {
+  const error = new Error('accounting pending');
+  const handler = jobType === 'analysis' ? mockRunSreAnalysis : mockRunSreRevision;
+  handler.mockRejectedValueOnce(error);
+  await expect(
+    dispatch(
+      makeSqsEvent(jobType === 'analysis' ? analysisBody : revisionBody),
+      { getRemainingTimeInMillis: () => 480000 } as never,
+      mockLogger
+    )
+  ).rejects.toBe(error);
 });

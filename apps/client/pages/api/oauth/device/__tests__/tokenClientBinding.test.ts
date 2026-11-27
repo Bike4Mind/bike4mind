@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findByDeviceCode: vi.fn(),
-  update: vi.fn(async () => undefined),
+  recordPollIfDue: vi.fn(async () => ({})),
+  claimApproved: vi.fn(async () => ({})),
   findById: vi.fn(async () => ({ id: 'u1', tokenVersion: 0 })),
   issueSessionForRequest: vi.fn(async () => ({ accessToken: 'a.jwt', refreshToken: 'r.jwt' })),
 }));
@@ -22,9 +23,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 vi.mock('@bike4mind/database', () => ({
-  deviceAuthorizationRepository: { findByDeviceCode: h.findByDeviceCode, update: h.update },
+  deviceAuthorizationRepository: {
+    findByDeviceCode: h.findByDeviceCode,
+    recordPollIfDue: h.recordPollIfDue,
+    claimApproved: h.claimApproved,
+  },
   userRepository: { findById: h.findById },
   // Always under the global poll ceiling: that ceiling has its own tests in token.test.ts, and
   // this file is only about binding a device code to the client it was issued to.
@@ -113,7 +118,7 @@ describe('POST /api/oauth/device/token client binding', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
-    expect(h.update).not.toHaveBeenCalled();
+    expect(h.recordPollIfDue).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
@@ -130,7 +135,7 @@ describe('POST /api/oauth/device/token client binding', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
-    expect(h.update).not.toHaveBeenCalled();
+    expect(h.recordPollIfDue).not.toHaveBeenCalled();
   });
 
   it('reads a row predating the clientId field as the CLI', async () => {
@@ -149,12 +154,41 @@ describe('POST /api/oauth/device/token client binding', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
-    expect(h.update).not.toHaveBeenCalled();
+    expect(h.recordPollIfDue).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('rejects a client_id that is not on the allowlist', async () => {
     await expect(call('b4m-rogue')).rejects.toThrow();
     expect(h.findByDeviceCode).not.toHaveBeenCalled();
+  });
+
+  it('answers invalid_grant and issues no session when the claim finds nothing', async () => {
+    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-cli'));
+    (h.claimApproved as Mock).mockResolvedValueOnce(null);
+
+    const res = await call('b4m-cli');
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_grant');
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+
+  it('does not claim the code when the user no longer exists', async () => {
+    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-cli'));
+    (h.findById as Mock).mockResolvedValueOnce(null);
+
+    await expect(call('b4m-cli')).rejects.toThrow();
+    expect(h.claimApproved).not.toHaveBeenCalled();
+  });
+
+  it('redeems an approved device code with a single claim', async () => {
+    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-cli'));
+
+    const res = await call('b4m-cli');
+
+    expect(res.statusCode).toBe(200);
+    expect(h.claimApproved).toHaveBeenCalledWith('auth-1');
+    expect(h.issueSessionForRequest).toHaveBeenCalledTimes(1);
   });
 });

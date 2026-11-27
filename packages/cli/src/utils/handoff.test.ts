@@ -767,10 +767,10 @@ describe('handoff', () => {
       };
       const session = createSession([createMessage('user', 'hi', 0)], workflow);
       const todos: TodoItem[] = [
-        { description: 'Write migration', status: 'in_progress' },
-        { description: 'Add tests', status: 'pending' },
-        { description: 'Ship it', status: 'completed' },
-        { description: 'Old idea', status: 'cancelled' },
+        { id: 'x', content: 'Write migration', status: 'in_progress' },
+        { id: 'x', content: 'Add tests', status: 'pending' },
+        { id: 'x', content: 'Ship it', status: 'completed' },
+        { id: 'x', content: 'Old idea', status: 'cancelled' },
       ];
 
       const handoff = buildLocalHandoff(session, {

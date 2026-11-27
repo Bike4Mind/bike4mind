@@ -6,10 +6,14 @@ import {
   USER_AUTH_AUDIT_EVENTS,
   type UserAuthAuditEvent,
 } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/utils';
-import { ApiKeyScope, CURRENT_POLICY_VERSION, type UserComplianceResponse } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CURRENT_POLICY_VERSION,
+  MODERATION_PAGE_READ,
+  type UserComplianceResponse,
+} from '@bike4mind/common';
 import { z } from 'zod';
 
 interface RequestQuery {
@@ -23,13 +27,13 @@ const EventFilterSchema = z.enum(USER_AUTH_AUDIT_EVENTS as [UserAuthAuditEvent, 
 // history ever exceeds it. Not a query param - nothing calls this with a page size.
 const ROW_LIMIT = 50;
 
-// Admin-only read-only endpoint aggregating a user's compliance evidence.
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+// Read-only endpoint aggregating a user's compliance evidence.
+const handler = adminApi({
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: MODERATION_PAGE_READ },
+}).get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { userId, event: eventParam } = req.query as RequestQuery;
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');

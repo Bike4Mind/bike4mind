@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, type IDataLakeAccessGrantDocument, type IDataLakeDocument } from '@bike4mind/common';
 import { transferLakeOwnership } from './transferLakeOwnership';
 import type { LakeTransferActor } from './lakeOwnershipCandidates';
+import { Logger } from '@bike4mind/observability';
 
 // Org-scoped by default: a PERSONAL lake is not transferable at all except by a platform admin
 // (resolveLakeTransferAuthority), so an org-less default would make every mechanical test below
@@ -176,7 +177,7 @@ describe('transferLakeOwnership', () => {
     // failure into no output at all - the only other symptom is a stamp naming an older, smaller edit.
     const { adapters, lakeArgs, update } = makeAdapters();
     update.mockRejectedValueOnce(new Error('mongo down'));
-    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const spy = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
 
     try {
       await expect(transferLakeOwnership(owner, ...lakeArgs, 'newOwner', adapters)).resolves.toEqual({

@@ -8,16 +8,26 @@ import {
   User,
   userRepository,
   withTransaction,
+  favoriteRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { accessibleBy } from '@casl/mongoose';
-import { logEvent } from '@server/utils/analyticsLog';
-import { unpublishUserArtifactsBySource } from '@server/services/publish/purgeUserPublishedArtifacts';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { baseApi } from '@server/middlewares/baseApi';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
-import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
+import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
+import {
+  assertFilesReadScope,
+  assertFilesWriteScope,
+  FILES_READ_OR_WRITE_SCOPES,
+} from '@bike4mind/server-utils/files/fileScopes';
 import qs from 'qs';
 
 // baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
@@ -36,16 +46,13 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
         fabFiles: fabFileRepository,
         users: userRepository,
         projects: projectRepository,
+        favorites: favoriteRepository,
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) => {
           try {
-            return await getFilesStorage().getSignedUrl(path, 'get', {
-              expiresIn: expireInSeconds,
-              audience: 'browser',
-            });
+            return await signFabFileGet(path, expireInSeconds, options);
           } catch (e) {
             req.logger.error('Error generating signed URL for file', {
               error: e,
@@ -55,6 +62,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
             return null;
           }
         },
+        contentUrl: fileContentUrl,
       },
     });
 
@@ -132,16 +140,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           ]);
 
           if (files.length > 0) {
-            try {
-              await fabFilesService.deleteStoredObjects(
-                files,
-                { files: getFilesStorage(), generated: getGeneratedCopyStore() },
-                req.logger
-              );
-            } catch (error) {
-              req.logger.error('Error deleting file from storage:', { error, userId });
-              throw error;
-            }
+            await fabFilesService.deleteStoredObjectsAfterCommit(
+              files,
+              { files: getFilesStorage(), generated: getGeneratedCopyStore() },
+              { session, key: 'storedObjects|deleteAll', logger: req.logger }
+            );
           }
 
           await logEvent(

@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { ChatAttachmentInput, ChatMessage, ChatSessionSummary } from '@shared/chat';
 import type {
   ClaudeCodeImportSettings,
@@ -8,7 +8,9 @@ import type {
   ClaudeImportResult,
   ClaudeImportState,
   ClaudeRemoveResult,
+  WebSyncSettings,
 } from '@shared/claudeImport';
+import { isImportKind, isSyncHintId } from '@shared/claudeImport';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { AttachmentStore } from '../chat/AttachmentStore';
 import { MAX_ATTACHMENTS_PER_TURN } from '../chat/attachments';
@@ -34,6 +36,22 @@ import {
   type FileCursor,
   type ScopeImportState,
 } from './ImportStateStore';
+import {
+  countWebNotebooks,
+  describeWebError,
+  fetchWebNotebook,
+  importNotebook,
+  listWebNotebookChanges,
+  listWebNotebooks,
+  needsWebImport,
+  webCounts,
+  webSessionId,
+  webNotebookWasDeleted,
+  type WebApi,
+  type WebNotebookChanges,
+  type WebNotebookList,
+} from './WebSessionSync';
+import type { WebNotebook } from './webSessionMapper';
 
 /** Low on purpose: an import is background work and must never compete with a reply. */
 const IMPORT_CONCURRENCY = 2;
@@ -43,6 +61,21 @@ const POLL_FALLBACK_MS = 60_000;
 const FIRST_SYNC_DELAY_MS = 5000;
 const SESSIONS_CHANGED_DEBOUNCE_MS = 500;
 const SAVE_EVERY = 25;
+/** Linux mtimes can trail Date.now() slightly, so an export landing right after the watch starts still counts. */
+const WATCH_SINCE_SLACK_MS = 2000;
+/** Focusing the window syncs web notebooks at most this often (ms). */
+const WEB_FOCUS_INTERVAL_MS = 60_000;
+/** While a window stays focused, look for new web notebooks this often (ms). There is no push from the web. */
+const WEB_POLL_INTERVAL_MS = 3 * 60_000;
+/** Each failed poll doubles the wait, up to this many doublings (3 min -> 48 min). */
+const WEB_POLL_MAX_BACKOFF_STEPS = 4;
+/**
+ * Between full lists a web sync reads only the change feed; this often (ms) it lists everything
+ * instead, which catches what the feed cannot show, such as a notebook hard-deleted by retention.
+ */
+const WEB_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
+/** Failed notebooks a change-feed run re-reads by id; the rest wait for a later run. */
+const WEB_FAILED_RETRIES_PER_RUN = 10;
 
 export interface ClaudeImportLogger {
   warn(message: string): void;
@@ -62,6 +95,8 @@ export interface ClaudeImportServiceDeps {
   pickPath: (kind: 'folder' | 'export', defaultPath?: string) => Promise<string | null>;
   send: (channel: string, payload: unknown) => void;
   logger: ClaudeImportLogger;
+  /** The signed-in account's API client, or null while signed out. */
+  webApi?: () => WebApi | null;
 }
 
 export class ClaudeImportService {
@@ -71,6 +106,13 @@ export class ClaudeImportService {
   private codeRerun = false;
   private chatRunning = false;
   private lastError: string | undefined;
+  private webRun: Promise<void> | null = null;
+  private webRerun = false;
+  /** Set by Sync now; the next web run lists everything rather than reading the change feed. */
+  private webReconcileRequested = false;
+  private webError: string | undefined;
+  /** When a web run last started or ended: the focus and poll throttles count from the later. */
+  private webRanAt = 0;
   private codeWatcher: FSWatcher | null = null;
   private codePoll: NodeJS.Timeout | null = null;
   private chatWatcher: FSWatcher | null = null;
@@ -80,10 +122,21 @@ export class ClaudeImportService {
   private chatTimer: NodeJS.Timeout | null = null;
   private sessionsTimer: NodeJS.Timeout | null = null;
   private startTimer: NodeJS.Timeout | null = null;
+  private webPollTimer: NodeJS.Timeout | null = null;
+  private webPollFailures = 0;
+  private windowFocused = false;
+  /** Notebooks this run has to read and how many it has read; null between runs. */
+  private webProgress: { done: number; total: number } | null = null;
   /** Scopes whose existing copies were brought in line this launch; see tidyImports. */
   private readonly tidied = new Set<string>();
   private disposed = false;
   private removing = false;
+  /** For the sidebar hints; looked up once per launch and account, see detectHints. */
+  private codeSessions: number | null = null;
+  private codeChecked = false;
+  private readonly webNotebooks = new Map<string, number>();
+  /** When the web count was last tried per account, so a failed one retries on focus but not on every focus. */
+  private readonly webCountTriedAt = new Map<string, number>();
   /** Settings writes are read-modify-write; two quick clicks must not lose one of them. */
   private settingsChain: Promise<unknown> = Promise.resolve();
 
@@ -105,6 +158,8 @@ export class ClaudeImportService {
     this.startTimer = setTimeout(() => {
       this.startTimer = null;
       this.runBackground(() => this.autoSync());
+      this.runBackground(() => this.autoSyncWeb());
+      this.runBackground(() => this.detectHints());
     }, FIRST_SYNC_DELAY_MS);
     this.startTimer.unref?.();
   }
@@ -112,9 +167,52 @@ export class ClaudeImportService {
   /** The account changed: its imports live in its own scope, so sync that scope. */
   onScopeChanged(): void {
     this.transcripts = [];
+    this.webError = undefined;
     // Restoring the saved sign-in lands here moments after launch; the delayed first sync covers it.
-    if (!this.startTimer) this.runBackground(() => this.autoSync());
+    if (!this.startTimer) {
+      this.runBackground(() => this.autoSync());
+      this.runBackground(() => this.autoSyncWeb());
+      this.runBackground(() => this.detectHints());
+    }
     this.pushState();
+  }
+
+  /** A window gained focus: catch up with the web, throttled, and never alongside a running sync. */
+  onWindowFocus(): void {
+    this.windowFocused = true;
+    this.scheduleWebPoll();
+    this.runBackground(() => this.detectHints());
+    if (this.startTimer || this.webRun || Date.now() - this.webRanAt < WEB_FOCUS_INTERVAL_MS) return;
+    this.runBackground(() => this.autoSyncWeb());
+  }
+
+  /** No window of the app is focused any more (hidden, minimized or in the background): stop polling. */
+  onAppBlur(): void {
+    this.windowFocused = false;
+    if (this.webPollTimer) clearTimeout(this.webPollTimer);
+    this.webPollTimer = null;
+  }
+
+  /** One pending poll at most, and only while focused; a failed poll backs off, a good one resets. */
+  private scheduleWebPoll(): void {
+    if (this.webPollTimer || !this.windowFocused || this.disposed) return;
+    const delay = WEB_POLL_INTERVAL_MS * 2 ** this.webPollFailures;
+    this.webPollTimer = setTimeout(() => {
+      this.webPollTimer = null;
+      this.runBackground(() => this.pollWeb());
+    }, delay);
+    this.webPollTimer.unref?.();
+  }
+
+  private async pollWeb(): Promise<void> {
+    try {
+      // A run in flight, or one a focus just started, already covers this tick.
+      if (!this.windowFocused || this.webRun || Date.now() - this.webRanAt < WEB_FOCUS_INTERVAL_MS) return;
+      await this.autoSyncWeb();
+      this.webPollFailures = this.webError ? Math.min(this.webPollFailures + 1, WEB_POLL_MAX_BACKOFF_STEPS) : 0;
+    } finally {
+      this.scheduleWebPoll();
+    }
   }
 
   private serializeSettings<T>(work: () => Promise<T>): Promise<T> {
@@ -125,7 +223,7 @@ export class ClaudeImportService {
 
   dispose(): void {
     this.disposed = true;
-    for (const timer of [this.codeTimer, this.chatTimer, this.sessionsTimer, this.startTimer]) {
+    for (const timer of [this.codeTimer, this.chatTimer, this.sessionsTimer, this.startTimer, this.webPollTimer]) {
       if (timer) clearTimeout(timer);
     }
     if (this.codePoll) clearInterval(this.codePoll);
@@ -140,8 +238,14 @@ export class ClaudeImportService {
     const scope = scopeKey ? await this.states.scope(scopeKey) : null;
     const files = scope?.files ?? {};
     const { forked, ...counts } = countsFor(files, this.transcripts, settings.code);
+    const { forked: webForked, ...webCount } = webCounts(scope?.webNotebooks ?? {});
     return {
       signedIn: !!scopeKey,
+      hints: {
+        dismissed: scope?.dismissedHints ?? [],
+        codeSessions: this.codeSessions,
+        webNotebooks: scopeKey ? (this.webNotebooks.get(scopeKey) ?? null) : null,
+      },
       code: {
         settings: settings.code,
         sourceFolder: this.sourceFolder(settings),
@@ -157,6 +261,16 @@ export class ClaudeImportService {
         watchFolder: settings.chatWatchFolder,
         running: this.chatRunning,
         lastImport: scope?.lastChatImport ?? null,
+      },
+      web: {
+        settings: settings.web,
+        running: !!this.webRun,
+        ...(this.webProgress ? { progress: { ...this.webProgress } } : {}),
+        lastSyncAt: scope?.webLastSyncAt ?? null,
+        lastSyncMs: scope?.webLastSyncMs ?? null,
+        counts: webCount,
+        forked: webForked,
+        ...(this.webError ? { error: this.webError } : {}),
       },
     };
   }
@@ -212,6 +326,18 @@ export class ClaudeImportService {
     return this.state();
   }
 
+  /** Accepts only the enable toggle from the renderer. */
+  setWebSettings(patch: unknown): Promise<ClaudeImportState> {
+    return this.serializeSettings(async () => {
+      const current = await this.states.readSettings();
+      const input = (patch && typeof patch === 'object' ? patch : {}) as Partial<WebSyncSettings>;
+      const enabled = typeof input.enabled === 'boolean' ? input.enabled : current.web.enabled;
+      await this.states.writeSettings({ ...current, web: { enabled } });
+      if (enabled && !current.web.enabled) void this.syncWeb();
+      return this.state();
+    });
+  }
+
   async pickCodeFolder(reset: boolean): Promise<ClaudeImportState> {
     const before = await this.states.readSettings();
     const folder = reset ? null : await this.deps.pickPath('folder', this.sourceFolder(before));
@@ -234,10 +360,55 @@ export class ClaudeImportService {
     // user's to import by hand.
     await this.serializeSettings(async () => {
       const current = await this.states.readSettings();
-      await this.states.writeSettings({ ...current, chatWatchFolder: folder, chatWatchSince: Date.now() });
+      await this.states.writeSettings({
+        ...current,
+        chatWatchFolder: folder,
+        chatWatchSince: Date.now() - WATCH_SINCE_SLACK_MS,
+      });
     });
     await this.applyWatchers();
     return this.state();
+  }
+
+  async dismissHint(id: unknown): Promise<ClaudeImportState> {
+    const scopeKey = this.deps.scopeKey();
+    if (scopeKey && isSyncHintId(id)) await this.states.dismissHint(scopeKey, id);
+    return this.state();
+  }
+
+  /**
+   * Feeds the empty-sidebar import card's options: Claude Code sessions counted by file name alone
+   * (never read), and one count request to the web. Skipped once that card is dismissed or a sync
+   * is on; the Claude Code count runs once per launch, the web count once per account (throttled).
+   */
+  private async detectHints(): Promise<void> {
+    const scopeKey = this.deps.scopeKey();
+    if (!scopeKey) return;
+    const settings = await this.states.readSettings();
+    const dismissed = (await this.states.scope(scopeKey)).dismissedHints;
+    const wanted = !dismissed.includes('sidebar-empty');
+    if (!this.codeChecked && !settings.code.enabled && !settings.code.sourceFolder && wanted) {
+      this.codeChecked = true;
+      const transcripts = await listTranscripts(this.defaultSourceFolder(), false);
+      this.codeSessions = transcripts.filter(transcript => ranInClaudeWorktree(transcript.path)).length;
+    }
+    const api = this.deps.webApi?.() ?? null;
+    const triedAt = this.webCountTriedAt.get(scopeKey) ?? 0;
+    if (
+      api &&
+      !this.webNotebooks.has(scopeKey) &&
+      Date.now() - triedAt >= WEB_FOCUS_INTERVAL_MS &&
+      !settings.web.enabled &&
+      wanted
+    ) {
+      this.webCountTriedAt.set(scopeKey, Date.now());
+      try {
+        this.webNotebooks.set(scopeKey, await countWebNotebooks(api));
+      } catch (error) {
+        this.deps.logger.warn(`WEB IMPORT: could not count notebooks: ${String(error)}`);
+      }
+    }
+    this.pushState();
   }
 
   private async autoSync(): Promise<void> {
@@ -252,6 +423,241 @@ export class ClaudeImportService {
     const settings = await this.states.readSettings();
     if (settings.code.enabled) await this.syncCode();
     await this.checkWatchedFolder();
+  }
+
+  private async autoSyncWeb(): Promise<void> {
+    if (!this.deps.scopeKey() || !(await this.states.readSettings()).web.enabled) return;
+    await this.syncWeb();
+  }
+
+  /**
+   * Coalesces like syncCode. Reads only the signed-in account's notebooks, into its own scope.
+   * `reconcile` forces a full list instead of the change feed.
+   */
+  syncWeb(options: { reconcile?: boolean } = {}): Promise<void> {
+    if (this.removing) return Promise.resolve();
+    if (options.reconcile) this.webReconcileRequested = true;
+    if (this.webRun) {
+      this.webRerun = true;
+      return this.webRun;
+    }
+    this.webRun = (async () => {
+      do {
+        this.webRerun = false;
+        this.webRanAt = Date.now();
+        try {
+          await this.runWebSync();
+        } catch (error) {
+          this.webError = error instanceof Error ? error.message : String(error);
+          this.deps.logger.warn(`WEB IMPORT: sync failed: ${this.webError}`);
+        }
+      } while (this.webRerun && !this.disposed);
+    })().finally(() => {
+      this.webRun = null;
+      this.webRanAt = Date.now();
+      this.webProgress = null;
+      this.pushState();
+    });
+    this.pushState();
+    return this.webRun;
+  }
+
+  private async runWebSync(): Promise<void> {
+    const scopeKey = this.deps.scopeKey();
+    const api = this.deps.webApi?.() ?? null;
+    if (!scopeKey || !api || this.disposed) return;
+    if (!(await this.states.readSettings()).web.enabled) return;
+    const started = Date.now();
+    const scope = await this.states.scope(scopeKey);
+    const reconcile =
+      this.webReconcileRequested ||
+      scope.webChangeMark === null ||
+      scope.webFullListAt === null ||
+      started - scope.webFullListAt >= WEB_RECONCILE_INTERVAL_MS;
+    this.webReconcileRequested = false;
+
+    const listed = await this.listWeb(api, scope.webChangeMark, reconcile);
+    if (!listed) return;
+    if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
+    if (!(await this.states.readSettings()).web.enabled) return;
+    let notebooks = listed.notebooks;
+    if (listed.kind === 'full') {
+      if (listed.complete) {
+        await this.dropWebNotebooks(scope, scopeKey, this.unlistedWebNotebooks(scope, listed.notebooks), id =>
+          webNotebookWasDeleted(api, id)
+        );
+      }
+    } else {
+      await this.dropWebNotebooks(scope, scopeKey, listed.deletedIds, async () => true);
+      notebooks = [...notebooks, ...(await this.retryFailedWebNotebooks(scope, scopeKey, api, notebooks))];
+    }
+
+    const tag = importScopeTag(scopeKey);
+    const queue = notebooks.filter(notebook => needsWebImport(notebook, scope.webNotebooks[notebook.id]));
+    const pickModel = once(this.deps.pickModel);
+    let done = 0;
+    let finished = true;
+    this.webProgress = { done: 0, total: queue.length };
+    this.pushState();
+    await runQueue(queue, IMPORT_CONCURRENCY, async notebook => {
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) {
+        finished = false;
+        return;
+      }
+      if (!(await this.states.readSettings()).web.enabled) {
+        finished = false;
+        return;
+      }
+      const previous = scope.webNotebooks[notebook.id];
+      const sessionId = webSessionId(notebook.id, tag);
+      try {
+        const cursor = await importNotebook(notebook, sessionId, previous, {
+          api,
+          store: this.deps.store,
+          deleteImported: this.deps.deleteImported,
+          scopeKey,
+          pickModel,
+        });
+        scope.webNotebooks[notebook.id] = cursor;
+        if (
+          cursor.status === 'imported' ||
+          ((previous?.status === 'imported' || previous?.wasImported === true) && cursor.status === 'skipped')
+        ) {
+          this.sessionsChanged();
+        }
+      } catch (error) {
+        if (error instanceof ImportScopeChangedError) {
+          finished = false;
+          return;
+        }
+        scope.webNotebooks[notebook.id] = {
+          sessionId,
+          version: previous?.version ?? '',
+          status: 'failed',
+          wasImported: previous?.status === 'imported' || previous?.wasImported === true,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        this.deps.logger.warn(`WEB IMPORT: could not import a notebook: ${String(error)}`);
+      }
+      done++;
+      if (this.webProgress) this.webProgress.done = done;
+      if (done % SAVE_EVERY === 0) {
+        await this.states.saveScope(scopeKey);
+        this.pushState();
+      }
+    });
+
+    // The mark moves only once every listed notebook has been dealt with: a run cut short reads the
+    // same changes again. A notebook that failed keeps its 'failed' cursor and is retried by id.
+    if (finished) {
+      if (listed.kind === 'full' && listed.complete) {
+        scope.webChangeMark = listed.latestChange;
+        scope.webFullListAt = started;
+      } else if (listed.kind === 'changes' && listed.latestChange) {
+        scope.webChangeMark = laterOf(scope.webChangeMark, listed.latestChange);
+      }
+    }
+    scope.webLastSyncAt = new Date().toISOString();
+    scope.webLastSyncMs = Date.now() - started;
+    await this.states.saveScope(scopeKey);
+  }
+
+  /**
+   * The change feed since `mark`, or the full list when reconciling, when there is no mark yet, or
+   * when the server has no change feed. Null when the listing failed outright; `webError` says why.
+   */
+  private async listWeb(
+    api: WebApi,
+    mark: string | null,
+    reconcile: boolean
+  ): Promise<({ kind: 'changes' } & WebNotebookChanges) | ({ kind: 'full' } & WebNotebookList) | null> {
+    try {
+      const changes = reconcile || !mark ? null : await listWebNotebookChanges(api, mark);
+      if (changes) {
+        this.webError = changes.stopReason
+          ? `Synced ${changes.notebooks.length} changed Bike4Mind web notebooks; the list ${changes.stopReason}.`
+          : undefined;
+        if (changes.stopReason) this.deps.logger.warn(`WEB IMPORT: partial change list: ${changes.stopReason}`);
+        return { kind: 'changes', ...changes };
+      }
+      const listed = await listWebNotebooks(api);
+      // A partial list still imports, newest first; the error says why some notebooks are missing.
+      this.webError = listed.stopReason
+        ? `Synced ${listed.notebooks.length} of your Bike4Mind web notebooks; the list ${listed.stopReason}.`
+        : undefined;
+      if (listed.stopReason) this.deps.logger.warn(`WEB IMPORT: partial notebook list: ${listed.stopReason}`);
+      return { kind: 'full', ...listed };
+    } catch (error) {
+      this.webError = `Could not read your notebooks from Bike4Mind web (${describeWebError(error)}).`;
+      this.deps.logger.warn(`WEB IMPORT: could not list notebooks: ${String(error)}`);
+      return null;
+    }
+  }
+
+  /** Imported notebooks a complete full list did not return: deletion candidates. */
+  private unlistedWebNotebooks(scope: ScopeImportState, listed: readonly WebNotebook[]): string[] {
+    const ids = new Set(listed.map(notebook => notebook.id));
+    return Object.keys(scope.webNotebooks).filter(id => !ids.has(id));
+  }
+
+  /**
+   * The change feed only shows a notebook again when it changes, so a read that failed is retried by
+   * id here, a few per run; a full list retries the rest. One found deleted is dropped.
+   */
+  private async retryFailedWebNotebooks(
+    scope: ScopeImportState,
+    scopeKey: string,
+    api: WebApi,
+    listed: readonly WebNotebook[]
+  ): Promise<WebNotebook[]> {
+    const listedIds = new Set(listed.map(notebook => notebook.id));
+    const failed = Object.entries(scope.webNotebooks)
+      .filter(([id, cursor]) => cursor.status === 'failed' && !listedIds.has(id))
+      .slice(0, WEB_FAILED_RETRIES_PER_RUN)
+      .map(([id]) => id);
+    const retries: WebNotebook[] = [];
+    const deleted: string[] = [];
+    for (const id of failed) {
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) break;
+      try {
+        const notebook = await fetchWebNotebook(api, id);
+        if (notebook === 'deleted') deleted.push(id);
+        else retries.push(notebook);
+      } catch (error) {
+        this.deps.logger.warn(`WEB IMPORT: could not re-read a failed notebook: ${describeWebError(error)}`);
+      }
+    }
+    await this.dropWebNotebooks(scope, scopeKey, deleted, async () => true);
+    return retries;
+  }
+
+  /**
+   * A notebook deleted on the web takes its untouched copy with it; a continued one stays.
+   * `confirmDeleted` vouches for each candidate: the 404 check for one a full list missed, or
+   * nothing for a tombstone the change feed returned.
+   */
+  private async dropWebNotebooks(
+    scope: ScopeImportState,
+    scopeKey: string,
+    candidates: readonly string[],
+    confirmDeleted: (id: string) => Promise<boolean>
+  ): Promise<void> {
+    for (const id of candidates) {
+      const cursor = scope.webNotebooks[id];
+      if (!cursor || cursor.status === 'forked') continue;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
+      if (!(await this.states.readSettings()).web.enabled) return;
+      if (!(await confirmDeleted(id))) continue;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
+      if (!(await this.states.readSettings()).web.enabled) return;
+      const outcome = await this.deps.deleteImported(cursor.sessionId, scopeKey);
+      if (outcome === 'forked') {
+        scope.webNotebooks[id] = { ...cursor, status: 'forked' };
+        continue;
+      }
+      if (outcome === 'removed') this.sessionsChanged();
+      delete scope.webNotebooks[id];
+    }
   }
 
   /**
@@ -470,7 +876,7 @@ export class ClaudeImportService {
 
   /** Removes only the desktop copies; continued sessions hold the user's own turns and stay. */
   async removeImported(kind: unknown): Promise<ClaudeRemoveResult> {
-    if (kind !== 'claude-code' && kind !== 'claude-chat') throw new Error('unknown import source');
+    if (!isImportKind(kind)) throw new Error('unknown import source');
     const scopeKey = this.deps.scopeKey();
     if (!scopeKey) return { removed: 0, keptForked: 0 };
     if (this.removing) throw new Error('Imported sessions are already being removed.');
@@ -492,6 +898,13 @@ export class ClaudeImportService {
       });
       await this.applyWatchers();
       await this.codeRun;
+    }
+    if (kind === 'b4m-web') {
+      await this.serializeSettings(async () => {
+        const settings = await this.states.readSettings();
+        await this.states.writeSettings({ ...settings, web: { enabled: false } });
+      });
+      await this.webRun;
     }
     if (this.deps.scopeKey() !== scopeKey) throw new ImportScopeChangedError();
     const sessions = (await this.deps.listSessions()).filter(session => session.importOrigin?.kind === kind);
@@ -516,6 +929,12 @@ export class ClaudeImportService {
       for (const [path, cursor] of Object.entries(scope.files)) {
         if (keptSessionIds.has(cursor.sessionId)) scope.files[path] = { ...cursor, status: 'forked' };
         else if (cursor.status !== 'forked') scope.files[path] = pendingCursor(cursor);
+      }
+    } else if (kind === 'b4m-web') {
+      for (const [id, cursor] of Object.entries(scope.webNotebooks)) {
+        if (keptSessionIds.has(cursor.sessionId) || cursor.status === 'forked') {
+          scope.webNotebooks[id] = { ...cursor, status: 'forked' };
+        } else delete scope.webNotebooks[id];
       }
     } else {
       scope.conversations = {};
@@ -657,6 +1076,15 @@ export class ClaudeImportService {
   }
 }
 
+/**
+ * Claude Code names a project folder after its cwd with every separator turned into '-', so
+ * `<repo>/.claude/worktrees/<name>` shows as `--claude-worktrees-`: the sessions sync takes
+ * (see claudeWorktreeOf), told apart without opening a transcript.
+ */
+function ranInClaudeWorktree(transcriptPath: string): boolean {
+  return basename(dirname(transcriptPath)).includes('--claude-worktrees-');
+}
+
 /** Read again from the top next time it is in scope: the copy it described is gone. */
 function pendingCursor(cursor: FileCursor): FileCursor {
   return {
@@ -667,6 +1095,11 @@ function pendingCursor(cursor: FileCursor): FileCursor {
     status: 'pending',
     ...(cursor.cwd ? { cwd: cursor.cwd } : {}),
   };
+}
+
+/** The later of two ISO timestamps; a mark never moves backwards. */
+function laterOf(current: string | null, next: string): string {
+  return current && Date.parse(current) > Date.parse(next) ? current : next;
 }
 
 /** One lookup per run: a sync while offline would otherwise wait out a timeout per transcript. */

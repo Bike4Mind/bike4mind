@@ -10,13 +10,20 @@
  */
 
 import { z } from 'zod';
+import {
+  ForbiddenError,
+  NATIVE_DEV_OAUTH_CLIENT_ID,
+  NATIVE_OAUTH_CLIENT_ID,
+  type AuthSessionCreatedVia,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import {
   cacheRepository,
   oauthAuthorizationCodeRepository,
   oauthClientRepository,
+  oauthClientSignInRepository,
   oauthGrantRepository,
   oauthRefreshTokenRepository,
   userRepository,
@@ -24,13 +31,24 @@ import {
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
 import { PKCE_CODE_VERIFIER_RE } from '@server/auth/pkce';
 import { issueSessionForRequest } from '@server/auth/issueSession';
+import { withAccountNotPurging } from '@server/auth/withAccountNotPurging';
+import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
 import { mintRefreshFamily, refreshFamilyExpiresAt } from '@server/auth/oauthRefreshToken';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { getClientIp } from '@server/utils/ip';
+import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+
+const MAX_DEVICE_NAME_LENGTH = 64;
+
+// First-party clients whose sessions are labeled by a dedicated createdVia instead of the generic one.
+const CREATED_VIA_BY_CLIENT_ID: Readonly<Record<string, AuthSessionCreatedVia>> = {
+  [NATIVE_OAUTH_CLIENT_ID]: 'ios',
+  [NATIVE_DEV_OAUTH_CLIENT_ID]: 'ios',
+};
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -46,6 +64,11 @@ const AuthCodeRequestSchema = z.object({
     .regex(PKCE_CODE_VERIFIER_RE, 'code_verifier must be 43-128 unreserved characters (RFC 7636)')
     .optional(),
   client_secret: z.string().optional(),
+  // Optional label a native client reports for the device; shown in the active-sessions list.
+  deviceName: z
+    .string()
+    .transform(value => value.trim().slice(0, MAX_DEVICE_NAME_LENGTH))
+    .optional(),
 });
 
 // RFC 6749 6. `scope` may narrow (never widen) the family's scopes for this response only.
@@ -97,7 +120,7 @@ const handler = baseApi({ auth: false })
         return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
       }
 
-      const { code, redirect_uri, client_id, code_verifier, client_secret } = parsed.data;
+      const { code, redirect_uri, client_id, code_verifier, client_secret, deviceName } = parsed.data;
 
       // Load the client and validate the redirect_uri (RFC 6749 3.1.2.3).
       const client = await validateClient(client_id, redirect_uri);
@@ -179,8 +202,16 @@ const handler = baseApi({ auth: false })
         logError('invalid_grant', 400);
         return res.status(400).json({ error: 'invalid_grant', error_description: 'User not found' });
       }
+      try {
+        requireNonSystemUser(user);
+      } catch {
+        logError('invalid_grant', 400);
+        return res
+          .status(400)
+          .json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
+      }
 
-      const idToken = generateIdToken({
+      const idToken = await generateIdToken({
         ...idTokenUserParams(user),
         clientId: client_id,
         scopes: authCode.scopes,
@@ -189,6 +220,18 @@ const handler = baseApi({ auth: false })
         scopeLimited: client.clientType === 'relying-party',
         nonce: authCode.nonce,
       });
+
+      const recordSignInBestEffort = async () => {
+        try {
+          await withAccountNotPurging(user.id, () =>
+            oauthClientSignInRepository.recordSignIn({ userId: user.id, clientId: client.clientId, at: new Date() })
+          );
+        } catch (error) {
+          if (!(error instanceof ForbiddenError)) {
+            req.logger?.warn('Failed to record OAuth client sign-in', { clientId: client.clientId, error });
+          }
+        }
+      };
 
       // Relying-party clients get a scope/audience-bound OAuth access token, NOT a full first-party
       // session: no first-party refresh token, and the route gate (oauthRouteGate) default-denies it
@@ -221,6 +264,8 @@ const handler = baseApi({ auth: false })
             })
           : undefined;
 
+        await recordSignInBestEffort();
+
         return res.json({
           access_token: accessToken,
           id_token: idToken,
@@ -234,10 +279,13 @@ const handler = baseApi({ auth: false })
 
       // First-party clients keep the existing full first-party session (access + refresh), unchanged.
       const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
-        createdVia: 'oauth-token',
+        createdVia: CREATED_VIA_BY_CLIENT_ID[client_id] ?? 'oauth-token',
         tokenVersion: user.tokenVersion ?? 0,
         clientId: client_id,
+        ...(deviceName ? { device: { ...buildSessionDevice(req), displayName: deviceName } } : {}),
       });
+
+      await recordSignInBestEffort();
 
       return res.json({
         access_token: accessToken,
@@ -327,6 +375,7 @@ const handler = baseApi({ auth: false })
         return res.status(400).json(invalidGrant);
       }
       try {
+        requireNonSystemUser(user);
         assertAccountStateUsable(user);
       } catch {
         logError('invalid_grant', 400);
@@ -371,7 +420,7 @@ const handler = baseApi({ auth: false })
         aud: oauthAccessTokenAudience(),
       });
       // No nonce on a refreshed id_token (OIDC Core 12.2).
-      const idToken = generateIdToken({
+      const idToken = await generateIdToken({
         ...idTokenUserParams(user),
         clientId: client_id,
         scopes,

@@ -195,3 +195,36 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
     expect(json).toHaveBeenCalledWith({ success: true });
   });
 });
+
+describe('GET /api/data-lakes/batches/[batchId]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('strips server-only and undeclared fields from the batch', async () => {
+    h.findById.mockResolvedValue({
+      id: 'b1',
+      userId: 'u1',
+      dataLakeId: 'lake1',
+      status: 'uploading',
+      totalFiles: 3,
+      taxonomyBilling: { organizationId: 'org1', apiKeyId: 'key1' },
+      uploaderManageRung: 'owner',
+      uploadHistoryRecordedAt: new Date(),
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { res, json } = makeRes();
+
+    await run('GET', res);
+
+    expect(json).toHaveBeenCalledWith({
+      id: 'b1',
+      userId: 'u1',
+      dataLakeId: 'lake1',
+      status: 'uploading',
+      totalFiles: 3,
+    });
+  });
+});

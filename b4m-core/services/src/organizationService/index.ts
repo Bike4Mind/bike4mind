@@ -3,16 +3,24 @@ import type { SearchParameters } from './search';
 import { get } from './get';
 import { addMember } from './addMember';
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
-import getUsers from './getUsers';
+import getUsers, { getRoster } from './getUsers';
 import { create } from './create';
 import { update } from './update';
 import { deleteOrganization, deleteSchema } from './delete';
 import { listOwn } from './listOwn';
 import { listPendingUsers } from './listPendingUsers';
 import { revokeAccess } from './revokeAccess';
+import { getMemberOffboardingInventory } from './getMemberOffboardingInventory';
+import { reassignMemberContent } from './reassignMemberContent';
 import { leave } from './leave';
+import { transferOwnership } from './transferOwnership';
+import type { TransferOwnershipResult } from './transferOwnership';
+import { setOrganizationMemberRole } from './setOrganizationMemberRole';
+import type { OrganizationMemberRoleChange } from './setOrganizationMemberRole';
 import { clearActiveOrganization } from './clearActiveOrganization';
 import { setOrganizationGroupTypes } from './setOrganizationGroupTypes';
+import { createStandardGroup } from './createStandardGroup';
+import { shareGroupProject } from './shareGroupProject';
 import {
   assignUserToGroup,
   removeUserFromGroup,
@@ -45,6 +53,7 @@ export {
   setMemberCreditOverride,
   applyPartnerRuleMembership,
   getUsers,
+  getRoster,
   create,
   update,
   deleteOrganization,
@@ -52,9 +61,15 @@ export {
   listOwn,
   listPendingUsers,
   revokeAccess,
+  getMemberOffboardingInventory,
+  reassignMemberContent,
   leave,
+  transferOwnership,
+  setOrganizationMemberRole,
   clearActiveOrganization,
   setOrganizationGroupTypes,
+  createStandardGroup,
+  shareGroupProject,
   assignUserToGroup,
   assertCanManageOrgGroups,
   removeUserFromGroup,
@@ -69,6 +84,8 @@ export {
 };
 
 export type { SearchParameters };
+export type { TransferOwnershipResult };
+export type { OrganizationMemberRoleChange };
 export type { OrganizationStorageReconciliation, ReconcileOrganizationStorageAdapters };
 export type { GetOrganizationStorageUsageAdapters };
 export type { GroupTypeResolutionOverride };

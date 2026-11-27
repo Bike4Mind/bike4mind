@@ -17,6 +17,7 @@
  * - Idempotent: can be re-run safely if it fails
  */
 
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { SQSEvent, SQSHandler } from 'aws-lambda';
 import {
@@ -25,14 +26,32 @@ import {
   ingestedEmailRepository,
   User,
   IngestedEmailModel,
+  emailTriageItemRepository,
+  assistantBriefRepository,
+  usageEventRepository,
+  organizationRepository,
 } from '@bike4mind/database';
-// @ts-ignore - services may not be exported in types yet
-import { emailAnalysisService, apiKeyService } from '@bike4mind/services';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { emailAnalysisService, apiKeyService, recordOperationalUsage } from '@bike4mind/services';
+import { latchUsage, type CompletionUsage } from '@bike4mind/services/billing/completionMeter';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { NotFoundError, getSettingsByNames } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  type CompletionInfo,
+  type ICompletionBackend,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { ChatModels } from '@bike4mind/common';
+import {
+  ChatModels,
+  buildUsagePriceStamp,
+  getTextModelCost,
+  getTurnsCost,
+  type IUserDocument,
+  type IOrganizationDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
+import { triageEmail } from './emailTriage';
 
 /**
  * SQS Message payload schema
@@ -90,6 +109,143 @@ function parseTemperature(value: unknown, logger: Logger): number {
   return 0.3;
 }
 
+type EmailCompletionUsage = CompletionUsage & Pick<CompletionInfo, 'cacheWrite1hInputTokens' | 'stopReason'>;
+type EmailUsageOwner = { user: IUserDocument; organization?: IOrganizationDocument };
+
+async function recordEmailCompletionUsage({
+  usage,
+  resolveOwner,
+  modelInfo,
+  providerFailed,
+  latencyMs,
+  logger,
+}: {
+  usage: EmailCompletionUsage;
+  resolveOwner: () => Promise<EmailUsageOwner | undefined>;
+  modelInfo: ModelInfo;
+  providerFailed: boolean;
+  latencyMs: number;
+  logger: Logger;
+}): Promise<void> {
+  const turns = usage.turnUsage?.some(
+    turn => turn.inputTokens || turn.outputTokens || turn.cacheReadInputTokens || turn.cacheCreationInputTokens
+  )
+    ? usage.turnUsage
+    : undefined;
+  const zeroTokens = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+  const totals = turns?.reduce<typeof zeroTokens>(
+    (total, turn) => ({
+      inputTokens: total.inputTokens + turn.inputTokens,
+      outputTokens: total.outputTokens + turn.outputTokens,
+      cacheReadInputTokens: total.cacheReadInputTokens + (turn.cacheReadInputTokens ?? 0),
+      cacheCreationInputTokens: total.cacheCreationInputTokens + (turn.cacheCreationInputTokens ?? 0),
+    }),
+    zeroTokens
+  );
+  const { inputTokens = 0, outputTokens = 0, cacheReadInputTokens = 0, cacheCreationInputTokens = 0 } = totals ?? usage;
+  const promptTokens = inputTokens + cacheReadInputTokens + cacheCreationInputTokens;
+  if (promptTokens + outputTokens <= 0) {
+    logger.warn('Email model did not report token usage', { model: modelInfo.id });
+    return;
+  }
+
+  const owner = await resolveOwner();
+  if (!owner) return;
+
+  if (providerFailed) logger.warn('Recording reported usage after email model failure', { model: modelInfo.id });
+  const cacheWrite1hTokens = usage.cacheWrite1hInputTokens;
+  const costUsd = turns
+    ? getTurnsCost(modelInfo, turns)
+    : getTextModelCost(
+        modelInfo,
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+        promptTokens,
+        cacheWrite1hTokens
+      );
+  await recordOperationalUsage(
+    {
+      requestId: randomUUID(),
+      ...owner,
+      feature: 'operations',
+      source: 'system',
+      bypassCreditBilling: true,
+      provider: modelInfo.backend,
+      model: modelInfo.id,
+      inputTokens,
+      outputTokens,
+      cachedInputTokens: cacheReadInputTokens,
+      cacheWriteTokens: cacheCreationInputTokens,
+      costUsd,
+      priceStamp: buildUsagePriceStamp(modelInfo, { turns, tierBasisTokens: promptTokens, cacheWrite1hTokens }),
+      finishReason: usage.stopReason,
+      latencyMs,
+    },
+    { db: { adminSettings: adminSettingsRepository, usageEvents: usageEventRepository }, logger }
+  );
+}
+
+function meterEmailBackend(
+  backend: ICompletionBackend,
+  modelInfo: ModelInfo,
+  user: IUserDocument,
+  logger: Logger
+): ICompletionBackend {
+  let ownerPromise: Promise<EmailUsageOwner | undefined> | undefined;
+  const resolveOwner = () =>
+    (ownerPromise ??= (async () => {
+      if (!user.organizationId) return { user };
+      try {
+        const organization = await organizationRepository.findById(user.organizationId);
+        if (!organization) {
+          logger.warn('Email model usage organization is missing');
+          return undefined;
+        }
+        return { user, organization };
+      } catch {
+        logger.warn('Could not look up email model usage organization');
+        return undefined;
+      }
+    })());
+  const complete: ICompletionBackend['complete'] = async (model, messages, options, callback) => {
+    const usage: EmailCompletionUsage = {};
+    const startedAt = Date.now();
+    let providerFailed = false;
+    try {
+      await backend.complete(model, messages, options, async (chunks, info) => {
+        latchUsage(usage, info);
+        if (info?.cacheWrite1hInputTokens !== undefined) usage.cacheWrite1hInputTokens = info.cacheWrite1hInputTokens;
+        if (info?.stopReason !== undefined) usage.stopReason = info.stopReason;
+        await callback(chunks, info);
+      });
+    } catch (error) {
+      providerFailed = true;
+      throw error;
+    } finally {
+      await recordEmailCompletionUsage({
+        usage,
+        resolveOwner,
+        modelInfo,
+        providerFailed,
+        latencyMs: Date.now() - startedAt,
+        logger,
+      }).catch(error => logger.warn('Could not record email model usage', error));
+    }
+  };
+
+  return new Proxy(backend, {
+    get(target, property) {
+      if (property === 'complete') return complete;
+      const value = Reflect.get(target, property);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+const TRIAGE_MAX_TOKENS = 1200;
+
 /**
  * Main dispatch function with logger integration
  */
@@ -115,8 +271,7 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
     }
 
     logger.info('Email fetched for analysis', {
-      from: email.from,
-      subject: email.subject,
+      emailId: payload.emailId,
       userId: email.userId,
     });
 
@@ -199,10 +354,12 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
       throw new Error(`Model not available: ${emailAnalysisModel}`);
     }
 
-    const llmBackend = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: email.userId });
-    if (!llmBackend) {
+    const backend = getLlmByModel(apiKeyTable, { modelInfo, logger, endUserId: email.userId });
+    if (!backend) {
       throw new Error(`Failed to create LLM backend for model: ${emailAnalysisModel}`);
     }
+
+    const llmBackend = meterEmailBackend(backend, modelInfo, user, logger);
 
     // 9. Prepare email input for analysis
     const emailInput = emailAnalysisService.emailDocumentToAnalysisInput(email);
@@ -268,6 +425,45 @@ export const dispatch: SQSHandler = dispatchWithLogger(async (event: SQSEvent, c
     });
 
     logger.info('Email analysis saved to database');
+
+    // 12b. Triage for the owner's assistant brief. triageEmail never throws, so the analysis above stands.
+    await triageEmail(
+      {
+        enabled: async () => Boolean(await adminSettingsRepository.getSettingsValue('EnableEmailTriage')),
+        items: emailTriageItemRepository,
+        emailExists: async emailId => (await ingestedEmailRepository.findById(emailId)) !== null,
+        removeBriefItems: (userId, ids) => assistantBriefRepository.removeEmailSourcedItems(userId, ids),
+        complete: async prompt => {
+          let reply = '';
+          let tokensUsed: number | null = null;
+          await llmBackend.complete(
+            emailAnalysisModel,
+            [{ role: 'user', content: prompt }],
+            { maxTokens: TRIAGE_MAX_TOKENS, temperature: parseTemperature(temperature, logger) },
+            async (chunks: (string | null | undefined)[], info?: CompletionInfo) => {
+              // Reasoning and tool chunks carry a channel; only the reply text is parsed.
+              if (!info?.channel) reply += chunks.filter(Boolean).join('');
+              if (info?.inputTokens !== undefined || info?.outputTokens !== undefined) {
+                tokensUsed = (info.inputTokens ?? 0) + (info.outputTokens ?? 0);
+              }
+            }
+          );
+          return { reply, model: emailAnalysisModel, tokensUsed };
+        },
+        logger,
+      },
+      {
+        email: {
+          id: payload.emailId,
+          userId: email.userId,
+          from: email.from,
+          subject: email.subject,
+          date: email.date,
+          bodyText: email.bodyText,
+        },
+        analysis: analysisResult,
+      }
+    );
 
     // 13. Send real-time update to client via WebSocket (if needed in future)
     // Note: Skipping WebSocket notification for now - would need to add 'email_analysis_completed'

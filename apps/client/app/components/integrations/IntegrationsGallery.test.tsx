@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   navigate: vi.fn(),
   logEvent: vi.fn(),
   refreshUser: vi.fn(),
+  disconnectAtlassian: vi.fn(),
   stub: (testId: string) => ({ default: () => React.createElement('div', { 'data-testid': testId }) }),
 }));
 
@@ -53,7 +54,7 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useDisconnectGoogleDrive: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
-  useDisconnectAtlassian: () => ({ mutate: vi.fn(), isPending: false }),
+  useDisconnectAtlassian: () => ({ mutate: h.disconnectAtlassian, isPending: false }),
   useDisconnectNotion: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // The existing Profile > Integrations sections are rendered as is in the drawer; their own
@@ -73,6 +74,11 @@ vi.mock('@client/app/components/ProfileModal/SettingsTabContent/WebhookSubscript
   h.stub('stub-webhooks')
 );
 vi.mock('@client/app/components/ProfileModal/SettingsTabContent/McpSection', () => h.stub('stub-mcp'));
+vi.mock('./customMcp/SharedFunctionsSection', () => h.stub('stub-shared-functions'));
+vi.mock('./customMcp/CustomMcpConnectorPanel', () => ({
+  default: ({ presetId }: { presetId?: string }) =>
+    React.createElement('div', { 'data-testid': `stub-custom-mcp-${presetId ?? 'custom'}` }),
+}));
 
 import IntegrationsGallery, { SEARCH_SETTLE_MS } from './IntegrationsGallery';
 
@@ -106,6 +112,14 @@ beforeEach(() => {
 });
 
 describe('IntegrationsGallery', () => {
+  it('shows functions shared with the person on the Integrations tab, with no MCP setting on', async () => {
+    flags = new Set();
+    renderGallery();
+    expect(screen.getByTestId('stub-shared-functions')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('integrations-tab-models'));
+    expect(screen.queryByTestId('stub-shared-functions')).toBeNull();
+  });
+
   it('pins Connected first, groups by category, and puts the roadmap last', () => {
     renderGallery();
 
@@ -270,6 +284,17 @@ describe('IntegrationsGallery', () => {
     expect(screen.getByTestId('integrations-action-btn-atlassian')).toHaveTextContent('Reconnect');
   });
 
+  it('lets an expired grant be disconnected from the drawer, not only reconnected', async () => {
+    connections = { atlassian: { connected: false, needsReconnect: true } };
+    renderGallery();
+    await userEvent.click(screen.getByTestId('integrations-open-btn-atlassian'));
+    const drawer = await screen.findByTestId('integrations-drawer');
+
+    expect(within(drawer).getByTestId('integrations-drawer-connect-btn')).toHaveTextContent('Reconnect Atlassian');
+    await userEvent.click(within(drawer).getByTestId('integrations-drawer-disconnect-btn'));
+    expect(h.disconnectAtlassian).toHaveBeenCalledTimes(1);
+  });
+
   it('opens the drawer with capabilities and the existing management UI', async () => {
     renderGallery();
     await userEvent.click(screen.getByTestId('integrations-open-btn-github'));
@@ -283,6 +308,28 @@ describe('IntegrationsGallery', () => {
 
     await userEvent.click(within(drawer).getByTestId('integrations-drawer-close'));
     await waitFor(() => expect(screen.queryByTestId('integrations-drawer')).toBeNull());
+  });
+
+  it('sets up custom MCP connectors and their presets in the drawer once the switch is on', async () => {
+    flags.add('EnableCustomMcpConnectors');
+    connections = { linear: { connected: false, needsReconnect: true } };
+    renderGallery();
+
+    expect(screen.getByTestId('integrations-action-btn-custom-mcp')).toHaveTextContent('Set up');
+    expect(screen.getByTestId('integrations-action-btn-linear')).toHaveTextContent('Reconnect');
+
+    await userEvent.click(screen.getByTestId('integrations-action-btn-custom-mcp'));
+    expect(
+      within(await screen.findByTestId('integrations-drawer')).getByTestId('stub-custom-mcp-custom')
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('integrations-drawer-close'));
+    await waitFor(() => expect(screen.queryByTestId('integrations-drawer')).toBeNull());
+
+    await userEvent.click(screen.getByTestId('integrations-action-btn-linear'));
+    expect(
+      within(await screen.findByTestId('integrations-drawer')).getByTestId('stub-custom-mcp-linear')
+    ).toBeInTheDocument();
+    expect(h.connect).not.toHaveBeenCalled();
   });
 
   it('offers a request, not management, in a roadmap drawer', async () => {

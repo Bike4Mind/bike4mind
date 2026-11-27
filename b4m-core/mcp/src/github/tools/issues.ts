@@ -7,7 +7,6 @@
 import { z } from 'zod';
 import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
-import { githubToken } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import {
   ownerSchema,
@@ -17,7 +16,8 @@ import {
   confirmationParams,
   paginationParams,
 } from '../helpers/schemas.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   TOOL_CREATE_ISSUE,
@@ -26,6 +26,8 @@ import {
   TOOL_GET_ISSUE,
   TOOL_CREATE_ISSUE_COMMENT,
 } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 export function registerIssueTools(server: McpServer) {
   // CREATE ISSUE - Most common operation
@@ -72,19 +74,12 @@ export function registerIssueTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually create the issue
-      console.error(`[${TOOL_CREATE_ISSUE}] Attempting to create issue: ${fullRepoName} - "${title}"`);
-      console.error(`[${TOOL_CREATE_ISSUE}] Token present: ${!!githubToken}`);
-      console.error(`[${TOOL_CREATE_ISSUE}] Assignees received:`, JSON.stringify(assignees));
 
       // Log warning if assignees look like Slack User IDs
       if (assignees && assignees.length > 0) {
         const slackUserIds = assignees.filter(a => /^U[A-Z0-9]{10}$/.test(a));
         if (slackUserIds.length > 0) {
-          console.error(
-            `[${TOOL_CREATE_ISSUE}] WARNING: Detected potential Slack User IDs in assignees:`,
-            slackUserIds
-          );
-          console.error(`[${TOOL_CREATE_ISSUE}] These will likely fail as GitHub usernames`);
+          log.warn('assignees look like Slack user ids', { toolName: TOOL_CREATE_ISSUE, count: slackUserIds.length });
         }
       }
 
@@ -99,13 +94,13 @@ export function registerIssueTools(server: McpServer) {
           skippedLabels = labels.filter(label => !existingLabelNames.includes(label.toLowerCase()));
 
           if (skippedLabels.length > 0) {
-            console.error(`[${TOOL_CREATE_ISSUE}] ⚠️ Skipped non-existent labels:`, skippedLabels);
-          }
-          if (validatedLabels.length > 0) {
-            console.error(`[${TOOL_CREATE_ISSUE}] ✅ Using valid labels:`, validatedLabels);
+            log.warn('skipped non-existent labels', { toolName: TOOL_CREATE_ISSUE, count: skippedLabels.length });
           }
         } catch (labelError) {
-          console.error(`[${TOOL_CREATE_ISSUE}] ⚠️ Could not fetch repo labels, skipping labels:`, labelError);
+          log.warn('could not fetch repo labels, skipping labels', {
+            toolName: TOOL_CREATE_ISSUE,
+            ...errorLogFields(labelError),
+          });
           validatedLabels = undefined;
         }
       }
@@ -120,8 +115,7 @@ export function registerIssueTools(server: McpServer) {
           assignees,
         });
 
-        console.error(`[${TOOL_CREATE_ISSUE}] SUCCESS: Created issue #${result.data.number}`);
-        console.error(`[${TOOL_CREATE_ISSUE}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_CREATE_ISSUE, number: result.data.number });
 
         return createSuccessResponse({
           issue_number: result.data.number,
@@ -132,7 +126,7 @@ export function registerIssueTools(server: McpServer) {
           ...(skippedLabels.length > 0 && { labels_skipped: skippedLabels }),
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_ISSUE}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_ISSUE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -203,7 +197,6 @@ export function registerIssueTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually update the issue
-      console.error(`[${TOOL_UPDATE_ISSUE}] Attempting to update issue #${issue_number}: ${fullRepoName}`);
 
       try {
         // Build update payload with only provided fields
@@ -229,8 +222,7 @@ export function registerIssueTools(server: McpServer) {
           ...updateData,
         });
 
-        console.error(`[${TOOL_UPDATE_ISSUE}] SUCCESS: Updated issue #${result.data.number}`);
-        console.error(`[${TOOL_UPDATE_ISSUE}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_UPDATE_ISSUE, number: result.data.number });
 
         return createSuccessResponse({
           issue_number: result.data.number,
@@ -242,7 +234,7 @@ export function registerIssueTools(server: McpServer) {
           updated_at: result.data.updated_at,
         });
       } catch (error) {
-        console.error(`[${TOOL_UPDATE_ISSUE}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_UPDATE_ISSUE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -307,9 +299,6 @@ export function registerIssueTools(server: McpServer) {
       issue_number: issueNumberSchema,
     },
     async ({ owner, repo, issue_number }) => {
-      const fullRepoName = `${owner}/${repo}`;
-      console.error(`[${TOOL_GET_ISSUE}] Attempting to get issue #${issue_number}: ${fullRepoName}`);
-
       try {
         const result = await octokit.issues.get({
           owner,
@@ -317,8 +306,7 @@ export function registerIssueTools(server: McpServer) {
           issue_number,
         });
 
-        console.error(`[${TOOL_GET_ISSUE}] SUCCESS: Retrieved issue #${issue_number}`);
-        console.error(`[${TOOL_GET_ISSUE}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_GET_ISSUE, number: issue_number });
 
         // Fetch project associations using GraphQL
         let projects: Array<{ id: string; title: string; url: string }> = [];
@@ -357,11 +345,11 @@ export function registerIssueTools(server: McpServer) {
           projects = projectResult.node.projectItems.nodes
             .map(item => item.project)
             .filter((project): project is { id: string; title: string; url: string } => project !== null);
-          console.error(
-            `[${TOOL_GET_ISSUE}] Found ${projects.length} project(s) associated with issue #${issue_number}`
-          );
         } catch (projectError) {
-          console.error(`[${TOOL_GET_ISSUE}] Warning: Could not fetch project associations:`, projectError);
+          log.warn('could not fetch project associations', {
+            toolName: TOOL_GET_ISSUE,
+            ...errorLogFields(projectError),
+          });
           // Continue without project data - not a fatal error
         }
 
@@ -429,7 +417,6 @@ export function registerIssueTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually create the comment
-      console.error(`[${TOOL_CREATE_ISSUE_COMMENT}] Attempting to comment on issue #${issue_number}: ${fullRepoName}`);
 
       try {
         const result = await octokit.issues.createComment({
@@ -439,8 +426,7 @@ export function registerIssueTools(server: McpServer) {
           body,
         });
 
-        console.error(`[${TOOL_CREATE_ISSUE_COMMENT}] SUCCESS: Created comment on issue #${issue_number}`);
-        console.error(`[${TOOL_CREATE_ISSUE_COMMENT}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_CREATE_ISSUE_COMMENT, number: issue_number });
 
         return createSuccessResponse({
           comment_id: result.data.id,
@@ -449,7 +435,7 @@ export function registerIssueTools(server: McpServer) {
           body_preview: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_ISSUE_COMMENT}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_ISSUE_COMMENT, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const baseConnectDB = vi.fn();
 const setModelPriceRowsProvider = vi.fn();
 const setModelCatalogProvider = vi.fn();
+const setModelListRevisionProvider = vi.fn();
+const readModelListRevision = vi.fn();
 const priceRowsInForce = vi.fn();
 const catalogRowsInForce = vi.fn();
 const seedModelPrices = vi.fn();
@@ -13,8 +15,16 @@ const catalogInit = vi.fn();
 const discoveryStateInit = vi.fn();
 const dataLakeInit = vi.fn();
 
+// vi.resetModules() in freshConnectDB gives the module under test its own Logger, so mock it rather than spy on it.
+const logWarn = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/observability', () => ({ Logger: { warn: logWarn, info: vi.fn() } }));
 vi.mock('@bike4mind/db-core', () => ({ connectDB: baseConnectDB }));
-vi.mock('@bike4mind/llm-adapters', () => ({ setModelPriceRowsProvider, setModelCatalogProvider }));
+vi.mock('@bike4mind/llm-adapters', () => ({
+  setModelPriceRowsProvider,
+  setModelCatalogProvider,
+  setModelListRevisionProvider,
+}));
+vi.mock('./modelListRevision', () => ({ readModelListRevision }));
 vi.mock('./models/billing/ModelPriceModel', () => ({ modelPriceRepository: { rowsInForce: priceRowsInForce } }));
 vi.mock('./models/ai/ModelCatalogModel', () => ({
   modelCatalogRepository: { rowsInForce: catalogRowsInForce },
@@ -54,6 +64,8 @@ describe('priceCatalogBootstrap.connectDB', () => {
 
     expect(setModelCatalogProvider).toHaveBeenCalledTimes(1);
     expect(setModelPriceRowsProvider).toHaveBeenCalledTimes(1);
+    expect(setModelListRevisionProvider).toHaveBeenCalledTimes(1);
+    expect(setModelListRevisionProvider).toHaveBeenCalledWith(readModelListRevision);
     expect(seedModelCatalog).toHaveBeenCalledTimes(1);
     expect(seedModelPrices).toHaveBeenCalledTimes(1);
     expect(baseConnectDB).toHaveBeenCalledTimes(2);
@@ -106,7 +118,7 @@ describe('priceCatalogBootstrap.connectDB', () => {
   });
 
   it('still seeds when an index build fails, so an already-duplicated collection is not left empty', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = logWarn;
     catalogInit.mockRejectedValue(new Error('E11000 duplicate key'));
 
     const connectDB = await freshConnectDB();
@@ -115,12 +127,14 @@ describe('priceCatalogBootstrap.connectDB', () => {
 
     expect(seedModelCatalog).toHaveBeenCalledTimes(1);
     expect(seedModelPrices).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('unique index build failed'), expect.any(Error));
-    warn.mockRestore();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('unique index build failed'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('warns (does not throw or block seeding) when the DataLake index build fails on legacy duplicates', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = logWarn;
     dataLakeInit.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
 
     const connectDB = await freshConnectDB();
@@ -128,26 +142,30 @@ describe('priceCatalogBootstrap.connectDB', () => {
     await flushSeeding();
 
     expect(seedModelCatalog).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[dataLake]'), expect.any(Error));
-    warn.mockRestore();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[dataLake]'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('does not reject the connect when fire-and-forget seeding fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = logWarn;
     seedModelPrices.mockRejectedValue(new Error('mongo down'));
 
     const connectDB = await freshConnectDB();
     await expect(connectDB('mongodb://x')).resolves.toBe('connection');
     await flushSeeding();
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('seeding failed'), expect.any(Error));
-    warn.mockRestore();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('seeding failed'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('still seeds prices when the catalog seed fails, and reports the catalog as unseeded', async () => {
     // The two collections have independent fallback tiers: a catalog write error
     // must not cost the whole process its price rows.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = logWarn;
     seedModelCatalog.mockRejectedValue(new Error('mongo down'));
 
     vi.resetModules();
@@ -157,8 +175,10 @@ describe('priceCatalogBootstrap.connectDB', () => {
 
     expect(seedModelPrices).toHaveBeenCalledTimes(1);
     await expect(bootstrap.whenCatalogSeeded()).resolves.toBe(false);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('seeding failed'), expect.any(Error));
-    warn.mockRestore();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('seeding failed'),
+      expect.objectContaining({ error: expect.any(Error) })
+    );
   });
 
   it('reports the catalog as seeded only when its seed actually completed', async () => {
@@ -171,7 +191,6 @@ describe('priceCatalogBootstrap.connectDB', () => {
   });
 
   it('reports the catalog as seeded when only the price seed fails', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     seedModelPrices.mockRejectedValue(new Error('mongo down'));
 
     vi.resetModules();
@@ -180,7 +199,6 @@ describe('priceCatalogBootstrap.connectDB', () => {
     await flushSeeding();
 
     await expect(bootstrap.whenCatalogSeeded()).resolves.toBe(true);
-    warn.mockRestore();
   });
 
   it('leaves the latch open when the underlying connect fails, so a retry still wires', async () => {

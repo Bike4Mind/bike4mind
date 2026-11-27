@@ -36,12 +36,12 @@ vi.mock('@bike4mind/mcp', () => ({}));
 // The EnableMCPServer gate itself is pinned by mcpServerFlagGate.test.ts.
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ NotFoundError: class extends Error {} }));
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   BadRequestError: class extends Error {},
   ForbiddenError: class extends Error {},
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables: (v: unknown) => v,
   decryptEnvVariables: (v: unknown) => mockDecrypt(v),
 }));

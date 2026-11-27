@@ -10,8 +10,8 @@ export interface IArtifactVersionDocument extends Document<string> {
   artifactId: string;
   version: number;
   versionTag?: string;
-  contentId: Schema.Types.ObjectId;
-  parentVersionId?: Schema.Types.ObjectId;
+  contentId: string;
+  parentVersionId?: string;
   changes: string[];
   changeDescription?: string;
   createdBy: string;
@@ -66,6 +66,7 @@ const ArtifactVersionSchema = new Schema(
       required: true,
       index: true,
     },
+    superseded: { type: Boolean, select: false },
     isActive: {
       type: Boolean,
       default: false,
@@ -105,7 +106,7 @@ ArtifactVersionSchema.virtual('parentVersion', {
   justOne: true,
 });
 
-export const ArtifactVersion =
+export const ArtifactVersion: Model<IArtifactVersionDocument> =
   (mongoose.models.ArtifactVersion as mongoose.Model<IArtifactVersionDocument>) ||
   model<IArtifactVersionDocument>('ArtifactVersion', ArtifactVersionSchema);
 
@@ -137,6 +138,24 @@ export class ArtifactVersionRepository extends BaseRepository<IArtifactVersionDo
       data as Record<string, unknown>,
       options
     );
+  }
+
+  async activatePointerVersion(artifactId: string, pointer: { id: string; version: number }): Promise<void> {
+    // Include inactive older rows: a delayed reconciler must never reactivate one after this pass.
+    const retire = this.model.updateMany(
+      { artifactId, version: { $lt: pointer.version }, superseded: { $ne: true } },
+      { $set: { isActive: false, superseded: true } },
+      { runValidators: true }
+    );
+    if (this._txn) retire.session(this._txn);
+    await retire;
+    const activate = this.model.updateOne(
+      { artifactId, _id: pointer.id, version: pointer.version, superseded: { $ne: true } },
+      { $set: { isActive: true } },
+      { runValidators: true }
+    );
+    if (this._txn) activate.session(this._txn);
+    await activate;
   }
 
   async findByArtifactId(artifactId: string) {

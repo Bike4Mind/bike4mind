@@ -1,16 +1,16 @@
-import React, { useMemo, useState } from 'react';
-import { Box, Button, Card, Chip, IconButton, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
+import React, { useMemo } from 'react';
+import { Box, Chip, IconButton, Option, Select, Stack, Tooltip, Typography } from '@mui/joy';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import CloseIcon from '@mui/icons-material/Close';
-import SaveIcon from '@mui/icons-material/Save';
-import { toast } from 'sonner';
 import type { ModelInfo } from '@bike4mind/common';
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import { resolveRecommendedModelIds } from '@client/app/utils/recommendedModels';
+import { useRequiredSettingsDraft } from './SettingsDraftProvider';
+import { SettingsSection } from './shared/SettingsSection';
 
 const emptyIds: string[] = [];
 
@@ -21,7 +21,11 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
   const updateSettings = useUpdateSettings();
   // Same source as the picker, so "unavailable" here means the picker would skip the id too.
   const { accessibleTextModels, isLoading } = useAccessibleModels();
-  const [draft, setDraft] = useState<string[]>(storedIds);
+  const stagedDraft = useRequiredSettingsDraft('AdminRecommendedModelsSetting', 'recommendedModelIds', storedIds, {
+    name: 'Recommended models',
+    save: value => updateSettings.mutateAsync({ key: 'recommendedModelIds', value }),
+  });
+  const { value: draft, setValue: setDraft } = stagedDraft;
 
   const modelsById = useMemo(
     () => new Map<string, ModelInfo>(accessibleTextModels.map(m => [m.id, m])),
@@ -31,7 +35,6 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
     () => accessibleTextModels.filter(m => !draft.includes(m.id)).sort((a, b) => a.name.localeCompare(b.name)),
     [accessibleTextModels, draft]
   );
-  const isDirty = draft.join('\n') !== storedIds.join('\n');
   const fallbackId = resolveRecommendedModelIds([], defaultModelId)[0] ?? '';
 
   const move = (index: number, delta: -1 | 1) =>
@@ -41,17 +44,8 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
       return next;
     });
 
-  const handleSave = () =>
-    updateSettings.mutate(
-      { key: 'recommendedModelIds', value: draft },
-      {
-        onSuccess: () => toast.success('Recommended models updated'),
-        onError: (error: Error) => toast.error(`Failed to update recommended models: ${error.message}`),
-      }
-    );
-
   return (
-    <Card variant="outlined" sx={{ mb: 2, p: 3 }} data-testid="admin-recommended-models-card">
+    <SettingsSection data-testid="admin-recommended-models-card">
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
         <AutoAwesomeRoundedIcon sx={{ mr: 1, color: 'primary.plainColor' }} />
         <Typography level="h4">Recommended Models</Typography>
@@ -99,7 +93,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
                 size="sm"
                 aria-label={`Move ${label} up`}
                 data-testid={`admin-recommended-models-${id}-up-btn`}
-                disabled={index === 0}
+                disabled={index === 0 || stagedDraft.pending}
                 onClick={() => move(index, -1)}
               >
                 <ArrowUpwardIcon />
@@ -108,7 +102,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
                 size="sm"
                 aria-label={`Move ${label} down`}
                 data-testid={`admin-recommended-models-${id}-down-btn`}
-                disabled={index === draft.length - 1}
+                disabled={index === draft.length - 1 || stagedDraft.pending}
                 onClick={() => move(index, 1)}
               >
                 <ArrowDownwardIcon />
@@ -118,6 +112,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
                 color="danger"
                 aria-label={`Remove ${label}`}
                 data-testid={`admin-recommended-models-${id}-remove-btn`}
+                disabled={stagedDraft.pending}
                 onClick={() => setDraft(prev => prev.filter(x => x !== id))}
               >
                 <CloseIcon />
@@ -133,7 +128,7 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
           sx={{ flex: 1 }}
           placeholder="Add a model"
           value={null}
-          disabled={addable.length === 0}
+          disabled={addable.length === 0 || stagedDraft.pending}
           onChange={(_, id: string | null) => id && setDraft(prev => [...prev, id])}
           slotProps={{ button: { 'data-testid': 'admin-recommended-models-add-select' } }}
         >
@@ -143,24 +138,12 @@ const RecommendedModelsEditor: React.FC<{ storedIds: string[]; defaultModelId: u
             </Option>
           ))}
         </Select>
-        <Tooltip title="Save recommended models" placement="top">
-          <Button
-            color="success"
-            size="sm"
-            data-testid="admin-recommended-models-save-btn"
-            loading={updateSettings.isPending}
-            disabled={!isDirty}
-            onClick={handleSave}
-          >
-            <SaveIcon sx={{ marginX: 1 }} />
-          </Button>
-        </Tooltip>
       </Box>
-    </Card>
+    </SettingsSection>
   );
 };
 
-/** Ordered editor for the `recommendedModelIds` admin setting. */
+/** Ordered editor for the `recommendedModelIds` admin setting; saves through its SettingsDraftProvider's SaveBar. */
 export const AdminRecommendedModelsSetting: React.FC = () => {
   const { getSetting, getSettingObject } = useAdminSettings();
   const stored = getSettingObject<unknown>('recommendedModelIds', emptyIds);

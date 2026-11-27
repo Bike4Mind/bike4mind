@@ -55,7 +55,7 @@ describe('MFAModal passkey option', () => {
   });
 
   it('is never offered during MFA setup', () => {
-    renderModal({ onPasskeyVerify: vi.fn(), title: 'Set Up Multi-Factor Authentication' });
+    renderModal({ onPasskeyVerify: vi.fn(), mode: 'setup', title: 'Set Up Multi-Factor Authentication' });
     expect(screen.queryByTestId(PASSKEY_BTN)).toBeNull();
   });
 
@@ -69,5 +69,47 @@ describe('MFAModal passkey option', () => {
   it('locks the code entry while a passkey ceremony is in flight', () => {
     renderModal({ onPasskeyVerify: vi.fn(), passkeyLoading: true });
     expect(screen.getByTestId('mfa-modal-code-input').querySelector('input')!.disabled).toBe(true);
+  });
+});
+
+describe('MFAModal passkey enrollment (setup mode)', () => {
+  const setupProps = { mode: 'setup' as const, title: 'Set Up Multi-Factor Authentication' };
+
+  it('offers enrolling a passkey instead of an authenticator app', () => {
+    const onPasskeyEnroll = vi.fn();
+    renderModal({ ...setupProps, onPasskeyEnroll });
+
+    fireEvent.click(screen.getByTestId('mfa-modal-passkey-enroll-btn'));
+
+    expect(onPasskeyEnroll).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the enroll button in a browser without WebAuthn', () => {
+    mockPasskeysSupported.mockReturnValue(false);
+    renderModal({ ...setupProps, onPasskeyEnroll: vi.fn() });
+    expect(screen.queryByTestId('mfa-modal-passkey-enroll-btn')).toBeNull();
+  });
+
+  it('does not offer enrollment outside setup mode', () => {
+    renderModal({ onPasskeyEnroll: vi.fn() });
+    expect(screen.queryByTestId('mfa-modal-passkey-enroll-btn')).toBeNull();
+  });
+
+  it('shows the backup codes and Continue once enrolled, with the code input gone', () => {
+    const onPasskeyEnrollDone = vi.fn();
+    renderModal({
+      ...setupProps,
+      onPasskeyEnroll: vi.fn(),
+      passkeyBackupCodes: ['AAAA-1111', 'BBBB-2222'],
+      onPasskeyEnrollDone,
+    });
+
+    expect(screen.getByTestId('mfa-modal-passkey-enrolled')).toBeTruthy();
+    expect(screen.getByText('AAAA-1111')).toBeTruthy();
+    expect(screen.queryByTestId('mfa-modal-code-input')).toBeNull();
+    expect(screen.queryByTestId('mfa-modal-passkey-enroll-btn')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('mfa-modal-passkey-continue-btn'));
+    expect(onPasskeyEnrollDone).toHaveBeenCalledTimes(1);
   });
 });

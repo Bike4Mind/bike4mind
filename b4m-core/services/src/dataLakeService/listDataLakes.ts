@@ -13,6 +13,7 @@ import type {
 } from '@bike4mind/common';
 import {
   DATA_LAKES,
+  registryOverridingSlugs,
   DATA_LAKE_TRANSITIONAL_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DEFAULT_DATA_LAKE_ORIGIN,
@@ -34,7 +35,7 @@ import {
   grantedLakeReachFor,
   supersededOwnLakeIdsFor,
   manageGrantedLakeIdsFor,
-  resolveEnforceReadGrants,
+  resolveEnforceReadGrantsResult,
   type LakeAccessLogger,
 } from './resolveLakeReadAccess';
 
@@ -152,7 +153,7 @@ interface ListDataLakesAdapters {
     /**
      * Optional GitHub lake-connection lookup. When present, each manageable lake that carries
      * `pendingConnector` also carries `hasGitHubConnection`, read flag-free from the same rows
-     * apps/client/server/dataLakes/assertLakeConnectorFree.ts treats as a GitHub binding. One batched
+     * packages/server-utils/src/dataLakes/assertLakeConnectorFree.ts treats as a GitHub binding. One batched
      * read for the page, never per lake.
      */
     gitHubLakeConnections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> };
@@ -175,6 +176,8 @@ interface ListDataLakesAdapters {
  * to its actual support.
  */
 interface ListDataLakesOptions extends ListDataLakesAdapters {
+  /** Audit classification must distinguish a failed lookup from a real absence of member access. */
+  requireCompleteAccess?: boolean;
   /**
    * Optional pre-resolved grant-id set: skips this function's own `grantedLakeReachFor` call when
    * the caller already ran the identical query. Only safe to pass when the caller never threads
@@ -494,7 +497,7 @@ const toFallbackConfig = (
  * does NOT own - so the UI can flag someone else's lake and not let it be managed by mistake.
  *
  * Wider blast radius than its name suggests: `resolveAccessibleLakes`
- * (`apps/client/server/dataLakes/index.ts`) builds the content-scope lake set from this same
+ * (`packages/server-utils/src/dataLakes/index.ts`) builds the content-scope lake set from this same
  * function, and that set is the lake arm of the single-file read gate behind `/api/files/[id]`,
  * `/api/files/byIds` and `/api/files/presigned-url`, plus the scope for `/api/data-lakes/articles`,
  * `/api/data-lakes/tag-counts` and the `rlm-answer` has-any-lake precondition. A row this function
@@ -503,8 +506,11 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db, logger, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
+  { db, logger, grantedLakeIds: precomputedGrantedLakeIds, requireCompleteAccess = false }: ListDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
+  if (requireCompleteAccess && (!db.settings || !db.dataLakeAccessGrants)) {
+    throw new Error('Complete lake access requires settings and grant adapters');
+  }
   // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
   // a caller that also threads `settings` could get includeReaders=true below, silently
   // mismatching what the precomputed set was actually resolved with. Guarded rather than
@@ -516,7 +522,11 @@ export const listDataLakes = async (
         'is only valid when includeReaders is forced false (no settings adapter)'
     );
   }
-  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const enforcement = await resolveEnforceReadGrantsResult(db.settings, logger);
+  if (requireCompleteAccess && !enforcement.readSucceeded) {
+    throw new Error('Complete lake access requires a successful read-grant settings lookup');
+  }
+  const includeReaders = enforcement.enforced;
   // The precomputed set carries the USER half only. That loses nothing: the guard above forces
   // includeReaders=false whenever it is supplied, and the org arm is resolved only under
   // includeReaders - so the recomputing branch would return an empty org half here too.
@@ -540,8 +550,10 @@ export const listDataLakes = async (
       orgGrantedLakes,
       supersededOwnLakeIds,
     });
-  } catch {
-    // DB may not have the collection yet - fall through to hardcoded
+  } catch (error) {
+    if (requireCompleteAccess) throw error;
+    // A fresh install may not have the collection yet; ordinary browsing retains its static fallback.
+    logger?.warn?.('Dynamic lake access lookup failed; using the static registry', error);
   }
 
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
@@ -586,8 +598,8 @@ export const listDataLakes = async (
     )
   );
 
-  // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
-  const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
+  // Merge with hardcoded fallbacks (an org-scoped DB entry takes precedence by slug/id).
+  const dynamicIds = registryOverridingSlugs(dynamicLakes);
   const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));
 
   const normalizedUserTags = ctx.userTags.map(t => t.toLowerCase());
@@ -657,7 +669,7 @@ export const listAllDataLakes = async (
       gitHubBindings.get(dl.id)
     )
   );
-  const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
+  const dynamicIds = registryOverridingSlugs(dynamicLakes);
   const hardcodedFallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));
   // This is the only list an admin (the only actor toFallbackConfig ever surfaces groundingMode
   // to) ever sees, so the overlay batch is fetched only here - listDataLakes' non-admin callers

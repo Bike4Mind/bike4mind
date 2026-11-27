@@ -17,7 +17,7 @@ export type NotebookCurationJobStatus = 'completed';
  * recorded so that SQS's native retry + dead-letter-queue machinery still
  * protects against transient failures (LLM timeout, storage blip, DB hiccup).
  *
- * `curationJobId` is a per-request UUID (minted in pages/api/notebooks/curate.ts),
+ * `curationJobId` is a per-request UUID (minted in server-utils notebooks/startNotebookCuration.ts),
  * so it uniquely identifies a single curation request - the natural idempotency
  * key. Records are garbage-collected via TTL.
  */

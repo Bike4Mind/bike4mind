@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { premiumToolDisplayLabels } from '@client/app/premium-generated/premiumToolDisplayLabels.generated';
-import { getToolDisplayName, humanizeToolId, TOOL_MAPPING } from './toolMapping';
+import { findToolDisplayLabel, getToolDisplayName, humanizeToolId, TOOL_MAPPING } from './toolMapping';
 
 describe('humanizeToolId', () => {
   it('drops a leading namespace segment and title-cases the rest', () => {
@@ -23,6 +23,21 @@ describe('humanizeToolId', () => {
 
   it('treats a colon as a separator, as in MCP server:tool ids', () => {
     expect(humanizeToolId('github:create_issue')).toBe('Create Issue');
+  });
+});
+
+describe('findToolDisplayLabel', () => {
+  it("returns a core tool's displayName", () => {
+    expect(findToolDisplayLabel('web_search', {})).toBe(TOOL_MAPPING.web_search.displayName);
+  });
+
+  it('matches an underscore overlay key against a hyphenated id, and the reverse', () => {
+    expect(findToolDisplayLabel('acme-run-job', { acme_run_job: 'Run job' })).toBe('Run job');
+    expect(findToolDisplayLabel('acme_run_job', { 'acme-run-job': 'Run job' })).toBe('Run job');
+  });
+
+  it('returns undefined for an unknown id', () => {
+    expect(findToolDisplayLabel('gpt-4o-mini-tts', { acme_run_job: 'Run job' })).toBeUndefined();
   });
 });
 

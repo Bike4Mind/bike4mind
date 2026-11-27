@@ -1,0 +1,64 @@
+import { Stack, Typography } from '@mui/joy';
+import { signupGrantRemaining } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useSignupGrantSchedule } from '@client/app/hooks/useSignupGrantSchedule';
+import { advertisedDripCredits, unlockPathsCopy } from '@client/app/components/Session/newUserWelcomeModel';
+import { isSignupGrantHeldForReview } from '@client/app/utils/onboarding';
+
+const formatUnlockDate = (date: Date | string) =>
+  new Date(date).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+export default function SignupGrantStatus() {
+  const { currentUser } = useUser();
+  const { dailyCredits, dripCap } = useSignupGrantSchedule();
+  const minActiveSeconds = useGetSettingsValue('signupGrantActivityMinActiveSeconds');
+  const paymentHoldHours = useGetSettingsValue('signupUnlockPaymentHoldHours');
+  const grant = currentUser?.signupGrant;
+  if (currentUser?.signupGrantHeldReason === 'budget_exhausted' && (!grant || grant.stage === 'pending_email')) {
+    return (
+      <Typography level="body-sm" data-testid="signup-grant-status">
+        Your free credits are being prepared.
+      </Typography>
+    );
+  }
+  if (isSignupGrantHeldForReview(currentUser)) {
+    // A risk review judges this account alone, so blaming its email domain would be untrue. Domain holds carry
+    // no held reason of their own.
+    const subject =
+      currentUser?.signupGrantHeldReason === 'risk_review' ? 'your signup' : 'new signups from your email domain';
+    return (
+      <Typography level="body-sm" data-testid="signup-grant-under-review">
+        Your free credits are on hold while we review {subject}, which we do to keep free credits fair. You can keep
+        using Bike4Mind in the meantime.
+      </Typography>
+    );
+  }
+  if (!grant) return null;
+  const remaining = signupGrantRemaining(grant, dripCap);
+  return (
+    <Stack spacing={1} data-testid="signup-grant-status">
+      <Typography level="body-sm" data-testid="signup-grant-released">
+        {grant.creditsReleased.toLocaleString('en-US')} signup credits released.
+        {grant.inviteBonusPaid && grant.inviteBonusPaid > 0
+          ? ` Plus a ${grant.inviteBonusPaid.toLocaleString('en-US')} invite bonus.`
+          : ''}
+        {remaining > 0
+          ? ` ${remaining.toLocaleString('en-US')} more credits are still locked.`
+          : ' Your signup grant is fully released.'}
+        {grant.stage === 'pending_email' && ' Verify your email to release your signup tranche.'}
+      </Typography>
+      {remaining > 0 && grant.heldUnlock && (
+        <Typography level="body-sm" data-testid="signup-grant-held-unlock">
+          Your payment unlocked your bonus credits. They unlock on {formatUnlockDate(grant.heldUnlock.releaseAt)}, once
+          the payment has settled.
+        </Typography>
+      )}
+      {remaining > 0 && !grant.heldUnlock && (
+        <Typography level="body-sm" data-testid="signup-grant-unlock-paths">
+          {unlockPathsCopy(advertisedDripCredits({ dailyCredits, dripCap, grant }), minActiveSeconds, paymentHoldHours)}
+        </Typography>
+      )}
+    </Stack>
+  );
+}

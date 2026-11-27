@@ -64,23 +64,38 @@ describe('resolveLakeSpendAddressees', () => {
     expect(result).toEqual([{ userId: 'creator-1', email: 'creator@example.com' }]);
   });
 
-  it('resolves org billing owner + admins for an org-owned lake', async () => {
+  it('resolves org billing owner, admins and current billing managers with deduplicated ids', async () => {
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
       organizations: {
-        findById: vi.fn().mockResolvedValue({ userId: 'billing-owner', adminUserIds: ['admin-1'] }),
+        findById: vi.fn().mockResolvedValue({
+          userId: 'billing-owner',
+          adminUserIds: ['admin-1'],
+          billingManagerUserIds: ['billing-1', 'billing-1', 'stale-billing', 'admin-1'],
+          users: [{ userId: 'billing-1' }, { userId: 'admin-1' }],
+        }),
       },
       users: {
-        findActiveEmailsByIds: emailRows([
-          { id: 'billing-owner', email: 'billing@example.com' },
-          { id: 'admin-1', email: 'admin@example.com' },
-        ]),
+        findActiveEmailsByIds: vi.fn(
+          emailRows([
+            { id: 'billing-owner', email: 'billing@example.com' },
+            { id: 'admin-1', email: 'admin@example.com' },
+            { id: 'billing-1', email: 'billing-manager@example.com' },
+            { id: 'stale-billing', email: 'stale@example.com' },
+          ])
+        ),
       },
     });
 
     const result = await resolveLakeSpendAddressees('lake-1', db, logger);
 
-    expect(result.map(a => a.userId).sort()).toEqual(['admin-1', 'billing-owner']);
+    expect(result.map(a => a.userId).sort()).toEqual(['admin-1', 'billing-1', 'billing-owner']);
+    expect(db.users.findActiveEmailsByIds).toHaveBeenCalledExactlyOnceWith([
+      'creator-1',
+      'billing-owner',
+      'admin-1',
+      'billing-1',
+    ]);
   });
 
   it('resolves an org-principal owner/curator GRANT to ITS OWN org admins, distinct from the lake org', async () => {

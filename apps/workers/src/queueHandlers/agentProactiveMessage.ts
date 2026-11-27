@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import {
   sessionAgentConfigRepository,
   sessionRepository,
@@ -16,11 +17,22 @@ import {
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { apiKeyService } from '@bike4mind/services';
+import { isTerminalCreditRefusal, readOrgModelPolicy } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
+import { isOrgModelNotAllowedError } from '@bike4mind/services/llm/modelAdmission';
+import { resolveRequestBillingOrgId } from '@bike4mind/server-utils/billing/resolveRequestBillingOrgId';
+import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import * as agentProactiveMessagingService from '@bike4mind/services/agentProactiveMessagingService';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { canAccessSession } from '@server/utils/sessionAccess';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+import { canAccessSession } from '@bike4mind/server-utils/utils/sessionAccess';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
+import {
+  publishPushNotification,
+  sessionDeepLink,
+  truncateForPush,
+} from '@bike4mind/server-utils/utils/pushNotifications';
 
 const agentProactiveMessageQueuePayload = z.object({
   sessionAgentConfigId: z.string(),
@@ -74,6 +86,12 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       return;
     }
 
+    // The meter bills the user's org seat, so that org's model policy governs the message. Read once so the
+    // meter's admission and the tools see the same snapshot; a missing org doc is unrestricted.
+    const billingOrgId = resolveRequestBillingOrgId({ user });
+    const billingOrg = billingOrgId ? await organizationRepository.findById(billingOrgId) : null;
+    const orgModelPolicy = readOrgModelPolicy(billingOrg?.modelPolicy);
+
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(config.userId, {
       db: {
         apiKeys: apiKeyRepository,
@@ -96,34 +114,48 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
 
     const recentMessages = await questRepository.getMostRecentChatHistory(config.sessionId, 10);
 
-    await agentProactiveMessagingService.generateAndSendProactiveMessage({
-      config,
-      agent,
-      session,
-      user,
-      logger,
-      recentMessages: recentMessages.reverse(), // Reverse to get chronological order
-      db: {
-        quests: questRepository,
-        sessions: sessionRepository,
-        sessionAgentConfigs: sessionAgentConfigRepository,
-        apiKeys: apiKeyRepository,
-        adminSettings: adminSettingsRepository,
-        // Audit trail for images blocked by the image_generation/edit_image tools'
-        // moderation gate. The gate itself is unconditional (constructed
-        // inline in the tool) - this only wires the incident record, not the block.
-        imageModerationIncidents,
-        // Record tool-internal operational llm.complete spend (blog draft, deep research,
-        // file edit, notebook gen) that runs inside a proactive message.
-        usageEvents: usageEventRepository,
-        organizations: organizationRepository,
-        scopedSettings: scopedSettingsRepository,
-      },
-      apiKeyTable,
-      storage: getFilesStorage(),
-      imageGenerateStorage: getGeneratedImageStorage(),
-      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
-    });
+    try {
+      await agentProactiveMessagingService.generateAndSendProactiveMessage({
+        config,
+        agent,
+        session,
+        user,
+        getEntitlements: () => getUserEntitlements(user),
+        logger,
+        recentMessages: recentMessages.reverse(), // Reverse to get chronological order
+        db: {
+          quests: questRepository,
+          sessions: sessionRepository,
+          sessionAgentConfigs: sessionAgentConfigRepository,
+          apiKeys: apiKeyRepository,
+          adminSettings: adminSettingsRepository,
+          // Audit trail for images blocked by the image_generation/edit_image tools'
+          // moderation gate. The gate itself is unconditional (constructed
+          // inline in the tool) - this only wires the incident record, not the block.
+          imageModerationIncidents,
+          // Record tool-internal operational llm.complete spend (blog draft, deep research,
+          // file edit, notebook gen) that runs inside a proactive message.
+          usageEvents: usageEventRepository,
+          organizations: organizationRepository,
+          scopedSettings: scopedSettingsRepository,
+        },
+        apiKeyTable,
+        storage: getFilesStorage(),
+        imageGenerateStorage: getGeneratedImageStorage(),
+        imageUrlSigningSecret: signingKey('search-image-url'),
+        meter: createCompletionMeter(user, logger, 'proactive agent messages', {
+          sessionId: config.sessionId,
+          orgModelPolicy,
+        }),
+        orgModelPolicy,
+      });
+    } catch (err) {
+      // Refused before any provider call; retrying cannot help until the owner adds credits, the daily cap
+      // resets, an admin restores the account's AI access, or the org allows the model again.
+      if (!isTerminalCreditRefusal(err) && !isAiAccessRefusal(err) && !isOrgModelNotAllowedError(err)) throw err;
+      logger.warn(`Skipping proactive message for agent ${config.agentId}: ${(err as Error).message}`);
+      return;
+    }
 
     await clientMessageSender.sendToClient(config.userId, Resource.websocket.managementEndpoint, {
       action: 'invalidate_query',
@@ -134,6 +166,24 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       action: 'invalidate_query',
       queryKey: ['recent-proactive-messages'],
     });
+
+    // Scheduled and unprompted, so it is pushed whether or not the user is connected.
+    const sessionName = session.name?.trim();
+    await publishPushNotification(
+      {
+        userId: config.userId,
+        category: 'agent_message',
+        title: agent.name ? truncateForPush(agent.name, 60) : 'New message',
+        body: sessionName
+          ? `New message in "${truncateForPush(sessionName, 60)}".`
+          : 'Your agent sent you a new message.',
+        deepLink: sessionDeepLink(config.sessionId),
+        // The body names only the session, so a later message replaces an earlier one rather than stacking.
+        collapseId: `agent-message:${config.sessionId}:${config.agentId}`,
+        sessionId: config.sessionId,
+      },
+      logger
+    );
 
     logger.info(`Successfully processed proactive message for agent ${config.agentId}`);
   } catch (error) {

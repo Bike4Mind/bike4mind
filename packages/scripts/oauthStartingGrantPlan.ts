@@ -1,7 +1,11 @@
 import { AuthStrategy, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
 /** The consumer OAuth providers that signed users up with no starting grant before the fix. */
-export const STARTING_GRANT_STRATEGIES: readonly string[] = [AuthStrategy.Google, AuthStrategy.Github];
+export const STARTING_GRANT_STRATEGIES: readonly string[] = [
+  AuthStrategy.Google,
+  AuthStrategy.Github,
+  AuthStrategy.Apple,
+];
 
 export type StartingGrantUser = {
   id: string;
@@ -139,7 +143,7 @@ export const buildPlan = async (
 export type BackfillArgs = {
   execute: boolean;
   createdBefore: Date;
-  /** Required with --execute: the run aborts unless defaultFreeCredits resolves to exactly this. */
+  /** Required with --execute: the run aborts unless the signup schedule's initial credits resolve to exactly this. */
   expectAmount: number | null;
   /** Added to the NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list. */
   extraInternalDomains: string[];
@@ -183,7 +187,7 @@ export const parseBackfillArgs = (argv: readonly string[]): BackfillArgs => {
   const execute = argv.includes('--execute');
   const expectAmount = parseExpectAmount(argv);
   if (execute && expectAmount === null) {
-    throw new Error('--execute requires --expect-amount=<credits> so a misconfigured defaultFreeCredits fails fast');
+    throw new Error('--execute requires --expect-amount=<credits> so a misconfigured signup schedule fails fast');
   }
   return {
     execute,

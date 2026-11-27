@@ -1,4 +1,8 @@
-export { validateBundle, type ValidateBundleInput, type ValidateBundleResult } from './validateBundle';
+export {
+  validateBundle,
+  type ValidateBundleInput,
+  type ValidateBundleResult,
+} from '@bike4mind/server-utils/services/publish/validateBundle';
 export { resolveVisibility } from './resolveVisibility';
 export { buildListVisibilityFilter, type BuildListFilterInput } from './buildListFilter';
 export { buildListQuery, type ListQueryParams, type SortKey } from './buildListQuery';
@@ -9,39 +13,54 @@ export {
   type ScopePermissionResult,
 } from './checkScopePermission';
 export { mayRepublishSlug, SLUG_OWNED_BY_OTHER } from './slugOwnership';
-export { buildPublishS3KeyPrefix, buildPublishUrlPath } from './paths';
+export { buildPublishS3KeyPrefix, buildPublishUrlPath } from '@bike4mind/server-utils/services/publish/paths';
 export {
+  archivedVersionBytes,
   checkPublishQuota,
+  checkInPlaceRewriteQuota,
+  type InPlaceRewriteQuotaInput,
   type PublishQuotaInput,
   type PublishQuotaResult,
   type QuotaUsage,
+  type VersionBytes,
 } from './checkPublishQuota';
+export {
+  planPublishVersions,
+  planVersionedPublish,
+  versionsPushUpdate,
+  type PlanPublishVersionsInput,
+  type PreviousVersionState,
+} from './planPublishVersions';
 export {
   invalidatePublishCdn,
   publishCachePaths,
   toCacheTarget,
   type PublishCacheTarget,
-} from './invalidatePublishCdn';
+} from '@bike4mind/server-utils/services/publish/invalidatePublishCdn';
 export { restrictDuplicatePublications, type DuplicateKeeper } from './restrictDuplicatePublications';
 export {
   renderSandboxedBundle,
+  encodeBundlePath,
+  isBundlePagePath,
+  resolveBundlePath,
   type RenderSandboxedBundleInput,
   type RenderSandboxedBundleResult,
   type SandboxAsset,
-} from './renderSandboxedBundle';
+} from '@bike4mind/server-utils/services/publish/renderSandboxedBundle';
 export {
   collectInlineAssets,
   type CollectInlineAssetsInput,
   type CollectInlineAssetsResult,
   PER_ASSET_MAX_BYTES,
   TOTAL_INLINE_MAX_BYTES,
-} from './collectInlineAssets';
+} from '@bike4mind/server-utils/services/publish/collectInlineAssets';
 export { renderBundleLoaderShell } from './renderBundleLoaderShell';
 export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
 export { generateShareToken } from './shareToken';
 export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
 export { recordGatedView, type RecordGatedViewInput } from './recordGatedView';
 export { renderPassphraseShell } from './renderPassphraseShell';
+export { renderNotFoundPage } from './renderNotFoundPage';
 export {
   checkVisibility,
   type VisibilityCheckArtifact,
@@ -63,11 +82,12 @@ export {
   signGateToken,
   verifyGateToken,
   GATE_TOKEN_TTL_SECONDS,
-} from './publishGateToken';
+} from '@bike4mind/server-utils/services/publish/publishGateToken';
 export {
   signDraftUploadToken,
   verifyDraftUploadToken,
   mintDraftUploadUrl,
+  DRAFT_UPLOAD_TOKEN_HEADER,
   DRAFT_UPLOAD_EXPIRY_SECONDS,
   type DraftUploadClaims,
   type DraftUploadStorage,
@@ -91,5 +111,12 @@ export {
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
 export { renderArtifactIndexHtml } from './renderArtifactHtml';
-export { purgeUserPublishedArtifacts } from './purgeUserPublishedArtifacts';
-export { loadLiveOwner } from './loadLiveOwner';
+export { purgeUserPublishedArtifacts } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
+export { excludeNonLiveOwners, loadLiveOwner } from './loadLiveOwner';
+export {
+  consumePublishAction,
+  publishActionLimit,
+  publishActionsKey,
+  type PublishActionReceipt,
+  type PublishActor,
+} from './publishRateLimit';

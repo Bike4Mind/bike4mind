@@ -76,7 +76,12 @@ describe('stampOAuthSourceTag', () => {
 
     await expect(stampOAuthSourceTag(user.id, CLIENT_ID)).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('oauthSourceTag'), CLIENT_ID, expect.any(Error));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({
+      service: 'oauthSourceTag',
+      clientId: CLIENT_ID,
+      error: { name: 'Error' },
+    });
     expect(await tagsOf(user.id)).toEqual([]);
   });
 });

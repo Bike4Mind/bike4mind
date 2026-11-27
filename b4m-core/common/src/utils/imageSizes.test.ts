@@ -5,6 +5,7 @@ import {
   fallbackImageSize,
   isSupportedImageSize,
   OPENAI_LEGACY_IMAGE_SIZES,
+  reduceAspectRatio,
   resolveGptImageGenerateSize,
 } from './imageSizes';
 
@@ -160,5 +161,16 @@ describe('resolveGptImageGenerateSize', () => {
     // A malformed pair names no resolution either, so it takes the same route.
     expect(resolveGptImageGenerateSize(ImageModels.GPT_IMAGE_2, '1024x1024x1024')).toBe('1024x1024x1024');
     expect(resolveGptImageGenerateSize(ImageModels.GPT_IMAGE_1_5, '1024x1024x1024')).toBe('1024x1024');
+  });
+});
+
+describe('reduceAspectRatio', () => {
+  it.each([
+    [1536, 1024, '3:2'],
+    [1024, 1536, '2:3'],
+    [1024, 1024, '1:1'],
+    [1920, 1080, '16:9'],
+  ])('reduces %ix%i to %s', (width, height, expected) => {
+    expect(reduceAspectRatio(width, height)).toBe(expected);
   });
 });

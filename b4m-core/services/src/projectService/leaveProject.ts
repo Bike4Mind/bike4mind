@@ -1,4 +1,5 @@
 import { revokeFromProject } from '../sharingService';
+import { projectAccessRecipients } from '../sharingService/projectGrantor';
 import {
   IFabFileRepository,
   IProjectRepository,
@@ -23,6 +24,7 @@ interface LeaveProjectAdapters {
     fabFiles: IFabFileRepository;
     users: IUserRepository;
   };
+  onAccessRemoved?: (userIds: string[]) => void;
 }
 
 export const leaveProject = async (
@@ -53,6 +55,7 @@ export const leaveProject = async (
     const pruned = await revokeFromProject({ project, userIdToRevoke: userIdToRemove }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
+    project.systemPrompts = pruned.systemPrompts;
   } else {
     // User is leaving voluntarily
     if (project.userId === user.id) {
@@ -62,14 +65,21 @@ export const leaveProject = async (
     const pruned = await revokeFromProject({ project, userIdToRevoke: user.id }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
+    project.systemPrompts = pruned.systemPrompts;
   }
 
+  await adapters.db.projects.shareable.updateUserShares(project.id, { remove: { userId: userIdToRemove ?? user.id } });
   await adapters.db.projects.update({
     id: project.id,
-    users: project.users,
     fileIds: project.fileIds,
     sessionIds: project.sessionIds,
+    systemPrompts: project.systemPrompts,
   });
+
+  adapters.onAccessRemoved?.([
+    userIdToRemove ?? user.id,
+    ...(await projectAccessRecipients(project, adapters.db.users)),
+  ]);
 
   return project;
 };

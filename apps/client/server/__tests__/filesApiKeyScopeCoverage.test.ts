@@ -5,7 +5,7 @@ import path from 'path';
 import { extractRequiredScopesGate, methodBlocks, stripComments, tsFiles } from './scopeCoverageHelpers';
 
 /**
- * Every `/api/files` door gates API keys on a files scope (server/files/fileScopes.ts). Before
+ * Every `/api/files` door gates API keys on a files scope (packages/server-utils/src/files/fileScopes.ts). Before
  * this guard, the family was scoped door by door and most doors were missed, so a key minted
  * without `files:*` could still upload and read through a sibling. A source scan, not a runtime
  * test: nothing at runtime fails when a new door simply omits `requiredScopes`.
@@ -24,10 +24,13 @@ const EXPECTED_GATES: Record<string, string> = {
   'byIds.ts': 'FILES_READ_SCOPES',
   'check-duplicates.ts': 'FILES_READ_SCOPES',
   'download.ts': 'FILES_READ_SCOPES',
+  'favorites.ts': 'FILES_READ_SCOPES',
+  'generation-models.ts': 'FILES_READ_SCOPES',
   'getFabFileNameById.ts': 'FILES_READ_SCOPES',
   'presigned-url.ts': 'FILES_READ_SCOPES',
   'search.ts': 'FILES_READ_SCOPES',
   'tags/counts.ts': 'FILES_READ_SCOPES',
+  '[id]/favorite.ts': 'FILES_WRITE_SCOPES',
   '[id]/moderate.ts': 'FILES_WRITE_SCOPES',
   '[id]/upload.ts': 'FILES_WRITE_SCOPES',
   'bulk-delete.ts': 'FILES_WRITE_SCOPES',
@@ -50,6 +53,9 @@ const EXPECTED_GATES: Record<string, string> = {
 // apiKeyScopePostureCoverage.test.ts), so EXPECTED_GATES keys don't drift by platform path.sep.
 const rel = (f: string) => path.relative(FILES_API_DIR, f).split(path.sep).join('/');
 
+// Doors with no session or API-key auth at all: the signed URL query is the capability.
+const SIGNED_URL_DOORS = new Set(['[id]/content.ts']);
+
 const routes = tsFiles(FILES_API_DIR).map(file => [rel(file), file] as const);
 
 describe('every /api/files door gates API keys on a files scope', () => {
@@ -59,8 +65,16 @@ describe('every /api/files door gates API keys on a files scope', () => {
 
   it.each(routes)('%s', (relPath, file) => {
     const rawSource = readFileSync(file, 'utf8');
+    if (SIGNED_URL_DOORS.has(relPath)) {
+      expect(rawSource).toMatch(/baseApi\(\{[^}]*auth: false/);
+      expect(rawSource).toMatch(/verifyFileContentSig\(/);
+      return;
+    }
     const gate = extractRequiredScopesGate(rawSource, 'FILES');
-    expect(gate, 'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @server/files/fileScopes').toBeDefined();
+    expect(
+      gate,
+      'declare baseApi({ requiredScopes: FILES_*_SCOPES }) from @bike4mind/server-utils/files/fileScopes'
+    ).toBeDefined();
 
     const expectedGate = EXPECTED_GATES[relPath];
     expect(

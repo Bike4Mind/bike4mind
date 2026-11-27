@@ -1,6 +1,6 @@
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Resource } from 'sst';
 import { adminSettingsRepository, releaseNoteRepository, slackDevWorkspaceRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -8,7 +8,6 @@ import {
   ChatModels,
   parseReleaseNotesConfig,
   type ReleaseNote,
-  ReleaseNotesJobPayloadSchema,
   type ReleaseNotesConfig,
   type ReleaseNotesJobPayload,
 } from '@bike4mind/common';
@@ -44,10 +43,6 @@ const estimateCost = (modelId: string, usage: TokenUsage): number => {
   return (usage.inputTokens * price.input + usage.outputTokens * price.output) / TOKENS_PER_MILLION;
 };
 
-/** Bodies from the retired What's New generation cron carry `generatedDate`; they are acked and dropped. */
-const isLegacyPayload = (body: unknown): boolean =>
-  typeof body === 'object' && body !== null && 'generatedDate' in body;
-
 async function loadConfig(logger: Logger): Promise<ReleaseNotesConfig | null> {
   const settings = await getSettingsByNames([SETTING_NAME], { adminSettings: adminSettingsRepository }, { logger });
   const parsed = parseReleaseNotesConfig(settings[SETTING_NAME]);
@@ -67,13 +62,18 @@ const CATEGORY_LABEL: Record<ReleaseNote['items'][number]['category'], string> =
 // Slack mrkdwn control characters; escaping them keeps model output from forming <!channel> or links.
 const escapeSlack = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function buildSlackText(note: ReleaseNote, releaseUrl: string): string {
+function buildSlackText(note: ReleaseNote, releaseUrl: string, omittedPrs: number[], heldForReview: boolean): string {
   const hours = Math.max(0, Math.round((note.publishAt.getTime() - Date.now()) / MS_PER_HOUR));
-  const status =
-    note.status === 'hidden'
+  const status = heldForReview
+    ? 'The generated headline and summary hit the release-notes denylist, so the note is stored hidden. Finish it in the admin Release Notes tab to publish it.'
+    : note.status === 'hidden'
       ? 'No customer-facing changes; stored hidden and will not publish.'
       : `Goes live in ${hours}h (${note.publishAt.toISOString()}). Edit it before then to change or hide it.`;
   const lines = [`*Release notes for <${releaseUrl}|${escapeSlack(note.releaseTag)}>*`, status];
+  if (omittedPrs.length > 0) {
+    const numbers = omittedPrs.map(n => `#${n}`).join(', ');
+    lines.push(`Triage could not classify PRs ${numbers}, so they are left out. Add them if customers would notice.`);
+  }
   // A hidden note's headline and summary describe the items that were dropped.
   if (note.status !== 'hidden') {
     if (note.headline) lines.push('', `*${escapeSlack(note.headline)}*`);
@@ -87,6 +87,8 @@ function buildSlackText(note: ReleaseNote, releaseUrl: string): string {
 async function postToSlack(
   note: ReleaseNote,
   releaseUrl: string,
+  omittedPrs: number[],
+  heldForReview: boolean,
   config: ReleaseNotesConfig,
   logger: Logger
 ): Promise<void> {
@@ -96,16 +98,17 @@ async function postToSlack(
   }
   try {
     const workspace = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(config.slackTeamId);
-    if (!workspace?.slackBotToken) {
+    const token = decryptToken(workspace?.slackBotToken);
+    if (!token) {
       logger.warn('[releaseNotes] no Slack bot token for the configured workspace; skipping announcement');
       return;
     }
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${workspace.slackBotToken}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel: config.slackChannelId,
-        text: buildSlackText(note, releaseUrl),
+        text: buildSlackText(note, releaseUrl, omittedPrs, heldForReview),
         unfurl_links: false,
         unfurl_media: false,
       }),
@@ -120,20 +123,30 @@ async function postToSlack(
   }
 }
 
+type GenerationOutcome = {
+  note: ReleaseNote;
+  preserved: boolean;
+  heldForReview: boolean;
+  omittedPrs: number[];
+  usage: TokenUsage;
+  modelId: string;
+};
+
 /**
  * Generates, finalizes and stores the note. A denylist hit or generic copy in the headline or summary gets
  * one editorial rewrite; triage is not repeated. A rewrite can introduce a denylist hit the previous draft
  * did not have, in which case the previous draft is finalized instead (with its generic headline replaced).
- * Fails only when both the rewrite and the previous draft hit the denylist.
+ * When both drafts hit the denylist, the rewrite's headline is rebuilt from its surviving items, or the
+ * note is stored hidden for an admin to finish, so one blocked sentence never costs the release its note.
  */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
   config: ReleaseNotesConfig,
   logger: Logger
-): Promise<{ note: ReleaseNote; preserved: boolean; usage: TokenUsage; modelId: string }> {
+): Promise<GenerationOutcome> {
   const deadline = Date.now() + GENERATION_BUDGET_MS;
   const { complete, modelId } = await createReleaseNotesCompleter(config, logger, deadline);
-  const triage = await triageReleaseNotes(payload.prs, complete);
+  const triage = await triageReleaseNotes(payload.prs, complete, { logger });
   const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
@@ -152,21 +165,33 @@ async function generateAndStore(
     // The rewrite can hit the denylist even though the earlier draft did not. Keep the earlier draft
     // (finalized with the generic-headline fallback) rather than losing the note it could have produced.
     if (result.kind === 'repair' && lastAttempt && previousDraft) {
-      const rewriteReasons = result.reasons;
       result = finalizeReleaseNote(previousDraft, payload, config, logger, { lastAttempt: true });
-      // Name both drafts' hits: the rewrite's are what sent us back to the earlier one.
-      if (result.kind === 'repair') feedback = [...rewriteReasons, ...result.reasons];
+    }
+    // Both drafts hit the denylist: build the copy from the rewrite's items rather than fail the release.
+    if (result.kind === 'repair' && lastAttempt) {
+      result = finalizeReleaseNote(generated.draft, payload, config, logger, {
+        lastAttempt: true,
+        rebuildDeniedCopy: true,
+      });
     }
     if (result.kind === 'ok') {
       const { note, preserved } = await releaseNoteRepository.upsertGenerated(result.note);
-      return { note: preserved ? note : result.note, preserved, usage, modelId };
+      return {
+        note: preserved ? note : result.note,
+        preserved,
+        heldForReview: result.heldForReview,
+        omittedPrs: triage.omitted,
+        usage,
+        modelId,
+      };
     }
     previousDraft = generated.draft;
   }
-  throw new Error(`[releaseNotes] headline or summary still hit the denylist after a rewrite: ${feedback.join('; ')}`);
+  // Unreachable: the last attempt always finalizes with rebuildDeniedCopy, which never asks for a repair.
+  throw new Error(`[releaseNotes] no note was finalized for ${payload.releaseTag}`);
 }
 
-async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): Promise<void> {
+export async function runReleaseNotesJob(payload: ReleaseNotesJobPayload, logger: Logger): Promise<void> {
   logger.updateMetadata({ releaseTag: payload.releaseTag });
 
   const config = await loadConfig(logger);
@@ -178,7 +203,7 @@ async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): 
   // Dimension keys match the retired What's New generator so its dashboards keep their series.
   const environment = Resource.App.stage;
   const startedAt = Date.now();
-  let outcome: Awaited<ReturnType<typeof generateAndStore>>;
+  let outcome: GenerationOutcome;
   try {
     outcome = await generateAndStore(payload, config, logger);
   } catch (err) {
@@ -197,11 +222,11 @@ async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): 
     throw err;
   }
 
-  const { note, preserved, usage, modelId } = outcome;
+  const { note, preserved, heldForReview, omittedPrs, usage, modelId } = outcome;
   if (preserved) {
     logger.info('[releaseNotes] stored note was edited by a human; kept it and skipped the announcement');
   } else {
-    await postToSlack(note, payload.releaseUrl, config, logger);
+    await postToSlack(note, payload.releaseUrl, omittedPrs, heldForReview, config, logger);
   }
 
   await emitModalGenerationMetrics([
@@ -227,23 +252,3 @@ async function processPayload(payload: ReleaseNotesJobPayload, logger: Logger): 
     },
   ]);
 }
-
-export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
-  for (const record of event.Records) {
-    // Invalid JSON throws here on purpose: a corrupt body belongs in the DLQ, not silently acked.
-    const body: unknown = JSON.parse(record.body);
-
-    if (isLegacyPayload(body)) {
-      logger.warn('[releaseNotes] dropping legacy whatsNewGeneration payload', { messageId: record.messageId });
-      await emitModalGenerationMetrics([{ name: 'LegacyPayloadDropped', value: 1, unit: StandardUnit.Count }]);
-      continue;
-    }
-
-    const parsed = ReleaseNotesJobPayloadSchema.safeParse(body);
-    if (!parsed.success) {
-      throw new Error(`[releaseNotes] invalid job payload: ${parsed.error.message}`);
-    }
-
-    await processPayload(parsed.data, logger);
-  }
-});

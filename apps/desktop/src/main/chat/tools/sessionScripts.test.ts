@@ -1,0 +1,570 @@
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  expectShellRun,
+  forgetSessionWrites,
+  gitRunsConfiguredProgram,
+  recordSessionTreeWrite,
+  recordSessionWrite,
+  sessionScriptRun,
+  shellCommandRan,
+} from './sessionScripts';
+import type { ToolContext } from './types';
+
+const WRITTEN = [
+  'setup.sh',
+  'sub/y.sh',
+  'run.sh',
+  'tools/go.py',
+  'tools/x.ts',
+  'tools/hook.js',
+  'web/package.json',
+  'Makefile',
+  'vitest.config.ts',
+  'src/a.test.ts',
+  'tests/test_a.py',
+  'py/tests/conftest.py',
+  'rs/build.rs',
+  'justfile',
+  'Taskfile.yml',
+  'cfg/custom.config.ts',
+  'plugins/myplug.py',
+  'a.R',
+  'b.ps1',
+  'npx',
+  'npx.cmd',
+  'pnpm',
+  'sub/npx',
+  'uv.bat',
+];
+
+describe('sessionScriptRun', () => {
+  let root: string;
+  const session = 'session-scripts-test';
+  const context = { sessionId: session } as ToolContext;
+
+  beforeAll(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-session-scripts-')));
+    for (const directory of [
+      'tools',
+      'sub',
+      'web',
+      'src',
+      'tests',
+      'py/tests',
+      'rs',
+      'cfg',
+      'plugins',
+      'repo/.git/hooks',
+      'repo/sub',
+    ]) {
+      await mkdir(join(root, directory), { recursive: true });
+    }
+    for (const file of [...WRITTEN, 'data.txt']) {
+      await writeFile(join(root, file), 'x\n', 'utf8');
+      if (file !== 'data.txt') await recordSessionWrite(context, join(root, file));
+    }
+  });
+
+  afterAll(() => rm(root, { recursive: true, force: true }));
+
+  const runs = async (command: string, sessionId = session) =>
+    (await sessionScriptRun(command, root, sessionId))?.names ?? null;
+
+  it.each([
+    ['bash setup.sh', 'setup.sh'],
+    ['./setup.sh', './setup.sh'],
+    ['ROOT/setup.sh --flag', 'ROOT/setup.sh'],
+    ['. ./setup.sh', './setup.sh'],
+    ['sudo -E bash setup.sh', 'setup.sh'],
+    ['sudo -u bob bash setup.sh', 'setup.sh'],
+    ['timeout 5 python3 -u tools/go.py', 'tools/go.py'],
+    ['env A=1 python3 tools/go.py', 'tools/go.py'],
+    ['cd tools && python go.py', 'go.py'],
+    ['bash < setup.sh', 'setup.sh'],
+    ['Rscript a.R', 'a.R'],
+    ['cat a.R | Rscript -', 'a.R'],
+    ['cat setup.sh | sh', 'setup.sh'],
+    ['bash -lc "bash setup.sh"', 'setup.sh'],
+    ['echo ok; (bash setup.sh)', 'setup.sh'],
+    ['make build', 'Makefile'],
+    ['npx tsx tools/x.ts', 'tools/x.ts'],
+    ['NPX tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.exe tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.cmd tsx tools/x.ts', 'tools/x.ts'],
+    ['/usr/bin/npx tsx tools/x.ts', 'tools/x.ts'],
+    ['./npx ls', './npx'],
+    ['./npx.cmd ls', './npx.cmd'],
+    ['./pnpm exec ls', './pnpm'],
+    ['sub/npx ls', 'sub/npx'],
+    ['ROOT/npx ls', 'ROOT/npx'],
+    ['./uv.bat run ls', './uv.bat'],
+    ['./npx tsx x.ts', './npx'],
+    ['uv.bat run python tools/go.py', 'tools/go.py'],
+    ['bash.bat setup.sh', 'setup.sh'],
+    ['PNPM exec tsx tools/x.ts', 'tools/x.ts'],
+    ['powershell.exe -File b.ps1', 'b.ps1'],
+    ['bunx tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpm exec tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpm --filter app exec tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpm -F app exec tsx tools/x.ts', 'tools/x.ts'],
+    ['npm exec -- tsx tools/x.ts', 'tools/x.ts'],
+    ['npm x -- tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpx tsx tools/x.ts', 'tools/x.ts'],
+    ['yarn exec tsx tools/x.ts', 'tools/x.ts'],
+    ['bun x tsx tools/x.ts', 'tools/x.ts'],
+    ['pnpm dlx tsx tools/x.ts', 'tools/x.ts'],
+    ['yarn dlx tsx tools/x.ts', 'tools/x.ts'],
+    ['uv run python tools/go.py', 'tools/go.py'],
+    ['poetry run python tools/go.py', 'tools/go.py'],
+    ['node --require=./tools/hook.js app.js', './tools/hook.js'],
+    ['NODE_OPTIONS=--require=./tools/hook.js node app.js', './tools/hook.js'],
+    ['NODE_OPTIONS="--require ./tools/hook.js" node app.js', './tools/hook.js'],
+    ['npx vitest run', 'vitest.config.ts'],
+    ['vitest', 'vitest.config.ts'],
+    ['pytest', 'py/tests/conftest.py'],
+    ['cd rs && cargo build', 'rs/build.rs'],
+    ['just test', 'justfile'],
+    ['task build', 'Taskfile.yml'],
+    ['python3 tools/go.py -m pytest', 'tools/go.py'],
+    ['uv run tools/go.py', 'tools/go.py'],
+    ['vitest --config cfg/custom.config.ts', 'cfg/custom.config.ts'],
+    ['npx jest -c cfg/custom.config.ts', 'cfg/custom.config.ts'],
+    ['pnpm vitest --config=cfg/custom.config.ts', 'cfg/custom.config.ts'],
+    ['pytest -p plugins.myplug', 'plugins/myplug.py'],
+    ['git -c core.editor=./tools/hook.js commit', './tools/hook.js'],
+    ['bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['bash -c "cd sub; bash y.sh"', 'y.sh'],
+    ['bash +ec "cd sub; bash y.sh"', 'y.sh'],
+    ['sudo -u bob bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['timeout -s KILL 5 bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['echo "$(./run.sh)"', './run.sh'],
+    ['echo "$(bash run.sh)"', 'run.sh'],
+    ['bash <(cat run.sh)', 'run.sh'],
+    ['cat run.sh | sudo bash', 'run.sh'],
+    ['cat run.sh | env bash', 'run.sh'],
+    ['time FOO=1 make', 'Makefile'],
+    ['cat run.sh | time FOO=1 bash', 'run.sh'],
+    ['./run.sh; constructor', './run.sh'],
+    ['__proto__; ./run.sh', './run.sh'],
+    ['bash.exe setup.sh', 'setup.sh'],
+    ['BASH.EXE -c "bash setup.sh"', 'setup.sh'],
+    ['cat setup.sh | sh.exe', 'setup.sh'],
+    ['nice --adj 5 make', 'Makefile'],
+    ['cat run.sh | nice --adj 5 bash', 'run.sh'],
+    ["env -S './run.sh'", './run.sh'],
+    ["env -S 'bash run.sh'", 'run.sh'],
+    ['env -S make', 'Makefile'],
+    ['env -iS make build', 'Makefile'],
+    ['env --split-string=./run.sh', './run.sh'],
+    ['env -S \'bash -c "cd sub && ./y.sh"\'', './y.sh'],
+    ['cat run.sh | env -S bash', 'run.sh'],
+    ["git -c alias.z='!sh run.sh' z", 'run.sh'],
+    ['/usr/bin/git -c core.hooksPath=./run.sh commit', './run.sh'],
+  ])('finds %s', async (command, name) => {
+    expect(await runs(command.replace('ROOT', root))).toContain(name.replace('ROOT', root));
+  });
+
+  it('finds a launcher path spelled relative to the directory a cd moved into', async () => {
+    const id = 'launcher-after-cd';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub/npx'));
+    expect(await runs('cd sub && ./npx ls', id)).toContain('./npx');
+    expect(await runs('./npx ls', id)).toBeNull();
+  });
+
+  it('finds a path-spelled launcher behind another launcher', async () => {
+    expect(await runs('npx ./npx ls')).toContain('./npx');
+  });
+
+  it('matches a written file in the home folder given as ~', async () => {
+    const script = join(sandboxedHome(), 'b4m-session-scripts-nonexistent.sh');
+    await recordSessionWrite(context, script);
+    expect(await runs('bash ~/b4m-session-scripts-nonexistent.sh')).toHaveLength(1);
+    expect(await runs('cd ~ && bash b4m-session-scripts-nonexistent.sh')).toEqual([
+      'b4m-session-scripts-nonexistent.sh',
+    ]);
+  });
+
+  it.each(['cd web && npm run build', 'pnpm --dir web test', 'yarn --cwd web build'])(
+    'finds the package.json %s reads',
+    async command => {
+      expect(await runs(command)).toEqual(['web/package.json']);
+    }
+  );
+
+  it.each([
+    'cat setup.sh',
+    'git add setup.sh tools/go.py',
+    'git status',
+    'chmod +x setup.sh',
+    'npm test',
+    'cd tools && npm test',
+    'python3 -c "print(1)"',
+    'bash data.txt',
+    'grep x setup.sh | wc -l',
+    'bash $SCRIPT',
+    'cd src && npx vitest run a.test.ts',
+    'cd tests && python -m pytest test_a.py',
+    'npx prettier --write tools/x.ts',
+    'npx eslint tools/x.ts',
+    'npx tsc -p tools/x.ts',
+    'pnpm exec eslint tools/x.ts',
+    'echo "$(cat run.sh)"',
+    'diff <(cat run.sh) data.txt',
+    'cat run.sh | sudo tee out.txt',
+    'command -v ./run.sh',
+  ])('ignores %s', async command => {
+    expect(await runs(command)).toBeNull();
+  });
+
+  it('only counts files the same session wrote', async () => {
+    expect(await runs('bash setup.sh', 'another-session')).toBeNull();
+  });
+
+  it('changes the generation when the script is written again', async () => {
+    const before = await sessionScriptRun('bash setup.sh', root, session);
+    await recordSessionWrite(context, join(root, 'setup.sh'));
+    const after = await sessionScriptRun('bash setup.sh', root, session);
+    expect(after?.generation).not.toBe(before?.generation);
+  });
+
+  it('flags git in a repository whose hooks were written until an approved run', async () => {
+    const id = 'session-scripts-hooks';
+    const repo = join(root, 'repo');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(repo, '.git/hooks/pre-commit'));
+
+    const run = await sessionScriptRun('git commit -m x', repo, id);
+    expect(run?.hooks.map(([repository]) => repository)).toEqual([repo]);
+    expect(await sessionScriptRun('git status', root, id)).toBeNull();
+    expect(await sessionScriptRun(`git -C ${repo} status`, root, id)).not.toBeNull();
+    expect(await sessionScriptRun('timeout -s KILL 5 git status', repo, id)).not.toBeNull();
+
+    expectShellRun('key', id, run!.hooks);
+    shellCommandRan({ sessionId: id, approvedKey: 'key' } as ToolContext);
+    expect(await sessionScriptRun('git status', repo, id)).toBeNull();
+  });
+
+  it('flags git in the enclosing repository after a config write from a subfolder', async () => {
+    const id = 'session-scripts-subfolder';
+    const repo = join(root, 'repo');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(repo, 'sub', '.git', 'config'));
+    expect((await sessionScriptRun('git status', repo, id))?.hooks).toEqual([[repo, expect.any(Number)]]);
+  });
+
+  it('flags git everywhere after a write to the global git config', async () => {
+    const id = 'session-scripts-global';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'home', '.gitconfig'));
+    expect((await sessionScriptRun('git status', join(root, 'tools'), id))?.hooks).toHaveLength(1);
+  });
+
+  it.each([
+    'git --git-dir ./evil --work-tree=. status',
+    'git --git-dir=evil status',
+    'GIT_DIR=./evil GIT_WORK_TREE=. git status',
+    'export GIT_DIR=evil; git status',
+    'env GIT_COMMON_DIR=evil git log',
+    'cd sub && GIT_DIR=../evil git status',
+    'XDG_CONFIG_HOME=./xdg git status',
+    'export XDG_CONFIG_HOME=xdg && git log',
+    'EDITOR=./x.sh git commit --allow-empty',
+    'VISUAL=./x.sh git commit --allow-empty',
+    "EDITOR='./x.sh --wait' git rebase -i HEAD~1",
+    'PAGER=./x.sh git log',
+    'SSH_ASKPASS=./x.sh git fetch',
+    'PATH=./bin:$PATH git help clean',
+    'PATH=bin:"$PATH" git --help clean',
+    'export PATH="$PWD/bin:$PATH"; git log',
+    'PATH=$PATH:./bin git help clean',
+    'GIT_DIR=""./evil git status',
+    'GIT_DIR="$PWD"/evil git status',
+    'GIT_DIR=${PWD}/evil git status',
+    'GIT_DIR=$(pwd)/evil git status',
+    'GIT_DIR=`pwd`/evil git status',
+    'GIT_DIR=e\\vil git status',
+    'd=evil; GIT_DIR=$d git status',
+    'GIT_DIR=$X git status',
+    'git --git-dir=""./evil status',
+    "git --git-dir './evil' status",
+    'XDG_CONFIG_HOME=""./xdg git status',
+    'XDG_CONFIG_HOME=$X git status',
+    'PATH=:$PATH git help clean',
+    'PATH=$PATH: git help clean',
+    'PATH=$(pwd)/bin:$PATH git help clean',
+    'PATH="$PWD"/bin:$PATH git help clean',
+    'export GIT_DIR=./evil; find . -maxdepth 0 -exec git status \\;',
+    'export GIT_DIR=./evil; find . -maxdepth 0 -execdir env git status \\;',
+    'env -C sub GIT_DIR=../evil git status',
+    'set -a; read -r GIT_DIR <<< ./evil; git status',
+    'set -a; read -r GIT_COMMON_DIR <<< ./evil; git status',
+    'set -a; read -r XDG_CONFIG_HOME <<< ./xdg; git status',
+    'set -a; read -r PATH <<< ./bin; git help clean',
+    'export PATH="$(pnpm bin):$PATH"; git status',
+  ])('flags %s, where git reads config or runs a program from a file this session wrote', async command => {
+    const id = 'session-scripts-git-reads';
+    for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
+    }
+    expect(await runs(command, id)).not.toBeNull();
+  });
+
+  it.each([
+    'git status',
+    'git --git-dir=other status',
+    'GIT_DIR=other git status',
+    'XDG_CONFIG_HOME=other git status',
+    'EDITOR=vim git commit',
+    'PAGER=cat git log',
+    'PATH=/usr/bin:$PATH git log',
+    'PATH=other:$PATH git help clean',
+    'PATH=other:${PATH} git help clean',
+    'echo PATH=./bin; git status',
+    "git commit -m 'EDITOR=./x.sh'",
+  ])('ignores %s, where git reads nothing this session wrote', async command => {
+    const id = 'session-scripts-git-reads';
+    for (const file of ['evil/config', 'xdg/git/config', 'x.sh', 'bin/man']) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, file));
+    }
+    expect(await runs(command, id)).toBeNull();
+  });
+
+  it('counts a file the script itself makes executable as a program in a PATH folder', async () => {
+    const id = 'session-scripts-chmod-program';
+    await writeFile(join(root, 'tools', 'later'), '#!/bin/sh\n', 'utf8');
+    await chmod(join(root, 'tools', 'later'), 0o644);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'later'));
+    const path = 'export PATH="$(cd tools && pwd):$PATH" && git commit --allow-empty';
+    expect(await runs(path, id)).toBeNull();
+    expect(await runs(`chmod +x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod a+x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod 755 tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod -R u+x tools/later && ${path}`, id)).not.toBeNull();
+    expect(await runs(`chmod 644 tools/later && ${path}`, id)).toBeNull();
+    expect(await runs(`chmod -x tools/later && ${path}`, id)).toBeNull();
+    expect(await runs(`chmod +x tools/other && ${path}`, id)).toBeNull();
+  });
+
+  it('reads a PATH entry bash fills in as a folder of programs only once the session wrote a program', async () => {
+    const id = 'session-scripts-path-programs';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'src', 'a.ts'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
+    expect(await runs('set -a; read -r PATH <<< ./x; git status', id)).toBeNull();
+    await writeFile(join(root, 'tools', 'plain'), 'x\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'plain'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).toBeNull();
+    await writeFile(join(root, 'tools', 'vim'), '#!/bin/sh\n', 'utf8');
+    await chmod(join(root, 'tools', 'vim'), 0o755);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'tools', 'vim'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', id)).not.toBeNull();
+    expect(await runs('export PATH="$(cd tools && pwd):$PATH"; git commit --allow-empty', id)).not.toBeNull();
+    const binId = 'session-scripts-path-bin';
+    await recordSessionWrite({ sessionId: binId } as ToolContext, join(root, 'node_modules', '.bin', 'x'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', binId)).not.toBeNull();
+    const treeId = 'session-scripts-path-tree';
+    await recordSessionTreeWrite({ sessionId: treeId } as ToolContext, join(root, 'vendor'));
+    expect(await runs('export PATH="$(pnpm bin):$PATH"; git status', treeId)).not.toBeNull();
+  });
+
+  it('reads a git dir from each folder git is moved into', async () => {
+    const id = 'session-scripts-git-dir-moved';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'evil', 'config'));
+    expect(await runs('GIT_DIR=evil git -C sub status', id)).not.toBeNull();
+    expect(await runs('GIT_DIR=evil git status', id)).toBeNull();
+  });
+
+  it('reads a variable name in any case on Windows only', async () => {
+    const id = 'session-scripts-git-reads';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'evil/config'));
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      expect(await runs('git_dir=./evil git status', id)).toBeNull();
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      expect(await runs('git_dir=./evil git status', id)).not.toBeNull();
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+
+  it('does not flag git run in a bare layout the session wrote, which the shell refuses to find by itself', async () => {
+    const id = 'session-scripts-bare';
+    const folder = join(root, 'bare');
+    await mkdir(join(folder, 'objects'), { recursive: true });
+    await mkdir(join(folder, 'refs'), { recursive: true });
+    await writeFile(join(folder, 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+    await writeFile(join(folder, 'config'), '[diff]\n\texternal = touch MARK\n', 'utf8');
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'config'));
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(folder, 'commondir'));
+    expect(await sessionScriptRun('git -C bare diff HEAD~1 HEAD', root, id)).toBeNull();
+    expect(await sessionScriptRun('cd bare && git diff HEAD~1 HEAD', root, id)).toBeNull();
+  });
+
+  it('runs a launched file from the folder env -C names', async () => {
+    const id = 'session-scripts-env-c';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'y.sh'));
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'npx'));
+    expect(await runs('env -C sub ./y.sh', id)).toEqual(['./y.sh']);
+    expect(await runs('env -C sub bash y.sh', id)).toEqual(['y.sh']);
+    // bash opens a redirect from its own folder, not the one env moves the command to.
+    expect(await runs('env -C sub bash < y.sh', id)).toBeNull();
+    expect(await runs('bash < sub/y.sh', id)).toEqual(['sub/y.sh']);
+    expect(await runs('env -C sub ./npx ls', id)).toEqual(['./npx']);
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub', 'jest'));
+    expect(await runs('env -C sub ./npx vitest', id)).toEqual(['./npx']);
+    expect(await runs('env -C sub ./jest', id)).toEqual(['./jest']);
+    expect(await runs('env -C other ./npx vitest', id)).toBeNull();
+    expect(await runs('env -C other ./jest', id)).toBeNull();
+    expect(await runs('env -C other ./y.sh', id)).toBeNull();
+    expect(await runs('cd sub && ./y.sh', id)).toEqual(['./y.sh']);
+  });
+
+  it('flags git after a write under .husky', async () => {
+    const id = 'session-scripts-husky';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'repo', '.husky', 'pre-push'));
+    expect((await sessionScriptRun('git push', join(root, 'repo'), id))?.hooks).toHaveLength(1);
+  });
+
+  it('asks before any script run once more files were written than it keeps', async () => {
+    const id = 'session-scripts-overflow';
+    for (let index = 0; index <= 200; index++) {
+      await recordSessionWrite({ sessionId: id } as ToolContext, join(root, `gen-${index}.txt`));
+    }
+    const run = await sessionScriptRun('bash data.txt', root, id);
+    expect(run).toMatchObject({ names: ['data.txt'], untracked: true });
+    expect(await sessionScriptRun('git status', root, id)).toBeNull();
+  });
+
+  it('treats a session whose records were evicted as overflowed', async () => {
+    const id = 'session-scripts-evicted';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'nothing.txt'));
+    for (let index = 0; index < 50; index++) {
+      await recordSessionWrite({ sessionId: `filler-${index}` } as ToolContext, join(root, 'nothing.txt'));
+    }
+    expect(await sessionScriptRun('bash data.txt', root, id)).toMatchObject({ untracked: true });
+    for (let index = 0; index < 50; index++) forgetSessionWrites(`filler-${index}`);
+    forgetSessionWrites(id);
+    forgetSessionWrites(session);
+  });
+
+  it('counts a file under a rewritten folder as written', async () => {
+    const id = 'session-scripts-tree';
+    await recordSessionTreeWrite({ sessionId: id } as ToolContext, join(root, 'tools'));
+    expect(await runs('python3 tools/go.py', id)).toEqual(['tools/go.py']);
+    expect(await runs('bash data.txt', id)).toBeNull();
+    expect(await runs('cd tools && ./missing.sh', id)).toBeNull();
+  });
+
+  it('flags git after a folder holding a repository is rewritten', async () => {
+    const id = 'session-scripts-tree-hooks';
+    await recordSessionTreeWrite({ sessionId: id } as ToolContext, join(root, 'repo'));
+    expect((await sessionScriptRun('git status', join(root, 'repo'), id))?.hooks).toHaveLength(1);
+  });
+
+  it('forgets a closed session', async () => {
+    const id = 'session-scripts-closed';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'setup.sh'));
+    forgetSessionWrites(id);
+    expect(await sessionScriptRun('bash setup.sh', root, id)).toBeNull();
+  });
+
+  describe.each(['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty'])('a command named %s', name => {
+    const id = 'session-scripts-own-keys';
+    beforeAll(() => recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'run.sh')));
+
+    it('is not a project-file runner', async () => {
+      expect(await runs(`${name} x`, id)).toBeNull();
+      expect(await runs(`${name} -C sub x`, id)).toBeNull();
+      expect(await runs(`FOO=./run.sh ${name}`, id)).toBeNull();
+    });
+
+    it('does not hide a session script run in the same command', async () => {
+      expect(await runs(`./run.sh; ${name}`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name}; ./run.sh`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name} && npx ${name} && ./run.sh`, id)).toEqual(['./run.sh']);
+    });
+  });
+});
+
+describe('session writes across a restart', () => {
+  let root: string;
+  const saved = new Map<string, unknown>();
+  const store = {
+    loadSessionWrites: async (id: string) => saved.get(id) ?? null,
+    saveSessionWrites: async (id: string, writes: unknown) => void saved.set(id, structuredClone(writes)),
+    deleteSessionWrites: async (id: string) => void saved.delete(id),
+  };
+
+  /** A fresh copy of the module, as after an app restart, reading the same store. */
+  const relaunch = async () => {
+    vi.resetModules();
+    const fresh = await import('./sessionScripts');
+    fresh.keepSessionWritesIn(store);
+    return fresh;
+  };
+
+  beforeAll(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-session-restart-')));
+    await mkdir(join(root, 'out'));
+    await writeFile(join(root, 'setup.sh'), 'x\n', 'utf8');
+    await writeFile(join(root, 'out', 'run.sh'), 'x\n', 'utf8');
+  });
+
+  afterAll(() => rm(root, { recursive: true, force: true }));
+
+  it('still asks in a resumed session, with the same generation', async () => {
+    const before = await relaunch();
+    const context = { sessionId: 'restart' } as ToolContext;
+    await before.recordSessionWrite(context, join(root, 'setup.sh'));
+    await before.recordSessionTreeWrite(context, join(root, 'out'));
+    const first = await before.sessionScriptRun('bash setup.sh && bash out/run.sh', root, 'restart');
+
+    const after = await relaunch();
+    const resumed = await after.sessionScriptRun('bash setup.sh && bash out/run.sh', root, 'restart');
+    expect(resumed?.names).toEqual(['setup.sh', 'out/run.sh']);
+    expect(resumed?.generation).toBe(first?.generation);
+    expect(await after.sessionScriptRun('bash setup.sh', root, 'other')).toBeNull();
+
+    await after.recordSessionWrite(context, join(root, 'setup.sh'));
+    expect((await after.sessionScriptRun('bash setup.sh', root, 'restart'))?.generation).not.toBe(first?.generation);
+  });
+
+  it('asks before any script run when the stored record does not read back', async () => {
+    saved.set('corrupt', { files: 'nope' });
+    const after = await relaunch();
+    expect(await after.sessionScriptRun('bash setup.sh', root, 'corrupt')).toMatchObject({ untracked: true });
+  });
+
+  it('removes the stored record when the session is deleted', async () => {
+    const before = await relaunch();
+    await before.recordSessionWrite({ sessionId: 'deleted' } as ToolContext, join(root, 'setup.sh'));
+    await before.forgetSessionWrites('deleted');
+    expect(saved.has('deleted')).toBe(false);
+    expect(await (await relaunch()).sessionScriptRun('bash setup.sh', root, 'deleted')).toBeNull();
+  });
+});
+
+describe('gitRunsConfiguredProgram', () => {
+  it.each([
+    ['git -c core.fsmonitor=./x status', 'core.fsmonitor'],
+    ["git -c 'core.hooksPath=h' commit", 'core.hookspath'],
+    ['sudo git -c core.sshCommand=ssh push', 'core.sshcommand'],
+    ['git -c core.fsmonitor status', 'core.fsmonitor'],
+    ['git --config-env core.hooksPath=H commit', 'core.hookspath'],
+    ['git -c core.hooksPath=/dev/null -c core.fsmonitor=./x status', 'core.fsmonitor'],
+    ['git -c core.fsmonitor=$X status', 'core.fsmonitor'],
+  ])('flags %s', (command, key) => {
+    expect(gitRunsConfiguredProgram([{ words: command }])?.toLowerCase()).toBe(key);
+  });
+
+  it.each([
+    'git status',
+    'git -c color.ui=never log',
+    'echo -c core.fsmonitor=x',
+    'git -c core.hooksPath=/dev/null commit -m x',
+    "git -c 'core.fsmonitor=false' status",
+  ])('ignores %s', command => {
+    expect(gitRunsConfiguredProgram([{ words: command }])).toBeNull();
+  });
+});

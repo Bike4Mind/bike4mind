@@ -3,24 +3,62 @@ import { createMocks } from 'node-mocks-http';
 
 // Middleware: collapse the baseApi chain so `.get(fn)` yields the raw handler,
 // mirroring apps/client/pages/api/auth/okta/__tests__/callback.test.ts.
+const mockChain = vi.hoisted(() => ({
+  order: [] as string[],
+  post: undefined as undefined | ((...a: unknown[]) => void),
+}));
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = { use: () => chain, get: (fn: any) => fn };
+  type Chain = { use: () => Chain; post: (fn: (...a: unknown[]) => void) => Chain; get: (fn: unknown) => unknown };
+  const chain: Chain = {
+    use: () => chain,
+    post: fn => {
+      mockChain.order.push('post');
+      mockChain.post = fn;
+      return chain;
+    },
+    get: fn => {
+      mockChain.order.push('get');
+      return fn;
+    },
+  };
   return { baseApi: () => chain };
 });
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
-  checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
+  checkBlockedIP: () => {
+    mockChain.order.push('checkBlockedIP');
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
+  },
+}));
+vi.mock('@server/middlewares/oauthIpRateLimit', () => ({
+  oauthIpRateLimit: (bucket: string) => {
+    mockChain.order.push(`oauthIpRateLimit:${bucket}`);
+    return (_req: unknown, _res: unknown, next?: () => void) => next?.();
+  },
+}));
+const { rateLimitOptions } = vi.hoisted(() => ({ rateLimitOptions: [] as unknown[] }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: (opts: unknown) => {
+    rateLimitOptions.push(opts);
+    mockChain.order.push('rateLimit');
+    return (_req: any, _res: any, next: any) => next?.();
+  },
 }));
 
 // passport.authenticate is invoked as passport.authenticate(strategy, opts, cb)(req, res, next);
 // the mock lets each test drive the (err, user, info) triple passport would normally supply.
 const mockAuthenticate = vi.fn();
+const registeredStrategies = vi.hoisted(() => ({ names: new Set<string>() }));
 vi.mock('passport', () => ({
-  default: { authenticate: (...args: any[]) => mockAuthenticate(...args) },
+  default: {
+    authenticate: (...args: unknown[]) => mockAuthenticate(...args),
+    // passport's own registry lookup, read by isPassportStrategyRegistered.
+    _strategy: (name: string) => (registeredStrategies.names.has(name) ? { authenticate: () => undefined } : undefined),
+  },
 }));
 
 const mockAuthFailCreate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
-  authFailLogRepository: { create: (...a: any[]) => mockAuthFailCreate(...a) },
+  authFailLogRepository: { create: (...a: unknown[]) => mockAuthFailCreate(...a) },
 }));
 
 vi.mock('@server/auth/tokenGenerator', () => ({
@@ -28,31 +66,44 @@ vi.mock('@server/auth/tokenGenerator', () => ({
     createAccessToken: () => ({ accessToken: 'jwt-access', refreshToken: 'jwt-refresh' }),
   },
 }));
-vi.mock('@server/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', () => ({ verifyStateToken: vi.fn() }));
 
 const mockResolveSecondFactor = vi.fn();
 const mockLogSignInSuccess = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/auth/signInSecondFactor', () => ({
-  resolveSecondFactor: (...a: any[]) => mockResolveSecondFactor(...a),
-  logSignInSuccess: (...a: any[]) => mockLogSignInSuccess(...a),
+  resolveSecondFactor: (...a: unknown[]) => mockResolveSecondFactor(...a),
+  logSignInSuccess: (...a: unknown[]) => mockLogSignInSuccess(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/signupEvents', () => ({
-  emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
+  emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
 }));
 const mockRecordSignupAcquisition = vi.fn().mockResolvedValue({ isSynthetic: false });
 const mockEmitSignupFunnelEvents = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/analytics/funnel', () => ({
-  recordSignupAcquisition: (...a: any[]) => mockRecordSignupAcquisition(...a),
-  emitSignupFunnelEvents: (...a: any[]) => mockEmitSignupFunnelEvents(...a),
+  recordSignupAcquisition: (...a: unknown[]) => mockRecordSignupAcquisition(...a),
+  emitSignupFunnelEvents: (...a: unknown[]) => mockEmitSignupFunnelEvents(...a),
+}));
+
+const mockRecordSignupNetwork = vi.fn().mockResolvedValue(undefined);
+vi.mock('@server/auth/networkMeta', () => ({
+  recordSignupNetwork: (...a: unknown[]) => mockRecordSignupNetwork(...a),
+}));
+
+const mockRefreshSignupRiskScore = vi.fn().mockResolvedValue(undefined);
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
+vi.mock('@server/auth/signupRiskScore', () => ({
+  refreshSignupRiskScore: (...a: unknown[]) => mockRefreshSignupRiskScore(...a),
 }));
 
 const mockIssueBrowserSession = vi.fn().mockResolvedValue({ accessToken: 'jwt-access', sid: 'sid' });
 vi.mock('@server/auth/issueSession', () => ({
-  issueBrowserSession: (...a: any[]) => mockIssueBrowserSession(...a),
+  issueBrowserSession: (...a: unknown[]) => mockIssueBrowserSession(...a),
 }));
 
 const mockStampSourceTag = vi.fn().mockResolvedValue(undefined);
@@ -61,8 +112,8 @@ vi.mock('@server/utils/auth/oauthSourceTag', () => ({
 }));
 
 // Import after mocks are registered.
-import { logEvent } from '@server/utils/analyticsLog';
-import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@server/auth/jwtStateStore';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { verifyStateToken, type VerifyResult, type BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { logAuthAudit } from '@server/utils/authAudit';
 
 const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { clientId: string }> => ({
@@ -71,33 +122,84 @@ const stateNaming = (clientId: string): VerifyResult<BaseStatePayload & { client
 });
 import handler from '@pages/api/auth/[strategy]/callback';
 
-function makeReqRes(headers: Record<string, string> = {}) {
+const log = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
+
+function makeReqRes(headers: Record<string, string> = {}, query: Record<string, string> = {}) {
   const { req, res } = createMocks({
     method: 'GET',
-    query: { strategy: 'github', state: 'state-token' },
+    query: { strategy: 'github', state: 'state-token', code: 'auth-code', ...query },
     headers: { host: 'localhost:3000', 'user-agent': 'vitest', ...headers },
     url: '/api/auth/github/callback',
   });
+  Object.assign(req, { logger: log });
   return { req: req as any, res: res as any };
 }
 
 /** Drive the handler as if passport's verify callback resolved with (err, user, info). */
-async function runCallback(err: unknown, user: unknown, info: unknown, headers?: Record<string, string>) {
+async function runCallback(
+  err: unknown,
+  user: unknown,
+  info: unknown,
+  headers?: Record<string, string>,
+  query?: Record<string, string>
+) {
   // The handler does not await passport's callback, so hold on to the promise it returns and wait
   // for that: a fixed tick races any await added above the code under test.
   let passportCallback: Promise<unknown> | undefined;
   mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
     passportCallback = cb(err, user, info);
   });
-  const { req, res } = makeReqRes(headers);
+  const { req, res } = makeReqRes(headers, query);
   await handler(req, res, vi.fn());
   await passportCallback;
   return res;
 }
 
 beforeEach(() => {
+  log.error.mockClear();
+  log.warn.mockClear();
+  log.info.mockClear();
   vi.clearAllMocks();
+  registeredStrategies.names = new Set(['google', 'github']);
   mockResolveSecondFactor.mockResolvedValue({ kind: 'satisfied', trustedDevice: null });
+});
+
+describe('[strategy]/callback - unavailable provider and empty callback', () => {
+  it.each(['apple', 'facebook'])(
+    'answers 404 for the %s callback when that provider is not registered, without an error log',
+    async strategy => {
+      const errorSpy = log.error;
+      const { req, res } = makeReqRes({}, { strategy });
+
+      await expect(handler(req, res, vi.fn())).rejects.toMatchObject({ statusCode: 404 });
+
+      expect(mockAuthenticate).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it('redirects a callback carrying neither code nor error to the login page at warn', async () => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+    const { req, res } = makeReqRes({}, { strategy: 'google', code: '' });
+
+    await handler(req, res, vi.fn());
+
+    expect(res._getRedirectUrl()).toBe('/login?error=missing_code');
+    expect(mockAuthenticate).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith('OAuth callback without code or error', { strategy: 'google' });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('still hands a provider error return (no code) to passport', async () => {
+    const res = await runCallback(null, undefined, { message: 'denied' }, undefined, {
+      code: '',
+      error: 'access_denied',
+    });
+
+    expect(mockAuthenticate).toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+  });
 });
 
 describe('[strategy]/callback - !user branch sanitized reason', () => {
@@ -111,7 +213,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     expect(JSON.stringify(loggedArg)).not.toContain('E11000');
 
     const redirectUrl = res._getRedirectUrl();
-    expect(redirectUrl).toBe('/login?error=Authentication%20failed');
+    expect(redirectUrl).toBe('/login?error=callback_error');
     expect(redirectUrl).not.toContain('victim');
     expect(redirectUrl).not.toContain('E11000');
   });
@@ -123,9 +225,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_expired' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('Your login request expired. Please try again.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=invalid_state');
   });
 
   it('maps state_missing and state_invalid to their own distinct canonical reasons', async () => {
@@ -134,7 +234,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Missing state parameter',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_missing' }));
-    expect(missingRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(missingRes._getRedirectUrl()).toBe('/login?error=callback_error');
 
     vi.clearAllMocks();
 
@@ -143,7 +243,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
       message: 'Invalid authorization state.',
     });
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'state_invalid' }));
-    expect(invalidRes._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(invalidRes._getRedirectUrl()).toBe('/login?error=callback_error');
   });
 
   it('default-denies an unrecognized or absent code to internal - raw info.message never substitutes for reason', async () => {
@@ -157,7 +257,7 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
 
     const withNoInfo = await runCallback(null, undefined, undefined);
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'internal' }));
-    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+    expect(withNoInfo._getRedirectUrl()).toBe('/login?error=callback_error');
     void withUnknownCode;
   });
 
@@ -168,7 +268,102 @@ describe('[strategy]/callback - !user branch sanitized reason', () => {
     });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'forbidden_system_user' }));
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+  });
+});
+
+describe('[strategy]/callback - !user branch log level', () => {
+  it.each([
+    'registration_closed',
+    'state_expired',
+    'state_invalid',
+    'state_missing',
+    'duplicate_account',
+    'forbidden_system_user',
+  ])('logs the expected %s outcome at warn, below the level the alert channel pages on', async code => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+
+    await runCallback(null, undefined, { code });
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate user not found', { info: { code } });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs a cancelled consent (?error=access_denied) at warn with its own reason', async () => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+    // What passport-oauth2 passes to fail() when the provider redirects back with access_denied.
+    const info = { message: 'The user has denied your application access.' };
+
+    const res = await runCallback(null, undefined, info, undefined, { error: 'access_denied' });
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate user not found', { info });
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'access_denied' }));
+    expect(res._getRedirectUrl()).toBe('/login?error=callback_error');
+  });
+
+  it('keeps an unrecognized failure at error', async () => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+
+    await runCallback(null, undefined, { message: 'Failed to obtain access token' });
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport authenticate user not found', {
+      info: { message: 'Failed to obtain access token' },
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('[strategy]/callback - guards', () => {
+  it('rate limits the callback at 10/min per client IP in the oauth-callback bucket', () => {
+    expect(rateLimitOptions).toEqual([{ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }]);
+  });
+});
+
+describe('[strategy]/callback - err branch log level', () => {
+  /** Shaped like passport-oauth2's TokenError, which carries the provider's OAuth error code. */
+  function tokenError(code: string) {
+    return Object.assign(new Error('Bad Request'), { name: 'TokenError', code });
+  }
+
+  it('logs a replayed or expired authorization code (invalid_grant) at warn', async () => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+    const err = tokenError('invalid_grant');
+
+    const res = await runCallback(err, undefined, undefined);
+
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate error', { info: undefined, error: err });
+    expect(errorSpy).not.toHaveBeenCalled();
     expect(res._getRedirectUrl()).toBe('/login?error=Authentication%20failed');
+  });
+
+  it.each([
+    Object.assign(new Error('Invalid Credentials'), { name: 'UserInfoError' }),
+    'account_link_email_mismatch',
+    'account_link_requires_verification',
+  ])('warns for an expected provider or account-link refusal: %s', async err => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+    await runCallback(err, undefined, undefined);
+    expect(warnSpy).toHaveBeenCalledWith('Passport authenticate error', { info: undefined, error: err });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another TokenError code', tokenError('invalid_client')],
+    ['a non-token error', new Error('boom')],
+  ])('keeps %s at error', async (_label, err) => {
+    const errorSpy = log.error;
+    const warnSpy = log.warn;
+
+    await runCallback(err, undefined, undefined);
+
+    expect(errorSpy).toHaveBeenCalledWith('Passport authenticate error', { info: undefined, error: err });
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -176,10 +371,24 @@ describe('[strategy]/callback - banned user gate', () => {
   it('refuses to issue a session for a banned user and records the refusal', async () => {
     const res = await runCallback(null, { id: 'u-banned', email: 'banned@example.com', isBanned: true }, undefined);
 
-    expect(res._getRedirectUrl()).toBe('/login?error=account_suspended');
+    expect(res._getRedirectUrl()).toBe('/login?error=account_suspended&reason=terms_violation');
     expect(mockAuthFailCreate).toHaveBeenCalledWith(
       expect.objectContaining({ strategy: 'github', reason: 'user_banned', email: 'banned@example.com' })
     );
+    expect(mockIssueBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a payment hold', { disputePending: true }, 'account_on_hold'],
+    ['a moderation suspension', { moderation: { status: 'suspended' } }, 'account_policy_suspended'],
+  ])('sends %s to the login notice without issuing a session', async (_label, state, code) => {
+    const res = await runCallback(
+      null,
+      { id: 'u-held', email: 'held@example.com', isBanned: false, ...state },
+      undefined
+    );
+
+    expect(res._getRedirectUrl()).toBe(`/login?error=${code}`);
     expect(mockIssueBrowserSession).not.toHaveBeenCalled();
   });
 
@@ -192,14 +401,37 @@ describe('[strategy]/callback - banned user gate', () => {
   });
 });
 
+describe('[strategy]/callback - guards and refusal metric line', () => {
+  it('registers the Apple POST hop ahead of the rate limiters so only the GET is limited', () => {
+    expect(mockChain.order).toEqual(['checkBlockedIP', 'post', 'rateLimit', 'oauthIpRateLimit:oauth-callback', 'get']);
+  });
+
+  it.each([
+    ['registration_closed', 1],
+    ['state_expired', 0],
+    ['internal', 0],
+  ])('logs oauth-signup-refused for %s: %i time(s)', async (code, count) => {
+    const info = vi.fn();
+    mockAuthenticate.mockImplementation(
+      (_s: string, _o: unknown, cb: (...args: unknown[]) => Promise<unknown>) => () => {
+        pending = cb(null, undefined, { code });
+      }
+    );
+    let pending: Promise<unknown> | undefined;
+    const { req, res } = makeReqRes();
+    req.logger = { ...log, info };
+    await handler(req, res, vi.fn());
+    await pending;
+    expect(info.mock.calls.filter(c => c[0] === 'oauth-signup-refused')).toHaveLength(count);
+  });
+});
+
 describe('[strategy]/callback - invite gate', () => {
-  it('surfaces registration_closed with an invite-only message', async () => {
+  it('surfaces registration_closed as a login error code', async () => {
     const res = await runCallback(null, undefined, { code: 'registration_closed' });
 
     expect(mockAuthFailCreate).toHaveBeenCalledWith(expect.objectContaining({ reason: 'registration_closed' }));
-    expect(res._getRedirectUrl()).toBe(
-      `/login?error=${encodeURIComponent('This instance is invite-only. Ask an administrator for an invite.')}`
-    );
+    expect(res._getRedirectUrl()).toBe('/login?error=registration_closed');
   });
 });
 
@@ -241,9 +473,36 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       userId: 'u-new',
       touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
       method: 'github',
+      account: { isSynthetic: false },
     });
     expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
     expect(res._getRedirectUrl()).toContain('firstSignupSession=1');
+  });
+
+  it("ties a new account's signup funnel to the visit it came from", async () => {
+    const visitId = 'd'.repeat(32);
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touchCookie}; b4m_vid=${visitId}`,
+    });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(expect.objectContaining({ visitId }));
+  });
+
+  it("carries a new account's verified hop, read from its own cookies, to the signup funnel", async () => {
+    const hopId = 'c'.repeat(32);
+    const verifiedTouch = { srcProductId: 'source-product', hopId, redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'github', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touchCookie}; b4m_vid=${'d'.repeat(32)}; b4m_hop=${hopId}`,
+    });
+
+    // The provider returns the browser by a top-level GET, so the Lax hop cookie is on this request.
+    expect(mockRecordSignupAcquisition.mock.calls[0][0].req.headers.cookie).toContain(`b4m_hop=${hopId}`);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new', acquisition }) })
+    );
   });
 
   it("persists a new account's acquisition with the provider as the signup method", async () => {
@@ -251,6 +510,48 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ id: 'u-new' }), method: 'github' })
+    );
+  });
+
+  it("stamps a new account's signup network with the provider as the method", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockRecordSignupNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', method: 'github' })
+    );
+  });
+
+  it("passes the new account's stored signupClientId to its signup event, undefined when it has none", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true, signupClientId: 'client-1' }, undefined, {
+      cookie: touchCookie,
+    });
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'u-new', clientId: 'client-1' })
+    );
+
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+    expect(mockRecordSignupNetwork.mock.calls.at(-1)?.[0].clientId).toBeUndefined();
+  });
+
+  it('rescores a new account only after its signup network is stamped', async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    // Only the user id is asserted; the logger arguments are not part of this contract.
+    expect(mockRefreshSignupRiskScore.mock.calls.map(([userId]) => userId)).toEqual(['u-new']);
+    expect(mockRecordSignupNetwork.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRefreshSignupRiskScore.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("passes an internal new account's flag to its funnel stages and its product credit", async () => {
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ isSynthetic: false, isInternal: true });
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new', isSynthetic: false, isInternal: true }) })
+    );
+    expect(mockEmitSignup).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u-new', account: { isSynthetic: false, isInternal: true } })
     );
   });
 
@@ -271,6 +572,8 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
     expect(mockRecordSignupAcquisition).not.toHaveBeenCalled();
+    expect(mockRecordSignupNetwork).not.toHaveBeenCalled();
+    expect(mockRefreshSignupRiskScore).not.toHaveBeenCalled();
   });
 
   // The REGISTER log and the emit are separate statements; folding the emit into the log's
@@ -311,6 +614,7 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       userId: 'u-new',
       touches: { lastTouch: { source: 'widgets', medium: 'landing' } },
       method: 'github',
+      account: { isSynthetic: false },
     });
   });
 
@@ -322,7 +626,12 @@ describe('[strategy]/callback - signup credited to the source product', () => {
       cookie: `${touch}; b4m_consent=denied; b4m-consent-decision=granted`,
     });
 
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: {},
+      method: 'github',
+      account: { isSynthetic: false },
+    });
   });
 
   // The gate fails closed, so each of these is a separate way of NOT saying granted. Absent is
@@ -340,7 +649,12 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     // way: with no touches there is no source product, so this stream sends nothing at all for
     // a suppressed visitor. The account is recorded in Mongo by the REGISTER log above, which
     // is a different system.
-    expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
+    expect(mockEmitSignup).toHaveBeenCalledWith({
+      userId: 'u-new',
+      touches: {},
+      method: 'github',
+      account: { isSynthetic: false },
+    });
   });
 });
 
@@ -456,5 +770,59 @@ describe('[strategy]/callback - second factor gate', () => {
       trustedDevice,
     });
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+  });
+});
+
+describe('POST /api/auth/apple/callback (form_post bounce)', () => {
+  const post = (strategy: string, body: Record<string, unknown>) => {
+    const { req, res } = createMocks({ method: 'POST', query: { strategy }, body });
+    return { run: () => mockChain.post!(req, res), res };
+  };
+
+  it('303-redirects the form fields to the GET callback and maps a cancelled consent to access_denied', () => {
+    const { run, res } = post('apple', { code: 'c', state: 's', user: '{"name":{}}', junk: 'x' });
+    run();
+    expect(res._getStatusCode()).toBe(303);
+    expect(res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s&user=%7B%22name%22%3A%7B%7D%7D');
+
+    const cancelled = post('apple', { error: 'user_cancelled_authorize', state: 's' });
+    cancelled.run();
+    expect(cancelled.res._getRedirectUrl()).toBe('/api/auth/apple/callback?state=s&error=access_denied');
+  });
+
+  it('forwards only the name from the user field, never the email', () => {
+    const user = JSON.stringify({ name: { firstName: 'Ada', lastName: 'L' }, email: 'ada@example.com' });
+    const { run, res } = post('apple', { code: 'c', state: 's', user });
+    run();
+    const forwarded = new URL(res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
+    expect(forwarded).toBe(JSON.stringify({ name: { firstName: 'Ada', lastName: 'L' } }));
+    expect(res._getRedirectUrl()).not.toContain('example.com');
+
+    const malformed = post('apple', { code: 'c', state: 's', user: 'not-json' });
+    malformed.run();
+    expect(malformed.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
+  });
+
+  it('drops an oversized user field and truncates oversized name parts', () => {
+    const huge = post('apple', {
+      code: 'c',
+      state: 's',
+      user: JSON.stringify({ name: { firstName: 'a'.repeat(3000) } }),
+    });
+    huge.run();
+    expect(huge.res._getRedirectUrl()).toBe('/api/auth/apple/callback?code=c&state=s');
+
+    const long = post('apple', {
+      code: 'c',
+      state: 's',
+      user: JSON.stringify({ name: { firstName: 'b'.repeat(500) } }),
+    });
+    long.run();
+    const forwarded = new URL(long.res._getRedirectUrl(), 'http://localhost').searchParams.get('user');
+    expect(JSON.parse(forwarded!).name.firstName).toHaveLength(120);
+  });
+
+  it('refuses a POST for any other strategy', () => {
+    expect(post('github', { code: 'c' }).run).toThrow(/Invalid auth strategy/);
   });
 });

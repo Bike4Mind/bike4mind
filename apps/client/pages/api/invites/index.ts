@@ -4,7 +4,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { inviteRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
-import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
+import { filterInviteRecipientsToSelf, withoutDisabledSpaceInvites } from '@server/managers/inviteManager';
 import { z } from 'zod';
 
 // The pre-consolidation CASL path returned every pending invite with no pagination, so
@@ -29,7 +29,8 @@ const handler = baseApi().get(async (req, res) => {
   );
 
   // Strip co-recipients' emails from each invite, keeping only the caller's own entry.
-  return res.json(result.data.map(invite => filterInviteRecipientsToSelf(invite, req.user.email)));
+  const visible = await withoutDisabledSpaceInvites(result.data);
+  return res.json(visible.map(invite => filterInviteRecipientsToSelf(invite, req.user.email)));
 });
 
 export const config = {

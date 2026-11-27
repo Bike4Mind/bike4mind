@@ -12,6 +12,9 @@ import { useTheme as useJoyTheme } from '@mui/joy';
 import KnowledgeModal from '../../Knowledge/KnowledgeModal';
 import { HelpPanel, HelpSuggestionBanner } from '../../help';
 import DataLakeUploadIndicator from '../../DataLakeWizard/DataLakeUploadIndicator';
+import GearsDiscovery from '@client/app/components/gears/GearsDiscoveryModal';
+import { CoreTutorialHost } from '@client/app/components/tutorial/core/CoreTutorialHost';
+import PreviewSleepBanner from '@client/app/components/PreviewSleepBanner';
 import { useHelpKeyboardShortcut } from '@client/app/hooks/useHelpKeyboardShortcut';
 import { useCommandPaletteShortcut } from '@client/app/hooks/useCommandPaletteShortcut';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
@@ -24,7 +27,9 @@ import type { NotebookContentFilter, NotebookOriginFilter } from './Sidenav/side
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
+import { COOKIE_BANNER_SPACE, VIEWPORT_ABOVE_COOKIE_BANNER } from '@client/app/utils/cookieBannerSpace';
 import { routeHeading } from './routeHeading';
+import { useSignupGrantHeartbeat } from '@client/app/hooks/useSignupGrantHeartbeat';
 
 // Empty in the open-core build, where premiumRoutes is empty.
 const EDGE_TO_EDGE_PATHS = edgeToEdgePaths(premiumRoutes);
@@ -84,6 +89,7 @@ const pulseBorder = keyframes`
 `;
 
 const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }) => {
+  useSignupGrantHeartbeat();
   const openSideNav = useNotebookLayout(s => s.openSideNav);
   const isMobile = useIsMobile();
   const isImpersonating = useAccessToken(s => s.impersonating);
@@ -131,7 +137,7 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
       container
       sx={{
         width: '100%',
-        height: '100dvh',
+        height: VIEWPORT_ABOVE_COOKIE_BANNER,
         overflow: 'hidden',
         border: isImpersonating ? '3px solid #d32f2f' : 'none',
         animation: isImpersonating ? `${pulseBorder} 2s infinite` : 'none',
@@ -166,7 +172,7 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
           container
           sx={{
             width: '100%',
-            height: '100dvh',
+            height: VIEWPORT_ABOVE_COOKIE_BANNER,
             position: 'relative',
             paddingTop: { xs: 'var(--notebook-header-height)', sm: 0 },
           }}
@@ -193,6 +199,9 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
       <HelpPanel />
       <HelpSuggestionBanner />
       <DataLakeUploadIndicator />
+      <GearsDiscovery />
+      <CoreTutorialHost />
+      <PreviewSleepBanner placement="floating" />
     </Grid>
   );
 };
@@ -235,7 +244,7 @@ const SideNavWrapper: FC<{ children: ReactNode }> = ({ children }) => {
               isTablet && {
                 top: 0,
                 left: 0,
-                height: '100dvh',
+                height: VIEWPORT_ABOVE_COOKIE_BANNER,
                 zIndex: 'var(--joy-zIndex-drawer, 1200)',
               }),
           })}
@@ -257,7 +266,7 @@ const SideNavWrapper: FC<{ children: ReactNode }> = ({ children }) => {
                     left: 0,
                     top: 0,
                     width: '24px',
-                    height: '100dvh',
+                    height: VIEWPORT_ABOVE_COOKIE_BANNER,
                     cursor: 'pointer',
                     zIndex: 500,
                     borderRight: `1px solid ${theme.palette.mode === 'dark' ? gray[800] : gray[200]}`,
@@ -286,6 +295,7 @@ const SideNavWrapper: FC<{ children: ReactNode }> = ({ children }) => {
                   root: {
                     sx: {
                       zIndex: 600,
+                      bottom: COOKIE_BANNER_SPACE,
                     },
                   },
                   content: {

@@ -1,0 +1,385 @@
+import { AdminRoleIdSchema, formatAdminPermissionSource, type AdminPermissionSource } from '@bike4mind/common';
+import { z } from 'zod';
+
+/**
+ * Quarterly access review: the snapshot shape, the report and reminder text, and the cadence. The
+ * reads live in ./accessReviewData.ts; the runbook is docs/security/quarterly-access-review.md.
+ */
+
+export const ACCESS_REVIEW_RUNBOOK = 'docs/security/quarterly-access-review.md';
+export const STALE_API_KEY_DAYS = 90;
+
+/** Canonical role identities for review reads; malformed stored references remain visible unchanged. */
+export function normalizeAccessReviewRoleIds(values: readonly unknown[]): string[] {
+  return [
+    ...new Set(
+      values.map(value => {
+        const id = String(value);
+        return AdminRoleIdSchema.safeParse(id).success ? id.toLowerCase() : id;
+      })
+    ),
+  ];
+}
+
+export type AccessReviewAccountStatus = 'active' | 'banned' | 'deleted';
+
+export interface AccessReviewGrantor {
+  userId: string | null;
+  name: string;
+  email: string | null;
+}
+
+export interface AccessReviewAdmin {
+  userId: string;
+  email: string | null;
+  username: string | null;
+  fullAdmin: boolean;
+  /** Effective permissions: direct grants plus every role's. */
+  permissions: string[];
+  /** The stored fields a revoke rewrites, as the `before` of the permissions update. */
+  directPermissions: string[];
+  adminRoleIds: string[];
+  /** One entry per held role id; an id with no role row (deleted, malformed) has a null name and grants nothing. */
+  roles: AccessReviewHeldRole[];
+  /** The direct grant and roles behind each effective permission, in `permissions` order. */
+  permissionSources: AdminPermissionSource[];
+  status: AccessReviewAccountStatus;
+  lastActiveAt: string | null;
+  /** Newest admin audit entry this account performed, denied attempts excluded. */
+  lastAdminActionAt: string | null;
+  /** Newest successful sign-in; null means none within the 12-month auth audit retention. */
+  lastSignInAt: string | null;
+  mfaEnabled: boolean;
+  /** Who made the newest per-user admin grant; null when it predates the admin audit log. */
+  grantedBy: AccessReviewGrantor | null;
+  grantedAt: string | null;
+  activeSessions: number;
+  trustedDevices: number;
+  passkeys: number;
+  oauthRefreshTokens: number;
+  bridgeDevices: number;
+  activeApiKeys: number;
+}
+
+export interface AccessReviewHeldRole {
+  id: string;
+  name: string | null;
+  deleted: boolean;
+}
+
+export interface AccessReviewRoleMember {
+  userId: string;
+  email: string | null;
+  username: string | null;
+  status: AccessReviewAccountStatus;
+}
+
+/** Every admin role defined, with the admin accounts holding it. */
+export interface AccessReviewRole {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  members: AccessReviewRoleMember[];
+}
+
+/** Never carries the key secret, hash, digest or prefix. */
+export interface AccessReviewApiKey {
+  id: string;
+  name: string;
+  ownerId: string;
+  ownerEmail: string | null;
+  ownerIsAdmin: boolean;
+  scopes: string[];
+  createdAt: string | null;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+}
+
+/** An admin's live access to another account: a support access grant or an impersonation session. */
+export interface AccessReviewDelegation {
+  sessionId: string;
+  adminId: string;
+  adminEmail: string | null;
+  userId: string;
+  startedAt: string | null;
+  expiresAt: string | null;
+}
+
+export const ACCESS_REVIEW_COUNT_LABELS = {
+  fullAdmins: 'Full admin accounts',
+  delegatedAdmins: 'Delegated admin accounts',
+  activeApiKeys: 'Active API keys',
+  adminScopedApiKeys: 'Active API keys with the admin scope',
+  adminOwnedApiKeys: 'Active API keys owned by admin accounts',
+  apiKeysWithoutExpiry: 'Active API keys with no expiry',
+  staleApiKeys: `Active API keys unused for ${STALE_API_KEY_DAYS} days`,
+  activeSessions: 'Active sign-in sessions',
+  impersonationSessions: 'Active impersonation sessions',
+  supportAccessGrants: 'Active support access grants',
+  trustedDevices: 'Trusted devices',
+  passkeys: 'Passkeys',
+  oauthGrants: 'OAuth app grants',
+  oauthRefreshTokens: 'OAuth refresh tokens',
+  bridgeDevices: 'Paired bridge devices',
+} as const;
+
+export type AccessReviewCounts = Record<keyof typeof ACCESS_REVIEW_COUNT_LABELS, number>;
+
+export interface AccessReviewSnapshot {
+  quarter: string;
+  generatedAt: string;
+  /** False when the key list holds only privileged keys (admin-owned or admin-scoped). */
+  allApiKeysListed: boolean;
+  counts: AccessReviewCounts;
+  admins: AccessReviewAdmin[];
+  roles: AccessReviewRole[];
+  apiKeys: AccessReviewApiKey[];
+  supportAccess: AccessReviewDelegation[];
+  impersonation: AccessReviewDelegation[];
+}
+
+/** The counts of a snapshot written earlier; tolerant of count keys added or removed since. */
+export interface AccessReviewBaseline {
+  quarter: string;
+  generatedAt: string;
+  counts: Partial<Record<string, number>>;
+}
+
+const baselineSchema = z.object({
+  quarter: z.string(),
+  generatedAt: z.string(),
+  counts: z.record(z.string(), z.number().int().nonnegative()),
+});
+
+export function parseAccessReviewBaseline(value: unknown): AccessReviewBaseline {
+  const parsed = baselineSchema.safeParse(value);
+  if (!parsed.success)
+    throw new Error('Baseline is not an access review snapshot (expected quarter, generatedAt, counts)');
+  return parsed.data;
+}
+
+export const reviewQuarter = (date: Date): string =>
+  `${date.getUTCFullYear()}-Q${Math.floor(date.getUTCMonth() / 3) + 1}`;
+
+/** The first Monday (UTC) of January, April, July and October: one day per quarter for a daily cron. */
+export const isAccessReviewReminderDay = (date: Date): boolean =>
+  date.getUTCMonth() % 3 === 0 && date.getUTCDate() <= 7 && date.getUTCDay() === 1;
+
+export const ACCESS_REVIEW_DEFAULT_DORMANT_DAYS = 90;
+/** Days into a quarter before a review not yet completed in it counts as overdue. */
+export const ACCESS_REVIEW_GRACE_DAYS = 30;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Midnight UTC on the first day of the quarter holding `date`. */
+export const quarterStart = (date: Date): Date =>
+  new Date(Date.UTC(date.getUTCFullYear(), Math.floor(date.getUTCMonth() / 3) * 3, 1));
+
+/** Dormant when the last admin action is `days` or more before `now`; no recorded action counts as dormant. */
+export const isDormant = (lastActionAt: string | null, now: Date, days: number): boolean => {
+  if (!lastActionAt) return true;
+  const at = Date.parse(lastActionAt);
+  if (Number.isNaN(at)) return true;
+  return now.getTime() - at >= days * DAY_MS;
+};
+
+/** When the review of the quarter holding `now` falls due: the end of that quarter's grace period. */
+export const accessReviewDueAt = (now: Date): Date =>
+  new Date(quarterStart(now).getTime() + ACCESS_REVIEW_GRACE_DAYS * DAY_MS);
+
+/** Overdue once the grace period of the current quarter has passed with no review completed inside it. */
+export const isAccessReviewOverdue = (latestCompletedAt: Date | null, now: Date): boolean => {
+  const start = quarterStart(now);
+  if (latestCompletedAt && latestCompletedAt.getTime() >= start.getTime()) return false;
+  return now.getTime() >= accessReviewDueAt(now).getTime();
+};
+
+/** The date the current review became overdue, or null while it is not overdue. */
+export const accessReviewOverdueSince = (latestCompletedAt: Date | null, now: Date): Date | null =>
+  isAccessReviewOverdue(latestCompletedAt, now) ? accessReviewDueAt(now) : null;
+
+const cell = (value: string | number | null | undefined): string =>
+  value === null || value === undefined
+    ? '-'
+    : String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/[\\`*_[\]|]/g, '\\$&')
+        .replace(/\s+/g, ' ');
+
+const day = (iso: string | null): string => (iso ? iso.slice(0, 10) : '-');
+
+const table = (headers: string[], rows: Array<Array<string | number | null>>): string[] =>
+  rows.length === 0
+    ? ['None.']
+    : [
+        `| ${headers.join(' | ')} |`,
+        `| ${headers.map(() => '---').join(' | ')} |`,
+        ...rows.map(row => `| ${row.map(cell).join(' | ')} |`),
+      ];
+
+const DECISION_HEADERS = ['Decision (keep/revoke)', 'Decided by'];
+
+const change = (now: number, before: number | undefined): string => {
+  if (before === undefined) return '-';
+  const delta = now - before;
+  return delta > 0 ? `+${delta}` : String(delta);
+};
+
+function countsTable(counts: AccessReviewCounts, baseline?: AccessReviewBaseline): string[] {
+  const entries = Object.entries(ACCESS_REVIEW_COUNT_LABELS) as Array<[keyof AccessReviewCounts, string]>;
+  if (!baseline)
+    return table(
+      ['Access', 'Count'],
+      entries.map(([key, label]) => [label, counts[key]])
+    );
+  return table(
+    ['Access', `Before (${baseline.quarter}, ${day(baseline.generatedAt)})`, 'After', 'Change'],
+    entries.map(([key, label]) => [
+      label,
+      baseline.counts[key] ?? null,
+      counts[key],
+      change(counts[key], baseline.counts[key]),
+    ])
+  );
+}
+
+const roleLabel = (role: AccessReviewHeldRole): string => role.name ?? `deleted role ${role.id}`;
+
+const sourceLabel = (source: AdminPermissionSource): string =>
+  `${source.permission} (${formatAdminPermissionSource(source)})`;
+
+const delegationRows = (rows: AccessReviewDelegation[]) =>
+  rows.map(row => [
+    row.sessionId,
+    row.adminEmail ?? row.adminId,
+    row.userId,
+    day(row.startedAt),
+    day(row.expiresAt),
+    '',
+    '',
+  ]);
+
+/**
+ * The review record: counts (with before/after when a baseline is given) and one row per grant of
+ * privileged access, with blank decision columns the reviewer fills in before filing it.
+ */
+export function formatAccessReviewMarkdown(snapshot: AccessReviewSnapshot, baseline?: AccessReviewBaseline): string {
+  const { counts, admins, roles, apiKeys, supportAccess, impersonation } = snapshot;
+  const keyHeading = snapshot.allApiKeysListed ? 'Active API keys' : 'Privileged API keys';
+  const keyScope = snapshot.allApiKeysListed
+    ? 'Every active, unexpired API key.'
+    : 'Active, unexpired keys owned by an admin account or carrying the admin scope. The counts above cover every key.';
+  return [
+    `# Access review ${snapshot.quarter}`,
+    '',
+    `Generated ${snapshot.generatedAt} from the app database (read-only). Fill in each Decision and Decided by, revoke what was decided, then re-run with this snapshot as the baseline to record the after counts. Runbook: ${ACCESS_REVIEW_RUNBOOK}.`,
+    '',
+    'Reviewer: ',
+    'Review completed (date): ',
+    '',
+    '## Counts',
+    '',
+    ...countsTable(counts, baseline),
+    '',
+    `## Admin accounts (${admins.length})`,
+    '',
+    ...table(
+      [
+        'User',
+        'Email',
+        'Status',
+        'Roles',
+        'Access',
+        'Last active',
+        'Sessions',
+        'Trusted devices',
+        'Passkeys',
+        'OAuth tokens',
+        'Bridge devices',
+        'API keys',
+        ...DECISION_HEADERS,
+      ],
+      admins.map(admin => [
+        admin.username ?? admin.userId,
+        admin.email,
+        admin.status,
+        admin.roles.map(roleLabel).join(', ') || null,
+        admin.fullAdmin ? 'full admin' : admin.permissionSources.map(sourceLabel).join(', '),
+        day(admin.lastActiveAt),
+        admin.activeSessions,
+        admin.trustedDevices,
+        admin.passkeys,
+        admin.oauthRefreshTokens,
+        admin.bridgeDevices,
+        admin.activeApiKeys,
+        '',
+        '',
+      ])
+    ),
+    '',
+    `## Admin roles (${roles.length})`,
+    '',
+    ...table(
+      ['Role', 'Permissions', 'Members'],
+      roles.map(role => [
+        role.name,
+        role.permissions.join(', '),
+        role.members.map(member => member.email ?? member.username ?? member.userId).join(', ') || null,
+      ])
+    ),
+    '',
+    `## ${keyHeading} (${apiKeys.length})`,
+    '',
+    keyScope,
+    '',
+    ...table(
+      ['Key id', 'Name', 'Owner', 'Owner is admin', 'Scopes', 'Created', 'Last used', 'Expires', ...DECISION_HEADERS],
+      apiKeys.map(key => [
+        key.id,
+        key.name,
+        key.ownerEmail ?? key.ownerId,
+        key.ownerIsAdmin ? 'yes' : 'no',
+        key.scopes.join(', ') || null,
+        day(key.createdAt),
+        day(key.lastUsedAt),
+        key.expiresAt ? day(key.expiresAt) : 'never',
+        '',
+        '',
+      ])
+    ),
+    '',
+    `## Active support access (${supportAccess.length})`,
+    '',
+    ...table(
+      ['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS],
+      delegationRows(supportAccess)
+    ),
+    '',
+    `## Active impersonation sessions (${impersonation.length})`,
+    '',
+    ...table(
+      ['Session id', 'Admin', 'User id', 'Started', 'Expires', ...DECISION_HEADERS],
+      delegationRows(impersonation)
+    ),
+    '',
+    '## Revocations',
+    '',
+    '| What was revoked | Revoked by | When | Note |',
+    '| --- | --- | --- | --- |',
+    '| | | | |',
+  ].join('\n');
+}
+
+/** Slack mrkdwn for the quarterly reminder: counts only, the per-account detail stays in the report. */
+export function formatAccessReviewSlackMessage(snapshot: Pick<AccessReviewSnapshot, 'quarter' | 'counts'>): string {
+  const entries = Object.entries(ACCESS_REVIEW_COUNT_LABELS) as Array<[keyof AccessReviewCounts, string]>;
+  return [
+    `:clipboard: *Quarterly access review due: ${snapshot.quarter}*`,
+    'Privileged access in the app database right now:',
+    ...entries.map(([key, label]) => `- ${label}: ${snapshot.counts[key]}`),
+    `Enumerate, decide keep or revoke for each grant, revoke, then re-run for the after counts and file the report. Runbook: \`${ACCESS_REVIEW_RUNBOOK}\``,
+  ].join('\n');
+}

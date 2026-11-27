@@ -36,10 +36,13 @@ ENABLED_EVENTS=(
   customer.deleted
   customer.subscription.deleted
   customer.subscription.updated
+  invoice.payment_action_required
   invoice.payment_failed
   invoice.payment_succeeded
   payment_intent.payment_failed
   payment_intent.succeeded
+  radar.early_fraud_warning.created
+  review.opened
 )
 
 RED='\033[0;31m'

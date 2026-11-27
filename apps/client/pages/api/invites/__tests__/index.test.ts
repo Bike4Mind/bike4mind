@@ -22,6 +22,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const listOwnPendingInvites = vi.hoisted(() => vi.fn());
+const flags = vi.hoisted(() => ({ spaces: true }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
+  isFeatureEnabled: vi.fn(async (name: string) => (name === 'EnableSpaces' ? flags.spaces : false)),
+}));
 vi.mock('@bike4mind/services', () => ({ sharingService: { listOwnPendingInvites } }));
 vi.mock('@bike4mind/database', () => ({ inviteRepository: {} }));
 
@@ -29,6 +33,39 @@ import '@pages/api/invites/index';
 
 describe('GET /api/invites', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('hides Space invites with EnableSpaces off and keeps the others', async () => {
+    flags.spaces = false;
+    listOwnPendingInvites.mockResolvedValue({
+      data: [
+        { id: 's1', type: 'Space', recipients: { pending: ['me@x.com'], accepted: [], refused: [] } },
+        { id: 'p1', type: 'Project', recipients: { pending: ['me@x.com'], accepted: [], refused: [] } },
+      ],
+      total: 2,
+    });
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'me' } });
+    Object.assign(req, { user: { id: 'me', email: 'me@x.com', isAdmin: false } });
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    const rows = Array.isArray(body) ? body : body.data;
+    expect(rows.map((row: { id: string }) => row.id)).toEqual(['p1']);
+  });
+
+  it('returns Space invites unchanged with EnableSpaces on', async () => {
+    flags.spaces = true;
+    listOwnPendingInvites.mockResolvedValue({
+      data: [{ id: 's1', type: 'Space', recipients: { pending: ['me@x.com'], accepted: [], refused: [] } }],
+      total: 1,
+    });
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'me' } });
+    Object.assign(req, { user: { id: 'me', email: 'me@x.com', isAdmin: false } });
+    await mockRefs.getHandler!(req, res);
+
+    const body = res._getJSONData();
+    const rows = Array.isArray(body) ? body : body.data;
+    expect(rows.map((row: { id: string }) => row.id)).toEqual(['s1']);
+  });
 
   it('calls listOwnPendingInvites with {limit,page} and returns the unwrapped data array', async () => {
     listOwnPendingInvites.mockResolvedValue({ data: [{ id: 'i1' }], total: 1 });

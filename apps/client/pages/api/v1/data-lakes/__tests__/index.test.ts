@@ -58,14 +58,16 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
         ? next()
         : res.status(403).json({ error: 'Feature not available', code: 'FEATURE_DISABLED' }),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRateLimitOptions(options);
     return (_req: unknown, _res: unknown, next: () => void) => next();
   },
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toMemberAccessContext: mockToMemberAccessContext }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
+  toMemberAccessContext: mockToMemberAccessContext,
+}));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -84,8 +86,9 @@ const rateLimitOptionsAtLoad: unknown = mockRateLimitOptions.mock.calls[0]?.[0];
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const MEMBER_CTX = { userId: 'u1', isAdmin: false, userTags: [], organizationIds: [], entitlementKeys: [] };
 
-const lakeConfig = (id: string) => ({
+const lakeConfig = (id: string, canManage = false) => ({
   id,
+  canManage,
   name: `Lake ${id}`,
   slug: `lake-${id}`,
   fileTagPrefix: `${id}:`,
@@ -129,7 +132,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockFeatureEnabled.value = true;
   mockToMemberAccessContext.mockResolvedValue(MEMBER_CTX);
-  mockListDataLakes.mockResolvedValue(DB_IDS.map(lakeConfig));
+  mockListDataLakes.mockResolvedValue(DB_IDS.map(id => lakeConfig(id)));
   mockFindLakes.mockImplementation(async (filter: { _id: { $in: string[] } }) => filter._id.$in.map(lakeDoc));
   mockComputeStats.mockResolvedValue({ fileCount: 9, totalSizeBytes: 90, totalChunkedChars: 0 });
 });
@@ -145,6 +148,26 @@ describe('GET /api/v1/data-lakes', () => {
     expect(body.next_cursor).toBeNull();
     expect(JSON.stringify(body)).not.toContain('editor only');
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('carries the list grant-aware manage flag as can_manage, false for a built-in lake', async () => {
+    const registry = DATA_LAKES[0];
+    mockListDataLakes.mockResolvedValue([
+      lakeConfig(DB_IDS[1], true),
+      lakeConfig(DB_IDS[2], false),
+      {
+        id: registry.id,
+        name: registry.name,
+        slug: registry.slug,
+        fileTagPrefix: registry.fileTagPrefix,
+        datalakeTag: registry.datalakeTag,
+        canManage: true,
+      },
+    ]);
+    const body = (await run())._getJSONData();
+    const flags = Object.fromEntries(body.data.map((l: { id: string; can_manage: boolean }) => [l.id, l.can_manage]));
+    expect(flags).toEqual({ [DB_IDS[1]]: true, [DB_IDS[2]]: false, [registry.id]: false });
+    expect(ListDataLakesResponseSchema.safeParse(body).success).toBe(true);
   });
 
   it('returns each lake tag, the value a session lakeScope takes', async () => {

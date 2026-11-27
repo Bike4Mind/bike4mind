@@ -246,6 +246,35 @@ The `concurrent-cap` test aborts the 3 long-running parents as soon as the 4th's
 - **MongoDB inspection is out of scope.** The script prints the exact `db.agentExecutions.findOne(...)` queries to run for parent/child linkage and credit-rollup verification — these need direct DB access.
 - **MFA test users.** The script fails fast if the test user has MFA configured. Use a non-MFA account for automated testing.
 
+## Seed a PR preview's admin settings
+
+A fresh preview never receives sensitive admin settings from staging (the preview data sync skips
+them), so provider-key-gated tools start out unavailable. `preview:seed-settings` fills them in from
+your shell environment in one command:
+
+```bash
+pnpm --filter @bike4mind/scripts preview:seed-settings --pr 1234 --dry-run
+pnpm --filter @bike4mind/scripts preview:seed-settings --pr 1234
+```
+
+- **Target:** `--pr <N>` or `--stage pr<N>`. Anything that is not exactly `pr<N>` (staging, production,
+  a typo) is refused before any network call.
+- **Write path:** the admin `PUT /api/settings/update` route, so each value is schema-validated,
+  encrypted at rest, audited and cache-invalidated exactly as an admin save from the UI. It needs no
+  `sst shell`, AWS session or database access.
+- **Auth:** `B4M_PREVIEW_ADMIN_TOKEN` (an admin bearer token on that preview), or
+  `E2E_CLEANUP_SECRET`, with which the script mints a throwaway emailless `settings:manage` delegate
+  (`qa-settings-seed-*-e2e`) for the run.
+- **Values come only from env vars**, never from flags, and are never printed. `--help` lists the
+  env var -> setting table (for example `OPENAI_API_KEY -> openaiDemoKey`,
+  `FIRECRAWL_API_KEY -> FirecrawlApiKey`, `OPENWEATHER_API_KEY -> OpenWeatherKey`). An unset env var
+  is reported as `skipped`, not an error.
+- **Idempotent:** each setting reports `set`, `unchanged` or `skipped`. A secret counts as unchanged
+  when its stored last 4 characters match; pass `--force` to re-send secrets anyway. `--only` takes a
+  comma-separated list of setting keys.
+- Other Lambda instances cache settings for up to 5 minutes, so a new key can take that long to show
+  up everywhere.
+
 ## Signup baseline and census
 
 `report:signup-baseline` is a read-only operator query pack. It emits JSON with signup and
@@ -307,3 +336,103 @@ wiring when that model exists.
   `NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`. No schedule or production query is executed by running
   tests. The trailing-90-day external signup count flags the 300- and 1,000-signup measurement
   thresholds, independently of the chosen baseline window.
+
+## Signup cohort sweep
+
+`report:signup-cohorts` is a read-only operator report of candidate signup groups. It reads stored
+email domains, local-part shapes, signup times and signup ASN/datacenter metadata, optionally adds
+precomputed domain facts, and writes a CSV. It performs no live DNS/RDAP lookups, database writes
+or account actions. A shared signal is a review candidate, not evidence that an account is abusive.
+
+Run inside an SST shell, keeping the CSV in private storage because it contains user ids and domains:
+
+```sh
+pnpm exec sst shell --stage staging \
+  pnpm --filter @bike4mind/scripts report:signup-cohorts \
+  --out signup-cohorts.csv \
+  --since 2026-10-01T00:00:00Z --until 2026-10-26T00:00:00Z --max-users 2000
+```
+
+Use explicit UTC timestamps for the `[since, until)` signup window. Omitted date limits are
+unbounded. `--max-users` reads only the earliest signups in the window (by `createdAt`, then id) and warns
+when the cap is hit; it does not produce a random or complete sample of each domain. The example is a bounded staging run, not production tuning.
+All tuning defaults are placeholders: set thresholds and shared-provider exclusions deliberately
+before interpreting a report. `--help` lists every option. Without `--facts` or `--shapes`, only
+stored signup ASN and time-window keys can link domains.
+
+Optional `--facts domain-facts.json` accepts this shape; every fact field is optional:
+
+```json
+{
+  "example.com": {
+    "mxHosts": ["mx.example.com"],
+    "nameservers": ["ns.example.com"],
+    "registrar": "Example Registrar",
+    "registeredAt": "2026-10-01T00:00:00Z"
+  }
+}
+```
+
+Fact keys and `--mailbox-domains` entries normalize to registrable domains. Use `--ignore-hosts`
+for shared MX/NS host suffixes and `--shapes alpha+digits,hex` (or `--shapes any`) to enable local-part
+shape signals. `--max-domains-per-key` caps ASN/time keys; `--max-domains-per-infra-key` separately
+caps MX, nameserver, registration and shape keys. Keys exceeding their cap appear as `common_key`
+rows and do not link domains.
+
+The CSV has one `member` row per grouped user, including edges and reasons. A `too_broad` status
+means the connected cohort exceeds `--max-cohort-domains`; inspect its edges rather than treating
+it as one actionable group. Missing facts, widespread capped keys, excluded mailbox providers or
+insufficient shared key kinds can produce no candidate cohorts. Check the `common_key` rows and
+chosen options before interpreting an empty report as absence of related signups. Invalid inputs
+or database failures exit unsuccessfully and log `[signup-cohort-sweep] failed`.
+
+## Curated model list (Desktop and CLI)
+
+`curated:keygen`, `curated:sign`, `curated:publish` and `curated:check-build` manage the signed list in `catalog/model-hub/curated-v2.json` (see each script's header for usage). `curated:publish` trusts the keyring on the canonical repo's `main`, while Desktop and the CLI trust the keyring shipped in their own builds, so a new key must ship in a Desktop or CLI release before lists signed only by it reach users.
+
+`curated:v2 [--check | --bump]` regenerates `curated-v2.json` from the `v2Channel` of `catalog/model-hub/curated-v3.json`; edit v3 and regenerate rather than editing v2 by hand. When the v2 content changes, add a `v2Channel.changelog` item for the next sequence and run `--bump`, which moves `v2Channel` to that sequence and records the new content hash.
+
+If the live list no longer verifies (corrupt bytes, or its key was dropped from `keys.json`), `curated:publish` refuses everything except a recovery-signed list: co-sign the replacement with the recovery key and give it a sequence above the one the live `latest.json.sig` names, which the script prints as a warning otherwise.
+
+## Database state snapshot
+
+`db:state` records a database's structural state to a JSON file and diffs two such files. Run a
+snapshot before and after maintenance or a large migration, then compare them. It connects with
+`autoIndex`/`autoCreate` off and is meant to send only the read commands listed in
+`src/dbState/readOnlyGuard.ts`. The guard watches commands as the driver sends them, so it detects
+a non-read command after it has reached the server; it cannot stop it. When it sees one, the run
+fails (exit 3) and no file is written. To make the run truly read-only, point `MONGODB_URI` at a
+database user that has only the `read` (or `readAnyDatabase`) role, especially on production: the
+default `MONGODB_URI` under `sst shell` is the app's read-write user. The connection string comes
+from `MONGODB_URI` (SST resource under `sst shell`, else the environment) and is never printed. The
+snapshot file holds no document data, but keep it out of the repo.
+
+```bash
+pnpm --filter @bike4mind/scripts db:state snapshot --out /tmp/before.json
+pnpm --filter @bike4mind/scripts db:state compare /tmp/before.json /tmp/after.json
+```
+
+`snapshot` writes: server version and replica set member count; per collection the type and
+options, estimated document count, every index with all of its options, and the search and
+vector search indexes (or why the server could not list them). Checks: TTL indexes whose
+`expireAfterSeconds` is not a finite number between 0 and 2147483647, and indexes declared in the
+Mongoose schemas but missing from the database, present but undeclared, or present with different
+options. Two snapshots of an unchanged database differ only in `takenAt`.
+
+| `snapshot` flag | Meaning |
+|---|---|
+| `--out <file>` | Required. Where to write the snapshot (mode 0600). |
+| `--exact-counts` | Also count every document per collection. Slow on large collections. |
+| `--no-schema-check` | Skip loading the Mongoose models and the schema-versus-database index check. |
+| `--undefined-scan <off\|top-level\|nested>` | Count documents holding a BSON `undefined` value. `off` by default; `top-level` counts on the server, `nested` walks every document. Reads from a secondary. |
+| `--scan-time-limit-ms <n>` | Time limit per collection for the undefined scan (default 60000). Collections that do not finish are listed as unfinished. |
+
+`compare` prints added (`+`), removed (`-`) and changed (`~`) collections, indexes, search
+indexes, count changes and check findings, then every finding in the after snapshot. Server
+version and differing snapshot settings are printed as notes. Exit code: 0 no differences, 1
+differences, 2 error.
+
+| `compare` flag | Meaning |
+|---|---|
+| `--count-tolerance <n>` | Ignore a document count change of up to `n` documents (default 0). |
+| `--count-tolerance-percent <p>` | Ignore a document count change of up to `p` percent of the before count (default 0). A change within either tolerance is ignored. |

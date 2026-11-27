@@ -53,7 +53,7 @@ const asString = (value: unknown): string | undefined =>
 const asNumber = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
-// Same shape as systemAuditActor() in apps/client/server/utils/adminAudit.ts (scripts cannot import apps/client).
+// Same shape as systemAuditActor() in packages/server-utils/src/utils/adminAudit.ts (scripts cannot import apps/client).
 const systemActorNamed = (name: string): AuditActor => ({ kind: 'system', scope: 'platform', name, wasAdmin: false });
 
 const UNKNOWN_ACTOR: AuditActor = {
@@ -259,7 +259,7 @@ const resolveOrgGranted = (flat: Metadata, row: CounterLogRow): ResolvedEvent =>
 
 const RESTORE_CONFIG_TYPE = 'whats-new-config';
 
-// Mirrors whats-new-config/restore.ts: one `config` change holding the whole before/after config.
+// Mirrors the retired config restore route: one `config` change holding the whole before/after config.
 const resolveWhatsNewRestore = (flat: Metadata): ResolvedEvent => {
   const { oldConfig, newConfig } = flat;
   const hasConfigs = isRecord(oldConfig) && isRecord(newConfig);
@@ -272,7 +272,7 @@ const resolveWhatsNewRestore = (flat: Metadata): ResolvedEvent => {
   };
 };
 
-// Mirrors whats-new/config.ts: one `syncConfig` change. The old row's per-field `changes` flags are
+// Mirrors the retired sync-config route: one `syncConfig` change. The old row's per-field `changes` flags are
 // derivable from before/after, so they are dropped only when that change is emitted.
 const resolveWhatsNewSyncConfig = (flat: Metadata): ResolvedEvent => {
   const { oldConfig, newConfig } = flat;

@@ -1,10 +1,19 @@
-// Intentional circular dependency: router.ts → waf.ts → wafPolicy.ts, and waf.ts is evaluated
-// after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
+// Intentional circular dependency: router.ts -> waf.ts -> wafPolicy.ts/wafAssociation.ts, and waf.ts is
+// evaluated after router.ts. This is safe because wafWebAcl is only consumed inside the transform.cdn
 // callback (lazy evaluation, not at import time). Do NOT access `router` from waf.ts at module
 // scope — it would be undefined at that point.
 import { wafWebAcl } from './waf';
 import { allowsUsercontentRequest } from '../packages/server-utils/src/utils/usercontentRequest';
-import { minifyRouterFunction } from './routerFunctionCode';
+import { isPreviewStage } from './constants';
+import {
+  USER_FILE_MARKER_HEADER,
+  noindexResponseInjection,
+  prepareRouterRequestFunction,
+  userFileCdnPrefixes as bareUserFileCdnPrefixes,
+  userFileCspInjection as userFileCspInjectionFor,
+} from './routerFunctionCode';
+import { AUTH_NETWORK_HEADERS, authNetworkCacheBehaviors, authNetworkJa4Injection } from './authNetworkForwarding';
+import { deleteRouterKvDataWithRouter } from './routerKvData';
 
 // const isPermanentStage = ['production', 'dev'].includes($app.stage);
 
@@ -17,17 +26,6 @@ export const domain =
   // SEED_STAGE_NAME is typically used in different deployment stages (like 'dev', 'staging', 'prod').
   // If SEED_STAGE_NAME is set, it appends it to 'previewDomain' to form a subdomain.
   ((process.env.SEED_STAGE_NAME || '').length > 0 ? `${process.env.SEED_STAGE_NAME}.${previewDomain}` : undefined);
-
-export function getAllowedOrigins(domain: string | undefined): string[] {
-  const origins = ['http://localhost:3000', 'https://localhost:3000'];
-
-  if (domain) {
-    origins.push(`https://app.${domain}`);
-    origins.push(`https://staging.${domain}`);
-  }
-
-  return origins;
-}
 
 // const router = isPermanentStage
 //   ? new sst.aws.Router('Router', {
@@ -74,6 +72,11 @@ export const isSharedRouterConsumer = !!shouldUseSharedRouter;
 // null when the stage isn't shared-dev or no domain is configured.
 const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.dev.${process.env.SERVER_DOMAIN}` : null;
 
+// The app host on stages where the Router below issues its certificate and writes its DNS
+// records, undefined everywhere else. Must stay in sync with the `domain` branch of the Router.
+export const managedAppDomain =
+  domain && !shouldUseSharedRouter && !sharedDevDomain && !process.env.APP_CERT_ARN ? `app.${domain}` : undefined;
+
 /**
  * Route prefix for shared dev router
  * When using shared router, namespace routes by stage to prevent conflicts
@@ -81,39 +84,12 @@ const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.d
  */
 export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${$app.stage}` : '';
 
-// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3.
-// The base list must mirror resolveProxyTarget in appFileProxy.ts (the allowlist of prefixes
-// routed through CloudFront) - i.e. the router.routeBucket(...) registrations in
-// infra/buckets.ts PLUS the tavern overlay's /tavern-sounds + /tavern-icons routes
-// (contributed via contributeTavernInfra, sst.config.ts) and /whats-new (a separate
-// distribution bucket the proxy can't serve, so it's here but absent from resolveProxyTarget).
-// KEEP IN SYNC with both; packages/scripts/src/checkUserFileCdnPrefixes.test.ts is the guard.
-// routePrefix is baked in so the prefixes are the literal URIs the viewer requests on EVERY
-// stage that owns its router - '' on deployed stages, '/<stage>' on `sst dev --stage
-// shared-dev` (routeBucket registers `${routePrefix}/generated`, etc.), where a bare
-// '/generated/' would never match.
-const userFileCdnPrefixes = [
-  '/generated/',
-  '/proxied-images/',
-  '/admin-logos/',
-  '/profile-photos/',
-  '/org-files/',
-  '/tavern-sounds/',
-  '/tavern-icons/',
-  '/app-config/',
-  '/whats-new/',
-].map(prefix => `${routePrefix}${prefix}`);
-
-// Same inert-document CSP the self-host proxy sets (apps/client/pages/api/app-files/serve/
-// [...key].ts). KEEP THE TWO IN SYNC - both serve these prefixes same-origin with the app.
-// allow-downloads keeps legitimate downloads of non-executable generated files (PDF, xlsx)
-// working; it grants no script/form/same-origin/popup capability, so the inertness the
-// backstop exists for is unchanged.
-const USER_FILE_CSP = "default-src 'none'; sandbox allow-downloads";
-// Request header stamped in the viewer-REQUEST function to mark a user-file request; read
-// back in the viewer-response function (see below). Any inbound value is cleared before the
-// prefix check so the marker stays function-owned, not client-settable.
-const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
+// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3 (the list
+// itself lives in routerFunctionCode.ts). routePrefix is baked in so the prefixes are the
+// literal URIs the viewer requests on EVERY stage that owns its router - '' on deployed
+// stages, '/<stage>' on `sst dev --stage shared-dev` (routeBucket registers
+// `${routePrefix}/org-files`, etc.), where a bare '/org-files/' would never match.
+const userFileCdnPrefixes = bareUserFileCdnPrefixes.map(prefix => `${routePrefix}${prefix}`);
 
 // Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
 // (an SVG or HTML uploaded as e.g. a profile photo) opened directly at its CDN URL must not
@@ -121,9 +97,9 @@ const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
 // Function (viewer-request) plus ONE viewer-response function, with no per-route cache
 // behaviors or ResponseHeadersPolicy to attach to. The catch: SST rewrites event.request.uri
 // INSIDE the viewer-request function (verified against the SST 4.17.1 Router source), so by
-// the viewer-response stage the URI is the rewritten S3 key (e.g. /generated/x -> /x), not
+// the viewer-response stage the URI is the rewritten S3 key (e.g. /org-files/x -> /organizations/x), not
 // the public prefix. Matching prefixes at response time would therefore silently miss the
-// four rewritten prefixes (/generated, /whats-new, /admin-logos, /org-files) - the very case
+// rewritten prefixes (/admin-logos, /org-files) - the very case
 // this backstop exists to cover. So we stamp a marker in the viewer-REQUEST injection, which
 // SST emits as the FIRST statement of the routing function (before its own rewrite), where
 // the URI is still the original prefix; the viewer-response function then keys off that
@@ -145,15 +121,26 @@ const userFileMarkerInjection = `
   }
 `;
 
-// Shared secret proving a request came through this distribution: the server function URL is
-// public, so apps/client/proxy.ts 403s any request without it (deployed stages only, via
-// ORIGIN_VERIFY_SECRET in infra/web.ts). The assignment replaces any inbound value (CloudFront
-// lowercases viewer header names), so a forged header is never trusted.
-// The header name must stay in sync with ORIGIN_VERIFY_HEADER in apps/client/proxy.ts.
+// Shared secret proving a request came through this distribution: the server function URL and the
+// ChatCompletion ALB are public, so apps/client/proxy.ts and
+// apps/client/server/chatCompletion/originVerify.ts 403 any request without it (deployed stages
+// only, via ORIGIN_VERIFY_SECRET in infra/web.ts and infra/chatCompletion.ts), and the ALB's
+// listener rules in infra/chatCompletion.ts forward only requests carrying it. The assignment
+// replaces any inbound value (CloudFront lowercases viewer header names), so a forged header is
+// never trusted. The header name must stay in sync with both of those files.
 export const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
 // special: false keeps the value alphanumeric, so it is safe inside the JS string literal below.
-export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', { length: 48, special: false });
+// Rotate by deploying with a new ORIGIN_VERIFY_SECRET_GENERATION (and DISABLE_ORIGIN_VERIFY='true'
+// until the edges have the new value, as on a first deploy). Keep it set afterwards: unsetting it
+// is a rotation too.
+const originVerifySecretGeneration = process.env.ORIGIN_VERIFY_SECRET_GENERATION || undefined;
+export const originVerifySecret = new random.RandomPassword('OriginVerifySecret', {
+  length: 48,
+  special: false,
+  ...(originVerifySecretGeneration ? { keepers: { generation: originVerifySecretGeneration } } : {}),
+});
 const originVerifyInjection = $interpolate`
+  ${authNetworkJa4Injection}
   event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" };
 `;
 
@@ -167,20 +154,7 @@ const usercontentGateInjection = `
 
 // Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
 // (/api/ai/v1/completions, ...) are left untouched.
-const userFileCspInjection = `
-  var __cspHit = event.request.headers["${USER_FILE_MARKER_HEADER}"] !== undefined;
-  if (!__cspHit) {
-    var __cspUri = event.request.uri;
-    var __cspPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
-    for (var __cspI = 0; __cspI < __cspPrefixes.length; __cspI++) {
-      if (__cspUri.indexOf(__cspPrefixes[__cspI]) === 0) { __cspHit = true; break; }
-    }
-  }
-  if (__cspHit) {
-    event.response.headers["content-security-policy"] = { value: "${USER_FILE_CSP}" };
-    event.response.headers["x-content-type-options"] = { value: "nosniff" };
-  }
-`;
+const userFileCspInjection = userFileCspInjectionFor(userFileCdnPrefixes);
 
 // Dev-only permissive CORS on every path (unchanged behavior; deployed stages rely on
 // per-bucket CORS config instead).
@@ -194,8 +168,33 @@ const devCorsInjection = `
 // that exceeds CloudFront's 10 KB limit. Transform only this Router's generated request code.
 $transform(aws.cloudfront.Function, (args, _opts, name) => {
   if (name !== 'RouterCloudfrontFunctionRequest') return;
-  args.code = $output(args.code).apply(minifyRouterFunction);
+  args.code = $output(args.code).apply(prepareRouterRequestFunction);
 });
+
+// CloudFront caps functions per account, and every preview's viewer-response code is the same
+// (sharedPreviewResponseFunctionCode in routerFunctionCode.ts), so previews attach one
+// account-level function the deployer points at instead of each creating its own. Unset keeps
+// today's per-stage function; the shared one is never created or deleted by a stage.
+const sharedResponseFunctionArn =
+  isPreviewStage && !$dev ? process.env.PREVIEW_SHARED_RESPONSE_FUNCTION_ARN || undefined : undefined;
+
+// CloudFront caps custom origin request policies per account (20 by default), so like the cache
+// policy above, a deployer can point every stage at one account-level policy instead of each
+// creating its own. docs/ja4-forwarding.md has the matching create command.
+const sharedAuthNetworkOriginRequestPolicyId = process.env.AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID || undefined;
+
+const authNetworkOriginRequestPolicyId = shouldUseSharedRouter
+  ? undefined
+  : (sharedAuthNetworkOriginRequestPolicyId ??
+    new aws.cloudfront.OriginRequestPolicy('AuthNetworkOriginRequestPolicy', {
+      comment: 'Forward trusted connection metadata on authentication requests',
+      headersConfig: {
+        headerBehavior: 'allViewerAndWhitelistCloudFront',
+        headers: { items: AUTH_NETWORK_HEADERS },
+      },
+      cookiesConfig: { cookieBehavior: 'all' },
+      queryStringsConfig: { queryStringBehavior: 'all' },
+    }).id);
 
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
@@ -238,15 +237,20 @@ const routerInstance = shouldUseSharedRouter
       // Attach both edge functions on every stage that owns its router (deployed +
       // shared-dev). The viewer-request function stamps the origin-verify secret and the
       // user-file marker BEFORE SST's URI rewrite; the viewer-response function reads the
-      // marker to apply the CSP backstop, and additionally injects permissive CORS on personal
-      // `sst dev` stages.
+      // marker to apply the CSP backstop, adds x-robots-tag noindex on every non-production
+      // stage, and additionally injects permissive CORS on personal `sst dev` stages.
+      // Previews on the shared response function get it attached in transform.cdn below.
       edge: {
         viewerRequest: {
           injection: $interpolate`${usercontentGateInjection}${originVerifyInjection}${userFileMarkerInjection}`,
         },
-        viewerResponse: {
-          injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
-        },
+        ...(sharedResponseFunctionArn
+          ? {}
+          : {
+              viewerResponse: {
+                injection: userFileCspInjection + noindexResponseInjection($app.stage) + ($dev ? devCorsInjection : ''),
+              },
+            }),
       },
       transform: {
         // When reusing an existing cache policy, import it into Pulumi state\
@@ -268,7 +272,36 @@ const routerInstance = shouldUseSharedRouter
             };
           }
 
-          // Attach SST-managed WAF if enabled (ENABLE_WAF=true).
+          // With edge.viewerResponse absent SST emits only the viewer-request association;
+          // append the shared function rather than replacing the list.
+          if (sharedResponseFunctionArn && args.defaultCacheBehavior) {
+            const behavior = args.defaultCacheBehavior as aws.types.input.cloudfront.DistributionDefaultCacheBehavior;
+            args.defaultCacheBehavior = {
+              ...behavior,
+              functionAssociations: $output(behavior.functionAssociations ?? []).apply(associations => [
+                ...associations,
+                { eventType: 'viewer-response', functionArn: sharedResponseFunctionArn },
+              ]),
+            };
+          }
+
+          // The request-function transform pins origin Host separately from the viewer hostname.
+          // Keep x-forwarded-host, cookies, Authorization and the existing cache/edge settings.
+          // Scope this policy to auth so S3 keeps the managed policy's response-* query filtering.
+          if (authNetworkOriginRequestPolicyId && args.defaultCacheBehavior) {
+            const existing = args.orderedCacheBehaviors as
+              aws.types.input.cloudfront.DistributionOrderedCacheBehavior[] | undefined;
+            args.orderedCacheBehaviors = [
+              ...(existing ?? []),
+              ...authNetworkCacheBehaviors(
+                args.defaultCacheBehavior as aws.types.input.cloudfront.DistributionDefaultCacheBehavior,
+                authNetworkOriginRequestPolicyId
+              ),
+            ];
+          }
+
+          // Attach the WAF if enabled (ENABLE_WAF=true): the stage-owned ACL, or the
+          // externally managed one looked up by name.
           // Uses SST v4's first-class webAclArn property on CdnArgs, which internally
           // maps to the CloudFront webAclId field — no manual transform chaining needed.
           if (wafWebAcl) {
@@ -332,6 +365,16 @@ export function cdnUrlForLambdaEnv() {
   return $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? LOCAL_FILE_PROXY_BASE : bareOrigin(routerInstance.url);
 }
 
+// Previews are created and torn down many times a day, and `sst remove` otherwise deletes
+// every routing key through the billed KeyValueStore API right before deleting the store
+// itself. Tie those keys to this router so a teardown skips them; see routerKvData.ts. The
+// transformation only sees resources registered after this line, which holds for every
+// route, site and function-URL key: they come from modules that import `router` below.
+// Preview-only, and never for a shared Router.get() router, whose store outlives this stage.
+if (isPreviewStage && !$dev && !shouldUseSharedRouter) {
+  $util.runtime.registerStackTransformation(args => deleteRouterKvDataWithRouter(args, routerInstance));
+}
+
 // Export router for other infrastructure to use
 export const router = routerInstance;
 
@@ -355,12 +398,6 @@ export const router = routerInstance;
 export function appUrlForLambdaEnv() {
   return bareOrigin(routerInstance.url);
 }
-
-export const whatsNewDistributionId = new sst.Linkable('whatsNewDistributionId', {
-  properties: {
-    value: router.distributionID,
-  },
-});
 
 // Explicitly expose the CloudFront distribution ID for backend discovery
 // The backend (apps/client/server/security/wafLogsInsights.ts) needs this to query WAF logs

@@ -7,6 +7,7 @@ import { UiNavigationEvents } from '@bike4mind/common';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 
 // Just enough of the menu's data hooks to render it; none of these rows are under test here.
 const router = vi.hoisted(() => ({ pathname: '/new', navigate: vi.fn() }));
@@ -16,7 +17,10 @@ vi.mock('@tanstack/react-router', () => ({
     select({ pathname: router.pathname }),
 }));
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string, fallback?: string) => fallback ?? key }),
+  useTranslation: () => ({
+    t: (key: string, fallback?: string, options?: Record<string, unknown>) =>
+      (fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(options?.[name] ?? '')),
+  }),
 }));
 vi.mock('@client/app/components/inbox/Badge', () => ({
   default: ({ children }: { children: React.ReactNode }) => children,
@@ -24,7 +28,14 @@ vi.mock('@client/app/components/inbox/Badge', () => ({
 const billing = vi.hoisted(() => ({ openView: vi.fn(), creditsEnabled: false }));
 const analytics = vi.hoisted(() => ({ mutate: vi.fn() }));
 const user = vi.hoisted(() => ({
-  current: { id: 'u1', name: 'Jane' } as { id: string; name: string; photoUrl?: string | null },
+  current: { id: 'u1', name: 'Jane' } as {
+    id: string;
+    name: string;
+    photoUrl?: string | null;
+    isAdmin?: boolean;
+    adminPermissions?: string[];
+  },
+  avatarVersion: 0,
 }));
 const config = vi.hoisted(() => ({ cdnUrl: 'https://cdn.example.test' as string | undefined }));
 vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
@@ -34,7 +45,18 @@ vi.mock('@client/app/contexts/InboxContext', () => ({
   useInbox: { getState: () => ({ setOpen: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ currentUser: user.current, isAdmin: false }),
+  useUser: (select: (s: unknown) => unknown) =>
+    select({ currentUser: user.current, isAdmin: false, avatarVersion: user.avatarVersion }),
+}));
+const userSettings = vi.hoisted(() => ({ updatePreferences: vi.fn(), showHelp: false, tutorials: false }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({
+    updatePreferences: userSettings.updatePreferences,
+    settings: { showHelp: userSettings.showHelp },
+  }),
+  useServerSettings: () => ({
+    serverSettings: [{ settingName: 'EnableCoreTutorials', settingValue: userSettings.tutorials }],
+  }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
@@ -50,14 +72,32 @@ vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: unknown) => unknown) => select({ impersonating: false }),
 }));
 vi.mock('@client/app/hooks/useAppVersion', () => ({ useAppVersion: () => ({ data: undefined }) }));
+const desktopPromo = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@client/app/hooks/useDesktopPromoEnabled', () => ({ useDesktopPromoEnabled: () => desktopPromo.enabled }));
+const preferenceArena = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@client/app/hooks/usePreferenceArenaEnabled', () => ({
+  usePreferenceArenaEnabled: () => preferenceArena.enabled,
+}));
 const features = vi.hoisted(() => ({ enabled: new Set<string>() }));
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: (key: string) => features.enabled.has(key) }),
 }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsTablet: () => false }));
 vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => ({ data: undefined }) }));
+type MockAccount = { id: string; name: string; personal: boolean; credits: number };
+const accountsState = vi.hoisted(() => ({
+  accounts: [] as MockAccount[],
+  selectedAccount: null as MockAccount | null,
+  refetchOrganizations: vi.fn(),
+}));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
-  useAccounts: () => ({ accounts: [], selectedAccount: null, setSelectedAccount: vi.fn(), showAccountType: false }),
+  useAccounts: () => ({
+    accounts: accountsState.accounts,
+    selectedAccount: accountsState.selectedAccount,
+    setSelectedAccount: vi.fn(),
+    showAccountType: accountsState.accounts.length > 1,
+    refetchOrganizations: accountsState.refetchOrganizations,
+  }),
 }));
 vi.mock('..', () => ({
   useNotebookLayout: (select: (s: unknown) => unknown) => select({ setOpenSideNav: vi.fn() }),
@@ -123,6 +163,7 @@ describe('ProfileMenu AccountCard - semantics', () => {
 describe('ProfileMenu - avatar', () => {
   afterEach(() => {
     user.current = { id: 'u1', name: 'Jane' };
+    user.avatarVersion = 0;
     config.cdnUrl = 'https://cdn.example.test';
     delete process.env.NEXT_PUBLIC_CDN_URL;
   });
@@ -179,6 +220,28 @@ describe('ProfileMenu - avatar', () => {
     const img = screen.getByTestId('profile-menu-avatar').querySelector('img');
     expect(img?.getAttribute('src')).toBe('https://build-cdn.example.test/profile-photos/u1/abc.png');
   });
+
+  // Joy's Avatar latches on a failed load of an unchanged src; only a remount re-requests it.
+  it('remounts the avatar when avatarVersion bumps, even with the same photo', () => {
+    user.current = { id: 'u1', name: 'Jane', photoUrl: 'profile-photos/u1/abc.png' };
+    const view = render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    const before = screen.getByTestId('profile-menu-avatar');
+
+    user.avatarVersion = 1;
+    view.rerender(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+    const after = screen.getByTestId('profile-menu-avatar');
+    expect(after).not.toBe(before);
+    expect(after.querySelector('img')?.getAttribute('src')).toBe('https://cdn.example.test/profile-photos/u1/abc.png');
+  });
 });
 
 describe('closeSideNavOnOverlay', () => {
@@ -196,6 +259,29 @@ describe('closeSideNavOnOverlay', () => {
     closeSideNavOnOverlay(false, setOpenSideNav);
 
     expect(setOpenSideNav).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProfileMenu - Admin entry', () => {
+  afterEach(() => {
+    user.current = { id: 'u1', name: 'Jane' };
+  });
+
+  it.each([
+    ['an admin', { isAdmin: true }, true],
+    ['a delegate with a tab to open', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
+    ['a delegate whose permissions open no tab', { isAdmin: false, adminPermissions: ['users:impersonate'] }, false],
+    ['a user with no admin role', { isAdmin: false }, false],
+  ])('is shown to %s', (_case, role, shown) => {
+    user.current = { id: 'u1', name: 'Jane', ...role };
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+
+    expect(screen.queryByTestId('profile-menu-admin') !== null).toBe(shown);
   });
 });
 
@@ -319,6 +405,74 @@ describe('ProfileMenu - billing rows open URL-addressable views', () => {
     fireEvent.click(screen.getByTestId('profile-menu-billing'));
     expect(billing.openView).toHaveBeenCalledWith('credits', { focusSection: false });
     expect(analytics.mutate).toHaveBeenCalledWith({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
+  });
+});
+
+describe('ProfileMenu - Send feedback', () => {
+  beforeEach(() => {
+    userSettings.updatePreferences.mockClear();
+    userSettings.showHelp = false;
+    billing.creditsEnabled = false;
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    const trigger = screen.getByTestId('profile-menu-card');
+    fireEvent.click(trigger);
+    return trigger;
+  };
+
+  it('shows a top-level Send feedback row even when credits are disabled', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-send-feedback')).toHaveTextContent('Send Feedback');
+  });
+
+  it('sits directly after Billing when credits are enabled', () => {
+    billing.creditsEnabled = true;
+    openMenu();
+    expect(screen.getByTestId('profile-menu-billing').nextElementSibling).toBe(
+      screen.getByTestId('profile-menu-send-feedback')
+    );
+    billing.creditsEnabled = false;
+  });
+
+  it('offers no Tutorials row while core tutorials are switched off', () => {
+    openMenu();
+    expect(screen.queryByTestId('profile-menu-tutorials')).not.toBeInTheDocument();
+  });
+
+  it('offers Tutorials once core tutorials are switched on, and opens the picker', () => {
+    userSettings.tutorials = true;
+    try {
+      openMenu();
+      fireEvent.click(screen.getByTestId('profile-menu-tutorials'));
+      expect(useTutorialPicker.getState().open).toBe(true);
+      expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    } finally {
+      userSettings.tutorials = false;
+      useTutorialPicker.setState({ open: false });
+    }
+  });
+
+  it('opens the feedback form (set, never toggle) and closes the menu', () => {
+    const trigger = openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-send-feedback'));
+    expect(userSettings.updatePreferences).toHaveBeenCalledTimes(1);
+    expect(userSettings.updatePreferences).toHaveBeenCalledWith({ showHelp: true });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('still sets showHelp true when the feedback form is already open', () => {
+    userSettings.showHelp = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-send-feedback'));
+    expect(userSettings.updatePreferences).toHaveBeenCalledTimes(1);
+    expect(userSettings.updatePreferences).toHaveBeenCalledWith({ showHelp: true });
   });
 });
 
@@ -461,6 +615,53 @@ describe('ProfileMenu - focus after navigating', () => {
     fireEvent.click(screen.getByTestId('profile-menu-connections'));
     expect(router.navigate).toHaveBeenCalledWith({ to: '/integrations', search: { source: 'profile_menu' } });
     expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - desktop app link', () => {
+  beforeEach(() => {
+    router.pathname = '/new';
+    router.navigate.mockClear();
+  });
+
+  afterEach(() => {
+    desktopPromo.enabled = false;
+    preferenceArena.enabled = false;
+  });
+
+  const openMenu = () => {
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+  };
+
+  it('opens the desktop download page and closes the menu', () => {
+    desktopPromo.enabled = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-desktop-app'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/desktop' });
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+
+  it('is absent when the deployment turned the desktop promo off', () => {
+    openMenu();
+    expect(screen.getByTestId('profile-menu-panel')).toBeInTheDocument();
+    expect(screen.queryByTestId('profile-menu-desktop-app')).not.toBeInTheDocument();
+  });
+
+  it('opens the preference arena when the deployment enabled it', () => {
+    preferenceArena.enabled = true;
+    openMenu();
+    fireEvent.click(screen.getByTestId('profile-menu-arena'));
+    expect(router.navigate).toHaveBeenCalledWith({ to: '/arena' });
+  });
+
+  it('hides the preference arena row while the flag is off', () => {
+    openMenu();
+    expect(screen.queryByTestId('profile-menu-arena')).not.toBeInTheDocument();
   });
 });
 
@@ -640,5 +841,54 @@ describe('ProfileMenu - Hearth', () => {
   it('hides Hearth when its flag is off', () => {
     openMoreFlyout();
     expect(screen.queryByTestId('profile-more-hearth')).not.toBeInTheDocument();
+  });
+});
+
+describe('ProfileMenu - active account', () => {
+  const personal = { id: 'u1', name: 'Jane (Personal)', personal: true, credits: 10 };
+  const team = { id: 'org1', name: 'Acme & Co', personal: false, credits: 500 };
+
+  afterEach(() => {
+    accountsState.accounts = [];
+    accountsState.selectedAccount = null;
+    accountsState.refetchOrganizations.mockClear();
+  });
+
+  const renderMenu = () =>
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+
+  it('names the active team on the card', () => {
+    accountsState.accounts = [personal, team];
+    accountsState.selectedAccount = team;
+    renderMenu();
+
+    const active = screen.getByTestId('profile-menu-active-account');
+    expect(active).toHaveTextContent('Acme & Co');
+    expect(active).toHaveTextContent('(Team)');
+  });
+
+  it('labels the personal account as Personal', () => {
+    accountsState.accounts = [personal, team];
+    accountsState.selectedAccount = personal;
+    renderMenu();
+
+    expect(screen.getByTestId('profile-menu-active-account')).toHaveTextContent('Personal');
+    expect(screen.getByTestId('profile-menu-card')).not.toHaveTextContent('(Team)');
+  });
+
+  it('refetches account balances each time the menu opens', () => {
+    renderMenu();
+    expect(accountsState.refetchOrganizations).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    expect(accountsState.refetchOrganizations).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    expect(accountsState.refetchOrganizations).toHaveBeenCalledTimes(2);
   });
 });

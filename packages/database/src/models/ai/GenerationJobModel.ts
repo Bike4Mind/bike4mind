@@ -29,6 +29,7 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     ownerType: { type: String, enum: [CreditHolderType.User, CreditHolderType.Organization], required: true },
     ownerId: { type: String, required: true },
     requestedBy: { type: String, required: true },
+    apiKeyId: { type: String },
     source: { type: String, enum: [...GENERATION_JOB_SOURCES], required: true },
     state: { type: String, enum: [...GENERATION_JOB_STATES], required: true },
     // Kind-specific; validated by the kind's Zod schemas at the service boundary, not by Mongoose.
@@ -43,15 +44,28 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
     deadlineAt: { type: Date, required: true },
     idempotencyKey: { type: String },
     creditHold: { type: Schema.Types.Mixed, default: null },
+    // Validated by CompletionRunAttributionSchema at the route; stored as sent for the settlement ledger row.
+    run: { type: Schema.Types.Mixed },
+    runClaim: new Schema(
+      { runId: { type: String, required: true }, credits: { type: Number, required: true } },
+      { _id: false }
+    ),
     settledCredits: { type: Number },
     error: new Schema(
-      { code: { type: String, required: true }, message: { type: String, required: true } },
+      {
+        code: { type: String, required: true },
+        message: { type: String, required: true },
+        providerStatus: { type: Number },
+        retryAfterSeconds: { type: Number },
+        cutOffByStepDeadline: { type: Boolean },
+      },
       { _id: false }
     ),
     // Raw provider payloads can be large and are never returned to clients.
     rawProviderError: { type: Schema.Types.Mixed, select: false },
     terminalHandlingClaimedAt: { type: Date, default: null },
     terminalHandledAt: { type: Date, default: null },
+    groupCompletionNotifiedAt: { type: Date, default: null },
     questId: { type: String },
     delivery: new Schema(
       {
@@ -72,6 +86,11 @@ GenerationJobSchema.index({ state: 1, nextPollAt: 1 });
 GenerationJobSchema.index({ state: 1, terminalHandledAt: 1, updatedAt: 1 });
 // Serves the public list endpoint (newest first per requester); kind/state/source are residual filters.
 GenerationJobSchema.index({ requestedBy: 1, _id: -1 });
+// Serves findByGroup, run once per finished take to see whether its group is done.
+GenerationJobSchema.index(
+  { requestedBy: 1, 'payload.groupId': 1 },
+  { partialFilterExpression: { 'payload.groupId': { $type: 'string' } } }
+);
 GenerationJobSchema.index(
   { ownerType: 1, ownerId: 1, idempotencyKey: 1 },
   { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
@@ -107,6 +126,26 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
 
   async findByIdempotencyKey(ownerType: IGenerationJob['ownerType'], ownerId: string, key: string) {
     return toJob(await this.jobModel.findOne({ ownerType, ownerId, idempotencyKey: key }));
+  }
+
+  /**
+   * The user's own-credit job holds created since `since` that have neither settled nor been released, for the
+   * new-account spend cap (newAccountSpendCapAdapters.ts). A settled hold is excluded because its ledger row
+   * already counts it. Served by the { ownerType, ownerId, createdAt } index.
+   */
+  async findOutstandingHoldsForUser(userId: string, since: Date): Promise<Array<{ at: Date; credits: number }>> {
+    const docs = await this.jobModel
+      .find({
+        ownerType: CreditHolderType.User,
+        ownerId: userId,
+        createdAt: { $gte: since },
+        creditHold: { $ne: null },
+        settledCredits: { $exists: false },
+        terminalHandledAt: null,
+      })
+      .select({ creditHold: 1, createdAt: 1 })
+      .lean<Array<{ creditHold: { reservedCredits: number }; createdAt: Date }>>();
+    return docs.map(doc => ({ at: doc.createdAt, credits: doc.creditHold.reservedCredits }));
   }
 
   // Leasable: unleased (or lease expired) and either still in flight or terminal with handling not done.
@@ -171,17 +210,31 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     await this.jobModel.updateOne({ _id: id }, { $set: { terminalHandledAt: at } });
   }
 
+  async findByGroup(requestedBy: string, groupId: string) {
+    const docs = await this.jobModel.find({ requestedBy, kind: 'image', 'payload.groupId': groupId }).sort({ _id: 1 });
+    return docs.map(doc => doc.toJSON() as IGenerationJobDocument);
+  }
+
+  async claimGroupCompletionNotice(id: string, at: Date) {
+    const result = await this.jobModel.updateOne(
+      { _id: id, groupCompletionNotifiedAt: null },
+      { $set: { groupCompletionNotifiedAt: at } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   async recordSettlement(id: string, settledCredits: number) {
     await this.jobModel.updateOne({ _id: id }, { $set: { settledCredits } });
   }
 
-  async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+  async listByRequester({ requestedBy, kind, state, source, beforeId, compositionId, limit }: ListByRequesterQuery) {
     const docs = await this.jobModel
       .find({
         requestedBy,
         kind,
         ...(state && { state }),
         ...(source && { source }),
+        ...(compositionId && { 'payload.request.compositionId': compositionId }),
         ...(beforeId && { _id: { $lt: new mongoose.Types.ObjectId(beforeId) } }),
       })
       .sort({ _id: -1 })

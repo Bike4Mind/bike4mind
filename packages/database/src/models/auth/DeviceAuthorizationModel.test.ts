@@ -79,4 +79,39 @@ describe('DeviceAuthorizationModel repository', () => {
     }
     expect(await deviceAuthorizationRepository.countPendingAndUnexpired()).toBe(2);
   });
+
+  describe('atomic redemption', () => {
+    it('redeems an approved device code once under concurrent requests', async () => {
+      const doc = await deviceAuthorizationRepository.create(base({ status: 'approved', userId: 'u1' }));
+      const results = await Promise.all([
+        deviceAuthorizationRepository.claimApproved(doc.id),
+        deviceAuthorizationRepository.claimApproved(doc.id),
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(results.find(Boolean)?.status).toBe('consumed');
+    });
+
+    it('does not claim a code that is not approved', async () => {
+      const doc = await deviceAuthorizationRepository.create(base());
+      expect(await deviceAuthorizationRepository.claimApproved(doc.id)).toBeNull();
+    });
+
+    it('records one poll when two arrive inside the interval', async () => {
+      const doc = await deviceAuthorizationRepository.create(base());
+      const results = await Promise.all([
+        deviceAuthorizationRepository.recordPollIfDue(doc.id, 5000),
+        deviceAuthorizationRepository.recordPollIfDue(doc.id, 5000),
+      ]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      const stored = await deviceAuthorizationRepository.findById(doc.id);
+      expect(stored?.pollCount).toBe(1);
+      expect(stored?.lastPolledAt).toBeInstanceOf(Date);
+    });
+
+    it('records a poll once the interval has elapsed', async () => {
+      const doc = await deviceAuthorizationRepository.create(base({ lastPolledAt: new Date(Date.now() - 6000) }));
+      expect(await deviceAuthorizationRepository.recordPollIfDue(doc.id, 5000)).not.toBeNull();
+      expect(await deviceAuthorizationRepository.recordPollIfDue(doc.id, 5000)).toBeNull();
+    });
+  });
 });

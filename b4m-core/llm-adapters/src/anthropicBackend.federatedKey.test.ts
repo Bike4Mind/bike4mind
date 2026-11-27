@@ -21,6 +21,10 @@ describe('AnthropicBackend federated key', () => {
     expect(clientKey(new AnthropicBackend(ANTHROPIC_FEDERATED_KEY))).toBeNull();
   });
 
+  it('treats the literal federated string as a static user key', () => {
+    expect(clientKey(new AnthropicBackend('federated'))).toBe('federated');
+  });
+
   it('passes a real key through unchanged', () => {
     expect(clientKey(new AnthropicBackend('sk-ant-test'))).toBe('sk-ant-test');
   });

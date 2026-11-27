@@ -123,7 +123,6 @@ export const AnnotationDtoSchema = z.object({
   id: z.string(),
   publicId: z.string(),
   kind: AnnotationKindSchema,
-  authorId: z.string(),
   authorDisplayName: z.string(),
   body: z.string(),
   anchor: AnnotationAnchorSchema.optional(),
@@ -150,5 +149,6 @@ export type ListAnnotationsResponse = z.infer<typeof ListAnnotationsResponseSche
 export const CanCommentResponseSchema = z.object({
   commentPolicy: CommentPolicySchema,
   canComment: z.boolean(),
+  mineIds: z.array(z.string()),
 });
 export type CanCommentResponse = z.infer<typeof CanCommentResponseSchema>;

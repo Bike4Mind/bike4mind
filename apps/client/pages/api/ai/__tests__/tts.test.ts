@@ -1,97 +1,77 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CreditHolderType } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  ForbiddenError,
+  isZodError,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  SpeechGenerationSchema,
+} from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 
-const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError, UnprocessableEntityError } =
-  vi.hoisted(() => {
-    class InsufficientCreditsPreflightError extends Error {}
-    class TtsProviderNotConfiguredError extends Error {}
-    class UnprocessableEntityError extends Error {}
-    return {
-      InsufficientCreditsPreflightError,
-      TtsProviderNotConfiguredError,
-      UnprocessableEntityError,
-      mocks: {
-        synthesizeTts: vi.fn(),
-        hasTtsProviderKey: vi.fn(),
-        estimateTtsCreditCost: vi.fn(),
-        holdPreflightCredits: vi.fn(),
-        releaseHold: vi.fn(),
-        deductTtsCredits: vi.fn(),
-        saveGeneratedAssetToFiles: vi.fn(),
-        upload: vi.fn(),
-        getSignedUrl: vi.fn(),
-        orgFindById: vi.fn(),
-        orgFindAccessibleById: vi.fn(),
-      },
-    };
-  });
+const { mocks } = vi.hoisted(() => ({
+  mocks: {
+    createSpeechJob: vi.fn(),
+    runAudioJobInline: vi.fn(),
+    requestAudioJobCancel: vi.fn(),
+    readAudioJobOutput: vi.fn(),
+    fabFileFindById: vi.fn(),
+    upload: vi.fn(),
+    getSignedUrl: vi.fn(),
+    orgFindById: vi.fn(),
+    orgFindAccessibleById: vi.fn(),
+    generationJobFindById: vi.fn(),
+    resolvePaidCallRun: vi.fn(),
+  },
+}));
 
-// Contract-adapter mock: unwrap the post handler and stand in for the prelude by
-// exposing the body as `req.validated`. Passthrough, not a real parse - schema
-// validation is covered by the common package; here the well-formed body is
-// driven straight through to exercise the route logic.
+vi.mock('@server/completionRuns/paidCallRun', () => ({
+  resolvePaidCallRun: (...a: unknown[]) => mocks.resolvePaidCallRun(...a),
+}));
+
+// Contract-adapter mock: runs the contract's own request schema into `req.validated` (so body validation stays
+// under test), then the handler. A thrown ZodError maps to 422 (mirroring the real errorHandler), any other thrown
+// error to its statusCode or 500.
 vi.mock('@server/middlewares/defineNextRoute', () => ({
-  nextRouteForContract: () => ({
-    post:
-      (fn: (req: Record<string, unknown>, res: unknown) => unknown) => (req: Record<string, unknown>, res: unknown) => {
-        req.validated = req.body;
-        return fn(req, res);
-      },
+  nextRouteForContract: (contract: { request: { parse: (body: unknown) => unknown } }) => ({
+    post: (fn: (req: unknown, res: unknown) => unknown) => async (req: unknown, res: unknown) => {
+      try {
+        (req as { validated?: unknown }).validated = contract.request.parse((req as { body?: unknown }).body);
+        return await fn(req, res);
+      } catch (err) {
+        const statusCode = (err as { statusCode?: number })?.statusCode;
+        const status = isZodError(err) ? 422 : typeof statusCode === 'number' ? statusCode : 500;
+        (res as { status: (n: number) => { json: (b: unknown) => void } })
+          .status(status)
+          .json({ error: (err as Error)?.message, ...(err as { additionalInfo?: object }).additionalInfo });
+      }
+    },
   }),
 }));
 
-// Real common (shouldPersistGeneratedAudio, extensionFromMimeType) with the TTS tables pinned.
-vi.mock('@bike4mind/common', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/common')>()),
-  UnprocessableEntityError,
-  DEFAULT_TTS_PROVIDER: 'openai',
-  synthesizeSpeechContract: { method: 'post', path: '/api/ai/tts', auth: 'apiKeyOrJwt', responses: {} },
-  TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
-  VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
-  TTS_DEFAULT_MODEL: { openai: 'tts-1', elevenlabs: 'eleven_multilingual_v2' },
-  estimateTtsCreditCost: (...a: unknown[]) => mocks.estimateTtsCreditCost(...a),
+const createSpeechJobDeps = { sentinel: 'createSpeechJobDeps' };
+vi.mock('@bike4mind/services/audioJobs', () => ({
+  createSpeechJob: (...a: unknown[]) => mocks.createSpeechJob(...a),
+  inlineMinStepMs: (kind: string) => (kind === 'speech' ? 40_000 : 39_000),
 }));
-
-vi.mock('@server/utils/resolveTtsProvider', () => ({
-  TtsProviderNotConfiguredError,
-  hasTtsProviderKey: (...args: unknown[]) => mocks.hasTtsProviderKey(...args),
-}));
-// The provider-selection + fallback loop is covered in synthesizeTts.test.ts;
-// here it is a seam so the route's own branching is what's under test.
-vi.mock('@server/utils/synthesizeTts', () => ({
-  synthesizeTts: (...a: unknown[]) => mocks.synthesizeTts(...a),
-  upstreamStatus: (error: unknown) => (error as { status?: number })?.status,
-  isCredentialRejection: (error: unknown) => {
-    const status = (error as { status?: number })?.status;
-    return status === 401 || status === 403;
-  },
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({
+  getCreateSpeechJobDeps: () => createSpeechJobDeps,
+  runAudioJobInline: (...a: unknown[]) => mocks.runAudioJobInline(...a),
+  requestAudioJobCancel: (...a: unknown[]) => mocks.requestAudioJobCancel(...a),
+  readAudioJobOutput: (...a: unknown[]) => mocks.readAudioJobOutput(...a),
 }));
 vi.mock('@bike4mind/database', () => ({
+  fabFileRepository: { findById: (...a: unknown[]) => mocks.fabFileFindById(...a) },
+  generationJobRepository: { findById: (...a: unknown[]) => mocks.generationJobFindById(...a) },
   organizationRepository: {
     findById: (...a: unknown[]) => mocks.orgFindById(...a),
     shareable: { findAccessibleById: (...a: unknown[]) => mocks.orgFindAccessibleById(...a) },
   },
 }));
-// Real membership predicate: the resolver's roster re-check is what these tests exercise.
+// Real membership predicate: the billing resolver's roster re-check is what the billing tests exercise.
 vi.mock('@bike4mind/services', async () => {
   const services = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
   return { organizationService: { isCurrentOrgMember: services.organizationService.isCurrentOrgMember } };
 });
-vi.mock('@server/utils/deductTtsCredits', () => ({
-  deductTtsCredits: (...a: unknown[]) => mocks.deductTtsCredits(...a),
-}));
-vi.mock('@server/utils/creditPreflight', () => ({
-  holdPreflightCredits: (...a: unknown[]) => mocks.holdPreflightCredits(...a),
-  InsufficientCreditsPreflightError,
-}));
-// Mock the persistence helper so this route test doesn't pull in the real
-// FabFile/services/database stack (which references @bike4mind/common exports
-// not provided by the partial mock above).
-vi.mock('@server/utils/saveGeneratedAssetToFiles', () => ({
-  saveGeneratedAssetToFiles: (...a: unknown[]) => mocks.saveGeneratedAssetToFiles(...a),
-}));
-
 // Only the oversized-audio offload touches storage; the delivery module itself is real.
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({
@@ -100,244 +80,598 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   }),
 }));
 
+import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
 import { GENERATED_AUDIO_TOO_LARGE_MESSAGE } from '@server/utils/generatedAudioDelivery';
+vi.mock('@server/generations/routeDeps', () => ({
+  mapperDeps: { sign: vi.fn(), now: () => new Date('2026-10-06T00:02:00Z') },
+}));
+
+import { UNDELIVERABLE_MAY_BILL_MESSAGE } from '@server/generations/syncAudioJob';
 import handler from '../tts';
+
+const AUDIO = Buffer.from([1, 2, 3]);
 
 const run = (
   body: Record<string, unknown>,
-  user: { id?: string; organizationId?: string | null; isAdmin?: boolean } | undefined = { id: 'u1' },
-  apiKeyInfo?: unknown
+  user: Record<string, unknown> | undefined = { id: 'u1' },
+  apiKeyInfo?: Record<string, unknown>,
+  headers: Record<string, string | string[]> = {}
 ) => {
-  const { req, res } = createMocks({ method: 'POST', body });
-  (req as Record<string, unknown>).user = user;
-  if (apiKeyInfo) (req as Record<string, unknown>).apiKeyInfo = apiKeyInfo;
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  (req as Record<string, unknown>).logger = logger;
-  return {
-    res,
-    logger,
-    promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res),
-  };
+  Object.assign(req, { user, logger, ...(apiKeyInfo && { apiKeyInfo }) });
+  return { res, logger, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
-const synthesisResult = () => ({
-  audio: Buffer.from([1, 2, 3]),
-  contentType: 'audio/mpeg',
-  format: 'mp3',
-  model: 'tts-1',
-  characters: 5,
+const speechJob = (overrides: Record<string, unknown> = {}, payload: Record<string, unknown> = {}) => ({
+  id: 'job-1',
+  kind: 'speech',
+  state: 'succeeded',
+  payload: {
+    request: { text: 'hi', provider: 'openai' },
+    candidates: ['openai'],
+    saveToFiles: true,
+    producedBy: { provider: 'openai', model: 'tts-1' },
+    output: { location: 'files', s3Key: 'k/speech-1.mp3', fileId: 'fab-1', contentType: 'audio/mpeg', bytes: 3 },
+    ...payload,
+  },
+  ...overrides,
 });
 
-const heldCredits = { settle: vi.fn(), release: (...a: unknown[]) => mocks.releaseHold(...a) };
-
-const okSynthesis = (vendor = 'openai', fallbackFrom?: string) =>
-  mocks.synthesizeTts.mockResolvedValue({ vendor, result: synthesisResult(), fallbackFrom });
+const created = { ok: true, job: { id: 'job-1' }, created: true };
+const refusal = (status: number, code: string, message: string, extra: Record<string, unknown> = {}) => ({
+  ok: false,
+  status,
+  code,
+  message,
+  ...extra,
+});
+const createInput = (call = 0) => mocks.createSpeechJob.mock.calls[call][0];
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  mocks.holdPreflightCredits.mockResolvedValue(heldCredits);
-  mocks.hasTtsProviderKey.mockResolvedValue(true);
-  mocks.releaseHold.mockResolvedValue(undefined);
-  mocks.estimateTtsCreditCost.mockImplementation((_v: string, _m: string, chars: number) => chars * 10);
-  mocks.deductTtsCredits.mockResolvedValue(undefined);
+  mocks.resolvePaidCallRun.mockResolvedValue(undefined);
+  mocks.createSpeechJob.mockResolvedValue(created);
+  mocks.runAudioJobInline.mockResolvedValue(speechJob());
+  mocks.readAudioJobOutput.mockResolvedValue(AUDIO);
+  mocks.fabFileFindById.mockResolvedValue({ id: 'fab-1', fileName: 'speech-1.mp3', fileUrl: 'https://s3/get' });
   mocks.upload.mockResolvedValue(undefined);
   mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
-  mocks.saveGeneratedAssetToFiles.mockResolvedValue({
-    saved: true,
-    fileId: 'fab-1',
-    s3Key: 'k/speech-1.mp3',
-    fileName: 'speech-1.mp3',
-    fileUrl: 'https://s3/get',
-  });
   // Billing fixtures: every named org exists and every caller belongs to the one they name.
-  mocks.orgFindById.mockImplementation(async (id: string) => ({
-    id,
-    currentCredits: 1000,
-    userDetails: [],
-    users: [{ userId: 'u1' }],
-  }));
+  mocks.orgFindById.mockImplementation(async (id: string) => ({ id, users: [{ userId: 'u1' }] }));
   mocks.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) => ({ id }));
-  okSynthesis();
 });
 
 describe('POST /api/ai/tts', () => {
-  it('rejects an unsupported (vendor, format) pair with 422 before any provider cost', async () => {
-    const { promise } = run({ text: 'hi', provider: 'elevenlabs', format: 'wav' });
-    await expect(promise).rejects.toBeInstanceOf(UnprocessableEntityError);
-    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+  it('creates a speech job with the request, then returns the binary clip with the save headers', async () => {
+    const { res, promise } = run({ text: 'hi', voice: 'nova', format: 'mp3' }, { id: 'u1', preferredVoice: 'echo' });
+    await promise;
+
+    expect(mocks.createSpeechJob).toHaveBeenCalledWith(
+      {
+        user: { id: 'u1', organizationId: null, adminRoleWithheld: false },
+        request: expect.objectContaining({ text: 'hi', provider: 'openai', voice: 'nova', format: 'mp3' }),
+        source: 'studio',
+        apiKeyId: undefined,
+        saveToFiles: true,
+        preferredVoice: 'echo',
+      },
+      createSpeechJobDeps
+    );
+    expect(mocks.runAudioJobInline).toHaveBeenCalledWith('job-1', {
+      timeoutMs: expect.any(Number),
+      minStepMs: 40_000,
+      stepReserveMs: 11_000,
+    });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toEqual(AUDIO);
+    expect(res.getHeader('Content-Type')).toBe('audio/mpeg');
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
+    expect(res.getHeader('X-B4M-Audio-Fab-File-Id')).toBe('fab-1');
+    expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('speech-1.mp3');
+    expect(res.getHeader('X-B4M-Audio-File-Url')).toBe('https://s3/get');
+    expect(res.getHeader('X-B4M-Tts-Provider')).toBeUndefined();
+  });
+
+  it('returns base64 JSON with the format, save fields and no substitution fields', async () => {
+    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body).toMatchObject({
+      delivery: 'inline',
+      audio: AUDIO.toString('base64'),
+      contentType: 'audio/mpeg',
+      format: 'mp3',
+      saved: true,
+      fabFileId: 'fab-1',
+      fileName: 'speech-1.mp3',
+    });
+    expect(body).not.toHaveProperty('fallbackFrom');
+  });
+
+  it('marks an API-key call as source api and passes its key id and admin withholding', async () => {
+    const { promise } = run({ text: 'hi' }, { id: 'u1' }, { keyId: 'key-1', scopes: ['ai:generate'] });
+    await promise;
+    expect(createInput()).toMatchObject({
+      source: 'api',
+      apiKeyId: 'key-1',
+      user: { id: 'u1', organizationId: null, adminRoleWithheld: true },
+    });
+  });
+
+  it('reports a substituted provider in the body and headers, with the alternate default format', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({}, { producedBy: { provider: 'elevenlabs', model: 'eleven_multilingual_v2' } })
+    );
+    // wav is an OpenAI format ElevenLabs cannot produce, so the alternate fell back to its mp3 default.
+    const { res, promise } = run({ text: 'hi', format: 'wav', encoding: 'base64' });
+    await promise;
+    expect(res.getHeader('X-B4M-Tts-Provider')).toBe('elevenlabs');
+    expect(res.getHeader('X-B4M-Tts-Provider-Fallback-From')).toBe('openai');
+    expect(res._getJSONData()).toMatchObject({ provider: 'elevenlabs', fallbackFrom: 'openai', format: 'mp3' });
+  });
+
+  it('keeps the requested format when the requested provider produced the clip', async () => {
+    const { res, promise } = run({ text: 'hi', format: 'wav', encoding: 'base64' });
+    await promise;
+    expect(res._getJSONData()).toMatchObject({ format: 'wav' });
+  });
+
+  it('skips persistence for a throwaway preview: no save fields, no Files lookup', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob(
+        {},
+        { saveToFiles: false, output: { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 3 } }
+      )
+    );
+    const { res, promise } = run({ text: 'hi', preview: true });
+    await promise;
+    expect(createInput().saveToFiles).toBe(false);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
+    expect(mocks.fabFileFindById).not.toHaveBeenCalled();
+  });
+
+  it('reports the save as failed when the Files write fell back to the generated bucket', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({}, { output: { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 3 } })
+    );
+    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+    await promise;
+    expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'error' });
+  });
+
+  it('retries without the saved copy when the Files quota is full, and reports the save as skipped', async () => {
+    mocks.createSpeechJob
+      .mockResolvedValueOnce(
+        refusal(400, 'storage_quota_exceeded', 'full', { storage: { errorCode: 'storage_limit_exceeded' } })
+      )
+      .mockResolvedValueOnce(created);
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob(
+        {},
+        { saveToFiles: false, output: { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 3 } }
+      )
+    );
+    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+    await promise;
+    expect(mocks.createSpeechJob).toHaveBeenCalledTimes(2);
+    expect(createInput(0).saveToFiles).toBe(true);
+    expect(createInput(1).saveToFiles).toBe(false);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+  });
+
+  it('answers 403 when the billing org policy refuses the model, without waiting on a job', async () => {
+    // createSpeechJob asserts the org model policy before it holds credits or persists a job.
+    mocks.createSpeechJob.mockRejectedValue(
+      new ForbiddenError('Model "tts-1" is not allowed by your organization', {
+        errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+      })
+    );
+    const { res, promise } = run({ text: 'hi', organization_id: 'teamOrg' });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(createInput().user.organizationId).toBe('teamOrg');
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it('rejects a moderated user with 403 before creating a job', async () => {
+    const { res, promise } = run({ text: 'hi' }, { id: 'u1', isModerated: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ error: AI_ACCESS_REVOKED_MESSAGE });
+    expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a session', undefined],
+    ['a key without ai:end-user-id', { keyId: 'k1', userId: 'u1', scopes: ['ai:generate'] }],
+  ])('refuses end_user_id from %s with a 400 before any provider cost', async (_name, apiKeyInfo) => {
+    const { res, promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, apiKeyInfo);
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'end_user_id_not_allowed' });
+    expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['over 64 characters', 'a'.repeat(65)],
+    ['outside the charset', 'customer 42'],
+    ['an email', 'jane@example.com'],
+  ])('refuses an end_user_id that is %s with a 400 invalid_end_user_id, whatever the credential', async (_n, value) => {
+    const { res, promise } = run({ text: 'hi', end_user_id: value }, { id: 'u1' }, undefined);
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'invalid_end_user_id' });
+    expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it('accepts end_user_id from a platform key', async () => {
+    const platformKey = { keyId: 'k1', userId: 'u1', scopes: ['ai:generate', 'ai:end-user-id'] };
+    const { res, promise } = run({ text: 'hi', end_user_id: 'customer_42' }, { id: 'u1' }, platformKey);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.createSpeechJob).toHaveBeenCalled();
+  });
+
+  it('maps an invalid_request refusal (e.g. an unsupported format) to 422', async () => {
+    mocks.createSpeechJob.mockResolvedValue(
+      refusal(422, 'invalid_request', "The elevenlabs provider does not support 'wav'")
+    );
+    const { res, promise } = run({ text: 'hi', provider: 'elevenlabs', format: 'wav' });
+    await promise;
+    expect(res._getStatusCode()).toBe(422);
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
   });
 
   it('returns 401 with an actionable code when no provider is configured', async () => {
-    mocks.synthesizeTts.mockRejectedValue(new TtsProviderNotConfiguredError('no key'));
+    mocks.createSpeechJob.mockResolvedValue(
+      refusal(422, 'model_unavailable', 'No text-to-speech provider is configured')
+    );
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(401);
-    expect(res._getJSONData()).toMatchObject({ error: 'no key', errorCode: 'provider_not_configured' });
+    expect(res._getJSONData()).toEqual({
+      error: 'No text-to-speech provider is configured',
+      errorCode: 'provider_not_configured',
+    });
   });
 
-  // 422 + `insufficient_credits`, matching every other credit-metered endpoint.
-  // The classifier is the load-bearing half: this 422 shares its status with an
-  // ordinary validation failure, so a caller that matched on the status alone
-  // would treat "out of credits" as "bad request".
-  it('returns a classified 422 and never calls the provider when credits are exhausted', async () => {
-    mocks.holdPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
+  // The classifier is the load-bearing half: this 422 shares its status with an ordinary validation failure.
+  it('returns a classified 422 and never runs a job when credits are exhausted', async () => {
+    mocks.createSpeechJob.mockResolvedValue(refusal(402, 'insufficient_credits', 'broke'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(422);
-    expect(res._getJSONData()).toMatchObject({
-      error: 'broke',
+    expect(res._getJSONData()).toEqual({ error: 'broke', provider: 'openai', errorCode: 'insufficient_credits' });
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  it('maps a blocked job to a generic 422', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'blocked', error: { code: 'content_blocked' } }));
+    const { res, promise } = run({ text: 'hi', provider: 'elevenlabs' });
+    await promise;
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toEqual({
+      error: 'TTS request rejected by the elevenlabs provider',
+      provider: 'elevenlabs',
+    });
+  });
+
+  it('refuses a free-tier user past the daily cap with a classified 429 and Retry-After, before running a job', async () => {
+    mocks.createSpeechJob.mockResolvedValue(
+      refusal(429, 'daily_limit_reached', 'Daily free-tier credit limit reached. Try again tomorrow.', {
+        retryAfterSeconds: 3_600,
+      })
+    );
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toEqual({
+      error: 'Daily free-tier credit limit reached. Try again tomorrow.',
+      errorCode: 'daily_free_limit_reached',
+      retryAfter: 3_600,
+    });
+    expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+  });
+
+  // The job's error carries the status: rawProviderError is never read back from the database.
+  it.each([401, 403])('flags a %i credential rejection as provider_rejected (401)', async status => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({ state: 'failed', error: { code: 'provider_error', message: 'x', providerStatus: status } })
+    );
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData()).toEqual({
+      error: 'TTS request rejected by the openai provider',
       provider: 'openai',
-      errorCode: 'insufficient_credits',
+      errorCode: 'provider_rejected',
     });
-    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
-  it('rethrows a preflight failure that is not a credit refusal, before any provider cost', async () => {
-    const boom = new Error('settings down');
-    mocks.holdPreflightCredits.mockRejectedValue(boom);
-    const { promise } = run({ text: 'hi' });
-    await expect(promise).rejects.toBe(boom);
-    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
-  });
+  it.each([401, 429])(
+    'answers an exhausted quota (as a %i) with 503 temporarily unavailable, at warn',
+    async status => {
+      const error = { code: 'provider_error', message: 'openai_speech_quota_exhausted', providerStatus: status };
+      mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'failed', error }));
+      const { res, logger, promise } = run({ text: 'hi' });
+      await promise;
+      expect(res._getStatusCode()).toBe(503);
+      expect(res._getJSONData()).toEqual({
+        error: 'Text-to-speech is temporarily unavailable. Please try again later.',
+        provider: 'openai',
+      });
+      expect(logger.warn).toHaveBeenCalledWith('TTS synthesis failed', expect.objectContaining({ error }));
+      expect(logger.error).not.toHaveBeenCalled();
+    }
+  );
 
-  it('prices the pre-flight from the requested text so the gate is cost-aware', async () => {
-    const { promise } = run({ text: 'hello' });
-    await promise;
-    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1', 5);
-    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ requiredCredits: 50, featureLabel: 'text-to-speech' })
+  it('passes a provider rate limit through as 429 with the Retry-After the job recorded', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({
+        state: 'failed',
+        error: { code: 'provider_error', message: 'openai_rate_limited', providerStatus: 429, retryAfterSeconds: 12 },
+      })
     );
-    // Omitted keeps this endpoint's historical personal default.
-    expect(mocks.holdPreflightCredits.mock.calls[0][0]).toMatchObject({ billingOrganizationId: null });
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(429);
+    expect(res.getHeader('Retry-After')).toBe('12');
+    expect(res._getJSONData()).toEqual({ error: 'TTS request rejected by the openai provider', provider: 'openai' });
   });
 
-  it('holds the pricier fallback quote before synthesis, using its default model', async () => {
-    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 15 : 100));
-    okSynthesis('elevenlabs', 'openai');
-
-    const { promise } = run({ text: 'hello', provider: 'openai', model: 'tts-1-hd' });
-    await promise;
-
-    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
-    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
-    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 100 }));
-    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ vendor: 'elevenlabs', hold: heldCredits })
+  it('no longer reads a rate limit from the error message alone', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({ state: 'failed', error: { code: 'provider_error', message: 'openai_rate_limited' } })
     );
-  });
-
-  it('holds the estimate before synthesis and settles that same hold', async () => {
-    mocks.synthesizeTts.mockImplementation(async () => {
-      expect(mocks.holdPreflightCredits).toHaveBeenCalledTimes(1);
-      return { vendor: 'openai', result: synthesisResult() };
-    });
-    const { promise } = run({ text: 'hello', encoding: 'base64' });
-    await promise;
-    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
-    expect(mocks.releaseHold).not.toHaveBeenCalled();
-  });
-
-  it('returns the hold when synthesis fails, and bills nothing', async () => {
-    mocks.synthesizeTts.mockRejectedValue(new Error('network blip'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(502);
-    expect(mocks.releaseHold).toHaveBeenCalledTimes(1);
-    expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
   });
 
-  it('keeps a settled hold when delivery fails after billing', async () => {
-    mocks.saveGeneratedAssetToFiles.mockRejectedValue(new Error('s3 down'));
-    const { promise } = run({ text: 'hello', encoding: 'base64' });
-    await promise.catch(() => undefined);
-    expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
-    expect(mocks.releaseHold).not.toHaveBeenCalled();
-  });
-
-  it('prices an ElevenLabs request at the elevenlabs default model', async () => {
-    const { promise } = run({ text: 'hello', provider: 'elevenlabs' });
+  it('maps another provider 4xx to a generic 422 without leaking the provider text', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(
+      speechJob({
+        state: 'failed',
+        error: { code: 'provider_error', message: 'openai_http_400', providerStatus: 400 },
+        rawProviderError: { status: 400, snippet: 'raw provider detail' },
+      })
+    );
+    const { res, promise } = run({ text: 'hi' });
     await promise;
-    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
+    expect(res._getStatusCode()).toBe(422);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('raw provider detail');
   });
 
-  it('forwards an explicit model to the estimate', async () => {
-    const { promise } = run({ text: 'hello', model: 'tts-1-hd' });
+  it.each([
+    ['failed (orphaned)', { state: 'failed', error: { code: 'orphaned_submit', message: 'timeout' } }],
+    ['cancelled', { state: 'cancelled' }],
+  ])('maps a %s job to 502', async (_label, overrides) => {
+    mocks.runAudioJobInline.mockResolvedValue(speechJob(overrides));
+    const { res, logger, promise } = run({ text: 'hi' });
     await promise;
-    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData()).toEqual({ error: 'Failed to generate speech', provider: 'openai' });
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['warn', { code: 'orphaned_submit', message: 'cut off', cutOffByStepDeadline: true }],
+    ['error', { code: 'orphaned_submit', message: 'unknown outcome' }],
+    ['error', { code: 'provider_error', message: 'x' }],
+  ] as const)('logs a 502 failure at %s by its error', async (level, error) => {
+    mocks.runAudioJobInline.mockResolvedValue(speechJob({ state: 'failed', error }));
+    const { res, logger, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    const other = level === 'warn' ? 'error' : 'warn';
+    expect(logger[level]).toHaveBeenCalledWith('TTS synthesis failed', expect.objectContaining({ error }));
+    expect(logger[other]).not.toHaveBeenCalledWith('TTS synthesis failed', expect.anything());
+  });
+
+  it('answers 202 with the job resource when the job does not finish in time', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(
+      speechJob(
+        {
+          state: 'running',
+          source: 'studio',
+          createdAt: new Date('2026-10-06T00:00:00Z'),
+          updatedAt: new Date('2026-10-06T00:01:00Z'),
+        },
+        { output: undefined }
+      )
+    );
+    const { res, logger, promise } = run({ text: 'hi' }, undefined, undefined, { prefer: 'respond-async, wait=10' });
+    await promise;
+    expect(res._getStatusCode()).toBe(202);
+    expect(res.getHeader('Preference-Applied')).toBe('respond-async');
+    const body = SpeechGenerationSchema.parse(res._getJSONData());
+    expect(body).toMatchObject({ id: 'job-1', state: 'running', text: 'hi', output: null, error: null });
+    expect(mocks.generationJobFindById).toHaveBeenCalledWith('job-1');
+    expect(mocks.readAudioJobOutput).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('background'),
+      expect.objectContaining({ jobId: 'job-1' })
+    );
+  });
+
+  it('answers 504 request_timeout naming the job, and leaves it running, when the caller did not opt in to 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(speechJob({ state: 'running' }, { output: undefined }));
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(504);
+    expect(res._getJSONData()).toEqual({
+      error: expect.stringContaining('Retrying makes and bills a second clip'),
+      provider: 'openai',
+      errorCode: 'request_timeout',
+      jobId: 'job-1',
+    });
+    expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+    expect(res.getHeader('Preference-Applied')).toBeUndefined();
+    expect(mocks.requestAudioJobCancel).not.toHaveBeenCalled();
+  });
+
+  it('waits only for what the request has left since it arrived, keeping time to deliver', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: { text: 'hi' } });
+    Object.assign(req, {
+      user: { id: 'u1' },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      receivedAt: new Date(Date.now() - 10_000),
+    });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    const { timeoutMs } = mocks.runAudioJobInline.mock.calls[0][1];
+    // 58s from arrival, less 3s to read the clip back and answer, less the 10s already gone.
+    expect(timeoutMs).toBeGreaterThan(44_000);
+    expect(timeoutMs).toBeLessThanOrEqual(45_000);
+  });
+
+  it('delivers a job that ended just after the inline wait gave up on it, instead of answering 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(speechJob());
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toEqual(AUDIO);
+    expect(mocks.requestAudioJobCancel).not.toHaveBeenCalled();
+  });
+
+  it('maps a job that failed just after the inline wait gave up on it as a failure, not 202', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(
+      speechJob({ state: 'failed', error: { code: 'orphaned_submit', message: 'timeout' } })
+    );
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+  });
+
+  describe('a clip that outlasts the request and is not saved to Files', () => {
+    const unsaved = () => speechJob({ state: 'pending' }, { saveToFiles: false, output: undefined });
+
+    beforeEach(() => {
+      mocks.runAudioJobInline.mockResolvedValue(null);
+      mocks.generationJobFindById.mockResolvedValue(unsaved());
+    });
+
+    it.each(['requested', 'not_cancellable'] as const)(
+      'cancels the job (%s) and answers 504 rather than a 202 nothing could follow up',
+      async status => {
+        mocks.requestAudioJobCancel.mockResolvedValue({ status, job: unsaved() });
+        const { res, logger, promise } = run({ ...{ text: 'hi' }, preview: true });
+        await promise;
+        expect(mocks.requestAudioJobCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'job-1' }));
+        expect(res._getStatusCode()).toBe(504);
+        if (status === 'requested') {
+          expect(res.getHeader('X-B4M-Generation-Job-Id')).toBeUndefined();
+          expect(res._getJSONData()).toEqual({
+            error: 'Speech generation took too long',
+            provider: 'openai',
+            errorCode: 'request_timeout',
+          });
+        } else {
+          expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+          expect(res._getJSONData()).toEqual({
+            error: 'Speech generation took too long',
+            message: UNDELIVERABLE_MAY_BILL_MESSAGE,
+            provider: 'openai',
+            errorCode: 'request_timeout',
+            jobId: 'job-1',
+          });
+        }
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('not saved to Files'),
+          expect.objectContaining({ jobId: 'job-1', cancel: status })
+        );
+      }
+    );
+
+    it('delivers the clip when the cancel finds the job already ended', async () => {
+      mocks.requestAudioJobCancel.mockResolvedValue({
+        status: 'unchanged',
+        job: speechJob(
+          {},
+          {
+            saveToFiles: false,
+            output: { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 3 },
+          }
+        ),
+      });
+      const { res, promise } = run({ ...{ text: 'hi' }, preview: true });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getData()).toEqual(AUDIO);
+    });
+  });
+
+  it('answers 502 when the job vanished during the inline wait', async () => {
+    mocks.runAudioJobInline.mockResolvedValue(null);
+    mocks.generationJobFindById.mockResolvedValue(null);
+    const { res, logger, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData()).toEqual({ error: 'Failed to generate speech', provider: 'openai' });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('vanished'),
+      expect.objectContaining({ jobId: 'job-1' })
+    );
+  });
+
+  it('answers 502 when the stored clip cannot be read back', async () => {
+    mocks.readAudioJobOutput.mockRejectedValue(new Error('s3 down'));
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(502);
+    expect(res.getHeader('X-B4M-Generation-Job-Id')).toBe('job-1');
+    expect(res._getJSONData()).toEqual({ error: 'Failed to generate speech', provider: 'openai', jobId: 'job-1' });
   });
 
   describe('billing account', () => {
     it('bills the organization the switcher selected', async () => {
-      const { res, promise } = run({ text: 'hi', organization_id: 'teamOrg' });
+      const { promise } = run({ text: 'hi', organization_id: 'teamOrg' });
       await promise;
-
-      expect(res._getStatusCode()).toBe(200);
-      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
-        expect.objectContaining({ billingOrganizationId: 'teamOrg' })
-      );
-      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
+      expect(createInput().user.organizationId).toBe('teamOrg');
     });
 
-    it('bills personal credits when the switcher is on Personal, even for an org member', async () => {
-      // Explicit null = personal; the home-org seat must not override the switcher.
-      const { res, promise } = run({ text: 'hi', organization_id: null }, { id: 'u1', organizationId: 'homeOrg' });
+    it('bills personal credits when the field is omitted, even for an org member', async () => {
+      const { promise } = run({ text: 'hi' }, { id: 'u1', organizationId: 'homeOrg' });
       await promise;
-
-      expect(res._getStatusCode()).toBe(200);
-      expect(mocks.orgFindAccessibleById).not.toHaveBeenCalled();
-      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ billingOrganizationId: null }));
+      expect(createInput().user.organizationId).toBeNull();
     });
 
-    it('refuses (403) an organization the caller does not belong to, before synthesis', async () => {
+    it('refuses (403) an organization the caller does not belong to, before creating a job', async () => {
       mocks.orgFindAccessibleById.mockResolvedValue(null);
-
-      const { promise } = run({ text: 'hi', organization_id: 'otherOrg' });
-      await expect(promise).rejects.toMatchObject({ statusCode: 403 });
-      expect(mocks.synthesizeTts).not.toHaveBeenCalled();
-      expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
+      const { res, promise } = run({ text: 'hi', organization_id: 'otherOrg' });
+      await promise;
+      expect(res._getStatusCode()).toBe(403);
+      expect(mocks.createSpeechJob).not.toHaveBeenCalled();
     });
 
-    // An org-billed key's target is stamped on the key; before this fix Speech charged the user.
     it('bills an org-billed API key to its own organization when the body names none', async () => {
-      const { res, promise } = run(
+      const { promise } = run(
         { text: 'hi' },
         { id: 'u1' },
-        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg' }
+        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg', scopes: [] }
       );
       await promise;
-
-      expect(res._getStatusCode()).toBe(200);
-      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
-        expect.objectContaining({ billingOrganizationId: 'keyOrg' })
-      );
-      expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
-    });
-
-    it('refuses (403) an org-billed API key that names another organization', async () => {
-      const { promise } = run(
-        { text: 'hi', organization_id: 'otherOrg' },
-        { id: 'u1' },
-        { billingOwnerType: CreditHolderType.Organization, organizationId: 'keyOrg' }
-      );
-      await expect(promise).rejects.toMatchObject({
-        statusCode: 403,
-        additionalInfo: { errorCode: 'billing_organization_mismatch' },
-      });
-      expect(mocks.synthesizeTts).not.toHaveBeenCalled();
+      expect(createInput().user.organizationId).toBe('keyOrg');
     });
 
     it('bills a user-billed key to the user even when the user has an org seat', async () => {
-      const { res, promise } = run(
+      const { promise } = run(
         { text: 'hi' },
         { id: 'u1', organizationId: 'homeOrg' },
-        { billingOwnerType: CreditHolderType.User }
+        { billingOwnerType: CreditHolderType.User, scopes: [] }
       );
       await promise;
-
-      expect(res._getStatusCode()).toBe(200);
-      expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
-        expect.objectContaining({ billingOrganizationId: undefined })
-      );
+      expect(createInput().user.organizationId).toBeNull();
     });
   });
 
@@ -345,250 +679,88 @@ describe('POST /api/ai/tts', () => {
     const oversizedAudio = Buffer.alloc(4 * 1024 * 1024 + 1);
 
     beforeEach(() => {
-      mocks.synthesizeTts.mockResolvedValue({
-        vendor: 'openai',
-        result: { ...synthesisResult(), audio: oversizedAudio },
-      });
+      mocks.readAudioJobOutput.mockResolvedValue(oversizedAudio);
     });
 
-    it('serves the saved copy by URL for base64, without offloading, and still bills once', async () => {
+    it('serves the saved copy by URL for base64, without offloading', async () => {
       const { res, promise } = run({ text: 'hi', encoding: 'base64' });
       await promise;
       expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData()).toMatchObject({
-        delivery: 'url',
-        url: 'https://s3/get',
-        bytes: oversizedAudio.length,
-        saved: true,
-        fabFileId: 'fab-1',
-      });
+      expect(res._getJSONData()).toMatchObject({ delivery: 'url', url: 'https://s3/get', saved: true });
       expect(mocks.upload).not.toHaveBeenCalled();
-      // Provider cost is already incurred, so we must still charge on an oversized result.
-      expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
     });
 
-    it('offloads an unsaved binary response and redirects with a 303', async () => {
-      const { res, promise } = run({ text: 'hi', preview: true });
-      await promise;
-      expect(mocks.saveGeneratedAssetToFiles).not.toHaveBeenCalled();
-      expect(mocks.upload).toHaveBeenCalledWith(
-        oversizedAudio,
-        expect.stringMatching(/^generated-audio-offload\/.+\.mp3$/),
-        { ContentType: 'audio/mpeg' }
+    it('returns a 413 with the provider when an unsaved clip cannot be offloaded', async () => {
+      mocks.runAudioJobInline.mockResolvedValue(
+        speechJob(
+          {},
+          {
+            saveToFiles: false,
+            output: { location: 'generated', s3Key: 'g/1.mp3', contentType: 'audio/mpeg', bytes: 3 },
+          }
+        )
       );
-      expect(res._getStatusCode()).toBe(303);
-      expect(res._getRedirectUrl()).toBe('https://s3/offload');
-    });
-
-    it('returns a 413 with the provider and logs when the offload fails', async () => {
       mocks.upload.mockRejectedValue(new Error('s3 down'));
-      const { res, logger, promise } = run({ text: 'hi', preview: true, encoding: 'base64' });
+      const { res, promise } = run({ text: 'hi', preview: true, encoding: 'base64' });
       await promise;
       expect(res._getStatusCode()).toBe(413);
       expect(res._getJSONData()).toEqual({ error: GENERATED_AUDIO_TOO_LARGE_MESSAGE, provider: 'openai' });
-      expect(logger.error).toHaveBeenCalledTimes(1);
-      expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
     });
   });
+  describe('completion run', () => {
+    const runBody = { runId: '3f2b8c1e-9d4a-4e6b-8a1c-5d7e9f0a1b2c', role: 'root' };
+    const attribution = { ...runBody, purpose: 'tool' };
+    const body = { text: 'hi', run: runBody };
 
-  it('sets the save headers on a binary response when the audio was saved', async () => {
-    const { res, promise } = run({ text: 'hi' });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(res.getHeader('X-B4M-Audio-Saved')).toBe('true');
-    expect(res.getHeader('X-B4M-Audio-File-Name')).toBe('speech-1.mp3');
-    expect(res.getHeader('X-B4M-Audio-File-Url')).toBe('https://s3/get');
-  });
+    it('creates the job on the run, billing the account the run is bound to', async () => {
+      mocks.resolvePaidCallRun.mockResolvedValue({ attribution, billingOrganizationId: 'runOrg' });
 
-  it('passes an upstream 429 through with a generic body, without leaking provider text', async () => {
-    mocks.synthesizeTts.mockRejectedValue({ status: 429, message: 'raw provider detail' });
-    const { res, promise } = run({ text: 'hi' });
-    await promise;
-    expect(res._getStatusCode()).toBe(429);
-    const body = res._getJSONData();
-    expect(body.error).not.toContain('raw provider detail');
-    expect(body).toMatchObject({ provider: 'openai' });
-    // A rate limit is not a credential problem, so no switch-provider hint.
-    expect(body.errorCode).toBeUndefined();
-  });
+      const { res, promise } = run(body, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
 
-  it('flags a credential rejection so the client can advise switching provider', async () => {
-    mocks.synthesizeTts.mockRejectedValue({ status: 401, message: 'raw provider detail' });
-    const { res, promise } = run({ text: 'hi' });
-    await promise;
-    expect(res._getStatusCode()).toBe(401);
-    const body = res._getJSONData();
-    expect(body.error).not.toContain('raw provider detail');
-    expect(body).toMatchObject({ provider: 'openai', errorCode: 'provider_rejected' });
-  });
-
-  // The contract documents 401/422/429 only, so a raw provider 400/403/404 must
-  // not reach the caller as-is.
-  it.each([
-    { upstream: 403, expected: 401, errorCode: 'provider_rejected' },
-    { upstream: 400, expected: 422, errorCode: undefined },
-    { upstream: 404, expected: 422, errorCode: undefined },
-    { upstream: 413, expected: 422, errorCode: undefined },
-  ])('maps an upstream $upstream onto the documented $expected', async ({ upstream, expected, errorCode }) => {
-    mocks.synthesizeTts.mockRejectedValue({ status: upstream, message: 'raw provider detail' });
-    const { res, promise } = run({ text: 'hi' });
-    await promise;
-    expect(res._getStatusCode()).toBe(expected);
-    const body = res._getJSONData();
-    expect(body.error).not.toContain('raw provider detail');
-    expect(body.errorCode).toBe(errorCode);
-  });
-
-  it('maps a non-4xx provider failure to 502', async () => {
-    mocks.synthesizeTts.mockRejectedValue(new Error('network blip'));
-    const { res, promise } = run({ text: 'hi' });
-    await promise;
-    expect(res._getStatusCode()).toBe(502);
-  });
-
-  it('reports a substituted provider in the body and headers, and bills the vendor that did the work', async () => {
-    okSynthesis('elevenlabs', 'openai');
-    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ provider: 'elevenlabs', fallbackFrom: 'openai' });
-    expect(res.getHeader('X-B4M-Tts-Provider')).toBe('elevenlabs');
-    expect(res.getHeader('X-B4M-Tts-Provider-Fallback-From')).toBe('openai');
-    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'elevenlabs' }));
-  });
-
-  it('omits the substitution fields when the requested provider was used', async () => {
-    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
-    await promise;
-    const body = res._getJSONData();
-    expect(body.provider).toBeUndefined();
-    expect(body.fallbackFrom).toBeUndefined();
-    expect(res.getHeader('X-B4M-Tts-Provider')).toBeUndefined();
-  });
-
-  it('returns base64 JSON when encoding is base64 and charges once', async () => {
-    const { res, promise } = run({ text: 'hello', encoding: 'base64' });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({
-      delivery: 'inline',
-      audio: Buffer.from([1, 2, 3]).toString('base64'),
-      format: 'mp3',
-      contentType: 'audio/mpeg',
+      expect(res._getStatusCode()).toBe(200);
+      expect(mocks.resolvePaidCallRun).toHaveBeenCalledWith(expect.anything(), expect.objectContaining(runBody), undefined);
+      expect(createInput().run).toEqual(attribution);
+      expect(createInput().user.organizationId).toBe('runOrg');
     });
-    expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
-  });
 
-  it('forwards the request options for synthesis', async () => {
-    const { promise } = run({ text: '2', provider: 'elevenlabs', languageCode: 'en', voice: 'v1' });
-    await promise;
-    expect(mocks.synthesizeTts).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: 'elevenlabs', text: '2', languageCode: 'en', requestedVoice: 'v1' })
-    );
-  });
+    it('bills personal credits when the run is bound to the user', async () => {
+      mocks.resolvePaidCallRun.mockResolvedValue({ attribution, billingOrganizationId: null });
 
-  it('does not bill a caller without a resolved user id', async () => {
-    const { promise } = run({ text: 'hi' }, {});
-    await promise.catch(() => undefined);
-    expect(mocks.holdPreflightCredits).not.toHaveBeenCalled();
-    expect(mocks.deductTtsCredits).not.toHaveBeenCalled();
-  });
+      const { promise } = run(body, { id: 'u1', organizationId: 'homeOrg' });
+      await promise;
 
-  it('saves the audio by default and surfaces the saved reference in the base64 body', async () => {
-    const { res, promise } = run({ text: 'hello', encoding: 'base64' });
-    await promise;
-    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
-    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
-      {
-        userId: 'u1',
-        bytes: expect.any(Buffer),
-        contentType: 'audio/mpeg',
-        generation: { generator: 'speech', provider: 'openai', modelId: 'tts-1', prompt: 'hello', format: 'mp3' },
-      },
-      expect.anything()
-    );
-    expect(res._getJSONData()).toMatchObject({ saved: true, fabFileId: 'fab-1', fileUrl: 'https://s3/get' });
-  });
-
-  it('records the requested voice and language so the settings can be reused', async () => {
-    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1', languageCode: 'ja' });
-    await promise;
-    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ generation: expect.objectContaining({ voice: 'v-1', languageCode: 'ja' }) }),
-      expect.anything()
-    );
-  });
-
-  it('drops the requested voice when another provider stood in', async () => {
-    okSynthesis('openai', 'elevenlabs');
-    const { promise } = run({ text: 'hello', provider: 'elevenlabs', voice: 'v-1' });
-    await promise;
-    const [{ generation }] = mocks.saveGeneratedAssetToFiles.mock.calls[0];
-    expect(generation).not.toHaveProperty('voice');
-  });
-
-  it('records the vendor that actually produced the audio when a fallback was used', async () => {
-    okSynthesis('elevenlabs', 'openai');
-    const { promise } = run({ text: 'hello' });
-    await promise;
-    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ generation: expect.objectContaining({ provider: 'elevenlabs' }) }),
-      expect.anything()
-    );
-  });
-
-  it('skips persistence for a throwaway preview (preview: true)', async () => {
-    const { res, promise } = run({ text: 'hi', preview: true });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(mocks.saveGeneratedAssetToFiles).not.toHaveBeenCalled();
-  });
-
-  it('always saves a non-preview call regardless of any stored user preference', async () => {
-    const { promise } = run({ text: 'hi' }, { id: 'u1', preferences: { saveGeneratedAudio: false } } as never);
-    await promise;
-    expect(mocks.saveGeneratedAssetToFiles).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('configured fallback holds', () => {
-  it.each([false, true])('prices only configured alternates (%s)', async available => {
-    mocks.hasTtsProviderKey.mockResolvedValue(available);
-    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 123 : 820));
-    okSynthesis();
-    const { promise } = run({ text: 'hello', provider: 'openai' });
-    await promise;
-    expect(mocks.hasTtsProviderKey).toHaveBeenCalledWith('elevenlabs', 'u1');
-    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ requiredCredits: available ? 820 : 123 })
-    );
-    expect(mocks.synthesizeTts).toHaveBeenCalledWith(
-      expect.objectContaining({ candidates: available ? ['openai', 'elevenlabs'] : ['openai'] })
-    );
-  });
-
-  it('keeps a keyed alternate when the requested provider is unconfigured', async () => {
-    mocks.hasTtsProviderKey.mockResolvedValue(true);
-    okSynthesis('elevenlabs', 'openai');
-    const { promise, res } = run({ text: 'hello', provider: 'openai' });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai', 'elevenlabs'] }));
-  });
-
-  it('drops an alternate whose key lookup fails and still holds and synthesizes', async () => {
-    mocks.hasTtsProviderKey.mockRejectedValue(new Error('key lookup unavailable'));
-    mocks.estimateTtsCreditCost.mockImplementation((vendor: string) => (vendor === 'openai' ? 123 : 820));
-    const { res, logger, promise } = run({ text: 'hello' });
-    await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(logger.warn).toHaveBeenCalledWith('TTS fallback key lookup failed', {
-      vendor: 'elevenlabs',
-      error: 'key lookup unavailable',
+      expect(createInput().user.organizationId).toBeNull();
     });
-    expect(mocks.holdPreflightCredits).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 123 }));
-    expect(mocks.estimateTtsCreditCost).not.toHaveBeenCalledWith('elevenlabs', expect.anything(), expect.anything());
-    expect(mocks.synthesizeTts).toHaveBeenCalledWith(expect.objectContaining({ candidates: ['openai'] }));
-    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ hold: heldCredits }));
+
+    it("refuses another caller's run before creating a job", async () => {
+      mocks.resolvePaidCallRun.mockRejectedValue(Object.assign(new Error('run not found'), { statusCode: 404 }));
+
+      const { res, promise } = run(body);
+      await promise;
+
+      expect(res._getStatusCode()).toBe(404);
+      expect(mocks.createSpeechJob).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a run budget refusal from the job hold, without running the job', async () => {
+      mocks.resolvePaidCallRun.mockResolvedValue({ attribution, billingOrganizationId: null });
+      mocks.createSpeechJob.mockRejectedValue(
+        Object.assign(new Error('run spent'), { statusCode: 422, errorCode: 'run_budget_exhausted' })
+      );
+
+      const { res, promise } = run(body);
+      await promise;
+
+      expect(res._getStatusCode()).toBe(422);
+      expect(mocks.runAudioJobInline).not.toHaveBeenCalled();
+    });
+
+    it('creates the job without a run when none is sent', async () => {
+      const { promise } = run({ text: 'hi' });
+      await promise;
+
+      expect(createInput()).not.toHaveProperty('run');
+    });
   });
 });

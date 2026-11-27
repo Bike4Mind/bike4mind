@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../git/hostGitArgs';
+import { wslCommand, wslCommandEnv, wslLocation } from '../wsl/wslPath';
 import { isRepositoryPart } from './activityContract';
 
 export interface RepositoryName {
@@ -6,17 +8,32 @@ export interface RepositoryName {
   name: string;
 }
 
+export interface RemoteLocation extends RepositoryName {
+  /** Lower-cased host, e.g. `github.com`. */
+  host: string;
+  /** Lower-cased full path without `.git`, so `a/sub/repo` and `b/sub/repo` differ. */
+  path: string;
+}
+
 /**
  * Owner and name from a git remote URL: `git@host:owner/name.git`, `https://host/owner/name`,
  * `ssh://git@host/owner/name.git`. The host is dropped; only owner/name ever leave this machine.
  */
 export function parseRemote(remote: string): RepositoryName | null {
+  const location = parseRemoteLocation(remote);
+  return location ? { owner: location.owner, name: location.name } : null;
+}
+
+/** As `parseRemote`, keeping the host so a caller can tell github.com from another server. */
+export function parseRemoteLocation(remote: string): RemoteLocation | null {
   const trimmed = remote.trim();
-  const scp = /^[^@\s/]+@[^:\s]+:(.+)$/.exec(trimmed);
+  const scp = /^[^@\s/]+@([^:\s]+):(.+)$/.exec(trimmed);
+  let host: string;
   let path: string;
   if (scp) {
-    if (scp[1].startsWith('/') || scp[1].startsWith('~')) return null;
-    path = scp[1];
+    if (scp[2].startsWith('/') || scp[2].startsWith('~')) return null;
+    host = scp[1];
+    path = scp[2];
   } else {
     let url: URL;
     try {
@@ -26,6 +43,7 @@ export function parseRemote(remote: string): RepositoryName | null {
     }
     if (!['https:', 'http:', 'ssh:', 'git:', 'git+ssh:', 'ssh+git:'].includes(url.protocol) || !url.hostname)
       return null;
+    host = url.hostname;
     path = url.pathname;
   }
   const parts = path
@@ -34,7 +52,9 @@ export function parseRemote(remote: string): RepositoryName | null {
     .filter(Boolean);
   if (parts.length < 2) return null;
   const [owner, name] = parts.slice(-2);
-  return isRepositoryPart(owner) && isRepositoryPart(name) ? { owner, name } : null;
+  return isRepositoryPart(owner) && isRepositoryPart(name)
+    ? { host: host.toLowerCase(), owner, name, path: parts.join('/').toLowerCase() }
+    : null;
 }
 
 const CACHE_MS = 10 * 60_000;
@@ -55,10 +75,38 @@ export function createRepositoryResolver(
   };
 }
 
-function gitOriginUrl(directory: string): Promise<string | null> {
+/** `git config <args>` as the folder's own git reads it: Linux git for a WSL folder. */
+async function readGitConfig(directory: string, configArgs: readonly string[]): Promise<string | null> {
+  const env = await gitCommandEnv(directory);
+  const args = hostGitArgs(['-C', gitArgumentPath(directory, directory), 'config', ...configArgs], directory);
+  const command = await gitCommand(directory, args);
+  if (!command) return null;
   return new Promise(resolve => {
-    execFile('git', ['-C', directory, 'config', '--get', 'remote.origin.url'], { timeout: 2000 }, (err, stdout) => {
+    execFile(command.file, command.args, { env, timeout: quickGitTimeout(env), windowsHide: true }, (err, stdout) => {
       resolve(err ? null : stdout.trim() || null);
+    });
+  });
+}
+
+/** `origin`'s URL as the folder's own git reads it: Linux git for a WSL folder. */
+export function gitOriginUrl(directory: string): Promise<string | null> {
+  return readGitConfig(directory, ['--get', 'remote.origin.url']);
+}
+
+/** Every remote's `url` and `gh-resolved` entries, one `remote.<name>.<key> <value>` line each. */
+export function gitRemoteSettings(directory: string): Promise<string | null> {
+  return readGitConfig(directory, ['--get-regexp', '^remote\\..*\\.(url|gh-resolved)$']);
+}
+
+/** The host name the distro's `ssh` connects to for `alias` in a WSL folder; null elsewhere or when it cannot say. */
+export async function sshHostName(directory: string, alias: string): Promise<string | null> {
+  const location = wslLocation(directory);
+  if (!location || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(alias)) return null;
+  const command = wslCommand({ ...location, linuxPath: '/' }, 'ssh', ['-G', alias]);
+  const env = await wslCommandEnv(process.env, location.distro);
+  return new Promise(resolve => {
+    execFile(command.file, command.args, { env, timeout: 10_000, windowsHide: true }, (err, stdout) => {
+      resolve(err ? null : (/^hostname (\S+)$/m.exec(stdout)?.[1]?.toLowerCase() ?? null));
     });
   });
 }

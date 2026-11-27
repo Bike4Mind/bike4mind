@@ -27,9 +27,10 @@ export const listSessions = async (
   if (!user) throw new NotFoundError('User not found');
 
   const project = await adapters.db.projects.shareable.findAccessibleById(user, projectId);
-  if (!project) throw new Error('Project not found');
+  if (!project) throw new NotFoundError('Project not found');
 
-  const sessions = await adapters.db.sessions.findAllByIds(project.sessionIds);
+  // Listed in the project is not a grant: only sessions the caller can still read.
+  const sessions = await adapters.db.sessions.shareable.findAllAccessibleByIds(user, project.sessionIds);
 
   return sessions;
 };

@@ -1,4 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'skyGreeting' } });
 
 // Moon phase calculation (simplified from moonPhase tool)
 const SYNODIC_MONTH = 29.53059;
@@ -144,7 +147,7 @@ const getOnThisDayFact = async (): Promise<string | null> => {
     const event = events[Math.floor(Math.random() * Math.min(events.length, 5))];
     return `In ${event.year}: ${event.text}`;
   } catch (error) {
-    console.error('Failed to fetch On This Day:', error);
+    logger.error('Failed to fetch On This Day', { error });
     return null;
   }
 };
@@ -182,7 +185,7 @@ export default async function handler(
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('Sky greeting error:', error);
+    logger.error('Sky greeting error', { error });
     res.status(500).json({ error: 'Failed to generate sky greeting' });
   }
 }

@@ -5,6 +5,12 @@ import {
   isDocumentDBConnection,
   addCertificateToUri,
 } from '../certs/documentdb-cert-manager';
+import { USE_DOCUMENTDB } from './documentdb-compat';
+
+export const DOCUMENTDB_DEPRECATION_WARNING =
+  'AWS DocumentDB support is deprecated and will be removed in a future release. ' +
+  'Migrate to MongoDB Atlas or MongoDB Community 7 or later.';
+let documentDBDeprecationWarned = false;
 
 /**
  * Sleep utility for retry delays
@@ -93,16 +99,22 @@ export function isConnectionLostError(error: unknown): boolean {
   return name === 'MongooseError' && typeof message === 'string' && message.includes('buffering timed out');
 }
 
-// A failed socket is already invalidated by the driver, so an immediate re-ping lands on a fresh
+// A failed socket is already invalidated by the driver, so an immediate retry lands on a fresh
 // one. A server-selection timeout has already waited serverSelectionTimeoutMS, so retrying it only
 // doubles the failure latency.
-const PING_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
+const NETWORK_RETRY_ERROR_NAMES = CONNECTION_LOST_ERROR_NAMES.filter(name => name !== 'MongoServerSelectionError');
 
-const isRetryablePingError = (error: unknown): boolean => {
+/**
+ * True when an operation died on its socket (reset, or no reply within socketTimeoutMS) - the case
+ * where retrying once on a fresh connection is worth it. Excludes server selection, which has
+ * already waited its full timeout. Matched by name because more than one copy of the driver can
+ * be installed.
+ */
+export function isMongoNetworkError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const { name } = error as { name?: unknown };
-  return typeof name === 'string' && PING_RETRY_ERROR_NAMES.includes(name);
-};
+  return typeof name === 'string' && NETWORK_RETRY_ERROR_NAMES.includes(name);
+}
 
 const pingServer = () => mongoose.connection.getClient().db().command({ ping: 1 });
 
@@ -131,7 +143,7 @@ const checkWarmConnection = async (logger: Logger): Promise<void> => {
   try {
     await pingServer();
   } catch (error) {
-    if (!isRetryablePingError(error)) throw error;
+    if (!isMongoNetworkError(error)) throw error;
     // The driver invalidates failed network connections. Re-select without closing other requests' sockets.
     logger.warn('Database ping failed after inactivity, retrying on a healthy connection', {
       error: error instanceof Error ? error.message : String(error),
@@ -147,6 +159,11 @@ const ensureConnection = async (url: string, logger?: Logger, overrides?: Connec
       await checkWarmConnection(logger);
     }
     return true;
+  }
+
+  if (!documentDBDeprecationWarned && (isDocumentDBConnection(url) || USE_DOCUMENTDB())) {
+    documentDBDeprecationWarned = true;
+    logger.warn(DOCUMENTDB_DEPRECATION_WARNING);
   }
 
   // Check if this is a DocumentDB connection and handle certificate
@@ -249,6 +266,35 @@ export const getDB = () => {
   return mongoose;
 };
 
+interface TransactionState {
+  afterCommit: Map<string, () => Promise<unknown>>;
+  rollback?: { error: unknown };
+}
+
+const transactionBySession = new WeakMap<mongoose.mongo.ClientSession, TransactionState>();
+
+/** Prevents a managed transaction from committing when its caller catches a partial write's error. */
+export function markTransactionForRollback(session: mongoose.mongo.ClientSession, error: unknown): void {
+  const state = transactionBySession.get(session);
+  if (state) state.rollback ??= { error };
+}
+
+/**
+ * Queues `work` to run once the withTransaction owning `session` commits; withTransaction awaits it
+ * before returning, so a Lambda cannot freeze mid-way. Latest wins per `key`; an aborted run's work
+ * is dropped. Returns false when withTransaction does not own `session`.
+ */
+export function runAfterCommit(
+  session: mongoose.mongo.ClientSession,
+  key: string,
+  work: () => Promise<unknown>
+): boolean {
+  const queue = transactionBySession.get(session)?.afterCommit;
+  if (!queue) return false;
+  queue.set(key, work);
+  return true;
+}
+
 /**
  * Execute a function within a MongoDB transaction with automatic retry on transient errors.
  *
@@ -288,12 +334,30 @@ export const withTransaction = async <T>(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await mongoose.connection.transaction(async session => {
+      let afterCommit = new Map<string, () => Promise<unknown>>();
+      const result = await mongoose.connection.transaction(async session => {
         logger?.debug('Starting transaction...', { attempt: attempt + 1 });
-        const result = await fn(session);
-        logger?.debug('Transaction completed');
-        return result;
+        // Reset per callback run: the driver re-runs it in the same session on a transient commit error.
+        afterCommit = new Map();
+        const state: TransactionState = { afterCommit };
+        transactionBySession.set(session, state);
+        try {
+          const result = await fn(session);
+          if (state.rollback) throw state.rollback.error;
+          logger?.debug('Transaction completed');
+          return result;
+        } finally {
+          transactionBySession.delete(session);
+        }
       }, transactionOptions);
+      for (const work of afterCommit.values()) {
+        try {
+          await work();
+        } catch (error) {
+          logger?.warn('After-commit work failed', { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return result;
     } catch (error) {
       lastError = error;
 
@@ -487,6 +551,22 @@ function withAlsSession(model: mongoose.Model<any>, options: Record<string, unkn
   return options;
 }
 
+/**
+ * The `updatedAt` path a schema's `timestamps` option maintains, or null when it keeps none.
+ * The raw-driver soft deletes below bypass Mongoose's timestamp hooks, so they set it themselves:
+ * a delete is then visible to anyone paging changes by `updatedAt` (GET /api/v1/sessions
+ * `updated_since` relies on this to return tombstones).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- plugin schemas are typed against the `any` generic
+function timestampUpdatedAtPath(schema: mongoose.Schema<any>): string | null {
+  const timestamps: unknown = schema.get('timestamps');
+  if (timestamps === true) return 'updatedAt';
+  if (!timestamps || typeof timestamps !== 'object') return null;
+  const { updatedAt } = timestamps as { updatedAt?: unknown };
+  if (updatedAt === false) return null;
+  return typeof updatedAt === 'string' ? updatedAt : 'updatedAt';
+}
+
 export const softDeletePlugin = (
   // mongoose 8.24 defaults Document's _id to ObjectId; under the `any` schema
   // generic below, this.save() resolves _id to `unknown`, so the method return
@@ -503,6 +583,13 @@ export const softDeletePlugin = (
       default: null,
     },
   });
+
+  // Read lazily: the plugin may be applied before the schema's options are final.
+  const softDeleteSet = (): Record<string, Date> => {
+    const now = new Date();
+    const updatedAtPath = timestampUpdatedAtPath(schema);
+    return updatedAtPath ? { deletedAt: now, [updatedAtPath]: now } : { deletedAt: now };
+  };
 
   // Define a 'softDelete' method to mark documents as soft-deleted
   schema.methods.softDelete = async function () {
@@ -528,9 +615,9 @@ export const softDeletePlugin = (
     // which throws "path 'userId' is matched twice" when CASL generates $or
     // filters containing both root userId and nested users.userId paths.
     const softDeleteFilter = { ...castFilter, deletedAt: null };
-    console.debug(`Soft deleting one document with filter: ${JSON.stringify(softDeleteFilter)}`);
+    Logger.debug('Soft deleting one document', { filter: softDeleteFilter });
     return this.collection
-      .updateOne(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
+      .updateOne(softDeleteFilter, { $set: softDeleteSet() }, withAlsSession(this, options))
       .then((result: any) => ({
         ...result,
         deletedCount: result.modifiedCount,
@@ -545,9 +632,9 @@ export const softDeletePlugin = (
     // Perform a soft delete by updating the `deletedAt` field.
     // Use raw MongoDB driver to bypass Mongoose 8's path inference (see deleteOne above).
     const softDeleteFilter = { ...castFilter, deletedAt: null };
-    console.debug(`Soft deleting many documents with filter: ${JSON.stringify(softDeleteFilter)}`);
+    Logger.debug('Soft deleting many documents', { filter: softDeleteFilter });
     return this.collection
-      .updateMany(softDeleteFilter, { $set: { deletedAt: new Date() } }, withAlsSession(this, options))
+      .updateMany(softDeleteFilter, { $set: softDeleteSet() }, withAlsSession(this, options))
       .then((result: any) => ({
         ...result,
         deletedCount: result.modifiedCount,
@@ -629,7 +716,7 @@ export const softDeletePlugin = (
     const softDeleteFilter = { ...castFilter, deletedAt: null };
     await this.model.collection.updateOne(
       softDeleteFilter,
-      { $set: { deletedAt: new Date() } },
+      { $set: softDeleteSet() },
       queryOptions.session ? { session: queryOptions.session } : {}
     );
     // Skip the original delete operation by returning a null result
@@ -711,18 +798,18 @@ export function compareMongoIds(a: string | mongoose.Types.ObjectId, b: string |
 export async function safeDropIndex(collection: mongoose.Collection, indexName: string) {
   try {
     await collection.dropIndex(indexName);
-    console.log(`✓ Dropped index: ${indexName}`);
+    Logger.info('Dropped index', { indexName });
   } catch (error) {
     if (error instanceof mongoose.mongo.MongoError && error.code === 27) {
-      console.log(`⚠ Index not found (skipping): ${indexName}`);
+      Logger.info('Index not found (skipping)', { indexName });
     } else if (error instanceof mongoose.mongo.MongoError && error.code === 26) {
       // NamespaceNotFound: the collection itself does not exist yet, so there is no index
       // to drop - as "safe" a no-op as a missing index. Surfaced as a test-order flake:
       // a migration test calling this in beforeEach fails only when no earlier test in the
       // shard happened to create the collection.
-      console.log(`⚠ Collection not found (skipping): ${indexName}`);
+      Logger.info('Collection not found (skipping)', { indexName });
     } else if (error instanceof Error && error.message?.includes('index not found')) {
-      console.log(`⚠ Index not found (skipping): ${indexName}`);
+      Logger.info('Index not found (skipping)', { indexName });
     } else {
       throw error;
     }

@@ -2,6 +2,8 @@ import mongoose, { Document, Model, Schema, model } from 'mongoose';
 import { randomBytes } from 'crypto';
 import { claudeSkillNameFor, type ISkillListing } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
+import { SkillBundle } from './SkillBundleModel';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * A Skill Market listing. Holds a denormalized copy of its current APPROVED version (name,
@@ -26,8 +28,9 @@ const SkillListingSchema = new Schema<ISkillListingDocument>(
     sourceSkillId: { type: String, required: true },
     authorUserId: { type: String, required: true },
     authorName: { type: String, maxlength: 200 },
-    visibility: { type: String, required: true, enum: ['public', 'organization', 'unlisted'] },
+    visibility: { type: String, required: true, enum: ['public', 'organization', 'space', 'unlisted'] },
     organizationId: { type: String },
+    spaceId: { type: String },
     tags: { type: [String], default: [] },
     status: {
       type: String,
@@ -83,20 +86,32 @@ SkillListingSchema.pre('validate', function (next) {
     next(new Error('An organization listing requires organizationId'));
     return;
   }
+  if (this.visibility === 'space' && !this.spaceId) {
+    next(new Error('A space listing requires spaceId'));
+    return;
+  }
+  if (this.spaceId && this.visibility !== 'space') {
+    next(new Error('spaceId is only allowed on a space listing'));
+    return;
+  }
   next();
 });
 
 // Per CLAUDE.md MongoDB guideline: performance indexes declared together at the bottom.
 SkillListingSchema.index({ status: 1, visibility: 1, organizationId: 1 });
+SkillListingSchema.index(
+  { status: 1, visibility: 1, spaceId: 1 },
+  { name: 'skill_listing_status_visibility_space', partialFilterExpression: { spaceId: { $exists: true } } }
+);
 SkillListingSchema.index({ authorUserId: 1, createdAt: -1 });
 SkillListingSchema.index({ sourceSkillId: 1 });
 SkillListingSchema.index(
   { authorUserId: 1, sourceSkillId: 1 },
   { unique: true, partialFilterExpression: { activeSlot: true }, name: 'skill_listing_one_active_per_skill' }
 );
-// Makes a plugin-name collision within an org a write error instead of a feed-order tiebreak.
+// Makes a plugin-name collision within an org or Space a write error instead of a feed-order tiebreak.
 SkillListingSchema.index(
-  { organizationId: 1, claudePluginName: 1 },
+  { organizationId: 1, spaceId: 1, claudePluginName: 1 },
   {
     unique: true,
     partialFilterExpression: { claudePluginName: { $type: 'string' } },
@@ -182,27 +197,35 @@ export async function approvePendingListingVersion(
     await assignClaudePluginName(listingId, denorm.name);
   } catch (err) {
     // The approve already landed; the Claude Code feed assigns the name on its next build instead.
-    console.error('[SkillListing] assigning claudePluginName failed', listingId, err);
+    Logger.error('[SkillListing] assigning claudePluginName failed', { listingId, error: err });
   }
   return true;
 }
 
 /**
- * Give an Organization listing its Claude Code plugin name, once: the skill-name slug, or
- * `<slug>-<listing id tail>` when another listing in the org already holds the slug. Never
+ * Give an Organization or Space listing its Claude Code plugin name, once: the skill-name slug, or
+ * `<slug>-<listing id tail>` when another listing in the same org or Space already holds the slug. Never
  * overwrites an existing name, because `<plugin>@<marketplace>` installs are keyed on it; a no-op
  * for public/unlisted listings and listings already named.
  */
 export async function assignClaudePluginName(listingId: string, skillName: string): Promise<void> {
   const base = claudeSkillNameFor(skillName);
+  const owner = await SkillListing.findById(listingId).select('organizationId spaceId').lean();
+  const ownerFilter = owner?.spaceId
+    ? { spaceId: owner.spaceId }
+    : owner?.organizationId
+      ? { organizationId: owner.organizationId }
+      : null;
   // A skill can deliberately occupy an id-suffixed name too. Keep trying unique-index-backed
   // candidates instead of permanently omitting an otherwise approved listing from the feed.
   for (let attempt = 0; ; attempt += 1) {
     const claudePluginName =
       attempt === 0 ? base : attempt === 1 ? `${base}-${listingId.slice(-6)}` : `${base}-${listingId}-${attempt}`;
+    // Bundles share the feed's plugin namespace (SkillBundleModel), without a shared unique index.
+    if (ownerFilter && (await SkillBundle.exists({ ...ownerFilter, pluginName: claudePluginName }))) continue;
     try {
       await SkillListing.updateOne(
-        { _id: listingId, visibility: 'organization', claudePluginName: { $exists: false } },
+        { _id: listingId, visibility: { $in: ['organization', 'space'] }, claudePluginName: { $exists: false } },
         { $set: { claudePluginName } }
       );
       return;

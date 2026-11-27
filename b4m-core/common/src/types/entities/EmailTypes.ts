@@ -3,6 +3,9 @@ import { PaginatedResponse } from '../common';
 
 // ================== ENUMS ==================
 
+/** What the transport did with one message: `at` is when it accepted it. */
+export type EmailDeliveryOutcome = { ok: true; at: Date } | { ok: false; error: string };
+
 export enum EmailJobStatus {
   DRAFT = 'draft',
   SCHEDULED = 'scheduled',
@@ -16,6 +19,8 @@ export enum EmailJobStatus {
 export enum EmailSendStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
+  /** Accepted by the event bus; the email-send worker writes SENT or FAILED once it has tried the transport. */
+  QUEUED = 'queued',
   SENT = 'sent',
   DELIVERED = 'delivered',
   OPENED = 'opened',
@@ -170,7 +175,6 @@ export interface IEmailJobRepository extends IBaseRepository<IEmailJobDocument> 
     field: 'sentCount' | 'failedCount' | 'cancelledCount' | 'openedCount' | 'clickedCount' | 'totalEmailsSent',
     amount: number
   ) => Promise<void>;
-  updateOverallStatus: (id: string, status: EmailJobOverallStatus, updates?: Partial<IEmailJob>) => Promise<void>;
 }
 
 // ================== EMAIL SEND ATTEMPT ==================
@@ -211,6 +215,10 @@ export interface IEmailSendAttempt {
   // Error handling
   errorMessage?: string;
   retryCount: number;
+
+  // Batch send lease and sent marker (apps/workers/src/queueHandlers/emailBatch.ts)
+  claimedAt?: Date;
+  sendAccepted?: { at: Date; queued: boolean };
 }
 
 /**
@@ -235,7 +243,18 @@ export interface IEmailSendAttemptRepository extends IBaseRepository<IEmailSendA
       endDate?: Date;
     }
   ) => Promise<PaginatedResponse<IEmailSendAttemptDocument>>;
-  updateStatus: (id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttempt>) => Promise<void>;
+  markQueued: (id: string, updates: { sentAt: Date; retryCount: number }) => Promise<boolean>;
+  recordDeliveryOutcome: (
+    id: string,
+    outcome: EmailDeliveryOutcome,
+    options?: { retryCount?: number }
+  ) => Promise<string | null>;
+  markSendFailed: (id: string, updates: { errorMessage: string; retryCount: number }) => Promise<boolean>;
+  claimForSend: (
+    id: string,
+    options: { now: Date; staleBefore: Date; renderedSubject: string; renderedHtml: string }
+  ) => Promise<boolean>;
+  markSendAccepted: (id: string, accepted: { at: Date; queued: boolean }) => Promise<boolean>;
   markOpened: (trackingToken: string) => Promise<IEmailSendAttemptDocument | null>;
   recordClick: (trackingToken: string, link: string) => Promise<IEmailSendAttemptDocument | null>;
   getJobSummary: (jobId: string) => Promise<{
@@ -293,5 +312,4 @@ export interface IEmailPreferencesRepository extends IBaseRepository<IEmailPrefe
   findOrCreate: (email: string, userId?: string, subscriberId?: string) => Promise<IEmailPreferencesDocument>;
   unsubscribeFromCategory: (email: string, category: EmailCategory) => Promise<void>;
   globalUnsubscribe: (email: string) => Promise<void>;
-  resubscribe: (email: string, category?: EmailCategory) => Promise<void>;
 }

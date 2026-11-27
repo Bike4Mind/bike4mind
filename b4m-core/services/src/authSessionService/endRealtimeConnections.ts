@@ -3,7 +3,7 @@ import { IRealtimeConnectionRepository, RealtimeConnectionFilter } from '@bike4m
 
 export interface EndRealtimeConnectionsAdapters {
   db: { realtimeConnections: Pick<IRealtimeConnectionRepository, 'endConnections'> };
-  logger?: Logger;
+  logger?: Pick<Logger, 'log' | 'warn'>;
 }
 
 /**
@@ -30,8 +30,8 @@ export const endRealtimeConnections = async (
     return connectionIds;
   } catch (error) {
     const message = 'Failed to end realtime connections; the sweep will retry';
-    if (logger) logger.warn(message, error as Error);
-    else console.warn(message, error);
+    if (logger) logger.warn(message, { error });
+    else Logger.warn(message, { error });
     return [];
   }
 };

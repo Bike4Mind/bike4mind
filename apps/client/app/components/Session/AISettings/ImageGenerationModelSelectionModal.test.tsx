@@ -2,7 +2,13 @@ import React from 'react';
 import { render, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { BFL_SAFETY_TOLERANCE, IMAGE_SIZE_CONSTRAINTS, ImageModels, ModelName } from '@bike4mind/common';
+import {
+  BFL_SAFETY_TOLERANCE,
+  IMAGE_SIZE_CONSTRAINTS,
+  ImageModels,
+  ModelName,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { getThemeConfig } from '../../../utils/themes';
 
 // Use the real app theme so MUI Joy sx callbacks that access custom palette tokens
@@ -78,7 +84,9 @@ vi.mock('./MetaDataChips', () => ({
   default: ({ label }: { label: string }) => <span data-testid="model-metadata-chip">{label}</span>,
 }));
 
+import { estimateImageCredits } from '@bike4mind/services/imageCost';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
+import { formatImageToolPrice } from './useImageToolPrice';
 
 describe('ImageGenerationModelSelectionModal — handleModelChange size reset', () => {
   beforeEach(() => {
@@ -254,6 +262,41 @@ describe('ImageGenerationModelSelectionModal — safety_tolerance hard cap', () 
     // The pre-cap top-of-scale mark must be gone from the UI copy
     expect(queryByText('🌶️ Spicy')).toBeNull();
   });
+});
+
+describe('ImageGenerationModelSelectionModal - FLUX.2 prompt enhancement', () => {
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+  });
+
+  it.each([ImageModels.FLUX_2_KLEIN_4B, ImageModels.FLUX_2_KLEIN_9B, ImageModels.FLUX_2_KLEIN_9B_PREVIEW])(
+    'hides unsupported prompt enhancement but retains safety controls for %s',
+    model => {
+      mockImageModel = model;
+      const { queryByTestId, getByTestId } = render(
+        <TestWrapper>
+          <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+
+      expect(queryByTestId('prompt-upsampling-switch')).toBeNull();
+      expect(getByTestId('safety-tolerance-slider')).toBeInTheDocument();
+    }
+  );
+
+  it.each([ImageModels.FLUX_2_MAX, ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_PRO_PREVIEW, ImageModels.FLUX_2_FLEX])(
+    'offers supported prompt enhancement for %s',
+    model => {
+      mockImageModel = model;
+      const { getByTestId } = render(
+        <TestWrapper>
+          <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+        </TestWrapper>
+      );
+
+      expect(getByTestId('prompt-upsampling-switch')).toBeInTheDocument();
+    }
+  );
 });
 
 describe('ImageGenerationModelSelectionModal - settings the selected model ignores', () => {
@@ -438,5 +481,42 @@ describe('ImageGenerationModelSelectionModal - transparent background chip', () 
   it('does not flag gpt-image-2 or a provider that ignores the field', () => {
     expect(renderChipLabels(ImageModels.GPT_IMAGE_2)).not.toContain('Transparent background');
     expect(renderChipLabels(ImageModels.FLUX_PRO_1_1)).not.toContain('Transparent background');
+  });
+});
+
+describe('ImageGenerationModelSelectionModal - credit price chip', () => {
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+    mockQuality = 'standard';
+    mockSize = '1024x1024';
+    mockModelInfo = [];
+  });
+
+  const renderPrice = () =>
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    ).queryByTestId('image-model-credit-price')?.textContent;
+
+  it('shows the credits settlement charges for one image at the saved quality and size', () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'high';
+    mockSize = '1536x1024';
+    mockModelInfo = [{ id: ImageModels.GPT_IMAGE_2, name: 'GPT Image 2' }];
+    const { requiredCredits } = estimateImageCredits({ id: ImageModels.GPT_IMAGE_2 } as ModelInfo, 1, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'high',
+      size: '1536x1024',
+    });
+    expect(renderPrice()).toBe(formatImageToolPrice(requiredCredits));
+  });
+
+  it('prices a flat-rate model', () => {
+    mockModelInfo = [{ id: ImageModels.FLUX_PRO_1_1, name: 'FLUX 1.1 [pro]' }];
+    const { requiredCredits } = estimateImageCredits({ id: ImageModels.FLUX_PRO_1_1 } as ModelInfo, 1, {
+      model: ImageModels.FLUX_PRO_1_1,
+    });
+    expect(renderPrice()).toBe(formatImageToolPrice(requiredCredits));
   });
 });

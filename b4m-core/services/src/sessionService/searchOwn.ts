@@ -1,4 +1,12 @@
-import { ISessionDocument, SearchOptions, SessionListFilters, sessionSearchSchema } from '@bike4mind/common';
+import {
+  ISessionDocument,
+  MAX_SESSION_LIST_LIMIT,
+  SearchOptions,
+  SessionListFilters,
+  SessionListPage,
+  SessionListPageOptions,
+  sessionSearchSchema,
+} from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -12,8 +20,9 @@ interface SearchOwnSessionAdapters {
         userId: string,
         options: SearchOptions<ISessionDocument>,
         surface?: string,
-        filters?: SessionListFilters
-      ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+        filters?: SessionListFilters,
+        page?: SessionListPageOptions
+      ) => Promise<SessionListPage>;
     };
   };
 }
@@ -21,14 +30,17 @@ interface SearchOwnSessionAdapters {
 export const searchOwnSessions = async (
   userId: string,
   parameters: SearchOwnSessionParameters,
-  { db }: SearchOwnSessionAdapters
+  { db }: SearchOwnSessionAdapters,
+  page: SessionListPageOptions = {}
 ) => {
   const { search, surface, pagination, orderBy, origin, excludeOrigin, hasImages } = secureParameters(
     parameters,
     sessionSearchSchema
   );
 
-  const { page = 1, limit = 10 } = pagination || {};
+  const { page: pageNumber = 1, limit: requestedLimit = 10 } = pagination || {};
+  // Clamped rather than rejected so an older client asking for more still gets a page (with hasMore).
+  const limit = Math.min(requestedLimit, MAX_SESSION_LIST_LIMIT);
   const { field = 'lastUpdated', direction = 'desc' } = orderBy || {};
 
   const filters: SessionListFilters = {
@@ -37,12 +49,12 @@ export const searchOwnSessions = async (
     ...(hasImages !== undefined ? { hasImages } : {}),
   };
 
-  const result = await db.sessions.searchByUserId(
+  return db.sessions.searchByUserId(
     search,
     userId,
     {
       pagination: {
-        page,
+        page: pageNumber,
         limit,
       },
       orderBy: {
@@ -51,9 +63,7 @@ export const searchOwnSessions = async (
       },
     },
     surface,
-    // Omitted entirely when unset, so the default list call keeps its existing shape.
-    ...(Object.keys(filters).length ? [filters] : [])
+    filters,
+    page
   );
-
-  return result;
 };

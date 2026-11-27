@@ -1,4 +1,10 @@
-import { ArtifactTypeSchema, queryBool, readExperimentalFeaturePreference } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ARTIFACTS_DISABLED_ERROR,
+  ArtifactTypeSchema,
+  queryBool,
+  readExperimentalFeaturePreference,
+} from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -8,8 +14,9 @@ import {
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { resolveUserArtifactGate } from '@bike4mind/server-utils/utils/artifactGate';
-import { createArtifactSourceRefsGuard } from '@server/utils/artifactSourceRefsGuards';
+import { createArtifactSourceRefsGuard } from '@bike4mind/server-utils/utils/artifactSourceRefsGuards';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import type { Request } from 'express';
 import { z } from 'zod';
@@ -26,6 +33,8 @@ const ListArtifactsSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']).optional(),
   projectId: z.string().optional(),
   sessionId: z.string().optional(),
+  // A plain string: qs.parse turns `identifier[$ne]=x` into an object, which this rejects.
+  identifier: z.string().min(1).optional(),
   tags: z.array(z.string()).prefault([]),
   search: z.string().optional(),
 });
@@ -44,6 +53,7 @@ const CreateArtifactSchema = z.object({
   sourceQuestId: z.string().optional(),
   sessionId: z.string().optional(),
   parentArtifactId: z.string().optional(),
+  identifier: z.string().optional(),
   permissions: z
     .object({
       canRead: z.array(z.string()).prefault([]),
@@ -91,7 +101,10 @@ async function areUserArtifactsEnabled(user: Express.User): Promise<boolean> {
   });
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   /**
    * GET /api/artifacts
    * List artifacts with filtering and pagination
@@ -121,6 +134,13 @@ const handler = baseApi()
    */
   .post(
     asyncHandler(async (req, res) => {
+      // Gated per verb: the route-level scopes above admit read keys for the GET.
+      assertApiKeyScope(
+        req,
+        [ApiKeyScope.WRITE_NOTEBOOKS, ApiKeyScope.ADMIN],
+        'This API key is read-only for notebooks; notebooks:write is required',
+        { grandfatherLegacyKeys: true }
+      );
       const user = req.user;
       const userId = user?.id;
       if (!user || !userId) {
@@ -132,7 +152,7 @@ const handler = baseApi()
       validatedData.organizationId = await resolveActiveOrg(req as Request, validatedData.organizationId);
 
       if (isAiAuthoredCreate(validatedData.metadata) && !(await areUserArtifactsEnabled(user))) {
-        return res.status(403).json({ error: 'Artifacts are disabled for this user' });
+        return res.status(403).json({ error: ARTIFACTS_DISABLED_ERROR });
       }
 
       const result = await artifactService.create(userId, validatedData, {

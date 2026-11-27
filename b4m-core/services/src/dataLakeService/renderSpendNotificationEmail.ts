@@ -112,6 +112,23 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
     };
   }
 
+  if (kind === 'budget_exhausted' && scope === 'owner') {
+    // The owner's own share, so naming its figure discloses nothing about other tenants. Same
+    // windowEndsAt contract as the period branch below: absent means it will not clear by itself.
+    const allowance = `${budget ?? 'its embedding budget'}${detail.periodHours ? ` per ${detail.periodHours}h` : ''}`;
+    return {
+      subject: `Indexing paused for "${subjectName}" - this lake's owner reached its embedding budget`,
+      html: wrap(
+        lake,
+        windowEndsAt
+          ? `<p>The owner of this data lake has used its embedding budget of ${allowance}. Indexing for ` +
+              `lakes with this owner resumes automatically at ${windowEndsAt} - re-index failed files then.</p>`
+          : `<p>The owner of this data lake has an embedding budget of ${allowance}, which this work cannot ` +
+              `fit. Indexing stays paused until a platform admin raises the per-owner budget.</p>`
+      ),
+    };
+  }
+
   if (kind === 'budget_exhausted' && scope === 'period') {
     // Period scope is platform-wide, shared across every tenant lake - recipients here are
     // lake owners/org admins, not platform admins, so the dollar figure is never shown (it

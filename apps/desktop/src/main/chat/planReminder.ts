@@ -1,4 +1,4 @@
-import { TODO_TOOL_NAME, type TodoItem } from '@shared/todos';
+import { TODO_TOOL_NAME, type PlanItem } from '@shared/todos';
 
 /** Tool rounds a turn may run without touching the plan before it is nudged about it. */
 export const PLAN_REMINDER_ROUNDS = 3;
@@ -13,9 +13,9 @@ export const PLAN_REMINDER_ROUNDS = 3;
  * Fires every PLAN_REMINDER_ROUNDS rounds rather than once, so a turn that keeps ignoring it is
  * asked again; a successful todo_write resets the caller's count and re-arms it from zero.
  */
-export function stalePlanReminder(plan: readonly TodoItem[] | null, roundsSinceUpdate: number): string | null {
+export function stalePlanReminder(plan: readonly PlanItem[] | null, roundsSinceUpdate: number): string | null {
   if (!plan || plan.length === 0) return null;
-  if (plan.every(item => item.status === 'completed')) return null;
+  if (plan.every(item => item.status === 'completed' || item.status === 'cancelled')) return null;
   if (roundsSinceUpdate <= 0 || roundsSinceUpdate % PLAN_REMINDER_ROUNDS !== 0) return null;
   return reminder(
     `The plan the user sees still has unfinished items and has not changed in ${roundsSinceUpdate} rounds.`,
@@ -31,7 +31,7 @@ export function stalePlanReminder(plan: readonly TodoItem[] | null, roundsSinceU
  * question, or the user stopped it - but nothing stops work mid-item on purpose, so an item
  * left in progress is a forgotten update rather than a state anyone chose.
  */
-export function unfinishedPlanReminder(plan: readonly TodoItem[] | null): string | null {
+export function unfinishedPlanReminder(plan: readonly PlanItem[] | null): string | null {
   const open = plan?.find(item => item.status === 'in_progress');
   if (!open) return null;
   return reminder(

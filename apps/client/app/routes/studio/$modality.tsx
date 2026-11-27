@@ -1,14 +1,23 @@
 import { Stack, Tab, TabList, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import PageFrame from '@client/app/components/common/PageFrame';
-import { STUDIO_MODALITIES, isStudioModality, type StudioModality } from '@client/app/components/Studio/studioModality';
+import {
+  STUDIO_MODALITIES,
+  isStudioModality,
+  isStudioV2OnlyMedium,
+  type StudioMedium,
+  type StudioModality,
+} from '@client/app/components/Studio/studioModality';
 import { STUDIO_MODALITY_DEFINITIONS } from '@client/app/components/Studio/studioModalityRegistry';
 import { useStudioFeature } from '@client/app/components/Studio/useStudioFeature';
+import StudioCreateV2Page from '@client/app/components/Studio/v2/StudioCreateV2Page';
+import StudioFeatureGate from '@client/app/components/Studio/v2/StudioFeatureGate';
+import { STUDIO_V2_ONLY_MEDIUM_FEATURE } from '@client/app/components/Studio/v2/studioCreateMedia';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 
-const StudioPage = ({ modality }: { modality: StudioModality }) => {
+/** The Studio as it stands without Create v2: one tab per modality above that modality's form and gallery. */
+const LegacyStudioPage = ({ modality }: { modality: StudioModality }) => {
   const navigate = useNavigate();
-  const showImagePreview = useStudioFeature('image');
   const { tabLabel, galleryTitle, testId, Workspace, Gallery } = STUDIO_MODALITY_DEFINITIONS[modality];
   useDocumentTitle(`${tabLabel} Studio`);
 
@@ -34,12 +43,6 @@ const StudioPage = ({ modality }: { modality: StudioModality }) => {
                 {STUDIO_MODALITY_DEFINITIONS[candidate].tabLabel}
               </Tab>
             ))}
-            {/* Admin-only placeholder for the coming Image medium; it has no route yet, so it cannot be picked. */}
-            {showImagePreview && (
-              <Tab value="image" disabled data-testid="studio-tab-image">
-                Image (preview)
-              </Tab>
-            )}
           </TabList>
         </Tabs>
         <Workspace testId={testId} />
@@ -48,6 +51,22 @@ const StudioPage = ({ modality }: { modality: StudioModality }) => {
       </Stack>
     </PageFrame>
   );
+};
+
+/**
+ * /studio/<medium>. A legacy modality renders the legacy page until Create v2 opens (so it shows while the flags
+ * load, as it always has); a v2-only medium waits for its flag and 404s without it.
+ */
+const StudioPage = ({ modality }: { modality: StudioMedium }) => {
+  const isCreateV2Open = useStudioFeature('createV2');
+  if (isStudioV2OnlyMedium(modality)) {
+    return (
+      <StudioFeatureGate feature={STUDIO_V2_ONLY_MEDIUM_FEATURE[modality]}>
+        <StudioCreateV2Page medium={modality} />
+      </StudioFeatureGate>
+    );
+  }
+  return isCreateV2Open ? <StudioCreateV2Page medium={modality} /> : <LegacyStudioPage modality={modality} />;
 };
 
 export default StudioPage;

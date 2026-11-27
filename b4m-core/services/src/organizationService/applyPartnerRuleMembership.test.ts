@@ -1,7 +1,7 @@
 import { applyPartnerRuleMembership } from './applyPartnerRuleMembership';
 import { Permission, ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 
 describe('applyPartnerRuleMembership', () => {
   const verifiedUser = { id: 'user-id', name: 'Test User', email: 'test@partner.com', emailVerified: true };
@@ -28,6 +28,65 @@ describe('applyPartnerRuleMembership', () => {
   });
 
   const run = () => applyPartnerRuleMembership({ userId: 'user-id', organizationId: 'org-id' }, { db, logger });
+
+  describe.each([
+    { billing: 'non-Stripe', organization: org, addMethod: 'addMemberRaisingSeats' },
+    { billing: 'Stripe', organization: stripeOrg, addMethod: 'addMemberIfUnderCeiling' },
+  ] as const)('$billing active organization', ({ organization, addMethod }) => {
+    const pointers = [undefined, null, '', 'other-org-id', 'org-id'];
+
+    function expectPointerUpdate(organizationId: string | null | undefined) {
+      if (organizationId) {
+        expect(db.users.update).not.toHaveBeenCalled();
+      } else {
+        expect(db.users.update).toHaveBeenCalledExactlyOnceWith({ id: 'user-id', organizationId: 'org-id' });
+      }
+      expect(db.organizations.ensureUserDetails).toHaveBeenCalledExactlyOnceWith('org-id', {
+        id: 'user-id',
+        email: 'test@partner.com',
+        name: 'Test User',
+      });
+    }
+
+    it.each(pointers)('only initializes an empty pointer on add (current: %s)', async organizationId => {
+      db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId });
+      db.organizations.findById.mockResolvedValue(cloneDeep(organization));
+      db.organizations[addMethod].mockResolvedValue(cloneDeep(organization));
+
+      expect(await run()).toEqual({ added: true, reason: 'added', previousSeats: 5, newSeats: 5 });
+
+      expect(db.organizations[addMethod]).toHaveBeenCalledTimes(1);
+      expect(db.organizations[addMethod].mock.calls[0].slice(0, 2)).toEqual([
+        'org-id',
+        { userId: 'user-id', permissions: [Permission.read] },
+      ]);
+      expectPointerUpdate(organizationId);
+    });
+
+    it.each(pointers)('only repairs an empty pointer for an existing member (current: %s)', async organizationId => {
+      db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId });
+      db.organizations.findById.mockResolvedValue({ ...cloneDeep(organization), users: [{ userId: 'user-id' }] });
+
+      expect(await run()).toEqual({ added: false, reason: 'already-member' });
+
+      expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
+      expect(db.organizations.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      expectPointerUpdate(organizationId);
+    });
+
+    it.each(pointers)('only repairs an empty pointer after a concurrent add (current: %s)', async organizationId => {
+      db.users.findById.mockResolvedValue({ ...verifiedUser, organizationId });
+      db.organizations.findById
+        .mockResolvedValueOnce(cloneDeep(organization))
+        .mockResolvedValueOnce({ ...cloneDeep(organization), users: [{ userId: 'user-id' }] });
+      db.organizations[addMethod].mockResolvedValue(null);
+
+      expect(await run()).toEqual({ added: false, reason: 'already-member' });
+
+      expect(db.organizations[addMethod]).toHaveBeenCalledTimes(1);
+      expectPointerUpdate(organizationId);
+    });
+  });
 
   it('passes the admin-configured teamPlanMaxSeats ceiling to the atomic raise', async () => {
     db.adminSettings.findBySettingNames.mockResolvedValue([{ settingName: 'teamPlanMaxSeats', settingValue: '12' }]);

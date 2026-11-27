@@ -34,6 +34,12 @@ afterAll(() => {
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Buffer.equals, not toEqual: a deep toEqual walks every byte and took seconds per megabyte.
+const expectSameBytes = (actual: Buffer, expected: Buffer, label: string) => {
+  expect(actual.length, `${label} length`).toBe(expected.length);
+  expect(actual.equals(expected), `${label} bytes`).toBe(true);
+};
+
 const run = (destinationDir: string, pdfjsRoot?: string) =>
   spawnSync(process.execPath, [SCRIPT, destinationDir, ...(pdfjsRoot ? [pdfjsRoot] : [])], { encoding: 'utf8' });
 
@@ -55,8 +61,8 @@ describe('copy-pdf-worker.mjs', () => {
     const result = run(dir);
 
     expect(result.status).toBe(0);
-    expect(fs.readFileSync(path.join(dir, VERSIONED_NAME))).toEqual(REAL_WORKER_BYTES);
-    expect(fs.readFileSync(path.join(dir, LEGACY_NAME))).toEqual(REAL_WORKER_BYTES);
+    expectSameBytes(fs.readFileSync(path.join(dir, VERSIONED_NAME)), REAL_WORKER_BYTES, VERSIONED_NAME);
+    expectSameBytes(fs.readFileSync(path.join(dir, LEGACY_NAME)), REAL_WORKER_BYTES, LEGACY_NAME);
   });
 
   it('is idempotent: running twice leaves only the current versioned and legacy names behind', () => {
@@ -75,17 +81,63 @@ describe('copy-pdf-worker.mjs', () => {
     const result = run(dir);
 
     expect(result.status).toBe(0);
-    expect(fs.readdirSync(path.join(dir, ASSETS_NAME)).sort()).toEqual(['.complete', ...ASSET_DIRS]);
+    expect(fs.readdirSync(path.join(dir, ASSETS_NAME)).sort()).toEqual(['.complete-v2', ...ASSET_DIRS]);
     for (const file of [
       'wasm/openjpeg.wasm',
       'standard_fonts/FoxitSerif.pfb',
       'cmaps/UniJIS-UCS2-H.bcmap',
       'iccs/CGATS001Compat-v2-micro.icc',
     ]) {
-      expect(fs.readFileSync(path.join(dir, ASSETS_NAME, file))).toEqual(fs.readFileSync(path.join(pdfjsDir, file)));
+      expectSameBytes(
+        fs.readFileSync(path.join(dir, ASSETS_NAME, file)),
+        fs.readFileSync(path.join(pdfjsDir, file)),
+        file
+      );
     }
-    const expectedWasm = fs.readdirSync(path.join(pdfjsDir, 'wasm')).filter(f => !f.startsWith('quickjs-'));
+    const expectedWasm = fs
+      .readdirSync(path.join(pdfjsDir, 'wasm'))
+      .filter(f => !f.startsWith('quickjs-'))
+      .map(name => (name.startsWith('LICENSE') && !path.extname(name) ? `${name}.txt` : name));
     expect(fs.readdirSync(path.join(dir, ASSETS_NAME, 'wasm')).sort()).toEqual(expectedWasm.sort());
+  });
+
+  it('preserves every bundled license byte-identically under a served filename', () => {
+    const dir = makeTempDir();
+
+    const result = run(dir);
+
+    expect(result.status).toBe(0);
+    const copied = ASSET_DIRS.flatMap(sub => fs.readdirSync(path.join(dir, ASSETS_NAME, sub)));
+    for (const sub of ASSET_DIRS) {
+      for (const name of fs.readdirSync(path.join(pdfjsDir, sub)).filter(name => name.startsWith('LICENSE'))) {
+        const servedName = path.extname(name) ? name : `${name}.txt`;
+        expectSameBytes(
+          fs.readFileSync(path.join(dir, ASSETS_NAME, sub, servedName)),
+          fs.readFileSync(path.join(pdfjsDir, sub, name)),
+          `${sub}/${servedName}`
+        );
+      }
+    }
+    expect(copied.filter(f => !f.includes('.'))).toEqual([]);
+    // pdfjs-dist really ships them, so the filter is doing the work.
+    expect(fs.readdirSync(path.join(pdfjsDir, 'cmaps'))).toContain('LICENSE');
+  });
+
+  it('rebuilds a same-version directory carrying the previous completion marker', () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, ASSETS_NAME, 'cmaps'), { recursive: true });
+    fs.writeFileSync(path.join(dir, ASSETS_NAME, '.complete'), '');
+    fs.writeFileSync(path.join(dir, ASSETS_NAME, 'cmaps', 'LICENSE'), 'old notice');
+
+    expect(run(dir).status).toBe(0);
+
+    expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete-v2'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, ASSETS_NAME, 'cmaps', 'LICENSE'))).toBe(false);
+    expectSameBytes(
+      fs.readFileSync(path.join(dir, ASSETS_NAME, 'cmaps', 'LICENSE.txt')),
+      fs.readFileSync(path.join(pdfjsDir, 'cmaps', 'LICENSE')),
+      'cmaps/LICENSE.txt'
+    );
   });
 
   it('exits 1 and leaves no assets directory when a pdfjs-dist asset directory is missing', () => {
@@ -107,7 +159,7 @@ describe('copy-pdf-worker.mjs', () => {
   it('survives overlapping runs over an existing assets directory', async () => {
     const dir = makeTempDir();
     expect(run(dir).status).toBe(0);
-    fs.rmSync(path.join(dir, ASSETS_NAME, '.complete'));
+    fs.rmSync(path.join(dir, ASSETS_NAME, '.complete-v2'));
     const runAsync = () =>
       new Promise<number | null>(resolve => {
         spawn(process.execPath, [SCRIPT, dir], { stdio: 'ignore' }).on('close', resolve);
@@ -135,14 +187,14 @@ describe('copy-pdf-worker.mjs', () => {
       const result = runPatched(
         dir,
         `if (to.endsWith('${ASSETS_NAME}')) {
-           fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(to + '/.complete', '');
+           fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(to + '/.complete-v2', '');
            const e = new Error('lost race'); e.code = 'ENOTEMPTY'; throw e;
          }`
       );
 
       expect(result.status).toBe(0);
       expect(fs.readdirSync(dir).filter(f => f.endsWith('.tmp'))).toEqual([]);
-      expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete-v2'))).toBe(true);
     });
 
     it('exits 1 and leaves no assets or temp directory on an unrelated rename error', () => {
@@ -180,7 +232,7 @@ describe('copy-pdf-worker.mjs', () => {
       );
 
       expect(result.status).toBe(0);
-      expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete-v2'))).toBe(true);
       expect(fs.readdirSync(dir).filter(f => f.endsWith('.tmp'))).toEqual([]);
     });
 
@@ -189,7 +241,7 @@ describe('copy-pdf-worker.mjs', () => {
       const result = runPatched(
         dir,
         `if (to.endsWith('${ASSETS_NAME}')) {
-           fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(to + '/.complete', '');
+           fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(to + '/.complete-v2', '');
            const e = new Error('denied'); e.code = 'EPERM'; throw e;
          }`
       );

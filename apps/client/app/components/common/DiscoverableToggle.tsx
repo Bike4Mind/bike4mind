@@ -71,7 +71,7 @@ export function DiscoverableToggle({
           {/* FormHelperText, not Typography: only a FormHelperText child registers itself into
               Joy's FormControl context and lands in the switch's aria-describedby, so a screen-
               reader user actually hears this caveat instead of just the label. */}
-          <FormHelperText sx={{ opacity: 0.75 }}>
+          <FormHelperText sx={{ color: 'text.tertiary' }}>
             Off by default. When off, the link still works for anyone you send it to - it just won&apos;t show up in
             Google. Link previews in chat apps work either way.
           </FormHelperText>

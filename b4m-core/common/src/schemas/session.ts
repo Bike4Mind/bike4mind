@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { MAX_TOOL_CALLS_CEILING } from '../constants/llmLimits';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
-import { SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
+import {
+  CHAT_HISTORY_ITEM_TYPES,
+  QUEST_OUTCOME_ERROR_CODES,
+  SESSION_ORIGIN_CHANNELS,
+} from '../types/entities/SessionTypes';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 // Shared by the request and response schemas below - kept to one definition so the two
@@ -81,6 +85,14 @@ export const SessionUpdateRequestSchema = z.object({
         'While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value ' +
         'applies again once it is turned back on.'
     ),
+  promptCacheTtl: z
+    .enum(['5m', '1h'])
+    .optional()
+    .describe(
+      'How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. ' +
+        'A 1-hour cache costs more to write and the same to read; it applies only on models that ' +
+        'support it, and other models keep the 5-minute cache. Omit to leave it unchanged.'
+    ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
   // an upload that lands in notebook context by default has consented to this
@@ -99,6 +111,9 @@ export const SessionUpdateRequestSchema = z.object({
 
 export type SessionUpdateRequest = z.infer<typeof SessionUpdateRequestSchema>;
 
+/** Most ids one bulk write request may carry; clients chunk larger selections into several requests. */
+export const MAX_BULK_ITEMS = 100;
+
 /** Path parameter for session-scoped endpoints, e.g. GET/PUT /api/sessions/{id}. */
 export const SessionIdParamSchema = z.object({
   id: z.string().min(1),
@@ -115,6 +130,7 @@ export const SessionResponseSchema = z.object({
   _id: z.string().optional(),
   name: z.string(),
   userId: z.string(),
+  organizationId: z.string().optional(),
   knowledgeIds: z.array(z.string()).optional(),
   artifactIds: z.array(z.string()).optional(),
   tags: z.array(SessionTagSchema).optional(),
@@ -132,12 +148,27 @@ export const SessionResponseSchema = z.object({
     .boolean()
     .optional()
     .describe('Whether the session grounds on your own library alongside its lakes. Absent when never set.'),
+  promptCacheTtl: z
+    .enum(['5m', '1h'])
+    .optional()
+    .describe("The chat's prompt-cache lifetime. Absent when never set, which follows your default."),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which
   // zod-to-openapi then renders as a falsely-nullable field in the generated spec.
   firstCreated: z.date(),
   lastUpdated: z.date(),
+  updatedAt: z
+    .date()
+    .optional()
+    .describe(
+      'When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only ' +
+        'with chat activity. Absent only on sessions older than this field.'
+    ),
+  deletedAt: z
+    .date()
+    .optional()
+    .describe('Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.'),
 });
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
@@ -173,6 +204,15 @@ export const ListSessionsQuerySchema = PaginationQuerySchema.extend({
     .enum(SESSION_ORIGIN_CHANNELS)
     .optional()
     .describe('Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.'),
+  updated_since: z.iso
+    .datetime({ offset: true })
+    .optional()
+    .describe(
+      'Lists only sessions changed at or after this time, oldest change first, including deleted sessions ' +
+        '(with `deletedAt` set) so a sync can drop its copy. Pass the latest `updatedAt` you have read, ' +
+        'ideally minus a few minutes to absorb clock skew between servers; rows you already have come back ' +
+        'and can be skipped.'
+    ),
 });
 
 export type ListSessionsQuery = z.infer<typeof ListSessionsQuerySchema>;
@@ -202,6 +242,11 @@ export type SessionDeleteResponse = z.infer<typeof SessionDeleteResponseSchema>;
  */
 export const CreateSessionRequestSchema = z.object({
   name: z.string(),
+  organizationId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Organization context for new content. Requires membership; immutable after creation.'),
   projectId: z.string().optional().describe('Adds the new session to this project.'),
   dataLakeId: z
     .string()
@@ -243,3 +288,161 @@ export const CreateSessionRequestSchema = z.object({
 });
 
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
+
+/** Query for GET /api/v1/sessions/{id}/quests: the pagination convention, nothing more. */
+export const ListSessionQuestsQuerySchema = PaginationQuerySchema;
+
+export type ListSessionQuestsQuery = z.infer<typeof ListSessionQuestsQuerySchema>;
+
+/** An approval a tool is waiting on before it runs (confirm or cancel in the product UI). */
+export const SessionQuestPendingActionSchema = z.object({
+  tool: z.string().describe('The tool awaiting approval.'),
+  params: z.record(z.string(), z.unknown()).describe('The arguments the tool would run with.'),
+  ts: z.number().describe('When the approval was requested, in Unix milliseconds. It lapses after 15 minutes.'),
+});
+
+/**
+ * One turn of a session's conversation. A deliberately small projection of the stored quest: the
+ * fields needed to render a chat history. Poll `GET /api/v1/quests/{id}` for a turn's files and tool output.
+ */
+export const SessionQuestSchema = z.object({
+  id: z.string(),
+  prompt: z.string().nullable().describe('What the user sent. Null for a turn that carries no prompt.'),
+  reply: z
+    .string()
+    .nullable()
+    .describe('The visible answer, as `GET /api/v1/quests/{id}` reports it. Null while there is none yet.'),
+  status: z
+    .enum(['pending', 'running', 'done', 'stopped'])
+    .optional()
+    .describe('`done` and `stopped` are terminal. Absent on turns written before status tracking.'),
+  type: z
+    .enum(CHAT_HISTORY_ITEM_TYPES)
+    .optional()
+    .describe('`error` marks a failed turn; `reply` then holds the failure text.'),
+  errorCode: z
+    .enum(QUEST_OUTCOME_ERROR_CODES)
+    .optional()
+    .describe('Machine-readable failure class, present only on `type: "error"` turns that have one.'),
+  createdAt: z.date().describe('When the turn started; the sort key of the listing.'),
+  creditsUsed: z.number().optional().describe('Credits billed for the turn. Absent until it is billed.'),
+  pendingAction: SessionQuestPendingActionSchema.optional().describe(
+    'Set while a tool awaits approval on this turn. Only the session owner is shown it; a session shared with you never carries it.'
+  ),
+});
+
+export type SessionQuest = z.infer<typeof SessionQuestSchema>;
+
+export const ListSessionQuestsResponseSchema = paginatedResponseSchema(SessionQuestSchema);
+
+export type ListSessionQuestsResponse = z.infer<typeof ListSessionQuestsResponseSchema>;
+
+/** Path parameters for /api/v1/sessions/{id}/messages/{messageId}. */
+export const SessionMessageParamSchema = z.object({
+  id: z.string().min(1),
+  messageId: z.string().min(1),
+});
+
+/**
+ * Request for PUT /api/v1/sessions/{id}/messages/{messageId}. The same field allowlist the handler
+ * applies to the stored message; any other key is ignored.
+ */
+export const SessionMessageUpdateRequestSchema = z.object({
+  reply: z.string().optional().describe('Replaces the stored reply text.'),
+  replies: z.array(z.string()).optional().describe('Replaces the stored list of alternative replies.'),
+  pinned: z.boolean().optional().describe('Pins or unpins the message.'),
+  selectedChoiceIndex: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      'Index of the suggested choice that was picked. Only the pick is writable, only once, and only ' +
+        'when it is inside the options the server stored; otherwise it is ignored.'
+    ),
+});
+
+export type SessionMessageUpdateRequest = z.infer<typeof SessionMessageUpdateRequestSchema>;
+
+/** Response for DELETE /api/v1/sessions/{id}/messages/{messageId}. */
+export const SessionMessageDeleteResponseSchema = z.object({
+  msg: z.string().describe('Confirmation text.'),
+});
+
+/**
+ * Request for POST /api/v1/sessions/semantic-search. Defaults are declared here so the published
+ * spec shows them.
+ */
+export const SessionSemanticSearchRequestSchema = z.object({
+  query: z
+    .string()
+    .min(1)
+    .regex(/\S/, 'query must contain a non-whitespace character')
+    .describe('What to look for in the content of your sessions.'),
+  minSimilarity: z
+    .number()
+    .min(0)
+    .max(1)
+    .default(0.3)
+    .describe('Lowest cosine similarity a message needs to count as a match.'),
+  topK: z.number().int().min(1).max(200).default(50).describe('Most sessions to return.'),
+  hybridMode: z
+    .boolean()
+    .default(true)
+    .describe('Require a keyword match before semantic ranking. `false` ranks every message by similarity alone.'),
+  useReRanking: z
+    .boolean()
+    .default(false)
+    .describe('Verify the best candidates with a language model and drop the ones it judges irrelevant.'),
+});
+
+export type SessionSemanticSearchRequest = z.infer<typeof SessionSemanticSearchRequestSchema>;
+
+const SessionSemanticSearchScoreSchema = z.object({
+  sessionId: z.string(),
+  sessionName: z.string().optional(),
+  maxSimilarity: z.number().describe('Cosine similarity of the best matching message.'),
+  matchingMessages: z.number().int().describe('Messages in the session at or above `minSimilarity`.'),
+  bestMatch: z
+    .object({
+      similarity: z.number(),
+      snippet: z.string().describe('Opening of the best matching message, with its prompt and reply.'),
+    })
+    .optional(),
+});
+
+export const SessionSemanticSearchResponseSchema = z.object({
+  sessionIds: z.array(z.string()).describe('Matching sessions, best first.'),
+  count: z.number().int(),
+  scores: z
+    .array(SessionSemanticSearchScoreSchema)
+    .optional()
+    .describe('Per-session scores in the same order as `sessionIds`. Omitted when you have no sessions.'),
+  partial: z
+    .boolean()
+    .optional()
+    .describe('`true` when some messages were skipped because too many needed a fresh embedding.'),
+  suggestSpider: z.boolean().optional().describe('`true` when many messages were skipped for that reason.'),
+  debug: z
+    .object({
+      query: z.string(),
+      correctedQuery: z.string().optional(),
+      queryExpansionTimeMs: z.number().optional(),
+      minSimilarity: z.number(),
+      hybridMode: z.boolean(),
+      keywords: z.array(z.string()),
+      keywordMatchCount: z.number().int().nullable(),
+      messagesWithEmbedding: z.number().int(),
+      messagesGenerated: z.number().int(),
+      messagesSkipped: z.number().int(),
+      maxOnTheFlyEmbeddings: z.number().int(),
+      reRankingUsed: z.boolean(),
+      reRankingTimeMs: z.number().optional(),
+      candidatesReRanked: z.number().int().optional(),
+      candidatesFiltered: z.number().int().optional(),
+    })
+    .optional()
+    .describe('How the search ran. Omitted when you have no sessions.'),
+});
+
+export type SessionSemanticSearchResponse = z.infer<typeof SessionSemanticSearchResponseSchema>;

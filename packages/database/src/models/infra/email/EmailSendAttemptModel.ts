@@ -1,5 +1,10 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import { IEmailSendAttemptDocument, IEmailSendAttemptRepository, EmailSendStatus } from '@bike4mind/common';
+import {
+  IEmailSendAttemptDocument,
+  IEmailSendAttemptRepository,
+  EmailDeliveryOutcome,
+  EmailSendStatus,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { PaginatedResponse } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -37,6 +42,12 @@ const EmailSendAttemptSchema = new Schema<IEmailSendAttemptDocument, IEmailSendA
     // Error handling
     errorMessage: { type: String },
     retryCount: { type: Number, default: 0 },
+    // Batch send lease and sent marker: see claimForSend / markSendAccepted
+    claimedAt: { type: Date },
+    sendAccepted: {
+      at: { type: Date },
+      queued: { type: Boolean },
+    },
   },
   {
     timestamps: true,
@@ -136,8 +147,112 @@ export class EmailSendAttemptRepository
     };
   }
 
-  async updateStatus(id: string, status: EmailSendStatus, updates?: Partial<IEmailSendAttemptDocument>): Promise<void> {
-    await this.model.findByIdAndUpdate(id, { status, ...updates });
+  /**
+   * PENDING/PROCESSING -> QUEUED once the event bus accepts the mail. Also from CANCELLED: a cancel
+   * that lands mid-publish cannot stop mail the bus accepted. Returns false when the email-send worker
+   * already wrote its outcome, which can land before this write.
+   */
+  async markQueued(id: string, updates: { sentAt: Date; retryCount: number }): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING, EmailSendStatus.CANCELLED] },
+      },
+      { $set: { status: EmailSendStatus.QUEUED, ...updates } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Writes the transport's result, never downgrading an attempt already SENT or past it
+   * (delivered, opened, clicked, bounced, complained). FAILED -> SENT is allowed: a retried send can
+   * succeed. CANCELLED is overwritten too: an outcome exists only for a published mail, and a failure
+   * left CANCELLED would let a later markQueued turn it into QUEUED. Returns the jobId when the write
+   * applied, else null.
+   */
+  async recordDeliveryOutcome(
+    id: string,
+    outcome: EmailDeliveryOutcome,
+    options?: { retryCount?: number }
+  ): Promise<string | null> {
+    const retryCount = options?.retryCount;
+    const update = outcome.ok
+      ? {
+          $set: { status: EmailSendStatus.SENT, sentAt: outcome.at, ...(retryCount !== undefined && { retryCount }) },
+          $unset: { errorMessage: 1 },
+        }
+      : { $set: { status: EmailSendStatus.FAILED, errorMessage: outcome.error }, $inc: { retryCount: 1 } };
+    const result = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        status: {
+          $in: [
+            EmailSendStatus.PENDING,
+            EmailSendStatus.PROCESSING,
+            EmailSendStatus.QUEUED,
+            EmailSendStatus.FAILED,
+            EmailSendStatus.CANCELLED,
+          ],
+        },
+      },
+      update,
+      { new: true, projection: { jobId: 1 }, runValidators: true }
+    );
+    return result?.jobId ?? null;
+  }
+
+  /**
+   * Records the batch's own give-up. Matches only an attempt still PENDING/PROCESSING: a publish that
+   * threw may still have been accepted, and the worker's outcome must win over this write.
+   */
+  async markSendFailed(id: string, updates: { errorMessage: string; retryCount: number }): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING] } },
+      { $set: { status: EmailSendStatus.FAILED, ...updates } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Claims an attempt for sending: PENDING, or PROCESSING whose lease (claimedAt) predates staleBefore
+   * and whose mail was never accepted. A PROCESSING attempt written before leases existed has no
+   * claimedAt and is judged by updatedAt. Returns false when another invocation holds a fresh lease
+   * or the attempt already moved on.
+   */
+  async claimForSend(
+    id: string,
+    options: { now: Date; staleBefore: Date; renderedSubject: string; renderedHtml: string }
+  ): Promise<boolean> {
+    const { now, staleBefore, renderedSubject, renderedHtml } = options;
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        'sendAccepted.at': { $exists: false },
+        $or: [
+          { status: EmailSendStatus.PENDING },
+          { status: EmailSendStatus.PROCESSING, claimedAt: { $lt: staleBefore } },
+          { status: EmailSendStatus.PROCESSING, claimedAt: { $exists: false }, updatedAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { status: EmailSendStatus.PROCESSING, claimedAt: now, renderedSubject, renderedHtml } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Records that the mailer accepted the mail while the attempt is still PROCESSING, so a later batch
+   * finishes the status write instead of sending again.
+   */
+  async markSendAccepted(id: string, accepted: { at: Date; queued: boolean }): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: EmailSendStatus.PROCESSING },
+      { $set: { sendAccepted: accepted } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
   }
 
   async markOpened(trackingToken: string): Promise<IEmailSendAttemptDocument | null> {
@@ -241,6 +356,7 @@ export class EmailSendAttemptRepository
       if (status === EmailSendStatus.PENDING) statusCounts.pending = item.count;
       else if (status === EmailSendStatus.PROCESSING) statusCounts.processing = item.count;
       else if (status === EmailSendStatus.SENT || status === EmailSendStatus.DELIVERED) statusCounts.sent += item.count;
+      else if (status === EmailSendStatus.QUEUED) statusCounts.sent += item.count;
       else if (status === EmailSendStatus.OPENED || status === EmailSendStatus.CLICKED) statusCounts.sent += item.count;
       else if (status === EmailSendStatus.FAILED || status === EmailSendStatus.BOUNCED)
         statusCounts.failed += item.count;
@@ -254,6 +370,7 @@ export class EmailSendAttemptRepository
       else if (status === EmailSendStatus.PROCESSING) testStatusCounts.processing = item.count;
       else if (status === EmailSendStatus.SENT || status === EmailSendStatus.DELIVERED)
         testStatusCounts.sent += item.count;
+      else if (status === EmailSendStatus.QUEUED) testStatusCounts.sent += item.count;
       else if (status === EmailSendStatus.OPENED || status === EmailSendStatus.CLICKED)
         testStatusCounts.sent += item.count;
       else if (status === EmailSendStatus.FAILED || status === EmailSendStatus.BOUNCED)

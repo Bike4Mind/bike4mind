@@ -12,13 +12,19 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import { RefreshRounded, ErrorOutline, CheckCircle, Schedule, HourglassEmpty, Cancel } from '@mui/icons-material';
+import RefreshRounded from '@mui/icons-material/RefreshRounded';
+import ErrorOutline from '@mui/icons-material/ErrorOutline';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Schedule from '@mui/icons-material/Schedule';
+import HourglassEmpty from '@mui/icons-material/HourglassEmpty';
+import Cancel from '@mui/icons-material/Cancel';
 import {
   useListImportHistoryJobs,
   useRetryImportHistoryJob,
   useImportHistoryJobWebSocket,
 } from '@client/app/hooks/data/importHistoryJobs';
 import { IImportHistoryJob } from '@bike4mind/database/content';
+import { describeImportFailure, IMPORT_FAILED_STEP } from '@bike4mind/common';
 
 const formatRelativeTime = (date: Date): string => {
   const now = new Date();
@@ -43,10 +49,13 @@ const ImportHistoryJobRow: FC<{ job: IImportHistoryJob }> = ({ job }) => {
 
   // Use live progress if available, otherwise use job data
   const status = liveProgress?.status || job.status;
-  const progress = liveProgress?.progress || job.progress;
-  const currentStep = liveProgress?.currentStep || job.currentStep;
-  const processedItems = liveProgress?.processedItems || job.processedItems;
-  const totalItems = liveProgress?.totalItems || job.totalItems;
+  const progress = liveProgress?.progress ?? job.progress;
+  const processedItems = liveProgress?.processedItems ?? job.processedItems;
+  const totalItems = liveProgress?.totalItems ?? job.totalItems;
+  const failure =
+    status === 'failed' ? describeImportFailure(liveProgress?.errorMessage ?? job.errorMessage, job.source) : null;
+  // Rows that failed before markFailed recorded the step still carry the step they died on.
+  const currentStep = failure ? IMPORT_FAILED_STEP : liveProgress?.currentStep || job.currentStep;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -106,6 +115,16 @@ const ImportHistoryJobRow: FC<{ job: IImportHistoryJob }> = ({ job }) => {
         <Chip size="sm" variant="soft" color={getStatusColor(status) as any} startDecorator={getStatusIcon(status)}>
           {status}
         </Chip>
+        {failure && (
+          <Typography
+            level="body-xs"
+            color="danger"
+            sx={{ mt: 0.5 }}
+            data-testid={`import-job-failure-reason-${job.id}`}
+          >
+            {failure.reason}
+          </Typography>
+        )}
       </td>
       <td>
         <Stack spacing={0.5} sx={{ minWidth: 200 }}>
@@ -127,7 +146,7 @@ const ImportHistoryJobRow: FC<{ job: IImportHistoryJob }> = ({ job }) => {
         <Typography level="body-sm">{formatFileSize(job.fileSize)}</Typography>
       </td>
       <td>
-        {status === 'failed' && (
+        {failure?.retryable && (
           <Tooltip title="Retry import">
             <IconButton
               size="sm"

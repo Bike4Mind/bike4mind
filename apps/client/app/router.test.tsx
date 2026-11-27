@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   createMemoryHistory,
   createRootRoute,
@@ -11,18 +13,58 @@ import {
 } from '@tanstack/react-router';
 import {
   adminRoute,
+  adminSubscriptionByStripeIdRoute,
+  adminSubscriptionDetailRoute,
+  adminUserProfileRoute,
   billingRoute,
   feedbackRollupRoute,
   dataLakesRoute,
   integrationsRoute,
+  legacyQaRunRoute,
+  legacyQaSegmentlessRoutes,
+  legacyQaStatusRoute,
+  legacyQaTestRoute,
   newRoute,
   notebooksIndexRoute,
+  oauthLogoutRoute,
   router,
   studioRoute,
   subscriptionsIndexRoute,
 } from './router';
 import { AuditLogFiltersSchema } from '@bike4mind/common';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
+
+// The consent guard bootstraps a session over the network; the redirect tests below are about what
+// adminRoute does after it, so it passes here.
+vi.mock('./utils/consentGuard', () => ({ enforceConsentRedirect: async () => undefined }));
+
+// Pass-through, so a test can stub one bootstrap without changing the guards the other tests run.
+vi.mock('./utils/sessionBootstrap', async importOriginal => {
+  const actual = await importOriginal<typeof import('./utils/sessionBootstrap')>();
+  return { ...actual, bootstrapSession: vi.fn(actual.bootstrapSession) };
+});
+vi.mock('./routes/oauth/logout', () => ({ default: () => <div data-testid="oauth-logout-page-stub" /> }));
+
+// Hoisted: router.tsx calls startPageBeacon() while it is being imported.
+const pageBeacon = vi.hoisted(() => ({ startPageBeacon: vi.fn(), beaconPage: vi.fn() }));
+vi.mock('./utils/pageBeacon', () => pageBeacon);
+
+describe('page beacon wiring', () => {
+  it('notes the landing at bootstrap, then reports each page the router settles on', () => {
+    expect(pageBeacon.startPageBeacon).toHaveBeenCalledOnce();
+    expect(pageBeacon.beaconPage).not.toHaveBeenCalled();
+
+    router.emit({
+      type: 'onResolved',
+      toLocation: router.latestLocation,
+      pathChanged: true,
+      hrefChanged: true,
+      hashChanged: false,
+    });
+
+    expect(pageBeacon.beaconPage).toHaveBeenCalledOnce();
+  });
+});
 
 describe('adminRoute validateSearch', () => {
   const validate = (search: Record<string, unknown>) => adminRoute.options.validateSearch(search);
@@ -32,18 +74,18 @@ describe('adminRoute validateSearch', () => {
       validate({
         emergency_access: 'true',
         tab: 'audit-log',
-        feedbackId: 'f1',
+        feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
         category: 'credits',
-        entryId: 'e1',
+        entryId: 'cccccccccccccccccccccccc',
         section: 'security',
         q: 'slack',
       })
     ).toEqual({
       emergency_access: 'true',
       tab: 'audit-log',
-      feedbackId: 'f1',
+      feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       category: 'credits',
-      entryId: 'e1',
+      entryId: 'cccccccccccccccccccccccc',
       section: 'security',
       q: 'slack',
     });
@@ -67,6 +109,51 @@ describe('adminRoute validateSearch', () => {
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
 // comment) - rollup.test.tsx mocks '@client/app/router' wholesale, so this is the only place the
 // fallback branches actually run.
+describe('oauthLogoutRoute (RP-Initiated Logout)', () => {
+  it('renders outside the notebook layout', () => {
+    const ids = router.matchRoutes('/oauth/logout', {}).map(m => m.routeId);
+    expect(ids).toContain('/oauth/logout');
+    expect(ids).not.toContain('/layout');
+  });
+
+  it('keeps the four logout params as strings and drops anything else', () => {
+    expect(
+      oauthLogoutRoute.options.validateSearch({
+        client_id: 'b4m_example_rp_00000000',
+        post_logout_redirect_uri: 'https://rp.example.test/signed-out',
+        state: 's1',
+        id_token_hint: 'a.b.c',
+        redirect_uri: 'https://evil.example.test/',
+      })
+    ).toEqual({
+      client_id: 'b4m_example_rp_00000000',
+      post_logout_redirect_uri: 'https://rp.example.test/signed-out',
+      state: 's1',
+      id_token_hint: 'a.b.c',
+    });
+    expect(oauthLogoutRoute.options.validateSearch({ client_id: 42 })).toEqual({
+      client_id: '42',
+      post_logout_redirect_uri: undefined,
+      state: undefined,
+      id_token_hint: undefined,
+    });
+  });
+
+  it('restores the session before the page loads, without the consent redirect', async () => {
+    const { bootstrapSession } = await import('./utils/sessionBootstrap');
+    vi.mocked(bootstrapSession).mockResolvedValueOnce(undefined);
+    const beforeLoad = oauthLogoutRoute.options.beforeLoad as unknown as () => Promise<void>;
+    await beforeLoad();
+    expect(bootstrapSession).toHaveBeenCalled();
+  });
+
+  it('lazy-loads the logout page', async () => {
+    const Page = oauthLogoutRoute.options.component as unknown as () => JSX.Element;
+    render(<Page />);
+    expect(await screen.findByTestId('oauth-logout-page-stub')).toBeTruthy();
+  });
+});
+
 describe('feedbackRollupRoute validateSearch', () => {
   it('fills both bounds from the default window when the search is empty', () => {
     const fallback = defaultFeedbackRollupWindow();
@@ -129,14 +216,73 @@ describe('Data Lake article deep link keeps ?passage=', () => {
 describe('QA status routes', () => {
   const chain = (path: string) => router.matchRoutes(path, {}).map(m => m.routeId);
 
-  it.each(['/status', '/status/runs/abc', '/status/tests/a%2Fb'])('%s renders outside the notebook layout', path => {
+  it.each(['/admin/qa', '/admin/qa/runs/abc', '/admin/qa/tests/a%2Fb'])('%s renders in the admin layout', path => {
     const ids = chain(path);
-    expect(ids).toContain('/qa-status-layout');
+    expect(ids).toContain('/admin-layout');
     expect(ids).not.toContain('/layout');
   });
 
   it('keeps regular app pages inside the notebook layout', () => {
     expect(chain('/new')).toContain('/layout');
+  });
+});
+
+describe('legacy /status redirects', () => {
+  const run = (route: { options: { beforeLoad?: unknown } }, ctx: Record<string, unknown>) => {
+    try {
+      (route.options.beforeLoad as (c: unknown) => void)(ctx);
+    } catch (e) {
+      return (e as { options: Record<string, unknown> }).options;
+    }
+    throw new Error('did not redirect');
+  };
+  const key = 'notebook.spec.ts > saves (100% ok)/x?y#z';
+
+  it('sends /status with QA search keys to /admin/qa with the search kept', () => {
+    const search = { product: 'x', range: '7d' };
+    expect(run(legacyQaStatusRoute, { search })).toMatchObject({ to: '/admin/qa', search, replace: true });
+  });
+
+  it('sends bare /status to /admin/qa', () => {
+    expect(run(legacyQaStatusRoute, { search: {} })).toMatchObject({ to: '/admin/qa', replace: true });
+  });
+
+  it('sends /status/runs/<id> to the admin run page with params and search kept', () => {
+    expect(run(legacyQaRunRoute, { params: { id: 'r1' }, search: { product: 'x' } })).toMatchObject({
+      to: '/admin/qa/runs/$id',
+      params: { id: 'r1' },
+      search: true,
+      replace: true,
+    });
+  });
+
+  it('sends /status/tests/<key> to the admin test page', () => {
+    expect(run(legacyQaTestRoute, { params: { testKey: key }, search: {} })).toMatchObject({
+      to: '/admin/qa/tests/$testKey',
+      params: { testKey: key },
+      search: true,
+      replace: true,
+    });
+  });
+
+  it.each(legacyQaSegmentlessRoutes.map(route => [route.path, route] as const))(
+    'sends %s with no segment to /admin/qa',
+    (_path, route) => {
+      expect(run(route, {})).toMatchObject({ to: '/admin/qa', replace: true });
+    }
+  );
+
+  it('matches the old URLs and decodes the test key from one segment', () => {
+    const m = router.matchRoutes(`/status/tests/${encodeURIComponent(key)}`, {});
+    expect(m.at(-1)).toMatchObject({ routeId: '/status/tests/$testKey', params: { testKey: key } });
+    expect(router.matchRoutes('/status/runs/abc', {}).at(-1)?.routeId).toBe('/status/runs/$id');
+    expect(router.matchRoutes('/status/runs', {}).at(-1)?.routeId).toBe('/status/runs');
+    expect(router.matchRoutes('/status/', {}).at(-1)?.routeId).toBe('/status');
+  });
+
+  it('round-trips a test key through the redirect target', () => {
+    const { pathname } = router.buildLocation({ to: '/admin/qa/tests/$testKey', params: { testKey: key } });
+    expect(router.matchRoutes(pathname, {}).at(-1)).toMatchObject({ params: { testKey: key } });
   });
 });
 
@@ -149,6 +295,17 @@ describe('Studio route', () => {
     expect(ids).toContain('/layout');
     expect(studioMatch('/studio/video')).toMatchObject({ params: { modality: 'video' } });
     expect(studioMatch('/studio/video')?.paramsError).toBeUndefined();
+  });
+
+  it('parses the Create v2 Image medium; its page decides whether the flag lets it through', () => {
+    expect(studioMatch('/studio/image')).toMatchObject({ params: { modality: 'image' } });
+    expect(studioMatch('/studio/image')?.paramsError).toBeUndefined();
+  });
+
+  it.each(['productions', 'library'])('routes /studio/%s to its own area, not the medium param', area => {
+    const ids = router.matchRoutes(`/studio/${area}`, {}).map(match => match.routeId);
+    expect(ids.some(id => id.endsWith(`/studio/${area}`))).toBe(true);
+    expect(studioMatch(`/studio/${area}`)).toBeUndefined();
   });
 
   it('treats an unknown modality as not found', () => {
@@ -236,5 +393,106 @@ describe('integrationsRoute validateSearch', () => {
 
   it.each([{}, { source: 'newsletter' }, { source: 42 }, { source: ['profile_menu'] }])('drops %o', search => {
     expect(integrationsRoute.options.validateSearch?.(search)).toEqual({ source: undefined });
+  });
+});
+
+describe('admin layout', () => {
+  it('mounts the console and the user profile under one layout route', () => {
+    const consoleParent = adminRoute.options.getParentRoute();
+    expect(adminUserProfileRoute.options.getParentRoute()).toBe(consoleParent);
+    expect(consoleParent.id).toBe('/admin-layout');
+    expect(adminRoute.fullPath).toBe('/admin');
+    expect(adminUserProfileRoute.fullPath).toBe('/admin/users/$userId');
+  });
+});
+
+describe('admin user profile route', () => {
+  const USER_ID = '0123456789abcdef01234567';
+  const adminBeforeLoad = (search: Record<string, unknown>) =>
+    (adminRoute.options.beforeLoad as (ctx: unknown) => Promise<unknown>)({
+      location: { pathname: '/admin', searchStr: '', hash: '' },
+      search,
+    });
+
+  it('redirects an old /admin?userId= link to /admin/users/$userId', async () => {
+    const thrown: unknown = await adminBeforeLoad(adminRoute.options.validateSearch({ userId: USER_ID })).catch(
+      (error: unknown) => error
+    );
+    expect((thrown as { options: unknown }).options).toMatchObject({
+      to: '/admin/users/$userId',
+      params: { userId: USER_ID },
+      replace: true,
+    });
+  });
+
+  it('leaves /admin alone without a valid userId', async () => {
+    await expect(adminBeforeLoad(adminRoute.options.validateSearch({ tab: 'users' }))).resolves.toBeUndefined();
+    await expect(
+      adminBeforeLoad(adminRoute.options.validateSearch({ userId: '../organizations' }))
+    ).resolves.toBeUndefined();
+  });
+
+  it('deep-links a tab through ?tab=', () => {
+    const validate = (search: Record<string, unknown>) => adminUserProfileRoute.options.validateSearch(search);
+    expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
+    expect({ tab: 'nope', ...validate({ tab: 'nope' }) }.tab).toBeUndefined();
+  });
+});
+
+describe('admin subscription detail routes', () => {
+  it('mounts both under the admin layout', () => {
+    const layout = adminRoute.options.getParentRoute();
+    expect(adminSubscriptionDetailRoute.options.getParentRoute()).toBe(layout);
+    expect(adminSubscriptionByStripeIdRoute.options.getParentRoute()).toBe(layout);
+    expect(adminSubscriptionDetailRoute.fullPath).toBe('/admin/subscriptions/$subscriptionId');
+    expect(adminSubscriptionByStripeIdRoute.fullPath).toBe('/admin/subscriptions/by-stripe/$stripeSubscriptionId');
+  });
+
+  it('deep-links a tab through ?tab=', () => {
+    const validate = (search: Record<string, unknown>) => adminSubscriptionDetailRoute.options.validateSearch(search);
+    expect(validate({ tab: 'admin' })).toEqual({ tab: 'admin' });
+    expect(validate({ tab: 'overview' })).toEqual({ tab: undefined });
+    expect(validate({ tab: 'nope' })).toEqual({ tab: undefined });
+  });
+
+  it('matches the static by-stripe path before the $subscriptionId param', () => {
+    const match = (pathname: string) => router.getMatchedRoutes(pathname)[2]?.id;
+    expect(match('/admin/subscriptions/by-stripe/sub_123')).toBe(adminSubscriptionByStripeIdRoute.id);
+    expect(match('/admin/subscriptions/0123456789abcdef01234567')).toBe(adminSubscriptionDetailRoute.id);
+  });
+});
+
+describe('root route deletion-pending gate', () => {
+  // The app root's own component over a stub child, so the child stands in for any route outside ProviderBundle.
+  const mountAt = (path: string) => {
+    const root = createRootRoute({ component: router.routeTree.options.component });
+    const route = createRoute({ getParentRoute: () => root, path, component: () => <div data-testid="probe-page" /> });
+    const probe = createRouter({
+      routeTree: root.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={probe} />
+      </QueryClientProvider>
+    );
+  };
+
+  afterEach(() => useUser.setState({ currentUser: null }));
+
+  it('shows only the cancel screen on a root-level route for a deletion-pending user', async () => {
+    useUser.setState({ currentUser: { id: 'u1', deletion: { scheduledFor: '2030-01-01T00:00:00.000Z' } } as never });
+    mountAt('/accept-policies');
+
+    expect(await screen.findByTestId('account-deletion-pending-screen')).toBeInTheDocument();
+    expect(screen.queryByTestId('probe-page')).not.toBeInTheDocument();
+  });
+
+  it('renders the route for a user with no pending deletion', async () => {
+    useUser.setState({ currentUser: { id: 'u1' } as never });
+    mountAt('/accept-policies');
+
+    expect(await screen.findByTestId('probe-page')).toBeInTheDocument();
+    expect(screen.queryByTestId('account-deletion-pending-screen')).not.toBeInTheDocument();
   });
 });

@@ -12,6 +12,7 @@ import GroupsIcon from '@mui/icons-material/Groups';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import KeyboardIcon from '@mui/icons-material/Keyboard';
+import WidgetsOutlinedIcon from '@mui/icons-material/WidgetsOutlined';
 import { useCommandPalette } from '@client/app/hooks/useCommandPalette';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { useNotebookSearch } from '@client/app/contexts/NotebookSearchContext';
@@ -62,6 +63,14 @@ const CommandPalette = () => {
         icon: <FolderIcon />,
         keywords: ['projects', 'folder', 'organize'],
         onSelect: () => navigate({ to: '/projects' }),
+      },
+      {
+        id: 'artifacts',
+        label: t('sidenav.artifacts', 'Artifacts'),
+        description: t('artifacts.command_palette_description', 'Browse your saved artifacts'),
+        icon: <WidgetsOutlinedIcon />,
+        keywords: ['artifacts', 'library', 'html', 'diagram', 'saved'],
+        onSelect: () => navigate({ to: '/artifacts' }),
       },
       {
         id: 'agents',

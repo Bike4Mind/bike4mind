@@ -1,7 +1,14 @@
-import { HTTPError, HttpStatus, NotFoundError, UnprocessableEntityError, isZodError } from '@bike4mind/common';
+import {
+  HTTPError,
+  HttpStatus,
+  NotFoundError,
+  UnprocessableEntityError,
+  formatZodError,
+  isZodError,
+} from '@bike4mind/common';
 import { Request, Response } from 'express';
-import { fromZodError } from 'zod-validation-error';
-import type { RateLimitErrorInfo } from '@server/cli/auth';
+import type { RateLimitErrorInfo } from '@bike4mind/server-utils/cli/auth';
+import { requestLogUrl } from './requestLogUrl';
 
 /**
  * The public error envelope. Shared with the completions SSE route
@@ -81,7 +88,9 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
         // Counts the remaps ahead of removing this rule: production hits under this marker are
         // the casts still left to guard or fix. The original message names the model and the
         // path the 404 below would hide; it stays server-side. Stays `warn` so it cannot alarm.
-        req.logger.warn(`[cast-id-remap] ${req.method} ${req.url}: ${errorObj.message ?? ''}`);
+        req.logger.warn(
+          `[cast-id-remap] ${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])}: ${errorObj.message ?? ''}`
+        );
         errorObj = new NotFoundError('Resource not found');
       } else {
         // Mongoose's cast message names the model and the schema field (`... at path
@@ -93,7 +102,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     }
 
     if (isZodError(error)) {
-      errorObj = new UnprocessableEntityError(fromZodError(error).message);
+      errorObj = new UnprocessableEntityError(formatZodError(error));
     }
 
     if (errorObj instanceof HTTPError) {
@@ -105,7 +114,7 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
 
     // 4xx = client error (expected in normal operation) -> warn
     // 5xx = server error (actual bug/outage) -> error (triggers LiveOps via CloudWatch filter)
-    const message = `${req.method} ${req.url} → ${statusCode}: ${errorObj.message || 'No message available'}`;
+    const message = `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} \u2192 ${statusCode}: ${errorObj.message || 'No message available'}`;
     if (statusCode >= 500 && !(errorObj instanceof HTTPError && errorObj.expected)) {
       req.logger.error(message, error);
     } else {
@@ -113,7 +122,9 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
     }
 
     if (httpResponse) {
-      if (Object.keys(httpResponse.headers).length > 0) res.set(httpResponse.headers);
+      // setHeader, not Express's res.set: Next.js API routes hand us a bare Node ServerResponse, where
+      // res.set is undefined and the throw leaves the request hanging until the function times out.
+      for (const [headerName, value] of Object.entries(httpResponse.headers)) res.setHeader(headerName, value);
       res.status(statusCode).json(httpResponse.body);
       return;
     }
@@ -129,7 +140,10 @@ const errorHandler = (error: unknown, req: Request, res: Response) => {
   }
 
   // Unknown error shape - treat as server error
-  req.logger.error(`${req.method} ${req.url} → ${statusCode}: Unknown error`, error);
+  req.logger.error(
+    `${req.method} ${requestLogUrl((req.url ?? '').split('?')[0])} \u2192 ${statusCode}: Unknown error`,
+    error
+  );
   res.status(statusCode).json(buildErrorBody({ error: 'An unknown error occurred', requestId: req.requestId }));
   return;
 };

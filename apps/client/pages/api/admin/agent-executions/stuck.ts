@@ -1,6 +1,6 @@
-import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, SETTINGS_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   agentExecutionRepository,
   ACTIVE_AGENT_EXECUTION_STATUSES,
@@ -28,8 +28,11 @@ const QuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
+// The prompt is user content; this operational list never carries it.
+export type StuckExecutionItem = Omit<SerializedAgentExecutionListItem, 'query'>;
+
 export type StuckExecutionsResponse = {
-  items: SerializedAgentExecutionListItem[];
+  items: StuckExecutionItem[];
   olderThanMinutes: number;
 };
 
@@ -40,9 +43,10 @@ export type StuckExecutionsResponse = {
  * older than `minutes`. Backed by {@link agentExecutionRepository.listStuck};
  * `awaiting_subagent` is deliberately excluded - see model docstring.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { GET: SETTINGS_PAGE_READ },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const parsed = QuerySchema.safeParse(req.query);
   if (!parsed.success) {
     throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid query parameters');
@@ -58,7 +62,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   });
 
   const body: StuckExecutionsResponse = {
-    items: items.map(item => ({
+    items: items.map(({ query: _query, ...item }) => ({
       ...item,
       startedAt: item.startedAt?.toISOString(),
       completedAt: item.completedAt?.toISOString(),

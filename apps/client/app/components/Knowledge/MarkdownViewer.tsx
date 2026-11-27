@@ -1,11 +1,12 @@
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars, UNESCAPED } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars, unescapedDelimiter } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
-import { ContentCopy, Check } from '@mui/icons-material';
+import ContentCopy from '@mui/icons-material/ContentCopy';
+import Check from '@mui/icons-material/Check';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
@@ -63,6 +64,7 @@ const CopyButton = ({ text }: { text: string }) => {
   return (
     <Tooltip title={copied ? 'Copied!' : 'Copy code'} variant="solid" size="sm">
       <IconButton
+        data-testid="markdown-code-copy-btn"
         size="sm"
         variant="plain"
         color="neutral"
@@ -115,7 +117,7 @@ export const UnmarkedCitedPassage = ({ passage, title }: { passage: string; titl
 // A passage clipped mid-span keeps a dangling delimiter that the promoted document no longer has.
 function trimDanglingLatexDelimiters(text: string): string {
   const delimiters = (s: string) =>
-    [...s.matchAll(new RegExp(String.raw`${UNESCAPED}\\([()[\]])`, 'g'))].map(m => ({
+    [...s.matchAll(new RegExp(unescapedDelimiter(String.raw`([()[\]])`), 'g'))].map(m => ({
       kind: m[1] === '(' || m[1] === ')' ? 'paren' : 'bracket',
       opens: m[1] === '(' || m[1] === '[',
       start: m.index,
@@ -283,20 +285,24 @@ const MarkdownViewer: React.FC<Props> = ({
               node?.position?.start.line === node?.position?.end.line &&
               node?.position?.start.column !== node?.position?.end.column;
 
+            // An empty fence has no children at all.
+            const codeText = String(children ?? '').replace(/\n$/, '');
+
             if (language === 'mermaid') {
-              const chartContent = String(children).replace(/\n$/, '').trim();
+              const chartContent = codeText.trim();
               return <MermaidChart className="markdown-viewer-mermaid" chartDefinition={chartContent} />;
             }
 
             return !inline && match ? (
               <Box
                 className="markdown-viewer-code-block"
+                data-testid="markdown-code-block"
                 sx={{ maxWidth: '100%', overflowX: 'auto', position: 'relative' }}
                 {...citedBlockProps(node, citedRange)}
               >
-                <CopyButton text={String(children).replace(/\n$/, '')} />
+                <CopyButton text={codeText} />
                 <HighlightedCode
-                  code={String(children).replace(/\n$/, '')}
+                  code={codeText}
                   language={language}
                   customStyle={{ maxWidth: '100%', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
                 />

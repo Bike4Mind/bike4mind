@@ -1,0 +1,148 @@
+import type { Request } from 'express';
+import { z } from 'zod';
+import {
+  ASSIGNABLE_ORG_ROLES,
+  BadRequestError,
+  NotFoundError,
+  OrganizationEvents,
+  orgHoldsMemberRow,
+  organizationMemberRole,
+} from '@bike4mind/common';
+import {
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  groupRepository,
+  organizationRepository,
+  userApiKeyRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { organizationService } from '@bike4mind/services';
+import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
+import { adminApi } from '@server/middlewares/adminApi';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
+import {
+  parseAdminActionReason,
+  recordAdminActionFromRequest,
+  userAuditTarget,
+} from '@bike4mind/server-utils/utils/adminAudit';
+import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
+import { assertFullAdminForMembership } from '@server/organizations/adminMembership';
+
+const ROLE_LABELS: Record<(typeof ASSIGNABLE_ORG_ROLES)[number], string> = {
+  manager: 'manager',
+  billingManager: 'billing manager',
+  member: 'member',
+};
+
+const RoleSchema = z.object({ role: z.enum(ASSIGNABLE_ORG_ROLES) });
+
+const readParams = (req: Request) => {
+  const { id, userId } = req.query;
+  if (typeof id !== 'string' || !id || typeof userId !== 'string' || !userId) {
+    throw new BadRequestError('Organization and user id required');
+  }
+  return { organizationId: id, userId };
+};
+
+const loadMembership = async (organizationId: string, userId: string) => {
+  const organization = await organizationRepository.findById(organizationId);
+  if (!organization) throw new NotFoundError('Organization not found');
+  const role = organizationMemberRole(organization, userId);
+  if (!role) throw new NotFoundError(`They are not a member of ${organization.name}.`);
+  return { organization, role };
+};
+
+/** Removes a member, or changes their role (manager, billing manager, member), from the admin user profile. */
+const handler = adminApi({
+  auth: 'jwtOnly',
+  adminPermissions: { DELETE: 'users:moderate', PATCH: 'users:moderate' },
+})
+  .delete(async (req, res) => {
+    assertFullAdminForMembership(req.user);
+    const { organizationId, userId } = readParams(req);
+    const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
+
+    const organization = await withTransaction(async () => {
+      const { organization, role } = await loadMembership(organizationId, userId);
+      if (role === 'owner') {
+        throw new BadRequestError(
+          'Cannot remove the organization owner; transfer organization ownership first, then remove them.'
+        );
+      }
+      const { organization: updated, revokedOrgBilledApiKeyIds } = await organizationService.revokeAccess(
+        req.user,
+        { id: organizationId, userId },
+        {
+          db: {
+            organizations: organizationRepository,
+            users: userRepository,
+            groups: groupRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        }
+      );
+      await recordAdminActionFromRequest(req, {
+        action: 'org.member.removed',
+        target: await userAuditTarget(userId),
+        organizationId,
+        summary: `removed from organization ${organization.name}`,
+        reason,
+        details: { organizationName: organization.name, role, revokedOrgBilledKeys: revokedOrgBilledApiKeyIds.length },
+      });
+      return updated;
+    });
+
+    // After the commit, as on the org's own removal route, so a retried transaction cannot mail twice.
+    await refreshSeatEntitlements(userId);
+    const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(userId, organization, req.logger);
+    await logEventSafe(
+      { userId: req.user.id, type: OrganizationEvents.REMOVE_ORG_MEMBER, metadata: { organizationId, userId } },
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id },
+      req.logger,
+      organizationId
+    );
+
+    return res.json({ organizationId, userId, personalLakeSharesKept });
+  })
+  .patch(async (req, res) => {
+    assertFullAdminForMembership(req.user);
+    const { organizationId, userId } = readParams(req);
+    const parsed = RoleSchema.safeParse(req.body);
+    if (!parsed.success) throw new BadRequestError('Role must be manager, billingManager or member');
+    const { role: next } = parsed.data;
+    const reason = parseAdminActionReason((req.body as { reason?: unknown }).reason);
+
+    await withTransaction(async () => {
+      const { organization, role } = await loadMembership(organizationId, userId);
+      if (role === 'owner') throw new BadRequestError("The owner's role can't be changed.");
+      if (role === next) throw new BadRequestError(`They are already a ${ROLE_LABELS[next]} of ${organization.name}.`);
+      if (next !== 'member' && !orgHoldsMemberRow(organization, userId)) {
+        throw new BadRequestError('Only a member with read access can be given that role.');
+      }
+
+      // setMemberRole keeps the role lists disjoint; it joins this transaction through mongoose's ALS.
+      if (!(await organizationRepository.setMemberRole(organizationId, userId, next))) {
+        throw new BadRequestError('Only a member with read access can be given that role.');
+      }
+      await recordAdminActionFromRequest(req, {
+        action: 'org.member.role_changed',
+        target: await userAuditTarget(userId),
+        organizationId,
+        summary: `changed organization role in ${organization.name} to ${next}`,
+        reason,
+        changes: [{ field: 'role', before: role, after: next }],
+        details: { organizationName: organization.name },
+      });
+    });
+
+    return res.json({ organizationId, userId, role: next });
+  });
+
+export const config = { api: { externalResolver: true } };
+export default handler;

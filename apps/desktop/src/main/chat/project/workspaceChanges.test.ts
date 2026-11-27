@@ -1,23 +1,25 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { ChatProject } from '@shared/chat';
 import { describe, expect, it } from 'vitest';
 import { git } from './git';
+import { gitFixture } from './gitFixture.testHelper';
 import { countUntrackedFile, parseNumstat, readWorkspaceChanges } from './workspaceChanges';
 
-async function repository(): Promise<string> {
-  const directory = await realpath(await mkdtemp(join(tmpdir(), 'b4m-changes-')));
-  await git(directory, ['init', '--initial-branch=main', '--quiet']);
-  await git(directory, ['config', 'user.email', 'test@example.com']);
-  await git(directory, ['config', 'user.name', 'Test']);
-  await writeFile(join(directory, 'README.md'), 'one\ntwo\nthree\n', 'utf8');
-  await git(directory, ['add', '.']);
-  await git(directory, ['commit', '--quiet', '-m', 'first']);
-  return directory;
-}
+const repository = gitFixture(
+  'b4m-changes-',
+  async directory => {
+    await git(directory, ['init', '--initial-branch=main', '--quiet']);
+    await git(directory, ['config', 'user.email', 'test@example.com']);
+    await git(directory, ['config', 'user.name', 'Test']);
+    await writeFile(join(directory, 'README.md'), 'one\ntwo\nthree\n', 'utf8');
+    await git(directory, ['add', '.']);
+    await git(directory, ['commit', '--quiet', '-m', 'first']);
+  },
+  []
+);
 
 async function commitAll(directory: string, message: string): Promise<void> {
   await git(directory, ['add', '.']);

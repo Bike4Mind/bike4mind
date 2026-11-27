@@ -11,6 +11,7 @@ import path from 'path';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import type { CliConfig } from '../storage/types.js';
 import { PluginStore, getDefaultPluginsDir, isFeatureEnabled, type PluginDescriptor } from '../plugins/PluginStore.js';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface PluginCommandArgs {
   _: (string | number)[];
@@ -88,13 +89,13 @@ export function formatPluginList(descriptors: PluginDescriptor[], config: CliCon
     if (descriptor.valid) {
       const enabled = isFeatureEnabled(config.features, descriptor.configKey);
       lines.push(
-        `• ${descriptor.name}@${descriptor.version} - ${enabled ? '✅ Enabled' : '⏸️ Disabled'} (key: ${descriptor.configKey})`
+        `• ${sanitizeTerminalText(descriptor.name)}@${sanitizeTerminalText(descriptor.version)} - ${enabled ? '✅ Enabled' : '⏸️ Disabled'} (key: ${sanitizeTerminalText(descriptor.configKey)})`
       );
       if (descriptor.description) {
-        lines.push(`  ${descriptor.description}`);
+        lines.push(`  ${sanitizeTerminalText(descriptor.description)}`);
       }
     } else {
-      lines.push(`• ${descriptor.name} - ⚠️ ${descriptor.reason}`);
+      lines.push(`• ${sanitizeTerminalText(descriptor.name)} - ⚠️ ${sanitizeTerminalText(descriptor.reason)}`);
     }
   }
   return lines.join('\n');
@@ -204,22 +205,30 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
 
   for (const descriptor of added) {
     if (!descriptor.valid) {
-      console.warn(`⚠️ ${descriptor.name} installed, but its manifest is invalid: ${descriptor.reason}`);
+      console.warn(
+        `\u26A0\uFE0F ${sanitizeTerminalText(descriptor.name)} installed, but its manifest is invalid: ${sanitizeTerminalText(descriptor.reason)}`
+      );
       console.warn('It will not load until the manifest is fixed.');
       continue;
     }
     if (!newTopLevel.has(descriptor.name)) {
       // A transitive dependency that ships its own b4m-plugin manifest.
-      console.warn(`ℹ️ ${descriptor.name} is a dependency and carries a plugin manifest; not enabling it.`);
-      console.warn(`   Enable it explicitly with: b4m plugin add ${descriptor.name}`);
+      console.warn(
+        `ℹ️ ${sanitizeTerminalText(descriptor.name)} is a dependency and carries a plugin manifest; not enabling it.`
+      );
+      console.warn(`   Enable it explicitly with: b4m plugin add ${sanitizeTerminalText(descriptor.name)}`);
       continue;
     }
     const config = await configStore.load();
     // Minimal partial: only the features map is persisted (global-owned), so no
     // repo-sourced layer from the merged config is laundered into global.
     await configStore.save({ features: { ...config.features, [descriptor.configKey]: true } });
-    console.log(`✅ Installed ${descriptor.name}@${descriptor.version} (plugin key: ${descriptor.configKey})`);
-    console.log(`Enabled feature "${descriptor.configKey}". It will load next time you start b4m.`);
+    console.log(
+      `✅ Installed ${sanitizeTerminalText(descriptor.name)}@${sanitizeTerminalText(descriptor.version)} (plugin key: ${sanitizeTerminalText(descriptor.configKey)})`
+    );
+    console.log(
+      `Enabled feature "${sanitizeTerminalText(descriptor.configKey)}". It will load next time you start b4m.`
+    );
   }
 }
 

@@ -8,6 +8,7 @@ import { func as reauthFunc } from '@server/websocket/reauthConnection';
 import type { Context } from 'aws-lambda';
 import { Resource } from 'sst';
 import crypto from 'crypto';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 
 /**
  * Self-host WebSocket handler bridge.
@@ -41,6 +42,7 @@ const handler = baseApi({ auth: false }).post(
     const provided = Array.isArray(providedRaw) ? '' : (providedRaw ?? '');
     const secretOk =
       !!expected &&
+      !isUnconfiguredSecret(expected) &&
       provided.length === expected.length &&
       crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
     if (!secretOk) {
@@ -48,9 +50,12 @@ const handler = baseApi({ auth: false }).post(
     }
 
     const action = String((req.query as { action?: string }).action ?? '');
-    const { connectionId, ticket, headers, body } = (req.body ?? {}) as {
+    const { connectionId, ticket, headers, body, handoffPlatform, handoffName, handoffClientId } = (req.body ?? {}) as {
       connectionId?: string;
       ticket?: string;
+      handoffPlatform?: string;
+      handoffName?: string;
+      handoffClientId?: string;
       headers?: Record<string, string>;
       body?: string;
     };
@@ -64,7 +69,7 @@ const handler = baseApi({ auth: false }).post(
       // header instead. Forwarding `token` here would leave the browser socket credential-less.
       const event = {
         requestContext: { connectionId },
-        queryStringParameters: ticket ? { ticket } : {},
+        queryStringParameters: ticket ? { ticket, handoffPlatform, handoffName, handoffClientId } : {},
         headers: headers ?? {},
       };
       const result = await connectFunc(event as never, lambdaContext('selfhost_ws_connect'));
@@ -75,7 +80,7 @@ const handler = baseApi({ auth: false }).post(
       // domainName/stage only feed disconnect's best-effort cc_agent despawn
       // broadcast; the core cleanup (Connection + QuerySubscription pull) ignores
       // them. Note: disconnect builds https://<host>/<stage>, but the self-host
-      // management endpoint is plain HTTP (http://ws:3001), so that broadcast is
+      // management endpoint is plain HTTP (http://ws:3002), so that broadcast is
       // effectively a no-op here (it is wrapped in try/catch upstream and the
       // core cleanup still runs). Derive host/stage from the endpoint anyway.
       const mgmt = new URL(Resource.websocket.managementEndpoint);

@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 
-const { mockDeleteMany, mockFind, mockCountDocuments } = vi.hoisted(() => ({
+const { mockDeleteMany, mockFind, mockCountDocuments, mockDeleteTriage, mockRemoveBriefItems } = vi.hoisted(() => ({
   mockDeleteMany: vi.fn(),
   mockFind: vi.fn(),
   mockCountDocuments: vi.fn(),
+  mockDeleteTriage: vi.fn(),
+  mockRemoveBriefItems: vi.fn(),
 }));
 
 // baseApi mock: creates a callable chain that routes by req.method
@@ -36,6 +38,8 @@ vi.mock('@bike4mind/database', () => ({
     countDocuments: (...args: unknown[]) => mockCountDocuments(...args),
     deleteMany: (...args: unknown[]) => mockDeleteMany(...args),
   },
+  emailTriageItemRepository: { deleteByEmailIds: (...args: unknown[]) => mockDeleteTriage(...args) },
+  assistantBriefRepository: { removeEmailSourcedItems: (...args: unknown[]) => mockRemoveBriefItems(...args) },
 }));
 
 // Import handler after mocks are registered
@@ -104,5 +108,17 @@ describe('DELETE /api/users/[id]/ingested-emails', () => {
     // Call site now passes strings - castIdFilter inside softDeletePlugin converts them
     // to ObjectId before the raw driver is called. The mock captures the pre-cast call.
     expect(filter._id.$in).toEqual([id1.toHexString(), id2.toHexString()]);
+  });
+
+  it('removes the triage items and brief items derived from the deleted emails, scoped to the owner', async () => {
+    const ids = [new mongoose.Types.ObjectId().toHexString()];
+    const { req, res } = deleteReq('user-1', ids);
+    await invoke(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockDeleteTriage).toHaveBeenCalledWith('user-1', ids);
+    expect(mockRemoveBriefItems).toHaveBeenCalledWith('user-1', ids);
+    expect(mockDeleteMany.mock.invocationCallOrder[0]).toBeLessThan(mockDeleteTriage.mock.invocationCallOrder[0]);
+    expect(mockDeleteTriage.mock.invocationCallOrder[0]).toBeLessThan(mockRemoveBriefItems.mock.invocationCallOrder[0]);
   });
 });

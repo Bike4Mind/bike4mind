@@ -100,7 +100,8 @@ export async function findTransferableOrgArtifacts(ownerId: string): Promise<Tra
  * artifacts, so that is what lets it re-run this and finish the job. Idempotent: the child sweep
  * covers ALL of the owner's artifacts, and a clean re-run changes nothing.
  * Stored bundle objects in S3 are left in place; nothing serves them once the row is deleted.
- * CDN invalidation is the caller's job (see apps/client/server/services/publish/purgeUserPublishedArtifacts.ts).
+ * The owner-only thumbnail record is cleared with the row; deleting the thumbnail objects and the
+ * CDN invalidation are the caller's job (see packages/server-utils/src/services/publish/purgeUserPublishedArtifacts.ts).
  */
 export async function purgeOwnerPublishedArtifacts(
   ownerId: string,
@@ -147,7 +148,7 @@ async function purgeMatchingPublishedArtifacts(
   if (live.length > 0) {
     await PublishedArtifact.updateMany(
       { _id: { $in: live.map(a => a._id) }, deletedAt: null },
-      { $set: { deletedAt: now, deletedBy } }
+      { $set: { deletedAt: now, deletedBy }, $unset: { thumbnail: 1 } }
     );
   }
 
@@ -166,12 +167,17 @@ async function purgeMatchingPublishedArtifacts(
   };
 }
 
-/** The sources a delete-all removed: notebook ids for published replies, file ids for published files. */
+/**
+ * The sources a delete removed: notebook ids for published replies, message ids within one notebook
+ * for replies published from single messages, file ids for published files.
+ */
 export type PublishedArtifactSources =
-  { kind: 'reply'; sessionIds: string[] } | { kind: 'fabfile'; fabFileIds: string[] };
+  | { kind: 'reply'; sessionIds: string[] }
+  | { kind: 'replyMessage'; sessionId: string; messageIds: string[] }
+  | { kind: 'fabfile'; fabFileIds: string[] };
 
 /**
- * Take down the artifacts `ownerId` published from the given notebooks or files, for when the user
+ * Take down the artifacts `ownerId` published from the given notebooks, messages or files, for when the user
  * deletes the source rather than the account. Only artifacts `ownerId` owns are touched: someone
  * else's page built from a shared source is theirs to keep. Same cleanup as
  * purgeOwnerPublishedArtifacts, minus the org-page handover (the owner is still around).
@@ -181,6 +187,19 @@ export async function purgeOwnerPublishedArtifactsBySource(
   sources: PublishedArtifactSources,
   { deletedBy }: { deletedBy: string }
 ): Promise<Omit<PurgeOwnerPublishedArtifactsResult, 'transferred'>> {
+  if (sources.kind === 'replyMessage') {
+    // An empty list must stay a no-op: dropping the messageId clause would take down the whole notebook.
+    if (sources.messageIds.length === 0) return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
+    return purgeMatchingPublishedArtifacts(
+      {
+        ownerId,
+        'source.kind': 'reply',
+        'source.sessionId': sources.sessionId,
+        'source.messageId': { $in: sources.messageIds },
+      },
+      { deletedBy }
+    );
+  }
   const ids = sources.kind === 'reply' ? sources.sessionIds : sources.fabFileIds;
   if (ids.length === 0) return { artifacts: [], annotations: 0, reports: 0, viewAudits: 0 };
   const sourceField = sources.kind === 'reply' ? 'source.sessionId' : 'source.fabFileId';

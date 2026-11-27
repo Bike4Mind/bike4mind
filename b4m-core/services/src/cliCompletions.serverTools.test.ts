@@ -7,6 +7,18 @@ import { BadRequestError } from '@bike4mind/common';
 let capturedOptions: Record<string, any> | undefined;
 let completeImpl: (onChunk: (text: string[], info?: Record<string, unknown>) => Promise<void>) => Promise<void>;
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 // Keep the real pure cap helpers (isMemberCreditCapExceeded etc.); only stub the write.
 vi.mock('./creditService', async importOriginal => ({
@@ -22,7 +34,14 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([
+    {
+      id: 'test-model',
+      type: 'text',
+      backend: 'anthropic',
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
+  ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model: unknown, _messages: unknown, options: Record<string, any>, onChunk: any) => {
@@ -75,6 +94,7 @@ function buildDb() {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: usageEvents as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: organizations as any,
     },
     users,
@@ -186,7 +206,11 @@ describe('executeCompletion - serverTools opt-in', () => {
     // guard skips them), the terminal turn emits the accumulated whole-completion totals.
     const { db, usageEvents } = buildDb();
     completeImpl = async onChunk => {
-      await onChunk(['tool output\n'], { inputTokens: 0, outputTokens: 0, toolsUsed: ['search_knowledge_base'] });
+      await onChunk(['tool output\n'], {
+        inputTokens: 0,
+        outputTokens: 0,
+        toolsUsed: [{ name: 'search_knowledge_base', arguments: '{}' }],
+      });
       await onChunk(['answer'], { inputTokens: 300, outputTokens: 80 });
     };
 
@@ -393,5 +417,14 @@ describe('executeCompletion - serverTools opt-in', () => {
     expect(usageEvents.record).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'refusal', inputTokens: 100, outputTokens: 5 })
     );
+  });
+
+  // No fallback loop runs here, so a refusalFallback model must settle its refusal rather than throw.
+  it('asks the backend to settle a safety refusal instead of throwing it', async () => {
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, db });
+
+    expect(capturedOptions!.settleRefusal).toBe(true);
   });
 });

@@ -25,15 +25,15 @@ Extended thinking is an Anthropic Claude feature that allows the model to show i
 - **Educational:** Learn the model's thought process
 - **Debugging:** Identify where reasoning may have gone wrong
 
-:::info Automatic Feature
-Extended thinking is automatically available for supported Anthropic Claude models. You don't need to enable it explicitly.
+:::info Opt in per request
+Thinking defaults depend on the model: older Claude models require opt-in, while some adaptive Claude models reason by default. Send `options.thinking.enabled: true`, and optionally `options.thinking.budget_tokens` (integer; the in-app API reference lists the allowed range and default) and `options.reasoningEffort` (`none`, `minimal`, `low`, `medium`, `high` or `xhigh`). Models that cannot think ignore these fields. The in-app API reference lists the exact behavior per provider.
 :::
 
 ---
 
 ## How It Works
 
-When extended thinking is used, the response includes two components:
+Models may expose these two components when thinking metadata is available:
 
 1. **Thinking blocks** - The model's internal reasoning and step-by-step analysis
 2. **Response text** - The final answer based on the thinking
@@ -56,15 +56,16 @@ Returns thinking + answer
 
 ## Response Format
 
-When extended thinking is used, the `content` event includes a `thinking` array:
+On an Anthropic tool turn, the `tool_use` event can include an optional `thinking` array. Ordinary content events do not guarantee readable thinking blocks:
 
 ```typescript
 {
-  type: "content";
+  type: "tool_use";
   text: string;                    // The final answer
   thinking?: Array<{               // Optional thinking blocks
     type: "thinking";
-    text: string;                  // Reasoning text
+    signature: string;
+    thinking: string;                  // Reasoning text
   }>;
   usage: {
     inputTokens: number;
@@ -77,12 +78,13 @@ When extended thinking is used, the `content` event includes a `thinking` array:
 
 ```json
 {
-  "type": "content",
+  "type": "tool_use",
   "text": "The answer is 9 sheep. The phrase 'all but 9 die' means that 9 survived.",
   "thinking": [
     {
       "type": "thinking",
-      "text": "This is a word problem that requires careful reading. Let me parse it:\n- Total sheep: 17\n- 'all but 9 die' means: everyone except 9 died\n- So 9 survived\n- The answer is 9 remaining sheep"
+      "signature": "provider-signature",
+      "thinking": "This is a word problem that requires careful reading. Let me parse it:\n- Total sheep: 17\n- 'all but 9 die' means: everyone except 9 died\n- So 9 survived\n- The answer is 9 remaining sheep"
     }
   ],
   "usage": {
@@ -100,24 +102,28 @@ When extended thinking is used, the `content` event includes a `thinking` array:
 
 ```bash
 curl -X POST https://app.bike4mind.com/api/ai/v1/completions \
-  -H "X-API-Key: $B4M_API_KEY" \
+  -H "Authorization: Bearer $B4M_API_KEY" \
   -H "Content-Type: application/json" \
   --no-buffer \
   -d '{
-    "model": "claude-3-5-sonnet",
+    "model": "claude-sonnet-5",
     "messages": [
       {
         "role": "user",
         "content": "A farmer has 17 sheep, and all but 9 die. How many are left?"
       }
-    ]
+    ],
+    "max_tokens": 4000,
+    "options": { "thinking": { "enabled": true, "budget_tokens": 2048 } }
   }'
 ```
 
-### Response (with extended thinking)
+### Response
+
+The stream carries answer text as `content` events. Thinking metadata is optional and is primarily used to preserve signed blocks on tool turns. A response may contain no readable `thinking` field even when the model reasons.
 
 ```
-data: {"type":"content","text":"9 sheep are left. The phrase 'all but 9 die' means that 9 survived.","thinking":[{"type":"thinking","text":"This is a word problem that requires careful reading. Let me parse it:\n- Total sheep: 17\n- 'all but 9 die' means: everyone except 9 died\n- So 9 survived\n- The answer is 9 remaining sheep"}],"usage":{"inputTokens":28,"outputTokens":95}}
+data: {"type":"content","text":"9 sheep are left.","usage":{"inputTokens":28,"outputTokens":95},"stopReason":"end_turn"}
 
 data: [DONE]
 ```
@@ -125,6 +131,10 @@ data: [DONE]
 ---
 
 ## Displaying Thinking to Users
+
+These display examples apply only to readable `thinking` blocks. A `redacted_thinking` block is opaque. Preserve all raw blocks, including signatures, when echoing an assistant tool turn; see [tool continuation](./tools.md#step-4-send-tool-result-back). Do not rebuild the blocks from displayed text.
+
+The final event's `stopReason: "max_tokens"` means the answer was truncated even if `[DONE]` follows; increase or omit `max_tokens` to allow enough room for reasoning and answer text.
 
 You have three options for handling thinking blocks in your UI:
 
@@ -140,9 +150,9 @@ function displayResponse(event) {
   // Display thinking process
   if (event.thinking && event.thinking.length > 0) {
     console.log('\nReasoning process:');
-    event.thinking.forEach((block, index) => {
+    event.thinking.filter(block => block.type === 'thinking').forEach((block, index) => {
       console.log(`\nStep ${index + 1}:`);
-      console.log(block.text);
+      console.log(block.thinking);
     });
   }
 }
@@ -181,9 +191,9 @@ function ResponseComponent({ event }) {
 
           {showThinking && (
             <div className="thinking">
-              {event.thinking.map((block, i) => (
+              {event.thinking.filter(block => block.type === 'thinking').map((block, i) => (
                 <div key={i} className="thinking-block">
-                  {block.text}
+                  {block.thinking}
                 </div>
               ))}
             </div>
@@ -210,21 +220,12 @@ Simple question without thinking:   50 output tokens
 Same question with thinking:       200 output tokens
 ```
 
-**Cost impact:**
-
-```
-Claude 3.5 Sonnet: $15/1M output tokens
-
-Without thinking: 50 tokens = $0.00075
-With thinking:   200 tokens = $0.003
-
-4x increase in cost
-```
+Thinking tokens count within output tokens. `usage` counters and `credits.used`, when present, are cumulative for the completion; use the last reported values rather than adding every event. `reasoningTokens`, when reported, is a subset of `outputTokens`, not an additional charge.
 
 **Recommendations:**
 
 1. **Budget accordingly** - Account for increased token usage when using models with extended thinking
-2. **Set maxTokens** - Limit total output to control costs
+2. **Set `max_tokens`** - Limit total output to control costs
 3. **Monitor usage** - Track token consumption for optimization
 4. **Use when valuable** - Extended thinking is most valuable for complex reasoning tasks
 
@@ -286,27 +287,9 @@ User: "Hello!"
 
 ## Supported Models
 
-Extended thinking is currently available for:
+Extended thinking is available on supported Anthropic Claude models; a Claude name alone does not establish support. Call `GET /api/v1/models` for the model ids available to you.
 
-- **Claude 3.5 Sonnet**
-- **Claude 3 Opus**
-- **Other Anthropic Claude models** (check model capabilities)
-
-**Check if a model supports extended thinking:**
-
-```javascript
-function supportsExtendedThinking(modelName) {
-  const supportedModels = [
-    'claude-3-5-sonnet',
-    'claude-3-opus',
-    'claude-3-sonnet',
-  ];
-
-  return supportedModels.some(model =>
-    modelName.toLowerCase().includes(model)
-  );
-}
-```
+Check the model's capabilities in the API reference rather than inferring support from its name.
 
 ---
 
@@ -319,12 +302,14 @@ async function streamWithThinking(messages) {
   const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
     method: 'POST',
     headers: {
-      'X-API-Key': process.env.B4M_API_KEY,
+      'Authorization': `Bearer ${process.env.B4M_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-3-5-sonnet',
-      messages: messages
+      model: 'claude-sonnet-5',
+      messages: messages,
+      max_tokens: 4000,
+      options: { thinking: { enabled: true, budget_tokens: 2048 } },
     })
   });
 
@@ -338,9 +323,9 @@ async function streamWithThinking(messages) {
       // Check for thinking
       if (event.thinking && event.thinking.length > 0) {
         console.log('\nThinking process:');
-        event.thinking.forEach((block, index) => {
+        event.thinking.filter(block => block.type === 'thinking').forEach((block, index) => {
           console.log(`\n[Thought ${index + 1}]`);
-          console.log(block.text);
+          console.log(block.thinking);
         });
       }
 
@@ -368,7 +353,8 @@ def handle_event(event):
             print("\nThinking process:")
             for i, block in enumerate(event['thinking'], 1):
                 print(f"\n[Thought {i}]")
-                print(block['text'])
+                if block.get('type') == 'thinking':
+                    print(block['thinking'])
 
         # Display token usage
         if 'usage' in event:
@@ -396,7 +382,7 @@ Let users know when thinking is shown:
         💭 Reasoning process
       </span>
       <div className="thinking-content">
-        {event.thinking.map(block => block.text).join('\n')}
+        {event.thinking.filter(block => block.type === 'thinking').map(block => block.thinking).join('\n')}
       </div>
     </div>
   )}
@@ -414,8 +400,8 @@ const estimatedTokens = 100;
 // With thinking estimate (2-5x multiplier)
 const estimatedWithThinking = estimatedTokens * 3;
 
-// Set appropriate maxTokens
-const maxTokens = estimatedWithThinking;
+// Send as the top-level max_tokens field
+const max_tokens = estimatedWithThinking;
 ```
 
 ### 3. Use for Complex Tasks
@@ -458,12 +444,12 @@ let thinkingTokens = 0;
 
 function trackTokenUsage(event) {
   if (event.usage && event.usage.outputTokens) {
-    totalOutputTokens += event.usage.outputTokens;
+    totalOutputTokens = event.usage.outputTokens;
 
     // Estimate thinking tokens (rough approximation)
     if (event.thinking && event.thinking.length > 0) {
-      const thinkingText = event.thinking.map(b => b.text).join('');
-      thinkingTokens += Math.floor(thinkingText.length / 4);
+      const thinkingText = event.thinking.filter(block => block.type === 'thinking').map(b => b.thinking).join('');
+      thinkingTokens = event.usage.reasoningTokens ?? Math.floor(thinkingText.length / 4);
     }
 
     console.log(`Total output tokens: ${totalOutputTokens}`);
@@ -480,23 +466,22 @@ function trackTokenUsage(event) {
 ### Thinking Not Appearing
 
 **Possible causes:**
-1. **Wrong model** - Extended thinking only works with Anthropic Claude models
-2. **Simple query** - Model determined thinking wasn't needed
-3. **Model decision** - Model chose not to use extended thinking
+1. **Not enabled** - On opt-in models, the request did not set `options.thinking.enabled: true`
+2. **Wrong model** - The model cannot think, so the fields are ignored
+3. **No exposed blocks** - Not every response returns readable thinking metadata
 
 **Solutions:**
-- Verify you're using a Claude model (`claude-3-5-sonnet`, etc.)
+- Send `options.thinking.enabled: true` and use a model that can think (`claude-sonnet-5`, etc.)
 - Try a more complex query that requires reasoning
-- Extended thinking is automatic and model-decided (cannot be forced)
 
 ### Too Much Thinking
 
 **Possible causes:**
 1. **Complex queries** - Model is being thorough
-2. **No token limit** - Allowing unlimited output
+2. **Large token budget** - The model can spend more of its output budget reasoning
 
 **Solutions:**
-- Set reasonable `maxTokens` limits
+- Lower `options.thinking.budget_tokens` and set a reasonable `max_tokens`
 - Simplify your queries if possible
 - Accept that complex problems require more thinking
 
@@ -504,7 +489,7 @@ function trackTokenUsage(event) {
 
 ## Next Steps
 
-- **[Tools & Function Calling](/api/completions/tools)** - Use tools with extended thinking
-- **[Code Examples](/api/completions/examples/javascript)** - See complete implementations
-- **[Error Handling](/api/completions/errors)** - Handle response parsing
-- **[Best Practices](/api/completions/best-practices)** - Optimize token usage
+- **[Tools & Function Calling](./tools.md)** - Use tools with extended thinking
+- **[Code Examples](./examples/javascript.md)** - See complete implementations
+- **[Error Handling](./errors.md)** - Handle response parsing
+- **[Best Practices](./best-practices.md)** - Optimize token usage

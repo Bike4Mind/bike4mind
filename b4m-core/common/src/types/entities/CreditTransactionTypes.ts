@@ -3,12 +3,17 @@ import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
 import { COMPLETION_SOURCES, CompletionSource } from '../analytics';
+import { PAYER_STANDINGS } from './UserApiKeyTypes';
 
 export enum CreditPurchaseStatus {
   Completed = 'completed',
   Pending = 'pending',
   Failed = 'failed',
 }
+
+/** Why a completed purchase stopped counting toward paid standing: a full refund or a lost dispute. */
+export const PURCHASE_REVERSAL_REASONS = ['refunded', 'dispute_lost'] as const;
+export type PurchaseReversalReason = (typeof PURCHASE_REVERSAL_REASONS)[number];
 
 // Base transaction properties
 const BaseCreditTransaction = z.object({
@@ -33,6 +38,10 @@ const BaseCreditTransaction = z.object({
    * purchases/refunds) may not have it set. See CompletionSource in analytics.ts.
    */
   source: z.enum(COMPLETION_SOURCES).optional(),
+  /** Connected app whose exchange key made this charge; stamped by the ledger repository. */
+  oauthClientId: z.string().optional(),
+  /** Payer's standing when the exchange key was minted; set only when the key's owner paid the charge. */
+  payerStanding: z.enum(PAYER_STANDINGS).optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -50,6 +59,9 @@ export const PurchaseTransaction = BaseCreditTransaction.extend({
   stripePaymentIntentId: z.string(),
   packageId: z.string().optional(),
   amount: z.number(),
+  /** Set once the purchase is fully refunded or loses a dispute; absent on legacy rows. */
+  reversedAt: z.date().nullable().optional(),
+  reversalReason: z.enum(PURCHASE_REVERSAL_REASONS).optional(),
 });
 
 /**
@@ -92,9 +104,13 @@ export const GenericCreditAddTransaction = BaseCreditTransaction.extend({
   transactionId: z.string().optional(),
 });
 
+// Reason on the generic_add ledger row of an inviter reward; the client chart and the server grants must agree on it.
+export const REFERRAL_REWARD_REASON = 'referral_reward';
+
 /**
- * Known reasons for generic credit deductions.
- * New callers should use one of these values - not a free-form string.
+ * Built-in reasons for generic credit deductions; they seed the registry below.
+ * A package that needs a new reason registers it with registerGenericDeductReason
+ * rather than extending this list.
  */
 export const GenericDeductReasons = [
   'dispute_clawback',
@@ -107,9 +123,66 @@ export const GenericDeductReasons = [
   'optihashi_reservation',
   'optihashi_cost_chargeup',
   'credit_expiry',
+  'abuse_clawback',
+  'referral_reward_takeback',
 ] as const;
 
-export type GenericDeductReason = (typeof GenericDeductReasons)[number];
+/**
+ * Type-level extension point: a package that registers a reason at runtime also adds it here
+ * through declaration merging, e.g. `declare module '@bike4mind/common' { interface
+ * GenericDeductReasonExtensions { my_reason: true } }`.
+ */
+export interface GenericDeductReasonExtensions {}
+
+export type GenericDeductReason = (typeof GenericDeductReasons)[number] | keyof GenericDeductReasonExtensions;
+
+const GENERIC_DEDUCT_REASON_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+// Kept on globalThis so two loaded copies of this module (CJS and ESM, or two bundles in one
+// process) validate against the same set. Anything in-process can reach the set through the
+// symbol, so reads re-check the pattern rather than trusting what was added.
+const GENERIC_DEDUCT_REASON_REGISTRY_KEY = Symbol.for('b4m.credit.genericDeductReasons');
+
+// Each copy merges its own built-ins into whatever set it finds, so a copy that loads after an
+// older one with a shorter list still accepts every built-in it ships with.
+let seededRegistry: Set<string> | undefined;
+
+function genericDeductReasonRegistry(): Set<string> {
+  const holder = globalThis as unknown as Record<symbol, Set<string> | undefined>;
+  let registry = holder[GENERIC_DEDUCT_REASON_REGISTRY_KEY];
+  if (!registry) {
+    registry = new Set<string>();
+    holder[GENERIC_DEDUCT_REASON_REGISTRY_KEY] = registry;
+  }
+  if (seededRegistry !== registry) {
+    for (const reason of GenericDeductReasons) registry.add(reason);
+    seededRegistry = registry;
+  }
+  return registry;
+}
+
+/**
+ * Adds a reason that `generic_deduct` transactions may carry. Idempotent. Must run before the
+ * first transaction with that reason is parsed, since validation reads the registry at parse time.
+ */
+export function registerGenericDeductReason(reason: string): void {
+  if (typeof reason !== 'string' || !GENERIC_DEDUCT_REASON_PATTERN.test(reason)) {
+    throw new Error(
+      `Invalid generic deduct reason ${JSON.stringify(reason)}: expected lowercase snake_case matching ${GENERIC_DEDUCT_REASON_PATTERN}`
+    );
+  }
+  genericDeductReasonRegistry().add(reason);
+}
+
+export function isGenericDeductReason(value: unknown): value is GenericDeductReason {
+  return (
+    typeof value === 'string' && GENERIC_DEDUCT_REASON_PATTERN.test(value) && genericDeductReasonRegistry().has(value)
+  );
+}
+
+export function listGenericDeductReasons(): readonly string[] {
+  return [...genericDeductReasonRegistry()].filter(reason => GENERIC_DEDUCT_REASON_PATTERN.test(reason));
+}
 
 /**
  * Generic credit deduction transaction for legacy data and flexible use cases
@@ -123,9 +196,19 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
    */
   userId: z.string().optional(),
   /**
-   * Reason/source for the transaction. Use GenericDeductReasons for new callers.
+   * Reason/source for the transaction: a built-in GenericDeductReasons value or one added with
+   * registerGenericDeductReason.
    */
-  reason: z.enum(GenericDeductReasons).optional(),
+  reason: z
+    .custom<GenericDeductReason>(isGenericDeductReason, {
+      // Parse messages reach HTTP clients through secureParameters, so neither the input nor the
+      // registered names go into them.
+      error: issue =>
+        typeof issue.input === 'string'
+          ? 'Unregistered generic deduct reason'
+          : `Expected a generic deduct reason string, received ${issue.input === null ? 'null' : typeof issue.input}`,
+    })
+    .optional(),
   /**
    * Stripe dispute ID - set for dispute clawback transactions.
    * Used for idempotency (unique sparse index prevents duplicate clawbacks).
@@ -138,18 +221,32 @@ export const GenericCreditDeductTransaction = BaseCreditTransaction.extend({
   stripeRefundId: z.string().optional(),
 });
 
+/**
+ * Prompt-cache token counts, in the billing convention: disjoint from `inputTokens` and priced at
+ * their own rates, so a row whose `inputTokens` looks tiny can still carry a large charge. Optional
+ * because rows written before these were recorded (and providers that report no cache) lack them.
+ * Same names as the usage event's `cacheReadTokens`/`cacheWriteTokens`.
+ */
+const CacheTokenFields = {
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+};
+
 // Usage transactions with service-specific details
 export const TextGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('text_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  ...CacheTokenFields,
 });
 
 export const ImageGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('image_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -157,6 +254,7 @@ export const ImageGenerationUsageTransaction = BaseCreditTransaction.extend({
 
 export const ImageEditUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('image_edit_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -164,6 +262,7 @@ export const ImageEditUsageTransaction = BaseCreditTransaction.extend({
 
 export const VideoGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('video_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   questId: z.string(),
   sessionId: z.string(),
@@ -171,6 +270,7 @@ export const VideoGenerationUsageTransaction = BaseCreditTransaction.extend({
 
 export const RealtimeVoiceUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('realtime_voice_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
   /** Idempotency key for a per-response charge; the unique sparse index rejects a replay. */
@@ -179,6 +279,7 @@ export const RealtimeVoiceUsageTransaction = BaseCreditTransaction.extend({
 
 export const ToolUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('tool_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   /**
    * The model that actually incurred the tool cost (e.g. 'gpt-image-2'), NOT the chat
    * model of the quest that ran the tool. The row is one aggregate over every charging
@@ -196,8 +297,11 @@ export const CompletionApiUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('completion_api_usage'),
   model: z.string(),
   apiKeyId: z.string().optional(), // Optional - present for API key auth, undefined for JWT
+  /** The client conversation the request belongs to, when the client sends one (desktop, CLI). */
+  sessionId: z.string().optional(),
   inputTokens: z.number(),
   outputTokens: z.number(),
+  ...CacheTokenFields,
 });
 
 /** Synchronous POST /api/v1/decisions call. Quest-less; one row per call that charged >= 1 credit. */
@@ -207,28 +311,33 @@ export const DecisionUsageTransaction = BaseCreditTransaction.extend({
   apiKeyId: z.string().optional(), // Optional - present for API key auth, undefined for JWT
   inputTokens: z.number(),
   outputTokens: z.number(),
+  ...CacheTokenFields,
 });
 
 export const SpeechToTextUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('speech_to_text_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
 
 export const TextToSpeechUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('text_to_speech_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
 
 export const SoundEffectsUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('sound_effects_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
 
 export const MusicGenerationUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('music_generation_usage'),
+  apiKeyId: z.string().optional(), // Present for API key auth, undefined for JWT
   model: z.string(),
   sessionId: z.string(),
 });
@@ -251,6 +360,9 @@ export const TransferCreditTransaction = BaseCreditTransaction.extend({
  * 5. apps/client/app/components/ProfileModal/CreditAnalyticsTabContent.tsx - Add filtering and display logic
  *
  * Failure to sync these files will cause validation errors in MongoDB.
+ *
+ * A new `generic_deduct` reason is not a new type: register it with registerGenericDeductReason
+ * rather than adding it to GenericDeductReasons.
  */
 export const CreditTransaction = z.discriminatedUnion('type', [
   PurchaseTransaction,
@@ -349,6 +461,21 @@ export const AI_USAGE_TRANSACTION_TYPES: CreditTransactionType[] = CREDIT_DEDUCT
 );
 
 /**
+ * What the profile ledger counts as "credits used": every deduct type except transfers, so it
+ * includes `generic_deduct` charges that have no usage event. The usage breakdown reconciles to
+ * this set; keep the ledger view and GET /api/usage on it so the two totals cannot drift.
+ */
+export const LEDGER_USAGE_TRANSACTION_TYPES: CreditTransactionType[] = CREDIT_DEDUCT_TRANSACTION_TYPES.filter(
+  t => t !== 'transfer_credit'
+);
+
+/** Ledger spend over a window: credits are the magnitude (usage rows are stored negative). */
+export interface ILedgerUsageTotal {
+  creditsCharged: number;
+  transactions: number;
+}
+
+/**
  * Bucket key for ledger rows carrying no `source`. Not a CompletionSource: it
  * is the residual, and the UI pins it last rather than ranking it against real
  * surfaces. `source` is optional on the write path, so this covers both rows
@@ -406,8 +533,9 @@ export interface ILedgerPage {
 }
 
 /**
- * One API key's usage rolled up from the ledger (completion_api_usage and
- * decision_usage rows, which carry `apiKeyId`). Credits are the spend magnitude (positive). The
+ * One API key's usage rolled up from the ledger rows that carry `apiKeyId`. `requests` counts only
+ * completion_api_usage and decision_usage rows (one per request); credits and tokens sum every
+ * key-attributed row. Credits are the spend magnitude (positive). The
  * ledger has no COGS, so this cut carries tokens + credits only, not cogsUsd.
  */
 export interface IApiKeyUsage {
@@ -467,6 +595,21 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
     paymentIntentId: string,
     status: CreditPurchaseStatus
   ): Promise<ICreditTransactionDocument | null>;
+  /**
+   * Marks the purchase row for this payment intent reversed (first reversal wins). Returns the row even when
+   * it was already reversed, or null when no purchase row carries the intent.
+   */
+  markPurchaseReversed(
+    paymentIntentId: string,
+    reason: PurchaseReversalReason
+  ): Promise<ICreditTransactionDocument | null>;
+  /**
+   * Moves the row keyed `fromTransactionId` to `toTransactionId`, freeing the original key for a later payout.
+   * Returns null when no row carries `fromTransactionId`.
+   */
+  rekeyTransaction(fromTransactionId: string, toTransactionId: string): Promise<ICreditTransactionDocument | null>;
+  /** Any completed purchase of this owner's that was never refunded or lost to a dispute, or null. */
+  findUnreversedPurchase(ownerId: string, ownerType: CreditHolderType): Promise<ICreditTransactionDocument | null>;
   findByOwnerWithFilters(
     ownerId: string,
     ownerType: CreditHolderType,
@@ -480,14 +623,6 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
 
   /** One filtered, paginated page of an owner's ledger, newest first, with a total count. */
   queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
-
-  /**
-   * One page of admin credit adjustments across ALL users, newest first, with a
-   * total count. Cross-owner (not scoped to one holder): the generic_add /
-   * generic_deduct rows written by `adminUpdateUser` (reason `admin_adjustment`).
-   */
-  queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage>;
-
   /** An owner's net credit delta per UTC day in [from, to], oldest first; days without rows are omitted. */
   dailyNetCreditsForOwner(
     ownerId: string,
@@ -518,6 +653,12 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
    * last so the buckets still sum to the owner's ledger spend.
    */
   sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ISourceUsage[]>;
+
+  /**
+   * An owner's ledger spend over the trailing N days (default 30) across
+   * LEDGER_USAGE_TRANSACTION_TYPES, on the same cutoff as findByOwnerWithFilters.
+   */
+  usageTotalForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ILedgerUsageTotal>;
 }
 
 // True only for `any`: `1 & any` collapses to `any`, so `0 extends any` holds.

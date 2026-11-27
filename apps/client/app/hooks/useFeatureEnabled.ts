@@ -22,17 +22,12 @@ export const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableAgents: { adminKey: 'EnableAgents', defaultKey: 'EnableAgentsDefault' },
   enableRapidReply: { adminKey: 'EnableRapidReply', defaultKey: 'EnableRapidReplyDefault' },
   enableResearchEngine: { adminKey: 'EnableResearchEngine', defaultKey: 'EnableResearchEngineDefault' },
-  enableQuestMaster: { adminKey: 'EnableQuestMaster', defaultKey: 'EnableQuestMasterDefault' },
-  // User-controlled only (no admin SettingKey yet) - a per-user opt-in to the v5 node-graph
-  // QuestMaster, peer to V1. Promote to an admin-gated flag when rolling out org-wide.
-  enableQuestMasterV5: {},
   enableMementos: { adminKey: 'EnableMementos', defaultKey: 'EnableMementosDefault' },
   // User-controlled only (no admin SettingKey yet) - a per-user opt-in to the Mementos 2.0 ledger,
   // peer to V1. Promote to an admin-gated flag when rolling out org-wide.
   enableMementosV2: {},
   enableOllama: { adminKey: 'EnableOllama', defaultKey: 'EnableOllamaDefault' },
   enableDeepResearch: { adminKey: 'EnableDeepResearch', defaultKey: 'EnableDeepResearchDefault' },
-  enableBmPi: { adminKey: 'EnableBmPi', defaultKey: 'EnableBmPiDefault' },
   enableLattice: { adminKey: 'EnableLattice', defaultKey: 'EnableLatticeDefault' },
   enableBriefcase: { adminKey: 'EnableBriefcase', defaultKey: 'EnableBriefcaseDefault' },
   enableHearth: { adminKey: 'EnableHearth', defaultKey: 'EnableHearthDefault' },

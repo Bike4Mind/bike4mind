@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readlink, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyPatch, usesApplyPatch } from './applyPatchTool';
 import { fileRead } from './fileTools';
+import { fileEdit } from './writeTools';
 import { PathAccessDenied } from './paths';
 import type { ToolContext, ToolReporter } from './types';
 
@@ -369,6 +370,16 @@ describe('apply_patch', () => {
       await expect(stat(join(outside, 'planted.txt'))).rejects.toThrow();
       expect(await read('a.ts')).toBe('one\ntwo\nthree\n');
     });
+
+    it('does not delete a link that sits in a protected folder reached through an alias', async () => {
+      await mkdir(join(outside, 'prot'));
+      await symlink(outside, file('alias'));
+      await symlink(file('a.ts'), join(outside, 'prot', 'lnk'));
+      context = { ...context, protectedPaths: [join(outside, 'prot')] };
+
+      await expect(run(wrap('*** Delete File: alias/prot/lnk'))).rejects.toBeInstanceOf(PathAccessDenied);
+      await expect(readlink(join(outside, 'prot', 'lnk'))).resolves.toBe(file('a.ts'));
+    });
   });
 
   describe('approval', () => {
@@ -388,6 +399,26 @@ describe('apply_patch', () => {
       expect(several?.diffs?.map(diff => diff.operation)).toEqual(['edit', 'delete']);
       expect(several?.detail).toContain('Apply patch to 2 files (+1 -4):');
       expect(several?.detail).toContain('D b.ts (+0 -3)');
+    });
+
+    // "Allow in this chat" on a patch to one file in place covers later changes to that file only.
+    it('files the chat allowance under the file for an in-place change, and nothing wider', async () => {
+      const ask = (...body: string[]) => applyPatch.approval?.({ patchText: wrap(...body) }, context);
+      const first = await ask('*** Update File: a.ts', '@@', '-one', '+1');
+      const second = await ask('*** Update File: a.ts', '@@', '-three', '+3');
+      const other = await ask('*** Update File: b.ts', '@@', '-red', '+r');
+
+      expect(first?.chatKey).toBeDefined();
+      expect(second?.key).not.toBe(first?.key);
+      expect(second?.chatKey).toBe(first?.chatKey);
+      expect(other?.chatKey).not.toBe(first?.chatKey);
+
+      const edit = await fileEdit.approval?.({ path: file('a.ts'), oldText: 'one', newText: '1' }, context);
+      expect(edit?.chatKey).toBe(first?.chatKey);
+
+      expect((await ask('*** Delete File: a.ts'))?.chatKey).toBeUndefined();
+      expect((await ask('*** Update File: a.ts', '*** Move to: c.ts', '@@', '-one', '+1'))?.chatKey).toBeUndefined();
+      expect((await ask('*** Update File: a.ts', '@@', '-one', '+1', '*** Update File: b.ts', '@@', '-red', '+r'))?.chatKey).toBeUndefined();
     });
 
     it('fails at approval time, before the user is asked, when a hunk does not locate', async () => {

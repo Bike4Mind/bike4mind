@@ -171,7 +171,12 @@ export const createFabFileOnServerWithUpload = async (
       }
       throw new DOMException('Upload cancelled', 'AbortError'); // Always throw DOMException for consistency
     }
-    throw new Error('Failed to upload fab file');
+    // A raw string body is an S3 XML error or a gateway HTML page; callers toast getErrorMessage(err),
+    // which would show it verbatim.
+    if (axios.isAxiosError(err) && typeof err.response?.data === 'string') {
+      throw new Error('Failed to upload fab file', { cause: err });
+    }
+    throw err;
   }
 };
 
@@ -238,7 +243,8 @@ export const createAppFileOnServerWithUpload = async (
       (err as any)?.code === 'ERR_CANCELED';
 
     if (isAborted) {
-      // App files may not have a cleanup endpoint, but still throw the error
+      // The record was created by the presign call, so drop it rather than leave a Pending row behind.
+      await api.delete('/api/app-files/delete', { data: { id: fileId } }).catch(() => undefined);
       throw new DOMException('Upload cancelled', 'AbortError'); // Always throw DOMException for consistency
     }
     throw err;
@@ -309,11 +315,14 @@ export const getContentFromFabfile = async (file: IFabFileDocument): Promise<Res
   return response;
 };
 
+/** `created` is false when the caller already had a copy of the image, which is then the file returned. */
+export type CopiedGeneratedImage = IFabFileDocument & IShareableDocument & { created?: boolean };
+
 export const copyGeneratedImageToFabFile = async (
   imageS3Key: string,
   fileName?: string
-): Promise<IFabFileDocument & IShareableDocument> => {
-  const response = await api.post<IFabFileDocument & IShareableDocument>('/api/files/copy-generated-image', {
+): Promise<CopiedGeneratedImage> => {
+  const response = await api.post<CopiedGeneratedImage>('/api/files/copy-generated-image', {
     imageS3Key,
     fileName,
   });

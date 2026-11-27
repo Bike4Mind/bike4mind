@@ -10,12 +10,19 @@ import type {
   ChatStreamEvent,
   SpawnSuggestionResult,
 } from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
+import type { SpawnLocation } from '@shared/spawnLocation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, describeSuggestionOutcome, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
+import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -46,8 +53,11 @@ describe('ChatService spawn suggestions', () => {
   let queue: MessageQueue;
   let queueEvents: ChatQueueEvent[];
   let signedIn: boolean;
+  // 'ask' keeps the card for every suggestion, so only the tests that change it see an automatic start.
+  let location: SpawnLocation;
 
   beforeEach(async () => {
+    location = 'ask';
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-suggest-')));
     sessionsDir = await mkdtemp(join(tmpdir(), 'b4m-suggest-sessions-'));
     store = new SessionStore(sessionsDir, 'test-model');
@@ -71,8 +81,15 @@ describe('ChatService spawn suggestions', () => {
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
+      // An installed local model: an expired session must still be refused, never moved onto it.
+      models: {
+        list: async () => ({ models: [] }),
+        listLocal: async () => [{ id: 'local:ollama:qwen', name: 'qwen', backend: 'local-ollama' }],
+        cached: () => null,
+      } as unknown as ModelCatalog,
       approvals,
       queue,
+      spawnLocation: { read: async () => location },
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         signedIn
@@ -342,7 +359,76 @@ describe('ChatService spawn suggestions', () => {
     expect(latestSuggestions(parent.id)).toEqual([]);
   });
 
-  it('keeps the approval-gated start in a spawned session, which has no card to show', async () => {
+  it('starts the agent at once in an orchestrating session, with no card and nothing to approve', async () => {
+    const parent = await codeSession();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    const declared = post.mock.calls[0][1].options.tools as { toolSchema: { name: string; description: string } }[];
+    const tools = declared.map(entry => entry.toolSchema.name);
+    expect(tools).toContain('session_spawn');
+    expect(tools).not.toContain('session_suggestion_update');
+    expect(declared.find(entry => entry.toolSchema.name === 'session_spawn')?.toolSchema.description).toContain(
+      'STARTS it at once'
+    );
+    expect(String(wire(0)[0]?.content)).toContain('you are coordinating agents');
+
+    callTool(streams[0], 'o1', 'session_spawn', { prompt: 'do the first piece', title: 'First piece' });
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('Started session');
+    // Not a repository, so the card's default would be here too.
+    expect(call?.preview).toContain('It shares this working directory');
+    expect(call?.preview).not.toContain('No worktree was made');
+    expect(requested).not.toHaveBeenCalled();
+    expect(latestSuggestions(parent.id)).toEqual([]);
+    const child = (await store.list()).find(session => session.origin?.parentSessionId === parent.id);
+    expect(child).toMatchObject({ title: 'First piece', origin: { seedPrompt: 'do the first piece' } });
+    // The switch is the user's approval for this conversation only, never handed down.
+    expect(child).not.toHaveProperty('orchestrate');
+    expect(await store.get(child?.id ?? '')).not.toHaveProperty('orchestrate');
+  });
+
+  /** A Code child of a fresh parent at `depth`, with Orchestrate switched on. */
+  async function orchestratingChild(depth: number): Promise<string> {
+    const parent = await codeSession();
+    const project = (await store.get(parent.id))?.project;
+    if (!project) throw new Error('No project.');
+    const child = await store.create('test-model', {
+      mode: 'code',
+      project,
+      origin: { parentSessionId: parent.id, depth, seedPrompt: 'seed' },
+    });
+    await service.setSessionOrchestrate(child.id, true);
+    return child.id;
+  }
+
+  it('delegates from a child below the depth cap, which can still start one', async () => {
+    const childId = await orchestratingChild(1);
+    await service.send(childId, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    expect(String(wire(0)[0]?.content)).toContain('you are coordinating agents');
+
+    callTool(streams[0], 'd1', 'session_spawn', { prompt: 'a piece', title: 'Piece' });
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+    expect(call?.preview).toContain('Started session');
+    expect(requested).not.toHaveBeenCalled();
+  });
+
+  it('ignores the flag on a child at the depth cap: no guidance, and the cap refuses the start', async () => {
+    const childId = await orchestratingChild(2);
+    await service.send(childId, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    expect(String(wire(0)[0]?.content)).not.toContain('coordinating agents');
+
+    callTool(streams[0], 'd2', 'session_spawn', { prompt: 'a piece', title: 'Piece' });
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+    expect(JSON.stringify(call)).toContain('nested');
+    expect((await store.list()).filter(session => session.origin?.parentSessionId === childId)).toHaveLength(0);
+  });
+
+  it('lets a spawned session start another without a card, below the depth cap', async () => {
     const { parent, suggestion } = await suggestedBy('do the child work');
     const result = await service.startSpawnSuggestion({
       sessionId: parent.id,
@@ -361,28 +447,14 @@ describe('ChatService spawn suggestions', () => {
     expect(tools).not.toContain('session_suggestion_update');
 
     callTool(streams[childRequest], 'g1', 'session_spawn', { prompt: 'and another' });
-    const card = await vi.waitUntil(
-      () =>
-        events
-          .map(event => (event.type === 'tool-start' ? event.call : null))
-          .find(call => call?.name === 'session_spawn' && call.status === 'awaiting-approval'),
-      { timeout: 5000, interval: 5 }
-    );
-    expect(card.approvalChoice?.options.map(option => option.id)).toEqual(['worktree', 'local', 'here']);
-    expect(latestSuggestions(childOf(result))).toEqual([]);
-
-    // Run here, from the child's card: no grandchild, and the model is told to do it itself.
-    approvals.resolve(card.approvalId as string, { decision: 'redirect', optionId: 'here' });
-    const answered = await vi.waitUntil(() => settled('session_spawn').find(call => call?.id === card.id), {
+    const call = await vi.waitUntil(() => settled('session_spawn').find(entry => entry?.id === 'g1'), {
       timeout: 5000,
       interval: 5,
     });
-    expect(answered).toMatchObject({
-      status: 'done',
-      preview: expect.stringContaining('Do the work yourself now'),
-      label: 'Run here, in this conversation - no session was started',
-    });
-    expect((await store.list()).filter(session => session.origin)).toHaveLength(1);
+    // The mode takes the card's first option, a worktree, which this plain folder cannot hold.
+    expect(call?.approval?.decidedBy).toMatchObject({ kind: 'mode', mode: 'auto' });
+    expect(events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval')).toBe(false);
+    expect(latestSuggestions(childOf(result))).toEqual([]);
   });
 
   it('draws a run-here message when the reply ends while the send reads the session', async () => {
@@ -416,6 +488,31 @@ describe('ChatService spawn suggestions', () => {
       true
     );
     expect(queueEvents.some(event => event.sent?.message.content.startsWith(RUN_HERE_PREAMBLE))).toBe(true);
+  });
+
+  it('does not let a session mention in a suggestion run here open another project to session_read', async () => {
+    const elsewhere = await service.createCodeSession({
+      directory: await realpath(await mkdtemp(join(tmpdir(), 'b4m-suggest-other-'))),
+      branch: '',
+      workspace: false,
+    });
+    if (!elsewhere.ok) throw new Error(elsewhere.error);
+    const { parent, suggestion } = await suggestedBy(
+      `summarise ${formatSessionMention(elsewhere.session.id, 'Elsewhere')}`
+    );
+
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'here',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    expect(result.ok).toBe(true);
+    const index = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+    callTool(streams[index], 'r1', 'session_read', { session_id: elsewhere.session.id });
+    const read = await vi.waitUntil(() => settled('session_read')[0], { timeout: 5000, interval: 5 });
+    expect(read?.error).toMatch(/another project/);
   });
 
   it('queues a run-here message when another turn starts while the send reads the session', async () => {
@@ -566,6 +663,64 @@ describe('ChatService spawn suggestions', () => {
       callTool(streams[index], 'u1', 'session_suggestion_update', { id: suggestion.id, prompt: 'other' });
       await vi.waitUntil(() => settled('session_suggestion_update').length === 1, { timeout: 5000, interval: 5 });
       expect(settled('session_suggestion_update')[0]?.error).toMatch(/chose to run suggestion .* here/);
+    });
+  });
+
+  describe('with a Settings location', () => {
+    /** The parent calls session_spawn and the call settles, however the start went. */
+    async function spawnFrom(prompt: string) {
+      const parent = await codeSession();
+      await service.send(parent.id, 'delegate');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 's1', 'session_spawn', { prompt, title: 'Tidy imports' });
+      await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+      return { parent, call: settled('session_spawn')[0] };
+    }
+
+    it('starts the session at once in this folder, with no card, and tells the model in the result', async () => {
+      location = 'local';
+      const { parent, call } = await spawnFrom('remove the unused imports');
+
+      expect(call?.status).toBe('done');
+      expect(call?.preview).toContain('Started session');
+      expect(call?.preview).toContain('shares this working directory');
+      expect(requested).not.toHaveBeenCalled();
+      const started = await awaitSuggestion(parent.id, entry => entry.status === 'started');
+      expect(started.started).toMatchObject({ placement: 'local', auto: true });
+      // Already in the tool result, so no later turn reports it a second time.
+      expect(started.unreported).toBeUndefined();
+      expect((await store.list()).some(session => session.origin?.parentSessionId === parent.id)).toBe(true);
+    });
+
+    it('keeps the card in Ask mode', async () => {
+      location = 'local';
+      const parent = await codeSession();
+      await service.setApprovalMode(parent.id, 'ask');
+      await service.send(parent.id, 'delegate');
+      await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+      callTool(streams[0], 's1', 'session_spawn', { prompt: 'remove the unused imports', title: 'Tidy imports' });
+      await vi.waitUntil(() => settled('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+
+      expect(settled('session_spawn')[0]?.preview).toContain('Nothing has started');
+      expect(latestSuggestions(parent.id)[0]?.status).toBe('pending');
+      expect((await store.list()).some(session => session.origin)).toBe(false);
+    });
+
+    it('keeps the card for a worktree outside a git repository, and never runs it in this folder', async () => {
+      location = 'worktree';
+      const { parent, call } = await spawnFrom('remove the unused imports');
+
+      expect(call?.preview).toContain('Nothing has started');
+      const pending = latestSuggestions(parent.id)[0];
+      expect(pending).toMatchObject({ status: 'pending', repository: false });
+      expect(pending?.autoStartError).toBeUndefined();
+      expect((await store.list()).some(session => session.origin)).toBe(false);
+    });
+
+    it('keeps the card when Settings says ask each time', async () => {
+      const { parent, call } = await spawnFrom('remove the unused imports');
+      expect(call?.preview).toContain('Nothing has started');
+      expect(latestSuggestions(parent.id)[0]?.status).toBe('pending');
     });
   });
 

@@ -1,7 +1,8 @@
-import { SettingKey, settingsMap } from '@bike4mind/common';
+import { resolveSettingDefinition, SettingKey } from '@bike4mind/common';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { getSettingByName } from '@bike4mind/utils';
 import type { Request, RequestHandler } from 'express';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Single source of truth for coercing an admin-setting value into a boolean.
@@ -25,7 +26,7 @@ export async function isFeatureEnabled(featureName: SettingKey): Promise<boolean
   // Cached read (short TTL) rather than a per-request findOne. Every gated route
   // pays this on each call, so the uncached round-trip added up once flags went wide.
   const settingValue = await getSettingByName(featureName, { adminSettings: adminSettingsRepository });
-  return isSettingEnabled(settingValue ?? settingsMap[featureName]?.defaultValue);
+  return isSettingEnabled(settingValue ?? resolveSettingDefinition(featureName)?.defaultValue);
 }
 
 /**
@@ -49,7 +50,7 @@ export const requireFeature =
 
       next();
     } catch (error) {
-      console.error(`Error checking ${label}:`, error);
+      Logger.error(`Error checking ${label}`, { error });
       // Fail closed - deny access on error to be safe
       return res.status(500).json({
         error: 'Unable to verify feature access',
@@ -62,7 +63,7 @@ export const requireFeature =
  * Middleware to enforce server-side feature flag checks.
  * Prevents users from bypassing client-side feature checks via direct API calls.
  *
- * @param featureName - The admin setting key to check (e.g., 'EnableQuestMaster')
+ * @param featureName - The admin setting key to check (e.g., 'EnableMementos')
  * @returns Express middleware that returns 403 if feature is disabled
  */
 export const requireFeatureEnabled = (featureName: SettingKey): RequestHandler =>

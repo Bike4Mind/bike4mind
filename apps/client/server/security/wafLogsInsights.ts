@@ -13,9 +13,10 @@ import {
   resolveRouterDistributionId,
   resolveTimeWindow,
   type WafRangeInput,
-} from './wafSharedHelpers';
+} from '@bike4mind/server-utils/security/wafSharedHelpers';
 import { maskWafRequestHeaders } from './wafHeaderRedaction';
-import { WAF_CACHE_TTL, wafQueryCache } from './wafQueryCache';
+import { maskWafRequestLine, maskWafRequestUri } from './wafUriRedaction';
+import { WAF_CACHE_TTL, wafQueryCache } from '@bike4mind/server-utils/security/wafQueryCache';
 
 export interface WafLogsTopItem {
   name: string;
@@ -294,8 +295,10 @@ async function fetchWafBlockedRequests(params: {
         clientIp: typeof httpRequest.clientIp === 'string' ? httpRequest.clientIp : '',
         country: typeof httpRequest.country === 'string' ? httpRequest.country : '',
         headers: maskWafRequestHeaders(headers),
-        uri: typeof httpRequest.uri === 'string' ? httpRequest.uri : '',
-        args: typeof httpRequest.args === 'string' ? httpRequest.args : '',
+        ...maskWafRequestLine(
+          typeof httpRequest.uri === 'string' ? httpRequest.uri : '',
+          typeof httpRequest.args === 'string' ? httpRequest.args : ''
+        ),
         httpVersion: typeof httpRequest.httpVersion === 'string' ? httpRequest.httpVersion : '',
         httpMethod: typeof httpRequest.httpMethod === 'string' ? httpRequest.httpMethod : '',
         requestId: typeof httpRequest.requestId === 'string' ? httpRequest.requestId : '',
@@ -393,7 +396,15 @@ fields httpRequest.clientIp as clientIp, httpRequest.country as country
     }),
   ]);
 
-  const topBlockedUris = rowsToTopItems(blockedUrisRes.rows, 'uri', 'requests');
+  // Paths that differ only in a withheld segment share one label, so their rows are merged.
+  const blockedByUri = new Map<string, number>();
+  for (const item of rowsToTopItems(blockedUrisRes.rows, 'uri', 'requests')) {
+    const name = maskWafRequestUri(item.name);
+    blockedByUri.set(name, (blockedByUri.get(name) ?? 0) + item.count);
+  }
+  const topBlockedUris: WafLogsTopItem[] = [...blockedByUri]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
   const topClientIps = clientIpsRes.rows
     .map(r => {
       const clientIp = (r['clientIp'] ?? '').trim();
@@ -429,15 +440,20 @@ fields httpRequest.clientIp as ip, httpRequest.uri as uri
     limit: 10,
   });
 
-  const topRateLimitIps: WafRateLimitIpUsage[] = rateLimitRes.rows
-    .map(row => {
-      const ip = (row['ip'] ?? '').trim();
-      const uri = (row['uri'] ?? '').trim();
-      const peakRequests = Number((row['peakRequests'] ?? '').trim());
-      if (!ip || !uri || !Number.isFinite(peakRequests)) return null;
-      return { ip, uri, peakRequests };
-    })
-    .filter((r): r is WafRateLimitIpUsage => r !== null);
+  // Rows that share an IP and a label after masking are merged to the higher peak. The peaks may
+  // come from different windows, so the merged value is a lower bound, never an overcount.
+  const rateLimitByIpAndUri = new Map<string, WafRateLimitIpUsage>();
+  for (const row of rateLimitRes.rows) {
+    const ip = (row['ip'] ?? '').trim();
+    const rawUri = (row['uri'] ?? '').trim();
+    const peakRequests = Number((row['peakRequests'] ?? '').trim());
+    if (!ip || !rawUri || !Number.isFinite(peakRequests)) continue;
+    const uri = maskWafRequestUri(rawUri);
+    const key = `${ip} ${uri}`;
+    const seen = rateLimitByIpAndUri.get(key);
+    if (!seen || peakRequests > seen.peakRequests) rateLimitByIpAndUri.set(key, { ip, uri, peakRequests });
+  }
+  const topRateLimitIps = [...rateLimitByIpAndUri.values()].sort((a, b) => b.peakRequests - a.peakRequests);
 
   if (params.debug) {
     debugOut.topBlockedUrisQuery = topBlockedUrisQuery;

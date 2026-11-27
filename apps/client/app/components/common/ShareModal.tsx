@@ -1,11 +1,28 @@
-import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invites';
+import { useBatchShare, useCancelInvite, useShareDocument } from '@client/app/hooks/data/invites';
 import { useUserRevokeSharing } from '@client/app/hooks/data/user';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useUser } from '@client/app/contexts/UserContext';
-import { MAX_EMAIL_MESSAGE_LENGTH, MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
+import {
+  MAX_EMAIL_MESSAGE_LENGTH,
+  MAX_EMAIL_RECIPIENTS,
+  MAX_EMAIL_RECIPIENTS_ERROR,
+  MAX_INVITE_MESSAGE_LENGTH,
+  MAX_INVITE_RECIPIENTS,
+  MAX_INVITE_RECIPIENTS_ERROR,
+} from '@client/types/api';
 
-import { InviteType, IUserShare, Permission, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
+import {
+  InviteType,
+  IUserShare,
+  MAX_BULK_ITEMS,
+  Permission,
+  IFabFileDocument,
+  ISessionDocument,
+  type OrganizationSharingPolicy,
+  PUBLIC_SHARING_BLOCKED,
+  EXTERNAL_SHARING_BLOCKED,
+} from '@bike4mind/common';
 import {
   Autocomplete,
   Box,
@@ -36,11 +53,12 @@ import EmailIcon from '@mui/icons-material/Email';
 
 import UsernameText from './UsernameText';
 import { FormEvent, useEffect, useState } from 'react';
-import { cloneDeep } from 'lodash';
+import cloneDeep from 'lodash/cloneDeep';
 import { toast } from 'sonner';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import { isAxiosError } from 'axios';
 
 // Helper to show bulk operation feedback with success/partial/failure states
 const showBulkFeedback = (
@@ -64,6 +82,24 @@ const showBulkFeedback = (
     toast.error(`Failed to ${action.replace(/ed$/, '')} any ${itemType}s`);
     return 'failure';
   }
+};
+
+const isRateLimitError = (error: unknown) => isAxiosError(error) && error.response?.status === 429;
+
+// A rate-limited bulk share stops at the first refusal: every later item would be refused too.
+const showRateLimitedBulkFeedback = (
+  message: string,
+  successCount: number,
+  totalCount: number,
+  itemType: string,
+  unsharedItems: string[],
+  done = 'Shared',
+  notDone = 'Not shared'
+): 'partial' | 'failure' => {
+  // Name what is left: re-sharing the whole selection would charge the already-shared items again.
+  const unsharedPreview = unsharedItems.slice(0, 3).join(', ') + (unsharedItems.length > 3 ? '...' : '');
+  toast.error(`${message} ${done} ${successCount} of ${totalCount} ${itemType}s. ${notDone}: ${unsharedPreview}`);
+  return successCount > 0 ? 'partial' : 'failure';
 };
 
 // The server now resolves recipients case-insensitively (UserModel.findAllByEmailsOrUsernames),
@@ -104,6 +140,31 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
   const [currentInputValue, setCurrentInputValue] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [tabIndex, setTabIndex] = useState(1);
+  const [sharingPolicy, setSharingPolicy] = useState<OrganizationSharingPolicy | null>(null);
+  useEffect(() => {
+    if (!open || !id || (type !== InviteType.Session && type !== InviteType.Project)) return;
+    let active = true;
+    const resource = type === InviteType.Session ? 'sessions' : 'projects';
+    api
+      .get<{ policy: OrganizationSharingPolicy | null }>(`/api/${resource}/${id}/sharingPolicy`)
+      .then(response => {
+        if (active) setSharingPolicy(response.data?.policy ?? null);
+      })
+      .catch(() => {
+        /* Server enforcement remains authoritative if the hint cannot load. */
+      });
+    return () => {
+      active = false;
+      setSharingPolicy(null);
+    };
+  }, [open, id, type]);
+  const linkBlockedReason =
+    sharingPolicy &&
+    (!sharingPolicy.allowPublicLinks
+      ? PUBLIC_SHARING_BLOCKED
+      : !sharingPolicy.allowExternalSharing
+        ? EXTERNAL_SHARING_BLOCKED
+        : null);
   const [generatedLink, setGeneratedLink] = useState('');
   const [completedShares, setCompletedShares] = useState<number>(0);
   const [sharedUsers, setSharedUsers] = useState<IUserShare[]>(users || []);
@@ -180,23 +241,67 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
   const shareDocument = useShareDocument({
     onSuccess: () => {
       // Don't close the modal here; handleShareSubmit closes it after the toast is visible.
-      // Bulk completion is handled in the loop; link generation in the useEffect below.
+      // Link generation happens in the useEffect below. Bulk shares go through shareInBatches instead.
     },
     onError: error => {
-      // Bulk sharing aggregates its own per-item failures into one showBulkFeedback toast
-      // below; showing this hook's toast too would double up per failed item.
-      if (isBulkSharing) return;
       toast.error(getErrorMessage(error));
     },
     onSettled: () => {
-      if (!isBulkSharing) {
-        setLoading(false);
-      }
+      setLoading(false);
     },
   });
 
+  const batchShare = useBatchShare();
+
+  // One request per MAX_BULK_ITEMS chunk; the server stops at a send-budget refusal, and so does this.
+  const shareInBatches = async (recipientValue: string[], description: string | null) => {
+    const items: Array<IFabFileDocument | ISessionDocument> = isBulkSharingFiles ? files! : sessions!;
+    const nameOf = (item: IFabFileDocument | ISessionDocument) =>
+      isBulkSharingFiles ? (item as IFabFileDocument).fileName : (item as ISessionDocument).name || 'Untitled';
+    const links: string[] = [];
+    const failedItems: string[] = [];
+    let okCount = 0;
+    let rateLimitMessage: string | null = null;
+
+    for (let start = 0; start < items.length; start += MAX_BULK_ITEMS) {
+      const chunk = items.slice(start, start + MAX_BULK_ITEMS);
+      if (rateLimitMessage) {
+        failedItems.push(...chunk.map(nameOf));
+        continue;
+      }
+      try {
+        const data = await batchShare.mutateAsync({
+          type: isBulkSharingFiles ? InviteType.FabFile : InviteType.Session,
+          ids: chunk.map(item => item.id),
+          recipients: recipientValue,
+          description: description ?? undefined,
+          permissions: permissions.value,
+        });
+        const byId = new Map(data.results.map(r => [r.id, r]));
+        for (const item of chunk) {
+          const r = byId.get(item.id);
+          if (r?.ok) {
+            okCount++;
+            if (r.link) links.push(r.link);
+          } else {
+            failedItems.push(nameOf(item));
+          }
+        }
+        if (data.rateLimitMessage) rateLimitMessage = data.rateLimitMessage;
+      } catch (error) {
+        if (isRateLimitError(error)) rateLimitMessage = getErrorMessage(error);
+        else console.error('Failed to share a batch:', error);
+        failedItems.push(...chunk.map(nameOf));
+      }
+      setCompletedShares(Math.min(start + chunk.length, items.length));
+    }
+
+    return { links, okCount, failedItems, rateLimitMessage, total: items.length };
+  };
+
   const handleShareSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    if (tabIndex === 1 && linkBlockedReason) return;
     setLoading(true);
     setCompletedShares(0);
 
@@ -222,6 +327,11 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
       } else if (tabIndex === 0 && recipientValue.some(recipient => isSelfShareRecipient(recipient, currentUser))) {
         // Prevent self-sharing and show error message (only for "By Users" tab)
         const message = 'You cannot share files to yourself';
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
+        isInvalid = true;
+      } else if (tabIndex === 0 && recipientValue.length > MAX_INVITE_RECIPIENTS) {
+        const message = MAX_INVITE_RECIPIENTS_ERROR;
         setRecipients({ ...recipients, error: message });
         toast.error(message);
         isInvalid = true;
@@ -274,87 +384,42 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             }
           } catch (error) {
             console.error('Email error:', error);
-            toast.error('Failed to send email');
+            toast.error(getErrorMessage(error));
           }
           setLoading(false);
           return;
         } else if (tabIndex === 1) {
-          // For bulk link generation, create individual invites and combine their IDs into one link
-          const successResults: Array<{ link: string }> = [];
-          const failedItems: string[] = [];
-          const items = isBulkSharingFiles ? files! : sessions!;
+          // One invite per item, combined into one link the share page accepts in one request.
+          const { links, failedItems, rateLimitMessage, total } = await shareInBatches(recipientValue, description);
 
-          for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            const itemName = isBulkSharingFiles
-              ? (item as IFabFileDocument).fileName
-              : (item as ISessionDocument).name || 'Untitled';
-
-            try {
-              const result = await shareDocument.mutateAsync({
-                description,
-                recipients: recipientValue,
-                id: item.id,
-                type: isBulkSharingFiles ? InviteType.FabFile : InviteType.Session,
-                permissions: permissions.value,
-              });
-
-              if (result?.link) {
-                successResults.push(result);
-              } else {
-                failedItems.push(itemName);
-              }
-            } catch (error) {
-              console.error(`Failed to generate link for ${itemName}:`, error);
-              failedItems.push(itemName);
-            }
-            setCompletedShares(i + 1);
-          }
-
-          // Generate a single bulk link with all invite IDs from successful results
-          if (successResults.length > 0) {
-            const inviteIds = successResults.map(result => {
-              // Extract invite ID from link (last part after /share/)
-              const linkParts = result.link.split('/share/');
+          if (links.length > 0) {
+            const inviteIds = links.map(link => {
+              const linkParts = link.split('/share/');
               return linkParts[linkParts.length - 1];
             });
-
-            const baseUrl = successResults[0].link.split('/share/')[0];
-            const bulkLink = `${baseUrl}/share/${inviteIds.join(',')}`;
-            setGeneratedLink(bulkLink);
+            const baseUrl = links[0].split('/share/')[0];
+            setGeneratedLink(`${baseUrl}/share/${inviteIds.join(',')}`);
           }
 
-          showBulkFeedback(successResults.length, failedItems, itemType, 'generated links for');
+          if (rateLimitMessage) {
+            showRateLimitedBulkFeedback(
+              rateLimitMessage,
+              links.length,
+              total,
+              itemType,
+              failedItems,
+              'Generated links for',
+              'No link for'
+            );
+          } else {
+            showBulkFeedback(links.length, failedItems, itemType, 'generated links for');
+          }
         } else {
-          // Handle bulk sharing to users - process items sequentially to show accurate progress
-          const successResults: Array<{ link?: string }> = [];
-          const failedItems: string[] = [];
-          const items = isBulkSharingFiles ? files! : sessions!;
+          const { okCount, failedItems, rateLimitMessage, total } = await shareInBatches(recipientValue, description);
 
-          for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            const itemName = isBulkSharingFiles
-              ? (item as IFabFileDocument).fileName
-              : (item as ISessionDocument).name || 'Untitled';
-
-            try {
-              const result = await shareDocument.mutateAsync({
-                description,
-                recipients: recipientValue,
-                id: item.id,
-                type: isBulkSharingFiles ? InviteType.FabFile : InviteType.Session,
-                permissions: permissions.value,
-              });
-
-              successResults.push(result);
-            } catch (error) {
-              console.error(`Failed to share ${itemName}:`, error);
-              failedItems.push(itemName);
-            }
-            setCompletedShares(i + 1);
-          }
-
-          const result = showBulkFeedback(successResults.length, failedItems, itemType, 'shared');
+          const result = rateLimitMessage
+            ? showRateLimitedBulkFeedback(rateLimitMessage, okCount, total, itemType, failedItems)
+            : showBulkFeedback(okCount, failedItems, itemType, 'shared');
           if (result === 'failure') {
             setLoading(false);
             return; // Don't close modal if all failed
@@ -403,7 +468,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             }
           } catch (error) {
             console.error('Email error:', error);
-            toast.error('Failed to send email');
+            toast.error(getErrorMessage(error));
           }
           setLoading(false);
           return;
@@ -435,7 +500,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
       }
     } catch (error) {
       // Single-item failures are toasted by useShareDocument's onError above; bulk failures
-      // are aggregated within the loops above. Just log here to avoid a duplicate toast.
+      // are aggregated by shareInBatches. Just log here to avoid a duplicate toast.
       if (!isBulkSharing) {
         console.error('Error in sharing:', error);
       }
@@ -552,8 +617,9 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                 <GroupIcon /> By Users
               </Tab>
             </Tooltip>
-            <Tooltip title={'By Link'}>
+            <Tooltip title={linkBlockedReason || 'By Link'}>
               <Tab
+                data-testid="share-modal-link-tab"
                 sx={{
                   width: '33.33%',
                   borderRadius: '10px',
@@ -579,6 +645,20 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           </TabList>
 
           <Box sx={{ padding: '2em' }}>
+            {linkBlockedReason && (
+              <Typography level="body-sm" color="warning" data-testid="share-modal-policy-explanation">
+                {linkBlockedReason}
+              </Typography>
+            )}
+            {sharingPolicy && !sharingPolicy.allowExternalSharing && (
+              <Typography level="body-sm">
+                Only organization members
+                {sharingPolicy.allowedDomains.length
+                  ? ` and recipients at ${sharingPolicy.allowedDomains.join(', ')}`
+                  : ''}{' '}
+                can receive this share.
+              </Typography>
+            )}
             <form onSubmit={handleShareSubmit}>
               <Box sx={{ display: 'grid', gap: '1em' }}>
                 {tabIndex !== 2 && (
@@ -591,6 +671,12 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                       minRows={4}
                       variant={'outlined'}
                       name={'description'}
+                      slotProps={{
+                        textarea: {
+                          maxLength: MAX_INVITE_MESSAGE_LENGTH,
+                          'data-testid': 'share-modal-description-input',
+                        },
+                      }}
                       placeholder={
                         isBulkSharing
                           ? `Description for others to understand what you are sharing (${itemCount} files)...`
@@ -760,7 +846,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
                 <Button
                   className="share-modal-submit-button"
                   data-testid="share-modal-submit-button"
-                  disabled={loading}
+                  disabled={loading || (tabIndex === 1 && !!linkBlockedReason)}
                   type={'submit'}
                   sx={{ minWidth: { xs: 0, sm: '200px' }, flex: { xs: 1, sm: 'none' } }}
                   variant={'solid'}

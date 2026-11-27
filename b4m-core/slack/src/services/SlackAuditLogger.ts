@@ -1,5 +1,4 @@
 import { Logger } from '@bike4mind/observability';
-import type { IncomingMessage } from 'http';
 import { getSlackDb } from '../di/registry';
 
 export type SlackAuditEventType = 'command' | 'interaction' | 'event' | 'api_call';
@@ -195,23 +194,4 @@ export function logSlackAudit(context: SlackAuditContext): void {
  */
 export function logSlackAuditFailure(context: SlackAuditContext, errorMessage: string): void {
   SlackAuditLogger.create(context).failure(errorMessage);
-}
-
-/**
- * Extract client IP address from request
- * Handles x-forwarded-for header (common with proxies/load balancers) and falls back to socket address
- *
- * @deprecated Trusts the leftmost (client-supplied) x-forwarded-for token, so the result is
- * spoofable. Apps should use their own deploy-aware resolver; bike4mind's Slack routes use
- * packages/server-utils/src/utils/ip.ts. Kept only for existing external importers.
- */
-export function getClientIp(req: IncomingMessage): string | undefined {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  if (forwardedFor) {
-    // x-forwarded-for can be comma-separated list; first is the original client
-    const ips = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
-    return ips.split(',')[0].trim();
-  }
-  // Express adds `ip` as a convenience property; fall back to socket address
-  return ('ip' in req ? (req as { ip?: string }).ip : undefined) || req.socket?.remoteAddress;
 }

@@ -13,7 +13,7 @@ Create stunning images and edit existing ones using AI-powered tools. Bike4Mind 
 
 ### How to Generate
 
-**Using the Model Picker (Recommended):**
+**Using the Model Picker:**
 
 1. Click the **model picker** in the chat input area
 2. Select **Image Models** from the dropdown filter
@@ -21,35 +21,39 @@ Create stunning images and edit existing ones using AI-powered tools. Bike4Mind 
 4. Type a description of the image you want
 5. Press Enter to generate
 
-**Using the Command:**
-
-You can also use the `/gen_image` command followed by your prompt:
-```
-/gen_image A serene mountain landscape at sunset with a lake reflection
-```
-
 Once the model generates your image, you can view, download, or edit the result.
 
 ### Available Models
 
 #### OpenAI (DALL-E / GPT-Image)
+
 - **GPT-Image-1**: Latest OpenAI image generation
 - **Quality options**: Standard or HD
 - **Sizes**: 1024x1024, 1024x1536, 1536x1024
 
 #### Flux (Black Forest Labs)
+
 - **FLUX Pro 1.1**: Professional quality standard generation
 - **FLUX Pro Ultra**: Premium quality with custom aspect ratios
 - **FLUX Kontext**: Transform existing images based on prompts
+- **FLUX.2 Max, Pro, Pro (Preview), and Flex**: Generate images or transform attached images with up to eight input images in total
+- **FLUX.2 Klein 9B, Klein 9B (Preview), and Klein 4B**: Smaller models with up to four input images in total
+- **FLUX 3 Image and FLUX 3 Image Klein**: Generate images or transform attached images with up to ten input images in total
+
+To use FLUX.2 or FLUX 3 references, attach images to your current message, select one of those
+models, and describe the result. The first attached image and every additional reference count toward the
+model's total input limit. These transformations use image generation; masked editing uses the
+separate image editing model. FLUX.2 Klein and FLUX 3 models do not offer prompt upsampling, and
+FLUX 3 Image does not take a seed or an output format, so those settings have no effect on it.
 
 ### Generation Settings
 
-| Setting | Description |
-|---------|-------------|
-| **Quality** | Standard or HD (affects detail and credits) |
-| **Size/Aspect Ratio** | Choose dimensions for your image |
-| **Number of Images** | Generate 1-4 images per request |
-| **Safety Level** | Content moderation sensitivity (Flux models) |
+| Setting               | Description                                  |
+| --------------------- | -------------------------------------------- |
+| **Quality**           | Standard or HD (affects detail and credits)  |
+| **Size/Aspect Ratio** | Choose dimensions for your image             |
+| **Number of Images**  | Generate 1-4 images per request              |
+| **Safety Level**      | Content moderation sensitivity (Flux models) |
 
 ---
 
@@ -87,17 +91,18 @@ Transform an entire image based on a new prompt:
 
 Every generated image includes these options:
 
-| Action | Description |
-|--------|-------------|
-| **Download** | Save to your device |
-| **Copy** | Copy to clipboard |
-| **Edit** | Open in the image editor |
-| **Zoom** | View at full resolution |
-| **Gallery** | Browse multiple images |
+| Action       | Description              |
+| ------------ | ------------------------ |
+| **Download** | Save to your device      |
+| **Copy**     | Copy to clipboard        |
+| **Edit**     | Open in the image editor |
+| **Zoom**     | View at full resolution  |
+| **Gallery**  | Browse multiple images   |
 
 ### Image Gallery
 
 When multiple images are generated:
+
 - Use arrow keys or buttons to navigate
 - Click thumbnails for quick selection
 - Download individual or all images
@@ -126,10 +131,20 @@ When multiple images are generated:
 ## Credit Usage
 
 Image generation uses credits based on:
+
 - **Model**: Different models have different costs
 - **Quality**: HD images cost more than standard
 - **Size**: Larger images use more credits
 - **Quantity**: Each image in a batch counts separately
+
+The Image Generation row in Tools and the image model picker show the selected model and an estimated credits-per-image at your saved settings before you send. Free self-hosted models show as Free.
+
+FLUX.2 uses a flat credit charge per generated image at the model's first-megapixel rate. Larger
+outputs and reference images do not increase that charge. This is a product price, rather than a
+quote of the provider's full megapixel cost.
+
+FLUX 3 also uses a flat credit charge per generated image, set at the price of the provider tier that
+covers the largest size you can pick. Smaller sizes do not reduce that charge.
 
 Check your credit balance in Profile > Credit Analytics.
 
@@ -143,6 +158,13 @@ Check your credit balance in Profile > Credit Analytics.
 - Check you have sufficient credits
 - Verify you have API keys configured for the image provider (OpenAI or Black Forest Labs)
 - Try a simpler prompt first
+
+### Too Many FLUX.2 or FLUX 3 Inputs
+
+Count the primary image and additional references together: FLUX.2 Max, Pro, and Flex accept eight
+inputs; FLUX.2 Klein accepts four; FLUX 3 Image and FLUX 3 Image Klein accept ten. A continued
+conversation may carry forward its previous image as the primary.
+Remove references or start a fresh request if the generation reports that the total is too high.
 
 ### Poor Quality Results
 
@@ -164,3 +186,26 @@ Check your credit balance in Profile > Credit Analytics.
 - [Notebooks](./notebooks.md) - Where images are generated
 - [Artifacts](./artifacts-system.md) - Save images as artifacts
 - [Knowledge Management](./knowledge-management.md) - Organize generated images
+
+## FLUX 3 region edits through the API
+
+`POST /api/v1/image-edits` supports up to eight regions on `flux-3-image` and `flux-3-image-klein`. Each region has its own instruction and a normalized bounding box in **vertical-first** order: `[y_min, x_min, y_max, x_max]`.
+
+For example, this request targets the top part of an existing image:
+
+```json
+{
+  "model": "flux-3-image-klein",
+  "sessionId": "<notebook-id>",
+  "image": "https://example.com/source.png",
+  "fabFileIds": [],
+  "prompt": "Replace the selected sky with a starry night",
+  "edit_regions": [{ "prompt": "A clear night sky filled with stars", "bbox": [0, 0, 0.4, 1] }]
+}
+```
+
+Use a source image URL the service can fetch and your notebook's ID. These models take no mask: omit `fabFileIds` or send an empty array. Up to nine `referenceImageFabFileIds` may accompany the source. Without `edit_regions`, the same models support ordinary prompt-based editing.
+
+Coordinates must be between 0 and 1, with each minimum below its maximum. They are rounded to the provider's 0–1000 grid; a box that collapses on that grid is rejected. Invalid boxes or more than eight regions return 422. Regions supplied to another model, or a mask supplied to FLUX 3, return 400. The response is a queued quest; poll it until it completes to retrieve the edited image.
+
+Region selection is currently an API capability. The chat's paint-mask editor continues to use its existing editing models.

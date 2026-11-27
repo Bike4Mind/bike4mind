@@ -1,11 +1,17 @@
 import React from 'react';
-import { Box, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
-import { useTheme } from '@mui/joy/styles';
-import { ResponsiveLine } from '@nivo/line';
-import { type SpendData, type SpendKpi, type SpendKpiFormat } from '@bike4mind/common';
-
-// Nivo's generics fight strict TS here; the same assertion is used in AnalyticsTab.
-const ResponsiveLineChart = ResponsiveLine as any;
+import { Box, Chip, LinearProgress, Sheet, Stack, Typography } from '@mui/joy';
+import Alert from '@mui/joy/Alert';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import {
+  SPEND_ACCOUNT_FLAG_THRESHOLDS,
+  type SpendAccountFlag,
+  type SpendData,
+  type SpendKpi,
+  type SpendKpiFormat,
+} from '@bike4mind/common';
+import { TrendAreaChart } from '@client/app/components/Charts/TrendAreaChart';
+import { DataTable, EmptyState, type DataColumn } from '../../shared';
+import { adminChartSeries, adminChartStyle } from '../../EventMetrics/utils/chartTheme';
 
 interface SpendTabProps {
   /** Live spend for the selected window; the parent owns the useSpend query. */
@@ -34,6 +40,36 @@ const formatKpiValue = (value: number, format: SpendKpiFormat): string => {
       return String(value);
   }
 };
+
+const T = SPEND_ACCOUNT_FLAG_THRESHOLDS;
+
+/** Chip label and the limit it stands for, in the order the server emits flags. */
+const FLAG_INFO: Record<SpendAccountFlag, { label: string; limit: string }> = {
+  dailyCost: { label: 'Cost/day', limit: `over ${formatKpiValue(T.dailyCostUsd, 'currency')}/day on average` },
+  errorRate: { label: 'Errors', limit: `error rate over ${formatKpiValue(T.errorRate, 'percent')}` },
+  p95Latency: { label: 'p95', limit: `p95 latency over ${T.p95LatencyMs / 1000}s` },
+};
+
+const FLAG_RULES = `Flagged for ${Object.values(FLAG_INFO)
+  .map(f => f.limit)
+  .join(', ')}. Error rate and latency need at least ${T.minRequests} requests.`;
+
+const FlagBanner: React.FC<{ flaggedCount: number }> = ({ flaggedCount }) => (
+  <Alert
+    color="warning"
+    variant="soft"
+    startDecorator={<WarningAmberIcon />}
+    sx={{ mb: 2 }}
+    data-testid="spend-account-flag-banner"
+  >
+    <Box>
+      <Typography level="title-sm">
+        {flaggedCount.toLocaleString('en-US')} {flaggedCount === 1 ? 'account is' : 'accounts are'} over a limit
+      </Typography>
+      <Typography level="body-xs">{FLAG_RULES}</Typography>
+    </Box>
+  </Alert>
+);
 
 /** Percent change vs the prior period; null when there is no prior baseline. */
 const computeDelta = (value: number, priorValue: number): number | null => {
@@ -92,38 +128,92 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
   );
 };
 
+type SpendAccountRow = SpendData['byAccount'][number];
+
+// DataTable requires a retry handler; the parent owns the spend query's error state and `empty` has no action.
+const noRetry = () => undefined;
+
+const accountColumns: DataColumn<SpendAccountRow>[] = [
+  {
+    id: 'account',
+    label: 'Account',
+    width: '14rem',
+    wrap: true,
+    render: row => (
+      <Stack direction="row" spacing={0.5} alignItems="center" useFlexGap flexWrap="wrap">
+        <span>{row.accountName}</span>
+        {row.flags.map(flag => (
+          <Chip
+            key={flag}
+            size="sm"
+            variant="soft"
+            color="warning"
+            title={`Flagged: ${FLAG_INFO[flag].limit}`}
+            data-testid={`spend-account-flag-${flag}`}
+          >
+            {FLAG_INFO[flag].label}
+          </Chip>
+        ))}
+      </Stack>
+    ),
+  },
+  {
+    id: 'estCost',
+    label: 'Est. cost',
+    width: '7rem',
+    numeric: true,
+    render: row => formatKpiValue(row.estCost, 'currency'),
+  },
+  {
+    id: 'requests',
+    label: 'Requests',
+    width: '7rem',
+    numeric: true,
+    render: row => row.requests.toLocaleString('en-US'),
+  },
+  {
+    id: 'creditsUsed',
+    label: 'Credits',
+    width: '7rem',
+    numeric: true,
+    render: row => row.creditsUsed.toLocaleString('en-US'),
+  },
+  {
+    id: 'costPerRequest',
+    label: 'Cost / req',
+    width: '7rem',
+    numeric: true,
+    render: row => `$${row.costPerRequest.toFixed(4)}`,
+  },
+  {
+    id: 'errorRate',
+    label: 'Error rate',
+    width: '7rem',
+    numeric: true,
+    render: row => formatKpiValue(row.errorRate, 'percent'),
+  },
+  {
+    id: 'p95',
+    label: 'p95',
+    width: '7rem',
+    numeric: true,
+    // 0 means no event carried latencyMs, not an instant response.
+    render: row => (
+      <span data-testid={`spend-account-p95-${row.accountId}`}>
+        {row.p95LatencyMs > 0 ? formatKpiValue(row.p95LatencyMs, 'ms') : '--'}
+      </span>
+    ),
+  },
+];
+
 export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
-  const theme = useTheme();
-
-  // Duplicated from AnalyticsTab's chartTheme (hand-rolled, not shared code).
-  const chartTheme = {
-    axis: {
-      ticks: { text: { fill: theme.palette.text.tertiary } },
-      legend: { text: { fill: theme.palette.text.primary } },
-    },
-    grid: { line: { stroke: theme.palette.divider } },
-    tooltip: {
-      container: {
-        background: theme.palette.background.surface,
-        color: theme.palette.text.primary,
-        boxShadow: theme.shadow.md,
-        borderRadius: theme.radius.md,
-      },
-    },
-  };
-
   const maxModelCost = Math.max(...data.byModel.map(m => m.estCost), 0);
 
   // The by-account table is capped server-side; data.activeAccounts is the true
   // distinct count, so surface "top N of M" when the list is partial.
   const accountsTruncated = data.byAccount.length < data.activeAccounts;
-
-  const lineData = [
-    {
-      id: 'Daily Cost',
-      data: data.dailyCost.map(point => ({ x: point.date, y: point.cost })),
-    },
-  ];
+  const flaggedCount = data.byAccount.filter(row => row.flags.length > 0).length;
+  const dailyCost = data.dailyCost.map(point => ({ x: point.date, y: point.cost }));
 
   return (
     <Stack spacing={3} sx={{ mt: 1 }}>
@@ -148,7 +238,7 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
       {/* Section 2: Spend by account */}
       <Box>
         <Typography level="h4" sx={{ mb: accountsTruncated ? 0.5 : 2 }}>
-          {accountsTruncated ? 'Top Spend by Account' : 'Spend by Account'}
+          {accountsTruncated ? 'Top spend by account' : 'Spend by account'}
         </Typography>
         {accountsTruncated && (
           <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 2 }} data-testid="spend-account-truncation">
@@ -156,37 +246,26 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
             accounts by spend.
           </Typography>
         )}
-        {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
-        <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto', maxHeight: 480 }}>
-          <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
-            <thead>
-              <tr>
-                <th>Account</th>
-                <th style={{ textAlign: 'right' }}>Est. Cost</th>
-                <th style={{ textAlign: 'right' }}>Requests</th>
-                <th style={{ textAlign: 'right' }}>Credits</th>
-                <th style={{ textAlign: 'right' }}>Cost / Req</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.byAccount.map(row => (
-                <tr key={row.accountId}>
-                  <td>{row.accountName}</td>
-                  <td style={{ textAlign: 'right' }}>{formatKpiValue(row.estCost, 'currency')}</td>
-                  <td style={{ textAlign: 'right' }}>{row.requests.toLocaleString('en-US')}</td>
-                  <td style={{ textAlign: 'right' }}>{row.creditsUsed.toLocaleString('en-US')}</td>
-                  <td style={{ textAlign: 'right' }}>${row.costPerRequest.toFixed(4)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Sheet>
+        {flaggedCount > 0 && <FlagBanner flaggedCount={flaggedCount} />}
+        <DataTable<SpendAccountRow>
+          rows={data.byAccount}
+          columns={accountColumns}
+          getRowId={row => row.accountId}
+          label="Spend by account"
+          onRetry={noRetry}
+          empty={<EmptyState title="No account spend in this window" action={null} />}
+          testId="spend-by-account-table"
+          rowTestId={row => `spend-account-row-${row.accountId}`}
+          pagination={false}
+          maxHeight="480px"
+          minWidth="56rem"
+        />
       </Box>
 
       {/* Section 3: Cost by model (bar table) */}
       <Box>
         <Typography level="h4" sx={{ mb: 2 }}>
-          Cost by Model
+          Cost by model
         </Typography>
         <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2 }}>
           <Stack spacing={1.5} data-testid="spend-by-model-bars">
@@ -228,44 +307,20 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
       {/* Section 4: Daily cost line chart */}
       <Box>
         <Typography level="h4" sx={{ mb: 2 }}>
-          Daily Cost
+          Daily cost
         </Typography>
         <Box sx={{ height: 300 }} data-testid="spend-daily-cost-chart">
-          <ResponsiveLineChart
-            data={lineData}
-            theme={chartTheme}
-            margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
-            xScale={{ type: 'point' }}
-            yScale={{ type: 'linear', min: 'auto', max: 'auto' }}
-            curve="catmullRom"
-            axisTop={null}
-            axisRight={null}
-            axisBottom={{
-              tickSize: 5,
-              tickPadding: 5,
-              tickRotation: -45,
-              legend: 'Date',
-              legendPosition: 'middle',
-              legendOffset: 55,
-              format: (value: string) => value.slice(5),
-            }}
-            axisLeft={{
-              tickSize: 5,
-              tickPadding: 5,
-              tickRotation: 0,
-              legend: 'Cost (USD)',
-              legendPosition: 'middle',
-              legendOffset: -50,
-              format: (value: number) => `$${value}`,
-            }}
+          <TrendAreaChart
+            testId="spend-daily-cost-trend"
+            data={dailyCost}
+            color={adminChartSeries(1)[0]}
+            style={adminChartStyle}
+            xLegend="Date"
+            yLegend="Cost (USD)"
             pointSize={6}
-            pointColor={theme.palette.background.surface}
-            pointBorderWidth={2}
-            pointBorderColor={{ from: 'serieColor' }}
-            enableArea={true}
-            areaOpacity={0.15}
-            useMesh={true}
-            colors={[theme.palette.primary[500]]}
+            yAxisWidth={70}
+            formatX={value => value.slice(5)}
+            formatY={value => `$${value}`}
           />
         </Box>
       </Box>

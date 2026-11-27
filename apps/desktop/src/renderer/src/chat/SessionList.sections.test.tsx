@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { SessionList } from './SessionList';
 import { useSidebarSections } from './useSidebarSections';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -100,7 +101,6 @@ function Harness({
     <SessionList
       sessions={sessions}
       mode={mode}
-      onModeChange={() => {}}
       loading={false}
       activeId={null}
       statuses={new Map()}
@@ -116,6 +116,7 @@ function Harness({
       onTogglePin={() => {}}
       onToggleArchived={() => {}}
       onRename={() => {}}
+      onDownload={() => {}}
       userSections={sections}
       sectionActions={actions}
       sectionError={sectionError}
@@ -131,7 +132,7 @@ async function mount(
   mode: ChatSessionMode = 'chat'
 ) {
   bridge = fakeSidebarBridge(initial);
-  (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge };
+  (window as unknown as { b4m: unknown }).b4m = { sidebar: bridge, host: localHostConnections() };
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -217,8 +218,12 @@ afterEach(() => {
 });
 
 describe('the sidebar context menu', () => {
-  it('opens on a right-click in empty space with New session and New section', async () => {
+  it('opens on a right-click in empty space with New session and New section, but not on a row', async () => {
     await mount([summary('a', 'Alpha')]);
+
+    rightClick(el('chat-session-item'));
+    await settle();
+    expect(query('sidebar-context-new-section-btn')).toBeNull();
 
     rightClick(el('sidebar-session-scroll'));
     await settle();
@@ -227,15 +232,6 @@ describe('the sidebar context menu', () => {
     expect(query('sidebar-context-new-section-btn')).not.toBeNull();
     await click(el('sidebar-context-new-session-btn'));
     expect(onCreate).toHaveBeenCalledTimes(1);
-  });
-
-  it('leaves a right-click on a session row alone', async () => {
-    await mount([summary('a', 'Alpha')]);
-
-    rightClick(el('chat-session-item'));
-    await settle();
-
-    expect(query('sidebar-context-new-section-btn')).toBeNull();
   });
 
   it('creates an empty, named section from New section', async () => {
@@ -257,12 +253,21 @@ describe('the sidebar context menu', () => {
     expect(looseTitles()).toEqual(['Alpha']);
   });
 
-  it('closes the section-name dialog on Escape without creating anything', async () => {
+  it('keeps window shortcuts from firing behind the dialog, and closes it on Escape without creating anything', async () => {
     await mount([summary('a', 'Alpha')]);
 
     rightClick(el('sidebar-session-scroll'));
     await settle();
     await click(el('sidebar-context-new-section-btn'));
+    // A focused button inside the dialog must not let a window chord through.
+    await act(async () => {
+      el('section-name-cancel-btn').dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'b', metaKey: true, bubbles: true, cancelable: true })
+      );
+    });
+    expect(onToggleCollapsed).not.toHaveBeenCalled();
+    expect(query('section-name-dialog')).not.toBeNull();
+
     typeName('Work');
     await act(async () => {
       el('section-name-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -271,22 +276,6 @@ describe('the sidebar context menu', () => {
     expect(query('section-name-dialog')).toBeNull();
     expect(bridge.createSection).not.toHaveBeenCalled();
   });
-  it('keeps window shortcuts from firing behind the dialog when a button has focus', async () => {
-    await mount([summary('a', 'Alpha')]);
-
-    rightClick(el('sidebar-session-scroll'));
-    await settle();
-    await click(el('sidebar-context-new-section-btn'));
-    await act(async () => {
-      el('section-name-cancel-btn').dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'b', metaKey: true, bubbles: true, cancelable: true })
-      );
-    });
-
-    expect(onToggleCollapsed).not.toHaveBeenCalled();
-    expect(query('section-name-dialog')).not.toBeNull();
-  });
-
   it('caps a long name by code point after collapsing whitespace, not while typing', async () => {
     await mount([summary('a', 'Alpha')]);
     const emoji = '\u{1F600}'.repeat(40);
@@ -312,11 +301,8 @@ describe('moving a session from its menu', () => {
     // The check is the only glyph a section entry draws.
     expect(targets.map(node => node.querySelector('svg') !== null)).toEqual([true, false]);
     expect(el('chat-move-remove-btn').textContent).toBe('Remove from Work');
-  });
 
-  it('offers no Remove for a session in no section', async () => {
-    await mount([summary('b', 'Beta')], workAndHome);
-
+    // A session in no section gets no Remove.
     await openMoveTo('Beta');
 
     expect(query('chat-move-remove-btn')).toBeNull();
@@ -332,23 +318,6 @@ describe('moving a session from its menu', () => {
     expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
     expect(titlesIn(sectionNamed('Home'))).toEqual(['Beta']);
     expect(looseTitles()).toEqual([]);
-  });
-
-  it('draws a row moved into a section that shows only its first twenty', async () => {
-    const rows = Array.from({ length: 25 }, (_, index) => summary(`s${index}`, `S${index}`));
-    // Last in the list, so last in the section once moved there.
-    const old = summary('old', 'Old one');
-    await mount([...rows, old], {
-      sections: [{ id: 'work', name: 'Work' }],
-      assignments: Object.fromEntries(rows.map(row => [row.id, 'work'])),
-    });
-    expect(titlesIn(sectionNamed('Work'))).toHaveLength(20);
-    expect(titlesIn(sectionNamed('Work'))).not.toContain('Old one');
-
-    await openMoveTo('Old one');
-    await click(all('chat-move-to-section-btn').find(node => node.textContent === 'Work') ?? el('missing'));
-
-    expect(titlesIn(sectionNamed('Work'))).toContain('Old one');
   });
 
   it('returns the row to the default list on Remove from', async () => {
@@ -452,7 +421,7 @@ describe('starting a session in a section', () => {
 });
 
 describe("a section's own menu", () => {
-  it('renames the section', async () => {
+  it('renames the section from its menu and from a double-click on its name', async () => {
     await mount([summary('a', 'Alpha')], workAndHome);
 
     await click(el('sidebar-section-menu-btn', sectionNamed('Work')));
@@ -465,6 +434,18 @@ describe("a section's own menu", () => {
 
     expect(bridge.renameSection).toHaveBeenCalledWith('work', 'Day job');
     expect(titlesIn(sectionNamed('Day job'))).toEqual(['Alpha']);
+
+    act(() => {
+      el('sidebar-section-name', sectionNamed('Day job')).dispatchEvent(
+        new MouseEvent('dblclick', { bubbles: true, cancelable: true })
+      );
+    });
+    await settle();
+    expect((el('section-name-input') as HTMLInputElement).value).toBe('Day job');
+    typeName('Office');
+    await click(el('section-name-submit-btn'));
+    expect(bridge.renameSection).toHaveBeenLastCalledWith('work', 'Office');
+    expect(titlesIn(sectionNamed('Office'))).toEqual(['Alpha']);
   });
 
   it('deletes the section and puts its sessions back, deleting none of them', async () => {
@@ -477,23 +458,6 @@ describe("a section's own menu", () => {
     expect(all('sidebar-section-name').map(node => node.textContent)).toEqual(['Home']);
     expect(looseTitles()).toEqual(['Alpha', 'Beta']);
     expect(onDelete).not.toHaveBeenCalled();
-  });
-
-  it('renames the section from a double-click on its name', async () => {
-    await mount([summary('a', 'Alpha')], workAndHome);
-
-    act(() => {
-      el('sidebar-section-name', sectionNamed('Work')).dispatchEvent(
-        new MouseEvent('dblclick', { bubbles: true, cancelable: true })
-      );
-    });
-    await settle();
-    expect((el('section-name-input') as HTMLInputElement).value).toBe('Work');
-    typeName('Day job');
-    await click(el('section-name-submit-btn'));
-
-    expect(bridge.renameSection).toHaveBeenCalledWith('work', 'Day job');
-    expect(titlesIn(sectionNamed('Day job'))).toEqual(['Alpha']);
   });
 
   it('cancels a rename without changing anything', async () => {
@@ -559,7 +523,7 @@ async function dragRowOnto(title: string, target: HTMLElement) {
 }
 
 describe('dragging a session', () => {
-  it('moves a row dropped on a section into it', async () => {
+  it('moves a row dropped on a section into it, and a row between sections', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
 
     const accepted = await dragRowOnto('Beta', el('sidebar-section-header', sectionNamed('Home')));
@@ -567,20 +531,15 @@ describe('dragging a session', () => {
     expect(accepted).toBe(true);
     expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
     expect(titlesIn(sectionNamed('Home'))).toEqual(['Beta']);
-  });
-
-  it('moves a row between sections', async () => {
-    await mount([summary('a', 'Alpha')], workAndHome);
 
     await dragRowOnto('Alpha', el('sidebar-section-header', sectionNamed('Home')));
-
-    expect(bridge.moveSession).toHaveBeenCalledWith('a', 'home');
+    expect(bridge.moveSession).toHaveBeenLastCalledWith('a', 'home');
     expect(titlesIn(sectionNamed('Work'))).toEqual([]);
-    expect(titlesIn(sectionNamed('Home'))).toEqual(['Alpha']);
+    expect(titlesIn(sectionNamed('Home'))).toEqual(['Alpha', 'Beta']);
   });
 
-  it('marks the section under the pointer, and clears it when the drag ends', async () => {
-    await mount([summary('b', 'Beta')], workAndHome);
+  it('marks the section under the pointer, clears it over the list for a row in no section, and when the drag ends', async () => {
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
     const transfer = fakeDataTransfer();
 
     fireDrag(rowNamed('Beta'), 'dragstart', transfer);
@@ -589,11 +548,18 @@ describe('dragging a session', () => {
     expect(sectionNamed('Home').dataset.dropTarget).toBe('true');
     expect(sectionNamed('Work').dataset.dropTarget).toBeUndefined();
 
+    expect(fireDrag(rowNamed('Beta'), 'dragover', transfer)).toBe(false);
+    await settle();
+    expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
+
+    fireDrag(sectionNamed('Home'), 'dragover', transfer);
+    expect(sectionNamed('Home').dataset.dropTarget).toBe('true');
+
     fireDrag(rowNamed('Beta'), 'dragend', transfer);
     expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
   });
 
-  it('opens a drop slot in empty sections only while a row is dragged', async () => {
+  it('opens a drop slot in empty sections only while a row is dragged, and clears it on a drop with no dragend', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
     const transfer = fakeDataTransfer();
     expect(query('sidebar-section-drop-zone')).toBeNull();
@@ -608,13 +574,14 @@ describe('dragging a session', () => {
     ).toEqual(['home']);
 
     const accepted = fireDrag(el('sidebar-section-drop-zone'), 'dragover', transfer);
+    // No dragend: the drop alone has to clear the drag state.
     fireDrag(el('sidebar-section-drop-zone'), 'drop', transfer);
-    fireDrag(rowNamed('Beta'), 'dragend', transfer);
     await settle();
 
     expect(accepted).toBe(true);
     expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
     expect(query('sidebar-section-drop-zone')).toBeNull();
+    expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
   });
 
   it('opens no drop slots for a drag that ended before its first frame', async () => {
@@ -648,23 +615,6 @@ describe('dragging a session', () => {
     expect(bridge.moveSession).not.toHaveBeenCalled();
   });
 
-  it('clears a section highlight when a row in no section moves on to the list', async () => {
-    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
-    const transfer = fakeDataTransfer();
-    const row = rowNamed('Beta');
-    fireDrag(row, 'dragstart', transfer);
-    await nextFrame();
-
-    fireDrag(sectionNamed('Work'), 'dragover', transfer);
-    await settle();
-    expect(sectionNamed('Work').dataset.dropTarget).toBe('true');
-
-    expect(fireDrag(rowNamed('Beta'), 'dragover', transfer)).toBe(false);
-    await settle();
-    expect(sectionNamed('Work').dataset.dropTarget).toBeUndefined();
-    fireDrag(row, 'dragend', transfer);
-  });
-
   it('does nothing when a row is dropped back on its own section', async () => {
     await mount([summary('a', 'Alpha')], workAndHome);
 
@@ -695,22 +645,6 @@ describe('dragging a session', () => {
     expect(el('chat-session-item').getAttribute('draggable')).toBe('false');
   });
 
-  it('clears the drag state on a drop even when dragend never arrives', async () => {
-    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
-    const transfer = fakeDataTransfer();
-
-    fireDrag(rowNamed('Beta'), 'dragstart', transfer);
-    await nextFrame();
-    expect(query('sidebar-section-drop-zone')).not.toBeNull();
-    fireDrag(el('sidebar-section-drop-zone'), 'dragover', transfer);
-    fireDrag(el('sidebar-section-drop-zone'), 'drop', transfer);
-    await settle();
-
-    expect(bridge.moveSession).toHaveBeenCalledWith('b', 'home');
-    expect(query('sidebar-section-drop-zone')).toBeNull();
-    expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
-  });
-
   it('does not let a frame pending at drop time re-open the drop slots', async () => {
     await mount([summary('a', 'Alpha'), summary('b', 'Beta')], workAndHome);
     const transfer = fakeDataTransfer();
@@ -723,7 +657,7 @@ describe('dragging a session', () => {
     expect(query('sidebar-section-drop-zone')).toBeNull();
   });
 
-  it('does not pick up a pinned row for a section', async () => {
+  it('does not pick up a pinned row for a section, nor offer it Move to', async () => {
     await mount([summary('a', 'Alpha'), summary('p', 'Pinned one', { pinned: true })], workAndHome);
     const transfer = fakeDataTransfer();
 
@@ -739,6 +673,10 @@ describe('dragging a session', () => {
     expect(accepted).toBe(false);
     expect(sectionNamed('Home').dataset.dropTarget).toBeUndefined();
     expect(bridge.moveSession).not.toHaveBeenCalled();
+
+    await openRowMenu('Pinned one');
+    expect(query('chat-pin-session-btn')).not.toBeNull();
+    expect(query('chat-move-session-btn')).toBeNull();
   });
 
   it('draws an old row dropped into a section that shows only its first twenty', async () => {
@@ -784,15 +722,6 @@ describe('dragging a session', () => {
 });
 
 describe('Move to for rows outside the sections', () => {
-  it('is not offered for a pinned row', async () => {
-    await mount([summary('a', 'Alpha'), summary('p', 'Pinned one', { pinned: true })], workAndHome);
-
-    await openRowMenu('Pinned one');
-
-    expect(query('chat-pin-session-btn')).not.toBeNull();
-    expect(query('chat-move-session-btn')).toBeNull();
-  });
-
   it('is not offered for an archived row', async () => {
     await mount([summary('a', 'Alpha'), summary('z', 'Old one', { archived: true })], workAndHome);
 
@@ -851,11 +780,5 @@ describe('a failed section change', () => {
     await click(el('chat-section-error'));
 
     expect(onDismissSectionError).toHaveBeenCalledTimes(1);
-  });
-
-  it('shows nothing without an error', async () => {
-    await mount([summary('a', 'Alpha')]);
-
-    expect(query('chat-section-error')).toBeNull();
   });
 });

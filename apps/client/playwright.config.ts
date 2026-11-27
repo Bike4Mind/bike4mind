@@ -1,9 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 import { TIMEOUTS } from './e2e/constants';
+import { prEligibleConfigProjects } from './e2e/project-selection.mjs';
 
-dotenv.config({ path: path.resolve(__dirname, '.env.e2e') });
+const envFile = path.resolve(__dirname, '.env.e2e');
+if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const adminAuthFile = './e2e/.auth/admin.json';
 
@@ -76,10 +78,37 @@ const specProjects = [
     testMatch: /(?:^|\/)skills\.spec\.ts$/,
     auth: './e2e/.auth/skills-user.json',
   },
+  // Makes no model call; seeds its teams through the admin grant endpoint, so no Stripe either.
+  // teams-checkout.spec.ts is the Stripe half and self-skips off staging.
+  {
+    name: 'teams',
+    setupMatch: /(?:^|\/)teams\.setup\.ts$/,
+    testMatch: /(?:^|\/)teams(?:-checkout)?\.spec\.ts$/,
+    auth: './e2e/.auth/teams-user.json',
+    skipWarmup: true,
+  },
+  // Plays recorded replies only, so it makes no model call.
+  {
+    name: 'tutorial-basics',
+    setupMatch: /(?:^|\/)tutorial-basics\.setup\.ts$/,
+    testMatch: /(?:^|\/)tutorial-basics\.spec\.ts$/,
+    auth: './e2e/.auth/tutorial-basics-user.json',
+    skipWarmup: true,
+  },
+  // Generates only cheap audio (one short speech clip, one sound effect); video and music stay at
+  // form level. Makes no chat-model call, so it skips the AI warmup.
+  {
+    name: 'studio',
+    setupMatch: /(?:^|\/)studio\.setup\.ts$/,
+    testMatch: /(?:^|\/)studio\.spec\.ts$/,
+    auth: './e2e/.auth/studio-user.json',
+    skipWarmup: true,
+  },
   {
     name: 'credits',
     setupMatch: /(?:^|\/)credits\.setup\.ts$/,
-    testMatch: /(?:^|\/)credits\.spec\.ts$/,
+    // free-tier-limits rides here for the admin token from core setup; it mints its own free accounts.
+    testMatch: /(?:^|\/)(?:credits|free-tier-limits)\.spec\.ts$/,
     auth: './e2e/.auth/credits-user.json',
   },
   // Byte-fidelity suite: opt-in via EXPORT_BYTES_RUN. Three tests that each wait out an async S3
@@ -128,17 +157,21 @@ const specProjects = [
     : []),
 ];
 
-export default defineConfig({
+const config = defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 1,
   workers: Number(process.env.PW_WORKERS) || 3,
   timeout: TIMEOUTS.TEST,
-  // 30 min: with PW_WORKERS=3 the full suite runs in ~15–20 min under normal conditions,
-  // leaving a 10-min buffer. The GitHub Actions job cap is 35 min, so this inner guard
-  // gives Playwright time to run teardown and write artifacts before the job is killed.
-  globalTimeout: process.env.CI && process.env.AI_LATENCY_RUN !== 'true' ? 30 * 60_000 : undefined,
+  // Inner guard that stops the run early enough for teardown and artifacts before the GitHub
+  // Actions job is killed. 30 min by default; callers of .github/workflows/e2e-run.yml raise it
+  // through the global_timeout_minutes input (PW_GLOBAL_TIMEOUT_MINUTES), as e2e-manual.yml does
+  // for the full suite. Keep it below the caller's timeout_minutes.
+  globalTimeout:
+    process.env.CI && process.env.AI_LATENCY_RUN !== 'true'
+      ? (Number(process.env.PW_GLOBAL_TIMEOUT_MINUTES) || 30) * 60_000
+      : undefined,
   expect: { timeout: TIMEOUTS.VISIBLE },
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
@@ -193,8 +226,31 @@ export default defineConfig({
     {
       name: 'unauthenticated',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/, /(?:^|\/)mfa\.spec\.ts$/],
+      testMatch: [
+        /(?:^|\/)auth\.spec\.ts$/,
+        /(?:^|\/)existing-user-login\.spec\.ts$/,
+        /(?:^|\/)signup\.spec\.ts$/,
+        /(?:^|\/)mfa\.spec\.ts$/,
+      ],
       dependencies: ['setup-core', 'setup-projects'],
+    },
+    // Referral invites: kept out of `unauthenticated` (the core deploy-gate run) because each run
+    // creates a real signup and the per-IP/ASN signup caps are not skipped under E2E
+    // (packages/server-utils/src/auth/signupNetworkLimits.ts). Full suite + manual run.
+    {
+      name: 'referrals',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [/(?:^|\/)referrals\.spec\.ts$/],
+      dependencies: ['setup-core'],
+    },
+    // Launch-readiness A6.1: the signup leg on a short phone screen over a throttled link. Each run is
+    // a real signup, so like referrals it stays out of the `unauthenticated` deploy gate. Chromium
+    // only: the throttle goes through CDP. The spec sets the 375x667 viewport itself.
+    {
+      name: 'launch-readiness',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [/(?:^|\/)launch-readiness-[\w-]+\.spec\.ts$/],
+      dependencies: ['setup-core'],
     },
     // WebSocket token enforcement: mints its own throwaway users (revoking a token kills every
     // token that user holds), so it needs no shared auth state - only core setup.
@@ -204,6 +260,13 @@ export default defineConfig({
       testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
       dependencies: ['setup-core'],
     },
+    // Admin setup: signs the setup admin in again. Depending on `unauthenticated` keeps it in the
+    // last phase before `admin`, so the new token is minted right before the admin specs use it.
+    {
+      name: 'setup-admin',
+      testMatch: /(?:^|\/)admin\.setup\.ts$/,
+      dependencies: ['setup-core', 'unauthenticated'],
+    },
     // Admin specs
     {
       name: 'admin',
@@ -211,8 +274,16 @@ export default defineConfig({
         ...devices['Desktop Chrome'],
         storageState: adminAuthFile,
       },
-      dependencies: ['setup-core', 'unauthenticated'],
-      testMatch: [/(?:^|\/)admin\.spec\.ts$/, /(?:^|\/)admin-settings-secrets\.spec\.ts$/],
+      dependencies: ['setup-admin'],
+      testMatch: [
+        /(?:^|\/)admin\.spec\.ts$/,
+        /(?:^|\/)admin-access-review\.spec\.ts$/,
+        /(?:^|\/)signup-grants\.spec\.ts$/,
+        /(?:^|\/)admin-settings-secrets\.spec\.ts$/,
+        /(?:^|\/)admin-approvals\.spec\.ts$/,
+        /(?:^|\/)admin-tutorials\.spec\.ts$/,
+        /(?:^|\/)oauth-logout\.spec\.ts$/,
+      ],
     },
     // Per-spec test projects (each depends only on its own setup)
     ...specProjects.map(({ name, testMatch, auth }) => ({
@@ -241,3 +312,9 @@ export default defineConfig({
       : []),
   ],
 });
+
+if (process.env.PR_E2E === 'true' && config.projects) {
+  config.projects = prEligibleConfigProjects(config.projects);
+}
+
+export default config;

@@ -1,6 +1,14 @@
 import { AdminSettings } from '@bike4mind/database/infra';
-import { redactSettingSecrets, settingsMap, userReadableSettingKeys, type AdminSettingDoc } from '@bike4mind/common';
-import { decryptAtRest } from '@bike4mind/utils/security';
+import {
+  ApiKeyScope,
+  allSettingDefinitions,
+  hasAdminPermission,
+  isEnforceCreditsLocked,
+  settingsMap,
+  userReadableSettingKeys,
+  type AdminSettingDoc,
+} from '@bike4mind/common';
+import { redactStoredSetting } from '@server/utils/redactStoredSetting';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
 
@@ -17,10 +25,10 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // sreAgentConfig, secopsTriageConfig, contextTelemetryAlerts and prReportIdentityMap
   // among them: operational config and a staff-to-Slack identity map, none of it
   // `isSensitive`, none of it the caller's business. See userReadableSettingKeys().
-  const isAdmin = req.user?.isAdmin === true;
-  const permittedKeys = isAdmin
-    ? (Object.values(settingsMap) as Array<{ key: string }>).map(s => s.key)
-    : userReadableSettingKeys();
+  const canReadFullCatalog =
+    hasAdminPermission(req.user, 'settings:manage') &&
+    (!req.apiKeyInfo || req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN));
+  const permittedKeys = canReadFullCatalog ? allSettingDefinitions().map(s => s.key) : userReadableSettingKeys();
 
   // Only fetch the specific settings that users are allowed to see
   const settings = await AdminSettings.find({ settingName: { $in: permittedKeys } }).lean();
@@ -42,17 +50,16 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
   // Server-side consumers (apiKeyService.getEffective*) read AdminSettings directly and
   // are unaffected by this endpoint.
   //
-  // Sensitive values are stored encrypted; decrypt before redacting so the mask carries the
-  // real last-4 rather than the ciphertext tail. Only the mask leaves the server - the
-  // decrypted plaintext exists here just long enough to compute it. decryptAtRest passes a
-  // plaintext (not-yet-migrated) or non-encrypted value through unchanged.
-  const redacted: AdminSettingDoc[] = (settings ?? []).map(setting => {
-    const decrypted =
-      typeof setting.settingValue === 'string'
-        ? { ...setting, settingValue: decryptAtRest(setting.settingValue) }
-        : setting;
-    return redactSettingSecrets(decrypted as unknown as AdminSettingDoc);
-  });
+  // Sensitive values are stored encrypted; redactStoredSetting decrypts only those, so the mask
+  // carries the real last-4 rather than the ciphertext tail and only the mask leaves the server.
+  const redacted: AdminSettingDoc[] = (settings ?? []).map(redactStoredSetting);
+
+  // Hosted always meters credits, even if a stored row says false.
+  if (isEnforceCreditsLocked()) {
+    for (const row of redacted) {
+      if (row.settingName === 'enforceCredits') row.settingValue = true;
+    }
+  }
 
   // defaultEmbeddingModel's default is env-dependent on self-host (a local Ollama embedder when
   // no cloud key, else the cloud default - see defaultEmbeddingModelForEnv). The client cannot

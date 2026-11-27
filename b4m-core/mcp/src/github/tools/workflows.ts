@@ -5,18 +5,21 @@
  */
 
 import { z } from 'zod';
-import * as unzipper from 'unzipper';
+import JSZip from 'jszip';
 import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, paginationParams } from '../helpers/schemas.js';
-import { isRateLimitError, getErrorMessage } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { isRateLimitError, getErrorMessage, errorLogFields } from '../helpers/errors.js';
 import {
   TOOL_LIST_WORKFLOW_RUNS,
   TOOL_GET_WORKFLOW_RUN_DETAILS,
   TOOL_GET_WORKFLOW_RUN_LOGS,
   TOOL_GET_JOB_LOGS,
 } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 // Workflow run status values
 const workflowStatusSchema = z
@@ -194,7 +197,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        console.error(`[${TOOL_LIST_WORKFLOW_RUNS}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_LIST_WORKFLOW_RUNS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -303,7 +306,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        console.error(`[${TOOL_GET_WORKFLOW_RUN_DETAILS}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_GET_WORKFLOW_RUN_DETAILS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -372,7 +375,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        console.error(`[${TOOL_GET_JOB_LOGS}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_GET_JOB_LOGS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -449,19 +452,18 @@ export function registerWorkflowTools(server: McpServer) {
         const logsByJob: Record<string, string> = {};
         const relevantJobNames = new Set(relevantJobs.map(j => j.name));
 
-        // Use unzipper to parse the ZIP buffer
-        const directory = await unzipper.Open.buffer(Buffer.from(zipBuffer));
+        const archive = await JSZip.loadAsync(zipBuffer);
 
-        for (const file of directory.files) {
+        for (const file of Object.values(archive.files)) {
+          if (file.dir) continue;
           // GitHub ZIP structure: job_name/step_number_step_name.txt
-          const pathParts = file.path.split('/');
+          const pathParts = file.name.split('/');
           if (pathParts.length >= 1) {
             const jobName = pathParts[0];
 
             // Only process relevant jobs
             if (relevantJobNames.has(jobName) || !filterToFailed) {
-              const content = await file.buffer();
-              const logText = content.toString('utf-8');
+              const logText = await file.async('string');
 
               if (!logsByJob[jobName]) {
                 logsByJob[jobName] = '';
@@ -505,7 +507,7 @@ export function registerWorkflowTools(server: McpServer) {
             suggestion: 'GitHub API rate limit exceeded. Please wait before retrying.',
           });
         }
-        console.error(`[${TOOL_GET_WORKFLOW_RUN_LOGS}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_GET_WORKFLOW_RUN_LOGS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

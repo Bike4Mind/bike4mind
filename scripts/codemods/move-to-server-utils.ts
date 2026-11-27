@@ -7,7 +7,7 @@
  *   pnpm tsx scripts/codemods/move-to-server-utils.ts apps/client/server/memory/factCipher.ts ...
  *
  * Arguments are the files' OLD paths. A file under apps/client/server/X lands at src/X; one under
- * apps/client/{lib,shared,config,services,app/utils}/X keeps its client-relative path, so
+ * apps/client/{lib,shared,config,services,app/utils,app/constants,app/components}/X keeps its client-relative path, so
  * apps/client/lib/X lands at src/lib/X. No other client directory can move. Only .ts files can be
  * moved: the package's exports map resolves `./src/*.ts`. Every .ts/.tsx/.mts/.cts/.js/.mjs file (.d.ts included) under apps/client,
  * apps/workers, packages, b4m-core and infra is parsed with the TypeScript compiler API. A
@@ -33,7 +33,7 @@
  * shim of its package path (the move did not happen, or the target belongs to another file).
  * Idempotent: a second run changes nothing, including after the shims are added.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
@@ -44,7 +44,7 @@ export const PACKAGE_SRC = 'packages/server-utils/src';
 export const PACKAGE_NAME = '@bike4mind/server-utils';
 
 /** Client directories a file can move from; only server/ drops its prefix in the package. */
-const MOVABLE_ROOTS = ['server', 'lib', 'shared', 'config', 'services', 'app/utils'];
+const MOVABLE_ROOTS = ['server', 'lib', 'shared', 'config', 'services', 'app/utils', 'app/constants', 'app/components'];
 const SCAN_ROOTS = ['apps/client', 'apps/workers', 'packages', 'b4m-core', 'infra'];
 const OVERLAY_DIR = 'packages/premium/';
 const SKIP_DIRS = new Set(['node_modules', '.next', 'dist', '.turbo', 'premium-generated', 'coverage']);
@@ -304,8 +304,15 @@ export function run(root: string, oldPaths: string[]): { changed: string[]; warn
     }
   });
 
+  const isFile = (rel: string) => existsSync(path.join(root, rel)) && statSync(path.join(root, rel)).isFile();
+  // A non-source asset (e.g. a .json the moved code imports) keeps its extension in the specifier,
+  // so it counts as moved only when that exact path is a package file and its old copy is gone.
   const isPackageFile = (target: string) =>
-    ['.ts', '/index.ts'].some(ext => existsSync(path.join(root, `${target}${ext}`)));
+    ['.ts', '/index.ts'].some(ext => isFile(`${target}${ext}`)) ||
+    (!SOURCE_EXT.test(target) &&
+      path.extname(target) !== '' &&
+      isFile(target) &&
+      !existsSync(path.join(root, `${CLIENT_SERVER}${target.slice(PACKAGE_SRC.length)}`)));
   // Two passes: findRewrites throws on a left-behind import, and that must happen before any write.
   const pending: { absFile: string; file: string; next: string }[] = [];
   const warnings: string[] = [];

@@ -1,11 +1,23 @@
-export const SECRET_ROTATION_CONFIG: {
-  [key: string]: {
-    description: string;
-    rotationIntervalDays: number;
-    isAutomatic: boolean;
-    rotationProcess: string;
-  };
-} = {
+import {
+  describeDroppedContributions,
+  partitionContributed,
+  type ContributedSecretRotationSpec,
+  type PartitionedContributions,
+} from '@bike4mind/infra';
+import { contributedInfraResources } from '../../premium-generated/infraResources.generated';
+import { ensureContributedSecretsLoaded, isContributedSecret } from '../../utils/contributedSecrets';
+import { statusTransportKind, unusedMailSecrets } from '../../utils/mailer/configStatus';
+import type { MailTransportKind } from '../../utils/mailer/transport';
+import { Logger } from '@bike4mind/observability';
+
+export interface SecretRotationEntry {
+  description: string;
+  rotationIntervalDays: number;
+  isAutomatic: boolean;
+  rotationProcess: string;
+}
+
+export const SECRET_ROTATION_CONFIG: { [key: string]: SecretRotationEntry } = {
   // ── Authentication ─────────────────────────────────────────────────────────
   MONGODB_URI: {
     description: 'Database Credentials',
@@ -32,7 +44,14 @@ export const SECRET_ROTATION_CONFIG: {
     rotationIntervalDays: 90,
     isAutomatic: false,
     rotationProcess:
-      'Generate new key: openssl rand -hex 32. Copy current value to SECRET_ENCRYPTION_KEY_PREVIOUS, then set the new value via sst secret set. Existing encrypted values are re-encrypted on next read.',
+      'Generate new key: openssl rand -hex 32. Copy current value to SECRET_ENCRYPTION_KEY_PREVIOUS, set the new value via sst secret set, and deploy. Stored values are not re-encrypted on read: under sst shell run "pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets", then the same command with --verify. Clear SECRET_ENCRYPTION_KEY_PREVIOUS only after --verify exits 0.',
+  },
+  HMAC_SIGNING_SECRET: {
+    description: 'Optional root secret for signed URLs and hashed identifiers; unset, SECRET_ENCRYPTION_KEY signs',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess:
+      'Generate new value: openssl rand -hex 32. Copy the current value to HMAC_SIGNING_SECRET_PREVIOUS (on first use, copy SECRET_ENCRYPTION_KEY there), set the new value via sst secret set, and deploy. Keep the previous value for at least 90 days: earlier signatures and hashed identifiers are checked against it.',
   },
   OAUTH_RSA_PRIVATE_KEY: {
     description: 'RSA private key for signing OIDC ID tokens (RS256)',
@@ -147,6 +166,18 @@ export const SECRET_ROTATION_CONFIG: {
     isAutomatic: false,
     rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
   },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    description: 'Slack webhook for CloudWatch alarm notifications',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
+  },
+  SLACK_COST_ALARMS_WEBHOOK_URL: {
+    description: 'Slack webhook for cost and provider spend alarm notifications',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Regenerate webhook URL in Slack app settings and update SST Secret',
+  },
   SLACK_SIGNING_SECRET: {
     description: 'Slack app signing secret for request verification',
     rotationIntervalDays: 180,
@@ -210,36 +241,6 @@ export const SECRET_ROTATION_CONFIG: {
     isAutomatic: false,
     rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
   },
-  SECOPS_CODE_INGEST_TOKEN: {
-    description: 'SecOps — code analysis (Semgrep) ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_PACKAGES_INGEST_TOKEN: {
-    description: 'SecOps — package scan ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_PACKAGES_DISPATCH_TOKEN: {
-    description: 'SecOps — package scan dispatch token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_SECRETS_INGEST_TOKEN: {
-    description: 'SecOps — secrets scan ingest token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
-  SECOPS_SECRETS_DISPATCH_TOKEN: {
-    description: 'SecOps — secrets scan dispatch token',
-    rotationIntervalDays: 180,
-    isAutomatic: false,
-    rotationProcess: 'Generate new token and update SST Secret + corresponding GitHub secret',
-  },
   SECOPS_PROWLER_INGEST_TOKEN: {
     description: 'SecOps — Prowler cloud scan ingest token',
     rotationIntervalDays: 180,
@@ -266,10 +267,80 @@ export const SECRET_ROTATION_CONFIG: {
     isAutomatic: false,
     rotationProcess: 'Generate new random token and update SST Secret',
   },
-  E2E_CLEANUP_SECRET: {
-    description: 'Shared secret for E2E test cleanup endpoints (/api/test/create-user, /api/test/cleanup)',
+  CHAT_COMPLETION_INTERNAL_SECRET: {
+    description: 'Bearer shared by the frontend Lambda and ChatCompletion for internal quest dispatch',
     rotationIntervalDays: 180,
     isAutomatic: false,
-    rotationProcess: 'Generate new random token and update SST Secret via set-sst-secrets workflow',
+    rotationProcess:
+      'Generate a new random value, set it with `sst secret set`, then deploy the frontend and ChatCompletion together',
+  },
+  E2E_CLEANUP_SECRET: {
+    description: 'Header secret for the E2E test endpoints (/api/test/*)',
+    rotationIntervalDays: 180,
+    isAutomatic: false,
+    rotationProcess: 'Generate a new random token and update the per-tier deployer environment secret, then redeploy',
   },
 };
+
+const contributedRotations = new Map<string, SecretRotationEntry>();
+let contributedRotationsLoaded = false;
+
+/**
+ * Register rotation reminders for contributed secrets. A rotation whose secret is not a
+ * registered contributed secret is rejected, so secrets must be registered first.
+ */
+export function registerContributedSecretRotations(
+  specs: readonly ContributedSecretRotationSpec[]
+): PartitionedContributions<ContributedSecretRotationSpec> {
+  ensureContributedSecretsLoaded();
+  const result = partitionContributed(specs, spec => spec.secret, new Set(Object.keys(SECRET_ROTATION_CONFIG)));
+  const accepted: ContributedSecretRotationSpec[] = [];
+  for (const spec of result.registered) {
+    if (!isContributedSecret(spec.secret)) result.rejected.push(spec.secret);
+    else if (contributedRotations.has(spec.secret)) result.duplicates.push(spec.secret);
+    else accepted.push(spec);
+  }
+  result.registered = accepted;
+  for (const { secret, ...entry } of accepted) contributedRotations.set(secret, entry);
+  for (const line of describeDroppedContributions('secret rotation', result)) Logger.warn(`[secretRotation] ${line}`);
+  return result;
+}
+
+function ensureContributedRotationsLoaded(): void {
+  if (contributedRotationsLoaded) return;
+  contributedRotationsLoaded = true;
+  registerContributedSecretRotations(contributedInfraResources.rotations);
+}
+
+/**
+ * Core rotation entries plus every registered contributed one. Core entries win a name clash.
+ * Mail settings the transport never reads are left out, so an SES stage drops the SMTP ones.
+ */
+export function getSecretRotationConfig(transport: MailTransportKind = statusTransportKind()): {
+  [key: string]: SecretRotationEntry;
+} {
+  ensureContributedRotationsLoaded();
+  const config = { ...Object.fromEntries(contributedRotations), ...SECRET_ROTATION_CONFIG };
+  for (const name of unusedMailSecrets(transport)) delete config[name];
+  return config;
+}
+
+/**
+ * Names a package declared a rotation for that did not make it into the config. Anything
+ * that retires rotation records not in the config must stop when this is non-empty, or it
+ * would retire the records of a rotation that only failed to register.
+ */
+export function getUnregisteredContributedRotations(): string[] {
+  const config = getSecretRotationConfig();
+  return contributedInfraResources.rotations.map(r => r.secret).filter(name => !(name in config));
+}
+
+/** False in a tree where no package declares a rotation, e.g. a clone without overlays. */
+export function declaresContributedRotations(): boolean {
+  return contributedInfraResources.rotations.length > 0;
+}
+
+export function resetContributedSecretRotationsForTests(): void {
+  contributedRotations.clear();
+  contributedRotationsLoaded = false;
+}

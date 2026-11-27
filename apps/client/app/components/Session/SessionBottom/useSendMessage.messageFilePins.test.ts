@@ -11,7 +11,7 @@ import { resolve } from 'path';
 describe('useSendMessage - message attachments pinned to the session', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it.each(['return await handleCommand(commandHandlers,', 'return await handleLLMCommand({'])(
+  it.each(['return await dispatchSend(commandHandlers, imageSendMode,', 'return await handleLLMCommand({'])(
     'forwards the message-only ids on %s',
     opener => {
       const start = source.indexOf(opener);

@@ -162,7 +162,7 @@ describe('GeminiOmniVideoProvider specifics', () => {
     );
     await new GeminiOmniVideoProvider().submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(sent.input).toEqual([
@@ -176,7 +176,7 @@ describe('GeminiOmniVideoProvider specifics', () => {
     const provider = new GeminiOmniVideoProvider();
     const handle = await provider.submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(await provider.poll(handle, ctx())).toEqual({ status: 'running' });

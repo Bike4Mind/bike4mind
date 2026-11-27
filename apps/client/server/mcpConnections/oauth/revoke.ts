@@ -1,0 +1,72 @@
+import type { IMcpConnectionDocument } from '@bike4mind/common';
+import { RemoteMcpOAuthError, revokeRemoteMcpToken } from '@bike4mind/mcp/remote';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
+import { loadConnectionClient } from '@bike4mind/server-utils/mcpConnections/oauth/clientIdentity';
+import { withOAuthFetch } from '@bike4mind/server-utils/mcpConnections/oauth/oauthFetch';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'mcpOAuthRevoke' } });
+
+/** One deadline for the whole revocation: the caller is a request that is about to delete or clear the grant. */
+export const REVOKE_DEADLINE_MS = 5_000;
+
+/**
+ * RFC 7009 revocation of a connection's grant: the refresh token first, then the access token, at the
+ * advertised endpoint. Best effort: a failure (including a token that cannot be decrypted or a server that
+ * does not answer within `REVOKE_DEADLINE_MS`) is logged by hint and code only, never a token value, and
+ * never blocks the disconnect or delete that called it. Pass a connection read with credentials.
+ */
+export async function revokeConnectionGrant(
+  connection: IMcpConnectionDocument,
+  network: RemoteMcpNetworkOptions,
+  fetchFn?: FetchLike,
+  deadlineMs: number = REVOKE_DEADLINE_MS
+): Promise<void> {
+  const oauth = connection.auth.oauth;
+  if (connection.auth.kind !== 'oauth' || !oauth?.revocationEndpoint) return;
+  const endpoint = oauth.revocationEndpoint;
+
+  const revokeAll = async () => {
+    const tokens = [
+      { hint: 'refresh_token' as const, token: decryptToken(oauth.refreshTokenEnc) },
+      { hint: 'access_token' as const, token: decryptToken(oauth.accessTokenEnc) },
+    ].filter((entry): entry is { hint: 'refresh_token' | 'access_token'; token: string } => Boolean(entry.token));
+    if (tokens.length === 0) return;
+    const client = await loadConnectionClient(connection);
+    if (!client) return;
+    await withOAuthFetch(network, fetchFn, async pinned => {
+      for (const { hint, token } of tokens) {
+        try {
+          await revokeRemoteMcpToken(endpoint, { token, hint, client, fetchFn: pinned });
+        } catch (error) {
+          const code = error instanceof RemoteMcpOAuthError ? error.code : 'request_failed';
+          logger.warn('[mcpOAuth] Revoking a token of the connection failed', {
+            hint,
+            connectionId: connection.id,
+            code,
+          });
+        }
+      }
+    });
+  };
+
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>(resolve => {
+    timer = setTimeout(() => {
+      logger.warn('[mcpOAuth] Revoking the grant of the connection timed out', { connectionId: connection.id });
+      resolve();
+    }, deadlineMs);
+  });
+  try {
+    await Promise.race([
+      revokeAll().catch(() =>
+        logger.warn('[mcpOAuth] Could not revoke the grant of the connection', { connectionId: connection.id })
+      ),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}

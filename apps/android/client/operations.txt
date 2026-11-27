@@ -1,0 +1,14 @@
+# The operations the generated client exposes, one operationId per line. The whole spec generates code for
+# ~130 endpoints the app never calls; add an id here when a screen needs it, then run `make generate-client`.
+# Keep in step with apps/ios/Packages/B4MClient/openapi-generator-config.yaml where both apps use a route.
+getMe
+getClientConfig
+listSessions
+getSession
+listSessionQuests
+getQuest
+getCreditBalance
+listCreditTransactions
+# Left out on purpose, as on iOS: sendChatMessage. Its 200 response is an anyOf of the synchronous and the
+# queued shape, which the generator flattens into one class whose required fields only the first shape has,
+# so the queued reply would fail to decode. Chat uses a hand-written wire until the spec splits the shapes.

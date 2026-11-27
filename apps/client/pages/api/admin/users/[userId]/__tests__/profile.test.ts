@@ -1,0 +1,392 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError, ConflictError, missingAdminPermissionMessage } from '@bike4mind/common';
+
+const h = vi.hoisted(() => ({
+  csrfMiddleware: vi.fn(),
+  findById: vi.fn(),
+  existsOtherUserWithEmail: vi.fn(),
+  validateUsernameChange: vi.fn(),
+  writeUserUpdate: vi.fn(),
+  requestEmailChange: vi.fn(),
+  requireStepUp: vi.fn(),
+  buildEmailChangeMailer: vi.fn(),
+  publishEmailChangeMessages: vi.fn(),
+  record: vi.fn(),
+}));
+
+vi.mock('@server/middlewares/adminApi', async () =>
+  (await import('@server/middlewares/__tests__/adminApiMock')).adminApiMock()
+);
+vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
+vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => h.csrfMiddleware }));
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp: h.requireStepUp }));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: h.findById, existsOtherUserWithEmail: h.existsOtherUserWithEmail },
+  withTransaction: async (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@bike4mind/services', () => ({
+  userService: {
+    validateUsernameChange: h.validateUsernameChange,
+    writeUserUpdate: h.writeUserUpdate,
+    requestEmailChange: h.requestEmailChange,
+    EMAIL_IN_USE_MESSAGE: 'That email address is already in use.',
+  },
+}));
+vi.mock('@server/users/emailChangeMailer', () => ({
+  buildEmailChangeMailer: h.buildEmailChangeMailer,
+  publishEmailChangeMessages: h.publishEmailChangeMessages,
+}));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  parseAdminActionReason: (value: unknown) => {
+    if (typeof value !== 'string') throw new BadRequestError('A reason is required');
+    return value;
+  },
+  recordAdminActionFromRequest: h.record,
+}));
+
+const { default: handler } = (await import('../profile')) as unknown as {
+  default: ((req: unknown, res: unknown) => Promise<unknown>) & { _config: unknown };
+};
+
+const REASON = 'Customer request';
+
+const storedUser = (overrides: Record<string, unknown> = {}) => ({
+  id: 'user-1',
+  name: 'Ada Lovelace',
+  username: 'ada',
+  email: 'ada@example.com',
+  pendingEmail: null,
+  ...overrides,
+});
+
+const FULL_ADMIN = { id: 'admin-1', isAdmin: true };
+const moderator = (adminPermissions: string[] = ['users:moderate']) => ({
+  id: 'mod-1',
+  isAdmin: false,
+  adminPermissions,
+});
+
+const makeReq = (body: unknown, { user = FULL_ADMIN as unknown, userId = 'user-1' as unknown } = {}) => ({
+  method: 'PATCH',
+  query: { userId },
+  body,
+  user,
+  logger: { error: vi.fn() },
+});
+
+const run = async (body: unknown, options?: Parameters<typeof makeReq>[1]) => {
+  const json = vi.fn();
+  const req = makeReq(body, options);
+  await handler(req, { json });
+  return { json, req };
+};
+
+const rejection = async (body: unknown, options?: Parameters<typeof makeReq>[1]) => {
+  try {
+    await run(body, options);
+  } catch (error) {
+    return error as Error & { statusCode?: number; additionalInfo?: Record<string, unknown> };
+  }
+  throw new Error('expected the handler to reject');
+};
+
+describe('PATCH /api/admin/users/[userId]/profile', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    h.findById.mockResolvedValue(storedUser());
+    h.existsOtherUserWithEmail.mockResolvedValue(false);
+    h.validateUsernameChange.mockImplementation(
+      async (_user: unknown, params: { username?: string }) =>
+        params.username && (params.username = params.username.trim())
+    );
+    h.buildEmailChangeMailer.mockReturnValue({ mailer: true });
+  });
+
+  it('passes the csrf middleware to the chain', () => {
+    expect((handler as unknown as { _middlewares: unknown[] })._middlewares).toContain(h.csrfMiddleware);
+  });
+
+  it('declares users:moderate for PATCH', () => {
+    expect(handler._config).toEqual(
+      expect.objectContaining({ auth: 'jwtOnly', adminPermissions: { PATCH: 'users:moderate' } })
+    );
+  });
+
+  it.each([
+    ['no permission', { id: 'u2', isAdmin: false }],
+    ['an unrelated permission', moderator(['credits:adjust'])],
+    ['support:read only', moderator(['support:read'])],
+  ])('refuses a delegate with %s with the users:moderate message before reading the user', async (_, user) => {
+    const error = await rejection({ name: 'X', reason: REASON }, { user });
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe(missingAdminPermissionMessage('users:moderate'));
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegate with admin permissions', { isAdmin: false, adminPermissions: ['support:read'] }],
+  ])('refuses a users:moderate delegate editing %s and writes nothing', async (_, target) => {
+    h.findById.mockResolvedValue(storedUser(target));
+
+    const error = await rejection({ name: 'Ada King', reason: REASON }, { user: moderator() });
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe('Only full administrators can edit the profile of users with admin access');
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('lets a users:moderate delegate edit an ordinary user', async () => {
+    h.writeUserUpdate.mockResolvedValue(storedUser({ name: 'Ada King' }));
+
+    await run({ name: 'Ada King', reason: REASON }, { user: moderator() });
+
+    expect(h.writeUserUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a full admin edit a user with admin access', async () => {
+    h.findById.mockResolvedValue(storedUser({ isAdmin: true }));
+    h.writeUserUpdate.mockResolvedValue(storedUser({ name: 'Ada King', isAdmin: true }));
+
+    await run({ name: 'Ada King', reason: REASON });
+
+    expect(h.writeUserUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a missing user id', async () => {
+    const error = await rejection({ name: 'X', reason: REASON }, { userId: null });
+
+    expect(error.message).toBe('Invalid user ID');
+  });
+
+  it('rejects a malformed email inline, on the email field', async () => {
+    const error = await rejection({ email: 'not-an-email', reason: REASON });
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toBe('Enter a valid email address.');
+    expect(error.additionalInfo).toEqual({ field: 'email' });
+    expect(h.findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a blank name on the name field, since the account requires one', async () => {
+    const error = await rejection({ name: '   ', reason: REASON });
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toBe('Enter a name.');
+    expect(error.additionalInfo).toEqual({ field: 'name' });
+  });
+
+  it('requires a reason before any write', async () => {
+    const error = await rejection({ name: 'Ada King' });
+
+    expect(error.message).toMatch(/reason/i);
+    expect(h.findById).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for an unknown user', async () => {
+    h.findById.mockResolvedValue(null);
+
+    const error = await rejection({ name: 'Ada King', reason: REASON });
+
+    expect(error.statusCode).toBe(404);
+  });
+
+  it('tags a taken username with the username field', async () => {
+    h.validateUsernameChange.mockRejectedValue(new ConflictError('That username is taken.'));
+
+    const error = await rejection({ username: 'taken', reason: REASON });
+
+    expect(error.statusCode).toBe(409);
+    expect(error.additionalInfo).toEqual({ field: 'username' });
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('passes a non-HTTP write failure through untagged', async () => {
+    const failure = new Error('connection lost');
+    h.writeUserUpdate.mockRejectedValue(failure);
+
+    await expect(run({ username: 'ada2', reason: REASON })).rejects.toBe(failure);
+    expect(failure).not.toHaveProperty('additionalInfo');
+  });
+
+  it('refuses an edit that changes nothing', async () => {
+    const error = await rejection({
+      name: 'Ada Lovelace',
+      username: 'ada',
+      email: ' ADA@example.com ',
+      reason: REASON,
+    });
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toBe('Change the name, username or email.');
+    expect(h.requireStepUp).not.toHaveBeenCalled();
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not let a users:moderate delegate take a reserved username', async () => {
+    h.writeUserUpdate.mockResolvedValue(storedUser({ username: 'persona-x' }));
+
+    await run({ username: 'persona-x', reason: REASON }, { user: moderator() });
+
+    expect(h.validateUsernameChange).toHaveBeenCalledWith(
+      expect.anything(),
+      { username: 'persona-x' },
+      expect.anything(),
+      { allowReservedUsername: false }
+    );
+  });
+
+  it('writes a new name and username and audits them with the reason', async () => {
+    const { json } = await run({ name: '  Ada King ', username: ' ada2 ', reason: REASON });
+
+    expect(h.validateUsernameChange).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      { username: 'ada2' },
+      expect.anything(),
+      { allowReservedUsername: true }
+    );
+    expect(h.writeUserUpdate).toHaveBeenCalledWith(expect.anything(), {
+      id: 'user-1',
+      name: 'Ada King',
+      username: 'ada2',
+    });
+    expect(h.requireStepUp).not.toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+    expect(h.record).toHaveBeenCalledWith(expect.anything(), {
+      action: 'user.identity.updated',
+      target: { kind: 'user', id: 'user-1', displayName: 'ada@example.com' },
+      summary: 'updated name, username',
+      reason: REASON,
+      changes: [
+        { field: 'name', before: 'Ada Lovelace', after: 'Ada King' },
+        { field: 'username', before: 'ada', after: 'ada2' },
+      ],
+      details: undefined,
+    });
+    expect(h.publishEmailChangeMessages).toHaveBeenCalledWith([], expect.anything(), 'user-1');
+    expect(json).toHaveBeenCalledWith({
+      name: 'Ada King',
+      username: 'ada2',
+      email: 'ada@example.com',
+      pendingEmail: null,
+    });
+  });
+
+  it('records a name on an account that had none', async () => {
+    h.findById.mockResolvedValue(storedUser({ name: undefined, pendingEmail: 'old@example.com' }));
+
+    const { json } = await run({ name: 'Ada', reason: REASON });
+
+    expect(h.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ changes: [{ field: 'name', before: null, after: 'Ada' }] })
+    );
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ username: 'ada', pendingEmail: 'old@example.com' }));
+  });
+
+  it('starts a verified email change instead of writing the address', async () => {
+    h.findById.mockResolvedValue(storedUser({ pendingEmail: 'stale@example.com' }));
+
+    const { json, req } = await run({ email: ' New@Example.com ', reason: REASON });
+
+    expect(h.requireStepUp).toHaveBeenCalledWith(req);
+    expect(h.existsOtherUserWithEmail).toHaveBeenCalledWith('new@example.com', 'user-1');
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.buildEmailChangeMailer).toHaveBeenCalledWith(expect.any(Array), { adminNote: 'started' });
+    expect(h.requestEmailChange).toHaveBeenCalledWith(
+      { userId: 'user-1', newEmail: 'new@example.com' },
+      { db: { users: expect.anything() }, mailer: { mailer: true } }
+    );
+    expect(h.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        summary: 'updated pendingEmail',
+        changes: [{ field: 'pendingEmail', before: 'stale@example.com', after: 'new@example.com' }],
+        details: { currentEmail: 'ada@example.com' },
+      })
+    );
+    expect(json).toHaveBeenCalledWith({
+      name: 'Ada Lovelace',
+      username: 'ada',
+      email: 'ada@example.com',
+      pendingEmail: 'new@example.com',
+    });
+  });
+
+  it('adds a first email to an emailless account', async () => {
+    h.findById.mockResolvedValue(storedUser({ email: null, pendingEmail: undefined }));
+
+    await run({ email: 'first@example.com', reason: REASON });
+
+    expect(h.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        target: { kind: 'user', id: 'user-1', displayName: 'ada' },
+        changes: [{ field: 'pendingEmail', before: null, after: 'first@example.com' }],
+        details: { currentEmail: null },
+      })
+    );
+  });
+
+  it('reports an email another account holds on the email field, without starting a change', async () => {
+    h.existsOtherUserWithEmail.mockResolvedValue(true);
+
+    const error = await rejection({ name: 'Ada King', email: 'taken@example.com', reason: REASON });
+
+    expect(error.statusCode).toBe(409);
+    expect(error.message).toBe('That email address is already in use.');
+    expect(error.additionalInfo).toEqual({ field: 'email' });
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+  });
+
+  it('refuses a users:moderate delegate an email change without users:impersonate', async () => {
+    const error = await rejection(
+      { name: 'Ada King', email: 'new@example.com', reason: REASON },
+      { user: moderator() }
+    );
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toBe(missingAdminPermissionMessage('users:impersonate'));
+    expect(h.requireStepUp).not.toHaveBeenCalled();
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate holding users:moderate and users:impersonate start an email change', async () => {
+    const { req } = await run(
+      { email: 'new@example.com', reason: REASON },
+      { user: moderator(['users:moderate', 'users:impersonate']) }
+    );
+
+    expect(h.requireStepUp).toHaveBeenCalledWith(req);
+    expect(h.requestEmailChange).toHaveBeenCalledWith(
+      { userId: 'user-1', newEmail: 'new@example.com' },
+      expect.anything()
+    );
+  });
+
+  it('does not ask a users:moderate delegate for users:impersonate when the email is unchanged', async () => {
+    await run({ name: 'Ada King', email: ' ADA@example.com ', reason: REASON }, { user: moderator() });
+
+    expect(h.writeUserUpdate).toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+  });
+
+  it('makes no changes or audit entry when step-up fails', async () => {
+    const failure = new Error('step-up required');
+    h.requireStepUp.mockRejectedValue(failure);
+
+    await expect(run({ name: 'Ada King', email: 'new@example.com', reason: REASON })).rejects.toBe(failure);
+
+    expect(h.writeUserUpdate).not.toHaveBeenCalled();
+    expect(h.requestEmailChange).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.publishEmailChangeMessages).not.toHaveBeenCalled();
+  });
+});

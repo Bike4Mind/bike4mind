@@ -1,8 +1,20 @@
-import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
-import { subtractCredits, SubtractCreditsAdapters, SubtractCreditsParameters } from './subtractCredits';
-import { ICreditHolder, ICreditHolderMethods, CreditHolderType } from '@bike4mind/common';
+import { describe, it, expect, vi, beforeEach, afterEach, MockedObject } from 'vitest';
+import {
+  subtractCredits,
+  subtractCreditsWithLedgerRow,
+  SubtractCreditsAdapters,
+  SubtractCreditsParameters,
+} from './subtractCredits';
+import {
+  ICreditHolder,
+  ICreditHolderMethods,
+  CreditHolderType,
+  GenericDeductReason,
+  registerGenericDeductReason,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
+import { setOrgEventObserver } from '../organizationService/orgEventObserver';
 
 describe('creditService - subtractCredits', () => {
   // Mock credit holder responses
@@ -65,6 +77,48 @@ describe('creditService - subtractCredits', () => {
         reason: 'admin_adjustment',
         userId: 'user1',
       });
+    });
+
+    it('accepts a reason added through the registry', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const reason = 'subtract_test_registered_reason';
+      registerGenericDeductReason(reason);
+
+      await subtractCredits(
+        {
+          type: 'generic_deduct',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 5,
+          reason: reason as GenericDeductReason,
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'generic_deduct',
+        expect.objectContaining({ reason, credits: -5 })
+      );
+    });
+
+    it('rejects a reason that was never registered', async () => {
+      await expect(
+        subtractCredits(
+          {
+            type: 'generic_deduct',
+            ownerId: 'user1',
+            ownerType: CreditHolderType.User,
+            credits: 5,
+            reason: 'subtract_test_unregistered_reason' as GenericDeductReason,
+          },
+          mockAdapters
+        )
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        message: expect.stringContaining('Unregistered generic deduct reason'),
+      });
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+      expect(mockCreditTransactionRepo.createTransaction).not.toHaveBeenCalled();
     });
 
     it('should subtract credits from organization for generic_deduct transaction', async () => {
@@ -156,6 +210,42 @@ describe('creditService - subtractCredits', () => {
     });
   });
 
+  describe('apiKeyId attribution on usage transactions', () => {
+    const questScoped = { model: 'm', questId: 'q1', sessionId: 's1' };
+    const questLess = { model: 'm', sessionId: 's1' };
+    it.each([
+      ['text_generation_usage', { ...questScoped, inputTokens: 1, outputTokens: 1 }],
+      ['image_generation_usage', questScoped],
+      ['image_edit_usage', questScoped],
+      ['video_generation_usage', questScoped],
+      ['tool_usage', questScoped],
+      ['realtime_voice_usage', questLess],
+      ['speech_to_text_usage', questLess],
+      ['text_to_speech_usage', questLess],
+      ['sound_effects_usage', questLess],
+      ['music_generation_usage', questLess],
+    ] as const)('writes apiKeyId on %s', async (type, fields) => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(
+        {
+          type,
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 5,
+          apiKeyId: 'apikey-123',
+          ...fields,
+        } as SubtractCreditsParameters,
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        type,
+        expect.objectContaining({ apiKeyId: 'apikey-123' })
+      );
+    });
+  });
+
   describe('completion_api_usage transactions', () => {
     it('should forward source field through to createTransaction (CLI/API attribution)', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
@@ -186,6 +276,39 @@ describe('creditService - subtractCredits', () => {
         inputTokens: 200,
         outputTokens: 100,
       });
+    });
+
+    it('records cache tokens, the client session and tool names, so the row explains its charge', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(
+        {
+          type: 'completion_api_usage',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 183,
+          model: 'claude-opus-5-5',
+          sessionId: 'desktop-session-1',
+          inputTokens: 3,
+          outputTokens: 900,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          source: 'desktop',
+          metadata: { toolNames: ['read_file', 'bash'] },
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'completion_api_usage',
+        expect.objectContaining({
+          sessionId: 'desktop-session-1',
+          inputTokens: 3,
+          cacheReadTokens: 180_000,
+          cacheWriteTokens: 12_000,
+          metadata: { toolNames: ['read_file', 'bash'] },
+        })
+      );
     });
 
     it('should reject an unknown source value at the Zod enum boundary', async () => {
@@ -532,6 +655,45 @@ describe('creditService - subtractCredits', () => {
     });
   });
 
+  describe('subtractCreditsWithLedgerRow', () => {
+    const parameters: SubtractCreditsParameters = {
+      type: 'generic_deduct',
+      ownerId: 'user1',
+      ownerType: CreditHolderType.User,
+      credits: 10,
+      description: 'Admin deduction',
+    };
+
+    it('returns the holder and the id of the ledger row it wrote', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-sub' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await subtractCreditsWithLedgerRow(parameters, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-sub' });
+    });
+
+    it('returns the row id on the skipBalanceUpdate path', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-skip' } as never);
+
+      const result = await subtractCreditsWithLedgerRow(parameters, {
+        ...mockAdapters,
+        skipBalanceUpdate: true,
+        currentCreditHolder: mockUser,
+      });
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-skip' });
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+    });
+
+    it('subtractCredits still returns just the holder', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-sub' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await expect(subtractCredits(parameters, mockAdapters)).resolves.toBe(mockUser);
+    });
+  });
+
   describe('error handling', () => {
     it('should throw BadRequestError when credit update fails', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(null);
@@ -692,6 +854,60 @@ describe('creditService - subtractCredits', () => {
         'music_generation_usage',
         expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: -200 })
       );
+    });
+  });
+
+  describe('org debit alerts', () => {
+    const observer = vi.fn();
+    const deduct = (ownerType: CreditHolderType, ownerId: string): SubtractCreditsParameters => ({
+      type: 'generic_deduct',
+      ownerId,
+      ownerType,
+      credits: 50,
+      reason: 'refund_adjustment',
+    });
+
+    beforeEach(() => setOrgEventObserver(observer));
+    afterEach(() => setOrgEventObserver(null));
+
+    it('reports the post-debit pool balance for an org owner', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockOrganization);
+
+      await subtractCredits(deduct(CreditHolderType.Organization, 'org1'), mockAdapters);
+
+      expect(observer).toHaveBeenCalledWith({ type: 'credit_debit', organizationId: 'org1', balanceAfter: 450 });
+    });
+
+    it('reports the reconciled holder when the balance was already moved', async () => {
+      await subtractCredits(deduct(CreditHolderType.Organization, 'org1'), {
+        ...mockAdapters,
+        skipBalanceUpdate: true,
+        currentCreditHolder: { id: 'org1', currentCredits: 120 } as ICreditHolder,
+      });
+
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
+      expect(observer).toHaveBeenCalledWith({ type: 'credit_debit', organizationId: 'org1', balanceAfter: 120 });
+    });
+
+    it('does not report a user debit', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await subtractCredits(deduct(CreditHolderType.User, 'user1'), mockAdapters);
+
+      expect(observer).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])('still completes the debit when the observer throws (skipBalanceUpdate=%s)', async skip => {
+      observer.mockRejectedValue(new Error('alert down'));
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockOrganization);
+
+      const result = await subtractCreditsWithLedgerRow(deduct(CreditHolderType.Organization, 'org1'), {
+        ...mockAdapters,
+        ...(skip ? { skipBalanceUpdate: true, currentCreditHolder: mockOrganization } : {}),
+      });
+
+      expect(result.creditHolder).toEqual(mockOrganization);
+      expect(observer).toHaveBeenCalledOnce();
     });
   });
 });

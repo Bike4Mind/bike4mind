@@ -1,8 +1,9 @@
 import { Logger } from '@bike4mind/observability';
+import { ProviderRateLimitError } from '../providerRateLimitError';
 import { describe, expect, it, vi } from 'vitest';
 import { ElevenLabsSoundGenerator, SOUND_GENERATION_TIMEOUT_MS } from './ElevenLabsSoundGenerator';
 
-const logger = { error: vi.fn() } as unknown as Logger;
+const logger = { error: vi.fn(), warn: vi.fn() } as unknown as Logger;
 
 // The hosted serving function's own cap (infra/web.ts). The provider deadline
 // must stay strictly under it - that ordering IS the credit-loss guarantee.
@@ -41,7 +42,12 @@ describe('ElevenLabsSoundGenerator', () => {
     expect(url).toContain('output_format=mp3_44100_128');
     expect(init.method).toBe('POST');
     expect(init.headers['xi-api-key']).toBe('secret');
-    expect(JSON.parse(init.body)).toEqual({ text: 'dog barking', duration_seconds: 3, prompt_influence: 0.5 });
+    expect(JSON.parse(init.body)).toEqual({
+      model_id: 'eleven_text_to_sound_v2',
+      text: 'dog barking',
+      duration_seconds: 3,
+      prompt_influence: 0.5,
+    });
 
     expect(result.contentType).toBe('audio/mpeg');
     expect(result.audio.toString()).toBe('audio-bytes');
@@ -54,7 +60,7 @@ describe('ElevenLabsSoundGenerator', () => {
     await generator.generate('rain');
 
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(JSON.parse(init.body)).toEqual({ text: 'rain' });
+    expect(JSON.parse(init.body)).toEqual({ model_id: 'eleven_text_to_sound_v2', text: 'rain' });
   });
 
   it('maps the requested output format to the right content type', async () => {
@@ -81,6 +87,22 @@ describe('ElevenLabsSoundGenerator', () => {
     const generator = new ElevenLabsSoundGenerator({ apiKey: 'secret', logger, fetchImpl });
 
     await expect(generator.generate('boom')).rejects.toThrow(/failed: 401 quota exceeded/);
+  });
+
+  it('throws a ProviderRateLimitError carrying the Retry-After hint on a 429', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'retry-after': '3' }),
+      text: async () => 'concurrent_limit_exceeded',
+    })) as unknown as typeof fetch;
+    const generator = new ElevenLabsSoundGenerator({ apiKey: 'secret', logger, fetchImpl });
+
+    const error = await generator.generate('boom').catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(ProviderRateLimitError);
+    expect(error).toMatchObject({ provider: 'elevenlabs', retryAfterMs: 3000 });
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('aborts a stalled provider round-trip so the route can refund the reservation', async () => {

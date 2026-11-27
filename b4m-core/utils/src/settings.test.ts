@@ -7,7 +7,13 @@ import {
   shutdownSettingsCache,
   loadTeamPlanSettings,
 } from './settings';
-import { KNOWLEDGE_BASE_RETRIEVAL_PROMPT, WEB_SEARCH_FRESHNESS_PROMPT } from '@bike4mind/common';
+import {
+  KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+  WEB_SEARCH_FRESHNESS_PROMPT,
+  settingsMap,
+  supportedChatModels,
+  DECISION_MODEL_IDS,
+} from '@bike4mind/common';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
@@ -25,6 +31,48 @@ describe('getSettingsValue - legacy numeric boolean rows', () => {
       expect(getSettingsValue('EnableMCPServer', settings)).toBe(false);
       expect(getSettingsValue('enforceCredits', settings)).toBe(true);
     }
+  });
+});
+
+describe('getSettingsValue - enforceCredits hosted lock', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe('hosted', () => {
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', undefined);
+    });
+
+    it('resolves true over a stored false', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'false' })).toBe(true);
+    });
+
+    it('resolves true over a stored false even when the caller passes a false default', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'false' }, false)).toBe(true);
+    });
+
+    it('resolves true when no row is stored', () => {
+      expect(getSettingsValue('enforceCredits', {})).toBe(true);
+    });
+  });
+
+  describe('self-host', () => {
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+    });
+
+    it('honours a stored false', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'false' })).toBe(false);
+    });
+
+    it('honours a stored true', () => {
+      expect(getSettingsValue('enforceCredits', { enforceCredits: 'true' })).toBe(true);
+    });
+
+    it('falls back to the setting default when no row is stored', () => {
+      expect(getSettingsValue('enforceCredits', {})).toBe(settingsMap.enforceCredits.defaultValue);
+    });
   });
 });
 
@@ -105,13 +153,13 @@ const repoReturning = (settingValue: unknown) => ({
 describe('getSettingByName - stored boolean false survives the round-trip', () => {
   it('skipCache path returns false, not null', async () => {
     const db = { adminSettings: repoReturning(false) };
-    const v: unknown = await getSettingByName('EnableQuestMaster', db, { skipCache: true });
+    const v: unknown = await getSettingByName('EnableMementos', db, { skipCache: true });
     expect(v).toBe(false);
   });
 
   it('skipCache path returns null when the setting is absent', async () => {
     const db = { adminSettings: repoReturning(undefined) };
-    const v: unknown = await getSettingByName('EnableQuestMaster', db, { skipCache: true });
+    const v: unknown = await getSettingByName('EnableMementos', db, { skipCache: true });
     expect(v).toBeNull();
   });
 
@@ -232,6 +280,32 @@ describe('loadTeamPlanSettings', () => {
       minSeats: 25,
       maxSeats: 25,
       creditsPerSeat: 80000,
+    });
+  });
+});
+
+describe('getSettingsValue - stored admin AI engine compatibility', () => {
+  it('keeps master/budget/other-feature controls from a legacy feedback config', () => {
+    const decisionModels = new Set<string>(DECISION_MODEL_IDS);
+    const legacyModel = supportedChatModels.options.find(model => !decisionModels.has(model));
+    if (!legacyModel) throw new Error('Expected a legacy chat-only model fixture');
+    const config = getSettingsValue('adminAiConfig', {
+      adminAiConfig: JSON.stringify({
+        enabled: true,
+        monthlyCapUsd: 20,
+        features: {
+          feedbackTriage: { mode: 'shadow', model: legacyModel, dailyBudgetUsd: 3 },
+          dlqTriage: { mode: 'shadow', model: legacyModel },
+        },
+      }),
+    });
+    expect(config).toMatchObject({
+      enabled: true,
+      monthlyCapUsd: 20,
+      features: {
+        feedbackTriage: { mode: 'shadow', model: null, dailyBudgetUsd: 3 },
+        dlqTriage: { mode: 'shadow', model: legacyModel },
+      },
     });
   });
 });

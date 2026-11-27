@@ -5,7 +5,7 @@
  * premium overlay) so the fork build stays green. Runs as part of postinstall.
  */
 
-import fs from 'fs-extra';
+import { access, cp, mkdir } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -15,14 +15,17 @@ async function copyTavernAssets() {
   const src = path.resolve(__dirname, '../../../packages/premium/tavern/public/assets/tavern');
   const dst = path.resolve(__dirname, '../public/assets/tavern');
 
-  const srcExists = await fs.pathExists(src);
+  const srcExists = await access(src).then(
+    () => true,
+    () => false
+  );
   if (!srcExists) {
     // No-op: premium overlay not present (open-core fork or pre-bootstrap).
     return;
   }
 
-  await fs.ensureDir(dst);
-  await fs.copy(src, dst, { overwrite: true });
+  await mkdir(dst, { recursive: true });
+  await cp(src, dst, { recursive: true, force: true, verbatimSymlinks: true });
   console.log('[tavern-assets] copied', src, '→', dst);
 }
 

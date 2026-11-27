@@ -9,6 +9,7 @@ import {
 import { createMusicProviderRegistry, TestMusicProvider, type MusicProvider } from '@bike4mind/utils/musicProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
+import { createFakeRunBudget } from '../generationJobs/__test__/fakeRunBudget';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
@@ -35,7 +36,9 @@ const fakeHold = (params: { userId: string; requiredCredits: number }): CreditHo
 const validRequest = { model: 'test-music', prompt: 'a folk song', durationSeconds: 5 };
 
 // creditHold is module-mocked, so the adapters are never touched.
-const unusedCredits = {} as CreditHoldAdapters;
+const unusedCredits = {
+  spendFreezes: { findActiveForSubject: vi.fn(async () => null) },
+} as unknown as CreditHoldAdapters;
 
 // Registered as ElevenLabs so a priced, per-second model can be held against.
 const elevenLabsStub: MusicProvider = {
@@ -57,6 +60,7 @@ const lyriaStub: MusicProvider = {
 const makeDeps = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider(), elevenLabsStub, lyriaStub]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
@@ -90,6 +94,25 @@ describe('createMusicJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('refuses a paid-only model before holding credits or enqueuing work', async () => {
+    const { deps } = makeDeps();
+    const refusal = new Error('paid plan required');
+    vi.mocked(deps.assertModelAdmission).mockRejectedValue(refusal);
+    await expect(
+      createMusicJob(
+        {
+          user: { ...user, adminRoleWithheld: true },
+          request: { model: 'test-music', prompt: 'a song' },
+          source: 'api',
+        },
+        deps
+      )
+    ).rejects.toBe(refusal);
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith(user.id, 'test-music', true, null);
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
   });
 
   it('holds credits, creates a pending music job with its defaults resolved and enqueues it', async () => {
@@ -229,6 +252,7 @@ describe('createMusicJob', () => {
       { user: { id: 'u1', organizationId: 'org1' }, request: validRequest, source: 'api' },
       deps
     );
+    expect(deps.assertModelAdmission).toHaveBeenCalledWith('u1', expect.any(String), undefined, 'org1');
     expect(result).toMatchObject({ ok: true, job: { ownerType: CreditHolderType.Organization, ownerId: 'org1' } });
   });
 
@@ -286,5 +310,64 @@ describe('createMusicJob', () => {
     vi.mocked(releaseCreditHold).mockRejectedValueOnce(new Error('refund failed'));
     await expect(createMusicJob({ user, request: validRequest, source: 'api' }, deps)).rejects.toThrow('write failed');
     expect(error).toHaveBeenCalledWith('music_job_create_cleanup_failed', expect.objectContaining({ ownerId: 'u1' }));
+  });
+});
+
+describe('createMusicJob with a completion run', () => {
+  const run = { runId: 'run-1', role: 'root' as const, purpose: 'tool' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(holdCredits).mockImplementation(async params => fakeHold(params));
+  });
+
+  it('claims the whole hold against the run and persists the claim and the run on the job', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createMusicJob({ user, request: validRequest, source: 'api', run }, deps);
+    if (!result.ok) throw new Error('expected the job to be created');
+    const reserved = result.job.creditHold?.reservedCredits;
+    expect(result.job).toMatchObject({ run, runClaim: { runId: 'run-1', credits: reserved } });
+    expect(budget.state.committedCredits).toBe(reserved);
+  });
+
+  it('refuses with run_budget_exhausted and leaves no hold and no job when the song does not fit', async () => {
+    const budget = createFakeRunBudget({ budgetCredits: 0 });
+    const { deps, repository } = makeDeps({ runBudget: budget.adapters });
+    await expect(createMusicJob({ user, request: validRequest, source: 'api', run }, deps)).rejects.toMatchObject({
+      additionalInfo: { errorCode: 'run_budget_exhausted' },
+    });
+    expect(holdCredits).not.toHaveBeenCalled();
+    expect(repository.jobs.size).toBe(0);
+  });
+
+  it('returns the claim with the hold when the job cannot be queued', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({
+      runBudget: budget.adapters,
+      enqueue: vi.fn(async () => Promise.reject(new Error('sqs'))),
+    });
+    await expect(createMusicJob({ user, request: validRequest, source: 'api', run }, deps)).rejects.toThrow('sqs');
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(budget.state.committedCredits).toBe(0);
+  });
+
+  it('does not claim again for an idempotent replay', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const input = { user, request: validRequest, source: 'api' as const, idempotencyKey: 'k1', run };
+    const first = await createMusicJob(input, deps);
+    const second = await createMusicJob(input, deps);
+    if (!first.ok) throw new Error('expected the job to be created');
+    expect(second).toMatchObject({ ok: true, created: false, job: { id: first.job.id } });
+    expect(budget.adapters.claim).toHaveBeenCalledTimes(1);
+  });
+
+  it('touches no run budget without a run', async () => {
+    const budget = createFakeRunBudget();
+    const { deps } = makeDeps({ runBudget: budget.adapters });
+    const result = await createMusicJob({ user, request: validRequest, source: 'api' }, deps);
+    expect(result.ok && result.job).not.toHaveProperty('runClaim');
+    expect(budget.adapters.transact).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import { IUserDocument } from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { IResearchDataRepository, IResearchTaskRepository, IResearchTaskWithData } from '@bike4mind/common';
 import { z } from 'zod';
+import { generateSignedUrl, type GetFabFileAdapter } from '../fabFileService/get';
 
 const getResearchTaskSchema = z.object({
   id: z.string().min(1),
@@ -14,6 +15,7 @@ interface GetResearchTaskAdapters {
     researchTasks: IResearchTaskRepository;
     researchData: IResearchDataRepository;
   };
+  storage: GetFabFileAdapter['storage'];
 }
 
 export const get = async (
@@ -29,10 +31,22 @@ export const get = async (
     throw new Error('Research task not found');
   }
 
-  const researchData = await adapters.db.researchData.findAllByResearchTaskIdWithFiles(researchTask.id);
+  const researchData = await adapters.db.researchData.findAllByResearchTaskIdWithFiles(
+    researchTask.id,
+    researchTask.userId
+  );
+
+  const signedResearchData = await Promise.all(
+    researchData
+      .filter(data => String(data.fabFile.userId) === researchTask.userId)
+      .map(async data => ({
+        ...data,
+        fabFile: await generateSignedUrl(data.fabFile, { storage: adapters.storage } as GetFabFileAdapter),
+      }))
+  );
 
   return {
     ...researchTask,
-    researchData,
+    researchData: signedResearchData,
   };
 };

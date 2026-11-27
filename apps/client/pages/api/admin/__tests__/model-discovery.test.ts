@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
@@ -7,8 +8,15 @@ import { createMocks } from 'node-mocks-http';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (typeof middlewares)[number]) => {
+      middlewares.push(fn);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -52,12 +60,15 @@ vi.mock('@aws-sdk/client-lambda', () => ({
   }),
 }));
 vi.mock('sst', () => ({ Resource: resource }));
-vi.mock('@server/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
+vi.mock('@bike4mind/server-utils/modelDiscovery/scheduledRun', () => ({ runScheduledDiscovery }));
 // The real module pulls the whole discovery source registry in; only its gate matters here.
-vi.mock('@server/modelDiscovery/startupLeg', () => ({
+vi.mock('@bike4mind/server-utils/modelDiscovery/startupLeg', () => ({
   DISCOVERY_DRIVER_ENV: 'B4M_DISCOVERY_DRIVER',
   isDiscoveryDriver: () => process.env.B4M_DISCOVERY_DRIVER === 'true',
 }));
+
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 
 import handler from '../model-discovery';
 
@@ -124,13 +135,15 @@ const DETAILED_RUN = {
 function call(options: {
   method: 'GET' | 'POST';
   isAdmin?: boolean;
+  adminPermissions?: string[];
   // string[] covers a repeated query parameter, which is a request the route rejects.
   query?: Record<string, string | string[]>;
 }) {
   const { req, res } = createMocks({ method: options.method, query: options.query });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { run: () => handler(req as never, res as never), res };
 }
@@ -159,12 +172,18 @@ describe('/api/admin/model-discovery', () => {
 
   it.each(['GET', 'POST'] as const)('rejects a non-admin %s', async method => {
     const { run } = call({ method, isAdmin: false });
-    await expect(run()).rejects.toThrow('Admin access required');
+    await expect(run()).rejects.toThrow(/missing permission/i);
+  });
+
+  it('refuses Run now to a delegate holding settings:manage', async () => {
+    const { run } = call({ method: 'POST', isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] });
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
+    expect(getSettingsValue).not.toHaveBeenCalled();
   });
 
   it('rejects a non-admin asking for one run by id', async () => {
     const { run } = call({ method: 'GET', isAdmin: false, query: { runId: 'run-1' } });
-    await expect(run()).rejects.toThrow('Admin access required');
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(runById).not.toHaveBeenCalled();
   });
 
@@ -276,6 +295,8 @@ describe('/api/admin/model-discovery', () => {
             detail: 'openai publishes in 2/out 12 $/MTok and litellm in 8/out 24 $/MTok disagree beyond 10%',
           },
         ],
+        // Absent on the document too: a run from before the field still reads as an array.
+        longContextGaps: [],
         priceSkips: [{ modelId: 'm1', reason: 'unchanged' }],
         lifecycleTransitions: [
           { modelId: 'm4', from: 'active', to: 'deprecated', signal: 'absence', autoApplied: false },
@@ -448,5 +469,36 @@ describe('/api/admin/model-discovery', () => {
     expect(res._getStatusCode()).toBe(503);
     expect(res._getJSONData().message).toMatch(/not linked/);
     expect(lambdaSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/model-discovery admin audit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resource.lambdaFunctionNames = { modelDiscovery: 'dev-model-discovery-fn' };
+    delete process.env.B4M_SELF_HOST;
+    process.env.B4M_DISCOVERY_DRIVER = 'true';
+    getSettingsValue.mockImplementation(async () => 'manual');
+  });
+
+  it('records a triggered run after dispatch', async () => {
+    const { run } = call({ method: 'POST' });
+    await run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_discovery.triggered',
+      target: { kind: 'system', id: 'model-discovery' },
+      details: { dispatched: 'lambda' },
+    });
+    expect(lambdaSend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('does not audit a run that was refused', async () => {
+    getSettingsValue.mockImplementation(async (key: string) => (key === 'enableModelDiscovery' ? false : 'report'));
+    const { run } = call({ method: 'POST' });
+    await run();
+
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

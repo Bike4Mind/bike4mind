@@ -1,11 +1,11 @@
 import { SendMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import { RELEASE_NOTES_SCHEMA_VERSION, type ReleaseNotesJobPayload, type ReleaseNotesJobPr } from '@bike4mind/common';
-import { extractPRNumber } from '../generateChangelog';
+import { extractPRNumber, parseConventionalCommit } from '../generateChangelog';
 import { resolveCommitSha, type GitHubCommit, type GitHubRelease, type PRSummary } from '../utils/githubApi';
 
 export const PRODUCTION_TAG = /^v\d+\.\d+\.\d+\.\d+$/;
 export const EXCERPT_CHARS = 500;
-// Matches the editorial summary cap; author notes skip triage, so they are bounded here.
+// Bound author notes before they enter the audience triage prompt.
 export const CUSTOMER_NOTE_CHARS = 600;
 // SQS caps a message at 256 KiB; leave headroom for attributes and encoding.
 export const MAX_PAYLOAD_BYTES = 240_000;
@@ -18,6 +18,13 @@ const SIZE_TIERS = [
 ];
 
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+// The `admin` scope is mostly the operator admin panel (apps/client/app/components/admin), which customers never see.
+// An author's customer note keeps mixed customer UI changes eligible for worker audience triage.
+const OPERATOR_ONLY_SCOPES = new Set(['admin']);
+// The native iOS/Android apps are not distributed yet, so their PRs must not be announced. Remove this set when
+// they ship publicly. This step runs in CI with no DB access, so it is hardcoded rather than read from
+// `releaseNotesConfig`. A customer note keeps a PR eligible, as with the admin scope.
+const UNRELEASED_PLATFORM_SCOPES = new Set(['ios', 'android', 'mobile']);
 const CUSTOMER_NOTE_HEADING = /^##\s+customer note\s*$/im;
 const PLACEHOLDER_NOTE = /^(n\/?a|none|-+)$/i;
 
@@ -32,6 +39,24 @@ export function parseCustomerNote(body: string): string | undefined {
   const nextHeading = rest.search(/^#{1,2}\s/m);
   const note = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).replace(HTML_COMMENT, '').trim();
   return note && !PLACEHOLDER_NOTE.test(note) ? note.slice(0, CUSTOMER_NOTE_CHARS) : undefined;
+}
+
+/** True when the title has scopes and every one is in `scopes`; a title that also names another scope is kept. */
+function hasOnlyScopes(title: string, scopes: ReadonlySet<string>): boolean {
+  const titleScopes = parseConventionalCommit(title.trim())
+    .scope?.split(',')
+    .map(scope => scope.trim().toLowerCase());
+  return !!titleScopes?.length && titleScopes.every(scope => scopes.has(scope));
+}
+
+/** True when every scope is operator-only, e.g. `feat(admin): ...`; `feat(admin,chat): ...` may reach customers. */
+export function isOperatorOnlyTitle(title: string): boolean {
+  return hasOnlyScopes(title, OPERATOR_ONLY_SCOPES);
+}
+
+/** True when every scope is an unreleased native platform, e.g. `feat(ios): ...`; `feat(ios,client): ...` is kept. */
+export function isUnreleasedPlatformTitle(title: string): boolean {
+  return hasOnlyScopes(title, UNRELEASED_PLATFORM_SCOPES);
 }
 
 /** PR description with template comments stripped and whitespace collapsed, cut to `maxChars`. */
@@ -85,10 +110,16 @@ export async function buildReleaseNotesPayload(
   numbers.sort((a, b) => a - b);
 
   const prs: ReleaseNotesJobPr[] = [];
+  const excluded: number[] = [];
   for (const number of numbers) {
     const pr = await deps.getPRSummary(number);
     if (!pr) continue;
     const customerNote = parseCustomerNote(pr.body);
+    // Dropped before the LLM, which would otherwise reword an operator tool as "Organizations can now ...".
+    if ((isOperatorOnlyTitle(pr.title) || isUnreleasedPlatformTitle(pr.title)) && !customerNote) {
+      excluded.push(number);
+      continue;
+    }
     prs.push({
       number,
       title: pr.title,
@@ -97,6 +128,9 @@ export async function buildReleaseNotesPayload(
       excerpt: excerptDescription(pr.body),
     });
   }
+
+  if (excluded.length)
+    console.log(`Excluded operator-only or unreleased-platform PR(s): ${excluded.map(n => `#${n}`).join(', ')}`);
 
   // Releases created in the GitHub UI carry the target branch name, not a sha.
   const deployedSha = /^[0-9a-f]{40}$/i.test(release.target_commitish)

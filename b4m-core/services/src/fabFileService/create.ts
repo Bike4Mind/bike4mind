@@ -22,12 +22,13 @@ import {
   resolveSupportedMimeType,
   secureParameters,
 } from '@bike4mind/utils';
-import { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@bike4mind/common';
+import { GENERATED_AUDIO_OFFLOAD_PREFIX, type GeneratedAssetLineageEntry } from '@bike4mind/common';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { pickOwnerOrganizationId } from './resolveOwnerOrganization';
+import { signedUrlExpiresAt } from './get';
+import { storageReadOverrides, type StorageReadOverrides } from '@bike4mind/utils/contentDisposition';
 
 // The fab-file bucket reaps everything under these prefixes after 1 day (infra/buckets.ts,
 // expire-notebook-exports and expire-generated-audio-offload), so no durable FabFile may be stored there. Pinned to the rule by
@@ -68,6 +69,8 @@ export const createFabFileSchema = z.object({
 type CreateFabFileParameters = z.infer<typeof createFabFileSchema>;
 
 export interface CreateFabFileAdapters {
+  /** Server-validated ownership for generated assets, never parsed from upload parameters. */
+  ownerOrganizationId?: string;
   objectKey?: string;
   db: {
     fabFiles: {
@@ -96,12 +99,12 @@ export interface CreateFabFileAdapters {
     scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   storage: {
-    /** `ContentLength` binds a PUT to that byte length (see S3Storage.getSignedUrl). */
+    /** `ContentLength` binds a PUT to that byte length; the Response* overrides apply to a GET (see S3Storage.getSignedUrl). */
     generateSignedUrl: (
       path: string,
       expireInSeconds: number,
       type?: 'get' | 'put',
-      options?: { ContentLength?: number }
+      options?: { ContentLength?: number } & StorageReadOverrides
     ) => Promise<string>;
     upload: (
       path: string,
@@ -121,6 +124,8 @@ export interface CreateFabFileAdapters {
   provenance?: {
     sourceType: FabFileSourceType;
     sourceMetadata?: Record<string, unknown>;
+    /** Lineage of a generated file; see IFabFile.derivedFrom. Server-built only, for the same reason as the rest. */
+    derivedFrom?: GeneratedAssetLineageEntry[];
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -141,6 +146,25 @@ export interface CreateFabFileAdapters {
    * for the claim (it read it off the stored object, not off the request) may let it outrank the name.
    */
   mimeTypePrecedence?: 'extension-first' | 'claim-first';
+  /**
+   * In-flight client-upload bytes already billed to the owning pool (keyed by the owner org, undefined
+   * for a personal file), counted as used by the quota check. Pass it only on a door that leaves a
+   * pending client upload, i.e. a create without `content`.
+   */
+  pendingUploadBytes?: (organizationId: string | undefined) => number;
+  /**
+   * The caller writes the bytes itself right after a create without `content` (createByUrl, session
+   * summaries), so no presigned PUT is minted and the row is not a client upload (IFabFile.clientUpload).
+   */
+  serverUpload?: boolean;
+  /**
+   * Skips the owner's storage quota gate and stamps the row `storageExempt`, so the S3 upload event
+   * never charges it either (claimStorageCharge). An adapter rather than a `createFabFileSchema`
+   * field for the same reason as `provenance`: that schema is parsed from a caller-controlled HTTP
+   * body. The `MaxFileSize` cap still applies. Its one intended caller is the legacy QuestMaster
+   * conversion, which writes files the user never asked for.
+   */
+  storageExempt?: boolean;
 }
 
 /**
@@ -154,7 +178,7 @@ export interface CreateFabFileAdapters {
  * same setting.
  */
 export const MAX_FILE_SIZE_DEFAULT_MB = settingsMap.MaxFileSize.defaultValue ?? 30;
-const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
+const DEFAULT_EXPIRE_IN_SECONDS = 3600;
 
 /**
  * Every caller of `createFabFile` is gated against lake membership here, whether or not it also
@@ -175,7 +199,19 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 export const prepareFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
+  {
+    db,
+    storage,
+    provenance,
+    administeredOrgIds,
+    logger,
+    mimeTypePrecedence,
+    objectKey,
+    pendingUploadBytes,
+    serverUpload,
+    storageExempt,
+    ownerOrganizationId: explicitOwnerOrganizationId,
+  }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -190,7 +226,7 @@ export const prepareFabFile = async (
   const tagNames = (params.tags ?? []).map(t => t.name);
   // The file is created under `userId`, so it is its own owner-to-be for the admission contract.
   const targetLakes = await assertCanWriteDataLakeTags(actor, tagNames, { db, members: [{ userId }] });
-  const ownerOrganizationId = pickOwnerOrganizationId(targetLakes);
+  const ownerOrganizationId = explicitOwnerOrganizationId ?? pickOwnerOrganizationId(targetLakes);
   assertCanWriteStaticRegistryTags(actor, tagNames);
 
   // A file joining a lake here must also land under that lake's content prefix, or it
@@ -212,7 +248,7 @@ export const prepareFabFile = async (
   }
 
   let filePath = params.prefix ? `${params.prefix}/` : '';
-  filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
+  filePath += `${crypto.randomUUID()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
 
   if (objectKey) filePath = objectKey;
 
@@ -228,18 +264,24 @@ export const prepareFabFile = async (
     });
   }
 
-  await checkStorageLimitForOwner({ user, organizationId: ownerOrganizationId }, params.fileSize, id =>
-    db.organizations.findById(id)
-  );
+  if (!storageExempt) {
+    await checkStorageLimitForOwner(
+      { user, organizationId: ownerOrganizationId, pendingBytes: pendingUploadBytes?.(ownerOrganizationId) },
+      params.fileSize,
+      id => db.organizations.findById(id)
+    );
+  }
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
     ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
     ...(tags !== undefined && { tags }),
+    ...(storageExempt && { storageExempt: true }),
     ...(provenance && {
       sourceType: provenance.sourceType,
       ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),
+      ...(provenance.derivedFrom?.length && { derivedFrom: provenance.derivedFrom }),
     }),
     mimeType,
     filePath,
@@ -264,10 +306,15 @@ export const prepareFabFile = async (
     // moderationStatus to 'clean'/'blocked', and a url is only ever minted on read once clean
     // (see fabFileService/get.ts generateSignedUrl). Non-image content is unaffected.
     if (!mimeType.startsWith('image/')) {
-      buildData.fileUrl = await storage.generateSignedUrl(filePath, DEFAULT_EXPIRE_IN_SECONDS, 'get');
-      buildData.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
+      buildData.fileUrl = await storage.generateSignedUrl(
+        filePath,
+        DEFAULT_EXPIRE_IN_SECONDS,
+        'get',
+        storageReadOverrides({ mimeType, fileName: params.fileName, key: filePath })
+      );
+      buildData.fileUrlExpireAt = signedUrlExpiresAt(buildData.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
     }
-  } else {
+  } else if (!serverUpload) {
     // Bound to the declared size, the one the size and storage checks above ran on.
     buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put', { ContentLength: params.fileSize });
     buildData.clientUpload = true;
@@ -276,8 +323,27 @@ export const prepareFabFile = async (
   return buildData;
 };
 
+/** Splits the response-only signed URLs off a prepared FabFile so the persisted row never carries them. */
+export const stripSignedUrls = (prepared: Omit<IFabFileDocument, 'id'>) => {
+  const { fileUrl, fileUrlExpireAt, presignedUrl, ...persistable } = prepared;
+  const signed: Pick<IFabFileDocument, 'fileUrl' | 'fileUrlExpireAt' | 'presignedUrl'> = {
+    ...(fileUrl !== undefined && { fileUrl }),
+    ...(fileUrlExpireAt !== undefined && { fileUrlExpireAt }),
+    ...(presignedUrl !== undefined && { presignedUrl }),
+  };
+  return { persistable, signed };
+};
+
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
   adapters: CreateFabFileAdapters
-) => adapters.db.fabFiles.create(await prepareFabFile(userId, parameters, adapters));
+) => {
+  const { persistable, signed } = stripSignedUrls(await prepareFabFile(userId, parameters, adapters));
+  const created = await adapters.db.fabFiles.create(persistable);
+  const plain =
+    typeof (created as { toJSON?: unknown }).toJSON === 'function'
+      ? (created as unknown as { toJSON: () => IFabFileDocument }).toJSON()
+      : created;
+  return { ...plain, ...signed };
+};

@@ -1,29 +1,36 @@
-import { userRepository } from '@bike4mind/database';
+import { grantPackageRepository, userRepository, withTransaction } from '@bike4mind/database';
 import {
   ApiKeyScope,
+  MAX_STORAGE_LIMIT_MB,
   AuthEvents,
+  GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE,
+  grantPackageRefusalMessage,
   redactUserSecretsForSelf,
   sanitizeUsername,
   selfUserResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { userService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
+import { referService, userService } from '@bike4mind/services';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { EmailEvents } from '@server/utils/eventBus';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordAccountLane } from '@server/analytics/funnel';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { assertCanSeedAccount } from '@server/admin/assertCanSeedAccount';
+
+const AUDITED_USER_ID_LIMIT = 100;
 
 const userImportSchema = z.object({
   email: z.email('Invalid email format'),
   first: z.string().optional(),
   last: z.string().optional(),
   startingCredits: z.number().int().min(0, 'Credits must be a positive number').optional(),
-  startingStorage: z.number().int().min(0, 'Storage must be a positive number').optional(),
+  startingStorage: z.number().int().min(0, 'Storage must be a positive number').max(MAX_STORAGE_LIMIT_MB).optional(),
   tags: z.array(z.string()).optional(),
 });
 
@@ -47,18 +54,44 @@ const bulkCreateResponseSchema = z.object({
   ),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
-  asyncHandler<{}, unknown, { users: UserImportRow[] }>(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
-    const { users } = req.body;
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'settings:manage' } }).post(
+  asyncHandler<{}, unknown, { users: UserImportRow[]; grantPackageId?: string }>(async (req, res) => {
+    const { users, grantPackageId } = req.body;
 
     if (!Array.isArray(users) || users.length === 0) {
       throw new BadRequestError('Invalid input: users array is required and must not be empty');
     }
+    if (grantPackageId !== undefined && (typeof grantPackageId !== 'string' || grantPackageId.length === 0)) {
+      throw new BadRequestError('Invalid grant package id');
+    }
+    const grantPackage = grantPackageId
+      ? await referService.requireActiveGrantPackage(grantPackageId, grantPackageRepository)
+      : null;
 
+    // Checked over the whole request before any row is created, so a refused grant creates nobody.
+    // Rows are unvalidated here; non-numeric credits and non-string tags fail per-row validation later.
+    const rowTags = users.flatMap(row => (Array.isArray(row?.tags) ? row.tags.filter(t => typeof t === 'string') : []));
+    assertCanSeedAccount(req, {
+      credits: grantPackage
+        ? grantPackage.credits
+        : users.reduce(
+            (max, row) => (typeof row?.startingCredits === 'number' ? Math.max(max, row.startingCredits) : max),
+            0
+          ),
+      tags: [...(grantPackage?.tags ?? []), ...rowTags],
+    });
+
+    // Package rows create one at a time: each reserves against the same package caps, and parallel
+    // transactions on one package document would contend on write conflicts and retry.
+    let packageQueue: Promise<unknown> = Promise.resolve();
+    const inPackageQueue = <T>(fn: () => Promise<T>): Promise<T> => {
+      const run = packageQueue.then(fn);
+      packageQueue = run.catch(() => undefined);
+      return run;
+    };
+
+    const createdUserIds: string[] = [];
+    const startingCreditsById = new Map<string, number>();
     const results = await Promise.all(
       users.map(async userData => {
         try {
@@ -67,44 +100,74 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           // Derived from the address, so coerce it into the username rules rather than reject the row.
           const username = sanitizeUsername(validatedData.email.split('@')[0]) || `user-${randomUUID().slice(0, 8)}`;
 
-          const newUser = await userService.createUser(
-            {
-              username,
-              email: validatedData.email,
-              name: `${validatedData.first || ''} ${validatedData.last || ''}`.trim() || validatedData.email,
-              initialCredits: validatedData.startingCredits ?? 0,
-              record: {
-                // Passwordless: no usable password. Store null so `password`
-                // presence stays a truthful signal. Users sign in via OTC.
-                password: null,
-                hasUsablePassword: false,
+          const startingCredits = grantPackage ? grantPackage.credits : (validatedData.startingCredits ?? 0);
+          const createRowUser = () =>
+            userService.createUser(
+              {
+                username,
+                email: validatedData.email,
+                name: `${validatedData.first || ''} ${validatedData.last || ''}`.trim() || validatedData.email,
+                initialCredits: startingCredits,
+                record: {
+                  // Passwordless: no usable password. Store null so `password`
+                  // presence stays a truthful signal. Users sign in via OTC.
+                  password: null,
+                  hasUsablePassword: false,
+                  storageLimit: grantPackage?.storageMb ?? validatedData.startingStorage,
+                },
               },
-            },
-            {
-              db: {
-                users: userRepository,
-              },
-            }
-          );
+              {
+                db: {
+                  users: userRepository,
+                },
+              }
+            );
 
-          const isSynthetic = await recordSyntheticIdentity(newUser);
+          // A refused reservation rolls the account back, so a capped package fails only that row.
+          const newUser = grantPackage
+            ? await inPackageQueue(() =>
+                withTransaction(async () => {
+                  const created = await createRowUser();
+                  // One package grant per canonical inbox, as on the invite path (freeCredits.ts).
+                  if (
+                    grantPackage.credits > 0 &&
+                    !grantPackage.legacy &&
+                    !(await userRepository.claimFreeCreditGrant(created.id))
+                  ) {
+                    throw new BadRequestError(GRANT_PACKAGE_INBOX_CLAIMED_MESSAGE);
+                  }
+                  const reservation = await grantPackageRepository.reserveRedemption(grantPackage.id, created.id);
+                  if (reservation.outcome === 'refused') {
+                    throw new BadRequestError(grantPackageRefusalMessage(reservation.reason));
+                  }
+                  // Stamped only once the reservation held, in the same transaction as the account.
+                  await userRepository.update({ id: created.id, grantPackageId: grantPackage.id });
+                  created.grantPackageId = grantPackage.id;
+                  return created;
+                })
+              )
+            : await createRowUser();
+
+          createdUserIds.push(newUser.id);
+          startingCreditsById.set(newUser.id, startingCredits);
+
+          const lane = await recordAccountLane(newUser);
           await emitSignupFunnelEvents({
-            user: { id: newUser.id, isSynthetic },
+            user: { id: newUser.id, ...lane },
             method: 'admin',
             emailVerified: newUser.emailVerified === true,
-            creditsGranted: newUser.currentCredits ?? validatedData.startingCredits ?? 0,
+            creditsGranted: newUser.currentCredits ?? startingCredits,
           });
 
-          // Apply storage limit if provided (createUser hardcodes storageLimit: 1000, so we override after)
-          if (validatedData.startingStorage !== undefined) {
-            newUser.storageLimit = validatedData.startingStorage;
+          // Same merge as invite registration (userService/register.ts): package tags join the row's tags.
+          const mergedTags = [
+            ...new Set([...(newUser.tags ?? []), ...(grantPackage?.tags ?? []), ...(validatedData.tags ?? [])]),
+          ];
+          if (mergedTags.length > 0) {
+            newUser.tags = mergedTags;
           }
 
-          if (validatedData.tags && validatedData.tags.length > 0) {
-            newUser.tags = validatedData.tags;
-          }
-
-          await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
+          await userRepository.update({ id: newUser.id, tags: newUser.tags });
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();
@@ -177,6 +240,31 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
         }
       })
     );
+
+    // Rows commit independently, even when later processing fails. One best-effort entry covers
+    // every created account so a failed audit write cannot 500 a created batch.
+    if (createdUserIds.length > 0) {
+      const auditedIds = createdUserIds.slice(0, AUDITED_USER_ID_LIMIT);
+      const startingCreditsTotal = [...startingCreditsById.values()].reduce((sum, credits) => sum + credits, 0);
+      try {
+        await recordAdminActionFromRequest(req, {
+          action: 'user.bulk_created',
+          target: { kind: 'system', id: 'bulk-create-users', displayName: 'Bulk user import' },
+          summary: `bulk created ${createdUserIds.length} user(s)`,
+          details: {
+            count: createdUserIds.length,
+            failedCount: results.filter(r => !r.success).length,
+            createdUserIds: auditedIds,
+            grantPackageId: grantPackage?.id ?? null,
+            credits: startingCreditsTotal,
+            startingCreditsTotal,
+            startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),
+          },
+        });
+      } catch (error) {
+        req.logger.error('[ADMIN_AUDIT_WRITE_FAILED]', { action: 'user.bulk_created', error });
+      }
+    }
 
     // Validates after users are created and invites sent: a bad success row would 500 a batch that
     // succeeded and a retry would hit duplicates, so keep the row schema permissive.

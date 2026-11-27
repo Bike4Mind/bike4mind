@@ -1,0 +1,1444 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generateKeyPairSync } from 'node:crypto';
+import type { EventBridgeEvent } from 'aws-lambda';
+import {
+  BUSY_BLOCK_HELD_CATEGORIES,
+  PUSH_NOTIFICATION_CATEGORIES,
+  type InterruptionFeedback,
+  type LiveActivityPushEvent,
+  type PushNotificationCategory,
+  type PushNotificationEvent,
+  type PushNotificationPreferences,
+} from '@bike4mind/common';
+
+const h = vi.hoisted(() => ({
+  createTransport: vi.fn(),
+  withEventContextInner: vi.fn(),
+  findByUser: vi.fn(),
+  removeByToken: vi.fn(),
+  removeBySids: vi.fn(),
+  findLiveSids: vi.fn(),
+  findLiveActivityByQuest: vi.fn(),
+  removeLiveActivityByQuest: vi.fn(),
+  userFindById: vi.fn(),
+  orgFindById: vi.fn(),
+}));
+
+vi.mock('@workers/utils/eventContext', () => ({
+  withEventContext: (inner: unknown) => {
+    h.withEventContextInner.mockImplementation(inner as never);
+    return async (event: EventBridgeEvent<string, unknown>) =>
+      h.withEventContextInner(
+        { event: event['detail-type'], properties: event.detail },
+        {
+          info: vi.fn(),
+          warn: vi.fn(),
+          updateMetadata: vi.fn(),
+        }
+      );
+  },
+}));
+
+vi.mock('@bike4mind/server-utils/utils/eventBus', async () => {
+  const { PushNotificationEventSchema, LiveActivityPushEventSchema } = await import('@bike4mind/common');
+  return {
+    NotificationEvents: {
+      Push: { schema: PushNotificationEventSchema },
+      LiveActivity: { schema: LiveActivityPushEventSchema },
+    },
+  };
+});
+
+vi.mock('@bike4mind/database', () => ({
+  pushTokenRepository: {
+    findByUser: h.findByUser,
+    removeByToken: h.removeByToken,
+    removeBySids: h.removeBySids,
+    findLiveActivityByQuest: h.findLiveActivityByQuest,
+    removeLiveActivityByQuest: h.removeLiveActivityByQuest,
+  },
+  authSessionRepository: { findLiveSids: h.findLiveSids },
+  userRepository: { findById: h.userFindById },
+  organizationRepository: { findById: h.orgFindById },
+}));
+
+vi.mock('./sendPush.apns', async importOriginal => ({
+  ...(await importOriginal<typeof import('./sendPush.apns')>()),
+  createHttp2ApnsTransport: h.createTransport,
+}));
+
+import {
+  deliverLiveActivityPush,
+  deliverPush,
+  handler,
+  loadPushRecipient,
+  REDACTED_LIVE_ACTIVITY_STAGE_LABELS,
+  REDACTED_PUSH_COPY,
+  type PushRecipient,
+  type SendLiveActivityDeps,
+  type SendPushDeps,
+} from './sendPush';
+import type { ApnsRequest, ApnsResponse, ApnsTransport } from './sendPush.apns';
+import type { FcmRequest, FcmResponse } from './sendPush.fcm';
+
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+const EVENT: PushNotificationEvent = {
+  userId: '507f1f77bcf86cd799439011',
+  category: 'agent_completed',
+  title: 'Agent finished',
+  body: 'Your agent finished its task in "Q3 plan".',
+  deepLink: '/notebooks/session-1',
+  collapseId: 'agent-run:exec-1',
+  questId: 'quest-1',
+  sessionId: 'session-1',
+};
+
+type Token = {
+  id?: string;
+  token: string;
+  environment: 'sandbox' | 'production';
+  sid?: string;
+  platform?: 'ios' | 'android';
+};
+
+function makeDeps(
+  tokens: Token[],
+  overrides: Partial<SendPushDeps> & {
+    respond?: (request: ApnsRequest) => ApnsResponse;
+    endedSids?: readonly string[];
+  } = {}
+) {
+  const sent: ApnsRequest[] = [];
+  const removed: string[] = [];
+  const removedSids: string[] = [];
+  const endedSids = new Set(overrides.endedSids ?? []);
+  const stored = tokens.map(token => ({ sid: 'sid-live', platform: 'ios' as const, ...token }));
+  const deps: SendPushDeps & { transport: ApnsTransport } = {
+    tokens: {
+      findByUser: vi.fn(async () => stored),
+      removeByToken: vi.fn(async (token: string) => {
+        removed.push(token);
+        return true;
+      }),
+      removeBySids: vi.fn(async (sids: readonly string[]) => {
+        removedSids.push(...sids);
+        return stored.filter(token => sids.includes(token.sid)).length;
+      }),
+    },
+    sessions: {
+      findLiveSids: vi.fn(async (sids: readonly string[]) => new Set(sids.filter(sid => !endedSids.has(sid)))),
+    },
+    loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false })),
+    transport: {
+      send: vi.fn(async (request: ApnsRequest) => {
+        sent.push(request);
+        return overrides.respond?.(request) ?? { status: 200 };
+      }),
+      close: vi.fn(),
+    },
+    topic: 'com.example.client',
+    appUrl: 'https://app.example.test',
+    ...overrides,
+  };
+  return { deps, sent, removed, removedSids };
+}
+
+const payloadOf = (request: ApnsRequest) => JSON.parse(request.payload);
+
+describe('deliverPush', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  describe('approval_needed expiry and clearing', () => {
+    const NOW_MS = 1_700_000_000_000;
+    const PENDING_TS = NOW_MS - 60_000;
+    const APPROVAL: PushNotificationEvent = {
+      userId: 'user-1',
+      category: 'approval_needed',
+      title: 'Approval needed',
+      body: 'An agent wants to run create_issue and is waiting for your confirmation.',
+      deepLink: '/notebooks/session-1',
+      collapseId: 'approval:quest-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+      pendingActionTs: PENDING_TS,
+    };
+
+    it('expires the push at the pending action deadline, in epoch seconds', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(APPROVAL, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String(Math.floor((PENDING_TS + 15 * 60 * 1000) / 1000)));
+    });
+
+    it('starts the window now when the event carries no pendingActionTs', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush({ ...APPROVAL, pendingActionTs: undefined }, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String((NOW_MS + 15 * 60 * 1000) / 1000));
+    });
+
+    it('sets no expiration on other categories', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(EVENT, deps, logger, NOW_MS);
+      expect(sent[0].headers).not.toHaveProperty('apns-expiration');
+    });
+
+    it('gives the clearing push a fresh window even when the original deadline has passed', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      const lapsedTs = NOW_MS - 20 * 60 * 1000;
+      await deliverPush({ ...APPROVAL, pendingActionTs: lapsedTs, approvalResolved: 'lapsed' }, deps, logger, NOW_MS);
+      expect(sent[0].headers['apns-expiration']).toBe(String((NOW_MS + 15 * 60 * 1000) / 1000));
+    });
+
+    it('sends a quiet replacement under the same collapse id, with no buttons and no sound', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush({ ...APPROVAL, approvalResolved: 'approved' }, deps, logger, NOW_MS);
+
+      expect(sent[0].headers['apns-collapse-id']).toBe('approval:quest-1');
+      const payload = payloadOf(sent[0]);
+      expect(payload.aps.alert).toEqual({ title: 'Approval handled', body: 'This request was approved.' });
+      expect(payload.aps['interruption-level']).toBe('passive');
+      expect(payload.aps).not.toHaveProperty('sound');
+      expect(payload.aps).not.toHaveProperty('category');
+      expect(payload).not.toHaveProperty('approval');
+      expect(payload.approvalResolved).toBe('approved');
+    });
+
+    it('keeps the approve and deny buttons and the sound on the original push', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+      await deliverPush(APPROVAL, deps, logger, NOW_MS);
+      const payload = payloadOf(sent[0]);
+      expect(payload.aps.sound).toBe('default');
+      expect(payload.aps.category).toBe('approval_needed');
+      expect(payload.approval).toMatchObject({ questId: 'quest-1', pendingActionTs: PENDING_TS });
+    });
+
+    it('words an expired approval as expired, even for a redacting organization', async () => {
+      const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+        loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+      });
+      await deliverPush({ ...APPROVAL, approvalResolved: 'lapsed' }, deps, logger, NOW_MS);
+      expect(payloadOf(sent[0]).aps.alert.title).toBe('Approval expired');
+    });
+  });
+
+  it('sends a handoff only to the selected registration with no transcript or destination metadata', async () => {
+    const { deps, sent } = makeDeps([
+      { id: 'chosen', token: 'tok-chosen', environment: 'production' },
+      { id: 'other', token: 'tok-other', environment: 'production' },
+    ]);
+    await deliverPush(
+      {
+        ...EVENT,
+        category: 'session_handoff',
+        destinationId: 'chosen',
+        destinationSid: 'sid-live',
+        title: 'Continue',
+        body: 'Tap to open',
+      },
+      deps,
+      logger
+    );
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-chosen']);
+    expect(payloadOf(sent[0])).toEqual({
+      aps: { alert: { title: 'Continue', body: 'Tap to open' }, sound: 'default', 'thread-id': 'session-1' },
+      category: 'session_handoff',
+      deepLink: 'https://app.example.test/notebooks/session-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+    });
+    sent.length = 0;
+    await deliverPush({ ...EVENT, category: 'session_handoff' }, deps, logger);
+    expect(sent).toEqual([]);
+    await deliverPush(
+      { ...EVENT, category: 'session_handoff', destinationId: 'chosen', destinationSid: 'previous-session' },
+      deps,
+      logger
+    );
+    expect(sent).toEqual([]);
+  });
+
+  it('succeeds without contacting APNs or reading the user when there are no device tokens', async () => {
+    const { deps } = makeDeps([]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({ status: 'skipped', reason: 'no_tokens' });
+    expect(deps.tokens.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
+    expect(deps.loadRecipient).not.toHaveBeenCalled();
+    expect(deps.transport.send).not.toHaveBeenCalled();
+    expect(deps.sessions.findLiveSids).not.toHaveBeenCalled();
+  });
+
+  it('prunes and skips tokens whose session has ended, delivering only to live sessions', async () => {
+    const { deps, sent, removedSids } = makeDeps(
+      [
+        { token: 'tok-live', environment: 'production', sid: 'sid-live' },
+        { token: 'tok-expired-a', environment: 'production', sid: 'sid-expired' },
+        { token: 'tok-expired-b', environment: 'sandbox', sid: 'sid-expired' },
+      ],
+      { endedSids: ['sid-expired'] }
+    );
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 2,
+      failed: 0,
+    });
+    expect(deps.sessions.findLiveSids).toHaveBeenCalledTimes(1);
+    expect(deps.sessions.findLiveSids).toHaveBeenCalledWith(['sid-live', 'sid-expired']);
+    expect(removedSids).toEqual(['sid-expired']);
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-live']);
+  });
+
+  it('delivers to live sessions when pruning ended-session tokens fails', async () => {
+    const { deps, sent } = makeDeps(
+      [
+        { token: 'tok-live', environment: 'production', sid: 'sid-live' },
+        { token: 'tok-expired', environment: 'production', sid: 'sid-expired' },
+      ],
+      { endedSids: ['sid-expired'] }
+    );
+    vi.mocked(deps.tokens.removeBySids).mockRejectedValueOnce(new Error('db down'));
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(deps.tokens.removeBySids).toHaveBeenCalledExactlyOnceWith(['sid-expired']);
+    expect(sent.map(request => request.deviceToken)).toEqual(['tok-live']);
+    expect(logger.warn).toHaveBeenCalledWith('[Push] failed to prune device tokens of ended sessions', {
+      error: 'db down',
+    });
+  });
+
+  it('skips without reading the user when every token belongs to an ended session', async () => {
+    const { deps, removedSids } = makeDeps([{ token: 'tok-a', environment: 'production', sid: 'sid-gone' }], {
+      endedSids: ['sid-gone'],
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({ status: 'skipped', reason: 'no_tokens' });
+    expect(removedSids).toEqual(['sid-gone']);
+    expect(deps.loadRecipient).not.toHaveBeenCalled();
+    expect(deps.transport.send).not.toHaveBeenCalled();
+  });
+
+  it('does not prune when every session is live', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 1, pruned: 0 });
+    expect(deps.tokens.removeBySids).not.toHaveBeenCalled();
+  });
+
+  it('sends the title, body, deepLink and collapse id to every device token', async () => {
+    const { deps, sent } = makeDeps([
+      { token: 'tok-a', environment: 'production' },
+      { token: 'tok-b', environment: 'sandbox' },
+    ]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 2,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sent.map(r => [r.deviceToken, r.environment])).toEqual([
+      ['tok-a', 'production'],
+      ['tok-b', 'sandbox'],
+    ]);
+    expect(sent[0].headers).toEqual({
+      'apns-topic': 'com.example.client',
+      'apns-push-type': 'alert',
+      'apns-priority': '10',
+      'apns-collapse-id': 'agent-run:exec-1',
+    });
+    expect(payloadOf(sent[0])).toEqual({
+      aps: {
+        alert: { title: 'Agent finished', body: 'Your agent finished its task in "Q3 plan".' },
+        sound: 'default',
+        'thread-id': 'session-1',
+      },
+      category: 'agent_completed',
+      deepLink: 'https://app.example.test/notebooks/session-1',
+      questId: 'quest-1',
+      sessionId: 'session-1',
+    });
+  });
+
+  it('adds the approve and deny actions to an approval_needed push that names its pending action', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    const event = {
+      ...EVENT,
+      category: 'approval_needed' as const,
+      collapseId: 'approval:quest-1',
+      pendingActionTs: 1767225600000,
+    };
+
+    await deliverPush(event, deps, logger);
+
+    expect(payloadOf(sent[0])).toMatchObject({
+      aps: { category: 'approval_needed' },
+      approval: { questId: 'quest-1', pendingActionTs: 1767225600000, actions: ['approve', 'deny'] },
+    });
+  });
+
+  it('keeps the approval actions when content is redacted, and omits them without a pending action', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+    });
+    const approval = { ...EVENT, category: 'approval_needed' as const, pendingActionTs: 5 };
+
+    await deliverPush(approval, deps, logger);
+    await deliverPush({ ...approval, pendingActionTs: undefined }, deps, logger);
+
+    expect(payloadOf(sent[0]).approval).toMatchObject({ pendingActionTs: 5 });
+    expect(payloadOf(sent[1])).not.toHaveProperty('approval');
+    expect(payloadOf(sent[1]).aps).not.toHaveProperty('category');
+  });
+
+  it('adds no approval actions for another category or for an approval push without a quest', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+
+    await deliverPush({ ...EVENT, category: 'agent_completed' as const, pendingActionTs: 5 }, deps, logger);
+    await deliverPush(
+      { ...EVENT, category: 'approval_needed' as const, questId: undefined, pendingActionTs: 5 },
+      deps,
+      logger
+    );
+
+    for (const call of sent) {
+      expect(payloadOf(call)).not.toHaveProperty('approval');
+      expect(payloadOf(call).aps).not.toHaveProperty('category');
+    }
+  });
+
+  it('selects the brief category from briefAction, falls back to Listen, and keeps it when redacted', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+    });
+    const brief = { ...EVENT, category: 'brief_ready' as const, briefId: 'brief-1' };
+
+    await deliverPush({ ...brief, briefAction: 'approval' }, deps, logger);
+    await deliverPush({ ...brief, briefAction: 'question' }, deps, logger);
+    await deliverPush(brief, deps, logger);
+    await deliverPush({ ...brief, briefId: undefined, briefAction: 'approval' }, deps, logger);
+    await deliverPush({ ...EVENT, category: 'agent_completed' as const, briefAction: 'approval' }, deps, logger);
+
+    expect(payloadOf(sent[0]).aps.category).toBe('brief_ready_approval');
+    expect(payloadOf(sent[1]).aps.category).toBe('brief_ready_reply');
+    expect(payloadOf(sent[2]).aps.category).toBe('brief_ready_listen');
+    for (const call of sent.slice(3)) expect(payloadOf(call).aps).not.toHaveProperty('category');
+    expect(payloadOf(sent[0])).toMatchObject({ briefId: 'brief-1' });
+    expect(payloadOf(sent[0])).not.toHaveProperty('approval');
+  });
+
+  it('keeps an absolute deepLink as published', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    await deliverPush({ ...EVENT, deepLink: 'https://elsewhere.test/notebooks/s' }, deps, logger);
+    expect(payloadOf(sent[0]).deepLink).toBe('https://elsewhere.test/notebooks/s');
+  });
+
+  it('derives a collapse id from category and quest when the publisher sent none', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    await deliverPush({ ...EVENT, collapseId: undefined }, deps, logger);
+    expect(sent[0].headers['apns-collapse-id']).toBe('agent_completed:quest-1');
+  });
+
+  it.each([[{ status: 410, reason: 'Unregistered' }], [{ status: 410 }], [{ status: 400, reason: 'Unregistered' }]])(
+    'prunes a token APNs reports unregistered (%o) under its read-time sid and does not retry',
+    async response => {
+      const { deps, removed } = makeDeps(
+        [
+          { token: 'dead', environment: 'production', sid: 'sid-dead' },
+          { token: 'live', environment: 'production' },
+        ],
+        { respond: request => (request.deviceToken === 'dead' ? response : { status: 200 }) }
+      );
+
+      await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+        status: 'sent',
+        delivered: 1,
+        pruned: 1,
+        failed: 1,
+      });
+      expect(removed).toEqual(['dead']);
+      expect(deps.tokens.removeByToken).toHaveBeenCalledExactlyOnceWith('dead', { sid: 'sid-dead' });
+    }
+  );
+
+  it('keeps a BadDeviceToken token and reports it at error: APNs also returns it for a sandbox/production mismatch', async () => {
+    const { deps, removed } = makeDeps([{ token: 'mismatched', environment: 'production' }], {
+      respond: () => ({ status: 400, reason: 'BadDeviceToken' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 0,
+      pruned: 0,
+      failed: 1,
+    });
+    expect(removed).toEqual([]);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('BadDeviceToken'),
+      expect.objectContaining({ environment: 'production' })
+    );
+  });
+
+  it('does not prune on DeviceTokenNotForTopic: it is a wrong APNS_TOPIC, reported once at error', async () => {
+    const { deps, removed } = makeDeps(
+      [
+        { token: 'tok-a', environment: 'production' },
+        { token: 'tok-b', environment: 'production' },
+      ],
+      { respond: () => ({ status: 400, reason: 'DeviceTokenNotForTopic' }) }
+    );
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 0,
+      pruned: 0,
+      failed: 2,
+    });
+    expect(removed).toEqual([]);
+    expect(deps.tokens.removeByToken).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('server configuration'),
+      expect.objectContaining({ reason: 'DeviceTokenNotForTopic', likelyCause: expect.stringContaining('APNS_TOPIC') })
+    );
+  });
+
+  it.each([
+    [{ status: 403, reason: 'InvalidProviderToken' }, 'APNS_KEY_ID'],
+    [{ status: 403, reason: 'ExpiredProviderToken' }, 'clock'],
+    [{ status: 403, reason: 'SomeFutureAuthReason' }, 'provider credentials'],
+  ])('treats a 403 (%o) as a config error: error log, no retry, no prune', async (response, cause) => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], { respond: () => response });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 0, failed: 1 });
+    expect(deps.tokens.removeByToken).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      expect.objectContaining({ status: 403, likelyCause: expect.stringContaining(cause) })
+    );
+  });
+
+  it('replaces title and body with category-generic copy when the organization redacts', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: true })),
+    });
+
+    await deliverPush(EVENT, deps, logger);
+
+    const payload = payloadOf(sent[0]);
+    expect(payload.aps.alert).toEqual(REDACTED_PUSH_COPY.agent_completed);
+    expect(sent[0].payload).not.toContain('Q3 plan');
+    expect(payload.deepLink).toBe('https://app.example.test/notebooks/session-1');
+  });
+
+  it('suppresses a category the user switched off and leaves the others on', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: { agent_completed: false }, redactContent: false })),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'category_disabled',
+    });
+    expect(deps.transport.send).not.toHaveBeenCalled();
+
+    await expect(deliverPush({ ...EVENT, category: 'agent_failed' }, deps, logger)).resolves.toMatchObject({
+      status: 'sent',
+      delivered: 1,
+    });
+  });
+
+  it('never holds the busy-block summary push', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production', id: 'dest-1' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: true })),
+    });
+    const event = {
+      ...EVENT,
+      category: 'agent_completed' as const,
+      busyBlockDigest: true as const,
+      destinationId: 'dest-1',
+      destinationSid: 'sid-live',
+    };
+
+    const result = await deliverPush(event, deps, logger);
+
+    expect(result).not.toEqual({ status: 'skipped', reason: 'busy_block_hold' });
+  });
+
+  it.each(PUSH_NOTIFICATION_CATEGORIES)(
+    'holds %s only when it is a held category inside a busy block',
+    async category => {
+      const { deps } = makeDeps([{ token: 'tok-a', environment: 'production', id: 'dest-1' }], {
+        loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: true })),
+      });
+      const event = { ...EVENT, category, destinationId: 'dest-1', destinationSid: 'sid-live' };
+
+      const result = await deliverPush(event, deps, logger);
+
+      if ((BUSY_BLOCK_HELD_CATEGORIES as readonly string[]).includes(category)) {
+        expect(result).toEqual({ status: 'skipped', reason: 'busy_block_hold' });
+        expect(deps.transport.send).not.toHaveBeenCalled();
+      } else {
+        expect(result).toMatchObject({ status: 'sent', delivered: 1 });
+      }
+    }
+  );
+
+  it('delivers a held category outside a busy block, and reports a switched-off one as disabled inside it', async () => {
+    const outside = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({ preferences: undefined, redactContent: false, inBusyBlock: false })),
+    });
+    await expect(deliverPush(EVENT, outside.deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+
+    const disabled = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({
+        preferences: { agent_completed: false },
+        redactContent: false,
+        inBusyBlock: true,
+      })),
+    });
+    await expect(deliverPush(EVENT, disabled.deps, logger)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'category_disabled',
+    });
+  });
+
+  it('does not hold a run result inside a busy block when brief_ready is switched off', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => ({
+        preferences: { brief_ready: false },
+        redactContent: false,
+        inBusyBlock: true,
+      })),
+    });
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+  });
+
+  describe('block-end brief push and interruption feedback', () => {
+    const blockEnd = (blockEndCategories?: PushNotificationCategory[]) => ({
+      ...EVENT,
+      category: 'brief_ready' as const,
+      ...(blockEndCategories && { blockEndCategories }),
+    });
+    const withFeedback = (interruptionFeedback?: InterruptionFeedback, preferences?: PushNotificationPreferences) =>
+      makeDeps([{ token: 'tok-a', environment: 'production' }], {
+        loadRecipient: vi.fn(async () => ({ preferences, redactContent: false, interruptionFeedback })),
+      });
+
+    it('holds the push when every reported category was taught to stay quiet', async () => {
+      const { deps } = withFeedback({ agent_completed: true, agent_failed: true });
+      await expect(deliverPush(blockEnd(['agent_completed']), deps, logger)).resolves.toEqual({
+        status: 'skipped',
+        reason: 'interruption_feedback_hold',
+      });
+      expect(deps.transport.send).not.toHaveBeenCalled();
+    });
+
+    it.each<[string, InterruptionFeedback | undefined, PushNotificationCategory[]]>([
+      ['no feedback is stored', undefined, ['agent_completed']],
+      ['only another category was taught', { agent_failed: true }, ['agent_completed']],
+      ['the feedback was turned back off', { agent_completed: false }, ['agent_completed']],
+      ['the brief carries a decision', { agent_completed: true }, ['agent_completed', 'approval_needed']],
+      ['the brief carries other content', { agent_completed: true }, ['agent_completed', 'brief_ready']],
+      ['the brief reports nothing', { agent_completed: true }, []],
+    ])('delivers when %s', async (_label, feedback, categories) => {
+      const { deps } = withFeedback(feedback);
+      await expect(deliverPush(blockEnd(categories), deps, logger)).resolves.toMatchObject({
+        status: 'sent',
+        delivered: 1,
+      });
+    });
+
+    it('delivers a brief_ready push that is not a block-end push', async () => {
+      const { deps } = withFeedback({ agent_completed: true, agent_failed: true });
+      await expect(deliverPush(blockEnd(), deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+    });
+
+    it('still delivers the held-runs digest', async () => {
+      const { deps } = withFeedback({ agent_completed: true, agent_failed: true });
+      const digest = { ...EVENT, category: 'agent_completed' as const, busyBlockDigest: true as const };
+      await expect(deliverPush(digest, deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+    });
+
+    it('reports a switched-off brief_ready as disabled, not as held', async () => {
+      const { deps } = withFeedback({ agent_completed: true }, { brief_ready: false });
+      await expect(deliverPush(blockEnd(['agent_completed']), deps, logger)).resolves.toEqual({
+        status: 'skipped',
+        reason: 'category_disabled',
+      });
+    });
+  });
+
+  it('drops the event when the user no longer exists', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      loadRecipient: vi.fn(async () => null),
+    });
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({ status: 'skipped', reason: 'no_recipient' });
+  });
+
+  it('throws for an EventBridge retry only when every device failed transiently', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      respond: () => ({ status: 503, reason: 'ServiceUnavailable' }),
+    });
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently/);
+
+    const partial = makeDeps(
+      [
+        { token: 'ok', environment: 'production' },
+        { token: 'busy', environment: 'production' },
+      ],
+      { respond: request => (request.deviceToken === 'ok' ? { status: 200 } : { status: 503 }) }
+    );
+    await expect(deliverPush(EVENT, partial.deps, logger)).resolves.toMatchObject({ delivered: 1, failed: 1 });
+  });
+
+  it('keeps at most 10 sends in flight and still delivers to every token', async () => {
+    const tokens = Array.from({ length: 25 }, (_, i) => ({ token: `tok-${i}`, environment: 'production' as const }));
+    const { deps } = makeDeps(tokens);
+    const pending: Array<() => void> = [];
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(deps.transport.send).mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>(resolve => pending.push(resolve));
+      inFlight--;
+      return { status: 200 };
+    });
+
+    const done = deliverPush(EVENT, deps, logger);
+    for (let settled = 0; settled < 25;) {
+      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      const batch = pending.splice(0);
+      batch.forEach(resolve => resolve());
+      settled += batch.length;
+    }
+
+    await expect(done).resolves.toEqual({ status: 'sent', delivered: 25, pruned: 0, failed: 0 });
+    expect(peak).toBe(10);
+  });
+
+  it('counts a failed prune as one failed device without throwing or retrying', async () => {
+    const { deps } = makeDeps([{ token: 'dead', environment: 'production' }], {
+      respond: () => ({ status: 410, reason: 'Unregistered' }),
+    });
+    vi.mocked(deps.tokens.removeByToken).mockRejectedValueOnce(new Error('db down'));
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      failed: 1,
+      pruned: 0,
+      delivered: 0,
+    });
+    expect(logger.warn).toHaveBeenCalledWith('[Push] failed to prune an unregistered device token', {
+      error: 'db down',
+    });
+  });
+
+  it.each([
+    ['an unregistered token', { status: 410, reason: 'Unregistered' }],
+    ['a config error', { status: 400, reason: 'DeviceTokenNotForTopic' }],
+    ['a permanent rejection', { status: 400, reason: 'BadDeviceToken' }],
+  ])('still retries a transient failure that sits next to %s', async (_label, response) => {
+    const { deps } = makeDeps(
+      [
+        { token: 'other', environment: 'production' },
+        { token: 'busy', environment: 'production' },
+      ],
+      { respond: request => (request.deviceToken === 'busy' ? { status: 503 } : response) }
+    );
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently for 1 of 2/);
+  });
+
+  it('caps the collapse id at 64 characters', async () => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    await deliverPush({ ...EVENT, collapseId: 'c'.repeat(64) }, deps, logger);
+    await deliverPush({ ...EVENT, collapseId: 'c'.repeat(65) }, deps, logger);
+    expect(sent.map(request => request.headers['apns-collapse-id'])).toEqual(['c'.repeat(64), 'c'.repeat(64)]);
+  });
+
+  it.each([
+    ['title', 80],
+    ['body', 240],
+  ] as const)('keeps a %s of exactly %i characters and ellipsizes one longer', async (field, max) => {
+    const { deps, sent } = makeDeps([{ token: 'tok-a', environment: 'production' }]);
+    await deliverPush({ ...EVENT, [field]: 'x'.repeat(max) }, deps, logger);
+    await deliverPush({ ...EVENT, [field]: 'x'.repeat(max + 1) }, deps, logger);
+    const [atCap, overCap] = sent.map(request => payloadOf(request).aps.alert[field] as string);
+    expect(atCap).toBe('x'.repeat(max));
+    expect(overCap).toHaveLength(max);
+    expect(overCap.endsWith('...')).toBe(true);
+  });
+
+  it('does not retry a permanent rejection', async () => {
+    const { deps } = makeDeps([{ token: 'tok-a', environment: 'production' }], {
+      respond: () => ({ status: 400, reason: 'PayloadTooLarge' }),
+    });
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, failed: 1 });
+  });
+});
+
+describe('loadPushRecipient', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("reads the user's push preferences and the active organization's redaction flag", async () => {
+    h.userFindById.mockResolvedValue({
+      organizationId: 'org-1',
+      preferences: { pushNotifications: { agent_message: false } },
+    });
+    h.orgFindById.mockResolvedValue({ redactPushContent: true });
+
+    await expect(loadPushRecipient('u1')).resolves.toEqual({
+      preferences: { agent_message: false },
+      redactContent: true,
+      inBusyBlock: false,
+    });
+    expect(h.orgFindById).toHaveBeenCalledWith('org-1');
+  });
+
+  it('does not redact for a user without an organization', async () => {
+    h.userFindById.mockResolvedValue({ organizationId: null, preferences: null });
+    await expect(loadPushRecipient('u1')).resolves.toEqual({
+      preferences: undefined,
+      redactContent: false,
+      inBusyBlock: false,
+    });
+    expect(h.orgFindById).not.toHaveBeenCalled();
+  });
+
+  it('reports a user inside a freshly synced busy block', async () => {
+    const now = Date.now();
+    h.userFindById.mockResolvedValue({
+      organizationId: null,
+      preferences: { busyBlockBrief: { enabled: true } },
+      busyBlocks: [{ start: new Date(now - 60_000), end: new Date(now + 60_000) }],
+      busyBlocksSyncedAt: new Date(now - 60_000),
+    });
+    await expect(loadPushRecipient('u1')).resolves.toMatchObject({ inBusyBlock: true });
+  });
+});
+
+describe('handler', () => {
+  const VALID_KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+  const APNS_ENV = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY', 'APNS_TOPIC'] as const;
+  const saved: Partial<Record<(typeof APNS_ENV)[number], string>> = {};
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createTransport.mockImplementation(() => ({ send: vi.fn(), close: vi.fn() }));
+    for (const name of APNS_ENV) {
+      saved[name] = process.env[name];
+      delete process.env[name];
+    }
+  });
+  afterEach(() => {
+    for (const name of APNS_ENV) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+
+  const bridgeEvent = { 'detail-type': 'notification.push', detail: EVENT } as EventBridgeEvent<string, unknown>;
+
+  it('consumes the event as a no-op, without a database connection, when APNs is not configured', async () => {
+    process.env.APNS_KEY_ID = 'KEY123';
+    // APNS_TEAM_ID, APNS_KEY and APNS_TOPIC unset: a partial config is no config.
+
+    await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+    expect(h.withEventContextInner).not.toHaveBeenCalled();
+    expect(h.findByUser).not.toHaveBeenCalled();
+    expect(h.findLiveSids).not.toHaveBeenCalled();
+  });
+
+  it("treats the secrets' 'not-configured' placeholder as unset", async () => {
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'not-configured',
+      APNS_TEAM_ID: 'not-configured',
+      APNS_KEY: 'not-configured',
+      APNS_TOPIC: 'not-configured',
+    });
+
+    await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+    expect(h.withEventContextInner).not.toHaveBeenCalled();
+  });
+
+  it('consumes the event without retrying or reading the database when APNS_KEY is not a usable PEM', async () => {
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'K',
+      APNS_TEAM_ID: 'T',
+      APNS_KEY: '-----BEGIN PRIVATE KEY-----\\nnot-a-key\\n-----END PRIVATE KEY-----',
+      APNS_TOPIC: 'com.example.client',
+    });
+
+    await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+    expect(h.withEventContextInner).not.toHaveBeenCalled();
+    expect(h.findByUser).not.toHaveBeenCalled();
+    expect(h.findLiveSids).not.toHaveBeenCalled();
+  });
+
+  it('delivers through the configured path when every APNS_* value is set', async () => {
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'K',
+      APNS_TEAM_ID: 'T',
+      APNS_KEY: VALID_KEY_PEM,
+      APNS_TOPIC: 'com.example.client',
+    });
+    h.findByUser.mockResolvedValue([]);
+
+    await handler(bridgeEvent);
+
+    expect(h.withEventContextInner).toHaveBeenCalledTimes(1);
+    expect(h.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
+  });
+
+  describe('FCM_SERVICE_ACCOUNT', () => {
+    const RSA_KEY_PEM = generateKeyPairSync('rsa', { modulusLength: 2048 })
+      .privateKey.export({ type: 'pkcs8', format: 'pem' })
+      .toString();
+    const serviceAccount = (overrides: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        project_id: 'demo-project',
+        client_email: 'push@demo-project.iam.gserviceaccount.com',
+        private_key: RSA_KEY_PEM,
+        ...overrides,
+      });
+
+    afterEach(() => {
+      delete process.env.FCM_SERVICE_ACCOUNT;
+    });
+
+    it('consumes the event as a no-op when neither provider is configured', async () => {
+      await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+      expect(h.withEventContextInner).not.toHaveBeenCalled();
+    });
+
+    it('consumes the event without retrying or reading the database when the JSON is malformed', async () => {
+      process.env.FCM_SERVICE_ACCOUNT = '{not json';
+
+      await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+      expect(h.withEventContextInner).not.toHaveBeenCalled();
+      expect(h.findByUser).not.toHaveBeenCalled();
+    });
+
+    it('consumes the event when the private key is not a usable RSA key', async () => {
+      process.env.FCM_SERVICE_ACCOUNT = serviceAccount({ private_key: 'not-a-key' });
+
+      await expect(handler(bridgeEvent)).resolves.toBeUndefined();
+      expect(h.withEventContextInner).not.toHaveBeenCalled();
+    });
+
+    it('delivers through FCM alone, without APNs configured', async () => {
+      process.env.FCM_SERVICE_ACCOUNT = serviceAccount();
+      h.findByUser.mockResolvedValue([]);
+
+      await handler(bridgeEvent);
+
+      expect(h.withEventContextInner).toHaveBeenCalledTimes(1);
+      expect(h.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
+    });
+
+    it('keeps APNs delivery working when the FCM secret is broken', async () => {
+      Object.assign(process.env, {
+        APNS_KEY_ID: 'K',
+        APNS_TEAM_ID: 'T',
+        APNS_KEY: VALID_KEY_PEM,
+        APNS_TOPIC: 'com.example.client',
+        FCM_SERVICE_ACCOUNT: '{not json',
+      });
+      h.findByUser.mockResolvedValue([]);
+
+      await handler(bridgeEvent);
+
+      expect(h.withEventContextInner).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('shared transport', () => {
+    const OTHER_KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+      .privateKey.export({ type: 'pkcs8', format: 'pem' })
+      .toString();
+
+    const setConfig = (key: string, topic: string) =>
+      Object.assign(process.env, { APNS_KEY_ID: 'K', APNS_TEAM_ID: 'T', APNS_KEY: key, APNS_TOPIC: topic });
+
+    beforeEach(() => {
+      h.findByUser.mockResolvedValue([]);
+    });
+
+    it('creates the transport once for repeated invocations with the same config', async () => {
+      setConfig(VALID_KEY_PEM, 'com.example.reuse');
+
+      await handler(bridgeEvent);
+      await handler(bridgeEvent);
+
+      expect(h.createTransport).toHaveBeenCalledTimes(1);
+    });
+
+    it('rebuilds the transport, closing the old one, when a credential changes', async () => {
+      setConfig(VALID_KEY_PEM, 'com.example.rotate');
+      await handler(bridgeEvent);
+      const first = h.createTransport.mock.results[0].value as { close: ReturnType<typeof vi.fn> };
+
+      setConfig(OTHER_KEY_PEM, 'com.example.rotate');
+      await handler(bridgeEvent);
+
+      expect(h.createTransport).toHaveBeenCalledTimes(2);
+      expect(first.close).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('deliverPush over FCM', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const androidToken = (token: string, sid?: string): Token => ({
+    token,
+    environment: 'production',
+    platform: 'android',
+    ...(sid && { sid }),
+  });
+
+  function makeFcmDeps(
+    tokens: Token[],
+    options: { respond?: (request: FcmRequest) => FcmResponse; withApns?: boolean } = {}
+  ) {
+    const sentFcm: FcmRequest[] = [];
+    const { deps, removed, sent } = makeDeps(tokens);
+    const fcm = {
+      send: vi.fn(async (request: FcmRequest) => {
+        sentFcm.push(request);
+        return options.respond?.(request) ?? { status: 200 };
+      }),
+    };
+    const { transport, topic, ...withoutApns } = deps;
+    const fcmDeps: SendPushDeps = options.withApns ? { ...deps, fcm } : { ...withoutApns, fcm };
+    return { deps: fcmDeps, fcm, sentFcm, removed, sentApns: sent, apnsTransport: transport, topic };
+  }
+
+  it('sends an Android token one FCM message with copy, string data, and collapse metadata', async () => {
+    const { deps, sentFcm } = makeFcmDeps([androidToken('fcm-a')]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sentFcm).toHaveLength(1);
+    expect(sentFcm[0].deviceToken).toBe('fcm-a');
+    expect(sentFcm[0].message).toEqual({
+      notification: { title: EVENT.title, body: EVENT.body },
+      data: {
+        category: 'agent_completed',
+        deepLink: 'https://app.example.test/notebooks/session-1',
+        questId: 'quest-1',
+        sessionId: 'session-1',
+      },
+      android: {
+        priority: 'HIGH',
+        collapse_key: 'agent-run:exec-1',
+        notification: { tag: 'agent-run:exec-1' },
+      },
+    });
+  });
+
+  it('redacts title and body for an organization that redacts push content', async () => {
+    const { deps, sentFcm } = makeFcmDeps([androidToken('fcm-a')]);
+    deps.loadRecipient = vi.fn(async () => ({ preferences: undefined, redactContent: true }));
+
+    await deliverPush(EVENT, deps, logger);
+
+    expect(sentFcm[0].message.notification).toEqual(REDACTED_PUSH_COPY.agent_completed);
+    expect(JSON.stringify(sentFcm[0].message)).not.toContain('Q3 plan');
+  });
+
+  it('routes each platform to its own provider', async () => {
+    const { deps, sentFcm, sentApns } = makeFcmDeps(
+      [androidToken('fcm-a'), { token: 'apns-a', environment: 'production' }],
+      {
+        withApns: true,
+      }
+    );
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 2, failed: 0 });
+    expect(sentFcm.map(request => request.deviceToken)).toEqual(['fcm-a']);
+    expect(sentApns.map(request => request.deviceToken)).toEqual(['apns-a']);
+  });
+
+  it('skips, without pruning, tokens of a platform whose provider is not configured', async () => {
+    const { deps, removed, sentFcm } = makeFcmDeps([
+      androidToken('fcm-a'),
+      { token: 'apns-a', environment: 'production' },
+    ]);
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sentFcm).toHaveLength(1);
+    expect(removed).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('APNs is not configured'), { skipped: 1 });
+  });
+
+  it('prunes a token FCM reports UNREGISTERED under its read-time sid and does not retry', async () => {
+    const { deps, removed } = makeFcmDeps([androidToken('dead', 'sid-dead'), androidToken('live')], {
+      respond: request =>
+        request.deviceToken === 'dead' ? { status: 404, errorStatus: 'UNREGISTERED' } : { status: 200 },
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 1,
+      failed: 1,
+    });
+    expect(removed).toEqual(['dead']);
+    expect(deps.tokens.removeByToken).toHaveBeenCalledExactlyOnceWith('dead', { sid: 'sid-dead' });
+  });
+
+  it.each([
+    ['a bare 404 NOT_FOUND (also what a wrong project id returns)', { status: 404, errorStatus: 'NOT_FOUND' }],
+    ['SENDER_ID_MISMATCH', { status: 403, errorStatus: 'SENDER_ID_MISMATCH' }],
+    ['INVALID_ARGUMENT', { status: 400, errorStatus: 'INVALID_ARGUMENT' }],
+  ])('never prunes on %s', async (_label, response) => {
+    const { deps, removed } = makeFcmDeps([androidToken('tok')], { respond: () => response });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 0, failed: 1 });
+    expect(removed).toEqual([]);
+  });
+
+  it('reports a configuration rejection once at error, without retrying or pruning', async () => {
+    const { deps, removed } = makeFcmDeps([androidToken('a'), androidToken('b')], {
+      respond: () => ({ status: 403, errorStatus: 'PERMISSION_DENIED' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 0, failed: 2 });
+    expect(removed).toEqual([]);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('FCM rejected the server configuration'),
+      expect.objectContaining({ reason: 'PERMISSION_DENIED' })
+    );
+  });
+
+  it('treats a rejected OAuth exchange as a configuration error, not a retryable failure', async () => {
+    const { deps } = makeFcmDeps([androidToken('a')], {
+      respond: () => ({ status: 400, errorStatus: 'invalid_grant', stage: 'auth' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, failed: 1 });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('FCM rejected the server configuration'),
+      expect.objectContaining({ reason: 'invalid_grant' })
+    );
+  });
+
+  it.each([
+    ['429 QUOTA_EXCEEDED', { status: 429, errorStatus: 'QUOTA_EXCEEDED' }],
+    ['503 UNAVAILABLE', { status: 503, errorStatus: 'UNAVAILABLE' }],
+    ['a failing OAuth exchange (503)', { status: 503, stage: 'auth' as const }],
+  ])('throws for an EventBridge retry when every device failed with %s', async (_label, response) => {
+    const { deps } = makeFcmDeps([androidToken('a')], { respond: () => response });
+
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently for 1 of 1/);
+  });
+
+  it('throws for a retry when the transport itself throws', async () => {
+    const { deps, fcm } = makeFcmDeps([androidToken('a')]);
+    fcm.send.mockRejectedValue(new Error('socket hang up'));
+
+    await expect(deliverPush(EVENT, deps, logger)).rejects.toThrow(/failed transiently/);
+  });
+
+  it('does not retry a partial success, even across providers', async () => {
+    const { deps } = makeFcmDeps([androidToken('fcm-a'), { token: 'apns-a', environment: 'production' }], {
+      withApns: true,
+      respond: () => ({ status: 503, errorStatus: 'UNAVAILABLE' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 1, failed: 1 });
+  });
+
+  it('does not retry when the only failure is a pruned token', async () => {
+    const { deps } = makeFcmDeps([androidToken('a')], {
+      respond: () => ({ status: 404, errorStatus: 'UNREGISTERED' }),
+    });
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ delivered: 0, pruned: 1, failed: 1 });
+  });
+});
+
+describe('deliverLiveActivityPush', () => {
+  const USER_ID = '507f1f77bcf86cd799439011';
+  const UPDATE: LiveActivityPushEvent = {
+    userId: USER_ID,
+    questId: 'quest-1',
+    event: 'update',
+    contentState: { status: 'running', stageLabel: 'Searching', progress: 0.4 },
+  };
+  const END: LiveActivityPushEvent = {
+    userId: USER_ID,
+    questId: 'quest-1',
+    event: 'end',
+    contentState: { status: 'completed' },
+    dismissalDate: 1_800_000_060,
+  };
+  const NOW_SECONDS = 1_800_000_000;
+
+  function makeActivityDeps(
+    tokens: Token[],
+    respond?: (request: ApnsRequest) => ApnsResponse,
+    recipient: PushRecipient | null = { preferences: undefined, redactContent: false }
+  ) {
+    const sent: ApnsRequest[] = [];
+    const removed: string[] = [];
+    const deps: SendLiveActivityDeps = {
+      tokens: {
+        findLiveActivityByQuest: vi.fn(async () => tokens.map(token => ({ sid: 'sid-live', ...token }))),
+        removeByToken: vi.fn(async (token: string) => {
+          removed.push(token);
+          return true;
+        }),
+        removeLiveActivityByQuest: vi.fn(async () => tokens.length),
+        removeBySids: vi.fn(async () => 1),
+      },
+      sessions: { findLiveSids: vi.fn(async sids => new Set(sids)) },
+      loadRecipient: vi.fn(async () => recipient),
+      transport: {
+        send: vi.fn(async (request: ApnsRequest) => {
+          sent.push(request);
+          return respond?.(request) ?? { status: 200 };
+        }),
+        close: vi.fn(),
+      },
+      topic: 'com.example.client',
+    };
+    return { deps, sent, removed };
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("selects the quest's liveActivity tokens for the owner and skips quietly when there are none", async () => {
+    const { deps } = makeActivityDeps([]);
+    await expect(deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'no_tokens',
+    });
+    expect(deps.tokens.findLiveActivityByQuest).toHaveBeenCalledWith(USER_ID, 'quest-1');
+    expect(deps.transport.send).not.toHaveBeenCalled();
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+    expect(deps.loadRecipient).not.toHaveBeenCalled();
+  });
+
+  it('skips and prunes an ended-session token while delivering to live sessions', async () => {
+    const { deps, sent } = makeActivityDeps([
+      { token: 'ended', environment: 'production' },
+      { token: 'live', environment: 'production' },
+    ]);
+    vi.mocked(deps.tokens.findLiveActivityByQuest).mockResolvedValue([
+      { token: 'ended', environment: 'production', sid: 'sid-ended' },
+      { token: 'live', environment: 'production', sid: 'sid-live' },
+    ]);
+    vi.mocked(deps.sessions.findLiveSids).mockResolvedValue(new Set(['sid-live']));
+
+    await deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS);
+
+    expect(sent.map(request => request.deviceToken)).toEqual(['live']);
+    expect(deps.sessions.findLiveSids).toHaveBeenCalledWith(['sid-ended', 'sid-live']);
+    expect(deps.tokens.removeBySids).toHaveBeenCalledWith(['sid-ended']);
+  });
+
+  it.each([
+    ['end', END],
+    ['update', UPDATE],
+  ] as const)('retries partial transient failure only for an %s frame', async (_label, event) => {
+    const { deps } = makeActivityDeps(
+      [
+        { token: 'ok', environment: 'production' },
+        { token: 'busy', environment: 'production' },
+      ],
+      request => (request.deviceToken === 'ok' ? { status: 200 } : { status: 503 })
+    );
+
+    const delivery = deliverLiveActivityPush(event, deps, logger, NOW_SECONDS);
+    if (event.event === 'end') await expect(delivery).rejects.toThrow(/transiently/);
+    else await expect(delivery).resolves.toMatchObject({ delivered: 1, failed: 1 });
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+  });
+
+  it('drops the frame when the recipient user no longer exists', async () => {
+    const { deps } = makeActivityDeps([{ token: 'act-a', environment: 'production' }], undefined, null);
+    await expect(deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS)).resolves.toEqual({
+      status: 'skipped',
+      reason: 'no_recipient',
+    });
+    expect(deps.transport.send).not.toHaveBeenCalled();
+  });
+
+  it("replaces the stage label with a fixed one per status when the recipient's organization redacts", async () => {
+    const { deps, sent } = makeActivityDeps([{ token: 'act-a', environment: 'production' }], undefined, {
+      preferences: undefined,
+      redactContent: true,
+    });
+
+    await deliverLiveActivityPush(
+      { ...UPDATE, contentState: { status: 'running', stageLabel: 'Searching "q3 layoffs plan"', progress: 0.4 } },
+      deps,
+      logger,
+      NOW_SECONDS
+    );
+    await deliverLiveActivityPush(
+      { ...UPDATE, contentState: { status: 'approval_needed', stageLabel: 'Waiting for your approval' } },
+      deps,
+      logger,
+      NOW_SECONDS
+    );
+    await deliverLiveActivityPush(
+      { ...UPDATE, contentState: { status: 'some_future_status', stageLabel: 'secret.pdf' } },
+      deps,
+      logger,
+      NOW_SECONDS
+    );
+    await deliverLiveActivityPush(END, deps, logger, NOW_SECONDS);
+
+    expect(deps.loadRecipient).toHaveBeenCalledWith(USER_ID);
+    expect(sent.map(request => payloadOf(request).aps['content-state'])).toEqual([
+      { status: 'running', stageLabel: REDACTED_LIVE_ACTIVITY_STAGE_LABELS.running, progress: 0.4 },
+      { status: 'approval_needed', stageLabel: REDACTED_LIVE_ACTIVITY_STAGE_LABELS.approval_needed },
+      { status: 'some_future_status' },
+      { status: 'completed' },
+    ]);
+  });
+
+  it("sends the frame's publish timestamp so a late or retried frame cannot overwrite a newer one", async () => {
+    const { deps, sent } = makeActivityDeps([{ token: 'act-a', environment: 'production' }]);
+
+    await deliverLiveActivityPush({ ...UPDATE, timestamp: NOW_SECONDS - 40 }, deps, logger, NOW_SECONDS);
+
+    expect(payloadOf(sent[0]).aps.timestamp).toBe(NOW_SECONDS - 40);
+  });
+
+  it('sends an update with the liveactivity push type, topic suffix, priority 5 and the content state', async () => {
+    const { deps, sent } = makeActivityDeps([{ token: 'act-a', environment: 'sandbox' }]);
+
+    await expect(
+      deliverLiveActivityPush({ ...UPDATE, staleDate: 1_800_000_900 }, deps, logger, NOW_SECONDS)
+    ).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 0,
+      failed: 0,
+    });
+    expect(sent[0].deviceToken).toBe('act-a');
+    expect(sent[0].environment).toBe('sandbox');
+    expect(sent[0].headers).toEqual({
+      'apns-topic': 'com.example.client.push-type.liveactivity',
+      'apns-push-type': 'liveactivity',
+      'apns-priority': '5',
+    });
+    expect(payloadOf(sent[0])).toEqual({
+      aps: {
+        timestamp: NOW_SECONDS,
+        event: 'update',
+        'content-state': { status: 'running', stageLabel: 'Searching', progress: 0.4 },
+        'stale-date': 1_800_000_900,
+      },
+    });
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+  });
+
+  it('sends end at priority 10 with the dismissal date, then deletes the quest tokens', async () => {
+    const { deps, sent } = makeActivityDeps([
+      { token: 'act-a', environment: 'production' },
+      { token: 'act-b', environment: 'production' },
+    ]);
+
+    await deliverLiveActivityPush(END, deps, logger, NOW_SECONDS);
+
+    expect(sent).toHaveLength(2);
+    expect(sent[0].headers['apns-priority']).toBe('10');
+    expect(payloadOf(sent[0]).aps).toEqual({
+      timestamp: NOW_SECONDS,
+      event: 'end',
+      'content-state': { status: 'completed' },
+      'dismissal-date': 1_800_000_060,
+    });
+    expect(deps.tokens.removeLiveActivityByQuest).toHaveBeenCalledWith(USER_ID, 'quest-1');
+  });
+
+  it('prunes a dead token on update and keeps the others', async () => {
+    const { deps, removed } = makeActivityDeps(
+      [
+        { token: 'dead', environment: 'production' },
+        { token: 'live', environment: 'production' },
+      ],
+      request => (request.deviceToken === 'dead' ? { status: 410, reason: 'Unregistered' } : { status: 200 })
+    );
+
+    await expect(deliverLiveActivityPush(UPDATE, deps, logger, NOW_SECONDS)).resolves.toEqual({
+      status: 'sent',
+      delivered: 1,
+      pruned: 1,
+      failed: 1,
+    });
+    expect(removed).toEqual(['dead']);
+  });
+
+  it('throws on all-transient failure so the event retries, and keeps the tokens for the retry of an end', async () => {
+    const { deps } = makeActivityDeps([{ token: 'act-a', environment: 'production' }], () => ({
+      status: 503,
+      reason: 'ServiceUnavailable',
+    }));
+
+    await expect(deliverLiveActivityPush(END, deps, logger, NOW_SECONDS)).rejects.toThrow(/transiently/);
+    expect(deps.tokens.removeLiveActivityByQuest).not.toHaveBeenCalled();
+  });
+});
+
+describe('handler routing on detail-type', () => {
+  const saved: Record<string, string | undefined> = {};
+  const ENV = ['APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_KEY', 'APNS_TOPIC'] as const;
+  const KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+    .privateKey.export({ type: 'pkcs8', format: 'pem' })
+    .toString();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const name of ENV) saved[name] = process.env[name];
+    Object.assign(process.env, {
+      APNS_KEY_ID: 'K',
+      APNS_TEAM_ID: 'T',
+      APNS_KEY: KEY_PEM,
+      APNS_TOPIC: 'com.example.client',
+    });
+  });
+  afterEach(() => {
+    for (const name of ENV) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+
+  it('routes notification.liveActivity to the liveActivity token lookup, not the device lookup', async () => {
+    h.findLiveActivityByQuest.mockResolvedValue([]);
+    const detail: LiveActivityPushEvent = {
+      userId: '507f1f77bcf86cd799439011',
+      questId: 'quest-9',
+      event: 'update',
+      contentState: { status: 'running' },
+    };
+
+    await handler({ 'detail-type': 'notification.liveActivity', detail } as EventBridgeEvent<string, unknown>);
+
+    expect(h.findLiveActivityByQuest).toHaveBeenCalledWith(detail.userId, 'quest-9');
+    expect(h.findByUser).not.toHaveBeenCalled();
+  });
+});

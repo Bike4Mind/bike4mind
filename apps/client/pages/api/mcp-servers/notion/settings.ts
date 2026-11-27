@@ -1,8 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 import { NotionTokenManager } from '@server/integrations/notion/notionTokenManager';
-import { decryptToken, decryptEnvVariables, encryptEnvVariables } from '@server/security/tokenEncryption';
+import {
+  decryptToken,
+  decryptEnvVariables,
+  encryptEnvVariables,
+} from '@bike4mind/server-utils/security/tokenEncryption';
 
 const NOTION_UUID_REGEX = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const MAX_ALLOWED_PAGES = 50;
@@ -121,14 +126,14 @@ const handler = baseApi().patch(async (req, res) => {
       try {
         await NotionTokenManager.syncMcpServer(userId, accessToken, user.notionConnect.workspaceId);
       } catch (syncError) {
-        console.warn('[Notion Settings] MCP sync failed after settings update:', syncError);
+        req.logger.warn('Notion MCP sync failed after settings update', { userId, error: syncError });
       }
     } else {
       // Token decryption failed (e.g. key rotation) but the MCP server may still
       // have working env vars. Patch the settings-related env vars in place.
-      console.warn('[Notion Settings] Token decryption failed, using fallback env var patch');
+      req.logger.warn('Notion token decryption failed; using fallback env var patch', { userId });
       try {
-        await patchMcpServerEnvVars(userId, {
+        await patchMcpServerEnvVars(req.logger, userId, {
           writeEnabled: typeof writeEnabled === 'boolean' ? writeEnabled : user.notionConnect.writeEnabled,
           rootPageId: rootPageId !== undefined ? rootPageId : (user.notionConnect.rootPageId ?? null),
           accessMode: accessMode ?? user.notionConnect.accessMode ?? 'all',
@@ -136,13 +141,13 @@ const handler = baseApi().patch(async (req, res) => {
           excludedPageIds: excludedPageIds ?? user.notionConnect.excludedPageIds ?? [],
         });
       } catch (patchError) {
-        console.warn('[Notion Settings] Fallback MCP env patch failed:', patchError);
+        req.logger.warn('Notion fallback MCP env patch failed', { userId, error: patchError });
       }
     }
 
     res.status(200).json({ success: true });
   } catch (error) {
-    console.error('[Notion Settings] Error updating settings:', error);
+    req.logger.error('Notion settings update failed', { userId: req.user.id, error });
     const detail = error instanceof Error ? error.message : '';
     res.status(500).json({
       error: detail.includes('not connected')
@@ -158,6 +163,7 @@ const handler = baseApi().patch(async (req, res) => {
  * can't be decrypted but the MCP server's own env vars are still valid.
  */
 async function patchMcpServerEnvVars(
+  logger: Logger,
   userId: string,
   settings: {
     writeEnabled?: boolean;
@@ -173,7 +179,7 @@ async function patchMcpServerEnvVars(
   });
 
   if (!notionServer?.envVariables?.length) {
-    console.warn('[Notion Settings] No existing MCP server to patch');
+    logger.warn('Notion settings: no existing MCP server to patch', { userId });
     return;
   }
 
@@ -209,8 +215,6 @@ async function patchMcpServerEnvVars(
     id: notionServer.id,
     envVariables: encryptEnvVariables(updatedVars, notionServer),
   });
-
-  console.log('[Notion Settings] Patched MCP server env vars via fallback path');
 }
 
 export default handler;

@@ -10,6 +10,7 @@ import {
   TagType,
 } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { Logger } from '@bike4mind/observability';
 
 const options = {
   toJSON: {
@@ -126,7 +127,7 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     // name or userId dropped that arm, and an empty filter matches the first tag in the collection -
     // some other user's. No caller does this, so refusing costs nothing and closes the shape.
     if (!by.name || !by.userId) {
-      console.warn('touchLastActivityBy needs both a name and a userId; ignoring', by);
+      Logger.warn('touchLastActivityBy needs both a name and a userId; ignoring', { userId: by.userId });
       return;
     }
 
@@ -144,10 +145,10 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
       });
 
       if (updateResult.matchedCount === 0) {
-        console.warn(`No tag found matching filter:`, filter);
+        Logger.warn('No tag found matching filter', { userId: by.userId });
       }
     } catch (error) {
-      console.error('Error touching tag activity:', error);
+      Logger.error('Error touching tag activity', { userId: by.userId, error });
       throw error;
     }
   }

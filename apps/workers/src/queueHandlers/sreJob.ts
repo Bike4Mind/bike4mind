@@ -11,26 +11,45 @@
  * different retry policy, timeout, and permission set.
  */
 
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { Resource } from 'sst';
+import { createSreQueueAccounting } from './sreQueueAccounting';
+import { isSreAccountingError } from '@bike4mind/services/sreAgentService';
 import { SreJobMessageSchema } from '@bike4mind/common';
 import { runSreAnalysis } from './sreAnalysis';
 import { runSreRevision } from './sreRevision';
 
-export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
+export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   logger.updateMetadata({ handler: 'sreJob' });
   const message = SreJobMessageSchema.parse(JSON.parse(event.Records[0].body));
 
-  switch (message.jobType) {
-    case 'analysis':
-      await runSreAnalysis(message, logger);
-      return;
-    case 'revision':
-      await runSreRevision(message, logger);
-      return;
-    default: {
-      // Exhaustiveness guard - a new jobType must be wired here explicitly.
-      const _exhaustive: never = message;
-      throw new Error(`Unhandled SRE jobType: ${JSON.stringify(_exhaustive)}`);
+  const accounting = createSreQueueAccounting(
+    event.Records[0],
+    Date.now() + context.getRemainingTimeInMillis(),
+    Resource.App.stage
+  );
+
+  try {
+    switch (message.jobType) {
+      case 'analysis':
+        await runSreAnalysis(message, logger, accounting);
+        return;
+      case 'revision':
+        await runSreRevision(message, logger, accounting);
+        return;
+      default: {
+        const _exhaustive: never = message;
+        throw new Error(`Unhandled SRE jobType: ${JSON.stringify(_exhaustive)}`);
+      }
     }
+  } catch (error) {
+    if (isSreAccountingError(error)) {
+      logger.error('SRE accounting requires recovery', {
+        reason: error.reason,
+        providerCallId: error.providerCallId,
+        executionId: accounting.attribution.executionId,
+      });
+    }
+    throw error;
   }
 });

@@ -112,12 +112,14 @@ export const sendToQueue = async (queueUrl: string, message: Record<string, unkn
  * `waitTimeSeconds` defaults to 0 (short polling, immediate response) to preserve
  * existing callers. Pass up to 20 for long polling - used by the self-host worker's
  * poller loop (apps/workers/src/selfhost/selfHostWorker.ts) so it blocks instead of busy-spinning.
+ * `messageAttributeNames` is sent only when given, so other callers' requests are unchanged.
  */
 export const receiveFromQueue = async (
   queueUrl: string,
   maxMessages: number,
   visibilityTimeout = 30,
-  waitTimeSeconds = 0
+  waitTimeSeconds = 0,
+  messageAttributeNames?: string[]
 ): Promise<Message[]> => {
   const sqs = createSqsClient();
   const command = new ReceiveMessageCommand({
@@ -126,6 +128,7 @@ export const receiveFromQueue = async (
     WaitTimeSeconds: Math.min(Math.max(waitTimeSeconds, 0), 20),
     VisibilityTimeout: visibilityTimeout,
     AttributeNames: ['All'],
+    ...(messageAttributeNames ? { MessageAttributeNames: messageAttributeNames } : {}),
   });
   const response = await sqs.send(command);
   return response.Messages ?? [];
@@ -148,16 +151,22 @@ export const deleteFromQueue = async (queueUrl: string, receiptHandle: string): 
  */
 export const getQueueAttributes = async (
   queueUrl: string
-): Promise<{ approximateMessageCount: number; approximateNotVisibleCount: number }> => {
+): Promise<{
+  approximateMessageCount: number;
+  approximateNotVisibleCount: number;
+  messageRetentionSeconds?: number;
+}> => {
   const sqs = createSqsClient();
   const command = new GetQueueAttributesCommand({
     QueueUrl: queueUrl,
-    AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible'],
+    AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible', 'MessageRetentionPeriod'],
   });
   const response = await sqs.send(command);
+  const retention = parseInt(response.Attributes?.MessageRetentionPeriod ?? '', 10);
   return {
     approximateMessageCount: parseInt(response.Attributes?.ApproximateNumberOfMessages ?? '0', 10),
     approximateNotVisibleCount: parseInt(response.Attributes?.ApproximateNumberOfMessagesNotVisible ?? '0', 10),
+    messageRetentionSeconds: Number.isFinite(retention) ? retention : undefined,
   };
 };
 

@@ -41,7 +41,7 @@ WEBSOCKET_URL=wss://chat.example.com/ws
 
 # DO NOT change WEBSOCKET_MANAGEMENT_ENDPOINT - it is an internal, compose-network
 # address the app + fanout push to, never reached from the browser. Leave as:
-# WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3001
+# WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3002
 
 # -- MinIO / S3 credentials (required: change off the dev default) --
 # The example ships the conventional local default (minioadmin). Change it before
@@ -60,6 +60,8 @@ AWS_SECRET_ACCESS_KEY=REPLACE-with-openssl-rand-hex-24
 # from it. Point MAIL_* at a real SMTP provider. Use 587 (STARTTLS) or 465
 # (implicit TLS). MAIL_FROM should be an address your provider lets you send as.
 # (Defaults were MAIL_HOST=mail / MAIL_PORT=1025 pointing at Mailpit.)
+# MAIL_USERNAME and MAIL_PASSWORD are optional as a pair: remove both for a
+# relay without authentication, but never set only one of them.
 MAIL_HOST=smtp.your-provider.example
 MAIL_PORT=587
 MAIL_USERNAME=REPLACE-with-smtp-username
@@ -89,5 +91,8 @@ MAIL_FROM=bike4mind@chat.example.com
 # =====================================================================
 
 # Persistent master key for memory DEK envelope encryption. Generate once: openssl rand -hex 32
-# Back this up with the other encryption keys; do not replace it during redeploys.
+# Back this up with the other encryption keys; change it only by the rotation procedure in
+# docs/security/credential-storage.md.
 MEMORY_KEY_SECRET=
+# The outgoing MEMORY_KEY_SECRET; set only while rotating, otherwise leave empty.
+MEMORY_KEY_SECRET_PREVIOUS=

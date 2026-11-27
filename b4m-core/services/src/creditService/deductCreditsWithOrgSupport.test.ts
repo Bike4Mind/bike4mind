@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, MockedObject } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, MockedObject } from 'vitest';
 import { deductCreditsWithOrgSupport, DeductCreditsAdapters, DeductCreditsParams } from './deductCreditsWithOrgSupport';
 import {
   CreditHolderType,
@@ -15,6 +15,7 @@ vi.mock('./subtractCredits', () => ({
 }));
 
 import { subtractCredits } from './subtractCredits';
+import { setOrgEventObserver } from '../organizationService/orgEventObserver';
 
 const mockSubtractCredits = vi.mocked(subtractCredits);
 
@@ -103,6 +104,28 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it('records a run attribution on the ledger row, so the run reads the charge as settled spend', async () => {
+      const run = { runId: '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80', role: 'worker' as const, purpose: 'tool' as const };
+
+      await deductCreditsWithOrgSupport(
+        {
+          type: 'sound_effects_usage',
+          user: mockUser,
+          organization: null,
+          credits: 3,
+          sessionId: 's1',
+          model: 'm',
+          run,
+        },
+        mockAdapters
+      );
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'sound_effects_usage', metadata: { run } }),
+        expect.anything()
+      );
+    });
+
     it('should handle undefined organization the same as null', async () => {
       const params: DeductCreditsParams = {
         type: 'image_generation_usage',
@@ -130,6 +153,10 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
   });
 
   describe('organization deduction', () => {
+    const capObserver = vi.fn();
+    beforeEach(() => setOrgEventObserver(capObserver));
+    afterEach(() => setOrgEventObserver(null));
+
     it('should deduct credits from organization and update userDetails atomically', async () => {
       const params: DeductCreditsParams = {
         type: 'text_generation_usage',
@@ -153,6 +180,7 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
 
       // Member already has a userDetails row, so no self-heal seed is issued.
       expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+      expect(capObserver).toHaveBeenCalledWith({ type: 'member_cap_check', organizationId: 'org1', userId: 'user1' });
 
       expect(mockSubtractCredits).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -208,6 +236,40 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: 57 }),
         expect.any(Object)
       );
+    });
+
+    it("tracks no member row for the org's own service account, but still bills the org", async () => {
+      const orgWithoutUser = {
+        id: 'org1',
+        currentCredits: 500,
+        userDetails: [{ id: 'other-user', name: 'Other', usedCredits: 10, lastCreditUsedAt: null }],
+      } as unknown as IOrganizationDocument;
+      const serviceAccount = {
+        ...mockUser,
+        isSystem: true,
+        serviceAccountOrganizationId: 'org1',
+      } as IUserDocument;
+
+      await deductCreditsWithOrgSupport(
+        {
+          type: 'image_generation_usage',
+          user: serviceAccount,
+          organization: orgWithoutUser,
+          credits: 50,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'dall-e-3',
+        },
+        mockAdapters
+      );
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization }),
+        expect.anything()
+      );
+      expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+      expect(mockOrgRepo.updateUserDetails).not.toHaveBeenCalled();
+      expect(capObserver).not.toHaveBeenCalled();
     });
 
     it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {
@@ -269,6 +331,32 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
+    it.each(['text_generation_usage', 'completion_api_usage'] as const)(
+      'forwards cache read and write tokens for %s',
+      async type => {
+        const params = {
+          type,
+          user: mockUser,
+          organization: null,
+          credits: 15,
+          sessionId: 'session1',
+          questId: 'quest1',
+          model: 'claude-opus-5-5',
+          inputTokens: 5,
+          outputTokens: 250,
+          cacheReadTokens: 40_000,
+          cacheWriteTokens: 2_000,
+        } satisfies DeductCreditsParams;
+
+        await deductCreditsWithOrgSupport(params, mockAdapters);
+
+        expect(mockSubtractCredits).toHaveBeenCalledWith(
+          expect.objectContaining({ type, inputTokens: 5, cacheReadTokens: 40_000, cacheWriteTokens: 2_000 }),
+          expect.any(Object)
+        );
+      }
+    );
+
     it('should handle image_generation_usage type', async () => {
       const params: DeductCreditsParams = {
         type: 'image_generation_usage',
@@ -322,6 +410,30 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
 
       expect(mockSubtractCredits).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'video_generation_usage' }),
+        expect.any(Object)
+      );
+    });
+
+    it('should handle tool_usage type, carrying the per-call quest id and provider-tool model', async () => {
+      const params: DeductCreditsParams = {
+        type: 'tool_usage',
+        user: mockUser,
+        organization: null,
+        credits: 30,
+        sessionId: 'web-search-1',
+        questId: 'web-search-1',
+        model: 'serpapi-web_search',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'tool_usage',
+          credits: 30,
+          questId: 'web-search-1',
+          model: 'serpapi-web_search',
+        }),
         expect.any(Object)
       );
     });
@@ -484,6 +596,33 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         apiKeyId: 'apikey-123',
       });
       expect('questId' in calledWith).toBe(false);
+    });
+  });
+
+  describe('apiKeyId attribution', () => {
+    it.each([
+      { type: 'image_generation_usage', questId: 'quest1' },
+      { type: 'text_generation_usage', questId: 'quest1', inputTokens: 1, outputTokens: 1 },
+      { type: 'music_generation_usage' },
+      { type: 'text_to_speech_usage' },
+      { type: 'speech_to_text_usage' },
+      { type: 'sound_effects_usage' },
+      { type: 'completion_api_usage', inputTokens: 1, outputTokens: 1 },
+    ] as const)('forwards apiKeyId for $type', async variant => {
+      const params = {
+        ...variant,
+        user: mockUser,
+        organization: null,
+        credits: 2,
+        sessionId: 'session1',
+        model: 'model-x',
+        apiKeyId: 'apikey-123',
+      } as DeductCreditsParams;
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({ type: variant.type, apiKeyId: 'apikey-123' });
     });
   });
 

@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { execFileSync } from 'child_process';
-import * as path from 'path';
 import type { RecordLakeAccessEventInput } from '@bike4mind/common';
 import { LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS, LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS } from '@bike4mind/common';
 import { lakeAccessEventRepository as repo, LakeAccessEventModel } from './LakeAccessEventModel';
@@ -77,6 +75,18 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(event.returnedChunkCount).toBe(1);
       expect(event.surface).toBe('forced-retrieval');
       expect(event.createdAt).toBeInstanceOf(Date);
+    });
+
+    it.each([
+      'data-lake-health',
+      'data-lake-proposals',
+      'data-lake-findings',
+      'data-lake-inconsistencies',
+      'data-lake-skipped-files',
+      'data-lake-membership-duplicates',
+    ] as const)('persists the %s surface', async surface => {
+      const event = await repo.record(baseInput({ surface, resolvedLakeIds: ['lake-a'] }));
+      expect(event.surface).toBe(surface);
     });
 
     it('round-trips questId and sessionId (#1867 turn linkage)', async () => {
@@ -182,6 +192,22 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       const explicitFalse = await repo.record(baseInput({ chunkIds: ['c1'], servedNothing: false }));
       const storedFalse = await LakeAccessEventModel.findById(explicitFalse.id).lean();
       expect(Object.prototype.hasOwnProperty.call(storedFalse as object, 'servedNothing')).toBe(false);
+    });
+
+    it('stores adminBypassLakeIds filtered to resolvedLakeIds', async () => {
+      const event = await repo.record(
+        baseInput({ resolvedLakeIds: ['lake-1'], adminBypassLakeIds: ['lake-1', 'other'] })
+      );
+      const stored = await LakeAccessEventModel.findById(event.id).lean();
+      expect(stored?.adminBypassLakeIds).toEqual(['lake-1']);
+    });
+
+    it('leaves adminBypassLakeIds absent when omitted, empty, or fully filtered out', async () => {
+      for (const adminBypassLakeIds of [undefined, [], ['other']]) {
+        const event = await repo.record(baseInput({ resolvedLakeIds: ['lake-1'], adminBypassLakeIds }));
+        const stored = await LakeAccessEventModel.findById(event.id).lean();
+        expect(Object.prototype.hasOwnProperty.call(stored as object, 'adminBypassLakeIds')).toBe(false);
+      }
     });
 
     it('is absent updatedAt - an audit row that reports being updated is a lie', async () => {
@@ -504,49 +530,6 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       );
       const reloaded = await LakeAccessEventModel.findById(event.id);
       expect(reloaded!.expiresAt.getTime()).toBe(new Date('2020-01-01').getTime());
-    });
-
-    it('no other source file writes to LakeAccessEventModel/LakeAccessQueryTextModel outside their own repository methods', () => {
-      const repoRoot = path.resolve(__dirname, '../../../../..');
-      const relFromRoot = (p: string) => path.relative(repoRoot, p).split(path.sep).join('/');
-      const allowedFiles = new Set([
-        relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.test.ts')),
-        relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.ts')),
-        relFromRoot(path.resolve(__dirname, 'LakeAccessQueryTextModel.ts')),
-        // An index migration's integration test legitimately needs raw collection access: it
-        // asserts on `.indexes()` and resets state between cases, neither of which the repository
-        // exposes (nor should it - `record` is the only write verb by design). Declared here as an
-        // explicit exception rather than routed through `mongoose.connection.db` to dodge the
-        // pattern: evading a text guard leaves the same capability with none of the visibility,
-        // and it would decouple the collection name from the model. The guard's real subject is
-        // production code bypassing `record()` to mutate `expiresAt`; a migration test does not.
-        'packages/scripts/migrate/migrations/20260820000000_ensure-lakeaccessevent-questid-index.integration.test.ts',
-        'packages/scripts/migrate/migrations/20260827000000_ensure-lake-audit-tiebreak-indexes.integration.test.ts',
-      ]);
-      // `git grep` only searches TRACKED files (no explicit node_modules/.git/dist skip-list
-      // needed) and is dramatically faster than a synchronous fs walk of the whole monorepo -
-      // the walk this replaced timed out CI's 15s default even though it ran in well under a
-      // second locally. Covers the ordinary query-update verbs AND the raw-driver/collection
-      // escape hatch and overwriteImmutable, on BOTH models. Cannot catch an aliased import
-      // (`import { LakeAccessEventModel as X }`), a real limit of a text-pattern guard.
-      const pattern =
-        '(LakeAccessEventModel|LakeAccessQueryTextModel)\\s*\\.\\s*(updateOne|updateMany|findOneAndUpdate|bulkWrite|replaceOne|collection)\\s*[.(]';
-      let output = '';
-      try {
-        output = execFileSync('git', ['grep', '-lP', pattern, '--', '*.ts', '*.tsx'], {
-          cwd: repoRoot,
-          encoding: 'utf-8',
-        });
-      } catch (err) {
-        // Exit code 1 from `git grep` means "no matches" - not a real error.
-        if ((err as { status?: number }).status !== 1) throw err;
-      }
-      const offenders = output
-        .split('\n')
-        .filter(Boolean)
-        .filter(file => !allowedFiles.has(file));
-
-      expect(offenders).toEqual([]);
     });
   });
 

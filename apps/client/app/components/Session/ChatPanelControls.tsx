@@ -8,7 +8,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { menuSurfaceSx, selectListboxSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import { useCopySessionMarkdown } from './useCopySessionMarkdown';
+import { useCopySessionMarkdown, type GetCopyMarkdown } from './useCopySessionMarkdown';
 
 /**
  * Square chrome button for a panel header. Exported so surfaces that contribute their
@@ -34,6 +34,10 @@ const LAYOUT_LABELS: Record<LayoutChoice, string> = {
   floatingChat: 'Float',
 };
 
+/** The layout menu's accessible name: what it is, and the layout it shows, if any. */
+const layoutMenuName = (activeLayout?: LayoutChoice): string =>
+  activeLayout ? `Chat layout: ${LAYOUT_LABELS[activeLayout]}` : 'Chat layout';
+
 interface ChatPanelControlsProps {
   /** data-testid prefix, e.g. 'docked-chat' or 'floating-chat' */
   testIdPrefix: string;
@@ -41,6 +45,13 @@ interface ChatPanelControlsProps {
   activeLayout?: Exclude<LayoutChoice, 'floatingChat'>;
   /** Offer "Float" in the menu (docked panels only - the floating window is already there). */
   showFloat?: boolean;
+  /** Offer the dock layouts. Off for hosts that cannot lay out a docked panel (e.g. /admin). */
+  dockable?: boolean;
+  /**
+   * Markdown for the copy button. Omit to copy the main chat's current session; a surface
+   * with its own chat (e.g. a premium overlay) passes this so the button copies that chat.
+   */
+  getCopyMarkdown?: GetCopyMarkdown;
 }
 
 /**
@@ -48,64 +59,75 @@ interface ChatPanelControlsProps {
  * layout menu (dock directions plus, where the panel offers it, Float) followed by
  * copy-as-markdown. Panel-specific buttons (Hide chat, Close) stay in the panels.
  */
-const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({ testIdPrefix, activeLayout, showFloat = false }) => {
-  const { copyMarkdown, copied } = useCopySessionMarkdown();
+const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({
+  testIdPrefix,
+  activeLayout,
+  showFloat = false,
+  dockable = true,
+  getCopyMarkdown,
+}) => {
+  const { copyMarkdown, copied } = useCopySessionMarkdown(getCopyMarkdown);
 
   return (
     <>
-      <Select<LayoutChoice>
-        size="sm"
-        variant="outlined"
-        color="neutral"
-        value={activeLayout ?? null}
-        onChange={(_, value) => value && setSessionLayout({ layout: value })}
-        // The floating window passes no activeLayout, so nothing matches an Option and Joy
-        // leaves the button blank rather than falling back. Say what the control is.
-        placeholder="Layout"
-        indicator={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
-        renderValue={option => (
-          <Typography noWrap level="body-sm" textColor="inherit" sx={{ minWidth: 0 }}>
-            {option ? LAYOUT_LABELS[option.value] : 'Layout'}
-          </Typography>
-        )}
-        slotProps={{
-          button: { 'data-testid': `${testIdPrefix}-layout-select-btn` },
-          listbox: {
-            'data-testid': `${testIdPrefix}-layout-listbox`,
-            sx: theme => ({
-              ...menuSurfaceSx(theme),
-              ...selectListboxSx(theme),
-              // minWidth, not width: Joy's Select popper writes an inline width on this
-              // element from the anchor's own box, and an inline style beats any class.
-              minWidth: 180,
-              maxHeight: 360,
-              overflowY: 'auto',
-            }),
-          },
-        }}
-        data-testid={`${testIdPrefix}-layout-select`}
-        sx={{
-          maxWidth: 220,
-          fontWeight: 400,
-          gap: '8px',
-          // The chevron points at where the list is: down when it is closed, up while it is
-          // open, turning rather than swapping so the two read as one control.
-          [`& .${selectClasses.indicator}`]: { transition: 'transform 0.2s ease' },
-          [`&.${selectClasses.expanded} .${selectClasses.indicator}`]: { transform: 'rotate(-180deg)' },
-        }}
-      >
-        <Option value="dockRight" data-testid={`${testIdPrefix}-dock-right`}>
-          {LAYOUT_LABELS.dockRight}
-        </Option>
-        <Option value="dockBottom" data-testid={`${testIdPrefix}-dock-bottom`}>
-          {LAYOUT_LABELS.dockBottom}
-        </Option>
-        {showFloat && (
-          <Option value="floatingChat" data-testid={`${testIdPrefix}-float`}>
-            {LAYOUT_LABELS.floatingChat}
+      {dockable && (
+        <Select<LayoutChoice>
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          value={activeLayout ?? null}
+          onChange={(_, value) => value && setSessionLayout({ layout: value })}
+          // The floating window passes no activeLayout, so nothing matches an Option and Joy
+          // leaves the button blank rather than falling back. Say what the control is.
+          placeholder="Layout"
+          indicator={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
+          renderValue={option => (
+            <Typography noWrap level="body-sm" textColor="inherit" sx={{ minWidth: 0 }}>
+              {option ? LAYOUT_LABELS[option.value] : 'Layout'}
+            </Typography>
+          )}
+          slotProps={{
+            // A combobox takes no name from its contents, and the button shows only the current
+            // layout or the placeholder. The name carries the shown layout, so speech control finds
+            // the button by the words on it ("Dock left"); "Layout" is already in "Chat layout".
+            button: { 'data-testid': `${testIdPrefix}-layout-select-btn`, 'aria-label': layoutMenuName(activeLayout) },
+            listbox: {
+              'data-testid': `${testIdPrefix}-layout-listbox`,
+              sx: theme => ({
+                ...menuSurfaceSx(theme),
+                ...selectListboxSx(theme),
+                // minWidth, not width: Joy's Select popper writes an inline width on this
+                // element from the anchor's own box, and an inline style beats any class.
+                minWidth: 180,
+                maxHeight: 360,
+                overflowY: 'auto',
+              }),
+            },
+          }}
+          data-testid={`${testIdPrefix}-layout-select`}
+          sx={{
+            maxWidth: 220,
+            fontWeight: 400,
+            gap: '8px',
+            // The chevron points at where the list is: down when it is closed, up while it is
+            // open, turning rather than swapping so the two read as one control.
+            [`& .${selectClasses.indicator}`]: { transition: 'transform 0.2s ease' },
+            [`&.${selectClasses.expanded} .${selectClasses.indicator}`]: { transform: 'rotate(-180deg)' },
+          }}
+        >
+          <Option value="dockRight" data-testid={`${testIdPrefix}-dock-right`}>
+            {LAYOUT_LABELS.dockRight}
           </Option>
-        )}
-      </Select>
+          <Option value="dockBottom" data-testid={`${testIdPrefix}-dock-bottom`}>
+            {LAYOUT_LABELS.dockBottom}
+          </Option>
+          {showFloat && (
+            <Option value="floatingChat" data-testid={`${testIdPrefix}-float`}>
+              {LAYOUT_LABELS.floatingChat}
+            </Option>
+          )}
+        </Select>
+      )}
       <Tooltip title={copied ? 'Copied!' : 'Copy chat as Markdown'} disableInteractive>
         <IconButton
           size="md"

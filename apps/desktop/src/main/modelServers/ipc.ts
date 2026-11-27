@@ -1,0 +1,125 @@
+import type { IpcMain } from 'electron';
+import { IPC_CHANNELS } from '@shared/ipc';
+import type {
+  ModelServerAccess,
+  ModelServerAddInput,
+  ModelServerCredentialInput,
+  ModelServerKind,
+  ModelServerMutationResult,
+  ModelServerProbeInput,
+  ModelServerSpecs,
+  ModelServerUpdateInput,
+  ModelServerView,
+} from '@shared/modelServers';
+import { readLaunchShape, readSpecsShape } from '@shared/modelServers';
+import type { MachineView } from '@shared/models';
+import type { ModelServerRegistry } from './ModelServerRegistry';
+import { MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS } from './ModelServerStore';
+
+const text = (value: unknown, max = 4_096) => (typeof value === 'string' ? value.slice(0, max) : '');
+
+function kind(value: unknown): ModelServerKind | undefined {
+  return value === 'ollama' || value === 'openai-compatible' ? value : undefined;
+}
+
+function access(value: unknown): ModelServerAccess | undefined {
+  return value === 'chat' || value === 'manage' ? value : undefined;
+}
+
+// Trimmed first, then one past the limit, so credentialHeaders rejects an over-long value instead of it being saved truncated.
+const credentialText = (value: unknown, max: number) => text(typeof value === 'string' ? value.trim() : value, max + 1);
+
+/** The renderer is ours, but these reach the network: anything malformed becomes "no credential". */
+export function credentialInput(value: unknown): ModelServerCredentialInput {
+  const raw = (value ?? {}) as Record<string, unknown>;
+  if (raw.type === 'bearer') return { type: 'bearer', token: credentialText(raw.token, MAX_SECRET_CHARS) };
+  if (raw.type === 'header') {
+    return {
+      type: 'header',
+      name: credentialText(raw.name, MAX_HEADER_NAME_CHARS),
+      value: credentialText(raw.value, MAX_SECRET_CHARS),
+    };
+  }
+  return { type: 'none' };
+}
+
+/** Undefined leaves the specs as they are; null clears them. The store checks the figures. */
+export function specsInput(value: unknown): ModelServerSpecs | null | undefined {
+  if (value === undefined) return undefined;
+  return readSpecsShape(value);
+}
+
+/** The registry checks the port; only undefined is no port, and anything not a number or short text is invalid. */
+function portInput(value: unknown): number | string | undefined {
+  if (value === undefined || typeof value === 'number') return value;
+  // Not cut to length: a cut can leave a valid port followed by spaces, which the registry trims.
+  return typeof value === 'string' && value.length <= 16 ? value : 'invalid';
+}
+
+function probeInput(value: unknown): ModelServerProbeInput {
+  const raw = (value ?? {}) as Record<string, unknown>;
+  const port = portInput(raw.port);
+  return {
+    address: text(raw.address, 2_048),
+    credential: credentialInput(raw.credential),
+    transport: raw.transport === 'ssh' ? 'ssh' : 'http',
+    ...(port !== undefined ? { port } : {}),
+  };
+}
+
+export function registerModelServersIpc(
+  ipc: Pick<IpcMain, 'handle'>,
+  registry: Pick<
+    ModelServerRegistry,
+    'views' | 'probe' | 'add' | 'update' | 'remove' | 'check' | 'startServer' | 'stopServer' | 'restartServer'
+  >,
+  /** This computer's hardware as probed, before any entered specs; null when the probe failed. */
+  probedHardware: () => Promise<MachineView | null> = async () => null
+): void {
+  const mutate = async (work: () => Promise<ModelServerView[]>): Promise<ModelServerMutationResult> => {
+    try {
+      return { ok: true, servers: await work() };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : 'Could not save that server.' };
+    }
+  };
+
+  ipc.handle(IPC_CHANNELS.modelServersList, () => registry.views());
+  ipc.handle(IPC_CHANNELS.modelServersProbe, (_event, input: unknown) => registry.probe(probeInput(input)));
+  ipc.handle(IPC_CHANNELS.modelServersAdd, (_event, input: unknown) => {
+    const raw = (input ?? {}) as Record<string, unknown>;
+    const add: ModelServerAddInput = {
+      ...probeInput(raw),
+      name: text(raw.name, 200),
+      kind: kind(raw.kind) ?? 'ollama',
+      access: access(raw.access) ?? 'chat',
+      acceptOpen: raw.acceptOpen === true,
+      ...(raw.launch === true ? { launch: true } : {}),
+    };
+    return mutate(() => registry.add(add));
+  });
+  ipc.handle(IPC_CHANNELS.modelServersUpdate, (_event, id: unknown, input: unknown) => {
+    const raw = (input ?? {}) as Record<string, unknown>;
+    const update: ModelServerUpdateInput = {
+      ...(typeof raw.name === 'string' ? { name: text(raw.name, 200) } : {}),
+      ...(kind(raw.kind) ? { kind: kind(raw.kind) } : {}),
+      ...(access(raw.access) ? { access: access(raw.access) } : {}),
+      ...(raw.credential !== undefined ? { credential: credentialInput(raw.credential) } : {}),
+      ...(raw.specs !== undefined ? { specs: specsInput(raw.specs) } : {}),
+      ...(raw.launch !== undefined ? { launch: readLaunchShape(raw.launch) } : {}),
+    };
+    return mutate(() => registry.update(text(id, 64), update));
+  });
+  ipc.handle(IPC_CHANNELS.modelServersProbedHardware, () => probedHardware().catch(() => null));
+  ipc.handle(IPC_CHANNELS.modelServersLaunch, (_event, id: unknown, action: unknown) => {
+    const server = text(id, 64);
+    if (action === 'start') return mutate(() => registry.startServer(server));
+    if (action === 'stop') return mutate(() => registry.stopServer(server));
+    if (action === 'restart') return mutate(() => registry.restartServer(server));
+    return { ok: false, error: 'Unknown server action.' };
+  });
+  ipc.handle(IPC_CHANNELS.modelServersRemove, (_event, id: unknown) => mutate(() => registry.remove(text(id, 64))));
+  ipc.handle(IPC_CHANNELS.modelServersCheck, (_event, id: unknown) =>
+    registry.check(typeof id === 'string' ? text(id, 64) : undefined, { lookAgain: true })
+  );
+}

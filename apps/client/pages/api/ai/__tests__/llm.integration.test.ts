@@ -17,6 +17,8 @@ import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
 const {
+  mockCheckFreeTierDailySpendCap,
+  mockFindActiveFreeze,
   mockValidate,
   mockUserFindById,
   mockUserUpdate,
@@ -28,7 +30,10 @@ const {
   mockLoadIdentityPrompts,
   mockOrgFindAccessibleById,
   mockOrgFindById,
+  mockResolveUserRateLimitPerMin,
 } = vi.hoisted(() => ({
+  mockCheckFreeTierDailySpendCap: vi.fn().mockResolvedValue(undefined),
+  mockFindActiveFreeze: vi.fn(),
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
   mockUserUpdate: vi.fn(),
@@ -40,6 +45,7 @@ const {
   mockLoadIdentityPrompts: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
   mockOrgFindById: vi.fn(),
+  mockResolveUserRateLimitPerMin: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -51,13 +57,26 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: (...args: unknown[]) => mockCheckFreeTierDailySpendCap(...args),
+}));
+
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({
+  resolveUserRateLimitPerMin: (...a: unknown[]) => mockResolveUserRateLimitPerMin(...a),
+}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -105,6 +124,7 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.cacheRepository as object),
       tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
     },
+    spendFreezeRepository: { findActiveForSubject: (...a: unknown[]) => mockFindActiveFreeze(...a) },
     // resolveBillingOrgId -> resolveActiveOrg run for real here; only the org-membership repo call
     // is stubbed, so the billing wiring (route -> resolver -> gate) is exercised end to end.
     organizationRepository: {
@@ -119,20 +139,20 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/utils/chatCompletionDefaults', () => ({
+vi.mock('@bike4mind/server-utils/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
 }));
 
-vi.mock('@server/utils/sessionSystemPromptResolver', () => ({
+vi.mock('@bike4mind/server-utils/utils/sessionSystemPromptResolver', () => ({
   sessionWillInjectAuthoredPrompt: (...a: unknown[]) => mockWillInjectAuthoredPrompt(...a),
 }));
 
-vi.mock('@server/utils/systemPrompts/loader', () => ({
+vi.mock('@bike4mind/server-utils/utils/systemPrompts/loader', () => ({
   loadBaseIdentitySystemPromptMessages: (...a: unknown[]) => mockLoadIdentityPrompts(...a),
 }));
 
@@ -153,8 +173,19 @@ vi.mock('@server/auth/auth', async orig => {
   };
 });
 
+const { mockAdmitRequestCompletion, mockQuotaRelease } = vi.hoisted(() => {
+  const mockQuotaRelease = vi.fn(async () => {});
+  return {
+    mockQuotaRelease,
+    mockAdmitRequestCompletion: vi.fn(async (..._a: unknown[]) => ({ release: mockQuotaRelease })),
+  };
+});
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: (...a: unknown[]) => mockAdmitRequestCompletion(...a),
+}));
+
 import handler from '../llm';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { FILE_READ_TOOL_NAMES, ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 const OWN_ORG = '650000000000000000000abc';
@@ -198,9 +229,11 @@ function validateWithScopes(scopes: ApiKeyScope[] | string[]) {
 describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFindActiveFreeze.mockResolvedValue(null);
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockResolveUserRateLimitPerMin.mockResolvedValue(10);
     mockUserUpdate.mockResolvedValue(undefined);
     mockWillInjectAuthoredPrompt.mockResolvedValue(false);
     mockLoadIdentityPrompts.mockResolvedValue([]);
@@ -210,6 +243,50 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       session: { id: 'sess-1', name: 'Test Session' },
     });
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+  });
+
+  it('returns the daily cap response before creating a session or dispatching a quest', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: 'daily_free_limit_reached',
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'daily_free_limit_reached' });
+    expect(res.getHeader('Retry-After')).toBe('3600');
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ user: req.user, req, billingOrganizationId: null })
+    );
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('gives a user without AI access their access error, not spend_frozen', async () => {
+    mockFindActiveFreeze.mockResolvedValue({ scopeType: 'User', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ apiKey: null });
+    req.user = { ...JWT_USER, isModerated: true };
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().errorCode).not.toBe('spend_frozen');
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('refuses a frozen caller with 403 spend_frozen ahead of the daily cap and before a session', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockFindActiveFreeze.mockResolvedValueOnce({ scopeType: 'apiKey', frozenAt: new Date('2026-11-01T00:00:00Z') });
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'spend_frozen', frozenScope: 'api_key' });
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: 'k1' });
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 
   it('rejects a key lacking ai:chat (403) before dispatching any billed completion', async () => {
@@ -243,11 +320,47 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['key without read', VALID_KEY, [ApiKeyScope.AI_CHAT], false],
+    ['key with read', VALID_KEY, [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES], true],
+    ['session', null, [ApiKeyScope.AI_CHAT], true],
+  ] as const)('stamps trusted file admission for %s despite a forged body flag', async (_, apiKey, scopes, allowed) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire({ apiKey, body: { fileInputsAllowed: true, fabFileIds: ['private-canary'] } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+    expect(mockGetOrCreateSession.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ fabFileIds: allowed ? ['private-canary'] : [] })
+    );
+  });
+
+  it.each([null, VALID_KEY])('withholds server-only quest fields from a %j caller', async apiKey => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockInvoke.mockResolvedValue({
+      id: 'quest-1',
+      status: 'pending',
+      prompt: 'Hello there',
+      callback: { url: 'https://private.example.test', apiKeyId: 'private-key' },
+      embedding: [0.1, 0.2],
+      slackNotification: { channel: 'private-channel' },
+    });
+    const { req, res } = fire({ apiKey });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.quest).toMatchObject({ id: 'quest-1', status: 'pending', prompt: 'Hello there' });
+    for (const field of ['callback', 'embedding', 'slackNotification']) {
+      expect(body.quest).not.toHaveProperty(field);
+    }
+    expect(JSON.stringify(body)).not.toContain('private-');
+  });
+
   describe('data-lake write tools vs the key scopes', () => {
     const invokedDenied = () => (mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools;
 
     it('denies list/create/save to an ai:chat key without any data-lake scope', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]);
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
@@ -255,7 +368,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
 
     it('keeps a client deniedTools and adds to it, so a client can never lift the denial', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]);
       const { req, res } = fire({ body: { deniedTools: ['web_search'] } });
       await handler(req, res);
       expect(invokedDenied()).toEqual([
@@ -287,11 +400,18 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     });
 
-    it('denies nothing to a key that holds datalake:write', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    it('denies nothing to a key that holds datalake:write and files:read', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES]);
       const { req, res } = fire();
       await handler(req, res);
       expect(invokedDenied()).toBeUndefined();
+    });
+
+    it('denies the file-reading tools to a key without files:read', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(invokedDenied()).toEqual([...FILE_READ_TOOL_NAMES]);
     });
 
     it('denies nothing to a JWT/browser caller', async () => {
@@ -321,6 +441,27 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockGetOrCreateSession.mock.calls[0][0]).not.toHaveProperty('messageFileIds');
       expect(invokedBody().messageFileIds).toEqual(['f1', 'f2']);
+    });
+  });
+
+  describe('platform MCP connectors switched on in the composer', () => {
+    const platformId = 'a'.repeat(24);
+    const body = { enabledPlatformMcpConnections: [platformId] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards them for a session (JWT) caller', async () => {
+      const { req, res } = fire({ apiKey: null, body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().enabledPlatformMcpConnections).toEqual([platformId]);
+    });
+
+    it('drops them for an API-key caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedBody().enabledPlatformMcpConnections).toBeUndefined();
     });
   });
 
@@ -401,6 +542,83 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(invoked().authOrigin).toBe('session');
       expect(invoked().apiKeyId).toBeUndefined();
     });
+
+    it.each([
+      ['withholds', [ApiKeyScope.AI_CHAT], true],
+      ['keeps', [ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN], false],
+    ] as const)('%s the admin role on the queued quest for a key with scopes %j', async (_, scopes, withheld) => {
+      validateWithScopes([...scopes]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect((mockInvoke.mock.calls[0][0] as { adminRoleWithheld?: boolean }).adminRoleWithheld).toBe(withheld);
+    });
+  });
+
+  describe('the visit handed to the queued turn (its first_value names it)', () => {
+    const visitId = 'a'.repeat(32);
+    const invokedVisit = () => (mockInvoke.mock.calls[0][0] as { visitId?: string }).visitId;
+
+    it("hands invoke() a browser caller's visit cookie", async () => {
+      const { req, res } = fire({ apiKey: null, headers: { cookie: `b4m_vid=${visitId}` } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBe(visitId);
+    });
+
+    it.each([
+      ['no visit cookie', null, undefined],
+      ['a visit cookie this server did not mint', null, 'b4m_vid=not-a-visit'],
+      ['an API key, even with a visit cookie', VALID_KEY, `b4m_vid=${visitId}`],
+    ])('hands it no visit for %s', async (_, apiKey, cookie) => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey, headers: cookie ? { cookie } : {} });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedVisit()).toBeUndefined();
+    });
+
+    it('ignores a client-supplied visitId in the body', async () => {
+      const { req, res } = fire({ apiKey: null, body: { visitId } });
+      await handler(req, res);
+      expect(invokedVisit()).toBeUndefined();
+    });
+  });
+
+  describe('per-user tier rate limit', () => {
+    it('blocks a caller whose tier limit is 0 (429) with no bucket write, session, or completion', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(0);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('still serves a caller at the Free default of 10 and counts against that limit', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).toHaveBeenCalledWith(expect.any(String), 10, 60_000);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    it('429s an over-limit caller once the bucket is full', async () => {
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('skips enforcement for an unlimited (admin/developer) caller', async () => {
+      mockResolveUserRateLimitPerMin.mockResolvedValue(Infinity);
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockTryIncrement).not.toHaveBeenCalled();
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
@@ -467,6 +685,10 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(mockInvoke.mock.calls[0][0].body.organizationId).toBe(KEY_ORG);
       expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
+      expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+        expect.objectContaining({ user: req.user, req, billingOrganizationId: KEY_ORG })
+      );
+      expect(mockCheckFreeTierDailySpendCap.mock.calls[0][0].req).toBe(req);
     });
 
     it("accepts the key's own org in the body", async () => {
@@ -579,5 +801,39 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
     expect(mockInvoke.mock.calls[0][0].body.systemPrompt).toBe(atCap);
+  });
+});
+
+describe('POST /api/ai/llm (integration - untrusted owner quotas)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
+    mockApiKeyRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockWillInjectAuthoredPrompt.mockResolvedValue(false);
+    mockLoadIdentityPrompts.mockResolvedValue([]);
+    mockGetOrCreateSession.mockResolvedValue({ sessionId: 'sess-1', asyncPromises: [], session: { id: 'sess-1' } });
+    mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockAdmitRequestCompletion.mockResolvedValue({ release: mockQuotaRelease });
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+  });
+
+  it('checks the token quota for the queued turn without holding a concurrency slot', async () => {
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockAdmitRequestCompletion).toHaveBeenCalledWith(req, { holdSlot: false });
+  });
+
+  it('refuses an over-quota turn with a 429 and its errorCode before creating a session', async () => {
+    mockAdmitRequestCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 5 })
+    );
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'token_rate_limit_exceeded' });
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });

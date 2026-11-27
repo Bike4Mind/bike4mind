@@ -40,14 +40,24 @@
  * REDIRECT_URIS and FEDERATED_* are not read in this mode. Rerunning is idempotent:
  *   MONGODB_URI=<uri> TARGET_CLIENT_ID="b4m_..." OPT_IN_SCOPES="federated:admin-status" \
  *     pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
- * There is no revoke option; remove a scope by hand:
- *   db.oauthclients.updateOne({ clientId: 'b4m_...' }, { $pull: { allowedScopes: 'federated:admin-status' } })
+ * There is no revoke option here; remove an opt-in scope by editing the client in the admin
+ * console (OAuth clients > edit).
  *
  * REDIRECT_URIS is comma-separated. Each URI must be an absolute https URL; http is
  * allowed only for localhost, 127.0.0.1 and [::1]. No fragment, userinfo or whitespace.
+ *
+ * POST_LOGOUT_REDIRECT_URIS (optional, comma-separated, same rules as REDIRECT_URIS) registers
+ * where the client may send the browser after OIDC RP-Initiated Logout (/oauth/logout), e.g.
+ *   POST_LOGOUT_REDIRECT_URIS="https://app.example.com/signed-out"
  */
 
-import { ConflictError, nonOptInScopes, OAUTH_OPT_IN_SCOPES, type OAuthFederatedIdpInput } from '@bike4mind/common';
+import {
+  ConflictError,
+  nonOptInScopes,
+  OAUTH_OPT_IN_SCOPES,
+  postLogoutRedirectUrisSchema,
+  type OAuthFederatedIdpInput,
+} from '@bike4mind/common';
 import { addOAuthClientOptInScopes, createOAuthClient, mongoose, OAuthClientModel } from '@bike4mind/database';
 import { ZodError } from 'zod';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
@@ -102,6 +112,15 @@ export function readOptInScopesEnv(env: NodeJS.ProcessEnv = process.env): string
   return scopes;
 }
 
+/** Validated before connecting, like OPT_IN_SCOPES; a bad URI throws a ZodError. */
+export function readPostLogoutRedirectUrisEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const uris = (env.POST_LOGOUT_REDIRECT_URIS ?? '')
+    .split(',')
+    .map(u => u.trim())
+    .filter(Boolean);
+  return postLogoutRedirectUrisSchema.parse(uris);
+}
+
 export type SeedResult =
   | {
       status: 'created';
@@ -147,6 +166,7 @@ export async function runSeed(env: NodeJS.ProcessEnv = process.env): Promise<See
   const federatedIdpInput = readFederatedIdpEnv(env);
   const clientType = resolveClientType(env);
   const optInScopes = readOptInScopesEnv(env);
+  const postLogoutRedirectUris = readPostLogoutRedirectUrisEnv(env);
   // The grant would fail after creation and lose the one-time secret, so refuse up front.
   if (optInScopes.length && (!federatedIdpInput || clientType !== 'relying-party')) {
     throw new Error(
@@ -160,6 +180,7 @@ export async function runSeed(env: NodeJS.ProcessEnv = process.env): Promise<See
     const created = await createOAuthClient({
       name: clientName,
       redirectUris,
+      postLogoutRedirectUris,
       clientType,
       federatedIdp: federatedIdpInput,
     });

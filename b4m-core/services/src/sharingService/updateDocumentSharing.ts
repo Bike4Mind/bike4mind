@@ -1,6 +1,15 @@
-import { IFabFileRepository, ISessionRepository, IUserDocument, isImageServeable } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import {
+  canUpdateShareable,
+  IFabFileDocument,
+  IFabFileRepository,
+  IOrganizationRepository,
+  ISessionRepository,
+  IUserDocument,
+} from '@bike4mind/common';
+import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { generateSignedUrl, type GetFabFileAdapter } from '../fabFileService/get';
+import { assertContentPublicLinkPolicy } from './organizationPolicy';
 
 const updateDocumentSharingSchema = z.object({
   id: z.string(),
@@ -15,21 +24,23 @@ interface UpdateDocumentSharingAdapters {
   db: {
     sessions: Pick<ISessionRepository, 'shareable' | 'update'>;
     fabFiles: Pick<IFabFileRepository, 'shareable' | 'update'>;
+    organizations: Pick<IOrganizationRepository, 'findById'>;
   };
+  storage: GetFabFileAdapter['storage'];
 }
 
 /**
  * Updates the sharing flags on a shareable document (currently FabFile or Session).
  * Authorized at share level (`shareable.findShareAccessById`): these two flags publish the
  * document to every user on the instance, which is a re-share rather than an edit, so an
- * update-only sharee must not reach them. Mirrors the app-level FabFile leak-gate: a file that is not
- * image-serveable has its `fileUrl`/`fileUrlExpireAt` stripped from the RESPONSE only
- * (after the write persists), so a held/blocked image never leaks a signed URL.
+ * update-only sharee must not reach them. Changing isGlobalWrite (on or off) also needs update, so a
+ * share-only sharee can neither hand out nor take away edit rights it does not hold. A file response carries a URL
+ * signed on read, withheld for a file that is not image-serveable (held/blocked image).
  */
 export const updateDocumentSharing = async (
   user: IUserDocument,
   parameters: UpdateDocumentSharingParameters,
-  { db }: UpdateDocumentSharingAdapters
+  { db, storage }: UpdateDocumentSharingAdapters
 ) => {
   const { id, type, isGlobalRead, isGlobalWrite } = secureParameters(parameters, updateDocumentSharingSchema);
 
@@ -37,6 +48,16 @@ export const updateDocumentSharing = async (
 
   const document = await dbModel.shareable.findShareAccessById(user, id);
   if (!document) throw new NotFoundError(`${type} not found for ${id}`);
+
+  // isGlobalWrite gives every user update rights, so only a caller who holds update may change it.
+  if (isGlobalWrite !== !!document.isGlobalWrite && !canUpdateShareable(document, user.id, user.groups ?? [])) {
+    throw new ForbiddenError('You need edit access to change who can edit this');
+  }
+
+  // FabFile carries no model-level policy hook (sessions do), so the org's public-link rule is applied here.
+  if ((isGlobalRead && !document.isGlobalRead) || (isGlobalWrite && !document.isGlobalWrite)) {
+    await assertContentPublicLinkPolicy(document, db.organizations);
+  }
 
   // Targeted write: persist only the two sharing flags this endpoint owns, so the
   // stored fileUrl is left untouched. Branch per type so each concrete repo's
@@ -67,10 +88,8 @@ export const updateDocumentSharing = async (
   plain.isGlobalRead = isGlobalRead;
   plain.isGlobalWrite = isGlobalWrite;
 
-  // FabFile leak-gate: withhold the signed URL from the RESPONSE for a non-image-serveable
-  // file (response-only - the stored URL was never in the write above).
-  if (type === 'files' && !isImageServeable(plain)) {
-    return { ...plain, fileUrl: undefined, fileUrlExpireAt: undefined };
+  if (type === 'files') {
+    return generateSignedUrl(plain as unknown as IFabFileDocument, { storage });
   }
 
   return plain;

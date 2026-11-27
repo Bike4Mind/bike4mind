@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   isMediaRouteUrl,
   localizeMediaRouteUrls,
+  pickSlideStill,
   pickSlideVideo,
+  stillUrlsOf,
   storageKeyOf,
   videoUrlsOf,
   withRetryParam,
@@ -40,6 +42,33 @@ describe('videoUrlsOf', () => {
   it('lists the set urls', () => {
     expect(videoUrlsOf(both)).toEqual([both.landscapeUrl, both.landscapePosterUrl, both.portraitUrl]);
     expect(videoUrlsOf(undefined)).toEqual([]);
+  });
+});
+
+describe('pickSlideStill', () => {
+  it('uses landscape on desktop and portrait on mobile', () => {
+    const image = { landscapeUrl: 'w.png', portraitUrl: 't.png' };
+    expect(pickSlideStill(image, false)).toEqual({ src: 'w.png', orientation: 'landscape' });
+    expect(pickSlideStill(image, true)).toEqual({ src: 't.png', orientation: 'portrait' });
+  });
+
+  it('falls back to the other orientation', () => {
+    expect(pickSlideStill({ portraitUrl: 't.png' }, false)).toEqual({ src: 't.png', orientation: 'portrait' });
+    expect(pickSlideStill({ landscapeUrl: 'w.png' }, true)).toEqual({ src: 'w.png', orientation: 'landscape' });
+  });
+
+  it('is null without a still file', () => {
+    for (const v of [null, undefined, {}, { landscapeUrl: null, portraitUrl: null }]) {
+      expect(pickSlideStill(v, false)).toBeNull();
+    }
+  });
+});
+
+describe('stillUrlsOf', () => {
+  it('lists the set urls', () => {
+    expect(stillUrlsOf({ landscapeUrl: 'w.png', portraitUrl: null })).toEqual(['w.png']);
+    expect(stillUrlsOf({ landscapeUrl: 'w.png', portraitUrl: 't.png' })).toEqual(['w.png', 't.png']);
+    expect(stillUrlsOf(null)).toEqual([]);
   });
 });
 
@@ -81,6 +110,22 @@ describe('localizeMediaRouteUrls', () => {
   it("leaves the upstream feed's media route on the upstream", () => {
     const url = `${UPSTREAM}/api/v1/whats-new/media/n1/landscape`;
     expect(localizeMediaRouteUrls({ landscapeUrl: url }, UPSTREAM, HERE).landscapeUrl).toBe(url);
+  });
+
+  it('localizes a still image the same way as a video', () => {
+    expect(
+      localizeMediaRouteUrls(
+        {
+          landscapeUrl: 'https://app.example.com/api/v1/whats-new/media/n1/image-landscape',
+          portraitUrl: 'https://upstream.example.com/api/v1/whats-new/media/n1/image-portrait',
+        },
+        UPSTREAM,
+        HERE
+      )
+    ).toEqual({
+      landscapeUrl: '/api/v1/whats-new/media/n1/image-landscape',
+      portraitUrl: 'https://upstream.example.com/api/v1/whats-new/media/n1/image-portrait',
+    });
   });
 });
 

@@ -107,6 +107,30 @@ describe('ScopedOverridesByScope', () => {
     );
   });
 
+  // An object setting has no string form; String() on it printed [object Object].
+  it('shows an object setting default as JSON, not [object Object]', () => {
+    renderPanel();
+    enterAddress('org-1');
+
+    const row = screen.getByTestId('scoped-overrides-by-scope-row-customMcpPolicy');
+    expect(row).toHaveTextContent(
+      `no override at this rung (platform: ${JSON.stringify(settingsMap.customMcpPolicy.defaultValue)})`
+    );
+    expect(row).not.toHaveTextContent('[object Object]');
+  });
+
+  it('shows a stored object platform row as JSON, not [object Object]', () => {
+    // The platform settings column is Mixed, so a stored object value reaches the client as an object.
+    const stored = { mode: 'allowlist', allowedHostPatterns: ['*.example.com'] };
+    platformSettings = [{ settingName: 'customMcpPolicy', settingValue: stored } as unknown as IAdminSettings];
+    renderPanel();
+    enterAddress('org-1');
+
+    const row = screen.getByTestId('scoped-overrides-by-scope-row-customMcpPolicy');
+    expect(row).toHaveTextContent(`no override at this rung (platform: ${JSON.stringify(stored)})`);
+    expect(row).not.toHaveTextContent('[object Object]');
+  });
+
   // DefaultChunkSize is settableAt organization/owner only, so at the lake rung an override can
   // never exist there - saying "no override" would read as if one could be set.
   it('names a rung the setting cannot be set at, rather than calling it un-overridden', () => {

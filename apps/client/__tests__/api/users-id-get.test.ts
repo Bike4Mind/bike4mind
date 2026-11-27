@@ -5,6 +5,10 @@ vi.mock('@bike4mind/database', () => ({
   User: {
     findById: vi.fn(),
   },
+  Project: { exists: vi.fn() },
+  Session: { exists: vi.fn() },
+  organizationRepository: { findMembershipOrgIds: vi.fn() },
+  readAccessArms: vi.fn(user => [{ userId: user.id }]),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -15,7 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 import handler from '../../pages/api/users/[id]/index';
-import { User } from '@bike4mind/database';
+import { Project, Session, User, organizationRepository } from '@bike4mind/database';
 
 // Build a mock user document with all sensitive fields populated
 function mockUserDoc(overrides: Record<string, unknown> = {}) {
@@ -60,6 +64,9 @@ function mockRes() {
 describe('GET /api/users/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(organizationRepository.findMembershipOrgIds).mockResolvedValue([]);
+    vi.mocked(Project.exists).mockResolvedValue(null);
+    vi.mocked(Session.exists).mockResolvedValue(null);
   });
 
   it('returns 404 when user is not found', async () => {
@@ -75,6 +82,7 @@ describe('GET /api/users/[id]', () => {
 
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json).toHaveBeenCalledWith({ error: 'User not found' });
+    expect(organizationRepository.findMembershipOrgIds).not.toHaveBeenCalled();
   });
 
   // Self / admin get the profile with credentials stripped (via redactUserSecretsForSelf),
@@ -108,6 +116,7 @@ describe('GET /api/users/[id]', () => {
     expect(payload.googleDrive?.accessToken).toBeUndefined();
     expect(payload.atlassianConnect?.accessToken).toBeUndefined();
     expect(payload.slackSettings?.slackUserToken).toBeUndefined();
+    expect(organizationRepository.findMembershipOrgIds).not.toHaveBeenCalled();
   });
 
   it('returns the profile with credentials stripped for an admin viewing another user', async () => {
@@ -132,6 +141,7 @@ describe('GET /api/users/[id]', () => {
     expect(payload.googleDrive?.accessToken).toBeUndefined();
     expect(payload.atlassianConnect?.accessToken).toBeUndefined();
     expect(payload.slackSettings?.slackUserToken).toBeUndefined();
+    expect(organizationRepository.findMembershipOrgIds).not.toHaveBeenCalled();
   });
 
   it('returns the profile with credentials stripped when an admin fetches their own profile', async () => {
@@ -155,8 +165,11 @@ describe('GET /api/users/[id]', () => {
     expect(payload.atlassianConnect?.accessToken).toBeUndefined();
   });
 
-  it('returns only public fields when a non-admin user fetches another user', async () => {
+  it('returns only identity fields when an unrelated non-admin user fetches another user', async () => {
     const targetUser = mockUserDoc({ id: 'user-target-456' });
+    vi.mocked(organizationRepository.findMembershipOrgIds).mockImplementation(async id =>
+      id === 'different-user-999' ? ['viewer-org'] : ['subject-org']
+    );
     (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
       populate: vi.fn().mockReturnThis(),
       select: vi.fn().mockResolvedValue(targetUser),
@@ -174,10 +187,11 @@ describe('GET /api/users/[id]', () => {
     expect(payload.username).toBe('johndoe');
     expect(payload.name).toBe('John Doe');
     expect(payload.photoUrl).toBe('https://example.com/photo.jpg');
-    expect(payload.level).toBe('PaidUser');
-    expect(payload.role).toBe('Engineer');
-    expect(payload.team).toBe('Alpha');
-    expect(payload.isOnline).toBe(true);
+    expect(payload).not.toHaveProperty('level');
+    expect(payload).not.toHaveProperty('role');
+    expect(payload).not.toHaveProperty('team');
+    expect(payload).not.toHaveProperty('isOnline');
+    expect(payload).not.toHaveProperty('lastActiveAt');
 
     // Sensitive fields must be absent
     expect(payload.email).toBeUndefined();
@@ -191,6 +205,42 @@ describe('GET /api/users/[id]', () => {
     expect(payload.loginRecords).toBeUndefined();
     expect(payload.slackSettings).toBeUndefined();
   });
+
+  it.each(['organization', 'project', 'notebook'] as const)(
+    'includes presence and level for a shared %s colleague',
+    async workspace => {
+      (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
+        populate: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue(mockUserDoc({ id: 'subject' })),
+      });
+      if (workspace === 'organization') {
+        vi.mocked(organizationRepository.findMembershipOrgIds).mockResolvedValue(['shared-org']);
+      } else if (workspace === 'project') {
+        vi.mocked(Project.exists).mockResolvedValue({ _id: 'shared-project' } as never);
+      } else {
+        vi.mocked(Session.exists).mockResolvedValue({ _id: 'shared-notebook' } as never);
+      }
+
+      const res = mockRes();
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(mockReq('subject', 'viewer'), res);
+      const payload = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(payload).toMatchObject({
+        id: 'subject',
+        level: 'PaidUser',
+        role: 'Engineer',
+        team: 'Alpha',
+        isOnline: true,
+        lastActiveAt: new Date('2026-01-01'),
+      });
+      if (workspace !== 'organization') {
+        const model = workspace === 'project' ? Project : Session;
+        expect(model.exists).toHaveBeenCalledWith({
+          deletedAt: null,
+          $and: [{ $or: [{ userId: 'viewer' }] }, { $or: [{ userId: 'subject' }] }],
+        });
+      }
+    }
+  );
 
   // The redactor copies unknown keys; only the response schema strips them. This fails if the
   // self/admin branch stops going through respond().

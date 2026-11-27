@@ -1,14 +1,14 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Logger } from '@bike4mind/observability';
-import { createInstallProvider } from '@bike4mind/slack';
+import { createInstallProvider, getWorkspaceIdFromInstallState } from '@bike4mind/slack';
 import type { InstallationMetadata } from '@bike4mind/slack';
 import { CallbackOptions } from '@slack/oauth';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { randomUUID } from 'crypto';
-import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 /**
  * Slack OAuth Callback Endpoint
@@ -85,11 +85,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // handleCallback validates state, exchanges code for token, and calls installationStore
     try {
+      const binding = { expectedNonceHash: readStateNonceHash(req, NONCE_SLOT.slackAppInstall) };
+      const state = typeof req.query.state === 'string' ? req.query.state : undefined;
       const installer = await createInstallProvider(
-        (installMetadata: InstallationMetadata) => {
-          metadata = installMetadata;
+        {
+          // The app that started the install; undefined (invalid state, or one minted before the id was signed in)
+          // falls back to the first active app.
+          workspaceId: getWorkspaceIdFromInstallState(state, binding.expectedNonceHash),
+          onInstallComplete: (installMetadata: InstallationMetadata) => {
+            metadata = installMetadata;
+          },
         },
-        { expectedNonceHash: readStateNonceHash(req, NONCE_SLOT.slackAppInstall) }
+        binding
       );
       await installer.handleCallback(req, res, callbackOptions);
     } finally {
@@ -106,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         reason = 'access_denied';
       } else if (oauthErrorMessage.includes('state')) {
         reason = 'invalid_params';
-      } else if (oauthErrorMessage.includes('invalid_code') || oauthErrorMessage.includes('code')) {
+      } else if (oauthErrorMessage.includes('invalid_code')) {
         reason = 'invalid_code';
       }
 
@@ -156,7 +163,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       reason = 'invalid_params';
     } else if (err.message?.includes('access_denied') || err.message?.includes('cancelled')) {
       reason = 'access_denied';
-    } else if (err.message?.includes('invalid_code') || err.message?.includes('code')) {
+    } else if (err.message?.includes('invalid_code')) {
       reason = 'invalid_code';
     }
 

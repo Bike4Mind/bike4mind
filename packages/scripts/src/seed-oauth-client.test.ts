@@ -17,7 +17,15 @@ const { db } = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => db);
 
-import { formatZodError, main, readFederatedIdpEnv, resolveClientType, runSeed } from './seed-oauth-client';
+import { ZodError } from 'zod';
+import {
+  formatZodError,
+  main,
+  readFederatedIdpEnv,
+  readPostLogoutRedirectUrisEnv,
+  resolveClientType,
+  runSeed,
+} from './seed-oauth-client';
 
 const priorClientType = process.env.CLIENT_TYPE;
 
@@ -250,6 +258,54 @@ describe('runSeed', () => {
     await expect(runSeed({ ...env, MONGODB_URI: undefined })).rejects.toThrow(/MONGODB_URI/);
     expect(db.mongoose.connect).not.toHaveBeenCalled();
   });
+
+  describe('POST_LOGOUT_REDIRECT_URIS', () => {
+    it('passes an empty list when unset', async () => {
+      db.createOAuthClient.mockResolvedValue({ client: { clientId: 'cid' }, clientSecret: 's' });
+      await runSeed(env);
+      expect(db.createOAuthClient).toHaveBeenCalledWith(expect.objectContaining({ postLogoutRedirectUris: [] }));
+    });
+
+    it('drops blank entries and passes the URIs to the shared create', async () => {
+      db.createOAuthClient.mockResolvedValue({ client: { clientId: 'cid' }, clientSecret: 's' });
+      await runSeed({
+        ...env,
+        POST_LOGOUT_REDIRECT_URIS: ' https://a.example.test/signed-out , ,http://localhost:3000/out,',
+      });
+      expect(db.createOAuthClient).toHaveBeenCalledWith(
+        expect.objectContaining({
+          postLogoutRedirectUris: ['https://a.example.test/signed-out', 'http://localhost:3000/out'],
+        })
+      );
+    });
+
+    it('rejects a URI the redirect rules refuse, before connecting', async () => {
+      await expect(runSeed({ ...env, POST_LOGOUT_REDIRECT_URIS: 'http://a.example.test/out' })).rejects.toBeInstanceOf(
+        ZodError
+      );
+      expect(db.mongoose.connect).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('readPostLogoutRedirectUrisEnv', () => {
+  it('reads process.env by default', () => {
+    const prior = process.env.POST_LOGOUT_REDIRECT_URIS;
+    process.env.POST_LOGOUT_REDIRECT_URIS = 'https://a.example.test/out';
+    try {
+      expect(readPostLogoutRedirectUrisEnv()).toEqual(['https://a.example.test/out']);
+    } finally {
+      if (prior === undefined) delete process.env.POST_LOGOUT_REDIRECT_URIS;
+      else process.env.POST_LOGOUT_REDIRECT_URIS = prior;
+    }
+  });
+
+  it.each([['https://a.example.test/out#frag'], ['https://a.example.test/out,https://a.example.test/out']])(
+    'rejects %s',
+    raw => {
+      expect(() => readPostLogoutRedirectUrisEnv({ POST_LOGOUT_REDIRECT_URIS: raw })).toThrow(ZodError);
+    }
+  );
 });
 
 describe('formatZodError', () => {

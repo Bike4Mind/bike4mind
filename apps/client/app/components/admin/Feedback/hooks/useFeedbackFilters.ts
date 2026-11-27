@@ -1,7 +1,9 @@
 import { useCallback, useMemo } from 'react';
-import { FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { FeedbackFilters, FeedbackListFilterParams, UseFeedbackFiltersReturn } from '../types';
+import { calendarDayBoundary, DEFAULT_FEEDBACK_VIEW, type FeedbackCommentFilter } from '../feedbackTabSearch';
+import type { FeedbackReceivedWindow } from '../feedbackTrends';
 import { useFeedbackView } from './useFeedbackView';
 
 /**
@@ -21,9 +23,43 @@ import { useFeedbackView } from './useFeedbackView';
  * that nothing read. The dropdown's selection now reaches the query.
  */
 export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
-  const { value: searchTerm, debouncedValue: debouncedSearchTerm, setValue: setSearchTermValue } = useDebounceValue('');
+  const {
+    value: searchTerm,
+    debouncedValue: debouncedSearchTerm,
+    setValue: setSearchTermValue,
+    setValueImmediately: clearSearchTerm,
+  } = useDebounceValue('');
   const [view, updateView] = useFeedbackView();
-  const { statusFilters, organizations: selectedOrganizations, subject, sortAscending, page } = view;
+  const { area, severity } = view;
+  const setArea: UseFeedbackFiltersReturn['setArea'] = value => updateView({ area: value, page: 1 });
+  const setSeverity: UseFeedbackFiltersReturn['setSeverity'] = value => updateView({ severity: value, page: 1 });
+  const resolution = view.resolution;
+  const setResolution = useCallback<UseFeedbackFiltersReturn['setResolution']>(
+    next =>
+      updateView({
+        resolution: next,
+        statusFilters: next
+          ? (Object.fromEntries(
+              Object.values(FeedbackStatus).map(status => [status, status === FeedbackStatus.Closed])
+            ) as Record<FeedbackStatus, boolean>)
+          : DEFAULT_FEEDBACK_VIEW.statusFilters,
+        page: 1,
+      }),
+    [updateView]
+  );
+  const {
+    statusFilters,
+    organizations: selectedOrganizations,
+    userId,
+    subject,
+    types,
+    received,
+    createdFrom,
+    createdTo,
+    comment,
+    sortAscending,
+    page,
+  } = view;
 
   const setSearchTerm = useCallback(
     (term: string) => {
@@ -36,10 +72,13 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
 
   const setStatusFilters = useCallback<UseFeedbackFiltersReturn['setStatusFilters']>(
     update =>
-      updateView(current => ({
-        statusFilters: typeof update === 'function' ? update(current.statusFilters) : update,
-        page: 1,
-      })),
+      updateView(current => {
+        const statusFilters = typeof update === 'function' ? update(current.statusFilters) : update;
+        const onlyClosed = Object.values(FeedbackStatus).every(
+          status => statusFilters[status] === (status === FeedbackStatus.Closed)
+        );
+        return { statusFilters, resolution: onlyClosed ? current.resolution : undefined, page: 1 };
+      }),
     [updateView]
   );
 
@@ -48,9 +87,53 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     [updateView]
   );
 
+  const setUserId = useCallback((next: string | undefined) => updateView({ userId: next, page: 1 }), [updateView]);
+
   const setSubject = useCallback(
     (next: FeedbackSubject | undefined) => updateView({ subject: next, page: 1 }),
     [updateView]
+  );
+
+  const setTypes = useCallback((next: FeedbackType[]) => updateView({ types: next, page: 1 }), [updateView]);
+
+  // A preset window and a custom range are one filter, so setting either clears the other.
+  const setReceived = useCallback(
+    (next: FeedbackReceivedWindow | undefined) =>
+      updateView({ received: next, createdFrom: undefined, createdTo: undefined, page: 1 }),
+    [updateView]
+  );
+
+  const setCreatedRange = useCallback<UseFeedbackFiltersReturn['setCreatedRange']>(
+    range => updateView({ ...range, received: undefined, page: 1 }),
+    [updateView]
+  );
+
+  const setComment = useCallback(
+    (next: FeedbackCommentFilter | undefined) => updateView({ comment: next, page: 1 }),
+    [updateView]
+  );
+
+  const showOnly = useCallback<UseFeedbackFiltersReturn['showOnly']>(
+    next => {
+      clearSearchTerm('');
+      updateView({
+        statusFilters: DEFAULT_FEEDBACK_VIEW.statusFilters,
+        subject: DEFAULT_FEEDBACK_VIEW.subject,
+        types: DEFAULT_FEEDBACK_VIEW.types,
+        organizations: DEFAULT_FEEDBACK_VIEW.organizations,
+        userId: DEFAULT_FEEDBACK_VIEW.userId,
+        received: DEFAULT_FEEDBACK_VIEW.received,
+        createdFrom: DEFAULT_FEEDBACK_VIEW.createdFrom,
+        createdTo: DEFAULT_FEEDBACK_VIEW.createdTo,
+        comment: DEFAULT_FEEDBACK_VIEW.comment,
+        area: undefined,
+        severity: undefined,
+        resolution: undefined,
+        ...next,
+        page: 1,
+      });
+    },
+    [clearSearchTerm, updateView]
   );
 
   const toggleSortDirection = useCallback(
@@ -58,28 +141,76 @@ export const useFeedbackFilters = (): UseFeedbackFiltersReturn => {
     [updateView]
   );
 
-  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, subject, sortAscending };
+  const filters: FeedbackFilters = {
+    area,
+    severity,
+    searchTerm,
+    statusFilters,
+    selectedOrganizations,
+    userId,
+    subject,
+    resolution,
+    types,
+    received,
+    createdFrom,
+    createdTo,
+    comment,
+    sortAscending,
+  };
 
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
     return {
+      ...(area ? { area } : {}),
+      ...(severity ? { severity } : {}),
       // Omitted rather than sent empty: an empty array would be serialized as no filter anyway,
       // and `status` absent is the server's "any status".
       ...(statuses.length > 0 ? { status: statuses } : {}),
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
+      ...(userId ? { userId } : {}),
       // Single-valued, unlike status/organization: the endpoint takes one subject or none.
       ...(subject ? { subject } : {}),
+      ...(resolution ? { resolution } : {}),
+      ...(types.length > 0 ? { type: types } : {}),
+      ...(received ? { received } : {}),
+      ...(createdFrom ? { createdFrom: calendarDayBoundary(createdFrom, 'start') } : {}),
+      ...(createdTo ? { createdTo: calendarDayBoundary(createdTo, 'end') } : {}),
+      ...(comment ? { hasComment: comment === 'with' } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, subject, debouncedSearchTerm, sortAscending]);
+  }, [
+    area,
+    severity,
+    resolution,
+    statusFilters,
+    selectedOrganizations,
+    userId,
+    subject,
+    types,
+    received,
+    createdFrom,
+    createdTo,
+    comment,
+    debouncedSearchTerm,
+    sortAscending,
+  ]);
 
   return {
+    setArea,
+    setSeverity,
     filters,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setUserId,
     setSubject,
+    setResolution,
+    setTypes,
+    setReceived,
+    setCreatedRange,
+    setComment,
+    showOnly,
     toggleSortDirection,
     filterParams,
   };

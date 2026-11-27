@@ -12,11 +12,14 @@
 
 import { ATLASSIAN_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/atlassian/constants';
 import { GITHUB_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/github/constants';
+import { NOTION_CONFIRMABLE_TOOLS } from '@bike4mind/mcp/notion/constants';
+import type { IPendingAction } from '@bike4mind/common';
 
 export type McpPendingAction = {
   tool: string;
   params: Record<string, unknown>;
   ts: number;
+  customConnector?: IPendingAction['customConnector'];
 };
 
 export type McpPendingActionExtraction =
@@ -25,13 +28,14 @@ export type McpPendingActionExtraction =
   | { kind: 'rejected'; reason: 'malformed' | 'untrusted-emitter' | 'unparseable'; result: string };
 
 /** Per confirming server, the write tools that gate on a confirm button. The host executors route by
- * the same sets (apps/client/server/utils/pendingActionTarget.ts). The subagent permission gate also
+ * the same sets (packages/server-utils/src/utils/pendingActionTarget.ts). The subagent permission gate also
  * trusts these servers' tools (confirmingServerOf), so a server belongs here only if every one of its
  * write tools previews instead of executing (pinned by
  * b4m-core/mcp/src/shared/confirmingServers.previewGate.test.ts). */
 const CONFIRMABLE_TOOLS_BY_SERVER: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['github', GITHUB_CONFIRMABLE_TOOLS],
   ['atlassian', ATLASSIAN_CONFIRMABLE_TOOLS],
+  ['notion', NOTION_CONFIRMABLE_TOOLS],
 ]);
 
 const MCP_NAMESPACE_SEPARATOR = '__';

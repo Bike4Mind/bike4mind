@@ -1,0 +1,701 @@
+// @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { CssVarsProvider } from '@mui/joy/styles';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatProject, ProjectInspection } from '@shared/chat';
+import type { PrBarState } from '@shared/pullRequest';
+import type { WorkspaceChanges } from '@shared/workspaceChanges';
+import { desktopTheme } from '../theme';
+import { SessionPanel, type SessionPanelProps } from './SessionPanel';
+import {
+  useSessionPanelPrefs,
+  SESSION_PANEL_BESIDE_MIN_WIDTH,
+  SESSION_PANEL_PUSH_MIN_WIDTH,
+  SESSION_PANEL_SPACE,
+  sessionPanelLayout,
+  readCollapsedSections,
+  readSessionPanelOpen,
+  writeCollapsedSections,
+  writeSessionPanelOpen,
+} from './sessionPanelState';
+import type { ProjectBindingController } from './useChat';
+import type { BackgroundProcessView } from './useBackgroundProcesses';
+import { COLUMN_PADDING, CONTENT_MAX_WIDTH } from './layout';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { PlanItem } from '@shared/todos';
+import { TodoPanel } from './TodoPanel';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// CssVarsProvider reads the colour scheme through it.
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+const PROJECT: ChatProject = {
+  directory: '/Users/someone/code/thing',
+  name: 'thing',
+  branch: 'main',
+  workspace: false,
+  workingDirectory: '/Users/someone/code/thing',
+  contextDirectories: [],
+};
+
+const CHANGES: WorkspaceChanges = {
+  base: 'origin/main',
+  added: 53,
+  removed: 1,
+  fileCount: 1,
+  files: [{ path: 'src/a.ts', added: 53, removed: 1 }],
+  commitsAhead: 0,
+  uncommitted: 1,
+};
+
+const PULL_REQUEST: PrBarState = {
+  sessionId: 'session-1',
+  binding: {
+    owner: 'example-org',
+    repo: 'widgets',
+    number: 611,
+    url: 'https://github.com/example-org/widgets/pull/611',
+    source: 'shell',
+    boundAt: '',
+  },
+  snapshot: {
+    owner: 'example-org',
+    repo: 'widgets',
+    number: 611,
+    url: 'https://github.com/example-org/widgets/pull/611',
+    title: 'feat: ladder',
+    author: 'octo-dev',
+    state: 'OPEN',
+    isDraft: false,
+    headRefName: 'feat/widget-ladder',
+    headSha: 'sha-1',
+    baseRefName: 'main',
+    baseSha: 'base-1',
+    additions: 103,
+    deletions: 16,
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: null,
+    autoMergeArmed: false,
+    checks: [],
+    repoSettings: { autoMergeAllowed: false, allowedMethods: ['squash'] },
+    viewer: 'octo-dev',
+    fetchedAt: 0,
+  },
+  gh: 'ok',
+  refreshing: false,
+  autoMerge: { mode: null },
+  autoFix: { status: 'off', attempts: 0, max: 5 },
+};
+
+const binding: ProjectBindingController = {
+  hostId: LOCAL_HOST_ID,
+  busy: false,
+  error: null,
+  dismissError: vi.fn(),
+  pickDirectory: vi.fn(),
+  chooseDirectory: vi.fn(),
+  setBranch: vi.fn(),
+  setWorkspace: vi.fn(),
+  moveToCheckout: vi.fn(),
+  worktreeFrom: vi.fn(),
+  addContextDirectory: vi.fn(),
+  removeContextDirectory: vi.fn(),
+};
+
+const process = (id: string, status: BackgroundProcessView['status']): BackgroundProcessView =>
+  ({
+    id,
+    command: `pnpm run ${id}`,
+    status,
+    startedAt: new Date(Date.now() - 65_000).toISOString(),
+    ...(status === 'running' ? {} : { endedAt: new Date().toISOString(), exitCode: 0 }),
+    output: '',
+  }) as BackgroundProcessView;
+
+type Overrides = {
+  [K in keyof SessionPanelProps]?: SessionPanelProps[K] extends object
+    ? Partial<SessionPanelProps[K]>
+    : SessionPanelProps[K];
+};
+
+function props(overrides: Overrides = {}): Omit<SessionPanelProps, 'collapsed' | 'onToggleSection'> {
+  return {
+    variant: overrides.variant ?? 'docked',
+    ...(overrides.onDismiss ? { onDismiss: overrides.onDismiss } : {}),
+    ...(overrides.anchor ? { anchor: overrides.anchor } : {}),
+    environment: {
+      project: PROJECT,
+      binding,
+      settledTurns: 0,
+      inUse: false,
+      preparing: false,
+      ...overrides.environment,
+    },
+    changes: {
+      workspace: null,
+      hasPullRequest: false,
+      pullRequest: null,
+      pullRequestActions: {
+        onDismiss: async () => ({ ok: true }),
+        onRefresh: () => {},
+        onSetOption: async () => ({ ok: true }),
+      },
+      busy: false,
+      onCreatePullRequest: () => {},
+      ...overrides.changes,
+    },
+    context: { contextTokens: null, contextLimit: null, credits: null, ...overrides.context },
+    plan: { todos: null, turnOpen: false, ...overrides.plan },
+    background: {
+      processes: [],
+      spawned: [],
+      onStopProcess: () => {},
+      onStopSession: () => {},
+      onOpenSession: () => {},
+      onShowOutput: () => {},
+      ...overrides.background,
+    },
+  };
+}
+
+/** The panel with its real persisted prefs, as ChatShell wires it. */
+function Harness(rest: Omit<SessionPanelProps, 'collapsed' | 'onToggleSection'>) {
+  const prefs = useSessionPanelPrefs();
+  return <SessionPanel {...rest} collapsed={prefs.collapsed} onToggleSection={prefs.toggleSection} />;
+}
+
+let host: HTMLDivElement;
+let root: Root;
+
+async function show(overrides: Overrides = {}): Promise<void> {
+  await act(async () =>
+    root.render(
+      <CssVarsProvider theme={desktopTheme}>
+        <Harness {...props(overrides)} />
+      </CssVarsProvider>
+    )
+  );
+  await act(async () => undefined);
+}
+
+const find = (testId: string) => host.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+const get = (testId: string) => {
+  const found = find(testId);
+  if (!found) throw new Error(`no ${testId}`);
+  return found;
+};
+const sectionIds = () =>
+  [...host.querySelectorAll<HTMLElement>('[data-testid^="session-panel-section-"]')].map(section =>
+    section.dataset.testid?.replace('session-panel-section-', '')
+  );
+
+beforeEach(() => {
+  window.localStorage.clear();
+  const inspection: ProjectInspection = {
+    directory: PROJECT.directory,
+    name: 'thing',
+    isRepository: true,
+    branches: ['main'],
+    currentBranch: 'main',
+  };
+  (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
+    chat: { inspectProject: async () => inspection, listRecentFolders: async () => [] },
+    getAppInfo: async () => ({ homeDirectory: '' }),
+  };
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  host.remove();
+});
+
+describe('SessionPanel sections', () => {
+  it('draws only Environment, with the chips in their panel layout, when nothing else has content', async () => {
+    await show();
+    expect(sectionIds()).toEqual(['environment', 'context']);
+    expect(find('session-chips-panel')).not.toBeNull();
+    expect(get('session-chip-branch-btn').textContent).toBe('main');
+  });
+
+  it('draws every section in order once each has something to say', async () => {
+    await show({
+      context: { contextTokens: 1_000, contextLimit: 200_000 },
+      changes: { workspace: CHANGES },
+      plan: { todos: [{ id: '1', content: 'Do it', status: 'pending' }], turnOpen: true },
+      background: { processes: [process('dev', 'running')] },
+    });
+    expect(sectionIds()).toEqual(['environment', 'context', 'changes', 'plan', 'background']);
+  });
+});
+
+describe('the Changes / Pull request section', () => {
+  it('with no PR, shows the working-directory changes and sends Create PR to the same handler', async () => {
+    const onCreatePullRequest = vi.fn();
+    await show({ changes: { workspace: CHANGES, onCreatePullRequest } });
+
+    expect(get('session-panel-changes-toggle-btn').textContent).toContain('Changes');
+    expect(find('changes-bar')).not.toBeNull();
+    expect(find('pr-bar')).toBeNull();
+
+    await act(async () => get('changes-bar-create-pr-btn').click());
+    expect(onCreatePullRequest).toHaveBeenCalledWith(CHANGES);
+  });
+
+  it('keeps the totals and Create PR on screen with the section folded', async () => {
+    await show({ changes: { workspace: CHANGES } });
+    await act(async () => get('session-panel-changes-toggle-btn').click());
+
+    expect(get('session-panel-changes-toggle-btn').getAttribute('aria-expanded')).toBe('false');
+    expect(find('changes-bar')).toBeNull();
+    expect(get('session-panel-changes-summary').textContent).toBe('+53 -1');
+    expect(find('changes-bar-create-pr-btn')).not.toBeNull();
+  });
+
+  it('with a PR, shows it instead - its number, state and diff - and offers no second PR', async () => {
+    await show({ changes: { workspace: CHANGES, hasPullRequest: true, pullRequest: PULL_REQUEST } });
+
+    expect(get('session-panel-changes-toggle-btn').textContent).toContain('Pull request');
+    expect(find('pr-bar')).not.toBeNull();
+    expect(find('pr-bar-open-icon')).not.toBeNull();
+    expect(get('pr-bar-diff').textContent).toBe('+103 -16');
+    expect(find('changes-bar')).toBeNull();
+    expect(find('changes-bar-create-pr-btn')).toBeNull();
+
+    await act(async () => get('session-panel-changes-toggle-btn').click());
+    expect(get('pr-bar-headline').textContent).toContain('#611');
+    expect(get('pr-bar-headline-diff').textContent).toBe('+103 -16');
+  });
+
+  it('leaves the section out for a PR whose bar was dismissed, rather than offering another', async () => {
+    await show({ changes: { workspace: CHANGES, hasPullRequest: true, pullRequest: null } });
+    expect(sectionIds()).toEqual(['environment', 'context']);
+  });
+});
+
+describe('the Context section', () => {
+  it('honestly states that the first request is not measured', async () => {
+    await show({ context: { contextTokens: null, contextLimit: 200_000 } });
+    expect(get('session-panel-context-body').textContent).toContain('Not measured yet');
+    expect(find('session-panel-context-bar')).toBeNull();
+  });
+
+  it('shows the share of the window with a bar, and folds to the percentage', async () => {
+    await show({ context: { contextTokens: 50_000, contextLimit: 200_000 } });
+    expect(sectionIds()).toEqual(['environment', 'context']);
+    expect(get('session-panel-context-bar').getAttribute('aria-valuetext')).toBe('25%');
+    expect(get('session-panel-context-figure').textContent).toContain('50k / 200k');
+
+    await act(async () => get('session-panel-context-toggle-btn').click());
+    expect(find('session-panel-context-bar')).toBeNull();
+    expect(get('session-panel-context-toggle-btn').textContent).toContain('25%');
+  });
+
+  it('gives the token count and no bar when the model states no window', async () => {
+    await show({ context: { contextTokens: 50_000, contextLimit: null } });
+    expect(find('session-panel-context-bar')).toBeNull();
+    expect(get('session-panel-context-figure').textContent).toContain('reports no window size');
+  });
+
+  it('draws estimated categories, reserved/free space and expandable injected inventories', async () => {
+    await show({
+      context: {
+        contextTokens: 52_000,
+        contextLimit: 200_000,
+        contextSnapshot: {
+          model: 'test',
+          inputTokens: 50_000,
+          overhead: [
+            { id: 'mcp-tools', tokens: 2000, items: ['mcp__example__search'] },
+            { id: 'project', tokens: 3000, items: ['/project/CLAUDE.md'] },
+          ],
+        },
+      },
+    });
+    expect(get('context-row-messages').textContent).toContain('~45k');
+    expect(get('context-row-reserve').textContent).toContain('20k');
+    expect(get('context-row-free').textContent).toContain('130k');
+    expect(get('session-panel-context-body').textContent).not.toContain('Last measured request, not unsent messages');
+    expect(get('session-panel-context-body').textContent).toContain('Compacts automatically at 180k');
+    expect(get('session-panel-context-body').textContent).toContain('Buffer is reserved headroom, not injected');
+    const inventory = get('context-inventory-mcp-tools') as HTMLDetailsElement;
+    expect(inventory.open).toBe(false);
+    await act(async () => inventory.querySelector('summary')!.click());
+    expect(inventory.open).toBe(true);
+    expect(inventory.textContent).toContain('mcp__example__search');
+    expect(get('session-panel-context-body').textContent).toContain('Category shares (~) are estimates');
+  });
+
+  it('clamps the meter but retains the real over-limit figure', async () => {
+    await show({ context: { contextTokens: 220_000, contextLimit: 200_000 } });
+    expect(get('session-panel-context-bar').getAttribute('aria-valuenow')).toBe('200000');
+    expect(get('session-panel-context-bar').getAttribute('aria-valuetext')).toBe('110%');
+    expect(get('context-row-free').textContent).toContain('0');
+  });
+});
+
+describe('the Plan section', () => {
+  const todos = [
+    { id: '1', content: 'Read the code', status: 'completed' as const },
+    { id: '2', content: 'Write the fix', status: 'in_progress' as const },
+    { id: '3', content: 'Run the tests', status: 'pending' as const },
+  ];
+
+  it('leaves cancelled items out of the summary count', async () => {
+    await show({
+      plan: { todos: [...todos, { id: '4', content: 'Old idea', status: 'cancelled' as const }], turnOpen: true },
+    });
+    expect(find('chat-todo-item-cancelled')).not.toBeNull();
+    await act(async () => get('session-panel-plan-toggle-btn').click());
+    expect(get('session-panel-plan-toggle-btn').textContent).toContain('1/3');
+  });
+
+  it('lists the items, and folds to the progress count', async () => {
+    await show({ plan: { todos, turnOpen: true } });
+    expect(host.querySelectorAll('[data-testid^="chat-todo-item-"]')).toHaveLength(3);
+
+    await act(async () => get('session-panel-plan-toggle-btn').click());
+    expect(find('chat-todo-item-pending')).toBeNull();
+    expect(get('session-panel-plan-toggle-btn').textContent).toContain('1/3');
+  });
+
+  it('is left out once the plan is finished and no turn is running', async () => {
+    await show({ plan: { todos: todos.map(todo => ({ ...todo, status: 'completed' as const })), turnOpen: false } });
+    expect(sectionIds()).not.toContain('plan');
+  });
+});
+
+describe('the Background tasks section', () => {
+  it('shows a loop as the only background task, with cadence and a stop control', async () => {
+    const stop = vi.fn();
+    vi.stubGlobal('b4m', {
+      ...window.b4m,
+      chat: { ...window.b4m.chat, loopCommand: stop },
+    });
+    await show({
+      background: {
+        loop: {
+          sessionId: 's',
+          prompt: 'Check the build',
+          intervalMs: 30_000,
+          phase: 'scheduled',
+          nextRunAt: Date.now() + 30_000,
+        },
+      },
+    });
+    expect(get('session-panel-section-background').contains(get('loop-status'))).toBe(true);
+    expect(get('loop-status').textContent).toContain('30s after completion');
+    await act(async () => get('loop-stop-btn').click());
+    expect(stop).toHaveBeenCalledWith('s', 'stop');
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('session-panel-background-toggle-btn').textContent).toContain('Loop scheduled');
+    await show();
+    expect(find('session-panel-section-background')).toBeNull();
+  });
+
+  it('lists running commands and spawned sessions with a stop each, and folds the finished ones', async () => {
+    const onStopProcess = vi.fn();
+    const onStopSession = vi.fn();
+    const onOpenSession = vi.fn();
+    const onShowOutput = vi.fn();
+    await show({
+      background: {
+        processes: [process('dev', 'running'), process('build', 'exited')],
+        spawned: [
+          { id: 'child', title: 'Write the docs', createdAt: new Date().toISOString(), status: 'processing' },
+          { id: 'done-child', title: 'Old task', createdAt: new Date().toISOString(), status: 'done' },
+        ],
+        onStopProcess,
+        onStopSession,
+        onOpenSession,
+        onShowOutput,
+      },
+    });
+
+    expect(get('session-panel-task-running').textContent).toContain('pnpm run dev');
+    expect(get('session-panel-task-running').textContent).toMatch(/1m [56]s/);
+    expect(getComputedStyle(get('session-panel-spawned-open-btn')).fontSize).toBe('var(--joy-fontSize-xs)');
+    const stops = host.querySelectorAll<HTMLElement>('[data-testid="session-panel-task-stop-btn"]');
+    expect(stops).toHaveLength(2);
+    await act(async () => stops[0].click());
+    expect(onStopProcess).toHaveBeenCalledWith('dev');
+    await act(async () => stops[1].click());
+    expect(onStopSession).toHaveBeenCalledWith('child');
+
+    await act(async () => get('session-panel-spawned-open-btn').click());
+    expect(onOpenSession).toHaveBeenCalledWith('child');
+
+    const finished = get('session-panel-finished-toggle-btn');
+    expect(finished.textContent).toContain('Finished 2');
+    expect(finished.getAttribute('aria-expanded')).toBe('false');
+    expect(find('session-panel-task-finished')).toBeNull();
+    await act(async () => finished.click());
+    expect(get('session-panel-task-finished').textContent).toContain('exit 0');
+    expect(find('session-panel-spawned-finished')).not.toBeNull();
+
+    await act(async () => get('session-panel-show-output-btn').click());
+    expect(onShowOutput).toHaveBeenCalled();
+
+    await act(async () => get('session-panel-background-toggle-btn').click());
+    expect(get('session-panel-background-toggle-btn').textContent).toContain('2 running');
+  });
+});
+
+describe('section headers', () => {
+  it('are buttons that say whether they are open and which body they control', async () => {
+    await show();
+    const toggle = get('session-panel-environment-toggle-btn');
+    expect(toggle.tagName).toBe('BUTTON');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls') ?? '')).toBe(
+      get('session-panel-environment-body')
+    );
+  });
+
+  it('remember which sections are folded across a remount', async () => {
+    await show();
+    await act(async () => get('session-panel-environment-toggle-btn').click());
+    expect(window.localStorage.getItem('b4m.sessionPanel.collapsed')).toBe('["environment"]');
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    await show();
+    expect(get('session-panel-environment-toggle-btn').getAttribute('aria-expanded')).toBe('false');
+    expect(find('session-panel-environment-body')).toBeNull();
+  });
+});
+
+describe('the overlay variant', () => {
+  it('shuts on Escape, a press outside it or on its scrim, and its close button, not on a press inside', async () => {
+    const onDismiss = vi.fn();
+    await show({ variant: 'overlay', onDismiss });
+    expect(get('session-panel').dataset.variant).toBe('overlay');
+    expect(get('session-panel').getAttribute('role')).toBe('dialog');
+    expect(get('session-panel').getAttribute('aria-modal')).toBe('true');
+
+    await act(async () =>
+      get('session-panel-environment-toggle-btn').dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    );
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+
+    await act(async () => get('session-panel-scrim').dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(onDismiss).toHaveBeenCalledTimes(3);
+
+    await act(async () => get('session-panel-close-btn').click());
+    expect(onDismiss).toHaveBeenCalledTimes(4);
+  });
+
+  it('takes focus, keeps Tab inside, and hands focus back to its anchor when it shuts', async () => {
+    const anchor = document.createElement('button');
+    document.body.appendChild(anchor);
+    await show({ variant: 'overlay', onDismiss: vi.fn(), anchor: { current: anchor } });
+
+    const close = get('session-panel-close-btn');
+    expect(document.activeElement).toBe(close);
+    const focusables = [...get('session-panel').querySelectorAll<HTMLElement>('button:not([disabled])')];
+    const last = focusables[focusables.length - 1];
+    const tab = (shiftKey: boolean) =>
+      act(async () => {
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true }));
+      });
+
+    await tab(true);
+    expect(document.activeElement).toBe(last);
+    await tab(false);
+    expect(document.activeElement).toBe(close);
+
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(anchor);
+    anchor.remove();
+    root = createRoot(host);
+  });
+
+  it('is not modal while docked: no scrim, no close button, and Escape and outside presses do nothing', async () => {
+    const onDismiss = vi.fn();
+    await show({ variant: 'docked', onDismiss });
+    expect(find('session-panel-scrim')).toBeNull();
+    expect(find('session-panel-close-btn')).toBeNull();
+    expect(get('session-panel').getAttribute('role')).toBe('complementary');
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    await act(async () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
+describe('sessionPanelState', () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
+
+  describe('sessionPanelLayout', () => {
+    const centered = { centeredColumn: true };
+    const stage = { centeredColumn: false };
+
+    it('floats in the margin once the centered column leaves room for the whole card', () => {
+      // The card may sit over the column's padding, never its text.
+      expect(SESSION_PANEL_BESIDE_MIN_WIDTH).toBe(CONTENT_MAX_WIDTH + 2 * (SESSION_PANEL_SPACE - COLUMN_PADDING));
+      expect(sessionPanelLayout(SESSION_PANEL_BESIDE_MIN_WIDTH, centered)).toBe('beside');
+      expect(sessionPanelLayout(2400, centered)).toBe('beside');
+    });
+
+    it('pushes the column when only the rail and a full reading column fit', () => {
+      expect(SESSION_PANEL_PUSH_MIN_WIDTH).toBe(CONTENT_MAX_WIDTH + SESSION_PANEL_SPACE);
+      expect(sessionPanelLayout(SESSION_PANEL_BESIDE_MIN_WIDTH - 1, centered)).toBe('push');
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH, centered)).toBe('push');
+    });
+
+    it('overlays the thread below that, rather than squeezing the reading column', () => {
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH - 1, centered)).toBe('overlay');
+      expect(sessionPanelLayout(CONTENT_MAX_WIDTH, centered)).toBe('overlay');
+      expect(sessionPanelLayout(0, centered)).toBe('overlay');
+    });
+
+    it('never floats without a centered column, since the stage has no free margin', () => {
+      expect(sessionPanelLayout(2400, stage)).toBe('push');
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH, stage)).toBe('push');
+      expect(sessionPanelLayout(SESSION_PANEL_PUSH_MIN_WIDTH - 1, stage)).toBe('overlay');
+    });
+
+    it('treats a region not yet measured as wide', () => {
+      expect(sessionPanelLayout(null, centered)).toBe('beside');
+      expect(sessionPanelLayout(null, stage)).toBe('push');
+    });
+  });
+
+  describe('the remembered open flag', () => {
+    it('is open until the user closes it, and remembers either way', () => {
+      expect(readSessionPanelOpen()).toBe(true);
+      writeSessionPanelOpen(false);
+      expect(readSessionPanelOpen()).toBe(false);
+      writeSessionPanelOpen(true);
+      expect(readSessionPanelOpen()).toBe(true);
+    });
+  });
+
+  describe('the remembered folded sections', () => {
+    it('round-trips through storage', () => {
+      writeCollapsedSections(new Set(['plan', 'environment']));
+      expect([...readCollapsedSections()].sort()).toEqual(['environment', 'plan']);
+    });
+
+    it('drops anything it does not recognise instead of throwing', () => {
+      window.localStorage.setItem('b4m.sessionPanel.collapsed', JSON.stringify(['plan', 'connectors', 7]));
+      expect([...readCollapsedSections()]).toEqual(['plan']);
+      window.localStorage.setItem('b4m.sessionPanel.collapsed', '{not json');
+      expect(readCollapsedSections().size).toBe(0);
+    });
+  });
+
+  describe('storage that throws', () => {
+    it('falls back to the defaults on read and swallows writes', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+
+      expect(readSessionPanelOpen()).toBe(true);
+      expect(readCollapsedSections().size).toBe(0);
+      expect(() => writeSessionPanelOpen(false)).not.toThrow();
+      expect(() => writeCollapsedSections(new Set(['plan']))).not.toThrow();
+    });
+  });
+});
+
+const todos: PlanItem[] = [
+  { id: '1', content: 'Read the code', status: 'completed' },
+  { id: '2', content: 'Write the fix', status: 'in_progress' },
+  { id: '3', content: 'Run the tests', status: 'pending' },
+];
+const render = (list: PlanItem[] | null, turnOpen: boolean) =>
+  renderToStaticMarkup(<TodoPanel todos={list} turnOpen={turnOpen} />);
+
+describe('TodoPanel', () => {
+  it('opens collapsed, with the count and the item in hand on its one line', () => {
+    const html = render(todos, true);
+    expect(html).toContain('1 of 3 done');
+    expect(html).toContain('Write the fix');
+    expect(html).toContain('aria-expanded="false"');
+    // The list itself is not drawn until the bar is clicked.
+    expect(html).not.toContain('chat-todo-item-');
+    expect(html).not.toContain('Run the tests');
+  });
+
+  it('leaves the bar to the count alone when nothing is in progress', () => {
+    const html = render([{ id: '1', content: 'Read the code', status: 'pending' }], true);
+    expect(html).toContain('0 of 1 done');
+    expect(html).not.toContain('Read the code');
+  });
+
+  it('draws nothing without a plan', () => {
+    expect(render(null, true)).toBe('');
+    expect(render([], true)).toBe('');
+  });
+
+  it('stays while a turn runs after the last item is done, and leaves once the turn ends', () => {
+    const finished = todos.map(todo => ({ ...todo, status: 'completed' as const }));
+    expect(render(finished, true)).toContain('3 of 3 done');
+    expect(render(finished, false)).toBe('');
+  });
+
+  it('shows the activeForm of the current item on the bar', () => {
+    const list = todos.map(todo => (todo.status === 'in_progress' ? { ...todo, activeForm: 'Writing the fix' } : todo));
+    expect(render(list, true)).toContain('Writing the fix');
+  });
+
+  it('leaves cancelled items out of n/m', () => {
+    const list: PlanItem[] = [
+      { id: '1', content: 'Read the code', status: 'completed' },
+      { id: '2', content: 'Old idea', status: 'cancelled' },
+      { id: '3', content: 'Run the tests', status: 'pending' },
+    ];
+    expect(render(list, true)).toContain('1 of 2 done');
+  });
+
+  it('hides an all-cancelled plan, whatever the turn', () => {
+    const list: PlanItem[] = [{ id: '1', content: 'Old idea', status: 'cancelled' }];
+    expect(render(list, false)).toBe('');
+    expect(render(list, true)).toBe('');
+  });
+
+  it('lists a cancelled item struck through, and the current item by its activeForm', async () => {
+    const list: PlanItem[] = [
+      { id: '1', content: 'Old idea', status: 'cancelled' },
+      { id: '2', content: 'Write the fix', activeForm: 'Writing the fix', status: 'in_progress' },
+    ];
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    await act(async () => root.render(<TodoPanel todos={list} turnOpen />));
+    await act(async () => host.querySelector<HTMLElement>('[data-testid="chat-todo-toggle"]')?.click());
+    const cancelled = host.querySelector('[data-testid="chat-todo-item-cancelled"]');
+    expect(cancelled).not.toBeNull();
+    expect(getComputedStyle(cancelled!.querySelector('[data-testid="chat-todo-text"]')!).textDecoration).toContain(
+      'line-through'
+    );
+    expect(host.querySelector('[data-testid="chat-todo-item-in_progress"]')?.textContent).toContain('Writing the fix');
+    await act(async () => root.unmount());
+  });
+});

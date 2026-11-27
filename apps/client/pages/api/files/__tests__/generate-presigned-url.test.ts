@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   findOverrides: vi.fn(),
+  userFindById: vi.fn(),
   s3ClientConfigs: [] as unknown[],
   baseApiOptions: undefined as unknown,
 }));
@@ -38,8 +39,8 @@ vi.mock('@aws-sdk/client-s3', () => ({
 vi.mock('@aws-sdk/s3-request-presigner', () => ({ getSignedUrl: vi.fn(async () => 'https://s3.test/put') }));
 
 // The assertion point: whatever tags reach here are what gets persisted on the FabFile.
-vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
@@ -48,12 +49,14 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+  // The personal quota check re-reads the uploader; `run` serves the request's own user.
+  userRepository: { findById: h.userFindById },
 }));
 
 // The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
 // entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
 // comes from req.user (never the body), preserving the security property the route depends on.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,
@@ -98,8 +101,11 @@ const req = (body: unknown, overrides: Record<string, unknown> = {}) =>
     ...overrides,
   }) as never;
 
-const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) =>
-  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, overrides), res);
+const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) => {
+  const request = req(body, overrides) as { user: unknown };
+  h.userFindById.mockResolvedValue(request.user);
+  return (handler as (req: unknown, res: unknown) => Promise<void>)(request, res);
+};
 
 const body = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',

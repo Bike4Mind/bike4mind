@@ -91,7 +91,7 @@ describe('ProfilePage tab strip', () => {
     mockPublishedArtifacts = [];
   });
 
-  it('renders the core tabs visible to all users (no Security or Published for non-admin with no artifacts)', () => {
+  it('renders the core tabs visible to all users (no Published with no artifacts)', () => {
     renderPage();
 
     expect(screen.getByTestId('profile-tab')).toBeInTheDocument();
@@ -99,8 +99,7 @@ describe('ProfilePage tab strip', () => {
     expect(screen.getByTestId('settings-tab')).toBeInTheDocument();
     expect(screen.getByTestId('usage-tab')).toBeInTheDocument();
     expect(screen.getByTestId('integrations-tab')).toBeInTheDocument();
-    // Non-admin: Security tab hidden
-    expect(screen.queryByTestId('security-tab')).not.toBeInTheDocument();
+    expect(screen.getByTestId('security-tab')).toBeInTheDocument();
     // No published artifacts: Published tab hidden
     expect(screen.queryByTestId('published-tab')).not.toBeInTheDocument();
   });
@@ -109,7 +108,15 @@ describe('ProfilePage tab strip', () => {
   it('gives every tab and the close button an accessible name', () => {
     renderPage();
 
-    for (const name of ['profile.title', 'community.title', 'settings.title', 'API Keys', 'Usage', 'Integrations']) {
+    for (const name of [
+      'profile.title',
+      'community.title',
+      'settings.title',
+      'API Keys',
+      'Usage',
+      'Integrations',
+      'Security',
+    ]) {
       expect(screen.getByRole('tab', { name })).toBeInTheDocument();
     }
     expect(screen.getByTestId('profile-close-btn')).toHaveAccessibleName('Close');
@@ -171,11 +178,11 @@ describe('ProfilePage tab strip', () => {
     expect(screen.getByTestId('security-tab')).toBeInTheDocument();
   });
 
-  it('hides the Security tab for non-admin users', () => {
+  it('shows the Security tab for non-admin users', () => {
     mockUser = { id: 'u1', name: 'Test User', isAdmin: false };
     renderPage();
 
-    expect(screen.queryByTestId('security-tab')).not.toBeInTheDocument();
+    expect(screen.getByTestId('security-tab')).toBeInTheDocument();
   });
 
   it('no longer renders the tabs that moved into /admin or Settings', () => {
@@ -240,6 +247,17 @@ describe('ProfilePage tab strip', () => {
     }
   });
 
+  it('redirects the legacy Settings security section deep link to the Security tab', () => {
+    searchValue = { tab: 'settings', section: 'security' };
+    renderPage();
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/profile',
+      search: { tab: 'security' },
+      replace: true,
+    });
+  });
+
   it('does not redirect for a current, valid tab', () => {
     searchValue = { tab: 'settings' };
     renderPage();
@@ -247,23 +265,14 @@ describe('ProfilePage tab strip', () => {
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it('redirects non-admin away from ?tab=security', () => {
-    mockUser = { id: 'u1', name: 'Test User', isAdmin: false };
-    searchValue = { tab: 'security' };
-    renderPage();
-
-    expect(mockNavigate).toHaveBeenCalledWith({
-      to: '/profile',
-      search: { tab: '' },
-      replace: true,
-    });
-  });
-
-  it('does not redirect admin away from ?tab=security', () => {
-    mockUser = { id: 'u1', name: 'Admin User', isAdmin: true };
-    searchValue = { tab: 'security' };
-    renderPage();
-
-    expect(mockNavigate).not.toHaveBeenCalled();
+  it('does not redirect anyone away from ?tab=security', () => {
+    for (const isAdmin of [false, true]) {
+      vi.clearAllMocks();
+      mockUser = { id: 'u1', name: 'Test User', isAdmin };
+      searchValue = { tab: 'security' };
+      const { unmount } = renderPage();
+      expect(mockNavigate).not.toHaveBeenCalled();
+      unmount();
+    }
   });
 });

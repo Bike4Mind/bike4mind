@@ -10,7 +10,9 @@ import {
   ERROR_MAX_CHARS,
   applyLatencyGate,
   latencyGateTest,
+  latencyGateTests,
   latencyMetric,
+  latencyMetrics,
   mergeParsed,
   parseResults,
   suiteDisplayName,
@@ -185,6 +187,23 @@ describe('latency gate', () => {
     ).toBe('avg 2.00s, threshold 5s, 1 prompt(s) never finished');
   });
 
+  it('reads the median when the file carries one, and names it in the error', () => {
+    const json = { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 6.5, averageResponseTimeSec: 40 };
+    expect(latencyGateTest(file, json)?.error).toBe('median 6.50s, threshold 5s');
+    expect(latencyMetric(file, json)?.value).toBe(6.5);
+    expect(latencyGateTest(file, { ...json, medianResponseTimeSec: 4 })?.status).toBe('passed');
+  });
+
+  it('does not fail on an abandoned attempt that a retry superseded', () => {
+    const results = [
+      { id: 'a', incomplete: true, retried: true },
+      { id: 'a', attempt: 1 },
+    ];
+    expect(
+      latencyGateTest(file, { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 2, results })?.status
+    ).toBe('passed');
+  });
+
   it('treats no data as no verdict and a missing threshold as a breach, like the Aggregate step', () => {
     expect(latencyGateTest(file, { model: 'model-x', thresholdSec: 5, averageResponseTimeSec: 0 })).toBeNull();
     expect(latencyGateTest(file, { model: 'model-x', averageResponseTimeSec: 3 })?.error).toBe(
@@ -232,5 +251,115 @@ describe('latency gate', () => {
     expect(breached.tests.map(t => t.status)).toEqual(['failed']);
     expect(breached.tests.map(t => t.testKey)).toEqual([over.testKey]);
     expect(breached.counts).toMatchObject({ failed: 1, ran: 1 });
+  });
+});
+
+describe('per-prompt latency results', () => {
+  const file = '/x/ai-latency-doc-prompts-results.json';
+  const prompt = (over = {}) => ({
+    aiModel: 'model-x',
+    promptName: 'Prompt A',
+    thresholdSec: 120,
+    actualResponseLatency: '51.67 secs.',
+    totalEndToEnd: '51.67 secs.',
+    exceedsThreshold: false,
+    ...over,
+  });
+
+  it('maps each prompt to its own latency metric', () => {
+    expect(
+      latencyMetrics(file, [prompt(), prompt({ promptName: 'Prompt B', actualResponseLatency: '8 secs.' })])
+    ).toEqual([
+      {
+        kind: 'latency',
+        model: 'model-x',
+        label: 'ai-latency-doc-prompts: Prompt A',
+        value: 51.67,
+        unit: 's',
+        threshold: 120,
+      },
+      {
+        kind: 'latency',
+        model: 'model-x',
+        label: 'ai-latency-doc-prompts: Prompt B',
+        value: 8,
+        unit: 's',
+        threshold: 120,
+      },
+    ]);
+  });
+
+  it('skips prompts with no latency and list entries of any other shape', () => {
+    expect(latencyMetrics(file, [prompt({ actualResponseLatency: '0.00 secs.' }), { model: 'model-x' }, null])).toEqual(
+      []
+    );
+    expect(latencyGateTests(file, [{ model: 'model-x', averageResponseTimeSec: 9 }])).toEqual([]);
+    expect(latencyMetrics(file, [prompt({ aiModel: '' })])).toEqual([]);
+    expect(latencyGateTests(file, [prompt({ aiModel: '' })])).toEqual([]);
+  });
+
+  it('caps a long prompt label at the ingest schema limit', () => {
+    const [metric] = latencyMetrics(file, [prompt({ promptName: 'P'.repeat(300) })]);
+    expect(metric.label).toHaveLength(200);
+    expect(metric.label.startsWith('ai-latency-doc-prompts: PPP')).toBe(true);
+  });
+
+  it('passes a prompt within budget and fails one over it or with no measurement', () => {
+    const tests = latencyGateTests(file, [
+      prompt(),
+      prompt({ promptName: 'Prompt B', actualResponseLatency: '130.5 secs.', exceedsThreshold: true }),
+      prompt({ promptName: 'Prompt C', actualResponseLatency: '0.00 secs.', totalEndToEnd: '0.00 secs.' }),
+    ]);
+    expect(tests.map(t => [t.testKey, t.status, t.error])).toEqual([
+      ['latency-gate::ai-latency-doc-prompts: Prompt A [model-x]', 'passed', undefined],
+      ['latency-gate::ai-latency-doc-prompts: Prompt B [model-x]', 'failed', '130.50s, threshold 120s'],
+      [
+        'latency-gate::ai-latency-doc-prompts: Prompt C [model-x]',
+        'failed',
+        'no measurement; the prompt crashed or timed out',
+      ],
+    ]);
+  });
+
+  it('names the check that tripped a breach', () => {
+    const over = (promptName, fields) =>
+      prompt({ promptName, exceedsThreshold: true, initialResponseThresholdSec: 15, ...fields });
+    const tests = latencyGateTests(file, [
+      over('Initial', {
+        rapidResponseDetected: true,
+        initialResponseLatency: '22.10 secs.',
+        actualResponseLatency: '40.00 secs.',
+        totalEndToEnd: '40.00 secs.',
+      }),
+      over('Initial ignored', {
+        rapidResponseDetected: false,
+        initialResponseLatency: '22.10 secs.',
+        actualResponseLatency: '130.00 secs.',
+        totalEndToEnd: '130.00 secs.',
+      }),
+      over('End-to-end', { actualResponseLatency: '110.00 secs.', totalEndToEnd: '125.00 secs.' }),
+      over('Both', {
+        rapidResponseDetected: true,
+        initialResponseLatency: '16.00 secs.',
+        actualResponseLatency: '121.00 secs.',
+        totalEndToEnd: '121.00 secs.',
+      }),
+      over('Unexplained', { actualResponseLatency: '40.00 secs.', totalEndToEnd: '40.00 secs.' }),
+    ]);
+    expect(tests.map(t => t.error)).toEqual([
+      'initial response 22.10s, threshold 15s',
+      '130.00s, threshold 120s',
+      'end-to-end 125.00s, threshold 120s',
+      'initial response 16.00s, threshold 15s; 121.00s, threshold 120s',
+      '40.00s, threshold 120s',
+    ]);
+  });
+
+  it('leaves a single-cell summary file exactly as latencyMetric and latencyGateTest read it', () => {
+    const json = { model: 'model-x', thresholdSec: 5, medianResponseTimeSec: 6.5 };
+    expect(latencyMetrics(file, json)).toEqual([latencyMetric(file, json)]);
+    expect(latencyGateTests(file, json)).toEqual([latencyGateTest(file, json)]);
+    expect(latencyMetrics(file, { ...json, medianResponseTimeSec: 0 })).toEqual([]);
+    expect(latencyGateTests(file, { ...json, medianResponseTimeSec: 0 })).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@ import { test, expect } from './fixtures';
 import { SKILLS_MEMBER_KEY, TIMEOUTS } from './constants';
 import { getTestUsers, type TestUser } from './helpers/test-users';
 import { apiCreateSkill, apiDeleteAllSkills, apiShareSkill } from './helpers/api';
+import { newWafRequestContext } from './helpers/waf-bypass';
 
 /**
  * Skills web UI: list, create, detail, edit, share - plus the non-admin side of
@@ -15,6 +16,9 @@ import { apiCreateSkill, apiDeleteAllSkills, apiShareSkill } from './helpers/api
  * stubs the list response instead of relying on the DB.
  */
 test.describe.configure({ mode: 'serial' });
+// The empty-state step stubs the list with page.route, which cannot see a request the service worker
+// answers (same as notebook.spec.ts's map test).
+test.use({ serviceWorkers: 'block' });
 
 // kebab-case only (SkillModel `name` regex); TEST_RUN_ID is digits, so it's valid.
 const TEST_RUN_ID = Date.now().toString().slice(-6);
@@ -37,7 +41,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     ({ accessToken: token, userId } = specUsers.skills);
     member = specUsers[SKILLS_MEMBER_KEY];
     if (!member) throw new Error(`No ${SKILLS_MEMBER_KEY} spec user - skills.setup.ts must run first`);
-    const ctx = await playwright.request.newContext();
+    const ctx = await newWafRequestContext(playwright.request);
     await apiDeleteAllSkills(ctx, token, userId);
     await apiDeleteAllSkills(ctx, member.accessToken, member.userId);
     await ctx.dispose();
@@ -47,7 +51,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     // Independent deletes: the member's legacy global-read skill is visible to every user on the
     // stage, so a failed admin delete must not skip it. Either user is absent if beforeAll threw
     // before assigning it.
-    const ctx = await playwright.request.newContext();
+    const ctx = await newWafRequestContext(playwright.request);
     const results = await Promise.allSettled([
       token ? apiDeleteAllSkills(ctx, token, userId) : Promise.resolve(),
       member ? apiDeleteAllSkills(ctx, member.accessToken, member.userId) : Promise.resolve(),
@@ -176,10 +180,12 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     await test.step('share dialog opens; unknown email surfaces an error', async () => {
       await skillsPage.openShareDialog();
       await expect(page.getByTestId('skill-share-dialog')).toContainText('Not shared with anyone yet');
-      await skillsPage.addShareByEmail(`nobody-${TEST_RUN_ID}@example.com`);
-      await expect(page.getByTestId('skill-share-error')).toContainText('No user found', {
-        timeout: TIMEOUTS.VISIBLE,
-      });
+      const unknownEmail = `nobody-${TEST_RUN_ID}@example.com`;
+      await skillsPage.addShareByEmail(unknownEmail);
+      await expect(page.getByTestId('skill-share-error')).toContainText(
+        `No one in your organizations has the email "${unknownEmail}"`,
+        { timeout: TIMEOUTS.VISIBLE }
+      );
     });
 
     await test.step('global-write auto-enables global-read + warning, and PUT .../share fires', async () => {

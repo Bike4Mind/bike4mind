@@ -38,7 +38,11 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const organizationRepository = vi.hoisted(() => ({ findById: vi.fn() }));
-const orgWebhookConfigRepository = vi.hoisted(() => ({ findByOrganizationId: vi.fn(), update: vi.fn() }));
+const orgWebhookConfigRepository = vi.hoisted(() => ({
+  findByOrganizationId: vi.fn(),
+  update: vi.fn(),
+  create: vi.fn(),
+}));
 const webhookSubscriptionRepository = vi.hoisted(() => ({ countByOrganization: vi.fn() }));
 vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository,
@@ -53,14 +57,24 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   encryptSecret: (s: string) => s,
   decryptSecret: (s: string) => s,
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: undefined } }));
+const configKey = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({
+  Config: {
+    get SECRET_ENCRYPTION_KEY() {
+      return configKey.value;
+    },
+  },
+}));
+
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest }));
 
 import '@pages/api/organizations/[id]/webhooks/github';
 
 const ORG_ID = '507f1f77bcf86cd799439011';
 
-const call = (orgId: string) => {
-  const { req, res } = createMocks({ method: 'GET', query: { id: orgId } });
+const call = (orgId: string, query: Record<string, string> = {}) => {
+  const { req, res } = createMocks({ method: 'GET', query: { id: orgId, ...query } });
   (req as any).user = { id: 'owner1', isAdmin: false };
   return { res, result: mockRefs.getHandler!(req, res) };
 };
@@ -98,9 +112,45 @@ describe('GET /api/organizations/[id]/webhooks/github', () => {
     expect(organizationRepository.findById).toHaveBeenCalledWith(ORG_ID.toUpperCase());
   });
 
+  it.each([{}, { revealSecret: 'true' }, { secret: 'true' }])(
+    'never returns the plain secret (query %j)',
+    async query => {
+      const { res, result } = call(ORG_ID, query);
+      await result;
+
+      const body = res._getJSONData();
+      expect(res._getStatusCode()).toBe(200);
+      expect('secret' in body).toBe(false);
+      expect(body.secretMasked).toBe('****');
+      expect(JSON.stringify(body)).not.toContain('"enc"');
+    }
+  );
+
   it('rejects an org id that is not object-id shaped', async () => {
     await expect(call('not-an-org-id').result).rejects.toThrow(/Invalid organization ID/);
     expect(organizationRepository.findById).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/organizations/[id]/webhooks/github', () => {
+  it('returns the plain secret once, alongside the mask', async () => {
+    configKey.value = 'fake-encryption-key';
+    orgWebhookConfigRepository.findByOrganizationId.mockResolvedValue(null);
+    orgWebhookConfigRepository.create.mockImplementation(async (doc: Record<string, unknown>) => ({
+      id: 'cfg1',
+      ...doc,
+    }));
+    const { req, res } = createMocks({ method: 'POST', query: { id: ORG_ID }, body: {} });
+    Object.assign(req, { user: { id: 'owner1', isAdmin: false } });
+    try {
+      await mockRefs.postHandler!(req, res);
+    } finally {
+      configKey.value = undefined;
+    }
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData().secret).toBe('secret');
+    expect(res._getJSONData().secretMasked).toBe('**cret');
   });
 });
 
@@ -132,6 +182,15 @@ describe('PUT /api/organizations/[id]/webhooks/github', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(orgWebhookConfigRepository.update).toHaveBeenCalledTimes(1);
     expect(orgWebhookConfigRepository.update.mock.calls[0][0]).toStrictEqual({ id: 'cfg1', enabled: false });
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.webhook.updated',
+        actorScope: 'organization',
+        changes: [{ field: 'enabled', before: true, after: false }],
+        details: { webhookConfigId: 'cfg1' },
+      })
+    );
   });
 
   it('writes only subscribedEvents when only subscribedEvents is sent', async () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { hashEmailToken } from '@bike4mind/utils';
 import { verifyEmailToken, VerifyEmailTokenParameters } from './verifyEmailToken';
 import { BadRequestError } from '@bike4mind/utils';
 
@@ -17,7 +18,7 @@ describe('verifyEmailToken', () => {
       email: 'test@example.com',
       username: 'testuser',
       emailVerified: false,
-      emailVerificationToken: 'valid-token-123',
+      emailVerificationToken: hashEmailToken('valid-token-123'),
       emailVerificationSentAt: new Date(Date.now() - 60000),
       emailVerificationExpires: new Date(Date.now() + 60000), // Valid for 1 more minute
       emailVerifiedAt: null,
@@ -55,6 +56,22 @@ describe('verifyEmailToken', () => {
     const updatedUser = mockAdapters.db.users.update.mock.calls[0][0];
     expect(updatedUser.emailVerifiedAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(updatedUser.emailVerifiedAt.getTime()).toBeLessThanOrEqual(Date.now() + 1000);
+  });
+
+  it('rejects the stored hash presented as the token', async () => {
+    await expect(verifyEmailToken({ token: mockUser.emailVerificationToken }, mockAdapters)).rejects.toThrow(
+      'Invalid or expired verification token'
+    );
+    expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it('accepts an unexpired token stored in plaintext before hashing', async () => {
+    const legacyToken = '3f2b8c1e-6a4d-4e2f-9b7a-1c5d8e9f0a2b';
+    mockUser.emailVerificationToken = legacyToken;
+    await verifyEmailToken({ token: legacyToken }, mockAdapters);
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ emailVerified: true, emailVerificationToken: null })
+    );
   });
 
   it('should throw BadRequestError if token is not found', async () => {

@@ -51,6 +51,13 @@ export function registerClaudeImport(ipcMain: Pick<IpcMain, 'handle'>, deps: Pic
     IPC_CHANNELS.claudeImportSetWatchFolder,
     withSender((clear: unknown) => service.setChatWatchFolder(clear === true))
   );
+  ipcMain.handle(IPC_CHANNELS.claudeImportSetWebSettings, (_event, patch: unknown) => service.setWebSettings(patch));
+  ipcMain.handle(IPC_CHANNELS.claudeImportSyncWeb, async () => {
+    // Sync now is the user asking for everything to be right, so it reconciles with a full list.
+    await service.syncWeb({ reconcile: true });
+    return service.state();
+  });
+  ipcMain.handle(IPC_CHANNELS.claudeImportDismissHint, (_event, id: unknown) => service.dismissHint(id));
   ipcMain.handle(IPC_CHANNELS.claudeImportRemove, (_event, kind: unknown) => service.removeImported(kind));
   return service;
 }

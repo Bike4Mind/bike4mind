@@ -14,11 +14,13 @@ import {
 } from './patch';
 import { realpathNearest } from './paths';
 import { recentFiles, recordRecentFile } from './recentFiles';
+import { recordSessionWrite } from './sessionScripts';
 import type { ApprovalPrompt, ToolContext, ToolDefinition } from './types';
 import {
   assertNoControlCharacters,
   assertUnchanged,
   editSnippets,
+  fileChangeAllowance,
   fingerprint,
   forget,
   MAX_WRITE_BYTES,
@@ -403,7 +405,11 @@ function toPrompt(plan: PatchPlan, context: ToolContext): ApprovalPrompt {
     ...plan.changes.map(c => `  ${summaryLine(c, context)}`),
   ].join('\n');
   const diffs = plan.changes.map(change => change.diff);
-  return diffs.length === 1 ? { detail, key: plan.key, diff: diffs[0] } : { detail, key: plan.key, diffs };
+  if (diffs.length !== 1) return { detail, key: plan.key, diffs };
+  const [diff] = diffs;
+  // A delete or a move is more than a change to the file, so its allowance stays with this call.
+  const changesInPlace = diff.operation !== 'delete' && diff.movedFrom === undefined;
+  return { detail, key: plan.key, diff, ...(changesInPlace ? fileChangeAllowance(diff.path) : {}) };
 }
 
 async function restore(plan: PatchPlan, targets: readonly string[]): Promise<void> {
@@ -473,7 +479,11 @@ async function runPatch(input: Record<string, unknown>, context: ToolContext): P
     context.beginWrite?.();
 
     await writeChanges(plan);
-    for (const change of plan.changes) if (change.status !== 'D') recordRecentFile(context, change.to);
+    for (const change of plan.changes) {
+      if (change.status === 'D') continue;
+      recordRecentFile(context, change.to);
+      await recordSessionWrite(context, change.to);
+    }
 
     for (const change of plan.changes) {
       const source = plan.disk.get(change.from);

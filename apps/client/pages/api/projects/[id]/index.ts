@@ -1,16 +1,25 @@
 import { z } from 'zod';
-import { ProjectEvents } from '@bike4mind/common';
-import { fabFileRepository, projectRepository, sessionRepository, userRepository } from '@bike4mind/database';
+import { ProjectEvents, projectResponseSchema } from '@bike4mind/common';
+import {
+  fabFileRepository,
+  projectRepository,
+  sessionRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
+import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
 import {
   assertProjectsReadScope,
   assertProjectsWriteScope,
   PROJECTS_READ_OR_WRITE_SCOPES,
 } from '@server/projects/projectScopes';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { respond } from '@server/utils/respond';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 
 const updateProjectBodySchema = z.object({
   name: z.string().optional(),
@@ -27,7 +36,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
         users: userRepository,
       },
     });
-    return res.json(project);
+    return respond(res, projectResponseSchema, project);
   })
   .put(async (req, res) => {
     assertProjectsWriteScope(req);
@@ -83,18 +92,29 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
       },
     });
 
-    await projectService.deleteProject(
-      req.user.id,
-      { ...(req.query as any) },
-      {
-        db: {
-          projects: projectRepository,
-          sessions: sessionRepository,
-          fabFiles: fabFileRepository,
-          users: userRepository,
-        },
-      }
-    );
+    // Read before the delete: its cascade prunes the project's file list.
+    const cleanUpTargets = await projectRevokeCleanupTargets(project.id, undefined, req.logger);
+
+    const affectedUserIds = await withTransaction(async () => {
+      const affected = new Set<string>();
+      await projectService.deleteProject(
+        req.user.id,
+        { id: project.id },
+        {
+          db: {
+            projects: projectRepository,
+            sessions: sessionRepository,
+            fabFiles: fabFileRepository,
+            users: userRepository,
+          },
+          onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
+        }
+      );
+      return [...affected];
+    });
+    await rescopeUserSubscriptions(affectedUserIds, req.logger);
+
+    await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
 
     await logEvent(
       {

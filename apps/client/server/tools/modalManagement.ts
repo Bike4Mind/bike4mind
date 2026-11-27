@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ModalModel } from '@bike4mind/database/social';
-import { IModalDocument } from '@bike4mind/common';
+import { IModalDocument, hasAdminPermission } from '@bike4mind/common';
 
 // Tool schema for LLM to understand parameters
 export const modalManagementToolSchema = z.object({
@@ -49,11 +49,11 @@ export const modalManagementTool = {
   inputSchema: modalManagementToolSchema,
 
   execute: async (params: ModalManagementParams, context?: { user?: any }) => {
-    // Validate user permissions
-    if (context?.user && !context.user.isAdmin) {
+    // Same rule as the Modal 'manage' ability: full admins and settings:manage delegates
+    if (!context?.user || !hasAdminPermission(context.user, 'settings:manage')) {
       return {
         success: false,
-        error: 'Admin permissions required for modal management',
+        error: 'Modal management permission required',
       };
     }
 

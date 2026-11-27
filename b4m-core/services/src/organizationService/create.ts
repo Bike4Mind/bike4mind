@@ -1,4 +1,10 @@
-import { IOrganizationDocument, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+  ConflictError,
+} from '@bike4mind/common';
 import { secureParameters, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -36,6 +42,10 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
     throw new NotFoundError(`Billing owner ${billingOwnerId} not found`);
   }
 
+  if (owner.deletion?.scheduledFor) {
+    throw new ConflictError('An account scheduled for deletion cannot own a new organization.');
+  }
+
   const buildOrganization: Omit<IOrganizationDocument, 'id'> = {
     ...validatedParams,
 
@@ -46,6 +56,7 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
     // Org-groups (#1172): a new org starts with no group types and no appointed admins (fail-closed).
     allowedGroupTypes: [],
     adminUserIds: [],
+    billingManagerUserIds: [],
     users: [],
     seats: validatedParams.seats,
     // Records the acting caller's email (the human who issued the create), deliberately NOT the

@@ -49,8 +49,10 @@ vi.mock('@bike4mind/database', () => ({
   lakeConfigChangeEventRepository: {},
   adminSettingsRepository: {},
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: h.admitProposedSource }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/proposalAdmissionDeps', () => ({
+  admitProposedSource: h.admitProposedSource,
+}));
 
 import handler from '../[proposalId]';
 
@@ -152,6 +154,60 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
       expect.anything()
     );
     expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'pending' } });
+  });
+
+  it('strips undeclared fields from the approved proposal and the admitted file', async () => {
+    h.approveDataLakeProposal.mockResolvedValue({
+      proposal: {
+        id: 'prop-1',
+        status: 'approved',
+        textHash: 'digest',
+        _id: 'raw-object-id',
+        __v: 7,
+        notInSchema: 'secret',
+      },
+      fabFile: { id: 'file-9', fileName: 'Report', userId: 'creator-1', notInSchema: 'secret' },
+    });
+    const { res, json } = makeRes();
+
+    await handler(makeReq({ decision: 'approve' }) as never, res);
+
+    expect(json).toHaveBeenCalledWith({
+      data: { id: 'prop-1', status: 'approved' },
+      fabFile: { id: 'file-9', fileName: 'Report' },
+    });
+  });
+
+  it('strips undeclared fields from the declined proposal', async () => {
+    h.declineDataLakeProposal.mockResolvedValue({
+      id: 'prop-1',
+      status: 'declined',
+      textHash: 'digest',
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { res, json } = makeRes();
+
+    await handler(makeReq({ decision: 'decline', reason: 'paywalled' }) as never, res);
+
+    expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'declined' } });
+  });
+
+  it('strips undeclared fields from the restored proposal', async () => {
+    h.restoreDataLakeProposal.mockResolvedValue({
+      id: 'prop-1',
+      status: 'pending',
+      textHash: 'digest',
+      _id: 'raw-object-id',
+      __v: 7,
+      notInSchema: 'secret',
+    });
+    const { res, json } = makeRes();
+
+    await handler(makeReq({ decision: 'restore' }) as never, res);
+
     expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'pending' } });
   });
 

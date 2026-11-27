@@ -4,7 +4,9 @@ type QuestState = components['schemas']['getQuestResponse200'];
 
 /**
  * A non-2xx response. `message` is the envelope's `error` (`ErrorResponse` in the spec); branch on `status` and
- * `errorCode`, never on the prose. The deprecated `name` field is deliberately not surfaced.
+ * `errorCode`, never on the prose. The deprecated `name` field is deliberately not surfaced. An OAuth body
+ * (a snake_case `error` code + `error_description`, no `errorCode`) maps `error` to `errorCode` and
+ * `error_description` to `message`.
  */
 export class B4mApiError extends Error {
   readonly status: number;
@@ -18,12 +20,21 @@ export class B4mApiError extends Error {
 
   constructor(status: number, body: unknown, headers: Headers) {
     const record = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-    super(typeof record.error === 'string' ? record.error : `HTTP ${status}`);
+    const error = typeof record.error === 'string' ? record.error : undefined;
+    const description = typeof record.error_description === 'string' ? record.error_description : undefined;
+    // Some non-OAuth bodies also send `error_description` next to a prose `error`; only a code is an errorCode.
+    const oauth =
+      typeof record.errorCode !== 'string' &&
+      error !== undefined &&
+      /^[a-z_]+$/.test(error) &&
+      description !== undefined;
+    super((oauth ? description : error) ?? `HTTP ${status}`);
     this.name = 'B4mApiError';
     this.status = status;
     this.body = body;
     this.headers = headers;
-    if (typeof record.errorCode === 'string') this.errorCode = record.errorCode;
+    if (oauth) this.errorCode = error;
+    else if (typeof record.errorCode === 'string') this.errorCode = record.errorCode;
     const requestId = typeof record.request_id === 'string' ? record.request_id : headers.get('x-request-id');
     if (requestId) this.requestId = requestId;
     const retryAfterSeconds = parseRetryAfterSeconds(headers.get('retry-after'));

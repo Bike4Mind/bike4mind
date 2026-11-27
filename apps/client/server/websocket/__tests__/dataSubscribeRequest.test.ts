@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CHAT_MESSAGE_WITHHELD_FIELDS, OWNER_ONLY_PROMPT_META_PROJECTION_PATHS } from '@bike4mind/common';
+import {
+  CHAT_MESSAGE_WITHHELD_FIELDS,
+  OWNER_ONLY_CHAT_MESSAGE_FIELDS,
+  OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
+  SERVER_OWNED_SESSION_ORIGIN_FIELDS,
+} from '@bike4mind/common';
 
 /**
  * Regression test for the WS subscribe handler's rotation-grace wiring: this path
@@ -31,7 +37,9 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 const serverOnlyQuestExclusions = Object.fromEntries(CHAT_MESSAGE_WITHHELD_FIELDS.map(field => [field, false]));
 
 const expectedQuestExclusions = {
-  ...Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false])),
+  ...Object.fromEntries(
+    [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...OWNER_ONLY_CHAT_MESSAGE_FIELDS].map(path => [path, false])
+  ),
   ...serverOnlyQuestExclusions,
 };
 
@@ -39,6 +47,7 @@ const mockFindModelByCollectionName = vi.fn();
 const mockUpsertSubscriber = vi.fn();
 const mockRemoveConnectionSubscribers = vi.fn();
 // The registered Connection row the handler requires; a test overrides it to null or another user.
+const mockFindRoles = vi.fn();
 let connectionRow: { userId: string } | null = { userId: 'caller-1' };
 const mockConnectionFindOne = vi.fn(() => ({ lean: async () => connectionRow }));
 const mockCloseConnection = vi.fn(async () => undefined);
@@ -46,36 +55,36 @@ vi.mock('@bike4mind/server-utils/websocket/closeConnection', () => ({
   closeConnection: (...args: unknown[]) => mockCloseConnection(...(args as [])),
 }));
 // The enforceMFA gate in verifyWsAccessToken is covered in its own test; inert here.
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async () => false,
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 vi.mock('@bike4mind/database', () => ({
   Connection: { findOne: (...args: unknown[]) => mockConnectionFindOne(...(args as [])) },
-  AdminSettings: {},
-  ApiKey: {},
-  AppFile: {},
-  Artifact: {},
-  ArtifactVersion: {},
-  FabFile: {},
+  AdminSettings: { collection: { collectionName: 'adminsettings' } },
+  ApiKey: { collection: { collectionName: 'apikeys' } },
+  AppFile: { collection: { collectionName: 'appfiles' } },
+  Artifact: { collection: { collectionName: 'artifacts' } },
+  ArtifactVersion: { collection: { collectionName: 'artifactversions' } },
+  FabFile: { collection: { collectionName: 'fabfiles' } },
   findModelByCollectionName: (...args: unknown[]) => mockFindModelByCollectionName(...args),
-  Inbox: {},
+  Inbox: { collection: { collectionName: 'inboxes' } },
   Invite: { collection: { collectionName: 'invites' } },
-  mongoose: {},
-  Organization: { collection: { collectionName: 'organizations' } },
-  Project: {},
+  mongoose: { isValidObjectId: (id: unknown) => typeof id === 'string' && /^[a-f0-9]{24}$/.test(id) },
+  Organization: { collection: { collectionName: 'organizations' }, findById: vi.fn() },
+  Project: { collection: { collectionName: 'projects' } },
   Quest: { collection: { collectionName: 'quests' } },
-  QuestMasterPlan: { collection: { collectionName: 'questMasterPlans' } },
   realtimeConnectionRepository: {
     upsertSubscriber: (...args: unknown[]) => mockUpsertSubscriber(...args),
     removeConnectionSubscribers: (...args: unknown[]) => mockRemoveConnectionSubscribers(...args),
   },
-  User: { findById: vi.fn() },
+  User: { findById: vi.fn(), collection: { collectionName: 'users' } },
+  adminRoleRepository: { findByIds: (...args: unknown[]) => mockFindRoles(...args) },
 }));
 
 const mockSessionFind = vi.fn();
 vi.mock('@bike4mind/database/auth', () => ({
-  Session: { find: (...args: unknown[]) => mockSessionFind(...args) },
+  Session: { find: (...args: unknown[]) => mockSessionFind(...args), collection: { collectionName: 'sessions' } },
 }));
 
 vi.mock('@casl/mongoose', () => ({
@@ -84,29 +93,29 @@ vi.mock('@casl/mongoose', () => ({
   accessibleBy: vi.fn().mockReturnValue({ ofType: vi.fn().mockReturnValue({}) }),
 }));
 
-vi.mock('@server/models/Subscription', () => ({
-  Subscription: {},
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
+  Subscription: { collection: { collectionName: 'subscriptions' } },
 }));
 
 vi.mock('@server/websocket/subscriptionScopes', () => ({
-  questMasterPlanSubscriptionScope: vi.fn(),
+  adminSettingsSubscriptionScope: vi.fn(),
   inviteSubscriptionScope: vi.fn(),
 }));
 
-vi.mock('@bike4mind/server-utils/utils/errors', () => ({
-  ForbiddenError: class ForbiddenError extends Error {},
-  NotFoundError: class NotFoundError extends Error {},
-  UnauthorizedError: class UnauthorizedError extends Error {},
-}));
+// The real classes: the account-state gate throws @bike4mind/common's errors, so a stand-in class would never match.
+vi.mock('@bike4mind/server-utils/utils/errors', async () => {
+  const { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } = await import('@bike4mind/common');
+  return { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError };
+});
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToConnection: vi.fn(),
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
 }));
 
-vi.mock('../../auth/ability', () => ({
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({
   default: vi.fn(),
 }));
 
@@ -116,7 +125,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
-vi.mock('@server/auth/secretRotationGrace', () => ({
+vi.mock('@bike4mind/server-utils/auth/secretRotationGrace', () => ({
   isRotatedSecretWithinGraceWindow: (...args: unknown[]) => mockIsWithinGraceWindow(...args),
 }));
 
@@ -134,8 +143,12 @@ vi.mock('sst', () => ({
 }));
 
 import { func } from '../dataSubscribeRequest';
-import { Project, User } from '@bike4mind/database';
-import { inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
+import ability from '@bike4mind/server-utils/auth/ability';
+import { hasAdminPermission } from '@bike4mind/common';
+import { sendToConnection } from '@bike4mind/server-utils/websocket/utils';
+import { Organization, Project, User } from '@bike4mind/database';
+import { accessibleBy } from '@casl/mongoose';
+import { adminSettingsSubscriptionScope, inviteSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 
 const baseEvent = (accessToken = 'token-123') => ({
@@ -151,6 +164,168 @@ const baseEvent = (accessToken = 'token-123') => ({
   }),
 });
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+
+describe('catalog signal initial delivery ordering', () => {
+  const orgId = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const trace: string[] = [];
+  const row = { _id: orgId, id: orgId, toJSON: () => ({ _id: orgId, id: orgId, modelPolicy: null }) };
+  let rows: Promise<Array<typeof row>>;
+  let initialReadFailure: Error | undefined;
+  const find = vi.fn((query: Record<string, unknown>) => ({
+    setOptions: () => ({
+      getQuery: () => query,
+      then: (resolve: (value: Array<typeof row>) => unknown, reject: (error: unknown) => unknown) => {
+        trace.push('find');
+        return (initialReadFailure ? Promise.reject(initialReadFailure) : rows).then(resolve, reject);
+      },
+    }),
+  }));
+  const runHandler = func as unknown as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>;
+  const invoke = (overrides: Record<string, unknown> = {}) =>
+    runHandler(
+      {
+        requestContext: { connectionId: 'conn-1' },
+        body: JSON.stringify({
+          action: 'subscribe_query',
+          accessToken: 'token-123',
+          subscriptionId: 'catalog',
+          collectionName: 'organizations',
+          query: { _id: orgId },
+          fields: {},
+          fetchInitialData: true,
+          initialDataAfterSubscribe: true,
+          ...overrides,
+        }),
+      },
+      {},
+      noopLogger
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    trace.length = 0;
+    connectionRow = { userId: 'caller-1' };
+    mockConnectionFindOne.mockImplementation(() => ({ lean: async () => connectionRow }));
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    vi.mocked(User.findById).mockResolvedValue({ _id: 'caller-1', id: 'caller-1', tokenVersion: undefined } as never);
+    vi.mocked(Organization.findById).mockResolvedValue(null);
+    mockFindModelByCollectionName.mockReturnValue({ find });
+    rows = Promise.resolve([row]);
+    initialReadFailure = undefined;
+    mockUpsertSubscriber.mockReset().mockImplementation(async () => {
+      trace.push('upsert');
+    });
+    vi.mocked(sendToConnection)
+      .mockReset()
+      .mockImplementation(async () => {
+        trace.push('send');
+      });
+    mockRemoveConnectionSubscribers.mockResolvedValue(undefined);
+    mockCloseConnection.mockResolvedValue(undefined);
+  });
+
+  it.each([false, true])('preserves generic order and opts signal delivery in explicitly (flag=%s)', async flag => {
+    await invoke({ initialDataAfterSubscribe: flag });
+    expect(trace).toEqual(flag ? ['find', 'upsert', 'send'] : ['find', 'send', 'upsert']);
+    expect(mockUpsertSubscriber.mock.calls[0][0]).toMatchObject({
+      collectionName: 'organizations',
+      query: { $and: [{ _id: orgId }, {}] },
+    });
+  });
+
+  it('keeps an existing same-id subscriber untouched when the initial read fails', async () => {
+    const failure = new Error('initial read unavailable');
+    initialReadFailure = failure;
+    await expect(invoke()).rejects.toBe(failure);
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+    expect(mockRemoveConnectionSubscribers).not.toHaveBeenCalled();
+    expect(sendToConnection).toHaveBeenCalledWith(
+      'conn-1',
+      expect.any(String),
+      expect.objectContaining({ action: 'data_subscribe_error' })
+    );
+  });
+
+  it.each([false, true])(
+    'does not deliver after the connection ends during the initial read (signal order: %s)',
+    async flag => {
+      let resolve: ((value: Array<typeof row>) => void) | undefined;
+      rows = new Promise(resolveRows => {
+        resolve = resolveRows;
+      });
+      const pending = invoke({ initialDataAfterSubscribe: flag });
+      await vi.waitFor(() => expect(trace).toContain('find'));
+      connectionRow = null;
+      resolve?.([row]);
+      await expect(pending).rejects.toBeInstanceOf(UnauthorizedError);
+      expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+      expect(sendToConnection).not.toHaveBeenCalled();
+      expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+    }
+  );
+
+  it('checks a queued initial send before it enters the transport', async () => {
+    rows = Promise.resolve(
+      Array.from({ length: 51 }, (_, index) => {
+        const id = index.toString(16).padStart(24, '0');
+        return { _id: id, id, toJSON: () => ({ _id: id, id, modelPolicy: null }) };
+      })
+    );
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    vi.mocked(sendToConnection).mockImplementation(async () => {
+      await held;
+    });
+    const pending = invoke({ collectionName: 'projects', query: {}, initialDataAfterSubscribe: false });
+    try {
+      await vi.waitFor(() => expect(sendToConnection).toHaveBeenCalledTimes(50));
+      connectionRow = null;
+    } finally {
+      release();
+    }
+    await expect(pending).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(sendToConnection).toHaveBeenCalledTimes(50);
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+
+  it('removes a registration that raced revocation before sending the initial signal', async () => {
+    mockUpsertSubscriber.mockImplementationOnce(async () => {
+      connectionRow = null;
+    });
+    await expect(invoke()).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(sendToConnection).not.toHaveBeenCalled();
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+    expect(mockCloseConnection).toHaveBeenCalled();
+  });
+
+  it('checks closure after initial delivery without writing a later registration', async () => {
+    vi.mocked(sendToConnection).mockImplementationOnce(async () => {
+      trace.push('send');
+      connectionRow = null;
+    });
+    await expect(invoke()).rejects.toBeInstanceOf(UnauthorizedError);
+    expect(trace).toEqual(['find', 'upsert', 'send']);
+    expect(mockUpsertSubscriber).toHaveBeenCalledTimes(1);
+    expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
+  });
+
+  it.each([
+    { collectionName: 'users' },
+    { query: {} },
+    { query: { _id: orgId, name: 'broad' } },
+    { query: { _id: 'invalid' } },
+    { fetchInitialData: false },
+    { fields: { modelPolicy: 0 } },
+  ])('refuses signal ordering outside a full single-org initial subscription: %j', async overrides => {
+    await expect(invoke(overrides)).rejects.toMatchObject({ statusCode: 400 });
+    expect(find).not.toHaveBeenCalled();
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+});
 
 describe('dataSubscribeRequest WS handler - rotation grace window', () => {
   beforeEach(() => {
@@ -268,6 +443,172 @@ describe('dataSubscribeRequest WS handler - quest field scoping', () => {
   });
 });
 
+describe('dataSubscribeRequest WS handler - session field scoping', () => {
+  const sessionEvent = (fields: Record<string, number> = {}) => ({
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'subscribe_query',
+      accessToken: 'token-123',
+      subscriptionId: 'sub-1',
+      collectionName: 'sessions',
+      query: {},
+      fields,
+      fetchInitialData: false,
+    }),
+  });
+  const expectedFields = {
+    ...Object.fromEntries(SERVER_OWNED_SESSION_FIELDS.map(field => [field, false])),
+    ...Object.fromEntries(SERVER_OWNED_SESSION_ORIGIN_FIELDS.map(field => [`origin.${field}`, false])),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      _id: 'caller-1',
+      id: 'caller-1',
+      tokenVersion: undefined,
+    });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it.each(['owner', 'sharee'])('uses and persists the same exclusions for a session %s', async viewer => {
+    const scope = { userId: viewer === 'owner' ? 'caller-1' : 'someone-else' };
+    vi.mocked(accessibleBy).mockReturnValue({ ofType: vi.fn().mockReturnValue(scope) } as never);
+    const find = vi.fn().mockReturnValue({
+      setOptions: vi.fn().mockReturnValue({ getQuery: () => ({ $and: [{}, scope] }) }),
+    });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await func(
+      sessionEvent() as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as unknown as Parameters<typeof func>[2]
+    );
+
+    expect(find).toHaveBeenCalledWith({ $and: [{}, scope] }, expectedFields);
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: 'sessions', fields: expectedFields }),
+      expect.anything()
+    );
+  });
+
+  it('keeps exclusions when a session subscriber requests inclusion fields', async () => {
+    const find = vi.fn().mockReturnValue({ setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}) }) });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await func(
+      sessionEvent({ name: 1 }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as unknown as Parameters<typeof func>[2]
+    );
+
+    expect(find.mock.calls[0][1]).toEqual(expectedFields);
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(
+      expect.objectContaining({ fields: expectedFields }),
+      expect.anything()
+    );
+  });
+});
+
+describe('dataSubscribeRequest WS handler - organization field scoping', () => {
+  const orgId = '650000000000000000000abc';
+  const organizationEvent = (query: Record<string, unknown>) => ({
+    requestContext: { connectionId: 'conn-1' },
+    body: JSON.stringify({
+      action: 'subscribe_query',
+      accessToken: 'token-123',
+      subscriptionId: 'sub-1',
+      collectionName: 'organizations',
+      query,
+      fields: {},
+      fetchInitialData: false,
+    }),
+  });
+  const find = vi.fn().mockReturnValue({ setOptions: vi.fn().mockReturnValue({ getQuery: () => ({}) }) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'caller-1', tokenVersion: undefined });
+    (Organization.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: 'owner-1',
+      adminUserIds: ['manager-1', 'former-manager'],
+      users: [{ userId: 'manager-1' }, { userId: 'caller-1' }],
+    });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it.each([
+    ['plain member', 'caller-1', false, true],
+    ['owner', 'owner-1', false, false],
+    ['current manager', 'manager-1', false, false],
+    ['former manager', 'former-manager', false, true],
+    ['platform admin', 'admin-1', true, false],
+  ])('scopes a %s subscription to the appropriate credit fields', async (_role, id, isAdmin, withheld) => {
+    connectionRow = { userId: id };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id, _id: id, isAdmin });
+    await func(
+      organizationEvent({ _id: orgId }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(Organization.findById).toHaveBeenCalledWith(orgId);
+    const fields = find.mock.calls[0][1] as Record<string, boolean>;
+    expect(fields['userDetails.usedCredits']).toBe(withheld ? false : undefined);
+    expect(fields['userDetails.maxCredits']).toBe(withheld ? false : undefined);
+    expect(fields['userDetails.lastCreditUsedAt']).toBe(withheld ? false : undefined);
+    expect(fields['userDetails.periodStart']).toBe(withheld ? false : undefined);
+    expect(fields.billingContact).toBe(isAdmin ? undefined : false);
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(expect.objectContaining({ fields }), expect.anything());
+  });
+
+  it.each([
+    ['a non-existent organization', orgId, null],
+    ['a malformed organization id', 'not-an-object-id', null],
+  ])('fails closed for %s', async (_case, id, found) => {
+    connectionRow = { userId: 'owner-1' };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });
+    (Organization.findById as ReturnType<typeof vi.fn>).mockResolvedValue(found);
+    await func(
+      organizationEvent({ _id: id }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(find.mock.calls[0][1]['userDetails.usedCredits']).toBe(false);
+  });
+
+  it('excludes member credit details on a broad subscription even for an owner', async () => {
+    connectionRow = { userId: 'owner-1' };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });
+    await func(
+      organizationEvent({}) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(Organization.findById).not.toHaveBeenCalled();
+    expect(find.mock.calls[0][1]['userDetails.usedCredits']).toBe(false);
+  });
+
+  it('does not privilege a compound query that includes an owned organization', async () => {
+    connectionRow = { userId: 'owner-1' };
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'owner-1', _id: 'owner-1' });
+    await func(
+      organizationEvent({ _id: orgId, $or: [{ name: 'Other team' }] }) as Parameters<typeof func>[0],
+      {} as Parameters<typeof func>[1],
+      noopLogger as Parameters<typeof func>[2]
+    );
+    expect(Organization.findById).not.toHaveBeenCalled();
+    expect(find.mock.calls[0][1]['userDetails.usedCredits']).toBe(false);
+  });
+});
+
 describe('dataSubscribeRequest WS handler - account state', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -281,7 +622,7 @@ describe('dataSubscribeRequest WS handler - account state', () => {
   });
 
   it.each([
-    ['a banned account', { isBanned: true }, UnauthorizedError],
+    ['a banned account', { isBanned: true }, ForbiddenError],
     ['a dispute-pending account', { disputePending: true }, ForbiddenError],
     ['a moderation-suspended account', { moderation: { status: 'suspended' } }, ForbiddenError],
   ])(
@@ -312,6 +653,7 @@ describe('dataSubscribeRequest WS handler - filters on withheld fields', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
     mockFindByKeyName.mockResolvedValue(null);
     mockIsWithinGraceWindow.mockReturnValue(false);
     mockVerifyToken.mockReturnValue({ id: 'caller-1' });
@@ -391,10 +733,9 @@ describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
   });
 
   it('backs out the entry it wrote and closes the socket when the row was ended after the write', async () => {
-    // First read (registration check) sees the live row; the re-read after the write does not.
-    mockConnectionFindOne
-      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
-      .mockImplementationOnce(() => ({ lean: async () => null }));
+    mockUpsertSubscriber.mockImplementationOnce(async () => {
+      connectionRow = null;
+    });
 
     await expect(func(inviteEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
 
@@ -404,9 +745,9 @@ describe('dataSubscribeRequest - connection ended mid-subscribe', () => {
   });
 
   const endAfterWrite = () =>
-    mockConnectionFindOne
-      .mockImplementationOnce(() => ({ lean: async () => ({ userId: 'caller-1' }) }))
-      .mockImplementationOnce(() => ({ lean: async () => null }));
+    mockUpsertSubscriber.mockImplementationOnce(async () => {
+      connectionRow = null;
+    });
 
   it('still refuses with UnauthorizedError when the close fails', async () => {
     endAfterWrite();
@@ -461,5 +802,161 @@ describe('dataSubscribeRequest - registered connection', () => {
 
     await expect(func(baseEvent() as any, {} as any, noopLogger as any)).rejects.toBeInstanceOf(UnauthorizedError);
     expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+});
+
+describe('dataSubscribeRequest WS handler - admin settings scope', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      _id: { toString: () => 'caller-1' },
+      id: 'caller-1',
+      email: 'caller@example.test',
+      tokenVersion: undefined,
+    });
+    mockUpsertSubscriber.mockResolvedValue({ id: 'sub-doc-1' });
+  });
+
+  it('runs the adminsettings find and the persisted query through adminSettingsSubscriptionScope', async () => {
+    const accessibleScope = { accessible: 'admin-settings-ability-scope' };
+    const sentinelScope = { sentinel: 'admin-settings-subscription-scope' };
+    vi.mocked(accessibleBy).mockReturnValue({ ofType: vi.fn().mockReturnValue(accessibleScope) } as never);
+    vi.mocked(adminSettingsSubscriptionScope).mockReturnValue(sentinelScope as never);
+    const scoped = { $and: [{}, sentinelScope] };
+    const find = vi.fn().mockReturnValue({ setOptions: vi.fn().mockReturnValue({ getQuery: () => scoped }) });
+    mockFindModelByCollectionName.mockReturnValue({ find });
+
+    await func(
+      {
+        requestContext: { connectionId: 'conn-1' },
+        body: JSON.stringify({
+          action: 'subscribe_query',
+          accessToken: 'token-123',
+          subscriptionId: 'sub-1',
+          collectionName: 'adminsettings',
+          query: {},
+          fields: {},
+          fetchInitialData: false,
+        }),
+      } as any,
+      {} as any,
+      noopLogger as any
+    );
+
+    expect(adminSettingsSubscriptionScope).toHaveBeenCalledWith(accessibleScope);
+    expect(find.mock.calls[0][0]).toEqual({ $and: [expect.anything(), sentinelScope] });
+    expect(mockUpsertSubscriber).toHaveBeenCalledWith(
+      expect.objectContaining({ collectionName: 'adminsettings', query: scoped }),
+      expect.anything()
+    );
+  });
+
+  it('refuses a subscription to the retired questmasterplans collection', async () => {
+    await expect(
+      func(
+        {
+          requestContext: { connectionId: 'conn-1' },
+          body: JSON.stringify({
+            action: 'subscribe_query',
+            accessToken: 'token-123',
+            subscriptionId: 'sub-1',
+            collectionName: 'questmasterplans',
+            query: {},
+            fields: {},
+            fetchInitialData: false,
+          }),
+        } as never,
+        {} as never,
+        noopLogger as never
+      )
+    ).rejects.toThrow('Invalid collectionName: questmasterplans');
+    expect(mockFindModelByCollectionName).not.toHaveBeenCalled();
+    expect(mockUpsertSubscriber).not.toHaveBeenCalled();
+  });
+});
+
+describe('subscribe role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+  const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn() };
+  const runHandler = func as unknown as (event: unknown, context: unknown, logger: unknown) => Promise<unknown>;
+  const subscribe = () =>
+    runHandler(
+      {
+        requestContext: { connectionId: 'conn-1' },
+        body: JSON.stringify({
+          action: 'subscribe_query',
+          accessToken: 'token-123',
+          subscriptionId: 'sessions',
+          collectionName: 'sessions',
+          query: {},
+          fields: {},
+          fetchInitialData: false,
+        }),
+      },
+      {},
+      noopLogger
+    ).catch(() => undefined);
+  const abilityUser = () => vi.mocked(ability).mock.calls.at(-1)?.[0] as never;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionRow = { userId: 'caller-1' };
+    mockConnectionFindOne.mockImplementation(() => ({ lean: async () => connectionRow }));
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'caller-1' });
+    vi.mocked(Organization.findById).mockResolvedValue(null);
+    mockFindRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+  });
+
+  it('builds the ability from a user whose only grant comes from a role', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ _id: 'caller-1', id: 'caller-1', adminRoleIds: [ROLE_ID] } as never);
+
+    await subscribe();
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(true);
+  });
+
+  it('refuses the permission on the next subscribe once the role is removed', async () => {
+    vi.mocked(User.findById).mockResolvedValueOnce({
+      _id: 'caller-1',
+      id: 'caller-1',
+      adminRoleIds: [ROLE_ID],
+    } as never);
+    await subscribe();
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(true);
+
+    vi.mocked(User.findById).mockResolvedValueOnce({ _id: 'caller-1', id: 'caller-1', adminRoleIds: [] } as never);
+    await subscribe();
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(false);
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+    vi.mocked(User.findById).mockResolvedValue({
+      _id: 'caller-1',
+      id: 'caller-1',
+      adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'],
+    } as never);
+
+    await subscribe();
+
+    expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(abilityUser(), 'settings:manage')).toBe(false);
+  });
+
+  it('builds no ability when the role lookup throws', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ _id: 'caller-1', id: 'caller-1', adminRoleIds: [ROLE_ID] } as never);
+    mockFindRoles.mockRejectedValue(new Error('db down'));
+
+    await subscribe();
+
+    expect(ability).not.toHaveBeenCalled();
   });
 });

@@ -731,6 +731,29 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
   });
 });
 
+describe('DataLakeRepository.countCountedCreatedBy', () => {
+  setupMongoTest();
+
+  it('counts every lake the user created except those being deleted or already gone', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'draft', createdByUserId: 'alice', status: 'draft' }));
+    await dataLakeRepository.create(baseLake({ slug: 'active', createdByUserId: 'alice', status: 'active' }));
+    await dataLakeRepository.create(baseLake({ slug: 'archived', createdByUserId: 'alice', status: 'archived' }));
+    await dataLakeRepository.create(baseLake({ slug: 'org', createdByUserId: 'alice', organizationId: 'org-1' }));
+    for (const status of ['deleting', 'deleted', 'purging'] as const) {
+      await dataLakeRepository.create(baseLake({ slug: status, createdByUserId: 'alice', status }));
+    }
+    await dataLakeRepository.create(baseLake({ slug: 'bobs', createdByUserId: 'bob' }));
+
+    expect(await dataLakeRepository.countCountedCreatedBy('alice')).toBe(4);
+    expect(await dataLakeRepository.countCountedCreatedBy('nobody')).toBe(0);
+  });
+
+  it('never counts for a blank caller id', async () => {
+    await DataLakeModel.collection.insertOne({ ...baseLake({ slug: 'orphan' }), createdByUserId: '' });
+    expect(await dataLakeRepository.countCountedCreatedBy('')).toBe(0);
+  });
+});
+
 describe('DataLakeRepository.findIdsCreatedBy', () => {
   setupMongoTest();
 
@@ -1735,6 +1758,30 @@ describe('DataLakeRepository - lake-memory extraction lease + continuation curso
       const gone = new mongoose.Types.ObjectId().toString();
       expect(await dataLakeRepository.getLakeMemoryFence(gone)).toEqual({ exists: false, purgedAt: null });
     });
+  });
+});
+
+describe('DataLakeBatchRepository - taxonomyBilling', () => {
+  setupMongoTest();
+
+  it.each(['orgB', null])('persists payer %s through the taxonomy claim and list projection', async organizationId => {
+    const taxonomyBilling = { organizationId, apiKeyId: 'key1', source: 'cli' as const };
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      wantsTaxonomy: true,
+      taxonomyBilling,
+    });
+
+    const claimed = await dataLakeBatchRepository.setTaxonomyStatusIfActive(batch.id, ['none'], 'queued');
+    expect(claimed?.taxonomyBilling).toMatchObject(taxonomyBilling);
+    const listed = await dataLakeBatchRepository.findActiveByUserId('u1');
+    expect(listed.find(item => item.id === batch.id)?.taxonomyBilling).toMatchObject(taxonomyBilling);
+  });
+
+  it('leaves legacy batches without a billing snapshot for the legacy owner fallback', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+    expect(batch.taxonomyBilling).toBeUndefined();
   });
 });
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type IMessage } from '@bike4mind/common';
 import type { ChatRequest } from 'ollama';
-import { OllamaBackend } from './ollamaBackend';
+import { OllamaBackend, type OllamaRequestSettings, type OllamaRequestSettingsReader } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 
@@ -39,7 +39,8 @@ async function run(
   await backend.complete(
     'qwen2.5-coder:3b',
     [{ role: 'user', content: 'go' } as any],
-    { stream: false, ...options } as any,
+    // These suites assert the wire message mapping; the identity line is covered separately.
+    { stream: false, omitIdentityReminder: true, ...options } as any,
     async (texts, info) => {
       texts.forEach(t => {
         if (t) out.push(t);
@@ -343,7 +344,7 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    // The window is what we will actually allocate (see effectiveContextWindow), not the
+    // The window is what we will actually allocate (see ollamaNumCtx), not the
     // 262144 the model reports, so callers size history to what fits. Output is half of
     // that, which is what leaves room for the prompt.
     expect(info.contextWindow).toBe(32768);
@@ -383,6 +384,23 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(false);
     expect(info.supportsTools).toBe(true);
     expect(info.supportsVision).toBe(false);
+  });
+
+  it('tells a reported lack of tools apart from a failed /api/show', async () => {
+    const reported = backendWithCapabilities(['completion']);
+    await reported.getModelInfo();
+    expect(reported.toolSupportUnchecked('qwen3.5:2b-q4_K_M')).toBe(false);
+
+    const failed = new OllamaBackend('http://localhost:11434', silentLogger);
+    (failed as any)._api = {
+      list: vi.fn(async () => ({ models: [{ name: 'tiny:1b' }] })),
+      show: vi.fn(async () => {
+        throw new Error('fetch failed');
+      }),
+    };
+    const [info] = await failed.getModelInfo();
+    expect(info.supportsTools).toBe(false);
+    expect(failed.toolSupportUnchecked('tiny:1b')).toBe(true);
   });
 });
 
@@ -444,7 +462,15 @@ describe('OllamaBackend.buildMessages image handling', () => {
   // Drive a plain completion and return the message the api chat call received.
   async function sentMessage(content: unknown) {
     const { backend, chat } = makeBackend(answer);
-    await backend.complete('moondream', [{ role: 'user', content } as any], { stream: false } as any, async () => {});
+    await backend.complete(
+      'moondream',
+      [{ role: 'user', content } as any],
+      {
+        stream: false,
+        omitIdentityReminder: true,
+      } as any,
+      async () => {}
+    );
     return (chat.mock.calls[0][0] as { messages: Array<{ content: string; images?: string[] }> }).messages[0];
   }
 
@@ -495,7 +521,7 @@ describe('OllamaBackend.buildMessages replayed tool calls', () => {
     await backend.complete(
       'qwen3:8b',
       history,
-      { stream: false, executeTools: false, tools: [mathTool(async () => '4')] },
+      { stream: false, executeTools: false, tools: [mathTool(async () => '4')], omitIdentityReminder: true },
       async () => {}
     );
     const request = chat.mock.calls[0]?.[0];
@@ -687,6 +713,184 @@ describe('OllamaBackend model options', () => {
     await run(backend, { tools: [mathTool(async () => '4')] });
     expect(chat).toHaveBeenCalledTimes(2);
     expect(show).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OllamaBackend per-model request settings', () => {
+  const reply = { message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 1, eval_count: 1 };
+  const show = {
+    capabilities: ['completion', 'thinking'],
+    model_info: { 'gptoss.context_length': 131072, 'gptoss.nextn_predict_layers': 1 },
+    parameters: 'temperature 1',
+    modelfile: 'FROM /blobs/sha256-abc',
+    thinking: { values: ['low', 'medium', 'high'] },
+  };
+
+  function backendWith(options: { requestSettings: OllamaRequestSettingsReader }) {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger, options);
+    const chat = vi.fn(async (_request: ChatRequest) => reply);
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => show),
+      list: vi.fn(async () => ({ models: [{ name: 'gpt-oss:20b' }] })),
+    };
+    return { backend, chat };
+  }
+
+  it('hands the reader what /api/show said and sends what it returns', async () => {
+    const read = vi.fn(async () => ({
+      numCtx: 65536,
+      keepAlive: -1,
+      options: { temperature: 0.6, draft_num_predict: 2 },
+      maxOutputTokens: 4096,
+      think: 'high',
+    }));
+    const { backend, chat } = backendWith({ requestSettings: read });
+    await run(backend, { temperature: 0.7 });
+
+    expect(read).toHaveBeenCalledWith('qwen2.5-coder:3b', {
+      capabilities: show.capabilities,
+      modelInfo: show.model_info,
+      parameters: show.parameters,
+      modelfile: show.modelfile,
+      thinkingValues: ['low', 'medium', 'high'],
+      trainedContext: 131072,
+      defaultNumCtx: 32768,
+    });
+    const request = chat.mock.calls[0][0];
+    expect(request.options).toEqual({ num_ctx: 65536, temperature: 0.6, draft_num_predict: 2, num_predict: 4096 });
+    expect(request.keep_alive).toBe(-1);
+    expect(request.think).toBe('high');
+  });
+
+  it("keeps the caller's maxTokens and thinking over the model's own", async () => {
+    const { backend, chat } = backendWith({
+      requestSettings: async () => ({ maxOutputTokens: 4096, think: 'high' }),
+    });
+    await run(backend, { maxTokens: 64, thinking: { enabled: false, budget_tokens: 0 } });
+    const request = chat.mock.calls[0][0];
+    expect(request.options).toEqual({ num_ctx: 32768, num_predict: 64 });
+    expect(request.think).toBe(false);
+  });
+
+  it("fails the turn with the reader's error and sends nothing", async () => {
+    const { backend, chat } = backendWith({
+      requestSettings: async () => {
+        throw new Error('settings file is broken');
+      },
+    });
+    await expect(run(backend, {})).rejects.toThrow('settings file is broken');
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it('reads the settings again on every round of a tool loop', async () => {
+    const read = vi.fn(async () => ({ numCtx: 16384 }));
+    const { backend, chat } = backendWith({ requestSettings: read });
+    chat.mockResolvedValueOnce({
+      message: { content: '', tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '1' } } }] },
+      prompt_eval_count: 1,
+      eval_count: 1,
+    } as never);
+    await run(backend, { tools: [mathTool(async () => '1')] });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("lists the model's own num_ctx, and the default when its settings cannot be read", async () => {
+    const listed = async (requestSettings: () => Promise<{ numCtx?: number }>) =>
+      (await backendWith({ requestSettings }).backend.getModelInfo())[0].contextWindow;
+    expect(await listed(async () => ({ numCtx: 65536 }))).toBe(65536);
+    expect(await listed(async () => ({}))).toBe(32768);
+    expect(
+      await listed(async () => {
+        throw new Error('broken');
+      })
+    ).toBe(32768);
+  });
+
+  it('keeps sending the listed num_ctx after the setting changes, warning once, while other fields stay live', async () => {
+    const warn = vi.fn();
+    let current = { numCtx: 16384, keepAlive: 600 };
+    const logger = { ...silentLogger, warn };
+    const backend = new OllamaBackend('http://localhost:11434', logger, { requestSettings: async () => current });
+    const chat = vi.fn(async (_request: ChatRequest) => reply);
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => show),
+      list: vi.fn(async () => ({ models: [{ name: 'qwen2.5-coder:3b' }] })),
+    };
+    expect((await backend.getModelInfo())[0].contextWindow).toBe(16384);
+
+    current = { numCtx: 65536, keepAlive: 1800 };
+    await run(backend, {});
+    await run(backend, {});
+
+    expect(chat.mock.calls.map(([request]) => [request.options?.num_ctx, request.keep_alive])).toEqual([
+      [16384, 1800],
+      [16384, 1800],
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(
+      'context change applies after the model list is refreshed or the CLI restarts'
+    );
+  });
+
+  function listingBackend(read: OllamaRequestSettingsReader, listed: () => string[]) {
+    const warn = vi.fn();
+    const settingsWarning = vi.fn();
+    const logger = { ...silentLogger, warn };
+    const backend = new OllamaBackend('http://localhost:11434', logger, { requestSettings: read, settingsWarning });
+    const chat = vi.fn(async (_request: ChatRequest) => reply);
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => show),
+      list: vi.fn(async () => ({ models: listed().map(name => ({ name })) })),
+    };
+    return { backend, chat, warn, settingsWarning };
+  }
+
+  it('sends the warning through settingsWarning when one is given, not the logger', async () => {
+    let numCtx = 16384;
+    const { backend, warn, settingsWarning } = listingBackend(
+      async () => ({ numCtx }),
+      () => ['qwen2.5-coder:3b']
+    );
+    await backend.getModelInfo();
+    numCtx = 8192;
+    await run(backend, {});
+    expect(settingsWarning).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('pins the advertised context for a model whose settings a listing could not read', async () => {
+    let read: () => Promise<OllamaRequestSettings> = async () => {
+      throw new Error('broken');
+    };
+    const { backend, chat, settingsWarning } = listingBackend(
+      () => read(),
+      () => ['qwen2.5-coder:3b']
+    );
+    expect((await backend.getModelInfo())[0].contextWindow).toBe(32768);
+    read = async () => ({ numCtx: 16384 });
+    await run(backend, {});
+    expect(chat.mock.calls[0][0].options?.num_ctx).toBe(32768);
+    expect(settingsWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a model the next listing no longer has', async () => {
+    let numCtx = 16384;
+    let names = ['qwen2.5-coder:3b'];
+    const { backend, chat, settingsWarning } = listingBackend(
+      async () => ({ numCtx }),
+      () => names
+    );
+    await backend.getModelInfo();
+    names = [];
+    await backend.getModelInfo();
+    numCtx = 65536;
+    await run(backend, {});
+    expect(chat.mock.calls[0][0].options?.num_ctx).toBe(65536);
+    expect(settingsWarning).not.toHaveBeenCalled();
   });
 });
 
@@ -982,5 +1186,35 @@ describe('OllamaBackend tool result recording', () => {
     expect(toolsUsed.length).toBe(2);
     expect(toolsUsed[0].id).not.toBe(toolsUsed[1].id);
     expect(toolsUsed.map(t => t.returnValue)).toEqual(['3', '7']);
+  });
+});
+
+describe('OllamaBackend with a custom fetch', () => {
+  it('sends requests through it and binds the abort signal', async () => {
+    const calls: { url: string; signal?: AbortSignal | null; dispatcher?: unknown }[] = [];
+    const custom = vi.fn(async (input: unknown, init?: RequestInit & { dispatcher?: unknown }) => {
+      calls.push({ url: String(input), signal: init?.signal, dispatcher: init?.dispatcher });
+      return new Response(
+        JSON.stringify({ model: 'm', message: { role: 'assistant', content: 'hi' }, done: true, done_reason: 'stop' }),
+        { headers: { 'content-type': 'application/json' } }
+      );
+    });
+    const backend = new OllamaBackend('http://gpu-box:11434', silentLogger, { fetch: custom as typeof fetch });
+    const controller = new AbortController();
+    let text = '';
+    await backend.complete(
+      'm',
+      [{ role: 'user', content: 'hi' }] as unknown as IMessage[],
+      { stream: false, abortSignal: controller.signal },
+      async parts => {
+        text += parts.filter(Boolean).join('');
+      }
+    );
+    expect(text).toContain('hi');
+    const chat = calls.find(call => call.url === 'http://gpu-box:11434/api/chat');
+    expect(chat).toBeDefined();
+    expect(calls.every(call => call.dispatcher === undefined)).toBe(true);
+    controller.abort();
+    expect(chat?.signal?.aborted).toBe(true);
   });
 });

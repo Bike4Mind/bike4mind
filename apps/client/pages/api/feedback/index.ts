@@ -1,11 +1,18 @@
-import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
   FEEDBACK_LIST_MAX_LIMIT,
+  FEEDBACK_RESOLUTIONS,
   FEEDBACK_SUBJECTS,
+  FEEDBACK_AI_AREAS,
+  FEEDBACK_AI_SEVERITIES,
   FeedbackEvents,
   FeedbackStatus,
+  FeedbackType,
+  hasFeedbackComment,
+  isFeedbackTriageNoise,
+  parseFeedbackClientContext,
   Permission,
   PromptMetaZodSchema,
   redactPromptMetaForViewer,
@@ -18,15 +25,21 @@ import type {
   FeedbackDeliverySkipReason,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { logEvent } from '@server/utils/analyticsLog';
-import { escapeRegex, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { EmailEvents } from '@server/utils/eventBus';
-import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import type { RequestHandler } from 'express';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { postFeedbackToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { FEEDBACK_RECEIVED_WINDOWS } from '@client/app/components/admin/Feedback/feedbackTrends';
+import { recordFeedbackRead } from '@server/utils/feedbackReadAudit';
+import { buildFeedbackListFilter } from '@server/utils/feedbackListFilter';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
 import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
@@ -64,6 +77,8 @@ export const FEEDBACK_LIST_FIELDS = [
   'content',
   'contentStored',
   'status',
+  'resolution',
+  'resolutionDuplicateId',
   'tags',
   'username',
   'userEmail',
@@ -72,6 +87,7 @@ export const FEEDBACK_LIST_FIELDS = [
   'type',
   'subject',
   'helpContext',
+  'clientContext',
   'sessionId',
   'questId',
   'createdAt',
@@ -89,33 +105,55 @@ export const FEEDBACK_LIST_FIELDS = [
  * page, defeating the four `{ key, createdAt }` indexes this endpoint exists to use. The status
  * *filter* below covers the triage need the grouping was standing in for.
  */
-const ListFeedbackQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).prefault(1),
-  limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
-  userId: z.string().min(1).optional(),
-  sessionId: z.string().min(1).optional(),
-  questId: z.string().min(1).optional(),
-  organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
-  // Legacy free-text org label. The admin dropdown builds its options out of the documents
-  // themselves, so it still selects on this; `organizationId` is the key programmatic callers
-  // (rollups, deep links) should use.
-  organization: z.union([z.string(), z.array(z.string())]).optional(),
-  status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
-  subject: z.enum(FEEDBACK_SUBJECTS).optional(),
-  // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
-  search: z.string().min(1).max(200).optional(),
-  sort: z.enum(['asc', 'desc']).prefault('desc'),
-  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
-  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
-  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
-  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
-  includeOrganizations: z.enum(['true', 'false']).optional(),
-});
+const ListFeedbackQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).prefault(1),
+    limit: z.coerce.number().int().min(1).max(FEEDBACK_LIST_MAX_LIMIT).prefault(FEEDBACK_LIST_DEFAULT_LIMIT),
+    userId: z.string().min(1).optional(),
+    sessionId: z.string().min(1).optional(),
+    questId: z.string().min(1).optional(),
+    organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
+    // Legacy free-text org label. The admin dropdown builds its options out of the documents
+    // themselves, so it still selects on this; `organizationId` is the key programmatic callers
+    // (rollups, deep links) should use.
+    organization: z.union([z.string(), z.array(z.string())]).optional(),
+    status: z.union([z.enum(FeedbackStatus), z.array(z.enum(FeedbackStatus))]).optional(),
+    resolution: z.enum(FEEDBACK_RESOLUTIONS).optional(),
+    subject: z.enum(FEEDBACK_SUBJECTS).optional(),
+    area: z.enum(FEEDBACK_AI_AREAS).optional(),
+    severity: z.enum(FEEDBACK_AI_SEVERITIES).optional(),
+    type: z.union([z.enum(FeedbackType), z.array(z.enum(FeedbackType))]).optional(),
+    received: z.enum(FEEDBACK_RECEIVED_WINDOWS).optional(),
+    // A custom created-date range, both ends inclusive. Instants rather than calendar days: the
+    // admin picks days in their own time zone, so the client resolves them to instants.
+    createdFrom: z.iso.datetime().optional(),
+    createdTo: z.iso.datetime().optional(),
+    // Whether the report was submitted with text, which `contentStored` records permanently (the
+    // text itself expires). An explicit enum for the same reason as includeOrganizations below.
+    hasComment: z.enum(['true', 'false']).optional(),
+    // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
+    search: z.string().min(1).max(200).optional(),
+    sort: z.enum(['asc', 'desc']).prefault('desc'),
+    // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+    // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+    // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+    // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+    includeOrganizations: z.enum(['true', 'false']).optional(),
+    // Serves the facet alone: no rows are read or audited, so the org filter menu does not page a
+    // report through the audit trail just to learn the organization names.
+    facetsOnly: z.enum(['true', 'false']).optional(),
+  })
+  .refine(query => !query.createdFrom || !query.createdTo || new Date(query.createdFrom) <= new Date(query.createdTo), {
+    error: 'createdFrom must not be after createdTo',
+    path: ['createdFrom'],
+  });
 
-/** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
-function toArray<T>(value: T | T[] | undefined): T[] {
-  if (value === undefined) return [];
-  return Array.isArray(value) ? value : [value];
+/** Distinct, non-empty organization names, sorted for the filter menu. */
+async function readOrganizationFacet(readable: FilterQuery<unknown>): Promise<string[]> {
+  const names = await FeedbackModel.distinct('organization', readable);
+  return names
+    .filter((name): name is string => typeof name === 'string' && name.length > 0)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 const CreateFeedbackRequestSchema = z.object({
@@ -132,6 +170,9 @@ const CreateFeedbackRequestSchema = z.object({
   questId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   contextQuestId: z.string().min(1).optional(),
+  // Left loose here on purpose: parseFeedbackClientContext validates and bounds it, and a malformed
+  // object must cost the report its context, not the report.
+  clientContext: z.unknown().optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -185,7 +226,7 @@ function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
 
 /**
  * Decides where feedback-to-email sends go for a given deploy stage, mirroring
- * resolveFeedbackSlackRoute (@server/integrations/slack/slack) so the two channels can't drift
+ * resolveFeedbackSlackRoute (@bike4mind/server-utils/integrations/slack/slack) so the two channels can't drift
  * apart on the same stage-leak bug. Non-production stages deliberately do NOT fall back to
  * FeedbackReceiveEmail - that fallback is exactly the leak this resolver closes (a real internal
  * recipient list otherwise inherited from a non-prod stage into the prod feedback inbox).
@@ -214,7 +255,35 @@ export function resolveFeedbackEmailRoute(
     : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
+const FEEDBACK_SUBMISSIONS_PER_HOUR = 10;
+const HOUR_MS = 60 * 60 * 1000;
+
+const onlyPost =
+  (limiter: RequestHandler): RequestHandler =>
+  (req, res, next) =>
+    req.method === 'POST' ? limiter(req, res, next) : next();
+
+// Submissions are capped per source IP and per signed-in user; listing is not limited here.
 const handler = baseApi()
+  .use(
+    onlyPost(
+      rateLimit({
+        bucket: 'feedback-create-ip',
+        subject: req => `ip:${getClientIp(req)}`,
+        limit: FEEDBACK_SUBMISSIONS_PER_HOUR,
+        windowMs: HOUR_MS,
+      })
+    )
+  )
+  .use(
+    onlyPost(
+      rateLimit({
+        bucket: 'feedback-create-user',
+        limit: FEEDBACK_SUBMISSIONS_PER_HOUR,
+        windowMs: HOUR_MS,
+      })
+    )
+  )
   .get(async (req, res) => {
     // Invariant check, not a reachable auth path - the auth middleware attaches an ability
     // unconditionally. Typed so errorHandler does not default it to a 500 that pages an operator
@@ -233,40 +302,21 @@ const handler = baseApi()
     // pass for every logged-in user).
     const readable = accessibleBy(req.ability, Permission.read).ofType(FeedbackModel);
 
-    const clauses: FilterQuery<unknown>[] = [readable];
-
-    if (query.userId) clauses.push({ userId: query.userId });
-    if (query.sessionId) clauses.push({ sessionId: query.sessionId });
-    if (query.questId) clauses.push({ questId: query.questId });
-    if (query.organizationId) clauses.push({ organizationId: query.organizationId });
-    if (query.subject) clauses.push({ subject: query.subject });
-
-    const organizations = toArray(query.organization);
-    if (organizations.length > 0) clauses.push({ organization: { $in: organizations } });
-
-    const statuses = toArray(query.status);
-    if (statuses.length > 0) clauses.push({ status: { $in: statuses } });
-
-    if (query.search) {
-      const pattern = new RegExp(escapeRegex(query.search), 'i');
-
-      // `content` lives on the TTL'd FeedbackText sibling rather than on the report, so a text
-      // search has to resolve ids over there first and cannot be expressed as one filter. The
-      // regex is unindexed, but this is an admin triage surface and the path it replaces shipped
-      // the entire collection to the browser to search it client-side. Projecting only _id keeps
-      // the intermediate small; FeedbackText is itself bounded by the 90-day content TTL.
-      const matchingText = await FeedbackTextModel.find({ content: pattern }).select('_id').lean();
-
-      const searchClauses: FilterQuery<unknown>[] = [{ username: pattern }, { userEmail: pattern }];
-      if (matchingText.length > 0) {
-        searchClauses.push({ _id: { $in: matchingText.map(text => text._id) } });
-      }
-      clauses.push({ $or: searchClauses });
+    if (query.facetsOnly === 'true') {
+      return res.json({
+        items: [],
+        total: 0,
+        page: query.page,
+        limit: query.limit,
+        organizations: await readOrganizationFacet(readable),
+      });
     }
 
-    // $and rather than a merged object literal: the CASL scope carries its own $or arm and a
-    // spread would silently drop one side of it. Same reason as pages/api/files/index.ts.
-    const filter = { $and: clauses };
+    const filter = await buildFeedbackListFilter(
+      { ...query, hasComment: query.hasComment === undefined ? undefined : query.hasComment === 'true' },
+      readable,
+      req.user?.isAdmin === true
+    );
 
     const [items, total, organizationFacet] = await Promise.all([
       FeedbackModel.find(filter)
@@ -279,8 +329,24 @@ const handler = baseApi()
       // selecting an organization would prune every other option out of the dropdown that
       // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
       // full-collection scan on an unindexed field and must not ride along on unrelated reads.
-      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
+      query.includeOrganizations === 'true' ? readOrganizationFacet(readable) : undefined,
     ]);
+
+    // An admin's read grant spans every reporter, so the page they are about to read is audited.
+    await recordFeedbackRead(
+      req,
+      items.map(item => ({ id: item.id, userId: item.userId })),
+      {
+        page: query.page,
+        limit: query.limit,
+        search: query.search,
+        userId: query.userId,
+        sessionId: query.sessionId,
+        questId: query.questId,
+        organizationId: query.organizationId,
+        subject: query.subject,
+      }
+    );
 
     return res.json({
       items: await hydrateFeedbackText(items.map(toRedactedFeedback)),
@@ -289,22 +355,26 @@ const handler = baseApi()
       limit: query.limit,
       // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
       // organizations have any feedback", which would empty the filter menu.
-      ...(organizationFacet && {
-        organizations: organizationFacet
-          .filter((name): name is string => typeof name === 'string' && name.length > 0)
-          .sort((a, b) => a.localeCompare(b)),
-      }),
+      ...(organizationFacet && { organizations: organizationFacet }),
     });
   })
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);
     const authenticated = req.isAuthenticated();
-    if (authenticated) {
-      console.log('Authenticated');
-    }
-
-    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId, contextQuestId } =
-      newFeedbackData;
+    const {
+      userId,
+      content,
+      tags,
+      username,
+      userEmail,
+      promptMeta,
+      type,
+      questId,
+      sessionId,
+      contextQuestId,
+      clientContext: rawClientContext,
+    } = newFeedbackData;
+    const clientContext = parseFeedbackClientContext(rawClientContext, req.headers['user-agent']);
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
@@ -341,11 +411,14 @@ const handler = baseApi()
         : Promise.resolve(false),
     ]);
 
+    const autoClosed = isFeedbackTriageNoise({ type, hasContent: hasFeedbackComment(content), tags });
     const newFeedback = new FeedbackModel({
       _id: feedbackId,
       userId: req.isAuthenticated() ? req.user.id : userId,
+      userIdVerified: authenticated,
       tags,
-      status: FeedbackStatus.New,
+      status: autoClosed ? FeedbackStatus.Closed : FeedbackStatus.New,
+      ...(autoClosed && type === FeedbackType.THUMBS_UP ? { resolution: 'no_action_needed' } : {}),
       username: req.isAuthenticated() ? req.user.username : username,
       userEmail: req.isAuthenticated() ? req.user.email : userEmail,
       organization: organization,
@@ -356,6 +429,7 @@ const handler = baseApi()
       contextQuestId: feedbackContext.contextQuestId,
       organizationId: feedbackContext.organizationId,
       subject: feedbackContext.subject,
+      clientContext,
       contentStored,
     });
     await saveFeedbackOrRollbackText({ feedback: newFeedback, contentStored, logger: req.logger });
@@ -450,7 +524,6 @@ const handler = baseApi()
 
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
-      console.log('Sending feedback to Slack is enabled');
       slack = await postFeedbackToSlack({
         type: type || 'CS',
         organization,
@@ -483,8 +556,6 @@ const handler = baseApi()
       );
     } else {
       const feedbackEmails = emailRoute.recipients;
-      console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
-      console.log('Sending feedback to email is enabled');
       // Content is sanitized from truncatedContent (not the raw request body) so the email
       // never carries more text than the reporter was told was saved - see the create-response
       // comment below for why the same truncated string is used everywhere.

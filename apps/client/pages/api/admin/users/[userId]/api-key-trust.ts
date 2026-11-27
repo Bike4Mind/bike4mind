@@ -1,0 +1,72 @@
+import { z } from 'zod';
+import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { userRepository, withTransaction } from '@bike4mind/database';
+import { adminApi } from '@server/middlewares/adminApi';
+import { assertCanActOnAdminTarget } from '@bike4mind/common';
+import { csrfProtection } from '@server/middlewares/csrfProtection';
+import { BadRequestError } from '@bike4mind/utils';
+import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+
+interface RequestQuery {
+  userId: string;
+}
+
+const bodySchema = z.object({ approved: z.boolean() });
+
+// Admin endpoint (keys:revoke) to trust (or stop trusting) an account for minting personal API keys
+// without waiting for the account-age or purchase requirement. Email must still be verified.
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revoke' } })
+  .use(csrfProtection())
+  .post(
+    asyncHandler(async (req, res) => {
+      const { userId } = req.query as RequestQuery;
+
+      if (typeof userId !== 'string' || !userId) {
+        throw new BadRequestError('Invalid user ID');
+      }
+
+      const parsedBody = bodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        throw new BadRequestError('Invalid request body: expected { approved: boolean }');
+      }
+      const { approved } = parsedBody.data;
+      const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
+
+      await withTransaction(async () => {
+        const user = await userRepository.findById(userId);
+
+        if (!user) {
+          throw new BadRequestError('User not found');
+        }
+        assertCanActOnAdminTarget(req.user, user, 'change API key trust for');
+
+        const before = user.apiKeyTrustApproved === true;
+        // Unchanged is a no-op: no write and no audit entry, like verify-email on an already-verified user.
+        if (before === approved) return;
+
+        await userRepository.update({ id: user.id, apiKeyTrustApproved: approved });
+
+        await recordAdminActionFromRequest(req, {
+          action: approved ? 'user.api_key_trust.approved' : 'user.api_key_trust.revoked',
+          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+          summary: approved ? 'approved account for personal API keys' : 'revoked personal API key trust',
+          reason,
+          changes: [{ field: 'apiKeyTrustApproved', before, after: approved }],
+        });
+
+        req.logger.info(
+          `Admin ${req.user.username} (${req.user.id}) set apiKeyTrustApproved=${approved} for user ${user.username} (${userId})`
+        );
+      });
+
+      return res.json({ apiKeyTrustApproved: approved });
+    })
+  );
+
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
+
+export default handler;

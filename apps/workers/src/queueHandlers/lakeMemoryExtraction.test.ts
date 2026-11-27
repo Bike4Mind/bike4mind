@@ -18,7 +18,7 @@ const sendToQueueMock = vi.fn();
 const setLakeMemoryCursorMock = vi.fn();
 
 // Pass the inner handler straight through so the test drives it directly, skipping connectDB.
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger:
     (handler: (e: SQSEvent, c: Context, l: unknown) => Promise<unknown>) => (e: SQSEvent, c: Context) =>
       handler(e, c, { warn: vi.fn(), info: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() }),

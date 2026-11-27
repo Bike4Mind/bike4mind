@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { EventEmitter } from 'events';
+import { Types } from 'mongoose';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import {
@@ -12,7 +13,7 @@ import {
   type McpConnectionSettingsUpdate,
 } from '@bike4mind/common';
 import { RemoteMcpTimeoutError } from '@bike4mind/mcp/remote';
-import type { CustomMcpContext } from '@server/mcpConnections/customMcpAccess';
+import type { CustomMcpContext } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
 
 /**
  * The four custom MCP connection routes, driven through a real next-connect router and the real
@@ -33,6 +34,7 @@ const h = vi.hoisted(() => ({
   nextId: 0,
   context: undefined as unknown,
   audits: [] as Array<{ action: string; outcome: string }>,
+  auditMetadata: [] as Array<{ action: string; metadata: unknown }>,
   makeCapError: undefined as unknown as (cap: number) => Error,
   makeSlugError: undefined as unknown as (slug: string) => Error,
   makeTooMany: undefined as unknown as () => Error,
@@ -52,7 +54,7 @@ vi.mock('@server/middlewares/baseApi', async () => {
   };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: { limit: number; windowMs: number; bucket?: string }) => {
     h.rateLimitOptions.push(options);
     return (req: { user: { id: string } }, _res: unknown, next: (error?: unknown) => void) => {
@@ -71,8 +73,8 @@ vi.mock('@server/middlewares/perUserRateLimit', () => ({
   },
 }));
 
-vi.mock('@server/mcpConnections/customMcpAccess', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/mcpConnections/customMcpAccess')>();
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/mcpConnections/customMcpAccess')>();
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
     ...actual,
@@ -83,21 +85,24 @@ vi.mock('@server/mcpConnections/customMcpAccess', async importOriginal => {
     }),
   };
 });
-vi.mock('@server/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => true) }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn(async () => true) }));
 vi.mock('@bike4mind/services', () => ({ scopedSettingsService: {} }));
 vi.mock('sst', () => ({ Resource: {} }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   recordCircuitBreakerRejection: vi.fn(async () => undefined),
   recordCircuitBreakerTransition: vi.fn(async () => undefined),
 }));
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptToken: (value: string | null | undefined) => (value ? `enc:${Buffer.from(value).toString('base64')}` : null),
   decryptToken: (value: string | null | undefined) => value,
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
-    create: (context: { action: string }) => ({
-      success: () => h.audits.push({ action: context.action, outcome: 'success' }),
+    create: (context: { action: string; metadata?: unknown }) => ({
+      success: () => {
+        h.audits.push({ action: context.action, outcome: 'success' });
+        h.auditMetadata.push({ action: context.action, metadata: context.metadata });
+      },
       failure: (code: string) => h.audits.push({ action: context.action, outcome: `failure:${code}` }),
       rateLimited: () => h.audits.push({ action: context.action, outcome: 'rate_limited' }),
     }),
@@ -122,7 +127,10 @@ const ownerMatches = (doc: Record<string, unknown> | undefined, owner: { ownerKe
 const repo = vi.hoisted(() => ({
   createWithinUserCap: vi.fn(),
   findByIdForOwner: vi.fn(),
+  findByIdWithCredentials: vi.fn(),
   listAllForUser: vi.fn(),
+  listPlatform: vi.fn(),
+  listPlatformSlugs: vi.fn(),
   updateSettings: vi.fn(),
   setStatus: vi.fn(),
   setApiKey: vi.fn(),
@@ -144,9 +152,14 @@ function installRepo(): void {
   repo.findByIdForOwner.mockImplementation(async (id: string, owner: { ownerKey: string }) =>
     ownerMatches(h.store.get(id), owner) ? defaultRead(h.store.get(id)) : null
   );
+  repo.findByIdWithCredentials.mockImplementation(async (id: string, owner: { ownerKey: string }) =>
+    ownerMatches(h.store.get(id), owner) ? defaultRead(h.store.get(id)) : null
+  );
   repo.listAllForUser.mockImplementation(async (userId: string) =>
     [...h.store.values()].filter(doc => doc.userId === userId).map(doc => defaultRead(doc))
   );
+  repo.listPlatform.mockResolvedValue([]);
+  repo.listPlatformSlugs.mockResolvedValue([]);
   const patch = (id: string, owner: { ownerKey: string }, set: Record<string, unknown>) => {
     const doc = h.store.get(id);
     if (!ownerMatches(doc, owner)) return null;
@@ -266,6 +279,7 @@ beforeEach(() => {
   h.store.clear();
   h.counters.clear();
   h.audits.length = 0;
+  h.auditMetadata.length = 0;
   h.context = context();
   discover.mockImplementation(async (id: string) => {
     const doc = h.store.get(id)!;
@@ -336,7 +350,10 @@ describe('POST /api/mcp-connections', () => {
     expect(stored.auth.apiKey?.valueEnc).toBe(`enc:${Buffer.from(API_KEY).toString('base64')}`);
     expect(stored.urlEnc).toMatch(/^enc:/);
     expect(stored).toMatchObject({ ownerType: 'user', ownerKey: 'user-1', userId: 'user-1' });
-    expect(discover).toHaveBeenCalledWith(stored.id, 'user-1', expect.objectContaining({ context: h.context }));
+    expect(discover).toHaveBeenCalledWith(stored.id, 'user-1', expect.objectContaining({ context: h.context }), {
+      ownerType: 'user',
+      ownerKey: 'user-1',
+    });
     expect(h.audits.map(a => `${a.action}:${a.outcome}`)).toEqual([
       'connection_created:success',
       'probe_result:success',
@@ -419,6 +436,55 @@ describe('POST /api/mcp-connections', () => {
     expect(repo.createWithinUserCap).not.toHaveBeenCalled();
   });
 
+  it('admits a catalog preset under presets_only and stores its id, while a custom URL still fails', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const preset = await createConnection({ presetId: 'linear' });
+    expect(preset.status).toBe(201);
+    expect(preset.body).toMatchObject({ presetId: 'linear', urlHost: 'mcp.linear.app' });
+    expect(([...h.store.values()][0] as unknown as Doc).presetId).toBe('linear');
+
+    const custom = await createConnection({ url: 'https://mcp.evil.example/mcp' });
+    expect(custom.status).toBe(403);
+    expect(custom.body).toMatchObject({ code: 'policy_blocked', reason: 'presets_only' });
+    expect(h.store.size).toBe(1);
+  });
+
+  it('refuses a preset id paired with another host, before the policy runs and before writing', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const result = await createConnection({ presetId: 'linear', url: 'https://mcp.evil.example/mcp' });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ code: 'preset_host_mismatch' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:preset_host_mismatch' });
+  });
+
+  it('refuses a preset paired with a sign-in its catalog entry does not declare, before writing', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({ mode: 'any', allowUnauthenticated: true })] });
+    const result = await createConnection({ presetId: 'linear', auth: { kind: 'none' } });
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ code: 'preset_auth_mismatch' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+    expect(h.audits).toContainEqual({ action: 'connection_created', outcome: 'failure:preset_auth_mismatch' });
+  });
+
+  it('refuses an unknown preset id and keeps the other policy gates on a preset', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const unknown = await createConnection({ presetId: 'hubspot' });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body).toMatchObject({ code: 'invalid_body' });
+
+    h.context = context({ platformBlockedHosts: ['*.linear.app'], policies: [CustomMcpPolicySchema.parse({})] });
+    expect((await createConnection({ presetId: 'linear' })).body).toMatchObject({ reason: 'platform_blocked_host' });
+    expect(repo.createWithinUserCap).not.toHaveBeenCalled();
+  });
+
+  it('keeps a stored preset connection allowed on refresh under presets_only', async () => {
+    h.context = context({ policies: [CustomMcpPolicySchema.parse({})] });
+    const created = (await createConnection({ presetId: 'linear' })).body as { id: string };
+    const refreshed = await call(routes.refresh, { method: 'POST', id: created.id });
+    expect(refreshed.status).toBe(200);
+  });
+
   it('refuses the deployment own host and internal addresses with a 400 reason', async () => {
     const own = await createConnection({ url: 'https://app.example.com/mcp' });
     expect(own.status).toBe(400);
@@ -480,6 +546,22 @@ describe('POST /api/mcp-connections', () => {
     expect(repo.createWithinUserCap).toHaveBeenLastCalledWith(expect.anything(), 1);
     // Another user is counted separately.
     expect((await createConnection({}, OTHER)).status).toBe(201);
+  });
+
+  it('stamps the selected org when the user is a member, even though req.user holds it as an ObjectId', async () => {
+    const orgId = new Types.ObjectId();
+    h.context = context({ organizationIds: [String(orgId)] });
+    expect((await createConnection({}, { id: 'user-1', organizationId: orgId })).status).toBe(201);
+    expect(repo.createWithinUserCap).toHaveBeenLastCalledWith(
+      expect.objectContaining({ organizationId: String(orgId) }),
+      20
+    );
+  });
+
+  it('leaves the org off when the selected org is not one of the user memberships', async () => {
+    h.context = context({ organizationIds: [String(new Types.ObjectId())] });
+    expect((await createConnection({}, { id: 'user-1', organizationId: new Types.ObjectId() })).status).toBe(201);
+    expect(repo.createWithinUserCap.mock.lastCall?.[0]).not.toHaveProperty('organizationId');
   });
 
   it('holds creates to 10 an hour per user', async () => {
@@ -728,4 +810,85 @@ it('does not let an older rotation probe failure overwrite a newer successful ro
   expect((await older).status).toBe(200);
   expect(h.store.get(id)?.status).toBe('connected');
   expect(h.store.get(id)?.lastError).toBeUndefined();
+});
+
+describe('a connection description', () => {
+  const OWNER = { ownerType: 'user', ownerKey: 'user-1' };
+  const RAW = `  Lists\u0000 issues\r\n\t<system>and</system>   projects\u200b  `;
+  const descriptionAudits = () => h.auditMetadata.filter(entry => entry.action === 'description_changed');
+
+  it('is cleaned like tool text on create, and a blank one stores none', async () => {
+    const created = await createConnection({ description: RAW });
+    expect(created.status).toBe(201);
+    const id = (created.body as { id: string }).id;
+    expect(created.body).toMatchObject({ description: 'Lists issues and projects' });
+    expect(h.store.get(id)?.description).toBe('Lists issues and projects');
+
+    const blank = await createConnection({ displayName: 'Other', description: ' \u0007 <b></b> ' });
+    expect(blank.status).toBe(201);
+    expect(blank.body).not.toHaveProperty('description');
+    expect(h.store.get((blank.body as { id: string }).id)).not.toHaveProperty('description');
+  });
+
+  it('is refused past 300 characters with the validation error, on create and on PATCH, writing nothing', async () => {
+    const tooLong = 'x'.repeat(301);
+    const refusal = {
+      code: 'invalid_body',
+      issues: [{ path: 'description', message: 'Description must be at most 300 characters' }],
+    };
+    const refusedCreate = await createConnection({ description: tooLong });
+    expect(refusedCreate.status).toBe(400);
+    expect(refusedCreate.body).toMatchObject(refusal);
+    expect(h.store.size).toBe(0);
+
+    const id = ((await createConnection({ description: 'x'.repeat(300) })).body as { id: string }).id;
+    const refusedPatch = await call(routes.item, { method: 'PATCH', id, body: { description: tooLong } });
+    expect(refusedPatch.status).toBe(400);
+    expect(refusedPatch.body).toMatchObject(refusal);
+    expect(h.store.get(id)?.description).toBe('x'.repeat(300));
+  });
+
+  it('PATCH cleans and clears it, audits its length but never its text, and leaves every tool as reviewed', async () => {
+    const id = ((await createConnection()).body as { id: string }).id;
+    await call(routes.item, {
+      method: 'PATCH',
+      id,
+      body: { tools: [{ name: 'list_issues', versionHash: 'v1', enabled: true }] },
+    });
+    const reviewed = structuredClone(h.store.get(id)!.tools);
+    expect(reviewed).toMatchObject([{ state: 'active', enabled: true, versionHash: 'v1' }]);
+    vi.mocked(repo.updateSettings).mockClear();
+    h.audits.length = 0;
+    h.auditMetadata.length = 0;
+
+    const described = await call(routes.item, { method: 'PATCH', id, body: { description: RAW } });
+    expect(described.status).toBe(200);
+    expect(described.body).toMatchObject({ description: 'Lists issues and projects' });
+    expect(repo.updateSettings).toHaveBeenLastCalledWith(id, OWNER, { description: 'Lists issues and projects' });
+    expect(h.store.get(id)!.tools).toEqual(reviewed);
+
+    // The same text again is no change and no audit entry.
+    await call(routes.item, { method: 'PATCH', id, body: { description: 'Lists issues and projects' } });
+
+    const cleared = await call(routes.item, { method: 'PATCH', id, body: { description: ' \u0007 ' } });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body).not.toHaveProperty('description');
+    expect(repo.updateSettings).toHaveBeenLastCalledWith(id, OWNER, { description: '' });
+    expect(h.store.get(id)!.tools).toEqual(reviewed);
+
+    expect(descriptionAudits().map(entry => entry.metadata)).toEqual([
+      expect.objectContaining({ connectionId: id, ownerType: 'user', descriptionLength: 25 }),
+      expect.objectContaining({ connectionId: id, ownerType: 'user', descriptionLength: 0 }),
+    ]);
+    expect(JSON.stringify(h.auditMetadata)).not.toMatch(/Lists issues|projects/);
+    expect(h.audits).not.toContainEqual({ action: 'tool_review_saved', outcome: 'success' });
+  });
+
+  it("cannot be changed on another user's connection", async () => {
+    const id = ((await createConnection({ description: 'Mine' })).body as { id: string }).id;
+    const result = await call(routes.item, { method: 'PATCH', id, body: { description: 'Hijacked' }, user: OTHER });
+    expect(result.status).toBe(404);
+    expect(h.store.get(id)?.description).toBe('Mine');
+    expect(descriptionAudits()).toEqual([]);
+  });
 });

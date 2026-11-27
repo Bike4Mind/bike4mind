@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Types } from 'mongoose';
-import { toSafeOrganizationSubdocument } from '../toSafeOrganizationSubdocument';
+import { toSafeOrganizationSubdocument } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
 
 /**
  * This is a classifier over a genuinely open-ended input: `.populate('organizationId')` can hand

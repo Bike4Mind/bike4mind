@@ -11,16 +11,30 @@
  * Auth mode, scopes and body validation all come from `startAgentExecutionContract`.
  */
 
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, BadGatewayError } from '@bike4mind/server-utils/utils/errors';
+import {
+  BadRequestError,
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  BadGatewayError,
+} from '@bike4mind/server-utils/utils/errors';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, startAgentExecutionContract } from '@bike4mind/common';
+import {
+  BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  startAgentExecutionContract,
+} from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { isChatModelUsable, resolveDefaultChatModel } from '@bike4mind/server-utils/utils/chatCompletionDefaults';
+import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
+import { apiKeyBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { assertFilesReadScope } from '@bike4mind/server-utils/files/fileScopes';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
@@ -28,7 +42,10 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const body = req.validated;
+  // The run reads attached files with the key owner's own access, so attaching them is a files read.
+  if (body.file_ids?.length || body.session_file_ids?.length) assertFilesReadScope(req);
 
   // Same model-resolution ladder as POST /api/chat: an explicit model wins, else the
   // admin default, which on a local-only self-host box may itself need a fallback - so
@@ -41,7 +58,12 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       userId: req.user.id,
       logger: req.logger,
     });
-    model = resolved.model;
+    // A free account must not start on a paid-only admin default.
+    // Resolved under the org the run bills (startAgentExecution's rule), so an org-disallowed default
+    // falls back here instead of being refused by the executor. Membership is checked there before any run starts.
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger, {
+      organizationId: apiKeyBillingOrgId(req.apiKeyInfo) ?? body.organization_id ?? null,
+    });
     // Self-host guard: apiKeys/models are populated only there. Fail fast with
     // actionable guidance rather than a cryptic error deep inside the executor.
     if (resolved.apiKeys && resolved.models) {
@@ -83,6 +105,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       enableMementos: body.enable_mementos,
       enableLattice: body.enable_lattice,
       enableArtifacts: body.enable_artifacts,
+      confidenceOverrides: body.confidence_overrides,
       // No `routingSource`: that field records which UI signal routed a send to the
       // agent pipeline, and a REST caller chose the pipeline outright. Its enum has no
       // value for "the API asked", and inventing one would be rejected by the Quest
@@ -103,8 +126,12 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
         throw new NotFoundError('Organization not found');
       case 'billing_organization_mismatch':
         throw new ForbiddenError(result.message, { errorCode: BILLING_ORGANIZATION_MISMATCH_ERROR_CODE });
+      case 'org_tool_not_allowed':
+        throw new ForbiddenError(result.message, { errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE });
       case 'billing_key_stale':
         throw new BadRequestError(result.message);
+      case 'confidence_overrides_forbidden':
+        throw new ForbiddenError(result.message);
       case 'concurrent_limit':
         throw new ConflictError(result.message);
       case 'dispatch_failed':

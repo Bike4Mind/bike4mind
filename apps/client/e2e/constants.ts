@@ -24,6 +24,14 @@ export const NOTEBOOK_EXPORT_IMPORTER_KEY = 'notebookExportBytesImporter';
  */
 export const SKILLS_MEMBER_KEY = 'skillsMember';
 
+/**
+ * Spec-user keys for the extra accounts the teams suite needs: no project authenticates as them, the
+ * spec opens isolated pages for them via openPageAs. teams.setup.ts creates them.
+ */
+export const TEAMS_MEMBER_KEY = 'teamsMember';
+export const TEAMS_MANAGER_KEY = 'teamsManager';
+export const TEAMS_INVITEE_KEY = 'teamsInvitee';
+
 /** Centralized timeout constants for E2E tests (in milliseconds). */
 export const TIMEOUTS = {
   /** Short UI transitions and state settling */
@@ -56,4 +64,12 @@ export const TIMEOUTS = {
    * not just the streaming phase.
    */
   IMAGE_GENERATION: 360_000,
+  /** Audio generation is a synchronous provider call plus a save to Files; allow for a cold provider. */
+  AUDIO_GENERATION: 90_000,
+  /** Wait for MediaPlayer to set `src`; mirrors its 30 s moderation wait plus headroom. */
+  AUDIO_SRC: 45_000,
+  /** Browser-side wait for audio metadata before reporting a duration. */
+  AUDIO_METADATA: 5_000,
+  /** An admin delete erases the account from a queue; the purge has taken about two minutes on staging. */
+  ACCOUNT_ERASURE: 240_000,
 } as const;

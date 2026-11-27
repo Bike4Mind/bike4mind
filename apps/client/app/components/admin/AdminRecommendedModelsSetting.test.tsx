@@ -1,12 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ModelInfo } from '@bike4mind/common';
 
 const mutate = vi.fn();
+const mutateAsync = vi.fn();
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => ({ mutate, isPending: false }),
+  useUpdateSettings: () => ({ mutate, mutateAsync, isPending: false }),
 }));
 const stored = vi.hoisted(() => ({ ids: undefined as unknown, defaultModel: undefined as string | undefined }));
 vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
@@ -24,9 +32,9 @@ const models = vi.hoisted(() => [
 vi.mock('@client/app/hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({ accessibleTextModels: models as ModelInfo[], isLoading: false }),
 }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { AdminRecommendedModelsSetting } from './AdminRecommendedModelsSetting';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderEditor = (ids: unknown, defaultModel?: string) => {
@@ -34,7 +42,9 @@ const renderEditor = (ids: unknown, defaultModel?: string) => {
   stored.defaultModel = defaultModel;
   return render(
     <CssVarsProvider theme={appTheme}>
-      <AdminRecommendedModelsSetting />
+      <SettingsDraftProvider>
+        <AdminRecommendedModelsSetting />
+      </SettingsDraftProvider>
     </CssVarsProvider>
   );
 };
@@ -43,18 +53,49 @@ const rowIds = () =>
   screen
     .getAllByTestId(/^admin-recommended-models-row-/)
     .map(row => row.getAttribute('data-testid')!.replace('admin-recommended-models-row-', ''));
-const saveBtn = () => screen.getByTestId('admin-recommended-models-save-btn') as HTMLButtonElement;
+const saveBar = () => screen.queryByTestId('admin-save-bar');
 
 describe('AdminRecommendedModelsSetting', () => {
+  it('locks draft controls while the SaveBar write is pending', () => {
+    stored.ids = ['model-a', 'model-b'];
+    mutateAsync.mockReturnValue(new Promise(() => {}));
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <SettingsDraftProvider>
+          <AdminRecommendedModelsSetting />
+        </SettingsDraftProvider>
+      </CssVarsProvider>
+    );
+    fireEvent.click(screen.getByTestId('admin-recommended-models-model-b-up-btn'));
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    expect(screen.getByTestId('admin-recommended-models-model-a-remove-btn')).toBeDisabled();
+    expect(screen.getByTestId('admin-recommended-models-model-a-up-btn')).toBeDisabled();
+    expect(screen.getByTestId('admin-recommended-models-add-select')).toBeDisabled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders the stored ids in order with display names, Save disabled until an edit', () => {
+  it('renders the stored ids in order with display names, the SaveBar hidden until an edit', () => {
     renderEditor(['model-b', 'model-a']);
     expect(rowIds()).toEqual(['model-b', 'model-a']);
     expect(within(screen.getByTestId('admin-recommended-models-row-model-b')).getByText('Model B')).toBeTruthy();
-    expect(saveBtn().disabled).toBe(true);
+    expect(saveBar()).toBeNull();
+    expect(screen.queryByTestId('admin-recommended-models-save-btn')).toBeNull();
+  });
+
+  it('throws outside a SettingsDraftProvider, since nothing else could save its edits', () => {
+    stored.ids = ['model-a'];
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <CssVarsProvider theme={appTheme}>
+          <AdminRecommendedModelsSetting />
+        </CssVarsProvider>
+      )
+    ).toThrow('AdminRecommendedModelsSetting must be rendered inside a SettingsDraftProvider.');
+    vi.mocked(console.error).mockRestore();
   });
 
   it('names the default model the picker falls back to when the list is empty', () => {
@@ -92,21 +133,25 @@ describe('AdminRecommendedModelsSetting', () => {
     expect(rowIds()).toEqual(['model-c', 'model-a', 'model-b']);
   });
 
-  it('saves the edited list as an ordered array of ids', () => {
+  it('saves the edited list as an ordered array of ids', async () => {
+    mutateAsync.mockResolvedValue({});
     renderEditor(['model-a', 'model-b']);
     fireEvent.click(screen.getByTestId('admin-recommended-models-model-b-up-btn'));
     fireEvent.click(screen.getByTestId('admin-recommended-models-model-a-remove-btn'));
-    fireEvent.click(saveBtn());
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
 
-    expect(mutate).toHaveBeenCalledTimes(1);
-    expect(mutate.mock.calls[0][0]).toEqual({ key: 'recommendedModelIds', value: ['model-b'] });
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'recommendedModelIds', value: ['model-b'] })
+    );
+    expect(mutate).not.toHaveBeenCalled();
   });
 
-  it('saves an emptied list as [] so the picker falls back to the default model', () => {
+  it('saves an emptied list as [] so the picker falls back to the default model', async () => {
+    mutateAsync.mockResolvedValue({});
     renderEditor(['model-a']);
     fireEvent.click(screen.getByTestId('admin-recommended-models-model-a-remove-btn'));
-    fireEvent.click(saveBtn());
-    expect(mutate.mock.calls[0][0]).toEqual({ key: 'recommendedModelIds', value: [] });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledExactlyOnceWith({ key: 'recommendedModelIds', value: [] }));
   });
 
   it('treats a malformed stored value as an empty list', () => {

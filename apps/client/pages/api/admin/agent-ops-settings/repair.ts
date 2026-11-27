@@ -1,14 +1,13 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@client/server/middlewares/baseApi';
+import { adminApi } from '@client/server/middlewares/adminApi';
 import { agentOpsSettingsRepository } from '@bike4mind/database';
 import { AgentOpsSettings } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/utils';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user!.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   try {
     const settings = await agentOpsSettingsRepository.getSettings();
 
@@ -51,6 +50,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
 
     await settingsDoc.save();
 
+    if (repairsMade.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.agent_ops.repaired',
+        target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+        summary: `repaired Agent Ops settings (${repairsMade.length} fixes)`,
+        details: { repairsMade },
+      });
+    }
+
     res.json({
       success: true,
       message: 'Database repaired successfully',
@@ -58,7 +66,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
       settings: settingsDoc.toJSON(),
     });
   } catch (error) {
-    console.error('Error repairing AgentOps settings:', error);
+    req.logger.error('Error repairing AgentOps settings', { error });
     res.status(500).json({
       success: false,
       message: 'Failed to repair AgentOps settings',

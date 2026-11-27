@@ -28,7 +28,7 @@ Every project starts the same way: enter a **name** and **description**, optiona
 On a new account, Projects has not earned a sidebar spot yet, so you start from **Gears**:
 
 1. Open **Gears** and find the **Projects** card
-2. Click **Create your first project** (then **Create your first project** again on the Projects page)
+2. Click **Create a project** (then **Create your first project** on the Projects page)
 3. Enter a name and description, optionally add notebooks or files, and click **Create Project**
 
 ![Creating your first project from Gears](https://youtu.be/noO3j87PBF4)
@@ -51,6 +51,8 @@ Once you have at least one project, **Projects** appears in the sidebar:
 | Description | 500 characters | What the project is about |
 
 ---
+
+The Team Up gear requires another account with a verified email to have read access to a project you own. Ask your teammate to accept the invitation and verify their email, then return to Gears. Your own account must also meet the reward requirements shown there.
 
 ## Managing Notebooks in Projects
 

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/auth",
-  "version": "1.1.9",
+  "version": "1.5.8",
   "publishConfig": {
     "access": "restricted"
   },
@@ -54,6 +54,16 @@
         "default": "./dist/mfaService/utils.cjs"
       }
     },
+    "./mfaService/totp": {
+      "import": {
+        "types": "./dist/mfaService/totp.d.mts",
+        "default": "./dist/mfaService/totp.mjs"
+      },
+      "require": {
+        "types": "./dist/mfaService/totp.d.cts",
+        "default": "./dist/mfaService/totp.cjs"
+      }
+    },
     "./crypto": {
       "import": {
         "types": "./dist/crypto.d.mts",
@@ -73,9 +83,8 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -85,16 +94,14 @@
     "@simplewebauthn/server": "^14.0.3",
     "jsonwebtoken": "^9.0.3",
     "qrcode": "^1.5.4",
-    "speakeasy": "^2.0.0",
     "zod": "^4.6.6"
   },
   "devDependencies": {
     "@tsconfig/node24": "*",
     "@types/jsonwebtoken": "^9.0.4",
     "@types/qrcode": "^1.5.6",
-    "@types/speakeasy": "^2.0.10",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

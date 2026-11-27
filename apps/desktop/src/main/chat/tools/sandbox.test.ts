@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { sandboxedHome } from '../../../../vitest.tempRoot';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildProfile, protectionFor, sandboxAvailable, sandboxCommand, secretPaths } from './sandbox';
 
 describe('buildProfile', () => {
@@ -22,15 +23,15 @@ describe('buildProfile', () => {
    * makes every credential store writable unless the denials come last.
    */
   it('keeps credential stores denied even when the folder above them is granted', () => {
-    const profile = buildProfile([homedir()], []);
-    const allowHome = profile.indexOf(`(allow file-write* (subpath "${homedir()}"))`);
-    const denySsh = profile.indexOf(`(deny file-read* file-write* (subpath "${homedir()}/.ssh"))`);
+    const profile = buildProfile([sandboxedHome()], []);
+    const allowHome = profile.indexOf(`(allow file-write* (subpath "${sandboxedHome()}"))`);
+    const denySsh = profile.indexOf(`(deny file-read* file-write* (subpath "${sandboxedHome()}/.ssh"))`);
 
     expect(denySsh).toBeGreaterThan(allowHome);
   });
 
   it('denies the paths the app protects regardless of what was granted', () => {
-    const profile = buildProfile([homedir()], ['/Users/someone/Library/Application Support/b4m']);
+    const profile = buildProfile([sandboxedHome()], ['/Users/someone/Library/Application Support/b4m']);
     expect(profile).toContain(
       '(deny file-read* file-write* (subpath "/Users/someone/Library/Application Support/b4m"))'
     );
@@ -64,7 +65,7 @@ describe('the Claude Code folder', () => {
   let claude: string;
 
   beforeAll(() => {
-    home = realpathSync(homedir());
+    home = realpathSync(sandboxedHome());
     claude = join(home, '.claude');
     mkdirSync(join(claude, 'skills', 'x'), { recursive: true });
     writeFileSync(join(claude, 'skills', 'x', 'SKILL.md'), 'the skill\n');
@@ -143,5 +144,31 @@ describe('the Claude Code folder', () => {
       }
       expect(readFileSync(join(claude, 'settings.json'), 'utf8')).toBe('{}\n');
     });
+  });
+});
+
+describe('protectionFor on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let home = '';
+  beforeEach(() => {
+    home = sandboxedHome();
+    process.env.HOME = 'C:\\Users\\me';
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+  });
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+    process.env.HOME = home;
+  });
+
+  it.each([
+    '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\.ssh\\id_rsa',
+    '\\\\wsl$\\Ubuntu\\mnt\\c\\Users\\me\\.ssh\\id_rsa',
+    '\\\\wsl.localhost\\Ubuntu\\mnt\\C\\users\\ME\\.ssh\\id_rsa',
+  ])('guards a drive path reached through the WSL share as %s', path => {
+    expect(protectionFor([path], 'read')).toMatch(/credentials/);
+  });
+
+  it('does not map a path in the distro itself', () => {
+    expect(protectionFor(['\\\\wsl.localhost\\Ubuntu\\Users\\me\\.ssh\\id_rsa'], 'read')).toBeUndefined();
   });
 });

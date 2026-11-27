@@ -1,6 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
+const isApiKeyAccessAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
+);
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown, request?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing, request))) throw new ForbiddenError(message);
+    },
+  };
+});
 // Unwrap the handler: baseApi().use(...).post(fn) => fn
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -11,13 +26,26 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 // rateLimit middleware is a no-op factory here; the per-client limit is exercised
 // via the cacheRepository mock below.
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+
+const mockGetActiveSubscriptions = vi.hoisted(() => vi.fn());
+const mockHoldsPaidStanding = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
+  getActiveSubscriptionsForUser: mockGetActiveSubscriptions,
+}));
+vi.mock('@bike4mind/server-utils/entitlements/paidStanding', () => ({ holdsPaidStanding: mockHoldsPaidStanding }));
 
 // Minimal enum surface the handler reads (avoids loading real @bike4mind/common).
 // BadRequestError is included (and constructed by the tests) so the handler's
 // `instanceof` check sees the same class identity as the rejection it inspects.
 vi.mock('@bike4mind/common', () => ({
-  ApiKeyScope: { AI_GENERATE: 'ai:generate', ME_READ: 'me:read' },
+  ApiKeyScope: {
+    AI_GENERATE: 'ai:generate',
+    ME_READ: 'me:read',
+    FUNCTIONS_INVOKE: 'functions:invoke',
+    FUNCTIONS_AUTHOR: 'functions:author',
+  },
+  EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES: ['functions:invoke', 'functions:author'],
   ApiKeyStatus: { ACTIVE: 'active', RATE_LIMITED: 'rate_limited', DISABLED: 'disabled', EXPIRED: 'expired' },
   BadRequestError: class BadRequestError extends Error {
     constructor(
@@ -80,8 +108,8 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
   // Defined inside the factory (hoisted): a class declaration in the module body
   // would be in its TDZ when the hoisted mock runs.
   FederatedIdTokenError: class FederatedIdTokenError extends Error {
-    constructor(message: string) {
-      super(message);
+    constructor(message: string, options?: { cause?: unknown }) {
+      super(message, options);
       this.name = 'FederatedIdTokenError';
     }
   },
@@ -132,6 +160,7 @@ function makeReq(body: any = VALID_BODY, headers: Record<string, string> = {}) {
 describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    isApiKeyAccessAllowedMock.mockResolvedValue(true);
     // Defaults for the happy path; individual tests override.
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);
@@ -140,6 +169,8 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     mockFindByUserId.mockResolvedValue([]);
     mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
     mockAuditCreate.mockResolvedValue({});
+    mockGetActiveSubscriptions.mockResolvedValue([]);
+    mockHoldsPaidStanding.mockReturnValue(false);
     mockRevokeUserApiKey.mockResolvedValue(undefined);
     // Default: user has an active grant covering the billable scope (realistic happy path). The
     // billable ai:generate scope - not mere grant existence - is what authorizes the mint.
@@ -152,6 +183,22 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
   afterEach(() => {
     delete process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT;
+  });
+
+  it('inherits the registered profile and ignores a request-supplied profile', async () => {
+    const rateLimit = { requestsPerMinute: 300, requestsPerDay: 20_000 };
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, rateLimit });
+    const { req, res } = makeReq({ ...VALID_BODY, rateLimit: { requestsPerMinute: 9999, requestsPerDay: 999999 } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey.mock.calls[0][1].rateLimit).toEqual(rateLimit);
+  });
+
+  it('leaves mint defaults unchanged for a client without a profile', async () => {
+    const { req, res } = makeReq();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey.mock.calls[0][1].rateLimit).toBeUndefined();
   });
 
   it('grant gate (enforce): valid token but no grant for this client -> 403 access_denied, no mint', async () => {
@@ -340,6 +387,33 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
   });
 
+  it('logs the verification cause on rejection without leaking it in the response', async () => {
+    mockVerifyIdToken.mockRejectedValue(
+      new FederatedIdTokenError('ID token failed signature/claim verification', {
+        cause: new Error('jwks fetch failed: connection reset'),
+      })
+    );
+    const { req, res } = makeReq();
+    await handler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getJSONData().error).toBe('invalid_grant');
+    expect(JSON.stringify(res._getJSONData())).not.toContain('connection reset');
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('(cause: jwks fetch failed: connection reset)')
+    );
+  });
+
+  it('logs a rejection with no cause without a cause suffix', async () => {
+    mockVerifyIdToken.mockRejectedValue(new FederatedIdTokenError('bad signature'));
+    const { req, res } = makeReq();
+    await handler(req as never, res as never);
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(req.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('(cause:'));
+    expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('bad signature'));
+  });
+
   it('AC3: token subject resolves to no B4M user → 401 invalid_grant', async () => {
     mockUserFindById.mockResolvedValue(null);
     const { req, res } = makeReq();
@@ -359,6 +433,33 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getJSONData().error).toBe('access_denied');
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
     expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it('paid-only switch: a user the apiKeyAccess setting denies gets 403 subscription_required, no mint', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({
+      error: 'subscription_required',
+      error_description: 'API keys require an active paid subscription',
+    });
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, { oauthExchangeClientId: 'client-1' }, req);
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockRevokeUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('gives a starter-only user a key when the gate admits the verified client, with no request-supplied marker', async () => {
+    isApiKeyAccessAllowedMock.mockImplementation(
+      async (_user: unknown, billing?: { oauthExchangeClientId?: string }) =>
+        billing?.oauthExchangeClientId === 'client-1'
+    );
+    const { req, res } = makeReq({ ...VALID_BODY, oauthExchangeClientId: 'other-client' });
+    await handler(...([req, res] as unknown as Parameters<typeof handler>));
+    expect(res._getStatusCode()).toBe(200);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(CONSENTED_USER, { oauthExchangeClientId: 'client-1' }, req);
+    expect(mockCreateUserApiKey).toHaveBeenCalled();
   });
 
   it('AC5: reuse-or-replace revokes the prior exchange key for this (user, client) before minting', async () => {
@@ -698,6 +799,7 @@ describe('POST /api/oauth/ai-token error logging', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isApiKeyAccessAllowedMock.mockResolvedValue(true);
     process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);

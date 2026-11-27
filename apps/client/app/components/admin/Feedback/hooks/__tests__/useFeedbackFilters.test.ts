@@ -7,6 +7,9 @@ vi.mock('@tanstack/react-router', async () => (await import('../../../__tests__/
 import { fakeAdminRouter } from '../../../__tests__/fakeAdminRouter';
 import { useFeedbackFilters } from '../useFeedbackFilters';
 
+// A UTC runner cannot tell local-day boundaries from UTC ones, so pin a zone and assert literals.
+process.env.TZ = 'America/Los_Angeles';
+
 /**
  * The hook's whole job is translating filter UI state into the GET /api/feedback query, so the
  * assertions here are on `filterParams` rather than on any filtered array: the filtering itself
@@ -61,13 +64,10 @@ describe('useFeedbackFilters', () => {
   });
 
   /**
-   * Load-bearing: with no status checked the key is OMITTED, and an absent `status` is the
-   * server's "any status". So this state cannot be sent as a query - it would invert the UI's
-   * "nothing checked means nothing shown" into "show everything". useFeedbackOperations is what
-   * holds that line, by disabling the list query while `status` is empty; this test pins the
-   * fact that gate exists to cover.
+   * Load-bearing: an absent `status` is the server's "any status", so an empty status set must never
+   * reach the query as one. It has no URL form, so it reads back as the default instead.
    */
-  it('omits status entirely when nothing is checked', () => {
+  it('queries the default New status when nothing is checked, rather than omitting status', () => {
     const { result } = setup();
 
     act(() => {
@@ -78,7 +78,15 @@ describe('useFeedbackFilters', () => {
       });
     });
 
-    expect(result.current.filterParams).not.toHaveProperty('status');
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.New]);
+  });
+
+  it('reads an old feedbackStatus=none link as the default New status', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackStatus: 'none' }));
+    const { result } = setup();
+
+    expect(fakeAdminRouter.search).not.toHaveProperty('feedbackStatus');
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.New]);
   });
 
   /**
@@ -108,6 +116,29 @@ describe('useFeedbackFilters', () => {
     });
 
     expect(result.current.filterParams).not.toHaveProperty('organization');
+  });
+
+  it('sends one reporter and resets the page when a userId filter is set', () => {
+    const userId = 'b'.repeat(24);
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 3 }));
+    const { result } = setup();
+
+    act(() => result.current.setUserId(userId));
+
+    expect(result.current.filterParams.userId).toBe(userId);
+    expect(result.current.filters.userId).toBe(userId);
+    expect(fakeAdminRouter.search).toMatchObject({ feedbackUser: userId });
+    expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
+  });
+
+  it('clears the reporter filter on showOnly unless it names one', () => {
+    act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackUser: 'b'.repeat(24) }));
+    const { result } = setup();
+    expect(result.current.filterParams.userId).toBe('b'.repeat(24));
+
+    act(() => result.current.showOnly({ types: [] }));
+
+    expect(result.current.filterParams).not.toHaveProperty('userId');
   });
 
   /**
@@ -175,6 +206,92 @@ describe('useFeedbackFilters', () => {
         sort: 'desc',
       });
     });
+  });
+
+  describe('received', () => {
+    it('sends the picked window and omits it again when cleared', () => {
+      const { result } = setup();
+
+      act(() => {
+        result.current.setReceived('24h');
+      });
+      expect(result.current.filterParams.received).toBe('24h');
+
+      act(() => {
+        result.current.setReceived(undefined);
+      });
+      expect(result.current.filterParams).not.toHaveProperty('received');
+    });
+
+    it('resets the page to 1 in one URL write', () => {
+      act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackPage: 4 }));
+      const { result } = setup();
+
+      act(() => result.current.setReceived('7d'));
+
+      expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
+      expect(fakeAdminRouter.navigate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('custom created range', () => {
+    it('sends viewer-local day boundaries, both inclusive', () => {
+      const { result } = setup();
+
+      act(() => result.current.setCreatedRange({ createdFrom: '2026-11-01', createdTo: '2026-11-08' }));
+
+      expect(fakeAdminRouter.search).toMatchObject({ feedbackFrom: '2026-11-01', feedbackTo: '2026-11-08' });
+      expect(result.current.filterParams.createdFrom).toBe('2026-11-01T07:00:00.000Z');
+      expect(result.current.filterParams.createdTo).toBe('2026-11-09T07:59:59.999Z');
+    });
+
+    it('replaces a preset window, and a preset window replaces it', () => {
+      act(() => fakeAdminRouter.reset({ tab: 'feedback', feedbackReceived: '7d', feedbackPage: 3 }));
+      const { result } = setup();
+
+      act(() => result.current.setCreatedRange({ createdFrom: '2026-11-01', createdTo: undefined }));
+      expect(result.current.filterParams).not.toHaveProperty('received');
+      expect(result.current.filterParams).not.toHaveProperty('createdTo');
+      expect(fakeAdminRouter.search).not.toHaveProperty('feedbackPage');
+
+      act(() => result.current.setReceived('24h'));
+      expect(result.current.filterParams.received).toBe('24h');
+      expect(result.current.filterParams).not.toHaveProperty('createdFrom');
+      expect(fakeAdminRouter.search).not.toHaveProperty('feedbackFrom');
+    });
+  });
+
+  describe('comment', () => {
+    it('sends hasComment for either choice and omits it when cleared', () => {
+      const { result } = setup();
+
+      act(() => result.current.setComment('with'));
+      expect(result.current.filterParams.hasComment).toBe(true);
+
+      act(() => result.current.setComment('without'));
+      expect(result.current.filterParams.hasComment).toBe(false);
+
+      act(() => result.current.setComment(undefined));
+      expect(result.current.filterParams).not.toHaveProperty('hasComment');
+    });
+  });
+
+  it('showOnly clears a custom range and the comment filter', () => {
+    act(() =>
+      fakeAdminRouter.reset({
+        tab: 'feedback',
+        feedbackFrom: '2026-11-01',
+        feedbackTo: '2026-11-08',
+        feedbackComment: 'with',
+      })
+    );
+    const { result } = setup();
+
+    act(() => result.current.showOnly({ received: '24h' }));
+
+    expect(result.current.filterParams).toMatchObject({ received: '24h' });
+    expect(result.current.filterParams).not.toHaveProperty('createdFrom');
+    expect(result.current.filterParams).not.toHaveProperty('hasComment');
   });
 
   it('flips the sort direction without touching the other filters', () => {
@@ -297,5 +414,27 @@ describe('useFeedbackFilters', () => {
       });
       expect(result.current.filterParams).not.toHaveProperty('search');
     });
+  });
+  it.each(['New', 'mixed', 'all'])('clears resolution when status selection becomes %s', selection => {
+    const { result } = setup();
+    act(() => result.current.setResolution('fixed'));
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.Closed]);
+    act(() =>
+      result.current.setStatusFilters({
+        [FeedbackStatus.New]: true,
+        [FeedbackStatus.InProgress]: selection === 'all',
+        [FeedbackStatus.Closed]: selection !== 'New',
+      })
+    );
+    expect(result.current.filters.resolution).toBeUndefined();
+    expect(result.current.filterParams.resolution).toBeUndefined();
+    // The UI maps unchecking its sole Closed status to All; this path must also clear resolution.
+    if (selection === 'all') expect(result.current.filterParams.status).toHaveLength(3);
+  });
+  it('clearing resolution restores the default New view', () => {
+    const { result } = setup();
+    act(() => result.current.setResolution('fixed'));
+    act(() => result.current.setResolution(undefined));
+    expect(result.current.filterParams.status).toEqual([FeedbackStatus.New]);
   });
 });

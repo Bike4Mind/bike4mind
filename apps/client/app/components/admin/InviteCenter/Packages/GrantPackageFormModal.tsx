@@ -1,0 +1,293 @@
+import { useState } from 'react';
+import {
+  Alert,
+  Button,
+  DialogActions,
+  DialogContent,
+  FormControl,
+  FormHelperText,
+  FormLabel,
+  Input,
+  Stack,
+  Switch,
+} from '@mui/joy';
+import { useMutation } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import {
+  isGrantPackageExpired,
+  requiresGrantReason,
+  updateRequiresGrantReason,
+  type GrantPackageReasonPolicy,
+  type IGrantPackageDocument,
+} from '@bike4mind/common';
+import {
+  ADMIN_REASON_HINT,
+  ADMIN_REASON_PRESETS,
+  AdminDialog,
+  EMPTY_ADMIN_REASON,
+  ReasonPicker,
+  composeAdminReason,
+  isAdminReasonComplete,
+  type AdminReasonDraft,
+} from '@client/app/components/admin/shared';
+import { createGrantPackage, updateGrantPackage } from '@client/app/utils/grantPackageAPICalls';
+import { createRegInvites } from '@client/app/utils/regInviteAPICalls';
+import { createPartnerSignupRule } from '@client/app/utils/partnerSignupRuleAPICalls';
+import { getErrorMessage } from '@client/app/utils/error';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
+import { todayUtc } from '@client/app/utils/dateUtils';
+import { GrantPackageCodesSection, dayOf, expiresAtFromDay, type QueuedCode } from './GrantPackageCodesSection';
+import { GrantPackageDomainsSection, domainRuleInput, type QueuedDomain } from './GrantPackageDomainsSection';
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+  /** Null creates a package; otherwise the package being edited. */
+  editing: IGrantPackageDocument | null;
+  reasonPolicy: GrantPackageReasonPolicy;
+};
+
+type Draft = {
+  name: string;
+  credits: string;
+  totalCap: string;
+  dailyCap: string;
+  active: boolean;
+  /** YYYY-MM-DD from the date input; empty means the package never expires. */
+  expiresOn: string;
+};
+
+const expiryDay = (pkg: IGrantPackageDocument | null): string => dayOf(pkg?.expiresAt);
+
+const toDraft = (pkg: IGrantPackageDocument | null): Draft => ({
+  name: pkg?.name ?? '',
+  credits: pkg ? String(pkg.credits) : '',
+  totalCap: pkg?.totalCap != null ? String(pkg.totalCap) : '',
+  dailyCap: pkg?.dailyCap != null ? String(pkg.dailyCap) : '',
+  active: pkg?.active ?? true,
+  expiresOn: expiryDay(pkg),
+});
+
+const WHOLE = /^\d+$/;
+
+/** Empty means unlimited; anything else must be a whole number of at least 1. */
+const parseCap = (value: string): number | null | 'invalid' => {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  return WHOLE.test(trimmed) && Number(trimmed) >= 1 ? Number(trimmed) : 'invalid';
+};
+
+export function GrantPackageFormModal({ open, onClose, onSaved, editing, reasonPolicy }: Props) {
+  const [draft, setDraft] = useState<Draft>(() => toDraft(editing));
+  const [reason, setReason] = useState<AdminReasonDraft>(EMPTY_ADMIN_REASON);
+  const [formError, setFormError] = useState<string | null>(null);
+  // Set when a create saved the package but a queued code or domain failed; the form then keeps editing that package.
+  const [saved, setSaved] = useState<IGrantPackageDocument | null>(null);
+  const [queuedCodes, setQueuedCodes] = useState<QueuedCode[]>([]);
+  const [queuedDomains, setQueuedDomains] = useState<QueuedDomain[]>([]);
+  const current = saved ?? editing;
+
+  const creditsText = draft.credits.trim();
+  const credits = WHOLE.test(creditsText) ? Number(creditsText) : null;
+  const totalCap = parseCap(draft.totalCap);
+  const dailyCap = parseCap(draft.dailyCap);
+  // An edit that leaves the day alone keeps the stored instant; only a newly picked day is rounded to its end.
+  const expiryChanged = !current || draft.expiresOn !== expiryDay(current);
+  const expiresAt =
+    !expiryChanged && current?.expiresAt ? new Date(current.expiresAt) : expiresAtFromDay(draft.expiresOn);
+  const expiryInvalid =
+    expiresAt !== null && (Number.isNaN(expiresAt.getTime()) || (!current && isGrantPackageExpired({ expiresAt })));
+  const valid =
+    draft.name.trim() !== '' && credits !== null && totalCap !== 'invalid' && dailyCap !== 'invalid' && !expiryInvalid;
+
+  const reasonRequired =
+    valid &&
+    (current
+      ? updateRequiresGrantReason(current, { credits, totalCap, active: draft.active, expiresAt }, reasonPolicy)
+      : requiresGrantReason({ credits, totalCap }, reasonPolicy));
+
+  const save = useMutation({
+    mutationFn: async () => {
+      // Unreachable while the save button is disabled for an invalid draft; kept so `valid` narrows the fields.
+      /* v8 ignore next */
+      if (!valid) throw new Error('Fix the highlighted fields first');
+      const body = {
+        name: draft.name.trim(),
+        credits,
+        totalCap,
+        dailyCap,
+        active: draft.active,
+        ...(expiryChanged ? { expiresAt } : {}),
+        ...(reasonRequired ? { reason: composeAdminReason(reason) } : {}),
+      };
+      if (current) return { pkg: await updateGrantPackage(current.id, body), failure: null };
+      const pkg = await createGrantPackage(body);
+      // Codes first, then domains; the first failure stops the run and names everything left unsent.
+      const links = [
+        ...queuedCodes.map(code => ({
+          isCode: true,
+          create: () => createRegInvites({ multiple: 1, unlimitedUse: code.unlimitedUse, grantPackageId: pkg.id }),
+        })),
+        ...queuedDomains.map(domain => ({
+          isCode: false,
+          create: () => createPartnerSignupRule(domainRuleInput(domain, pkg.id)),
+        })),
+      ];
+      for (const [index, link] of links.entries()) {
+        try {
+          await link.create();
+        } catch (error) {
+          const missingCodes = links.slice(index).filter(rest => rest.isCode).length;
+          const missingDomains = links.length - index - missingCodes;
+          const missing = [
+            missingCodes > 0 ? `${missingCodes} of ${queuedCodes.length} codes` : null,
+            missingDomains > 0 ? `${missingDomains} of ${queuedDomains.length} partner domains` : null,
+          ]
+            .filter(Boolean)
+            .join(' and ');
+          return {
+            pkg,
+            failure: `Created ${pkg.name}, but ${missing} were not created: ${getErrorMessage(error)}. Add them below.`,
+          };
+        }
+      }
+      return { pkg, failure: null };
+    },
+    onSuccess: ({ pkg, failure }) => {
+      onSaved();
+      if (failure) {
+        setSaved(pkg);
+        setQueuedCodes([]);
+        setQueuedDomains([]);
+        setFormError(failure);
+        return;
+      }
+      toast.success(current ? `Updated ${pkg.name}` : `Created ${pkg.name}`);
+      onClose();
+    },
+    onError: (error: unknown) => setFormError(getErrorMessage(error)),
+  });
+
+  const blocked = !valid
+    ? 'Fill in a name, credits, valid caps and a future expiry date.'
+    : reasonRequired && !isAdminReasonComplete(reason)
+      ? ADMIN_REASON_HINT
+      : null;
+  const set = (patch: Partial<Draft>) => setDraft(current => ({ ...current, ...patch }));
+
+  return (
+    <AdminDialog
+      open={open}
+      onClose={onClose}
+      title={current ? 'Edit grant package' : 'Create grant package'}
+      width={520}
+      data-testid="grant-package-form"
+    >
+      <DialogContent>
+        <Stack gap={1.5}>
+          {formError && (
+            <Alert color="danger" data-testid="grant-package-form-error">
+              {formError}
+            </Alert>
+          )}
+          <FormControl required>
+            <FormLabel>Name</FormLabel>
+            <Input
+              value={draft.name}
+              onChange={e => set({ name: e.target.value })}
+              slotProps={{ input: { 'data-testid': 'grant-package-name-input' } }}
+            />
+          </FormControl>
+          <FormControl required error={creditsText !== '' && credits === null}>
+            <FormLabel>Credits per signup</FormLabel>
+            <Input
+              value={draft.credits}
+              inputMode="numeric"
+              onChange={e => set({ credits: e.target.value })}
+              slotProps={{ input: { 'data-testid': 'grant-package-credits-input' } }}
+            />
+          </FormControl>
+          <Stack direction="row" gap={1.5}>
+            <FormControl error={totalCap === 'invalid'} sx={{ flex: 1 }}>
+              <FormLabel>Total signups cap</FormLabel>
+              <Input
+                value={draft.totalCap}
+                inputMode="numeric"
+                placeholder="Unlimited"
+                onChange={e => set({ totalCap: e.target.value })}
+                slotProps={{ input: { 'data-testid': 'grant-package-total-cap-input' } }}
+              />
+            </FormControl>
+            <FormControl error={dailyCap === 'invalid'} sx={{ flex: 1 }}>
+              <FormLabel>Daily signups cap</FormLabel>
+              <Input
+                value={draft.dailyCap}
+                inputMode="numeric"
+                placeholder="Unlimited"
+                onChange={e => set({ dailyCap: e.target.value })}
+                slotProps={{ input: { 'data-testid': 'grant-package-daily-cap-input' } }}
+              />
+            </FormControl>
+          </Stack>
+          <FormHelperText>Leave a cap empty for no limit. Daily caps reset at midnight UTC.</FormHelperText>
+          <FormControl error={expiryInvalid}>
+            <FormLabel>Expires on</FormLabel>
+            <OptionalDateInput
+              value={draft.expiresOn}
+              onChange={expiresOn => set({ expiresOn })}
+              emptyLabel="No expiry"
+              setLabel="Set an expiry date"
+              clearLabel="Remove expiry date"
+              initialDate={todayUtc}
+              aria-label="Expires on"
+              testId="grant-package-expires-input"
+            />
+            <FormHelperText>
+              Redeemable through the end of this day (UTC). Without a date the package never expires.
+            </FormHelperText>
+          </FormControl>
+          {current && (
+            <FormControl orientation="horizontal" sx={{ gap: 1 }}>
+              <Switch
+                checked={draft.active}
+                onChange={e => set({ active: e.target.checked })}
+                slotProps={{ input: { 'data-testid': 'grant-package-active-switch' } }}
+              />
+              <FormLabel>Active</FormLabel>
+            </FormControl>
+          )}
+          {reasonRequired && (
+            <>
+              <Alert color="warning" data-testid="grant-package-large-grant-alert">
+                This package can hand out more credits than the large-grant threshold, so it needs a reason.
+              </Alert>
+              <ReasonPicker
+                presets={ADMIN_REASON_PRESETS.grantPackage}
+                value={reason}
+                onChange={setReason}
+                data-testid="grant-package-reason"
+              />
+            </>
+          )}
+          <GrantPackageCodesSection pkg={current} queued={queuedCodes} onQueuedChange={setQueuedCodes} />
+          <GrantPackageDomainsSection pkg={current} queued={queuedDomains} onQueuedChange={setQueuedDomains} />
+          {blocked && <FormHelperText data-testid="grant-package-blocked-hint">{blocked}</FormHelperText>}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button
+          onClick={() => save.mutate()}
+          loading={save.isPending}
+          disabled={blocked !== null}
+          data-testid="grant-package-save-btn"
+        >
+          {current ? 'Save package' : 'Create package'}
+        </Button>
+        <Button variant="plain" color="neutral" onClick={onClose} data-testid="grant-package-cancel-btn">
+          Cancel
+        </Button>
+      </DialogActions>
+    </AdminDialog>
+  );
+}

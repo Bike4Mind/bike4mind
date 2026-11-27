@@ -119,6 +119,8 @@ export function getControlledScopes(): { bot: string[]; user: string[] } {
       'mpim:history',
       'mpim:read',
       'mpim:write',
+      'reactions:read',
+      'reactions:write',
       'users:read',
       'users:read.email',
       'files:read',
@@ -145,6 +147,7 @@ export function getControlledManifestFields(
   const botEvents = [
     'app_home_opened',
     'app_mention',
+    'reaction_added',
     ...(enableWorkflowSteps ? ['function_executed'] : []),
     'message.channels',
     'message.groups',

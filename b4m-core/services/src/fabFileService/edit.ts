@@ -130,15 +130,16 @@ export const editFabFile = async (
   // Refuse to read/return or overwrite a held/blocked uploaded image's bytes.
   if (!isImageServeable(fabFile)) throw new BadRequestError('File is not available for editing');
 
-  if (!fabFile.fileUrl && !fabFile.filePath) {
+  if (!fabFile.filePath) {
     throw new Error('File has no content to edit');
   }
 
   let contentToEdit = '';
 
-  if (fabFile.fileUrl) {
+  if (storage) {
     try {
-      const response = await fetch(fabFile.fileUrl);
+      const readUrl = await storage.generateSignedUrl(fabFile.filePath, 300);
+      const response = await fetch(readUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch file content: ${response.statusText}`);
       }
@@ -210,8 +211,6 @@ Return only the edited content without any markdown code blocks or explanations.
 
     const updatedFile: Partial<IFabFileDocument> = {
       id: fabFile.id,
-      fileUrl: await storage.generateSignedUrl(filePath, 3600),
-      fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
       filePath,
       updatedAt: new Date(),
       ...FAB_FILE_CONTENT_REWRITE_PATCH,

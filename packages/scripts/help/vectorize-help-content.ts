@@ -1,10 +1,11 @@
 #!/usr/bin/env tsx
+import { bindEmbeddingModel, buildEmbeddingRegistry, embedOne } from '@bike4mind/utils/embeddingProviders';
 /**
  * Vectorize Help Content Script
  *
  * Chunks help articles by heading sections and generates embeddings
- * using OpenAI text-embedding-3-small. Output is saved to help-embeddings.json
- * for runtime vector similarity search.
+ * using OpenAI text-embedding-3-small. Output is saved as help-embeddings.json (metadata)
+ * plus help-embeddings.bin (Float32 vectors) for runtime vector similarity search.
  *
  * Reads from the two bundled content roots bundle-help-content.ts produces: the
  * public root (apps/client/public/help-content/) and the admin-only root
@@ -14,7 +15,7 @@
  * Usage: OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize
  *
  * HELP_EMBEDDINGS_REQUIRED=false downgrades a missing key or a failed embedding run
- * from a build failure to a skip, leaving any existing help-embeddings.json in place
+ * from a build failure to a skip, leaving any existing help-embeddings files in place
  * and letting retrieval.ts fall back to keyword search. See embeddingsConfig.ts.
  */
 
@@ -22,10 +23,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
-import matter from 'gray-matter';
 import { glob } from 'glob';
-import { EmbeddingFactory } from '@bike4mind/fab-pipeline';
+
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
+import { parseFrontmatter } from '@bike4mind/common/utils/frontmatter';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex, HelpIndex, HelpAccessLevel } from './types.js';
 import {
   ADMIN_HELP_CONTENT_DIR,
@@ -36,6 +37,7 @@ import {
   truncateAndNormalize,
 } from './utils.js';
 import { helpEmbeddingsRequired } from './embeddingsConfig.js';
+import { HELP_EMBEDDINGS_META_FILE, HELP_EMBEDDINGS_VECTORS_FILE, encodeHelpEmbeddings } from './embeddingsCodec.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,7 +51,9 @@ const HELP_CONTENT_ROOT = path.join(CLIENT_ROOT, PUBLIC_HELP_CONTENT_DIR);
 // as an intermediate build artifact inside the regenerate/build pipeline.
 const ADMIN_HELP_CONTENT_ROOT = path.join(CLIENT_ROOT, ADMIN_HELP_CONTENT_DIR);
 const HELP_INDEX_PATH = path.resolve(__dirname, '../../../apps/client/app/generated/help-index.json');
-const OUTPUT_PATH = path.resolve(__dirname, '../../../apps/client/app/generated/help-embeddings.json');
+const OUTPUT_DIR = path.resolve(__dirname, '../../../apps/client/app/generated');
+const OUTPUT_PATH = path.join(OUTPUT_DIR, HELP_EMBEDDINGS_META_FILE);
+const VECTORS_OUTPUT_PATH = path.join(OUTPUT_DIR, HELP_EMBEDDINGS_VECTORS_FILE);
 
 const EMBEDDING_MODEL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 const BATCH_SIZE = 20;
@@ -58,10 +62,10 @@ const BATCH_SIZE = 20;
 // text-embedding-3-small is a Matryoshka model (native: 1536 dims). The first
 // N dims remain useful at lower dimensionality, so if the chunk count grows
 // significantly you can reduce this to 1024 or 512 to shrink the embeddings
-// file (~0.84 MB at 512 vs ~2.4 MB at 1536 for ~184 chunks).
+// vectors file (4 bytes per value: ~0.36 MB at 512 vs ~1.08 MB at 1536 for ~184 chunks).
 const EMBEDDING_DIMENSIONS = 1536;
-// Number of decimal places to keep per float. 6 gives ample precision
-// for cosine similarity while reducing JSON character count per number.
+// Number of decimal places to keep per float before the Float32 encode. 6 gives ample
+// precision for cosine similarity.
 const FLOAT_PRECISION = 6;
 
 /**
@@ -168,7 +172,7 @@ async function discoverArticles(contentRoot: string, root: RootKind): Promise<Di
   const articles: DiscoveredArticle[] = [];
   for (const filePath of files) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
-    const { data: frontmatter, content } = matter(fileContent);
+    const { data: frontmatter, content } = parseFrontmatter(fileContent);
 
     if (!frontmatter.title) {
       console.warn(`Skipping ${filePath}: No title in frontmatter`);
@@ -268,11 +272,11 @@ export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkD
 /**
  * Generate embeddings for all chunks in batches.
  * Vectors are truncated to EMBEDDING_DIMENSIONS (no-op at native 1536) and
- * floats are rounded to FLOAT_PRECISION decimal places for JSON size savings.
+ * floats are rounded to FLOAT_PRECISION decimal places.
  */
 async function generateEmbeddings(chunks: ChunkData[], apiKey: string): Promise<HelpEmbeddingChunk[]> {
-  const factory = new EmbeddingFactory({ openaiApiKey: apiKey });
-  const service = factory.createEmbeddingService(EMBEDDING_MODEL);
+  const factory = buildEmbeddingRegistry({ openaiApiKey: apiKey });
+  const service = bindEmbeddingModel(factory, EMBEDDING_MODEL);
 
   const results: HelpEmbeddingChunk[] = [];
   const totalBatches = Math.ceil(chunks.length / BATCH_SIZE);
@@ -283,12 +287,11 @@ async function generateEmbeddings(chunks: ChunkData[], apiKey: string): Promise<
 
     console.log(`Processing batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`);
 
-    const embeddings = await Promise.all(batch.map(chunk => service.generateEmbedding(chunk.content)));
+    const embeddings = await Promise.all(batch.map(chunk => embedOne(service, chunk.content)));
 
     for (let i = 0; i < batch.length; i++) {
       // Dimension reduction + L2 normalization (no-op at native 1536)
       const reduced = truncateAndNormalize(embeddings[i], EMBEDDING_DIMENSIONS);
-      // Truncate float precision for smaller JSON output
       const vector = reduced.map(v => truncateFloat(v, FLOAT_PRECISION));
 
       results.push({
@@ -354,22 +357,20 @@ async function main(): Promise<void> {
     sourceArticleCount: uniqueSlugs.size,
   };
 
-  // Ensure output directory exists
-  const outputDir = path.dirname(OUTPUT_PATH);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-  // Write non-pretty-printed to save space
-  fs.writeFileSync(OUTPUT_PATH, JSON.stringify(index));
+  const { metadataJson, vectors } = encodeHelpEmbeddings(index);
+  fs.writeFileSync(VECTORS_OUTPUT_PATH, vectors);
+  fs.writeFileSync(OUTPUT_PATH, metadataJson);
 
-  const fileSizeMB = (fs.statSync(OUTPUT_PATH).size / (1024 * 1024)).toFixed(2);
+  const totalBytes = fs.statSync(OUTPUT_PATH).size + fs.statSync(VECTORS_OUTPUT_PATH).size;
+  const fileSizeMB = (totalBytes / (1024 * 1024)).toFixed(2);
   console.log(`\nDone!`);
   console.log(`  Chunks: ${embeddedChunks.length}`);
   console.log(`  Articles: ${uniqueSlugs.size}`);
   console.log(`  Dimensions: ${EMBEDDING_DIMENSIONS}`);
   console.log(`  File size: ${fileSizeMB} MB`);
-  console.log(`  Output: ${OUTPUT_PATH}`);
+  console.log(`  Output: ${OUTPUT_PATH} + ${VECTORS_OUTPUT_PATH}`);
 }
 
 // Only run when invoked directly (not when imported by tests). Compared by resolved

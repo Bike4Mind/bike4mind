@@ -1,9 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { addCredits, AddCreditsAdapters, AddCreditsParameters, DuplicateCreditTransactionError } from './addCredits';
+import {
+  addCredits,
+  addCreditsWithLedgerRow,
+  AddCreditsAdapters,
+  AddCreditsParameters,
+  DuplicateCreditTransactionError,
+} from './addCredits';
 import { ICreditHolder, ICreditHolderMethods, CreditHolderType, CreditPurchaseStatus } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { createMockCreditTransactionRepository } from '../__tests__/utils/testUtils';
 import { MockedObject } from 'vitest';
+
+vi.mock('@bike4mind/db-core', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/db-core')>()),
+  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+}));
 
 describe('creditService - addCredits', () => {
   // Mock credit holder responses
@@ -29,6 +40,8 @@ describe('creditService - addCredits', () => {
       incrementCredits: vi.fn(),
     });
     mockCreditTransactionRepo = createMockCreditTransactionRepository();
+    // The repo returns the created row (null only for an idempotent duplicate).
+    mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-default' } as never);
 
     mockAdapters = {
       db: {
@@ -211,28 +224,22 @@ describe('creditService - addCredits', () => {
       });
     });
 
-    it('should use default description for generic_add when not provided', async () => {
-      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
-
-      const parameters: AddCreditsParameters = {
+    it.each([
+      ['missing', undefined],
+      ['blank', '   '],
+    ])('rejects a generic_add with a %s description instead of writing an unlabelled grant', async (_, description) => {
+      const parameters = {
         type: 'generic_add',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 25,
         reason: 'promotion',
-      };
+        description,
+      } as unknown as AddCreditsParameters;
 
-      await addCredits(parameters, mockAdapters);
-
-      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith('generic_add', {
-        ownerId: 'user1',
-        ownerType: CreditHolderType.User,
-        credits: 25,
-        description: 'Generic credit addition',
-        metadata: undefined,
-        reason: 'promotion',
-        userId: undefined,
-      });
+      await expect(addCredits(parameters, mockAdapters)).rejects.toThrow();
+      expect(mockCreditTransactionRepo.createTransaction).not.toHaveBeenCalled();
+      expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalled();
     });
 
     it('should pass transactionId to createTransaction for Zod passthrough verification', async () => {
@@ -240,6 +247,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -347,6 +355,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'org1',
         ownerType: CreditHolderType.Organization,
         credits: 100,
@@ -360,7 +369,7 @@ describe('creditService - addCredits', () => {
         ownerId: 'org1',
         ownerType: CreditHolderType.Organization,
         credits: 100,
-        description: 'Generic credit addition',
+        description: 'Test grant',
         metadata,
         reason: 'promotion',
         userId: undefined,
@@ -374,6 +383,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -395,6 +405,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -417,6 +428,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -458,6 +470,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'ghost',
         ownerType: CreditHolderType.User,
         credits: 100,
@@ -467,6 +480,41 @@ describe('creditService - addCredits', () => {
       await expect(addCredits(parameters, mockAdapters)).rejects.toThrow(BadRequestError);
       // Only the net-zero fetch was attempted; the real credit amount was never applied.
       expect(mockCreditHolderMethods.incrementCredits).not.toHaveBeenCalledWith('ghost', 100, expect.anything());
+    });
+  });
+
+  describe('addCreditsWithLedgerRow', () => {
+    const parameters: AddCreditsParameters = {
+      type: 'generic_add',
+      ownerId: 'user1',
+      ownerType: CreditHolderType.User,
+      credits: 100,
+      description: 'Admin grant',
+    };
+
+    it('returns the holder and the id of the ledger row it wrote', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-abc' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await addCreditsWithLedgerRow(parameters, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: 'tx-abc' });
+    });
+
+    it('returns an undefined row id on the idempotent duplicate path', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue(null);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const result = await addCreditsWithLedgerRow({ ...parameters, transactionId: 'dup-1' }, mockAdapters);
+
+      expect(result).toEqual({ creditHolder: mockUser, creditTransactionId: undefined });
+    });
+
+    it('addCredits still returns just the holder', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue({ id: 'tx-abc' } as never);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      await expect(addCredits(parameters, mockAdapters)).resolves.toBe(mockUser);
     });
   });
 
@@ -496,11 +544,62 @@ describe('creditService - addCredits', () => {
       );
     });
 
+    it('stamps the lot funding override for an admin-comped subscription', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });
+
+      const parameters: AddCreditsParameters = {
+        type: 'subscription',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 150,
+        description: 'Admin-granted subscription credits',
+        metadata: { subscriptionId: 'sub_123' },
+      };
+
+      await addCredits(parameters, {
+        ...mockAdapters,
+        db: { ...mockAdapters.db, creditLots: { create: mockCreditLotCreate } as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+        lotFundingSource: 'granted',
+      });
+
+      expect(mockCreditLotCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'subscription', fundingSource: 'granted', amount: 150 })
+      );
+    });
+
+    it('stamps the lotRef adapter option when the grant has no payment intent', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });
+
+      await addCredits(
+        {
+          type: 'generic_add',
+          ownerId: 'user1',
+          ownerType: CreditHolderType.User,
+          credits: 100,
+          transactionId: 'promo:1',
+          reason: 'promo',
+          description: 'Promo grant',
+        } as AddCreditsParameters,
+        {
+          ...mockAdapters,
+          db: { ...mockAdapters.db, creditLots: { create: mockCreditLotCreate } as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+          lotRef: 'promo:1',
+        }
+      );
+
+      expect(mockCreditLotCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'promo', amount: 100, stripeRef: 'promo:1' })
+      );
+    });
+
     it('does not stamp a lot when no creditLots adapter is provided (leaves the grant unstamped)', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 50,
@@ -517,6 +616,7 @@ describe('creditService - addCredits', () => {
 
       const parameters: AddCreditsParameters = {
         type: 'generic_add',
+        description: 'Test grant',
         ownerId: 'user1',
         ownerType: CreditHolderType.User,
         credits: 100,

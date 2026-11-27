@@ -151,7 +151,7 @@ describe('buildRetrievalUnavailableReport', () => {
 
   // The two buckets differ on the only thing the prose tells a reader to do, so they are counted
   // apart: waiting fixes one and never fixes the other.
-  it('counts a paused-rechunk file apart from the files that are merely re-indexing', () => {
+  it('counts a paused-rechunk file apart from the files that are merely still indexing', () => {
     const report = buildRetrievalUnavailableReport([
       { id: 'f1', fileName: 'indexing.pdf' },
       { id: 'f2', fileName: 'stranded.pdf', chunkStallReason: 'rechunkPaused' },
@@ -165,7 +165,7 @@ describe('buildRetrievalUnavailableReport', () => {
   // A pending rebuild carries no note, so it lands in `indexing` by construction - and it MUST, or
   // an ordinary wave would tell every reader that an administrator has to intervene. Pinned here
   // because "which bucket" is the difference between "search again in a minute" and "escalate".
-  it('buckets a file with a rebuild outstanding as re-indexing, never as paused', () => {
+  it('buckets a file with a rebuild outstanding as still indexing, never as paused', () => {
     const report = buildRetrievalUnavailableReport([
       { id: 'f1', fileName: 'rebuilding.pdf', notes: '', chunkRebuildRequestedAt: new Date() },
     ]);
@@ -188,14 +188,14 @@ describe('buildRetrievalUnavailableReport', () => {
 
     // Waiting still LEADS - it is the right first action for the ordinary case, which is the common one.
     expect(prose.indexOf('re-run the search then')).toBeLessThan(prose.indexOf('Rebuild passages'));
-    expect(prose).toContain('the rebuild did not finish');
+    expect(prose).toContain('indexing may have stalled');
     expect(prose).toContain('reprocess the files individually');
   });
 
   // EITHER arm buckets as paused. Bucketing the vectorize arm as `indexing` would print "they will
   // return on their own" about a file that never will: a dropped vectorize message has no producer
   // that re-sends it, which is the one thing this prose must not get wrong.
-  it('buckets a paused-VECTORIZE file as paused, not as merely re-indexing', () => {
+  it('buckets a paused-VECTORIZE file as paused, not as merely still indexing', () => {
     const report = buildRetrievalUnavailableReport([
       { id: 'f1', fileName: 'indexing.pdf' },
       { id: 'f2', fileName: 'novectors.pdf', chunkStallReason: 'vectorizePaused' },
@@ -228,12 +228,26 @@ describe('buildRetrievalUnavailableReport', () => {
 });
 
 describe('describeRetrievalUnavailable', () => {
+  // A first embedding (chunks written, vectors still landing, no rebuild requested) is withheld too;
+  // the notice must not claim a re-index or a replacement for it.
+  it('does not call a first embedding a re-index', () => {
+    const { withheld } = partitionByIndexAvailability([
+      { id: 'f1', fileName: 'new.pdf', chunkCount: 4, vectorizedChunkCount: 1 },
+    ]);
+    expect(withheld.map(f => f.id)).toEqual(['f1']);
+    const report = buildRetrievalUnavailableReport(withheld);
+    expect(report.indexing.count).toBe(1);
+    const text = describeRetrievalUnavailable(report)!;
+    expect(text).toContain('still being indexed');
+    expect(text).not.toMatch(/re-index|being replaced/i);
+  });
+
   it('says nothing when the search was complete', () => {
     expect(describeRetrievalUnavailable(emptyRetrievalUnavailableReport())).toBeNull();
     expect(describeRetrievalUnavailable(undefined)).toBeNull();
   });
 
-  // The remedy is TIME. Sending the reader to re-embed a file that is already re-embedding is the
+  // The remedy is TIME. Sending the reader to re-embed a file that is already being indexed is the
   // one wrong thing this sentence could do.
   it('names the files and points at waiting, never at re-embedding', () => {
     const text = describeRetrievalUnavailable(buildRetrievalUnavailableReport([{ id: 'f1', fileName: 'a.pdf' }]));
@@ -275,7 +289,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
   it('reports an unavailable-content search as partial', () => {
     const s = search({ retrievalUnavailable: buildRetrievalUnavailableReport([{ id: 'f1' }]) });
     expect(isPartialSearch(s)).toBe(true);
-    expect(describeSearchLimitations(s)).toContain('being re-indexed');
+    expect(describeSearchLimitations(s)).toContain('still being indexed');
   });
 
   it('reports both reasons in one notice when both apply', () => {
@@ -288,7 +302,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
       search({ embeddingMismatch: mismatch, retrievalUnavailable: buildRetrievalUnavailableReport([{ id: 'f1' }]) })
     );
     expect(text).toContain('ada-002');
-    expect(text).toContain('being re-indexed');
+    expect(text).toContain('still being indexed');
   });
 
   const superseded = () =>
@@ -317,7 +331,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
       })
     );
     expect(text).toContain('ada-002');
-    expect(text).toContain('being re-indexed');
+    expect(text).toContain('still being indexed');
     expect(text).toContain('Protocol.pdf');
   });
 

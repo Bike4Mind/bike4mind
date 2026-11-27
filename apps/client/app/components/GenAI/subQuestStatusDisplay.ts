@@ -1,24 +1,11 @@
-import { normalizeSubQuestStatus, type SubQuestStatus } from '@bike4mind/common';
+import {
+  normalizeSubQuestStatus,
+  PLAN_STATUS_DISPLAY,
+  SUB_QUEST_TO_PLAN_STATUS,
+  type PlanStatusColor,
+} from '@bike4mind/common';
 
-/** The Joy palette names a Chip accepts, narrowed to the ones this mapping uses. */
-export type SubQuestStatusColor = 'success' | 'warning' | 'neutral' | 'danger';
-
-/**
- * Chip palette per canonical status, exhaustive over SubQuestStatus so adding a status fails the
- * build here instead of silently rendering in the neutral fallback.
- *
- * `deleted` is intentionally `neutral` rather than `danger`: that is what the previous switch
- * produced for it (via its `default` arm), and the docx export's red for deleted is a separate
- * decision that belongs to whoever owns the visual language, not to a refactor. The two
- * deliberately disagree until someone decides.
- */
-const STATUS_COLORS: Record<SubQuestStatus, SubQuestStatusColor> = {
-  not_started: 'neutral',
-  in_progress: 'warning',
-  completed: 'success',
-  skipped: 'neutral',
-  deleted: 'neutral',
-};
+export type SubQuestStatusColor = PlanStatusColor;
 
 /**
  * Chip color for a sub-quest status as read from the database.
@@ -35,5 +22,7 @@ const STATUS_COLORS: Record<SubQuestStatus, SubQuestStatusColor> = {
  */
 export const getSubQuestStatusColor = (status: string): SubQuestStatusColor => {
   const canonical = normalizeSubQuestStatus(status);
-  return canonical === null ? 'neutral' : STATUS_COLORS[canonical];
+  const planStatus = canonical === null ? null : SUB_QUEST_TO_PLAN_STATUS[canonical];
+  // `deleted` has no plan status; it stays neutral rather than taking the docx export's red.
+  return planStatus === null ? 'neutral' : PLAN_STATUS_DISPLAY[planStatus].color;
 };

@@ -15,38 +15,30 @@
  * platform admin who is not a member of the lake reaches neither its files nor its membership
  * through the public API.
  */
-import type { Request } from 'express';
 import {
   addDataLakeFileContract,
   getDataLakeFileContract,
   removeDataLakeFileContract,
-  type AccessContext,
   type DataLakeFileMembershipResponse,
   type DataLakeFileResponse,
-  type IDataLakeDocument,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
-import {
-  adminSettingsRepository,
-  dataLakeAccessGrantRepository,
-  dataLakeRepository,
-  fabFileRepository,
-  lakeMembershipRemovalRepository,
-  scopedSettingsRepository,
-  withTransaction,
-} from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, withTransaction } from '@bike4mind/database';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
-import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
-import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
+import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
-import { storageOwnerTransferDb } from '@server/files/storageOwnerTransferDb';
+import {
+  addFileToWritableLake,
+  assertLakeMembershipWritable,
+  lakeAccessDb,
+  membershipWriteDb,
+} from '@server/dataLakes/lakeMembershipWrite';
 
 // Required: the raw pathname embeds `id`/`file_id`, so without a stable bucket each file gets its
 // own counter instead of one budget per caller.
@@ -57,52 +49,12 @@ const perUserRateLimit = () =>
     bucket: '/api/v1/data-lakes/[id]/files/[file_id]',
   });
 
-const lakeAccessDb = {
-  dataLakes: dataLakeRepository,
-  dataLakeAccessGrants: dataLakeAccessGrantRepository,
-  settings: adminSettingsRepository,
-};
-
 /** A malformed id can name no file, so it answers the same 404 as a missing one. */
 function fileIdOrNotFound(rawFileId: string): string {
   const fileId = toObjectIdString(rawFileId);
   if (!fileId) throw new NotFoundError('File not found');
   return fileId;
 }
-
-/**
- * The membership-write gate: readable (404 otherwise), then manageable and not built-in (403).
- * Decided here from the manage rule itself rather than by matching the service's refusal text.
- */
-async function assertLakeMembershipWritable(
-  lakeIdOrSlug: string,
-  ctx: AccessContext,
-  logger: Request['logger']
-): Promise<IDataLakeDocument> {
-  const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(lakeIdOrSlug, ctx, {
-    db: lakeAccessDb,
-    logger,
-  });
-  if (dataLakeService.isFallbackLake(lake)) {
-    throw new ForbiddenError('This data lake is built into the platform and is read-only');
-  }
-  if (!dataLakeService.canManageLake(lake, ctx, grants)) {
-    throw new ForbiddenError('You do not have permission to change which files belong to this data lake');
-  }
-  return lake;
-}
-
-const membershipWriteDb = {
-  ...storageOwnerTransferDb,
-  dataLakes: dataLakeRepository,
-  dataLakeAccessGrants: dataLakeAccessGrantRepository,
-  fabFiles: fabFileRepository,
-  lakeMembershipRemovals: lakeMembershipRemovalRepository,
-  // Without these the draft -> active flip a membership change can trigger records nothing; see
-  // the SPA route (pages/api/data-lakes/[id]/files/[fabFileId].ts).
-  ...lakeConfigAuditDb,
-  ...lakeMembershipAuditDb,
-};
 
 const getRouter = nextRouteForContract(getDataLakeFileContract, { rateLimit: perUserRateLimit() })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -139,16 +91,12 @@ const addRouter = nextRouteForContract(addDataLakeFileContract, { rateLimit: per
   .post(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };
-    const { lake, fileId, result } = await withTransaction(async () => {
-      const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
-      const fileId = fileIdOrNotFound(req.validatedParams.file_id);
-      const result = await dataLakeService.addFileToDataLake(actor, lake.id, fileId, {
-        db: { ...membershipWriteDb, scopedSettings: scopedSettingsRepository },
-        logger: req.logger,
-      });
-      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
-      await dataLakeRepository.touchIfStable(lake.id);
-      return { lake, fileId, result };
+    const { lake, fileId, result } = await addFileToWritableLake({
+      lakeIdOrSlug: req.validatedParams.id,
+      ctx,
+      actor,
+      resolveFileId: () => fileIdOrNotFound(req.validatedParams.file_id),
+      logger: req.logger,
     });
     const body: DataLakeFileMembershipResponse = {
       lake_id: lake.id,

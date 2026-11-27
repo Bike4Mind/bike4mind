@@ -18,7 +18,7 @@ import {
   Select,
   Option,
 } from '@mui/joy';
-import { CloudDownload } from '@mui/icons-material';
+import CloudDownload from '@mui/icons-material/CloudDownload';
 import { toast } from 'sonner';
 import { ContextHelpButton } from '@client/app/components/help';
 import { api } from '@client/app/contexts/ApiContext';
@@ -29,7 +29,9 @@ import {
   downloadBlob,
   BulkExportData,
 } from '@client/app/utils/bulkNotebookExport';
+import { getLocalDate } from '@client/app/utils/dateUtils';
 import { openInNewTab } from '@client/app/utils/externalLinks';
+import { OptionalDateInput } from '@client/app/components/common/OptionalDateInput';
 
 type ExportFormat = 'json' | 'excel' | 'word' | 'markdown';
 
@@ -53,7 +55,7 @@ interface ExportOptions {
 }
 
 /**
- * Resolve the calendar date an `<input type="date">` yields to an instant at the edge of that day
+ * Resolve the calendar date a date input yields to an instant at the edge of that day
  * in the viewer's own zone. A bare "2026-01-15" carries no offset, so whoever resolves it picks the
  * zone; doing it here is the only place the user's actual zone is known. Omitting the `Z` is what
  * makes Date parse the literal as local rather than UTC.
@@ -354,26 +356,34 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
               <Stack direction="row" spacing={2} className="notebook-export-modal-row">
                 <FormControl sx={{ flex: 1 }} className="notebook-export-modal-form-control">
                   <FormLabel>From Date</FormLabel>
-                  <Input
-                    type="date"
+                  <OptionalDateInput
                     value={drafts.fromDate}
-                    onChange={e => {
-                      setDrafts(d => ({ ...d, fromDate: e.target.value }));
-                      updateOption('fromDate', localDayBoundary(e.target.value, 'start'));
+                    onChange={value => {
+                      setDrafts(d => ({ ...d, fromDate: value }));
+                      updateOption('fromDate', localDayBoundary(value, 'start'));
                     }}
-                    slotProps={{ input: { 'data-testid': 'notebook-export-from-date-input' } }}
+                    emptyLabel="No start date"
+                    setLabel="Set from date"
+                    clearLabel="Remove from date"
+                    initialDate={getLocalDate}
+                    aria-label="From Date"
+                    testId="notebook-export-from-date-input"
                   />
                 </FormControl>
                 <FormControl sx={{ flex: 1 }}>
                   <FormLabel>To Date</FormLabel>
-                  <Input
-                    type="date"
+                  <OptionalDateInput
                     value={drafts.toDate}
-                    onChange={e => {
-                      setDrafts(d => ({ ...d, toDate: e.target.value }));
-                      updateOption('toDate', localDayBoundary(e.target.value, 'end'));
+                    onChange={value => {
+                      setDrafts(d => ({ ...d, toDate: value }));
+                      updateOption('toDate', localDayBoundary(value, 'end'));
                     }}
-                    slotProps={{ input: { 'data-testid': 'notebook-export-to-date-input' } }}
+                    emptyLabel="No end date"
+                    setLabel="Set to date"
+                    clearLabel="Remove to date"
+                    initialDate={getLocalDate}
+                    aria-label="To Date"
+                    testId="notebook-export-to-date-input"
                   />
                 </FormControl>
               </Stack>

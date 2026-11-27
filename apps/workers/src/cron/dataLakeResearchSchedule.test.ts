@@ -21,13 +21,14 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchRunRepository: { name: 'runs' },
   userRepository: { name: 'users' },
   organizationRepository: { name: 'organizations' },
+  spendFreezeRepository: { name: 'spendFreezes' },
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeResearchService: { runDueResearchSchedules: h.runDueResearchSchedules },
 }));
 vi.mock('@bike4mind/utils', () => ({ getSettingByName: h.getSettingByName }));
 vi.mock('@bike4mind/observability', () => ({ Logger: vi.fn() }));
-vi.mock('@server/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
+vi.mock('@bike4mind/server-utils/dataLakes/queueResearchRun', () => ({ queueResearchRun: h.queueResearchRun }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://localhost/%STAGE%' } }));
 vi.mock('sst', () => ({ Resource: h.resource }));
 
@@ -56,6 +57,7 @@ describe('runResearchScheduleTick', () => {
       adminSettings: {},
       users: { name: 'users' },
       organizations: { name: 'organizations' },
+      spendFreezes: { name: 'spendFreezes' },
     });
     const run = { id: 'run-1' };
     const lake = { id: 'lake-1' };

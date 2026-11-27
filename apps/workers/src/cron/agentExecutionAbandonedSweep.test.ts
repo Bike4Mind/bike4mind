@@ -107,7 +107,7 @@ describe('agentExecutionAbandonedSweep - handler', () => {
 
     await handler();
 
-    // warn never reaches the Slack channel LiveOps triage reads; only ERROR lines do.
+    // warn never reaches the LiveOps Slack channel; only ERROR lines do.
     expect(mockLogger.error).toHaveBeenCalledWith(
       '[AgentExecutionAbandonedSweep] Marked abandoned',
       expect.objectContaining({ candidates: 1, marked: 1 })

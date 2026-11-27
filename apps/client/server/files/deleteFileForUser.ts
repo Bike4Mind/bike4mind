@@ -12,13 +12,14 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { logEvent } from '@server/utils/analyticsLog';
-import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { recomputeStatsForLakeTags } from '@bike4mind/server-utils/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { lakeMembershipAuditDb } from '@bike4mind/server-utils/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { getGeneratedCopyStore } from '@server/files/generatedCopyStore';
+import { getGeneratedCopyStore } from '@bike4mind/server-utils/files/generatedCopyStore';
 import { adjustOwnerStorageInSession } from '@bike4mind/server-utils/s3/storageCharge';
+import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import type { Request } from 'express';
 
 /**
@@ -64,6 +65,7 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
           ...lakeMembershipAuditDb,
         },
         storage: getFilesStorage(),
+        session,
         generatedCopies: getGeneratedCopyStore(),
         onDeleteComplete: async (deleted, size) => {
           refund = { owner: storageOwnerOf(deleted), bytes: size };
@@ -114,6 +116,25 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
         error: error instanceof Error ? error.message : 'Unknown error',
         owner,
         sizeToDeduct: bytes,
+      });
+    }
+  }
+
+  // A published file snapshot outlives its source, so take the caller's own pages down with it, as the
+  // bulk delete does. Only on 'deleted': an unshare leaves the owner's file, and their pages, in place.
+  if (deleteAction === 'deleted') {
+    // The delete is already committed, so a failure is logged rather than failing the request.
+    try {
+      await unpublishUserArtifactsBySource(
+        userId,
+        { kind: 'fabfile', fabFileIds: [fabFileId] },
+        { logger: req.logger }
+      );
+    } catch (error) {
+      req.logger.error('Error unpublishing pages after single file delete:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        fabFileId,
+        userId,
       });
     }
   }

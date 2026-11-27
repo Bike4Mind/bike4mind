@@ -1,11 +1,8 @@
 import { useFloorAboveMeasuredWarning, useUpdateSettings } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
 import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
-import SaveIcon from '@mui/icons-material/Save';
 import WarningIcon from '@mui/icons-material/Warning';
 import {
-  Button,
-  Card,
   Divider,
   FormControl,
   FormHelperText,
@@ -15,20 +12,17 @@ import {
   Option,
   Select,
   Switch,
-  Tooltip,
   Alert,
-  Modal,
-  ModalDialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   Typography,
   Stack,
   Box,
 } from '@mui/joy';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import { SettingFieldRow } from './shared/SettingFieldRow';
+import { StatusChip } from './shared/StatusChip';
 import ScopedSettingOverrides from './ScopedSettingOverrides';
-import { rangeMessage } from './settingFieldHelpers';
+import { moneyChangeWarning, rangeMessage } from './settingFieldHelpers';
+import { useRequiredSettingsDraft } from './SettingsDraftProvider';
 
 interface SubSetting {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
@@ -37,23 +31,21 @@ interface SubSetting {
 
 /** Inline toggle row rendered inside a parent card - no card wrapper. */
 const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
-  const [value, setValue] = useState<boolean>(() => {
+  const initialValue = (() => {
     if (typeof defaultValue === 'boolean') return defaultValue;
     if (typeof defaultValue === 'number') return defaultValue === 1;
     if (typeof defaultValue === 'string') return defaultValue === 'true' || defaultValue === '1';
     return false;
-  });
+  })();
   const updateSettings = useUpdateSettings();
-  const resolvedDefault =
-    typeof defaultValue === 'boolean'
-      ? defaultValue
-      : typeof defaultValue === 'number'
-        ? defaultValue === 1
-        : defaultValue === 'true' || defaultValue === '1';
-  const isDirty = value !== resolvedDefault;
+  const draft = useRequiredSettingsDraft('AdminSettingInputField', setting.key, initialValue, {
+    name: setting.name,
+    save: value => updateSettings.mutateAsync({ key: setting.key, value }),
+  });
+  const { value, setValue } = draft;
 
   return (
-    <Box sx={{ py: 0.75 }}>
+    <Box data-admin-settings-editor tabIndex={0} aria-label={`${setting.name} settings editor`} sx={{ py: 0.75 }}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography level="title-md" sx={{ fontSize: '13px' }}>
@@ -64,19 +56,7 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-          <Switch checked={value} onChange={e => setValue(e.target.checked)} />
-          {isDirty && (
-            <Tooltip title="Save" placement="top">
-              <Button
-                color="success"
-                size="sm"
-                loading={updateSettings.isPending}
-                onClick={() => updateSettings.mutate({ key: setting.key, value })}
-              >
-                <SaveIcon sx={{ fontSize: '16px' }} />
-              </Button>
-            </Tooltip>
-          )}
+          <Switch checked={value} disabled={draft.pending} onChange={e => setValue(e.target.checked)} />
         </Box>
       </Box>
 
@@ -91,36 +71,60 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
 
 const AdminSettingInputField = ({
   setting,
-  index,
   defaultValue,
   subSettings,
+  lockedNote,
+  valueHelper,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
   // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
   defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
+  /** Locks the setting: its control and Save are disabled and this replaces the description. */
+  lockedNote?: string;
+  valueHelper?: ReactNode;
 }) => {
-  const [value, setValue] = useState<string | number | boolean | null>(() => {
-    if (typeof defaultValue === 'object') return null;
-    return defaultValue ?? null;
-  });
   const updateSettings = useUpdateSettings();
-  const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
-  // Whether the admin actually typed into a sensitive field, as opposed to the field
-  // being emptied by focus clearing the mask. Distinguishes a deliberate "unset this
-  // key" from an accidental empty write - see the guard in saveValue.
-  const [secretEdited, setSecretEdited] = useState(false);
-
-  // A sensitive field sitting empty purely because focus cleared its mask is not an edit,
-  // so Save stays disabled. Without this the field reads as dirty the moment it is focused
-  // and an empty write becomes one click away (saveValue guards the write itself as well).
-  const isUntouchedClearedSecret = setting.isSensitive === true && value === '' && !secretEdited;
-  // clearDeletesRow: an emptied field is unset, so typing into an unset field and deleting it again is no edit.
-  const comparable = setting.clearDeletesRow && value === '' ? null : value;
-  const isDirty = comparable !== defaultValue && !isUntouchedClearedSecret;
+  const draft = useRequiredSettingsDraft<string | number | boolean | null>(
+    'AdminSettingInputField',
+    setting.key,
+    typeof defaultValue === 'object' ? null : (defaultValue ?? null),
+    {
+      name: setting.name,
+      equals: (left, right) => (setting.clearDeletesRow && left === '' ? null : left) === right,
+      save: async next => {
+        if (next === null) throw new Error('Enter a setting value before saving.');
+        return updateSettings.mutateAsync({
+          key: setting.key,
+          value: next,
+          ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}),
+          ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
+        });
+      },
+      blocked: next =>
+        lockedNote ??
+        (setting.type === 'number' && next !== '' && next !== null
+          ? rangeMessage(Number(next), setting.min, setting.max)
+          : undefined),
+      // The SaveBar commits every edit, so the price and embedding confirmations are the warnings it batches.
+      warning: next =>
+        setting.key === 'defaultEmbeddingModel'
+          ? [
+              'Changing the embedding model affects new files. Existing files may need reprocessing to restore search accuracy.',
+            ]
+          : setting.changesCustomerPrice
+            ? [moneyChangeWarning(setting.key, setting.name, defaultValue, next)]
+            : [],
+    }
+  );
+  const { value, setValue } = draft;
+  // Focus only hides the stored mask; the draft changes when the admin types, so a focused,
+  // untouched secret stages nothing and an emptied one is a deliberate clear.
+  const [secretFocused, setSecretFocused] = useState(false);
   const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
+  const changesCustomerPrice = setting.changesCustomerPrice === true;
 
   // Only number settings declare bounds, and only some of those, so they are read through
   // the type discriminant rather than off the union.
@@ -131,259 +135,144 @@ const AdminSettingInputField = ({
     setting.type === 'number' && value !== null && value !== ''
       ? rangeMessage(typeof value === 'number' ? value : Number(value), bounds.min, bounds.max)
       : undefined;
-  // A rejected write is otherwise silent: the mutation surfaces nothing of its own and the
-  // Save button simply stops spinning.
+  // The field names a rejected write next to the value as well as in the SaveBar.
   const saveError = updateSettings.error ? getErrorMessage(updateSettings.error) : undefined;
   const fieldError = rangeError ?? saveError;
   const floorWarning = useFloorAboveMeasuredWarning(setting.key, value);
 
-  const saveValue = (next: string | number | boolean) => {
-    // Backstop, intentionally unreachable while isDirty excludes the untouched-empty state
-    // above. Kept because it does not depend on event ordering: the dirty check protects the
-    // button, this protects the write, so loosening one cannot silently expose ''.
-    // Do not delete as redundant. The original rationale cited macOS Safari and Firefox not
-    // blurring the input before a save click; that was measured and is wrong - both do blur
-    // on the button's mousedown and restore the mask. No browser is known to skip the blur,
-    // but nothing in the DOM contract guarantees it either.
-    if (setting.isSensitive && next === '' && !secretEdited) return;
-
-    updateSettings.mutate(
-      // An empty value on a sensitive setting destroys a live credential, so the server
-      // requires the intent to be explicit rather than inferred from an absent value.
-      {
-        key: setting.key,
-        value: next,
-        ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}),
-        ...(floorWarning ? { confirmAboveMeasuredFloor: true } : {}),
-      },
-      {
-        // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
-        // write with the mask, which is all this field should ever hold afterwards.
-        onSuccess: (data: { settingValue?: unknown } | undefined) => {
-          setSecretEdited(false);
-          if (setting.isSensitive && typeof data?.settingValue === 'string') setValue(data.settingValue);
-          // A cleared number field resolves server-side to the setting's own default (#2636),
-          // not to what was submitted - sync from the response instead of leaving the field
-          // empty until the next full settings refetch.
-          if (setting.type === 'number' && typeof data?.settingValue === 'number') setValue(data.settingValue);
-          // clearDeletesRow answers null for a clear (the platform row was deleted): sync to the
-          // empty state so the field does not read as dirty against the default it used to hold.
-          if (setting.clearDeletesRow && data?.settingValue === null) setValue(null);
-        },
-      }
-    );
-  };
-
-  const handleSaveSetting = () => {
-    if (value === null || rangeError) return;
-
-    // Show warning for embedding model changes
-    if (isEmbeddingModelSetting && isDirty) {
-      setShowEmbeddingWarning(true);
-      return;
-    }
-
-    // Save directly for other settings
-    saveValue(value);
-  };
-
-  const confirmEmbeddingModelChange = () => {
-    if (value === null) return;
-    saveValue(value);
-    setShowEmbeddingWarning(false);
-  };
-
   return (
-    <>
-      <Card
-        variant="outlined"
-        sx={{ width: '100%', mb: 1, bgcolor: index % 2 ? 'background.level1' : 'background.level2', p: 2 }}
-      >
-        <Grid container spacing={2}>
-          <Grid xs={12} md={6}>
-            <FormControl error={Boolean(fieldError)} sx={{ width: '100%' }}>
-              <FormLabel>{setting.name}</FormLabel>
-
-              {setting.type === 'boolean' ? (
-                <Switch
-                  sx={{ alignSelf: 'baseline' }}
-                  checked={typeof value === 'string' ? value === 'true' : (value as boolean)}
-                  onChange={e => setValue(e.target.checked)}
-                />
-              ) : setting.type === 'number' ? (
-                <Input
-                  // The schema's own bounds, so the browser offers the same range the server
-                  // will accept rather than leaving the field unbounded.
-                  slotProps={{
-                    input: {
-                      'data-testid': `admin-setting-${setting.key}-input`,
-                      min: bounds.min,
-                      max: bounds.max,
-                    },
-                  }}
-                  type="number"
-                  // clearDeletesRow with no row: the blank field is the "unset" state, not a missing
-                  // value. Name what it resolves to so an admin can tell it from a stored default.
-                  placeholder={setting.clearDeletesRow ? setting.unsetLabel : undefined}
-                  // A cleared field is kept as '' rather than coerced: Number('') is 0, which
-                  // the server would store as a real zero instead of letting makeNumberSetting's
-                  // empty-string preprocess fall back to the setting's own default.
-                  value={typeof value === 'number' ? value : value === null || value === '' ? '' : Number(value)}
-                  onChange={e => setValue(e.target.value === '' ? '' : Number(e.target.value))}
-                  // Locked during the save round-trip: onSuccess resyncs this field from the
-                  // server's resolved value, so an edit typed mid-flight would be silently
-                  // overwritten by the response for the previous submission.
-                  disabled={updateSettings.isPending}
-                />
-              ) : setting.type === 'string' ? (
-                setting.options ? (
-                  <Select value={(value as string) || ''} onChange={(e, v) => setValue(v)}>
-                    {Array.from(new Set(setting.options)).map((option, i) => (
-                      <Option key={`setting-${setting.key}-option-${option}-${i}`} value={option}>
-                        {option}
-                      </Option>
-                    ))}
-                  </Select>
-                ) : (
-                  <Input
-                    slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-input` } }}
-                    // Once the admin has typed, the field holds real plaintext. main used to
-                    // re-hide it on blur; keep that property by switching to a password field
-                    // rather than leaving a pasted key rendered until the page is left. The
-                    // server mask stays plain text so its last-4 tail is readable.
-                    type={setting.isSensitive && secretEdited ? 'password' : 'text'}
-                    value={(value as string) || ''}
-                    placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
-                    onChange={e => {
-                      setValue(e.target.value);
-                      if (setting.isSensitive) setSecretEdited(true);
-                    }}
-                    // A sensitive setting arrives already masked from the server, so there is
-                    // nothing to reveal. Clear the mask on focus so the admin types a fresh
-                    // value, and restore it on an untouched blur so the field stays non-dirty.
-                    // A field the admin deliberately emptied is left alone - that is a clear.
-                    onFocus={() => {
-                      if (showsStoredSecretMask) setValue('');
-                    }}
-                    onBlur={() => {
-                      if (setting.isSensitive && value === '' && !secretEdited) {
-                        setValue((defaultValue as string) ?? '');
-                      }
-                    }}
+    <SettingFieldRow
+      data-admin-settings-editor
+      data-testid={`admin-setting-${setting.key}-row`}
+      tabIndex={0}
+      aria-label={`${setting.name} settings editor`}
+    >
+      <Grid container spacing={2}>
+        <Grid xs={12} md={6}>
+          <FormControl error={Boolean(fieldError)} sx={{ width: '100%' }}>
+            <FormLabel>
+              {setting.name}
+              {changesCustomerPrice && (
+                <Box component="span" sx={{ ml: 1 }}>
+                  <StatusChip
+                    tone="warn"
+                    label="Changes customer price"
+                    data-testid={`admin-setting-${setting.key}-money-badge`}
                   />
-                )
-              ) : null}
+                </Box>
+              )}
+            </FormLabel>
 
-              <FormHelperText data-testid={`admin-setting-${setting.key}-helper`}>
-                {/* The floor warning outranks a stale save error: `saveValue` sends the confirm flag
-                    whenever `floorWarning` is truthy, so the warning must be the line the admin sees
-                    before that save, not one hidden behind a previous failure's message. */}
-                {rangeError ?? floorWarning ?? saveError ?? setting.description}
-              </FormHelperText>
-            </FormControl>
-          </Grid>
-
-          <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
-            <Tooltip title="Update Setting" placement="top">
-              <Button
-                data-testid={`admin-setting-${setting.key}-save-btn`}
-                color="success"
-                size="sm"
-                type="button"
-                loading={updateSettings.isPending}
-                onClick={handleSaveSetting}
-                disabled={!isDirty || Boolean(rangeError)}
-              >
-                <SaveIcon sx={{ marginX: 1 }} />
-              </Button>
-            </Tooltip>
-          </Grid>
-        </Grid>
-
-        {/* Warning alert for embedding model changes */}
-        {isEmbeddingModelSetting && isDirty && (
-          <Alert color="warning" variant="soft" startDecorator={<WarningIcon />} sx={{ mt: 1 }}>
-            <Typography level="body-sm">
-              <strong>Warning:</strong> Changing the embedding model will require reprocessing all existing files for
-              optimal search and analysis results. Files with mismatched embedding models will show a warning and can be
-              reprocessed individually.
-            </Typography>
-          </Alert>
-        )}
-
-        {/* Inline sub-settings (e.g. "On by default" toggles) */}
-        {subSettings && subSettings.length > 0 && (
-          <>
-            <Divider sx={{ my: 1 }} />
-            <Stack spacing={0}>
-              {subSettings.map((sub, i) => (
-                <SubSettingToggle
-                  key={`${sub.setting.key}-${i}`}
-                  setting={sub.setting}
-                  defaultValue={sub.defaultValue}
+            {setting.type === 'boolean' ? (
+              <Switch
+                sx={{ alignSelf: 'baseline' }}
+                checked={typeof value === 'string' ? value === 'true' : (value as boolean)}
+                onChange={e => setValue(e.target.checked)}
+                disabled={Boolean(lockedNote) || draft.pending}
+                slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-switch` } }}
+              />
+            ) : setting.type === 'number' ? (
+              <Input
+                // The schema's own bounds, so the browser offers the same range the server
+                // will accept rather than leaving the field unbounded.
+                slotProps={{
+                  input: {
+                    'data-testid': `admin-setting-${setting.key}-input`,
+                    min: bounds.min,
+                    max: bounds.max,
+                  },
+                }}
+                type="number"
+                // clearDeletesRow with no row: the blank field is the "unset" state, not a missing
+                // value. Name what it resolves to so an admin can tell it from a stored default.
+                placeholder={setting.clearDeletesRow ? setting.unsetLabel : undefined}
+                // A cleared field is kept as '' rather than coerced: Number('') is 0, which
+                // the server would store as a real zero instead of letting makeNumberSetting's
+                // empty-string preprocess fall back to the setting's own default.
+                value={typeof value === 'number' ? value : value === null || value === '' ? '' : Number(value)}
+                onChange={e => setValue(e.target.value === '' ? '' : Number(e.target.value))}
+                // Locked during the save round-trip: the refetched setting resets this field to the
+                // server's resolved value, so an edit typed mid-flight would be silently overwritten.
+                disabled={Boolean(lockedNote) || updateSettings.isPending || draft.pending}
+              />
+            ) : setting.type === 'string' ? (
+              setting.options ? (
+                <Select
+                  disabled={Boolean(lockedNote) || draft.pending}
+                  value={(value as string) || ''}
+                  onChange={(e, v) => setValue(v)}
+                >
+                  {Array.from(new Set(setting.options)).map((option, i) => (
+                    <Option key={`setting-${setting.key}-option-${option}-${i}`} value={option}>
+                      {option}
+                    </Option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-input` } }}
+                  // Once the admin has typed, the field holds real plaintext. main used to
+                  // re-hide it on blur; keep that property by switching to a password field
+                  // rather than leaving a pasted key rendered until the page is left. The
+                  // server mask stays plain text so its last-4 tail is readable.
+                  type={setting.isSensitive && draft.dirty ? 'password' : 'text'}
+                  value={secretFocused && showsStoredSecretMask ? '' : (value as string) || ''}
+                  disabled={Boolean(lockedNote) || draft.pending}
+                  placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
+                  onChange={e => setValue(e.target.value)}
+                  // A sensitive setting arrives already masked from the server, so there is
+                  // nothing to reveal. Hide the mask while focused so the admin types a fresh
+                  // value; an untouched blur shows it again without staging anything.
+                  onFocus={() => setSecretFocused(true)}
+                  onBlur={() => setSecretFocused(false)}
                 />
-              ))}
-            </Stack>
-          </>
-        )}
+              )
+            ) : null}
 
-        {/* Only a setting that opts into scoping gets a write surface for the narrower rungs. */}
-        {setting.scope && (
-          <>
-            <Divider sx={{ my: 1 }} />
-            <ScopedSettingOverrides setting={setting} />
-          </>
-        )}
-      </Card>
+            <FormHelperText data-testid={`admin-setting-${setting.key}-helper`}>
+              {/* The floor warning outranks a stale save error: the draft's save sends the confirm flag
+                  whenever `floorWarning` is truthy, so the warning must be the line the admin sees
+                  before that save, not one hidden behind a previous failure's message. */}
+              {rangeError ?? floorWarning ?? saveError ?? lockedNote ?? setting.description}
+            </FormHelperText>
+            {valueHelper && (
+              <FormHelperText sx={{ display: 'block', color: 'admin.inkMuted' }}>{valueHelper}</FormHelperText>
+            )}
+          </FormControl>
+        </Grid>
+      </Grid>
 
-      {/* Confirmation Modal for Embedding Model Changes */}
-      <Modal open={showEmbeddingWarning} onClose={() => setShowEmbeddingWarning(false)}>
-        <ModalDialog variant="outlined" role="alertdialog">
-          <DialogTitle>
-            <WarningIcon color="warning" sx={{ mr: 1 }} />
-            Confirm Embedding Model Change
-          </DialogTitle>
-          <DialogContent>
-            <Stack spacing={2}>
-              <Typography level="body-md">
-                You are about to change the default embedding model from{' '}
-                <strong>{typeof defaultValue === 'object' ? 'N/A' : String(defaultValue)}</strong> to{' '}
-                <strong>{value}</strong>.
-              </Typography>
-              <Alert color="warning" variant="soft">
-                <Typography level="body-sm">
-                  <strong>Important:</strong> This change will affect how new files are processed. Existing files that
-                  were processed with a different embedding model may show reduced search accuracy until they are
-                  reprocessed with the new model.
-                </Typography>
-              </Alert>
-              <Typography level="body-sm">
-                Files with mismatched embedding models will display a warning icon and can be reprocessed individually
-                through the session interface.
-              </Typography>
-            </Stack>
-          </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="warning"
-              onClick={confirmEmbeddingModelChange}
-              loading={updateSettings.isPending}
-            >
-              Change Embedding Model
-            </Button>
-            <Button
-              variant="plain"
-              color="neutral"
-              onClick={() => setShowEmbeddingWarning(false)}
-              disabled={updateSettings.isPending}
-            >
-              Cancel
-            </Button>
-          </DialogActions>
-        </ModalDialog>
-      </Modal>
-    </>
+      {/* Warning alert for embedding model changes */}
+      {isEmbeddingModelSetting && draft.dirty && (
+        <Alert color="warning" variant="soft" startDecorator={<WarningIcon />} sx={{ mt: 1 }}>
+          <Typography level="body-sm">
+            <strong>Warning:</strong> Changing the embedding model will require reprocessing all existing files for
+            optimal search and analysis results. Files with mismatched embedding models will show a warning and can be
+            reprocessed individually.
+          </Typography>
+        </Alert>
+      )}
+
+      {/* Inline sub-settings (e.g. "On by default" toggles) */}
+      {subSettings && subSettings.length > 0 && (
+        <>
+          <Divider sx={{ my: 1 }} />
+          <Stack spacing={0}>
+            {subSettings.map((sub, i) => (
+              <SubSettingToggle key={`${sub.setting.key}-${i}`} setting={sub.setting} defaultValue={sub.defaultValue} />
+            ))}
+          </Stack>
+        </>
+      )}
+
+      {/* Only a setting that opts into scoping gets a write surface for the narrower rungs. */}
+      {setting.scope && (
+        <>
+          <Divider sx={{ my: 1 }} />
+          <ScopedSettingOverrides setting={setting} />
+        </>
+      )}
+    </SettingFieldRow>
   );
 };
 

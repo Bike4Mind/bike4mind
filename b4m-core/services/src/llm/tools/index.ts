@@ -1,18 +1,27 @@
 import { ToolDefinition } from './base/types';
 export type { ToolContext, ToolDefinition } from './base/types';
 export { mergeRetrievalSummary, type RetrievalSummary } from './retrievalSummaryMerge';
+// For tools defined outside this package, so their nested llm.complete calls record usage the same way.
+export { recordToolOperationalUsage, type RecordToolOperationalUsageArgs } from './base/recordToolOperationalUsage';
 import { diceRollTool } from './implementation/diceroll';
 import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';
 import { musicGenerationTool } from './implementation/musicGeneration';
 import { audioGenerationTool } from './implementation/audioGeneration';
 import { videoGenerationTool } from './implementation/videoGeneration';
+import {
+  productionAddAudioTool,
+  productionAssembleTool,
+  productionGenerateShotTool,
+  productionStoryboardTool,
+} from './implementation/production';
 import { webSearchTool } from './implementation/websearch';
 import { webFetchTool } from './implementation/webfetch';
 import { wolframAlphaTool } from './implementation/wolfram_alpha';
 import { mathTool } from './implementation/math';
 import { mermaidChartTool } from './implementation/mermaidChart';
 import { currentDateTimeTool } from './implementation/currentDateTime';
+import { currentModelDetailsTool } from './implementation/currentModelDetails';
 import { deepResearchTool } from './implementation/deepResearch';
 import { B4MLLMTools, PremiumOverlayToolName } from '@bike4mind/common';
 import { promptEnhancementTool } from './implementation/promptEnhancement';
@@ -80,6 +89,30 @@ export type {
 
 export { isVideoToolConfig, type VideoToolConfig } from './implementation/videoGeneration';
 export { isMusicToolConfig, type MusicToolConfig } from './implementation/musicGeneration';
+export {
+  AUDIO_JOB_INLINE_TIMEOUT_MS,
+  withAudioToolJobs,
+  type AudioToolConfig,
+  type AudioToolJobs,
+} from './implementation/audioGeneration';
+export {
+  PRODUCTION_TOOL_NAMES,
+  isProductionToolConfig,
+  type ProductionAudioAdapter,
+  type ProductionAudioResult,
+  type ProductionJobView,
+  type ProductionToolConfig,
+} from './implementation/production';
+export {
+  buildEditJobRequest,
+  buildGenerateJobRequest,
+  clampImageCount,
+  isImageJobToolConfig,
+  type ImageJobRequestDraft,
+  type ImageLimitRefusal,
+  type ImageToolConfig,
+  type ImageToolJobsResult,
+} from './implementation/imageGeneration';
 export type { Searcher, SearchResult, ContentExtractionResult } from './implementation/deepResearch';
 
 /**
@@ -110,12 +143,17 @@ export const b4mTools = {
   music_generation: musicGenerationTool,
   audio_generation: audioGenerationTool,
   video_generation: videoGenerationTool,
+  production_storyboard: productionStoryboardTool,
+  production_generate_shot: productionGenerateShotTool,
+  production_add_audio: productionAddAudioTool,
+  production_assemble: productionAssembleTool,
   web_search: webSearchTool,
   web_fetch: webFetchTool,
   wolfram_alpha: wolframAlphaTool,
   math_evaluate: mathTool,
   mermaid_chart: mermaidChartTool,
   current_datetime: currentDateTimeTool,
+  current_model_details: currentModelDetailsTool,
   deep_research: deepResearchTool,
   prompt_enhancement: promptEnhancementTool,
   recharts: rechartsTool,
@@ -176,6 +214,26 @@ export const b4mTools = {
  * tool map explicitly.
  */
 export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
+export {
+  generateCustomMcpTools,
+  customMcpToolId,
+  loadCustomMcpConnections,
+  isReadOnlyCustomTool,
+  isCustomToolOffered,
+  CUSTOM_MCP_DATA_NOTICE,
+  MAX_CUSTOM_TOOLS_PER_TURN,
+  CUSTOM_MCP_OUTPUT_TOO_LARGE_BODY,
+  CUSTOM_MCP_AWAITING_APPROVAL_PREFIX,
+  customMcpResultBody,
+  customMcpResultText,
+  type CustomMcpToolHost,
+  type CustomMcpListOptions,
+  type CustomMcpConnectionOffer,
+  type CustomMcpOfferedTool,
+  type CustomMcpToolCallInput,
+  type CustomMcpToolCallResult,
+  type CustomMcpApprovalRequest,
+} from './customMcpTools';
 
 // Shared "confirmed empty" guard so the chat path (ToolBuilder) and agent path (loadAgentMcpTools) cannot drift.
 export { MCP_EMPTY_TOOL_FETCH_TTL_MS, shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';

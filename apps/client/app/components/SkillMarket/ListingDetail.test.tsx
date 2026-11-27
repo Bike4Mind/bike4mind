@@ -1,6 +1,7 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ListingDetail as ListingDetailData } from '@client/app/hooks/data/skillMarket';
@@ -15,6 +16,8 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 const hooks = vi.hoisted(() => ({
   detail: vi.fn(),
   mutation: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  me: undefined as
+    { organizations: Array<{ id: string; name: string }>; spaces?: Array<{ id: string; name: string }> } | undefined,
 }));
 
 vi.mock('@client/app/hooks/data/skillMarket', () => ({
@@ -24,7 +27,10 @@ vi.mock('@client/app/hooks/data/skillMarket', () => ({
   useRateListing: hooks.mutation,
   useReportListing: hooks.mutation,
   useModerateListing: hooks.mutation,
-  useMarketMe: () => ({ data: undefined }),
+  useMarketMe: () => ({ data: hooks.me }),
+}));
+vi.mock('@client/app/components/SkillsManagement/ClaudeCodeMarketplaceTab', () => ({
+  default: (props: unknown) => <div data-testid="marketplace-tab-props">{JSON.stringify(props)}</div>,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -82,8 +88,27 @@ const renderListing = (data: ListingDetailData, token = 'secret') => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hooks.me = undefined;
   writeText.mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+});
+
+describe('ListingDetail Claude Code tools card', () => {
+  it('lists the Claude Code tools the skill declares', () => {
+    const version = {
+      ...makeData().version!,
+      snapshot: { ...snapshot, claudeCodeAllowedTools: ['Bash(git:*)', 'Read'] },
+    };
+    renderListing(makeData({ version }));
+    const card = screen.getByTestId('market-claude-code-tools');
+    expect(card).toHaveTextContent('Bash(git:*)');
+    expect(card).toHaveTextContent('Read');
+  });
+
+  it('omits the card when the skill declares none', () => {
+    renderListing(makeData());
+    expect(screen.queryByTestId('market-claude-code-tools')).not.toBeInTheDocument();
+  });
 });
 
 describe('ListingDetail "Use in Claude Code"', () => {
@@ -133,5 +158,117 @@ describe('ListingDetail "Use in Claude Code"', () => {
     fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
     expect(screen.getByTestId('skill-claude-code-dialog')).toBeInTheDocument();
     expect(screen.queryByTestId('skill-claude-code-import-hint')).not.toBeInTheDocument();
+  });
+
+  it('passes the org listing name to the team marketplace tab', () => {
+    hooks.me = { organizations: [{ id: 'org1', name: 'Acme Labs' }] };
+    const data = makeData();
+    renderListing(
+      makeData({
+        listing: {
+          ...data.listing,
+          name: 'Hello Team',
+          visibility: 'organization',
+          organizationId: 'org1',
+          claudePluginName: 'hello-team-abc123',
+        },
+      })
+    );
+    fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '')).toEqual({
+      owner: { kind: 'organization', id: 'org1', name: 'Acme Labs' },
+      pluginName: 'hello-team-abc123',
+      skillName: 'Hello Team',
+    });
+  });
+
+  it('passes a Space listing to the team marketplace tab with the Space as owner', () => {
+    hooks.me = { organizations: [], spaces: [{ id: 'sp1', name: 'Platform' }] };
+    const data = makeData();
+    renderListing(
+      makeData({
+        listing: {
+          ...data.listing,
+          name: 'Hello Team',
+          visibility: 'space',
+          spaceId: 'sp1',
+          claudePluginName: 'hello-team-abc123',
+        },
+      })
+    );
+    fireEvent.click(screen.getByTestId('skill-claude-code-btn'));
+    fireEvent.click(screen.getByTestId('skill-claude-code-tab-marketplace'));
+    expect(JSON.parse(screen.getByTestId('marketplace-tab-props').textContent ?? '').owner).toEqual({
+      kind: 'space',
+      id: 'sp1',
+      name: 'Platform',
+    });
+  });
+});
+
+describe('ListingDetail review chip', () => {
+  const reviewed = (selfApproved?: boolean) => {
+    const base = makeData();
+    return makeData({
+      listing: { ...base.listing, autoChecked: false },
+      version: { ...base.version!, ...(selfApproved === undefined ? {} : { selfApproved }) },
+    });
+  };
+
+  it('says a person reviewed a version approved by someone else', () => {
+    renderListing(reviewed(false));
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.queryByText('Self-approved by the author')).not.toBeInTheDocument();
+  });
+
+  it('says self-approved when the author approved their own version', () => {
+    renderListing(reviewed(true));
+    expect(screen.getByText('Self-approved by the author')).toBeInTheDocument();
+    expect(screen.queryByText('Reviewed by a person')).not.toBeInTheDocument();
+  });
+});
+
+describe('ListingDetail scan tier chip', () => {
+  it('labels the tier as a scan result for the author of a person-approved version', () => {
+    const base = makeData();
+    renderListing(
+      makeData({
+        listing: { ...base.listing, autoChecked: false, riskTier: 'review' },
+        version: { ...base.version!, reviewStatus: 'approved' },
+        viewer: { ...base.viewer, isAuthor: true },
+      })
+    );
+    expect(screen.getByText('Reviewed by a person')).toBeInTheDocument();
+    expect(screen.getByTestId('market-tier-review')).toHaveTextContent('Scan: needs a look');
+  });
+});
+
+describe('ListingDetail report dialog Escape handling', () => {
+  const openReportDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+    renderListing(makeData());
+    await user.click(screen.getByTestId('market-report-btn'));
+    expect(screen.getByTestId('market-report-dialog')).toBeInTheDocument();
+  };
+
+  it('closes only the open reason list, then the dialog on a second Escape', async () => {
+    const user = userEvent.setup();
+    await openReportDialog(user);
+    await user.click(screen.getByTestId('market-report-reason'));
+    expect(screen.getByTestId('market-report-reason')).toHaveAttribute('aria-expanded', 'true');
+
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('market-report-reason')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('market-report-dialog')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('market-report-dialog')).not.toBeInTheDocument());
+  });
+
+  it('closes the dialog on Escape when the reason list is closed', async () => {
+    const user = userEvent.setup();
+    await openReportDialog(user);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByTestId('market-report-dialog')).not.toBeInTheDocument());
   });
 });

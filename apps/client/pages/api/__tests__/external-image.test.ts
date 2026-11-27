@@ -10,6 +10,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockRefs = vi.hoisted(() => ({ handler: null as null | ((req: any, res: any) => unknown) }));
 
+// The pinned client forwards to global fetch so these cases can stub the upstream.
+vi.mock('@bike4mind/fab-pipeline/ssrf', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline/ssrf')>()),
+  createPinnedFetch: () =>
+    Object.assign((input: string | URL, init?: RequestInit) => globalThis.fetch(input, init), {
+      close: async () => undefined,
+    }),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: any = {
@@ -46,9 +54,9 @@ vi.mock('dns', () => {
 
 import '../external-image';
 
-function request(url: string | undefined, isAdmin = true) {
+function request(url: string | undefined, isAdmin = true, adminPermissions?: string[]) {
   const logger = { warn: vi.fn(), info: vi.fn() };
-  const req: any = { user: { isAdmin }, query: url === undefined ? {} : { url }, logger };
+  const req: any = { user: { isAdmin, adminPermissions }, query: url === undefined ? {} : { url }, logger };
   const res: any = { redirect: vi.fn(), json: vi.fn() };
   return { req, res, logger };
 }
@@ -63,6 +71,17 @@ describe('GET /api/external-image - SSRF guarding', () => {
 
   it('rejects a non-admin caller before touching the URL', async () => {
     const { req, res } = request('https://example.com/a.png', false);
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow(/admin/i);
+  });
+
+  it('admits a settings:manage delegate, who previews modal images through it', async () => {
+    const { req, res } = request('http://example.com/a.png', false, ['settings:manage']);
+    // Past the role gate, so the next check (https only) is the one that refuses.
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow(/https/i);
+  });
+
+  it('rejects a delegate without settings:manage', async () => {
+    const { req, res } = request('https://example.com/a.png', false, ['support:read']);
     await expect(mockRefs.handler!(req, res)).rejects.toThrow(/admin/i);
   });
 

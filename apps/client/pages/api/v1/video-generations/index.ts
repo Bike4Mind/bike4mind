@@ -3,7 +3,7 @@
  * GET  /api/v1/video-generations - list the caller's jobs.
  *
  * Auth, scope and body validation come from the contracts; the job lifecycle lives in createVideoJob and the
- * generation-job engine. Every response renders through toPublicVideoGeneration.
+ * generation-job engine. Every response renders through toPublicGenerationJob.
  */
 import {
   createVideoGenerationContract,
@@ -12,6 +12,7 @@ import {
   NotFoundError,
   UnprocessableEntityError,
   VideoModelIdSchema,
+  videoRequestInputs,
   type CreateVideoGenerationBody,
   type GenerationJobSource,
   type VideoGenerationRequest,
@@ -20,15 +21,34 @@ import { createVideoJob, type CreateVideoJobResult } from '@bike4mind/services/v
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
+import { getCreateVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { limitInputFilesForKey } from '@bike4mind/server-utils/files/generateKeyInputs';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { mapperDeps } from '@server/generations/routeDeps';
-import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
+import { VIDEO_GENERATION_PROJECTION, toPublicGenerationJob } from '@server/generations/toPublicGenerationJob';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 
 const CURSOR_SCOPE = 'v1.video-generations';
+
+// The legacy field passes through as-is rather than becoming inputs: an idempotent retry is matched against the
+// stored request byte for byte, so rewriting it would turn a retry of a pre-`inputs` job into a 409.
+const toDomainInputs = (
+  body: CreateVideoGenerationBody
+): Pick<VideoGenerationRequest, 'inputs' | 'inputImageFileId'> => {
+  if (body.inputs && body.input_image_file_id) {
+    throw new UnprocessableEntityError('Send inputs or input_image_file_id, not both', {
+      errorCode: 'unexpected_input_image',
+    });
+  }
+  if (body.input_image_file_id) return { inputImageFileId: body.input_image_file_id };
+  if (body.inputs) return { inputs: body.inputs.map(input => ({ role: input.role, fileId: input.file_id })) };
+  return {};
+};
 
 // Omitted fields take the model's catalog defaults; createVideoJob then validates against its capabilities.
 const toDomainRequest = (body: CreateVideoGenerationBody): VideoGenerationRequest => {
@@ -37,15 +57,21 @@ const toDomainRequest = (body: CreateVideoGenerationBody): VideoGenerationReques
     throw new UnprocessableEntityError(`Unknown video model: ${body.model}`, { errorCode: 'model_unavailable' });
   }
   const { defaults } = getVideoModelCapabilities(model.data);
+  const inputs = toDomainInputs(body);
+  const hasFirstFrame = videoRequestInputs(inputs).some(input => input.role === 'first_frame');
   return {
     model: model.data,
-    mode: body.mode ?? (body.input_image_file_id ? 'image_to_video' : 'text_to_video'),
+    mode: body.mode ?? (hasFirstFrame || body.keyframes ? 'image_to_video' : 'text_to_video'),
     prompt: body.prompt,
     durationSeconds: body.duration_seconds ?? defaults.durationSeconds,
     aspectRatio: body.aspect_ratio ?? defaults.aspectRatio,
     resolution: body.resolution ?? defaults.resolution,
-    ...(body.input_image_file_id && { inputImageFileId: body.input_image_file_id }),
+    ...inputs,
     ...(body.audio !== undefined && { audio: body.audio }),
+    ...(body.draft !== undefined && { draft: body.draft }),
+    ...(body.keyframes && {
+      keyframes: body.keyframes.map(frame => ({ fileId: frame.file_id, timeSeconds: frame.time_seconds })),
+    }),
   };
 };
 
@@ -58,27 +84,42 @@ const toHttpError = (refusal: Extract<CreateVideoJobResult, { ok: false }>) =>
 const createRouter = nextRouteForContract(createVideoGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/video-generations'),
 }).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
   // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
   // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
-  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const organizationId = await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
+  const paidRun = await resolvePaidCallRun(req, req.validated.run, req.validated.organization_id);
+  const organizationId = paidRun
+    ? paidRun.billingOrganizationId
+    : await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  const deps = getCreateVideoJobDeps();
+  const loadInputFile = limitInputFilesForKey(req, (userId, id) => deps.loadInputImage(userId, { kind: 'file', id }));
+  const videoDeps: typeof deps = {
+    ...deps,
+    loadInputImage: (userId, ref) =>
+      ref.kind === 'file' ? loadInputFile(userId, ref.id) : deps.loadInputImage(userId, ref),
+  };
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId },
+      user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
       request,
       source,
+      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      ...(paidRun && { run: paidRun.attribution }),
       // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
       // source keeps a studio retry from replaying an API job that reused the same key.
       ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
     },
-    getCreateVideoJobDeps()
+    videoDeps
   );
   if (!result.ok) throw toHttpError(result);
-  return res.status(202).json(await toPublicVideoGeneration(result.job, mapperDeps));
+  return res.status(202).json(await toPublicGenerationJob(result.job, mapperDeps, VIDEO_GENERATION_PROJECTION));
 });
 
 const listRouter = nextRouteForContract(listVideoGenerationsContract, {
@@ -91,7 +132,7 @@ const listRouter = nextRouteForContract(listVideoGenerationsContract, {
     kind: 'video',
     cursorScope: CURSOR_SCOPE,
   });
-  const data = await Promise.all(jobs.map(job => toPublicVideoGeneration(job, mapperDeps)));
+  const data = await Promise.all(jobs.map(job => toPublicGenerationJob(job, mapperDeps, VIDEO_GENERATION_PROJECTION)));
   return res.json({ data, next_cursor: nextCursor });
 });
 

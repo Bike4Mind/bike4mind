@@ -45,9 +45,10 @@ Both options use this branching strategy:
 
 | Branch | Stage | Environment |
 |--------|-------|-------------|
-| `prod` | production | Production |
 | `main` | dev | Staging/Development |
 | `pr-*` | preview | PR previews |
+
+Production is promoted from a `main` commit by the deployment pipeline. There is no separate production branch.
 
 ## Required GitHub Variables
 

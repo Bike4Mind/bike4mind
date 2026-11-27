@@ -25,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-// Deliberately NOT mocking verifyOrgOwner. The one behaviour this route's gate swap changes -
+// Deliberately NOT mocking verifyOrgPermission. The one behaviour this route's gate swap changes -
 // a malformed id answering 400 where the deleted inline helper answered 404 - lives inside the
 // shared helper, so mocking it would assert the mock rather than the delta. Stubbing the
 // repository instead exercises route + helper together, which also pins the document contract
@@ -33,7 +33,21 @@ vi.mock('@server/middlewares/baseApi', () => ({
 const mockOrgFindById = vi.fn();
 const mockFindByOrganizationId = vi.fn();
 const mockWorkspaceDelete = vi.fn();
+const mockClearApiPosting = vi.fn();
+const mockClearFeedback = vi.fn();
+const mockRecordAudit = vi.fn();
+const mockOrgAudit = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEventSafe: (...args: unknown[]) => mockOrgAudit(...args),
+}));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: (...args: unknown[]) => mockRecordAudit(...args),
+}));
 vi.mock('@bike4mind/database/infra', () => ({
+  SlackFeedbackChannel: { updateMany: (...args: unknown[]) => mockClearFeedback(...args) },
+  slackChannelConfigRepository: {
+    clearApiPostingBySlackTeamId: (...args: unknown[]) => mockClearApiPosting(...args),
+  },
   organizationRepository: {
     findById: (...args: unknown[]) => mockOrgFindById(...args),
   },
@@ -53,6 +67,7 @@ import '../index';
 const ORG = '650000000000000000000abc';
 const OWNER = '650000000000000000000111';
 const STRANGER = '650000000000000000000333';
+const MANAGER = '650000000000000000000444';
 
 const org = { id: ORG, userId: OWNER };
 const workspace = {
@@ -79,12 +94,15 @@ function makeReq(user: { id: string; isAdmin: boolean }, orgId: string = ORG) {
 const owner = { id: OWNER, isAdmin: false };
 const stranger = { id: STRANGER, isAdmin: false };
 const admin = { id: STRANGER, isAdmin: true };
+const manager = { id: MANAGER, isAdmin: false };
+const orgWithManager = { ...org, adminUserIds: [MANAGER], users: [{ userId: MANAGER }] };
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockOrgFindById.mockResolvedValue(org);
   mockFindByOrganizationId.mockResolvedValue(workspace);
   mockWorkspaceDelete.mockResolvedValue(undefined);
+  mockClearApiPosting.mockResolvedValue([]);
 });
 
 describe('GET /api/organizations/[id]/integrations/slack', () => {
@@ -116,6 +134,19 @@ describe('GET /api/organizations/[id]/integrations/slack', () => {
     });
 
     // The gate must precede the lookup, or a non-owner learns whether the org has Slack wired up.
+    expect(mockFindByOrganizationId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue(orgWithManager);
+    const { req, res } = makeReq(manager);
+
+    await expect(routeHandlers.GET(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+      message: 'Organization not found',
+    });
+
     expect(mockFindByOrganizationId).not.toHaveBeenCalled();
   });
 
@@ -164,8 +195,35 @@ describe('DELETE /api/organizations/[id]/integrations/slack', () => {
     // The id of the resolved workspace, not the org id: deleting by the wrong key would still
     // satisfy a bare "was it called" assertion.
     expect(mockWorkspaceDelete).toHaveBeenCalledWith('ws_1');
+    expect(mockOrgAudit).toHaveBeenCalledWith({
+      organizationId: ORG,
+      actorUserId: OWNER,
+      action: 'connector.disconnected',
+    });
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(mockClearApiPosting).toHaveBeenCalledWith('T1');
+    expect(mockClearFeedback).toHaveBeenCalledWith({ workspaceId: 'ws_1' }, { $set: { enabled: false } });
+    expect(mockClearFeedback.mock.invocationCallOrder[0]).toBeLessThan(mockWorkspaceDelete.mock.invocationCallOrder[0]);
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it("turns off the workspace's API posting opt-ins before disconnecting, and audits it", async () => {
+    mockClearApiPosting.mockResolvedValue(['C1', 'C2']);
+    const { req, res } = makeReq(owner);
+
+    await routeHandlers.DELETE(req, res);
+
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'org.slack_channel_api_posting.updated',
+        details: { slackTeamId: 'T1', channelIds: ['C1', 'C2'] },
+      })
+    );
+    expect(mockClearApiPosting.mock.invocationCallOrder[0]).toBeLessThan(
+      mockWorkspaceDelete.mock.invocationCallOrder[0]
+    );
   });
 
   // The load-bearing one. DELETE is destructive and holds a freshly swapped gate; a dropped or
@@ -180,6 +238,21 @@ describe('DELETE /api/organizations/[id]/integrations/slack', () => {
 
     expect(mockFindByOrganizationId).not.toHaveBeenCalled();
     expect(mockWorkspaceDelete).not.toHaveBeenCalled();
+    expect(mockClearApiPosting).not.toHaveBeenCalled();
+  });
+
+  it('refuses a team manager (manageIntegrations is owner-only)', async () => {
+    mockOrgFindById.mockResolvedValue(orgWithManager);
+    const { req, res } = makeReq(manager);
+
+    await expect(routeHandlers.DELETE(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+    });
+
+    expect(mockFindByOrganizationId).not.toHaveBeenCalled();
+    expect(mockWorkspaceDelete).not.toHaveBeenCalled();
+    expect(mockClearApiPosting).not.toHaveBeenCalled();
   });
 
   it('400s a malformed org id and deletes nothing', async () => {

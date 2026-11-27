@@ -1,0 +1,592 @@
+import { z } from 'zod';
+import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
+import { Resource } from 'sst';
+// Leaf subpath, not the ./llm barrel: eventBus is imported by hundreds of API
+// routes, and the barrel would trace the tool registry into every one of them.
+import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
+import {
+  API_KEY_COMPLETION_SOURCES,
+  ContextTelemetrySchema,
+  ContextTelemetryAlertsSchema,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
+  LiveActivityPushEventSchema,
+  PushNotificationEventSchema,
+  STUDIO_JOB_COMPLETED_EVENT,
+  StudioJobCompletedEventSchema,
+  SRE_ANALYSIS_COMPLETED_EVENT,
+  type SreFixRequest,
+} from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { MAIL_BODY_KEY_PATTERN } from './mailer/mailBodyStore';
+
+// Self-host has no EventBridge. email.send goes straight to the mailer, which logs a failed
+// delivery itself; everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
+// (apps/workers/src/selfhost/eventDispatch.ts).
+// Enrichment remains best-effort by default. Submission endpoints and billing webhooks
+// requireAcceptance so failed delivery reaches the caller and can be retried.
+async function publishSelfHost(eventName: string, detail: unknown, requiredAcceptance = false): Promise<void> {
+  const logger = new Logger({ metadata: { service: 'eventBus' } });
+
+  if (eventName === 'email.send') {
+    const { default: mailer } = await import('./mailer/index');
+    const { to, subject, body, text, attachments, category, mirror, logRecipient, ref } = detail as z.infer<
+      typeof EmailEvents.Send.schema
+    >;
+    // queuedMailer sends self-host mail before it would offload, so a bodyRef never gets here.
+    if (body === undefined) throw new Error('email.send needs an inline body on self-host: bodyRef is hosted-only');
+    const result = await mailer.sendEmail(
+      to,
+      {
+        subject,
+        html: body,
+        ...(text !== undefined && { text }),
+        attachments: attachments?.map(att => ({
+          filename: att.filename,
+          content: Buffer.from(att.content, 'base64'),
+          contentType: att.contentType,
+        })),
+      },
+      { category, mirror, logRecipient }
+    );
+    if (ref) {
+      const { recordEmailDeliveryOutcome } = await import('./mailer/deliveryOutcome');
+      await recordEmailDeliveryOutcome(
+        ref,
+        result ? { ok: true, at: new Date() } : { ok: false, error: 'The mail transport did not accept the message' }
+      );
+    }
+    return;
+  }
+
+  const queueUrl = process.env.SELF_HOST_EVENT_QUEUE;
+  if (!queueUrl) {
+    if (requiredAcceptance) throw new Error('SELF_HOST_EVENT_QUEUE is required for event submission');
+    logger.warn(`Self-host: SELF_HOST_EVENT_QUEUE unset; dropping event ${eventName} (enrichment will not run)`);
+    return;
+  }
+  try {
+    // Lazy import so modules that never publish don't pull the SQS client at load.
+    const { sendToQueue } = await import('./sqs');
+    await sendToQueue(queueUrl, { detailType: eventName, detail });
+  } catch (error) {
+    if (requiredAcceptance) throw error;
+    logger.warn(`Self-host: failed to enqueue event ${eventName}`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function createEventBuilder({
+  getEventBusName,
+  source,
+  region,
+}: {
+  getEventBusName: () => string;
+  source?: string;
+  region?: string;
+}) {
+  return function event<EventName extends string, Schema extends z.ZodType>(eventName: EventName, schema: Schema) {
+    return {
+      // requireAcceptance only affects self-host; the hosted path always surfaces send errors.
+      publish: (detail: z.infer<typeof schema>, publishOptions: { requireAcceptance?: boolean } = {}) => {
+        if (process.env.B4M_SELF_HOST === 'true') {
+          return publishSelfHost(eventName, detail, publishOptions.requireAcceptance);
+        }
+        // Create client on each publish to ensure fresh AWS credentials
+        // Lambda containers can stay warm for extended periods, causing module-level
+        // clients to capture expired credentials. This was causing production failures:
+        // "InvalidSignatureException: Signature expired" when publishing events.
+        const eventBridge = new EventBridgeClient({
+          region,
+        });
+
+        const command = new PutEventsCommand({
+          Entries: [
+            {
+              Source: source || Resource.App.name,
+              DetailType: eventName,
+              Detail: JSON.stringify(detail),
+              // Resolved lazily so Lambdas that don't publish to this bus
+              // don't require it to be linked at module load time.
+              EventBusName: getEventBusName(),
+            },
+          ],
+        });
+
+        return eventBridge.send(command);
+      },
+      schema,
+    };
+  };
+}
+
+const event = createEventBuilder({
+  getEventBusName: () => Resource.AppEventBus.name,
+});
+
+/**
+ * What an email.send event delivers for, so the email-send worker can write the delivery outcome
+ * back to it (./mailer/deliveryOutcome.ts). Mail without one is fire-and-forget.
+ */
+export const EmailDeliveryRef = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('emailAttempt'), attemptId: z.string().min(1) }),
+  z.object({
+    kind: z.literal('incidentAlert'),
+    incidentId: z.string().min(1),
+    alert: z.enum(['review', 'escalation']),
+  }),
+]);
+export type EmailDeliveryRef = z.infer<typeof EmailDeliveryRef>;
+
+const EmailSendSchema = z
+  .object({
+    to: z.string(),
+    subject: z.string(),
+    body: z.string().optional(),
+    /** Plain-text alternative to the HTML body. */
+    text: z.string().optional(),
+    /**
+     * A body too large for the event, stored by ./mailer/mailBodyStore.ts. Its object carries
+     * the text alternative too, so `text` is not set alongside it.
+     */
+    bodyRef: z.object({ key: z.string().regex(MAIL_BODY_KEY_PATTERN) }).optional(),
+    category: z.literal('otc').optional(),
+    /** SendEmailOptions of the mailer (./mailer/index); both default to true there. */
+    mirror: z.boolean().optional(),
+    logRecipient: z.boolean().optional(),
+    ref: EmailDeliveryRef.optional(),
+    attachments: z
+      .array(
+        z.object({
+          filename: z.string(),
+          content: z.string(), // base64 encoded
+          encoding: z.string().optional(),
+          contentType: z.string(),
+        })
+      )
+      .optional(),
+  })
+  .superRefine((mail, ctx) => {
+    // An empty string is a valid body, so presence is `!== undefined`, not truthiness.
+    if ((mail.body !== undefined) === (mail.bodyRef !== undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'exactly one of body and bodyRef is required' });
+    }
+    if (mail.bodyRef !== undefined && mail.text !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'text travels in the stored body when bodyRef is set' });
+    }
+  });
+
+// publish does not parse, so the body-XOR-bodyRef rule the schema refines at parse time is also a type.
+export type EmailSendDetail = Omit<z.infer<typeof EmailSendSchema>, 'body' | 'text' | 'bodyRef'> &
+  ({ body: string; text?: string; bodyRef?: never } | { bodyRef: { key: string }; body?: never; text?: never });
+
+const emailSend = event('email.send', EmailSendSchema);
+
+export const EmailEvents = {
+  Send: {
+    schema: EmailSendSchema,
+    publish: (detail: EmailSendDetail, publishOptions?: { requireAcceptance?: boolean }) =>
+      emailSend.publish(detail, publishOptions),
+  },
+};
+
+/**
+ * Push to a user's first-party native clients. Publish through publishPushNotification
+ * (./pushNotifications.ts), which never throws into the host path; the consumer is
+ * apps/workers/src/events/sendPush.ts.
+ */
+export const NotificationEvents = {
+  Push: event('notification.push', PushNotificationEventSchema),
+  /** Live activity progress for a quest; publish via packages/server-utils/src/utils/liveActivityPush.ts. */
+  LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
+};
+
+/**
+ * One per finished Studio group, published by studioCompletionSubscriber (b4m-core/services generationJobs). Consumed by
+ * apps/workers/src/events/studioJobCompleted.ts; a native notifier subscribes to the same detail-type.
+ */
+export const StudioEvents = {
+  JobCompleted: event(STUDIO_JOB_COMPLETED_EVENT, StudioJobCompletedEventSchema),
+};
+
+export const StripeEvents = {
+  InvoicePaymentSucceeded: event(
+    'stripe.invoice.payment_succeeded',
+    z.object({
+      invoiceId: z.string(),
+      subscriptionId: z.string(),
+    })
+  ),
+  CustomerSubscriptionUpdated: event(
+    'stripe.cus.sub.updated',
+    z.object({
+      subscriptionId: z.string(),
+    })
+  ),
+};
+
+/** Published by POST /api/v1/briefs and the schedule reconciler; consumed by apps/workers/src/events/briefCompose.ts. */
+export const BriefEvents = {
+  Compose: event(
+    'brief.compose',
+    z.object({
+      briefId: z.string(),
+      userId: z.string(),
+      /** Set by the schedule reconciler: an empty window or a refused gate is discarded instead of delivered. */
+      scheduled: z.boolean().optional(),
+    })
+  ),
+};
+
+export const DelegationEvents = {
+  Process: event(
+    'delegation.process',
+    z.object({
+      delegationId: z.string(),
+      userId: z.string(),
+    })
+  ),
+};
+
+export const SessionEvents = {
+  AutoName: event(
+    'session.auto_name',
+    z.object({
+      sessionId: z.string(),
+      userId: z.string(),
+    })
+  ),
+  Summarize: event(
+    'session.summarize',
+    z.object({
+      sessionId: z.string(),
+      userId: z.string().optional(),
+      callTagging: z.boolean().optional(),
+      // Persisted list, not the full union: the handler stamps this straight onto the session, so
+      // accepting a decision-only reason here would store provenance for a run that never happened.
+      // Required, because the handler's write goes through $set, which drops an undefined - an event
+      // without a trigger would leave a NEW summary sitting next to the PREVIOUS run's provenance.
+      // Every publisher already passes one, and the summarizeSession chain now types it that way.
+      trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
+      // Who asked, when not the owner: the handler's summary write re-checks this user's update
+      // access, and it is forwarded to the Tag job it queues. Distinct from `userId`, the acting
+      // user the summary file and lake tags are resolved for.
+      requesterId: z.string().optional(),
+      // Who pays for the operational calls, forwarded to the Tag job too: the user who asked or
+      // whose turn triggered it (sharee or admin), never the owner on their behalf. Unset only where
+      // `userId` already names that user (agent runs) or nobody asked (spider), which bill
+      // `userId ?? session.userId`.
+      payerId: z.string().optional(),
+    })
+  ),
+  Tag: event(
+    'session.tag',
+    z.object({
+      sessionId: z.string(),
+      userId: z.string().optional(),
+      // Who asked, when not the owner: the handler's writes re-check this user's update access.
+      requesterId: z.string().optional(),
+      // Who pays, when someone asked (see Summarize.payerId); else `userId ?? session.userId`.
+      payerId: z.string().optional(),
+    })
+  ),
+  ContextSummarize: event(
+    'session.context_summarize',
+    z.object({
+      sessionId: z.string(),
+      verbatimWindowStartQuestId: z.string().regex(/^[0-9a-f]{24}$/, 'Must be a valid ObjectId hex string'), // Summary covers quests BEFORE this ID
+    })
+  ),
+};
+
+export const LLMEvents = {
+  CompletionStart: event('completion.started', QuestStartBodySchema),
+  // Slack-originated completions: the distinct detail type routes them to slackQuestProcessor
+  SlackCompletionStart: event('slack.completion.started', QuestStartBodySchema),
+  CompletionCompleted: event(
+    'completion.completed',
+    z.object({
+      questId: z.string(),
+      sessionId: z.string(),
+      userId: z.string(),
+      prompt: z.string(),
+      model: z.string(),
+      // Which memory pipelines should capture this turn. Resolved by the publisher, which is the only
+      // place that knows both the user's opt-ins AND the admin override, and carried here so the
+      // subscriber does not have to re-derive them (and cannot derive them differently).
+      //
+      // Optional for in-flight compatibility: an event published before this field existed can only
+      // have come from the V1-gated publisher, so the subscriber reads a missing `enableMementos` as
+      // true. See createMemento.
+      enableMementos: z.boolean().optional(),
+      enableMementosV2: z.boolean().optional(),
+    })
+  ),
+};
+
+export const SlackEvents = {
+  QuickAskRequested: event(
+    'slack.quickAsk.requested',
+    z.object({
+      requestId: z.string().min(1).max(200).optional(),
+      requestedAt: z.iso.datetime().optional(),
+      slackUserId: z.string(),
+      b4mUserId: z.string(),
+      question: z.string(),
+      workspaceId: z.string(),
+    })
+  ),
+};
+
+export const SpiderEvents = {
+  Start: event(
+    'spider.start',
+    z.object({
+      spiderJobId: z.string(),
+      userId: z.string(),
+      totalNotebooks: z.number(),
+      operations: z.array(z.enum(['messageCount', 'curation', 'summarize', 'tags', 'embeddings'])),
+      dryRun: z.boolean().prefault(false),
+    })
+  ),
+  Progress: event(
+    'spider.progress',
+    z.object({
+      spiderJobId: z.string(),
+      userId: z.string(),
+      notebooksProcessed: z.number(),
+      totalNotebooks: z.number(),
+      currentOperation: z.string(),
+      currentNotebookId: z.string().optional(),
+      currentNotebookName: z.string().optional(),
+    })
+  ),
+  Complete: event(
+    'spider.complete',
+    z.object({
+      spiderJobId: z.string(),
+      userId: z.string(),
+      totalNotebooks: z.number(),
+      stats: z.object({
+        messageCountsUpdated: z.number(),
+        notebooksCurated: z.number(),
+        notebooksSummarized: z.number(),
+        notebooksTagged: z.number(),
+      }),
+    })
+  ),
+  Error: event(
+    'spider.error',
+    z.object({
+      spiderJobId: z.string(),
+      userId: z.string(),
+      error: z.string(),
+      notebooksProcessed: z.number(),
+      totalNotebooks: z.number(),
+    })
+  ),
+};
+
+export const PiHistoryAnalysisEvents = {
+  Start: event(
+    'pi.history.analysis.start',
+    z.object({
+      analysisJobId: z.string(),
+      repoFullName: z.string(),
+      userId: z.string(), // Who triggered it
+    })
+  ),
+  Progress: event(
+    'pi.history.analysis.progress',
+    z.object({
+      analysisJobId: z.string(),
+      repoFullName: z.string(),
+      phase: z.enum([
+        'fetching_issues',
+        'fetching_prs',
+        'calculating_stats',
+        'building_profiles',
+        'extracting_keywords',
+        'saving',
+      ]),
+      percentage: z.number(),
+      itemsProcessed: z.number().optional(),
+      totalItems: z.number().optional(),
+    })
+  ),
+  Complete: event(
+    'pi.history.analysis.complete',
+    z.object({
+      analysisJobId: z.string(),
+      repoFullName: z.string(),
+      stats: z.object({
+        closedIssues: z.number(),
+        mergedPRs: z.number(),
+        contributors: z.number(),
+      }),
+    })
+  ),
+  Error: event(
+    'pi.history.analysis.error',
+    z.object({
+      analysisJobId: z.string(),
+      repoFullName: z.string(),
+      error: z.string(),
+      phase: z.string(),
+    })
+  ),
+};
+
+export const JiraHistoryAnalysisEvents = {
+  Start: event(
+    'pi.jira.history.analysis.start',
+    z.object({
+      analysisJobId: z.string(),
+      projectKey: z.string(), // Jira project key, e.g. "PROJ"
+      userId: z.string(),
+      cloudId: z.string().optional(),
+    })
+  ),
+  Progress: event(
+    'pi.jira.history.analysis.progress',
+    z.object({
+      analysisJobId: z.string(),
+      projectKey: z.string(),
+      phase: z.enum(['fetching_issues', 'calculating_stats', 'building_profiles', 'extracting_keywords', 'saving']),
+      percentage: z.number(),
+      itemsProcessed: z.number().optional(),
+      totalItems: z.number().optional(),
+    })
+  ),
+  Complete: event(
+    'pi.jira.history.analysis.complete',
+    z.object({
+      analysisJobId: z.string(),
+      projectKey: z.string(),
+      stats: z.object({
+        closedIssues: z.number(),
+        contributors: z.number(),
+      }),
+    })
+  ),
+  Error: event(
+    'pi.jira.history.analysis.error',
+    z.object({
+      analysisJobId: z.string(),
+      projectKey: z.string(),
+      error: z.string(),
+      phase: z.string(),
+    })
+  ),
+};
+
+/** Immutable request payer for a one-off curation; absent on legacy queued work. */
+export const NotebookCurationBillingSchema = z.object({
+  organizationId: z.string().nullable(),
+  apiKeyId: z.string().optional(),
+  source: z.enum(API_KEY_COMPLETION_SOURCES).optional(),
+});
+
+export const NotebookCurationEvents = {
+  Start: event(
+    'notebook.curation.start',
+    z.object({
+      sessionId: z.string(),
+      userId: z.string(),
+      curationJobId: z.string(),
+      batchJobId: z.string().optional(), // For tracking batch operations
+      batchIndex: z.number().optional(), // Position in batch (0-indexed)
+      batchTotal: z.number().optional(), // Total sessions in batch
+      curationType: z.enum(['transcript', 'executive_summary']).optional(),
+      artifactTypes: z
+        .array(
+          z.enum(['CODE', 'REACT', 'MERMAID', 'RECHARTS', 'SVG', 'HTML', 'QUESTMASTER_PLAN', 'DEEP_RESEARCH', 'IMAGE'])
+        )
+        .optional(),
+      exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
+      customNotebookName: z.string().optional(),
+      billing: NotebookCurationBillingSchema.optional(),
+    })
+  ),
+  Progress: event(
+    'notebook.curation.progress',
+    z.object({
+      curationJobId: z.string(),
+      sessionId: z.string(),
+      userId: z.string(),
+      stage: z.enum(['loading', 'extracting', 'generating', 'storing']),
+      percentage: z.number(),
+      message: z.string().optional(),
+      messagesProcessed: z.number().optional(),
+      totalMessages: z.number().optional(),
+      artifactsFound: z.number().optional(),
+    })
+  ),
+  Complete: event(
+    'notebook.curation.complete',
+    z.object({
+      curationJobId: z.string(),
+      sessionId: z.string(),
+      userId: z.string(),
+      curatedFileId: z.string(),
+      artifactCount: z.number(),
+      messageCount: z.number(),
+      tokensProcessed: z.number(),
+      curationType: z.enum(['transcript', 'executive_summary']).optional(),
+      exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
+      artifactTypes: z
+        .array(
+          z.enum(['CODE', 'REACT', 'MERMAID', 'RECHARTS', 'SVG', 'HTML', 'QUESTMASTER_PLAN', 'DEEP_RESEARCH', 'IMAGE'])
+        )
+        .optional(),
+    })
+  ),
+  Error: event(
+    'notebook.curation.error',
+    z.object({
+      curationJobId: z.string(),
+      sessionId: z.string(),
+      userId: z.string(),
+      error: z.string(),
+      stage: z.enum(['loading', 'extracting', 'generating', 'storing']),
+    })
+  ),
+};
+
+export const TelemetryEvents = {
+  Alert: event(
+    'telemetry.alert',
+    z.object({
+      telemetry: ContextTelemetrySchema,
+      alertConfig: ContextTelemetryAlertsSchema,
+      requestId: z.string().optional(), // Quest ID for correlation
+    })
+  ),
+};
+
+export const ModerationEvents = {
+  // A user entering suspend_pending, or any severe-category hit. Published fire-and-forget from the
+  // chat path; apps/workers/src/events/moderationEscalationAlert.ts posts it to the abuse alarm channel.
+  // Mirrors ModerationEscalationAlert in b4m-core/services/src/userService/moderationPolicy.ts.
+  Escalation: event(
+    'moderation.escalation',
+    z.object({
+      userId: z.string(),
+      reasons: z.array(z.enum(['suspend_pending', 'severe_category'])).min(1),
+      categories: z.array(z.string()),
+      source: z.enum(['openai', 'bedrock', 'provider']),
+      hitsInWindow: z.number().int().min(0),
+    })
+  ),
+};
+
+export const SreEvents = {
+  // Diagnostician -> Surgeon handoff. Routed to sreFixQueue by an EventBridge rule
+  // (infra/eventBus.ts) so additional consumers (audit, metrics) can attach without
+  // touching the analysis handler. The strict payload schema lives with the consumer
+  // (apps/workers/src/queueHandlers/sreFix.ts); publish-side stays typed via SreFixRequest.
+  AnalysisCompleted: event(
+    SRE_ANALYSIS_COMPLETED_EVENT,
+    z.custom<SreFixRequest>((v: unknown) => typeof v === 'object' && v !== null)
+  ),
+};

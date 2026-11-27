@@ -1,4 +1,4 @@
-import { escapeHtml } from './viewerSecurity';
+import { escapeHtml } from '@bike4mind/server-utils/services/publish/viewerSecurity';
 
 /**
  * Build the server-rendered head-meta and noscript body a public share needs to

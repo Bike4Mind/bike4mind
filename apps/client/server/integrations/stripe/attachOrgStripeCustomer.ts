@@ -1,6 +1,6 @@
 import { Organization, organizationRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { createCustomer, CustomerType } from './stripe';
+import { createCustomer, CustomerType } from '@bike4mind/server-utils/integrations/stripe/stripe';
 
 /** The slice of an organization document this needs; the caller passes a full IOrganizationDocument. */
 type OrgStripeCustomerTarget = {
@@ -23,7 +23,7 @@ type OrgStripeCustomerTarget = {
  * `deletedAt: null` in the filter follows this model's own convention (`OrganizationModel.ts:247`):
  * a delete landing between the gate's read and this write must not stamp a customer onto a dead
  * tenant. `softDeletePlugin`'s update hook adds the same filter; this one is redundant but explicit.
- * `verifyOrgOwner` already rejects a soft-deleted org (its `findById` is hooked), so this only
+ * `verifyOrgPermission` already rejects a soft-deleted org (its `findById` is hooked), so this only
  * covers that race - and when it fires, the reload below misses too and the caller gets the
  * BadRequestError rather than a checkout session against an organization that no longer exists.
  *
@@ -41,7 +41,11 @@ type OrgStripeCustomerTarget = {
  * for two different models, and has no test file at all. Until then, if you change the concurrency
  * contract here, change it in all three.
  */
-export async function attachOrgStripeCustomer(organization: OrgStripeCustomerTarget): Promise<string> {
+export async function attachOrgStripeCustomer(
+  organization: OrgStripeCustomerTarget,
+  /** Stamped on the customer when it is created here; typically the buyer's signup network (riskMetadata.ts). */
+  metadata?: Record<string, string>
+): Promise<string> {
   if (organization.stripeCustomerId) {
     return organization.stripeCustomerId;
   }
@@ -50,6 +54,7 @@ export async function attachOrgStripeCustomer(organization: OrgStripeCustomerTar
     email: organization.billingContact,
     name: organization.name,
     type: CustomerType.Organization,
+    ...(metadata && { metadata }),
   });
 
   const won = await Organization.findOneAndUpdate(

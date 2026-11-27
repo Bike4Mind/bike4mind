@@ -4,6 +4,9 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { LinkedInApi } from '@bike4mind/common';
+import { createStderrLogger } from '../shared/stderrLog.js';
+
+const log = createStderrLogger('linkedin');
 
 const server = new McpServer({
   name: 'Demo',
@@ -11,12 +14,12 @@ const server = new McpServer({
 });
 
 if (!process.env.LINKEDIN_ACCESS_TOKEN) {
-  console.error('LINKEDIN_ACCESS_TOKEN environment variable is not set');
+  log.error('LINKEDIN_ACCESS_TOKEN environment variable is not set');
   process.exit(1);
 }
 
 if (!process.env.COMPANY_NAME) {
-  console.error('COMPANY_NAME environment variable is not set');
+  log.error('COMPANY_NAME environment variable is not set');
   process.exit(1);
 }
 
@@ -40,10 +43,10 @@ server.tool('get_company', { vanityName: z.string() }, async ({ vanityName }: { 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('LinkedIn MCP Server running on stdio');
+  log.info('running on stdio');
 }
 
 main().catch(error => {
-  console.error('Fatal error in main():', error);
+  log.error('fatal error in main', { error });
   process.exit(1);
 });

@@ -178,7 +178,7 @@ describe('VeoVideoProvider specifics', () => {
     const bytes = Buffer.from('png');
     await new VeoVideoProvider().submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1', prompt: recorded.instances[0].prompt }),
-      { inputImage: { bytes, mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes, mimeType: 'image/png' }] },
       ctx()
     );
     // The recording redacts the image bytes, so compare with them redacted in the sent body too.
@@ -206,7 +206,7 @@ describe('VeoVideoProvider specifics', () => {
     const error = await new VeoVideoProvider()
       .submit(
         request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-        { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+        { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
         ctx()
       )
       .catch((e: unknown) => e);
@@ -218,7 +218,7 @@ describe('VeoVideoProvider specifics', () => {
     const provider = new VeoVideoProvider();
     const handle = await provider.submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(await provider.poll(handle, ctx())).toEqual({ status: 'running' });
@@ -277,6 +277,21 @@ describe('VeoVideoProvider specifics', () => {
     server.use(http.post(SUBMIT, () => HttpResponse.json(body, { status: 400 })));
     const error = await new VeoVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
     expect(error).toMatchObject({ definitive: true, message: 'veo_http_400', raw: body });
+  });
+
+  // The shape the shut-down preview model now answers with; resubmitting can never get past it.
+  it.each([404, 400])('maps the retired-model %i to a definitive non-retryable error', async status => {
+    const body = {
+      error: {
+        code: status,
+        message: 'This model models/veo-3.1-fast-generate-preview is no longer available.',
+        status: status === 404 ? 'NOT_FOUND' : 'FAILED_PRECONDITION',
+      },
+    };
+    server.use(http.post(SUBMIT, () => HttpResponse.json(body, { status })));
+    const error = await new VeoVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ProviderSubmitError);
+    expect(error).toMatchObject({ definitive: true, retryable: false, message: `veo_http_${status}`, raw: body });
   });
 
   it.each([

@@ -13,7 +13,7 @@ import { getPeriodUsedCredits, IOrganizationDocument, resolveMemberCreditCap } f
  * `deductCreditsWithOrgSupport` intentionally does NOT re-check the cap.
  */
 
-type MemberCapOrg = Pick<IOrganizationDocument, 'userDetails' | 'maxCreditsPerMember'>;
+type MemberCapOrg = Pick<IOrganizationDocument, 'userDetails' | 'maxCreditsPerMember' | 'serviceAccountUserId'>;
 
 /**
  * Internal (non-chat-facing) refusal message for an already-capped member, shared by
@@ -71,9 +71,12 @@ export function getMemberUsedCredits(
 
 /**
  * The monthly cap that applies to `userId`: their per-member override when set,
- * otherwise the org default. null means uncapped.
+ * otherwise the org default. null means uncapped. The org's service account (which holds its
+ * org-owned API keys) is not a member, so it is uncapped here; the org balance and each key's
+ * own spend cap still bound it.
  */
 export function getMemberCreditCap(organization: MemberCapOrg, userId: string): number | null {
+  if (organization.serviceAccountUserId && organization.serviceAccountUserId === userId) return null;
   return resolveMemberCreditCap(
     organization.userDetails?.find(u => u.id === userId),
     organization.maxCreditsPerMember

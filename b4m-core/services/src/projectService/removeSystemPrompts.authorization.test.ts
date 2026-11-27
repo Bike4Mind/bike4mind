@@ -25,7 +25,13 @@ describe('removeSystemPrompts authorization', () => {
       adapters: {
         db: {
           projects: { shareable: createShareableFake([project as never]), update: projectUpdate },
-          fabFiles: { shareable: createShareableFake([]), update: vi.fn() },
+          fabFiles: {
+            shareable: createShareableFake([]),
+            update: vi.fn(),
+            findAllByIds: vi.fn().mockResolvedValue([]),
+          },
+          users: { findByIds: vi.fn().mockResolvedValue([]) },
+          invites: { findAllByDocumentId: vi.fn().mockResolvedValue([]) },
         },
       },
     };

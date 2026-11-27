@@ -1,14 +1,28 @@
-import { usdToCredits, VIDEO_MODEL_CATALOG, type VideoModel, type VideoModelId } from '@bike4mind/common';
+import {
+  usdToCredits,
+  VIDEO_INPUT_ROLES,
+  VIDEO_MODEL_CATALOG,
+  videoModelProfile,
+  type VideoModel,
+  type VideoModelId,
+} from '@bike4mind/common';
 
 /** The server's public shape for a catalog model, as toPublicVideoModel renders it. */
 export function publicVideoModel(id: VideoModelId): VideoModel {
   const caps = VIDEO_MODEL_CATALOG[id];
+  const profile = videoModelProfile(id);
   return {
     id,
     object: 'video_model',
     display_name: caps.displayName,
     provider: caps.provider,
+    provider_label: profile.providerLabel,
+    blurb: profile.blurb,
     modes: [...caps.modes],
+    input_roles: VIDEO_INPUT_ROLES.flatMap(role => {
+      const accepted = caps.inputs[role];
+      return accepted ? [{ role, max: accepted.max }] : [];
+    }),
     duration:
       caps.duration.kind === 'range'
         ? { kind: 'range', min: caps.duration.min, max: caps.duration.max, step: caps.duration.step }

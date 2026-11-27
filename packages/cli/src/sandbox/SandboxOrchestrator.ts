@@ -17,7 +17,8 @@ import type {
   SandboxViolation,
 } from './types.js';
 import { DEFAULT_SANDBOX_CONFIG } from './types.js';
-import type { SandboxRuntime } from './runtime/SandboxRuntimeAdapter.js';
+import path from 'path';
+import { resolveSandboxPath, type SandboxRuntime } from './runtime/SandboxRuntimeAdapter.js';
 import type { ProxyManager } from './proxy/ProxyManager.js';
 import type { ViolationLogStore } from './logging/ViolationLogStore.js';
 
@@ -32,6 +33,20 @@ export class SandboxOrchestrator {
     // Clone so a runtime mutation (e.g. setNetworkEnabled) never writes through to
     // the shared DEFAULT_SANDBOX_CONFIG singleton both entrypoints fall back to.
     this.config = structuredClone(config ?? DEFAULT_SANDBOX_CONFIG);
+    // Saved configs carry full arrays, so schema defaults never reach them; always enforce the built-in denies
+    const fsConfig = this.config.filesystem;
+    fsConfig.deniedPaths = [...new Set([...DEFAULT_SANDBOX_CONFIG.filesystem.deniedPaths, ...fsConfig.deniedPaths])];
+    const deniedPaths = fsConfig.deniedPaths.map(resolveSandboxPath);
+    fsConfig.allowedReadPaths = fsConfig.allowedReadPaths.filter(allowedPath => {
+      const resolvedAllowedPath = resolveSandboxPath(allowedPath);
+      return !deniedPaths.some(deniedPath => {
+        const relativePath = path.relative(deniedPath, resolvedAllowedPath);
+        return (
+          relativePath === '' ||
+          (!relativePath.startsWith(`..${path.sep}`) && relativePath !== '..' && !path.isAbsolute(relativePath))
+        );
+      });
+    });
     this.runtime = runtime ?? null;
     this.proxyManager = proxyManager ?? null;
   }
@@ -45,7 +60,11 @@ export class SandboxOrchestrator {
    * 3. If runtime is not available -> unsandboxed with warning
    * 4. Otherwise -> sandbox the command
    */
-  shouldSandbox(command: string, cwd: string): SandboxDecision {
+  shouldSandbox(
+    command: string,
+    cwd: string,
+    validateWorkingDirectory?: (cwd: string) => string | undefined
+  ): SandboxDecision {
     // 1. Sandbox disabled
     if (!this.config.enabled || this.config.mode === 'disabled') {
       return { type: 'unsandboxed', requiresPermission: true };
@@ -76,17 +95,24 @@ export class SandboxOrchestrator {
       };
     }
 
+    const workingDirectoryError = validateWorkingDirectory?.(cwd);
+    if (workingDirectoryError) return { type: 'blocked', reason: workingDirectoryError };
+
     // 4. Sandbox the command
     const proxyEnv = this.proxyManager?.getProxyEnv() ?? {};
+    const proxyPort =
+      this.config.network.enabled && this.proxyManager?.isRunning() ? this.proxyManager.getPort() : null;
+    const proxySocketPath = proxyPort !== null ? this.proxyManager?.getSocketPath() : null;
     const wrappedCommand = this.runtime.wrapCommand({
       command,
       cwd,
       filesystemConfig: this.config.filesystem,
-      // Belt-and-braces: never claim network is on to the runtime unless a proxy is
-      // actually running to filter it. This is the single consumption choke point, so
-      // any path that leaves a stale network.enabled flag (e.g. /sandbox:disable or
-      // /sandbox:mode) still fails closed here - the flag alone can't grant raw egress.
-      networkEnabled: this.config.network.enabled && (this.proxyManager?.isRunning() ?? false),
+      // Single choke point: a stale network.enabled flag without a running proxy grants nothing.
+      // Each runtime confines egress to the proxy (Seatbelt by port, Bubblewrap through the socket).
+      networkEnabled: proxyPort !== null,
+      ...(proxyPort !== null && { proxyPort }),
+      ...(proxySocketPath && { proxySocketPath }),
+      allowContainerSockets: this.config.allowContainerSockets === true,
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&
         this.config.platform.linux.seccompProfile && {
@@ -128,10 +154,7 @@ export class SandboxOrchestrator {
    * proxy in lockstep - this is the SINGLE lifecycle owner. Fail-closed: when
    * enabling, the proxy must be running afterwards or the flag stays false. The
    * flag is not trusted on its own either - shouldSandbox additionally gates on
-   * proxyManager.isRunning(), so a stale network.enabled left by any other path
-   * can never hand the runtime raw egress. Note the proxy only filters clients
-   * that honor HTTP(S)_PROXY; raw sockets (`curl --noproxy`, `nc`) still egress
-   * when network is on, so allowedDomains binds proxy-aware traffic only.
+   * proxyManager.isRunning().
    * Returns whether network is enabled on return. Does not persist - caller saves.
    */
   async setNetworkEnabled(enabled: boolean): Promise<boolean> {

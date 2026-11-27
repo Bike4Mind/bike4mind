@@ -1,4 +1,4 @@
-import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback } from '@bike4mind/server-utils/app/utils/artifactParser';
 
 // Private-use delimiter for parked code spans; cannot occur in a title that came from chat text.
 const CODE_SPAN_MARK = '\uE000';

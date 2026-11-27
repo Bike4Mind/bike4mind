@@ -10,16 +10,18 @@ const mockDlqUrls = vi.hoisted(() => ({
   'image-edit': 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditDLQ',
   'generation-callback': 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueueDLQ',
   'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
+  'render-job': 'https://sqs.us-east-2.amazonaws.com/123456789/renderJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
   'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
-  'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',
   'slack-export': 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueueDLQ',
   'github-webhook': 'https://sqs.us-east-2.amazonaws.com/123456789/githubWebhookQueueDLQ',
   'webhook-delivery': 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueueDLQ',
   'quest-export': 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueueDLQ',
-  'liveops-triage': 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueueDLQ',
+  'callable-function-call': 'https://sqs.us-east-2.amazonaws.com/123456789/callableFunctionCallQueueDLQ',
+  'account-data-export': 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueueDLQ',
+  'account-erasure': 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueueDLQ',
   'email-ingestion': 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueueDLQ',
   'email-analysis': 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueueDLQ',
   'email-batch': 'https://sqs.us-east-2.amazonaws.com/123456789/emailBatchQueueDLQ',
@@ -38,11 +40,41 @@ const mockDlqUrls = vi.hoisted(() => ({
   'data-lake-research': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueueDLQ',
   'data-lake-taxonomy': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueueDLQ',
   'lake-memory': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueueDLQ',
+  'risk-evidence': 'https://sqs.us-east-2.amazonaws.com/123456789/riskEvidenceQueueDLQ',
   'lake-inconsistency-model': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueueDLQ',
   'drive-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueueDLQ',
   'drive-disconnect-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueueDLQ',
   'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
   'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
+  'publish-thumbnail': 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueueDLQ',
+  ...Object.fromEntries(
+    [
+      'young-account-spend-alert',
+      'api-probe-detector',
+      'cloud-security-scan',
+      'image-moderation-review-sweep',
+      'spend-monitor',
+      'signup-grant-held-release',
+      'revenue-snapshot',
+      'subscription-reconciliation',
+      'account-deletion-sweep',
+      'dlq-triage-sweep',
+      'organization-retention',
+      'fab-file-moderation',
+      'telemetry-alert-rule',
+      'moderation-alerts',
+      'session-enrichment',
+      'billing-events',
+      'email-events',
+      'push-events',
+      'notebook-events',
+      'completion-events',
+      'business-metric-alerts',
+      'side-app-health-alerts',
+      'alarm-handler',
+    ].map(label => [label, `https://sqs.us-east-2.amazonaws.com/123456789/${label}`])
+  ),
+  'generated-media-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -52,16 +84,18 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   imageEditQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditQueue',
   generationCallbackQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueue',
   generationJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobQueue',
+  renderJobQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/renderJobQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
-  whatsNewHighlightsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueue',
   notebookCurationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueue',
   agentProactiveMessageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueue',
   slackExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/slackExportQueue',
   githubWebhookQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubWebhookQueue',
   webhookDeliveryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueue',
   questExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueue',
-  liveOpsTriageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueue',
+  callableFunctionCallQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/callableFunctionCallQueue',
+  accountDataExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueue',
+  accountErasureQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountErasureQueue',
   emailIngestionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueue',
   emailAnalysisQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueue',
   emailBatchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailBatchQueue',
@@ -80,11 +114,14 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   dataLakeResearchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueue',
   dataLakeTaxonomyQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueue',
   lakeMemoryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueue',
+  riskEvidenceQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/riskEvidenceQueue',
   lakeInconsistencyModelQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueue',
   driveLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueue',
   driveDisconnectPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueue',
   githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
   githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
+  publishThumbnailQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/publishThumbnailQueue',
+  generatedMediaPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generatedMediaPurgeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -95,13 +132,27 @@ vi.mock('sst', () => ({
   },
 }));
 
-import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './dlqRegistry';
+import {
+  coreDlqDescriptors,
+  getDlqRegistry,
+  DLQ_STALE_WHEN,
+  getDlqByLabel,
+  getSourceQueueUrl,
+  getDlqUrl,
+  missingQueueHelp,
+  entityAt,
+  firstEntity,
+  noEntity,
+  describeDlqMessage,
+} from './dlqRegistry';
+
+const PARTITION = 'aws';
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 39 DLQ entries', () => {
+    it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(39);
+      expect(registry.map(entry => entry.label).sort()).toEqual(Object.keys(mockDlqUrls).sort());
     });
 
     it('each entry has required fields', () => {
@@ -109,7 +160,8 @@ describe('dlqRegistry', () => {
         expect(entry.label).toBeTruthy();
         expect(entry.displayName).toBeTruthy();
         expect(entry.application).toBeTruthy();
-        expect(entry.sourceQueue).toBeTruthy();
+        if (entry.sourceQueue === null) expect(entry.replay).toBe('unsafe');
+        else expect(entry.sourceQueue).toBeTruthy();
       }
     });
 
@@ -129,10 +181,47 @@ describe('dlqRegistry', () => {
 
     it('getSourceQueueUrl returns source URL from Resource binding', () => {
       for (const entry of getDlqRegistry()) {
+        if (entry.sourceQueue === null) continue;
         const sourceUrl = getSourceQueueUrl(entry.sourceQueue as Parameters<typeof getSourceQueueUrl>[0]);
         expect(typeof sourceUrl).toBe('string');
         expect(sourceUrl).toContain('sqs.us-east-2.amazonaws.com');
       }
+    });
+
+    it('classifies replay safety from what the consumer does', () => {
+      expect(getDlqByLabel('fab-file-chunk')?.replay).toBe('safe');
+      expect(getDlqByLabel('secops-triage')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('fab-file-vectorize')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('webhook-delivery')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('account-data-export')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('agent-proactive-message')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('email-batch')?.replay).toBe('side-effects');
+      expect(getDlqByLabel('email-job')?.replay).toBe('unsafe');
+      expect(getDlqByLabel('drive-disconnect-purge')?.replay).toBe('safe');
+      expect(getDlqByLabel('github-webhook')?.replay).toBe('unsafe');
+    });
+
+    it('every core entry has description, replay, replayNote, owner', () => {
+      const incomplete = coreDlqDescriptors()
+        .map(entry => ({ label: entry.label, missing: missingQueueHelp(entry) }))
+        .filter(({ missing }) => missing.length > 0);
+      expect(incomplete).toEqual([]);
+    });
+
+    it('flags stale dead letters only with a known staleWhen value', () => {
+      const flagged = getDlqRegistry().filter(entry => entry.staleWhen !== undefined);
+      for (const entry of flagged) expect(DLQ_STALE_WHEN).toContain(entry.staleWhen);
+      const byLabel = (label: string) => getDlqRegistry().find(entry => entry.label === label)?.staleWhen;
+      expect(byLabel('session-enrichment')).toBe('self-healing');
+      // The queue also holds user-requested session.tag jobs, which nothing re-runs.
+      expect(getDlqRegistry().find(entry => entry.label === 'session-enrichment')?.staleDetailTypes).toEqual([
+        'session.summarize',
+      ]);
+      expect(byLabel('organization-retention')).toBe('superseded-schedule');
+      // These handlers read the scheduled event time, so a late replay is not covered by a later run.
+      expect(byLabel('spend-monitor')).toBeUndefined();
+      expect(byLabel('young-account-spend-alert')).toBeUndefined();
+      expect(byLabel('api-probe-detector')).toBeUndefined();
     });
 
     it('includes tavern-heartbeat entry', () => {
@@ -181,18 +270,117 @@ describe('dlqRegistry', () => {
   });
 });
 
+describe('missingQueueHelp', () => {
+  const valid = { description: 'Does a thing', replay: 'safe', replayNote: 'Upserts by id', owner: 'Platform ops' };
+
+  it('returns nothing for a complete entry', () => {
+    expect(missingQueueHelp(valid)).toEqual([]);
+  });
+
+  it('flags empty and whitespace-only strings', () => {
+    expect(missingQueueHelp({ ...valid, description: '' })).toEqual(['description']);
+    expect(missingQueueHelp({ ...valid, owner: '   ' })).toEqual(['owner']);
+  });
+
+  it('flags a missing key', () => {
+    expect(missingQueueHelp({ description: valid.description, replay: valid.replay, owner: valid.owner })).toEqual([
+      'replayNote',
+    ]);
+  });
+
+  it('flags a replay value outside the enum', () => {
+    expect(missingQueueHelp({ ...valid, replay: 'maybe' })).toEqual(['replay']);
+    expect(missingQueueHelp({ ...valid, replay: undefined })).toEqual(['replay']);
+  });
+
+  it('flags every field of an entry with no help', () => {
+    expect(missingQueueHelp({})).toEqual(['description', 'replayNote', 'owner', 'replay']);
+  });
+});
+
 describe('dlqUrls Linkable', () => {
   // The mock above cannot catch a key renamed on one side only; read the real infra/web.ts instead.
   it('exposes a URL under every registry label, and nothing else', () => {
     const webTs = readFileSync(fileURLToPath(new URL('../../../../infra/web.ts', import.meta.url)), 'utf8');
     const block = webTs.slice(webTs.indexOf("new sst.Linkable('dlqUrls'"));
     const properties = block.slice(block.indexOf('{'), block.indexOf('\n});'));
-    const linkableKeys = [...properties.matchAll(/^\s+'([a-z0-9-]+)':/gm)].map(m => m[1]).sort();
+    const linkableKeys = [...properties.matchAll(/['"]([a-z0-9-]+)['"]:/g)].map(m => m[1]).sort();
 
     expect(linkableKeys).toEqual(
       getDlqRegistry()
         .map(entry => entry.label)
         .sort()
     );
+  });
+});
+
+describe('dead-letter message describe', () => {
+  it('every core entry describes its messages', () => {
+    const undescribed = coreDlqDescriptors()
+      .filter(entry => typeof entry.describe !== 'function')
+      .map(entry => entry.label);
+    expect(undescribed).toEqual([]);
+  });
+
+  it('entityAt reads the first dotted path that holds a string or number', () => {
+    const describe = entityAt('Quest', 'payload.questId', 'questId');
+    expect(describe({ payload: { questId: 'q1' } })).toEqual({ type: 'Quest', id: 'q1' });
+    expect(describe({ questId: 42 })).toEqual({ type: 'Quest', id: '42' });
+    expect(entityAt('Notebook', 'sessionIds.0')({ sessionIds: ['s1', 's2'] })).toEqual({ type: 'Notebook', id: 's1' });
+    expect(describe({ payload: {} })).toBeNull();
+    expect(describe('not an object')).toBeNull();
+  });
+
+  it('firstEntity falls through to the next describer', () => {
+    const describe = firstEntity(entityAt('Invoice', 'invoiceId'), entityAt('Subscription', 'subscriptionId'));
+    expect(describe({ subscriptionId: 'sub_1' })).toEqual({ type: 'Subscription', id: 'sub_1' });
+    expect(describe({})).toBeNull();
+    expect(noEntity({ anything: 'x' })).toBeNull();
+  });
+
+  it('describeDlqMessage parses the body and tolerates non-JSON or a missing describe', () => {
+    const entry = getDlqByLabel('fab-file-vectorize')!;
+    expect(describeDlqMessage(entry, '{"fabFileId":"f1"}')).toEqual({ type: 'File', id: 'f1' });
+    expect(describeDlqMessage(entry, 'not json')).toBeNull();
+    expect(describeDlqMessage(entry, undefined)).toBeNull();
+    expect(describeDlqMessage({ ...entry, describe: undefined }, '{"fabFileId":"f1"}')).toBeNull();
+  });
+
+  it("release-notes tells the two kinds on the merged What's New DLQ apart", () => {
+    const entry = getDlqByLabel('release-notes')!;
+    expect(describeDlqMessage(entry, '{"kind":"release-notes","releaseTag":"v1.2.3.4"}')).toEqual({
+      type: 'Release',
+      id: 'v1.2.3.4',
+    });
+    expect(describeDlqMessage(entry, '{"kind":"highlights","correlationId":"c1","environment":"dev"}')).toEqual({
+      type: 'Highlights run',
+      id: 'c1',
+    });
+  });
+});
+
+describe('describeDlqMessage for scheduled events', () => {
+  const scheduledBody = JSON.stringify({
+    'detail-type': 'Scheduled Event',
+    source: 'aws.events',
+    time: '2026-03-01T04:00:00Z',
+    resources: [`arn:${PARTITION}:events:us-east-2:000000000000:rule/app-stage-Nightly`],
+  });
+
+  it('names a scheduled run by its time when the queue describes nothing', () => {
+    expect(describeDlqMessage({ describe: () => null }, scheduledBody)).toEqual({
+      type: 'Scheduled run',
+      id: '2026-03-01T04:00:00.000Z',
+    });
+    expect(describeDlqMessage({}, scheduledBody)).toEqual({ type: 'Scheduled run', id: '2026-03-01T04:00:00.000Z' });
+  });
+
+  it("keeps the queue's own entity and returns null for other bodies", () => {
+    expect(describeDlqMessage({ describe: () => ({ type: 'Job', id: 'j1' }) }, scheduledBody)).toEqual({
+      type: 'Job',
+      id: 'j1',
+    });
+    expect(describeDlqMessage({ describe: () => null }, '{"detail-type":"Other"}')).toBeNull();
+    expect(describeDlqMessage({}, 'not json')).toBeNull();
   });
 });

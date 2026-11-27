@@ -1,24 +1,34 @@
-import { AuthStrategy, IAuthProviders } from '@bike4mind/common';
-import { User, authSessionRepository, realtimeConnectionRepository, type IUserObject } from '@bike4mind/database';
-import { Logger } from '@bike4mind/observability';
-import { authSessionService } from '@bike4mind/services';
-import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { omit } from 'lodash';
-import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import { AuthStrategy, IAuthProviders, type INetworkMeta } from '@bike4mind/common';
 import {
-  applyEmailVerifiedGrants,
-  isEligibleForFreeCredits,
-  releaseVerifiedPendingFreeCredits,
-} from '@server/auth/emailVerifiedGrants';
+  User,
+  adminSettingsRepository,
+  authSessionRepository,
+  realtimeConnectionRepository,
+  registrationInviteRepository,
+  type IUserObject,
+} from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { authSessionService, userService } from '@bike4mind/services';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import omit from 'lodash/omit';
+import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import { type NetworkRequest, readNetworkMeta } from '@server/auth/networkMeta';
+import { isSignupNetworkOverLimit } from '@bike4mind/server-utils/auth/signupNetworkLimits';
+import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
+import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { wasTurnstileVerified } from '@server/auth/signupChallenge';
+import { readOAuthInviteCode, readOAuthRedirectTo } from '@server/auth/passportOAuthStateStore';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
-import { OAuthFailureReason } from './oauthFailureReason';
+import { OAuthFailureReason } from '@bike4mind/server-utils/utils/auth/oauthFailureReason';
 import { isOpenRegistrationAllowed } from './openRegistration';
 import { isPartnerDomainSignupAllowed } from './partnerSignupBypass';
 import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
+import { sealProviderTokens } from './providerTokensAtRest';
+import { resolveSignupClientId } from './signupClientId';
 
 /**
  * Strategies where anyone on the internet can present an identity, so a first login
@@ -27,7 +37,11 @@ import { applyOAuthSignupDomainGrant } from './oauthSignupGrants';
  * the authorization - gating them would break enterprise onboarding on instances that
  * are invite-only for the public.
  */
-const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([AuthStrategy.Google, AuthStrategy.Github]);
+const SELF_SERVE_STRATEGIES: ReadonlySet<AuthStrategy> = new Set([
+  AuthStrategy.Google,
+  AuthStrategy.Github,
+  AuthStrategy.Apple,
+]);
 
 /** The user `done` hands the callback endpoints, with the transient flags this module sets (never persisted). */
 export type OAuthUser = IUserObject & {
@@ -36,6 +50,45 @@ export type OAuthUser = IUserObject & {
   signupCreditsGranted?: number;
 };
 
+type ResolvedReferral = NonNullable<Awaited<ReturnType<typeof userService.resolveRegistrationInvite>>>;
+type PreparedOAuthReferral = {
+  resolved: ResolvedReferral;
+  claim: NonNullable<Awaited<ReturnType<typeof userService.claimRegistrationInvite>>>;
+};
+
+/**
+ * The refer-flow invite an OAuth signup carried, checked with the same expiry, single-use and
+ * email-binding rules as registerUser. Any other outcome (bad code, admin or unlimited code, read
+ * error) signs up uninvited: a code typed alongside a social login must never fail the login.
+ */
+async function prepareOAuthReferral(code: string, verifiedEmail: string): Promise<PreparedOAuthReferral | null> {
+  try {
+    const resolved = await userService.resolveRegistrationInvite(
+      code,
+      verifiedEmail.toLowerCase().trim(),
+      registrationInviteRepository
+    );
+    if (!resolved) return null;
+    if (!resolved.isReferral) {
+      Logger.globalInstance.info('[oauth signup] invite code ignored: not a referral invite');
+      return null;
+    }
+    // No transaction: a crash before the account is created strands the claim (code used, no usedbyId).
+    // An admin reopens a stranded claim by setting the invite back to open (/api/reg-invites/update).
+    const claim = await userService.claimRegistrationInvite(resolved, registrationInviteRepository);
+    if (!claim) {
+      Logger.globalInstance.warn('[oauth signup] invite already redeemed; signing up uninvited');
+      return null;
+    }
+    return { resolved, claim };
+  } catch (e) {
+    // BadRequestError messages are fixed strings with no user data.
+    const reason = e instanceof BadRequestError ? e.message : 'preparation failed';
+    Logger.globalInstance.info(`[oauth signup] invite code ignored: ${reason}`);
+    return null;
+  }
+}
+
 // Core authentication logic shared by all strategies
 const authenticateUser = async (
   strategy: AuthStrategy,
@@ -43,7 +96,12 @@ const authenticateUser = async (
   refreshToken: string,
   profile: any,
   done: any,
-  authProvider?: Partial<IAuthProviders>
+  authProvider?: Partial<IAuthProviders>,
+  signupNetwork?: INetworkMeta,
+  challengeVerified?: true | null,
+  inviteCode?: string | null,
+  // The flow's post-login redirectTo; a new account records the OAuth client it names.
+  signupRedirectTo?: unknown
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -81,11 +139,11 @@ const authenticateUser = async (
       user = await User.findOne({ $or: conditions });
     }
 
+    // A strategy that seals its own tokens (Apple) passes them in authProvider, which wins.
     const oauthCredentials = {
       id,
       strategy,
-      refreshToken,
-      accessToken,
+      ...sealProviderTokens(accessToken, refreshToken),
       ...(authProvider ?? {}),
     };
 
@@ -221,6 +279,34 @@ const authenticateUser = async (
         done(null, undefined, { code: 'registration_closed' });
         return;
       }
+      // The same email rules registerUser applies to an email sign-up. A failed list read throws to
+      // the catch below, so the gate fails closed as it does there.
+      if (SELF_SERVE_STRATEGIES.has(strategy)) {
+        if (!email || !isProviderEmailVerified(profile)) {
+          done(null, undefined, { code: 'signup_email_unverified' });
+          return;
+        }
+        const normalizedEmail = email.toLowerCase().trim();
+        if (
+          await userService.shouldBlockDisposableEmail(normalizedEmail, {
+            adminSettings: adminSettingsRepository,
+            signupProtection,
+          })
+        ) {
+          done(null, undefined, { code: 'signup_email_blocked', email: normalizedEmail });
+          return;
+        }
+      }
+      // Only Google/GitHub pass a network (selfServeVerifyCallback), matching the invite gate's scope;
+      // a partner-domain rule is an admin's authorization and skips the caps, as on the OTC path.
+      if (
+        signupNetwork &&
+        !(await isPartnerDomainSignupAllowed(email, isProviderEmailVerified(profile))) &&
+        (await isSignupNetworkOverLimit(signupNetwork, Logger.globalInstance))
+      ) {
+        done(null, undefined, { code: 'signup_limited' });
+        return;
+      }
 
       const name = profile?.displayName ?? profile?.name ?? username ?? '';
       // Gate the provider-asserted email out of a brand-new account's login
@@ -235,24 +321,53 @@ const authenticateUser = async (
       // The provider-verified email is the proof of ownership registerViaOTC gets from the code,
       // so a self-serve account is created tagged and the flat grant released right away; a
       // failed release leaves the tag for the backfill script. Okta/SAML get no flat grant.
-      const pendingFreeCredits =
-        SELF_SERVE_STRATEGIES.has(strategy) &&
-        !!emailForNewAccount &&
-        (await isEligibleForFreeCredits(emailForNewAccount, Logger.globalInstance));
-      user = await createUniqueOAuthUser({
-        name,
-        baseUsername,
-        email: emailForNewAccount,
-        oauthCredentials,
-        pendingFreeCredits,
-      });
+      const pendingFreeCredits = SELF_SERVE_STRATEGIES.has(strategy);
+      // An invite never opens a closed instance: the gate above ran first. Self-serve only, where
+      // the email was just required to be provider-verified, so the email binding holds.
+      const referral =
+        inviteCode && pendingFreeCredits && emailForNewAccount
+          ? await prepareOAuthReferral(inviteCode, emailForNewAccount)
+          : null;
+      const referralInvite = referral
+        ? {
+            inviteId: referral.resolved.invite.id,
+            inviterId: referral.resolved.invite.userId ?? null,
+          }
+        : undefined;
+      const signupClientId = await resolveSignupClientId(signupRedirectTo);
+      try {
+        user = await createUniqueOAuthUser({
+          name,
+          baseUsername,
+          email: emailForNewAccount,
+          oauthCredentials,
+          pendingFreeCredits,
+          ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
+          ...(referralInvite ? { referralInvite } : {}),
+          signupClientId,
+        });
+      } catch (e) {
+        await referral?.claim.release().catch(() => {
+          Logger.globalInstance.warn('[oauth signup] invite claim release failed; the code may remain claimed');
+        });
+        throw e;
+      }
       const newUserId = String(user._id);
+      if (referral) {
+        try {
+          await userService.redeemRegistrationInvite(referral.resolved, newUserId, registrationInviteRepository);
+        } catch (e) {
+          // The code is already closed by the claim; this only loses its usedbyId/history entry.
+          Logger.globalInstance.error('[oauth signup] invite redeem failed', { error: e });
+        }
+      }
       let creditsGranted = 0;
       if (pendingFreeCredits) {
         const release = await releaseVerifiedPendingFreeCredits(
           { id: newUserId, tags: user.tags, pendingCreditGrant: user.pendingCreditGrant },
           'OAuth signup (provider-verified email)',
-          Logger.globalInstance
+          Logger.globalInstance,
+          signupNetwork
         );
         creditsGranted += release.creditsGranted;
       }
@@ -280,7 +395,7 @@ const authenticateUser = async (
     // attach a canonical, data-free `code` the callback can safely record -
     // the raw `message` rides along only for the callback's console.error
     // (CloudWatch), never for the audit reason or redirect.
-    console.error('[verifyCallback] authenticateUser threw:', e);
+    Logger.globalInstance.error('[verifyCallback] authenticateUser threw', { error: e });
     const code: OAuthFailureReason = isDuplicateKeyError(e)
       ? 'duplicate_account'
       : e instanceof ForbiddenError
@@ -299,7 +414,7 @@ export const verifyCallback = (strategy: AuthStrategy) => {
     // Different OAuth providers call with different signatures:
     // - Standard (GitHub): (accessToken, refreshToken, profile, done)
     // - With params (Google): (accessToken, refreshToken, params, profile, done)
-    // - With custom data (SAML): (accessToken, refreshToken, profile, done, authProvider)
+    // - With custom data (SAML): (accessToken, refreshToken, profile, done, authProvider, signupRedirectTo)
 
     if (rest.length === 2) {
       // Standard: (profile, done)
@@ -308,8 +423,68 @@ export const verifyCallback = (strategy: AuthStrategy) => {
       // With params: (params, profile, done)
       return authenticateUser(strategy, accessToken, refreshToken, rest[1], rest[2]);
     } else {
-      // With custom data: (profile, done, authProvider)
-      return authenticateUser(strategy, accessToken, refreshToken, rest[0], rest[1], rest[2]);
+      // With custom data: (profile, done, authProvider, signupRedirectTo)
+      return authenticateUser(
+        strategy,
+        accessToken,
+        refreshToken,
+        rest[0],
+        rest[1],
+        rest[2],
+        undefined,
+        undefined,
+        undefined,
+        rest[3]
+      );
     }
   };
 };
+
+/**
+ * Google/GitHub verify, registered with `passReqToCallback: true` so a first login can be checked
+ * against its network. The declared arity (5) is what makes passport-oauth2 call it as
+ * (req, accessToken, refreshToken, profile, done); do not add or drop parameters.
+ */
+export const selfServeVerifyCallback =
+  (strategy: AuthStrategy) =>
+  // any: passport's untyped verify callback, as in verifyCallback above
+  (req: NetworkRequest, accessToken: string, refreshToken: string, profile: unknown, done: any) =>
+    authenticateUser(
+      strategy,
+      accessToken,
+      refreshToken,
+      profile,
+      done,
+      undefined,
+      readNetworkMeta(req),
+      wasTurnstileVerified(req),
+      readOAuthInviteCode(req),
+      readOAuthRedirectTo(req)
+    );
+
+/**
+ * Self-serve login for a strategy that builds its own profile (Apple derives it from the id_token, not
+ * a userinfo call), with the same network and challenge gating as selfServeVerifyCallback.
+ */
+export const authenticateSelfServeProfile = (
+  strategy: AuthStrategy,
+  req: NetworkRequest,
+  accessToken: string,
+  refreshToken: string,
+  profile: unknown,
+  // any: passport's untyped verify callback, as in verifyCallback above
+  done: any,
+  authProvider?: Partial<IAuthProviders>
+) =>
+  authenticateUser(
+    strategy,
+    accessToken,
+    refreshToken,
+    profile,
+    done,
+    authProvider,
+    readNetworkMeta(req),
+    wasTurnstileVerified(req),
+    readOAuthInviteCode(req),
+    readOAuthRedirectTo(req)
+  );

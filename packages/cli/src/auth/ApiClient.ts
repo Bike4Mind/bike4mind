@@ -11,6 +11,9 @@ export { NotAuthenticatedError, SessionRevokedError } from '@bike4mind/client-au
 
 const USER_AGENT = `b4m-cli/${packageJson.version}`;
 
+// A reserved TLD, so even a transport that bypasses the refusing adapter cannot resolve it.
+const SIGNED_OUT_BASE_URL = 'http://signed-out.invalid';
+
 /**
  * Per-request timeout. Generous by design: a waited chat (POST /api/chat with wait:true)
  * runs a full server-side quest, so the bound only exists to stop a hung backend from
@@ -54,6 +57,28 @@ export class ApiClient extends AuthenticatedApiClient {
       },
       isPassThrough401: isProviderKeyFailure,
     });
+  }
+
+  private signedOutClient = false;
+
+  /** True for a client made by `ApiClient.whileSignedOut`. */
+  get signedOut(): boolean {
+    return this.signedOutClient;
+  }
+
+  /**
+   * A client for a signed-out session: every request rejects before it leaves the process, so a
+   * cloud call that a signed-out path failed to skip surfaces as a sign-in message, never traffic.
+   */
+  static whileSignedOut(configStore?: ConfigStore): ApiClient {
+    const client = new ApiClient(SIGNED_OUT_BASE_URL, configStore);
+    client.signedOutClient = true;
+    client.getAxiosInstance().defaults.adapter = async config => {
+      throw new Error(
+        `Not signed in, so ${config.url ?? 'the request'} was not sent to Bike4Mind. Run /login to sign in.`
+      );
+    };
+    return client;
   }
 
   get baseURL(): string {

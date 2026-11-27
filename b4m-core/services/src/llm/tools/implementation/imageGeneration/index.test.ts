@@ -1,7 +1,15 @@
+vi.mock('../../helpers/modelAdmission', () => ({
+  createToolModelAdmission: vi.fn(async () => ({ assert: vi.fn(async (_modelId: string) => {}) })),
+}));
+import { createToolModelAdmission } from '../../helpers/modelAdmission';
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels } from '@bike4mind/common';
-import { ImageModerationBlockedError as OpenAIModerationBlockedError } from '@bike4mind/utils';
+import {
+  ImageModerationBlockedError as OpenAIModerationBlockedError,
+  ImageProviderUnavailableError,
+} from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import type { ToolContext } from '../../base/types';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
@@ -28,6 +36,7 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
 const mockGeminiGenerate = vi.fn();
 const mockBflGenerate = vi.fn();
 const mockOpenAIGenerate = vi.fn();
+const mockXaiGenerate = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
@@ -40,6 +49,9 @@ vi.mock('@bike4mind/utils', async importOriginal => {
     }),
     OpenAIImageService: vi.fn().mockImplementation(function () {
       return { generate: mockOpenAIGenerate };
+    }),
+    XAIImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockXaiGenerate };
     }),
   };
 });
@@ -93,7 +105,12 @@ function createFakeContext(): ToolContext {
 }
 
 describe('image_generation processAndStoreImages moderation gate (agent-tool serve-gate bypass)', () => {
-  const RENDER = { model: 'gpt-image-2', provider: 'openai', prompt: 'a lighthouse at dusk' };
+  const RENDER = {
+    model: 'gpt-image-2',
+    provider: 'openai',
+    prompt: 'a lighthouse at dusk',
+    request: { model: 'gpt-image-2', prompt: 'a lighthouse at dusk', n: 2, quality: 'high' },
+  };
 
   beforeEach(() => {
     mockCheckImage.mockReset();
@@ -141,7 +158,9 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
         modelId: 'gpt-image-2',
         prompt: RENDER.prompt,
         jobId: expect.any(String),
+        request: RENDER.request,
       },
+      generatedOutputKey: 'generated/stored-key.png',
     });
   });
 
@@ -452,23 +471,24 @@ describe('image_generation OpenAI model selection for transparent backgrounds', 
     mockOpenAIGenerate.mockResolvedValue([]);
   });
 
-  it('steps a default gpt-image-2 selection down to gpt-image-1.5 when transparency is requested', async () => {
+  it.each([
+    ['a default gpt-image-2 selection', {}],
+    ['an explicitly-selected gpt-image-2', { model: ImageModels.GPT_IMAGE_2 }],
+  ])('refuses transparency on %s instead of stepping down', async (_label, selection) => {
     const context = createFakeContext();
 
-    const { toolFn } = imageGenerationTool.implementation(context, {});
+    const { toolFn } = imageGenerationTool.implementation(context, selection);
 
-    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+    const result = await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
 
-    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
-      'an inventory icon',
-      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
-    );
+    expect(result).toContain('cannot render a transparent background');
+    expect(mockOpenAIGenerate).not.toHaveBeenCalled();
   });
 
-  it('steps an explicitly-selected gpt-image-2 down to gpt-image-1.5 when transparency is requested', async () => {
+  it('keeps a transparent background on a capable model', async () => {
     const context = createFakeContext();
 
-    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_1_5 });
 
     await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
 
@@ -507,7 +527,80 @@ describe('image_generation OpenAI content-policy refusal logging', () => {
     const result = await toolFn({ prompt: 'a red bike' });
 
     expect(result).toBe('Error: blocked by policy');
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('blocked by content policy'), { requestId: 'req-1' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('OpenAI image'), {
+      kind: 'moderation_blocked',
+      provider: 'openai',
+      requestId: 'req-1',
+    });
     expect(consoleError).not.toHaveBeenCalled();
+  });
+});
+
+describe('image_generation expected provider failures become the tool result, logged at warn', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [
+      'xAI',
+      ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+      mockXaiGenerate,
+      new OpenAIModerationBlockedError('rejected', 'r1', 'xai'),
+    ],
+    ['BFL', ImageModels.FLUX_PRO, mockBflGenerate, new OpenAIModerationBlockedError('flagged', 'r2', 'bfl')],
+    [
+      'BFL timeout',
+      ImageModels.FLUX_PRO,
+      mockBflGenerate,
+      new ImageProviderUnavailableError('try later', { provider: 'bfl', reason: 'polling_timeout' }),
+    ],
+    [
+      'Gemini',
+      ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      mockGeminiGenerate,
+      new OpenAIModerationBlockedError('blocked', 'r3', 'gemini'),
+    ],
+  ])('%s', async (_label, model, generate, failure) => {
+    generate.mockReset();
+    generate.mockRejectedValue(failure);
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => {});
+
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), { model });
+    const result = await toolFn({ prompt: 'a red bike' });
+
+    expect(result).toBe(`Error: ${failure.message}`);
+    expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ kind: failure.kind }));
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('still throws a genuine xAI failure', async () => {
+    mockXaiGenerate.mockReset();
+    mockXaiGenerate.mockRejectedValue(new Error('upstream exploded'));
+
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+    });
+
+    await expect(toolFn({ prompt: 'a red bike' })).rejects.toThrow('upstream exploded');
+  });
+});
+
+describe('imageGeneration model admission', () => {
+  it('refuses before provider execution and admits the selected model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async (_modelId: string) => {
+      throw refusal;
+    });
+    vi.mocked(createToolModelAdmission).mockResolvedValueOnce({ assert: assertAdmission, admits: async () => false });
+    const context = createFakeContext();
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      editModel: ImageModels.GPT_IMAGE_2,
+    });
+    await expect(toolFn({ prompt: 'an image', image: 'data:image/png;base64,AAAA' })).rejects.toBe(refusal);
+    expect(createToolModelAdmission).toHaveBeenLastCalledWith(context);
+    expect(assertAdmission).toHaveBeenCalledWith(ImageModels.GPT_IMAGE_2);
   });
 });

@@ -1,0 +1,304 @@
+import type { AdminErasureCollection } from '@bike4mind/common';
+import { FabFile, mongoose, withTransaction } from '@bike4mind/database';
+import { findPersonalOrganizationIds, personalFilter, purgePersonalLakeById } from '../users/purgeAccountContent';
+import { findOrganizationFileIds } from '../users/purgeAccountFiles';
+import { DATA_HOLDER_REGISTRY } from './registry/index';
+import { valuesAt } from './documentPaths';
+import { deletedUserValue, redactedValue, uniqueIndexPaths } from './placeholder';
+import { SubjectErasurePlan, type ErasureCheckpoint, type ErasureEntry } from './subjectErasurePlan';
+import {
+  MATCH_BATCH,
+  SubjectMatcher,
+  orderParentsFirst,
+  parentKeyPaths,
+  type DataSubject,
+  type LeanDocument,
+} from './subjectMatcher';
+import type { DataHolderRegistry, UserReference } from './types';
+
+/**
+ * Carries out what SubjectErasurePlan decides for each document naming the person: deletes it,
+ * anonymizes or pulls the matched references, and clears `alsoRedact` fields, per the rules in
+ * `types.ts`. Writes go by `_id` through the raw collection, so Mongoose immutability and soft-delete
+ * hooks do not block them and soft-deleted rows are reached. Ordinary walks run outside a transaction;
+ * file families, personal lakes and the final organization stage use bounded transactions.
+ *
+ * A model is written as soon as it is decided, except a `viaParent` parent: its writes wait until
+ * every other model is done and then run children before parents, so a run stopped part way never
+ * leaves children whose parent no longer names the person (the next run could not reach them).
+ *
+ * Left alone: the subject's own `User` row and their personal workspaces, which `hardDeleteUser`
+ * deletes (completeAccountDeletion.ts); the purge finds those workspaces by `userId` on a retry.
+ */
+
+type Operation = mongoose.mongo.AnyBulkWriteOperation;
+type Update = mongoose.mongo.UpdateFilter<mongoose.mongo.Document>;
+type Plain = Record<string, unknown>;
+
+const PERSONAL_WORKSPACE_MODEL = 'Organization';
+
+const isPlain = (value: unknown): value is Plain =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Segment indexes of `path` whose value on `document` is an array. */
+function arraySegments(document: LeanDocument, segments: readonly string[]): number[] {
+  const found: number[] = [];
+  let values: unknown[] = [document];
+  segments.forEach((segment, index) => {
+    const next = values.flatMap(value => (isPlain(value) && Object.hasOwn(value, segment) ? [value[segment]] : []));
+    if (next.some(Array.isArray)) found.push(index);
+    values = next.flatMap(value => (Array.isArray(value) ? value : [value]));
+  });
+  return found;
+}
+
+/** `segments` with `$[]` after every array but the last, which gets `last` (or nothing when null). */
+function positional(segments: readonly string[], arrays: readonly number[], last: string | null): string {
+  const lastArray = arrays[arrays.length - 1];
+  return segments
+    .map((segment, index) => {
+      if (!arrays.includes(index)) return segment;
+      if (index !== lastArray) return `${segment}.$[]`;
+      return last === null ? segment : `${segment}.${last}`;
+    })
+    .join('.');
+}
+
+export class SubjectErasureExecutor {
+  private readonly matcher: SubjectMatcher;
+  private personalWorkspaces: Promise<ReadonlySet<string>> | undefined;
+  private readonly parents: ReadonlySet<string>;
+  private readonly deferred = new Map<string, Operation[]>();
+
+  constructor(
+    private readonly subject: DataSubject,
+    private readonly assertLease: ErasureCheckpoint,
+    private readonly registry: DataHolderRegistry = DATA_HOLDER_REGISTRY,
+    private readonly session?: mongoose.ClientSession
+  ) {
+    this.matcher = new SubjectMatcher(subject, session);
+    this.parents = new Set(parentKeyPaths(registry).keys());
+  }
+
+  /** Erases what the registry decides and returns those decisions, counted per collection. */
+  async run(): Promise<AdminErasureCollection[]> {
+    this.deferred.clear();
+    const plan = new SubjectErasurePlan(this.subject, this.registry, this.session);
+    const collections = await plan.collections(this.assertLease, (model, entries) => this.write(model, entries));
+    for (const model of orderParentsFirst(this.registry).reverse()) {
+      const operations = this.deferred.get(model);
+      if (operations) await this.apply(model, operations);
+    }
+    return collections;
+  }
+
+  private async write(model: string, entries: readonly ErasureEntry[]): Promise<void> {
+    const skipped = await this.skippedIds(model);
+    const workspaces = [...(await this.workspaceIds())];
+    const ordinary: ErasureEntry[] = [];
+    for (const entry of entries) {
+      if (skipped.has(String(entry.document._id))) continue;
+      if (entry.outcome === 'deleted' && model === 'DataLake') {
+        const deleted = await purgePersonalLakeById(this.subject.userId, String(entry.document._id), this.assertLease);
+        if (!deleted) {
+          ordinary.push({
+            ...entry,
+            outcome: 'anonymized',
+            matched: entry.matched.filter(reference => reference.action !== 'deleteDocument'),
+          });
+        }
+      } else if (entry.outcome === 'deleted' && model === 'FabFile') {
+        const deleted = await this.deleteFileFamily(entry, workspaces);
+        if (!deleted) {
+          ordinary.push({
+            ...entry,
+            outcome: 'anonymized',
+            matched: entry.matched.filter(reference => reference.action !== 'deleteDocument'),
+          });
+        }
+      } else if (entry.outcome !== 'deleted' || model !== 'FabFileChunk' || !this.registry.FabFile) {
+        ordinary.push(entry);
+      }
+    }
+    const operations = ordinary.flatMap(entry => this.operationsFor(model, entry, workspaces));
+    if (!this.parents.has(model)) return this.apply(model, operations);
+    this.deferred.set(model, [...(this.deferred.get(model) ?? []), ...operations]);
+  }
+
+  private async deleteFileFamily(entry: ErasureEntry, workspaces: readonly string[]): Promise<boolean> {
+    const operation = this.operationsFor('FabFile', entry, workspaces)[0];
+    if (!operation || !('deleteOne' in operation)) throw new Error('Expected a file deletion');
+    return withTransaction(async session => {
+      await this.assertLease();
+      const database = mongoose.connection.db;
+      if (!database) throw new Error('Subject erasure requires a connected database');
+      const files = database.collection(FabFile.collection.name);
+      const file = await files.findOne(operation.deleteOne.filter, { session });
+      if (!file) return false;
+      // File retags and lake ownership updates serialize against these actual writes.
+      await files.updateOne({ _id: file._id }, { $currentDate: { updatedAt: true } }, { session });
+      const tags = Array.isArray(file.tags)
+        ? file.tags.flatMap(tag =>
+            isPlain(tag) && typeof tag.name === 'string' ? [tag.name, tag.name.toLowerCase()] : []
+          )
+        : [];
+      const lakes = database.collection(mongoose.model('DataLake').collection.name);
+      const clauses: Plain[] = tags.length ? [{ datalakeTag: { $in: tags } }] : [];
+      if (tags.some(tag => tag.includes(':'))) clauses.push({ createdByUserId: String(file.userId) });
+      if (clauses.length) {
+        await lakes.updateMany({ $or: clauses }, { $currentDate: { updatedAt: true } }, { session });
+      }
+      if ((await findOrganizationFileIds([FabFile.hydrate(file)], this.subject.userId)).has(String(file._id)))
+        return false;
+      await this.assertLease();
+      const chunks = this.registry.FabFileChunk;
+      if (chunks?.kind === 'viaParent' && chunks.parent === 'FabFile') {
+        await database
+          .collection(mongoose.model('FabFileChunk').collection.name)
+          .deleteMany({ [chunks.foreignKey]: String(file._id) }, { session });
+      }
+      await this.assertLease();
+      const deleted = await files.deleteOne(operation.deleteOne.filter, { session });
+      if (deleted.deletedCount !== 1) throw new Error('File ownership changed during erasure');
+      return true;
+    });
+  }
+
+  private async apply(model: string, operations: readonly Operation[]): Promise<void> {
+    const database = mongoose.connection.db;
+    if (!database) throw new Error('Subject erasure requires a connected database');
+    const collection = database.collection(mongoose.model(model).collection.name);
+    for (let start = 0; start < operations.length; start += MATCH_BATCH) {
+      await this.assertLease();
+      await collection.bulkWrite(operations.slice(start, start + MATCH_BATCH), {
+        ordered: true,
+        session: this.session,
+      });
+    }
+  }
+
+  private async skippedIds(model: string): Promise<ReadonlySet<string>> {
+    const ids = new Set<string>();
+    if (this.registry[model]?.kind === 'subject') ids.add(this.subject.userId);
+    if (model === PERSONAL_WORKSPACE_MODEL) {
+      for (const id of await this.workspaceIds()) ids.add(id);
+    }
+    return ids;
+  }
+
+  private workspaceIds(): Promise<ReadonlySet<string>> {
+    this.personalWorkspaces ??= findPersonalOrganizationIds(this.subject.userId, this.session).then(
+      found => new Set(found)
+    );
+    return this.personalWorkspaces;
+  }
+
+  private operationsFor(
+    model: string,
+    { outcome, matched, document }: ErasureEntry,
+    workspaces: readonly string[]
+  ): Operation[] {
+    // Each write re-checks the match it was planned from, so a row reassigned since the read is left alone.
+    const stillMatching = (references: readonly UserReference[]) => {
+      // The values as read, not filterFor's forms: those miss a mixed-case stored email.
+      const clauses = references.flatMap((reference): Plain[] => {
+        const values = valuesAt(document, reference.path).filter(this.matcher.isSubject(reference));
+        if (values.length === 0) return [];
+        const clause = { ...reference.where, [reference.path]: { $in: values } };
+        // A personal row moved into an organization since the read is no longer the person's to delete.
+        if (reference.scope !== 'personal') return [clause];
+        const personal = personalFilter(this.subject.userId, workspaces, reference.path);
+        // A file joins an organization lake by tag (isOrganizationFile), so a retag since the read voids it.
+        if (model === 'FabFile') return [{ $and: [clause, personal, { tags: document.tags ?? null }] }];
+        return [{ $and: [clause, personal] }];
+      });
+      return {
+        _id: document._id,
+        ...(clauses.length > 0 ? { $or: clauses } : {}),
+      } as mongoose.mongo.Filter<mongoose.mongo.Document>;
+    };
+    if (outcome === 'deleted') {
+      // A viaParent child matches through its parent, so it has no own reference to re-check.
+      const filter = stillMatching(matched.filter(reference => reference.action === 'deleteDocument'));
+      return [{ deleteOne: { filter } }];
+    }
+    return matched.flatMap(reference => {
+      const write = this.updateFor(model, reference, document);
+      const filter = stillMatching([reference]);
+      // Built from registry paths, which no static type describes.
+      return write ? [{ updateOne: { filter, update: write.update as Update, arrayFilters: write.arrayFilters } }] : [];
+    });
+  }
+
+  /** One reference's update; a `retain` only clears its `alsoRedact`. */
+  private updateFor(
+    model: string,
+    reference: UserReference,
+    document: LeanDocument
+  ): { update: Plain; arrayFilters?: Plain[] } | null {
+    if (reference.action === 'deleteDocument') return null;
+    if (reference.action === 'retain') {
+      const update = compact(this.redactions(model, reference.alsoRedact ?? [], null));
+      return Object.keys(update).length > 0 ? { update } : null;
+    }
+    const values = [...new Set(valuesAt(document, reference.path).filter(this.matcher.isSubject(reference)))];
+    if (values.length === 0) return null;
+    const segments = reference.path.split('.');
+    const arrays = arraySegments(document, segments);
+    const lastArray = arrays[arrays.length - 1];
+    const remainder = lastArray === undefined ? '' : segments.slice(lastArray + 1).join('.');
+
+    if (reference.action === 'pullFromArray') {
+      if (lastArray === undefined) return null;
+      const condition = remainder ? { [remainder]: { $in: values } } : { $in: values };
+      return { update: { $pull: { [positional(segments.slice(0, lastArray + 1), arrays, null)]: condition } } };
+    }
+
+    const unique = uniqueIndexPaths(mongoose.model(model).schema).has(reference.path);
+    const placeholder = deletedUserValue(values[0], reference.matchBy, unique ? document._id : undefined);
+    if (lastArray === undefined) {
+      const redactions = this.redactions(model, reference.alsoRedact ?? [], null);
+      return { update: compact({ ...redactions, $set: { ...redactions.$set, [reference.path]: placeholder } }) };
+    }
+    // Only the elements naming the person change; `alsoRedact` under the same array goes with them.
+    const arrayPrefix = segments.slice(0, lastArray + 1).join('.');
+    const redactions = this.redactions(model, reference.alsoRedact ?? [], {
+      arrayPrefix,
+      positional: positional(segments.slice(0, lastArray + 1), arrays, '$[match]'),
+    });
+    return {
+      update: compact({
+        ...redactions,
+        $set: { ...redactions.$set, [positional(segments, arrays, '$[match]')]: placeholder },
+      }),
+      arrayFilters: [{ [remainder ? `match.${remainder}` : 'match']: { $in: values } }],
+    };
+  }
+
+  /** `alsoRedact` paths are unset, or set to a placeholder where the schema requires them. */
+  private redactions(
+    model: string,
+    paths: readonly string[],
+    element: { arrayPrefix: string; positional: string } | null
+  ): { $set: Plain; $unset: Plain } {
+    const $set: Plain = {};
+    const $unset: Plain = {};
+    const schema = mongoose.model(model).schema;
+    for (const path of paths) {
+      const target =
+        element && path.startsWith(`${element.arrayPrefix}.`)
+          ? `${element.positional}${path.slice(element.arrayPrefix.length)}`
+          : path;
+      const type = schema.path(path);
+      if (!type?.isRequired) {
+        $unset[target] = '';
+      } else {
+        $set[target] = redactedValue(path, type.instance);
+      }
+    }
+    return { $set, $unset };
+  }
+}
+
+const compact = (update: Plain): Plain =>
+  Object.fromEntries(Object.entries(update).filter(([, value]) => !isPlain(value) || Object.keys(value).length > 0));

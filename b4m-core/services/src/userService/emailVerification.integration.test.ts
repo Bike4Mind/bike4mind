@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { hashEmailToken } from '@bike4mind/utils';
 import { sendEmailVerification } from './sendEmailVerification';
 import { resendEmailVerification } from './resendEmailVerification';
 import { verifyEmailToken } from './verifyEmailToken';
@@ -60,7 +61,7 @@ describe('Email Verification Flow - Integration Tests', () => {
 
       expect(mockAdapters.mailer.sendEmailVerificationEmail).toHaveBeenCalledTimes(1);
       expect(generatedToken).toBeTruthy();
-      expect(mockUser.emailVerificationToken).toBe(generatedToken);
+      expect(mockUser.emailVerificationToken).toBe(hashEmailToken(generatedToken));
       expect(mockUser.emailVerificationSentAt).toBeInstanceOf(Date);
       expect(mockUser.emailVerificationExpires).toBeInstanceOf(Date);
 

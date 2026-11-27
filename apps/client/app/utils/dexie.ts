@@ -12,11 +12,10 @@ import {
   IAdminSettings,
   IChatHistoryItem,
   IAppFile,
-  IQuestMasterPlanDocument,
   IArtifactDocument,
   IArtifactVersionDocument,
 } from '@bike4mind/common';
-import { IUserSubscription } from '@client/lib/userSubscriptions/types';
+import { IUserSubscription } from '@bike4mind/server-utils/lib/userSubscriptions/types';
 import Dexie, { Table } from 'dexie';
 
 export class DexieStore extends Dexie {
@@ -27,7 +26,6 @@ export class DexieStore extends Dexie {
   public quests!: Table<IChatHistoryItem, string>;
   appfiles!: Table<IAppFile, string>;
   usersubscriptions!: Table<IUserSubscription, string>;
-  questmasterplans!: Table<IQuestMasterPlanDocument, string>;
   artifacts!: Table<IArtifactDocument, string>;
   artifact_versions!: Table<IArtifactVersionDocument, string>;
 
@@ -71,6 +69,11 @@ export class DexieStore extends Dexie {
       bob_runs: '_id, &id, userId',
 
       adminsettings: '_id, &id, &name',
+    });
+    // Version 22 drops the local cache of the retired in-chat QuestMaster plans. Earlier versions
+    // stay as they are: Dexie upgrades an existing browser database through each one in turn.
+    this.version(22).stores({
+      questmasterplans: null,
     });
   }
 }

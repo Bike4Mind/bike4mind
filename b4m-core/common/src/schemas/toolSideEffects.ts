@@ -43,6 +43,7 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   deep_research: 'none',
   math_evaluate: 'none',
   current_datetime: 'none',
+  current_model_details: 'none',
   prompt_enhancement: 'none',
   wikipedia_on_this_day: 'none',
   moon_phase: 'none',
@@ -56,7 +57,6 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   list_my_data_lakes: 'none',
   chess_engine: 'none',
   fmp_financial_data: 'none',
-  bob_panel_read: 'none',
   // Expands a stored instruction template into text for the next turn; writes nothing.
   skill: 'none',
   // Classifies text the caller already holds: no stored write, no outbound action on anyone's
@@ -71,15 +71,17 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   // Serializes a .ipynb into the observation; unlike excel_generation it does not persist
   // the file, so it stops at `local`.
   generate_jupyter_notebook: 'local',
-  optihashi_schedule: 'local',
-  optihashi_formulate: 'local',
-  optihashi_edit_problem: 'local',
 
   image_generation: 'external',
   edit_image: 'external',
   music_generation: 'external',
   audio_generation: 'external',
   video_generation: 'external',
+  // Start generation jobs and rewrite the composition's shots and timeline.
+  production_storyboard: 'external',
+  production_generate_shot: 'external',
+  production_add_audio: 'external',
+  production_assemble: 'external',
   excel_generation: 'external',
   create_data_lake: 'external',
   save_content_to_data_lake: 'external',
@@ -88,6 +90,9 @@ const CORE_TOOL_SIDE_EFFECTS: Record<B4MLLMTools, ToolSideEffects> = {
   blog_edit: 'external',
   blog_draft: 'external',
   delegate_to_agent: 'external',
+  // Starts a Bob site read that bills the user's credits and publishes its report as them: a
+  // stored write made on their behalf, unlike deep_research's spend, so agent mode asks first.
+  bob_panel_read: 'external',
 };
 
 /**
@@ -130,6 +135,9 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
 
   // Premium overlay
   mission_status: 'none',
+  optihashi_schedule: 'local',
+  optihashi_formulate: 'local',
+  optihashi_edit_problem: 'local',
   optihashi_decompose: 'local',
   optihashi_solve: 'local',
   send_slack_message: 'external',

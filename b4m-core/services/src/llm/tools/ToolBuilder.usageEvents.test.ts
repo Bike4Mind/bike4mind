@@ -143,12 +143,27 @@ describe('recordToolUsageEvent', () => {
   it('swallows a rejected record and warns instead of throwing into billing', async () => {
     const warn = vi.fn();
     const db = { usageEvents: { record: vi.fn().mockRejectedValue(new Error('db down')) } };
-    recordToolUsageEvent(db as never, { warn } as never, 'image_generation', {} as never);
-    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    await expect(
+      recordToolUsageEvent(db as never, { warn } as never, 'image_generation', {} as never)
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
     expect(db.usageEvents.record).toHaveBeenCalled();
   });
 
-  it('is a no-op when the usage events repository is absent', () => {
-    expect(() => recordToolUsageEvent({} as never, { warn: vi.fn() } as never, 'x', {} as never)).not.toThrow();
+  it('is a no-op when the usage events repository is absent', async () => {
+    await expect(recordToolUsageEvent({}, { warn: vi.fn() } as never, 'x', {} as never)).resolves.toBeUndefined();
+  });
+
+  it('swallows a record that throws synchronously', async () => {
+    const warn = vi.fn();
+    const db = {
+      usageEvents: {
+        record: vi.fn(() => {
+          throw new Error('bad input');
+        }),
+      },
+    };
+    await expect(recordToolUsageEvent(db, { warn } as never, 'x', {} as never)).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
   });
 });

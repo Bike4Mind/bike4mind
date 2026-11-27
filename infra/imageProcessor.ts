@@ -1,7 +1,6 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { allSecrets } from './secrets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
-import { lambdaVpc } from './vpc';
 
 /**
  * Image Processor Lambda Function
@@ -14,9 +13,12 @@ import { lambdaVpc } from './vpc';
  * Invocation: Direct Lambda SDK invocation from services that need image processing
  *
  * Note: Linked to S3 buckets to allow downloading images from S3 for processing
+ *
+ * No VPC: the handler takes the image in the invoke payload and returns it the same way, so it
+ * opens no database or in-VPC connection. A handler change that adds one must restore `vpc`;
+ * see docs/architecture/lambda-vpc-audit.md and infra/__tests__/lambdaVpcAudit.test.ts.
  */
 export const imageProcessor = new sst.aws.Function('ImageProcessor', {
-  vpc: lambdaVpc,
   handler: 'apps/workers/src/media/imageProcessor.handler',
   runtime: 'nodejs24.x',
   timeout: '5 minutes',

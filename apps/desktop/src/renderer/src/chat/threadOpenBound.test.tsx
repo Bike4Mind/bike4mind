@@ -12,7 +12,7 @@ import { WINDOW_STEP } from './threadWindow';
 /** Rounds rendered so far, by the round text they were handed; see the ToolCallList mock. */
 const toolListRenders = vi.hoisted(() => ({ count: 0 }));
 
-// The rows themselves are pinned in ToolCallList.open.test.tsx. Stubbed here so the count of
+// The rows themselves are pinned in ToolCallList.test.tsx. Stubbed here so the count of
 // rounds rendered is directly observable, and so a jsdom parse of thousands of rows is not what
 // this file spends its time on.
 vi.mock('./ToolCallList', () => ({
@@ -53,6 +53,8 @@ const resume = () => undefined;
 
 const SPARSE_STRESS_SHAPE: ThreadShape = {
   ...STRESS_SHAPE,
+  turns: 50,
+  boundaryAt: 40,
   previewChars: 100,
   diffEvery: 0,
   proseChars: 40,
@@ -131,7 +133,7 @@ describe('opening a long conversation', () => {
 
   // jsdom has no layout, so the host's heights are scripted: 100px a round, scrolled 300px down.
   it("holds the reader's distance from the bottom while older turns mount above them", () => {
-    render(buildThread(STRESS_SHAPE));
+    render(buildThread(SPARSE_STRESS_SHAPE));
     const host = container.querySelector('[data-testid="chat-thread"]') as HTMLElement;
     let scrollTop = 300;
     Object.defineProperty(host, 'scrollHeight', { get: () => count('chat-message-round') * 100 });
@@ -144,9 +146,10 @@ describe('opening a long conversation', () => {
     expect(host.scrollHeight - host.scrollTop).toBe(fromBottom);
   });
 
-  // The stress fixture's turns and boundary, with almost none of its text: walking to the
-  // boundary mounts every turn after it, and drawing all of that markdown is what used to run
-  // this past its timeout on a loaded runner. The bound on what one window draws is pinned above.
+  // The stress fixture's rounds with almost none of its text, and fewer turns that still span
+  // several windows: walking to the boundary mounts every turn after it, and drawing all of that
+  // is what used to run this past its timeout on a loaded runner. The bound on what one window
+  // draws is pinned above.
   it('reaches the compaction boundary by scrolling, and only then offers the earlier messages', () => {
     render(buildThread(SPARSE_STRESS_SHAPE));
     for (let step = 0; step < 100 && count('chat-thread-older-sentinel') > 0; step++)

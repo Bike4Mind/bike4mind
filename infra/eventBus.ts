@@ -4,9 +4,24 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
-import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
+import { notebookCurationQueue, riskEvidenceQueue, riskEvidenceQueueDLQ, sreFixQueue, sreFixQueueDLQ } from './queues';
+import { createEventBusDeadLetter } from './eventBusDeadLetter';
+import { otcEmailConfigurationSet } from './otcEmailMetrics';
+import { mailTransportEnvironment, sesSendPermissions } from './mailTransport';
+import { appUrlForLambdaEnv } from './router';
+import { mailBodyEnvironment, mailBodyGetPermission } from './mailBodyOffload';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 
 // Stripe events
+const billingEventsDLQ = new sst.aws.Queue('billingEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const billingEventsDeadLetter = createEventBusDeadLetter('billingEventsDLQ', billingEventsDLQ);
+
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
   'stripe-invoice-payment-succeeded',
   {
@@ -17,6 +32,7 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
     timeout: '1 minute',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
     // Lumina5/Entitlements skip metrics (emitMetric in the handler + plan-lookup miss
     // in handleUserSubscriptionInvoice).
@@ -25,12 +41,15 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
+      billingEventsDeadLetter.sendPermission,
     ],
+    transform: billingEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['stripe.invoice.payment_succeeded'],
     },
+    transform: billingEventsDeadLetter.ruleTarget,
   }
 );
 
@@ -44,6 +63,7 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
     timeout: '1 minute',
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
     // Lumina5/Entitlements reconcile metrics (emitMetric in the handler).
     permissions: [
@@ -51,17 +71,39 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
+      billingEventsDeadLetter.sendPermission,
     ],
+    transform: billingEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['stripe.cus.sub.updated'],
     },
+    transform: billingEventsDeadLetter.ruleTarget,
   }
 );
 
+billingEventsDeadLetter.allowRules([
+  stripeInvoicePaymentSucceededSubscription,
+  stripeCustomerSubscriptionUpdatedSubscription,
+]);
+
 // Email events
-eventBus.subscribe(
+const emailEventsDLQ = new sst.aws.Queue('emailEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const emailEventsDeadLetter = createEventBusDeadLetter('emailEventsDLQ', emailEventsDLQ);
+
+// Recipient domains the worker drops instead of handing to the transport. The E2E suites sign up
+// and invite synthetic test.com users on every non-production stage, and SES would otherwise
+// bounce those and count them against the stage's configuration set metrics.
+const mailSinkDomains = $app.stage === 'production' ? '' : 'test.com';
+
+export const emailSendSubscription = eventBus.subscribe(
   'email-send',
   {
     handler: 'apps/workers/src/events/sendEmail.handler',
@@ -69,27 +111,90 @@ eventBus.subscribe(
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
     environment: {
+      ...mailBodyEnvironment(appFilesBucket),
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      OTC_SES_CONFIGURATION_SET: otcEmailConfigurationSet?.name ?? '',
+      ...mailTransportEnvironment,
+      MAIL_SINK_DOMAINS: mailSinkDomains,
     },
+    permissions: [emailEventsDeadLetter.sendPermission, ...sesSendPermissions, mailBodyGetPermission(appFilesBucket)],
+    transform: emailEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['email.send'],
     },
+    transform: emailEventsDeadLetter.ruleTarget,
   }
 );
 
+emailEventsDeadLetter.allowRules([emailSendSubscription]);
+
+// Push notifications to first-party native clients (apps/workers/src/events/sendPush.ts).
+// The APNS_* credentials are sst.Secrets (infra/secrets.ts, linked through allSecrets) defaulting to
+// 'not-configured'; with any of them unset the handler consumes events as a no-op, so stages without
+// push credentials need nothing here.
+const pushEventsDLQ = new sst.aws.Queue('pushEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const pushEventsDeadLetter = createEventBusDeadLetter('pushEventsDLQ', pushEventsDLQ);
+
+export const notificationPushSubscription = eventBus.subscribe(
+  'notification-push',
+  {
+    handler: 'apps/workers/src/events/sendPush.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    // VPC for the database egress path the other Mongo-reading subscribers use; APNs is reached via NAT.
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
+    },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      // One Lambda handles both and routes on the detail-type; a live activity frame shares the push DLQ.
+      detailType: ['notification.push', 'notification.liveActivity'],
+    },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+// Relays a finished Studio group to the requester's open sessions (apps/workers/src/events/studioJobCompleted.ts).
+// A user-facing notification like push, so it shares the push DLQ; a native notifier adds its own rule on the
+// same detail-type.
+export const studioJobCompletedSubscription = eventBus.subscribe(
+  'studio-job-completed',
+  {
+    handler: 'apps/workers/src/events/studioJobCompleted.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi],
+    // VPC for the database egress path (websocket connections are read from Mongo).
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    permissions: [pushEventsDeadLetter.sendPermission],
+    transform: pushEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: { detailType: ['studio.job.completed'] },
+    transform: pushEventsDeadLetter.ruleTarget,
+  }
+);
+
+pushEventsDeadLetter.allowRules([notificationPushSubscription, studioJobCompletedSubscription]);
+
 // Session events
 //
-// Shared DLQ for the session enrichment handlers. EventBridge invokes these Lambdas
-// asynchronously, so a failure can be lost on either side of the invoke:
-// - the rule-target DLQ (sessionEnrichmentRuleDLQ) only sees events EventBridge could not
-//   hand to Lambda at all;
-// - once Lambda accepts the invoke, a thrown error, timeout or init crash is retried by
-//   Lambda (2 retries) and then dropped unless the FUNCTION has a dead-letter target
-//   (sessionEnrichmentFunctionDLQ). This is the side a real handler failure lands on.
-// Alarm-only (no source queue to replay into; recovery is re-emitting the event), see
-// infra/dlqAlarms.ts. Guarded by infra/__tests__/sessionEnrichmentDlq.test.ts.
+// Session enrichment handlers share one dead letter (see infra/eventBusDeadLetter.ts).
 const sessionEnrichmentDLQ = new sst.aws.Queue('sessionEnrichmentDLQ', {
   transform: {
     queue: {
@@ -97,27 +202,7 @@ const sessionEnrichmentDLQ = new sst.aws.Queue('sessionEnrichmentDLQ', {
     },
   },
 });
-
-// Lambda delivers async-invoke failures to the DLQ with the function's own execution role.
-const sessionEnrichmentDLQSendPermission = {
-  actions: ['sqs:SendMessage'],
-  resources: [sessionEnrichmentDLQ.arn],
-};
-
-// sst.aws.Function has no first-party async-invoke DLQ prop, so the underlying
-// aws.lambda.Function's deadLetterConfig is set directly (same as fabFileModerationDLQ in
-// infra/queues.ts).
-const sessionEnrichmentFunctionDLQ = {
-  function: {
-    deadLetterConfig: { targetArn: sessionEnrichmentDLQ.arn },
-  },
-};
-
-const sessionEnrichmentRuleDLQ = {
-  target: {
-    deadLetterConfig: { arn: sessionEnrichmentDLQ.arn },
-  },
-};
+const sessionEnrichmentDeadLetter = createEventBusDeadLetter('sessionEnrichmentDLQ', sessionEnrichmentDLQ);
 
 const sessionAutoNamingSubscription = eventBus.subscribe(
   'session-auto-name',
@@ -135,15 +220,15 @@ const sessionAutoNamingSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
-      sessionEnrichmentDLQSendPermission,
+      sessionEnrichmentDeadLetter.sendPermission,
     ],
-    transform: sessionEnrichmentFunctionDLQ,
+    transform: sessionEnrichmentDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['session.auto_name'],
     },
-    transform: sessionEnrichmentRuleDLQ,
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
   }
 );
 
@@ -163,15 +248,15 @@ const sessionSummarizationSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
-      sessionEnrichmentDLQSendPermission,
+      sessionEnrichmentDeadLetter.sendPermission,
     ],
-    transform: sessionEnrichmentFunctionDLQ,
+    transform: sessionEnrichmentDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['session.summarize'],
     },
-    transform: sessionEnrichmentRuleDLQ,
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
   }
 );
 
@@ -184,10 +269,10 @@ const sessionContextSummarizationSubscription = eventBus.subscribe(
     vpc: lambdaVpc,
     timeout: '2 minutes',
     environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
-    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }, sessionEnrichmentDLQSendPermission],
-    transform: sessionEnrichmentFunctionDLQ,
+    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }, sessionEnrichmentDeadLetter.sendPermission],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
   },
-  { pattern: { detailType: ['session.context_summarize'] }, transform: sessionEnrichmentRuleDLQ }
+  { pattern: { detailType: ['session.context_summarize'] }, transform: sessionEnrichmentDeadLetter.ruleTarget }
 );
 
 const sessionTaggingSubscription = eventBus.subscribe(
@@ -206,49 +291,96 @@ const sessionTaggingSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
-      sessionEnrichmentDLQSendPermission,
+      sessionEnrichmentDeadLetter.sendPermission,
     ],
-    transform: sessionEnrichmentFunctionDLQ,
+    transform: sessionEnrichmentDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['session.tag'],
     },
-    transform: sessionEnrichmentRuleDLQ,
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
   }
 );
 
-const sessionEnrichmentSubscriptions = [
+const briefComposeSubscription = eventBus.subscribe(
+  'brief-compose',
+  {
+    handler: 'apps/workers/src/events/briefCompose.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '2 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      sessionEnrichmentDeadLetter.sendPermission,
+    ],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['brief.compose'],
+    },
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
+  }
+);
+
+// Runs the operations model over a delegated item (POST /api/v1/delegations); see apps/workers/src/events/delegationProcess.ts.
+// The handler throws only while shared files are still being extracted, so the async retries double as the wait.
+const delegationProcessSubscription = eventBus.subscribe(
+  'delegation-process',
+  {
+    handler: 'apps/workers/src/events/delegationProcess.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '3 minutes',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      sessionEnrichmentDeadLetter.sendPermission,
+    ],
+    transform: sessionEnrichmentDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['delegation.process'],
+    },
+    transform: sessionEnrichmentDeadLetter.ruleTarget,
+  }
+);
+
+sessionEnrichmentDeadLetter.allowRules([
+  briefComposeSubscription,
+  delegationProcessSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,
   sessionTaggingSubscription,
-];
+]);
 
-// EventBridge delivers to a rule-target DLQ as the events.amazonaws.com service principal,
-// so the queue needs a resource policy granting SendMessage, scoped to the session rules.
-new aws.sqs.QueuePolicy('sessionEnrichmentDLQPolicy', {
-  queueUrl: sessionEnrichmentDLQ.url,
-  policy: $util
-    .all([sessionEnrichmentDLQ.arn, $util.all(sessionEnrichmentSubscriptions.map(sub => sub.nodes.rule.arn))])
-    .apply(([dlqArn, ruleArns]) =>
-      JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Effect: 'Allow',
-            Principal: { Service: 'events.amazonaws.com' },
-            Action: 'sqs:SendMessage',
-            Resource: dlqArn,
-            Condition: { ArnEquals: { 'aws:SourceArn': ruleArns } },
-          },
-        ],
-      })
-    ),
+// Notebook Curation and Spider events share one dead letter (see infra/eventBusDeadLetter.ts).
+const notebookEventsDLQ = new sst.aws.Queue('notebookEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
 });
+const notebookEventsDeadLetter = createEventBusDeadLetter('notebookEventsDLQ', notebookEventsDLQ);
 
-// Notebook Curation events
-eventBus.subscribe(
+const notebookCurationStartSubscription = eventBus.subscribe(
   'notebook-curation-start',
   {
     handler: 'apps/workers/src/events/notebookCuration.handler',
@@ -272,17 +404,20 @@ eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      notebookEventsDeadLetter.sendPermission,
     ],
+    transform: notebookEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['notebook.curation.start'],
     },
+    transform: notebookEventsDeadLetter.ruleTarget,
   }
 );
 
 // Notebook Curation Analytics - logs analytics when curation completes
-eventBus.subscribe(
+const notebookCurationAnalyticsSubscription = eventBus.subscribe(
   'notebook-curation-complete-analytics',
   {
     handler: 'apps/workers/src/events/notebookCurationAnalytics.handler',
@@ -293,11 +428,14 @@ eventBus.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    permissions: [notebookEventsDeadLetter.sendPermission],
+    transform: notebookEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['notebook.curation.complete'],
     },
+    transform: notebookEventsDeadLetter.ruleTarget,
   }
 );
 
@@ -313,11 +451,6 @@ eventBus.subscribe(
 // Telemetry Alert events - sends Slack alerts and creates GitHub issues for context telemetry anomalies
 // Processes alerts asynchronously so main Lambda can terminate without blocking
 // Includes fingerprinting, deduplication, regression detection, and LLM priority determination
-//
-// Rule-target DLQ: EventBridge silently DROPS an event once the target's delivery retries
-// are exhausted and no DLQ is configured - a failed alert delivery would vanish without
-// trace. The deadLetterConfig on the rule target (set via transform.target below) captures
-// those undeliverable events instead. Alarmed in infra/dlqAlarms.ts.
 const telemetryAlertRuleDLQ = new sst.aws.Queue('telemetryAlertRuleDLQ', {
   transform: {
     queue: {
@@ -325,6 +458,7 @@ const telemetryAlertRuleDLQ = new sst.aws.Queue('telemetryAlertRuleDLQ', {
     },
   },
 });
+const telemetryAlertDeadLetter = createEventBusDeadLetter('telemetryAlertRuleDLQ', telemetryAlertRuleDLQ);
 
 const telemetryAlertSubscription = eventBus.subscribe(
   'telemetry-alert',
@@ -343,41 +477,53 @@ const telemetryAlertSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      telemetryAlertDeadLetter.sendPermission,
     ],
+    transform: telemetryAlertDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['telemetry.alert'],
     },
-    transform: {
-      target: {
-        deadLetterConfig: {
-          arn: telemetryAlertRuleDLQ.arn,
-        },
-      },
-    },
+    transform: telemetryAlertDeadLetter.ruleTarget,
   }
 );
 
-// EventBridge delivers to a rule-target DLQ as the events.amazonaws.com service principal,
-// so the queue needs a resource policy granting SendMessage, scoped to this rule's ARN.
-new aws.sqs.QueuePolicy('telemetryAlertRuleDLQPolicy', {
-  queueUrl: telemetryAlertRuleDLQ.url,
-  policy: $util.all([telemetryAlertRuleDLQ.arn, telemetryAlertSubscription.nodes.rule.arn]).apply(([dlqArn, ruleArn]) =>
-    JSON.stringify({
-      Version: '2012-10-17',
-      Statement: [
-        {
-          Effect: 'Allow',
-          Principal: { Service: 'events.amazonaws.com' },
-          Action: 'sqs:SendMessage',
-          Resource: dlqArn,
-          Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
-        },
-      ],
-    })
-  ),
+telemetryAlertDeadLetter.allowRules([telemetryAlertSubscription]);
+
+// Moderation escalations (a user entering suspend_pending, a severe-category hit) posted to the abuse
+// alarm channel by apps/workers/src/events/moderationEscalationAlert.ts. Published fire-and-forget from
+// the chat path, so a failed post retries here and then dead-letters rather than touching the request.
+const moderationAlertsDLQ = new sst.aws.Queue('moderationAlertsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
 });
+const moderationAlertsDeadLetter = createEventBusDeadLetter('moderationAlertsDLQ', moderationAlertsDLQ);
+const moderationAlertMention = alarmSlackMentionFunctionArgs();
+
+const moderationEscalationSubscription = eventBus.subscribe(
+  'moderation-escalation-alert',
+  {
+    handler: 'apps/workers/src/events/moderationEscalationAlert.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets],
+    // VPC for the database egress path (the account age and funding lookup reads Mongo).
+    vpc: lambdaVpc,
+    timeout: '30 seconds',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...moderationAlertMention.environment },
+    permissions: [...moderationAlertMention.permissions, moderationAlertsDeadLetter.sendPermission],
+    transform: moderationAlertsDeadLetter.functionTarget,
+  },
+  {
+    pattern: { detailType: ['moderation.escalation'] },
+    transform: moderationAlertsDeadLetter.ruleTarget,
+  }
+);
+
+moderationAlertsDeadLetter.allowRules([moderationEscalationSubscription]);
 
 // Spider events - comprehensive notebook grooming
 const spiderSubscription = eventBus.subscribe(
@@ -396,14 +542,34 @@ const spiderSubscription = eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      notebookEventsDeadLetter.sendPermission,
     ],
+    transform: notebookEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['spider.start'],
     },
+    transform: notebookEventsDeadLetter.ruleTarget,
   }
 );
+
+notebookEventsDeadLetter.allowRules([
+  notebookCurationStartSubscription,
+  notebookCurationAnalyticsSubscription,
+  spiderSubscription,
+]);
+
+// Completion events. Defined here rather than in infra/llm.ts, which owns the rules, because
+// SlackQuestProcessor (infra/functions.ts) needs the function side too and llm.ts imports it.
+const completionEventsDLQ = new sst.aws.Queue('completionEventsDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const completionEventsDeadLetter = createEventBusDeadLetter('completionEventsDLQ', completionEventsDLQ);
 
 // SRE Diagnostician -> Surgeon handoff. The analysis handler emits
 // sre.analysis.completed (apps/client/server/utils/eventBus.ts) and this rule
@@ -426,11 +592,41 @@ const sreFixDispatchSubscription = eventBus.subscribeQueue('SreFixDispatch', sre
 // target's policy created by subscribeQueue only covers the main queue).
 sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
 
+// Account behavioral risk evidence. completion.completed is published only for turns with mementos
+// enabled (publishMementoCompletion), so this is a freshness nudge for that cohort; the hourly
+// signupRiskSweep is the baseline. The input transformer keeps the event's prompt out of the queue and
+// its DLQ. Failed deliveries go to riskEvidenceQueueDLQ, which is already alarmed in infra/dlqAlarms.ts.
+const riskEvidenceCompletionSubscription = eventBus.subscribeQueue('RiskEvidenceCompletion', riskEvidenceQueue, {
+  pattern: {
+    detailType: ['completion.completed'],
+  },
+  transform: {
+    target: targetArgs => {
+      targetArgs.deadLetterConfig = { arn: riskEvidenceQueueDLQ.arn };
+      targetArgs.inputTransformer = {
+        inputPaths: { userId: '$.detail.userId' },
+        inputTemplate: '{"kind":"completion","userId":<userId>}',
+      };
+    },
+  },
+});
+
+sst.aws.Queue.createPolicy('RiskEvidenceQueueDLQEventsPolicy', riskEvidenceQueueDLQ.arn);
+
 export {
   eventBus,
-  telemetryAlertRuleDLQ,
-  sessionEnrichmentDLQ,
+  telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  pushEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+  sessionEnrichmentDeadLetter,
   sreFixDispatchSubscription,
+  riskEvidenceCompletionSubscription,
+  briefComposeSubscription,
+  delegationProcessSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

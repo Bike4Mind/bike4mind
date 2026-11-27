@@ -79,11 +79,14 @@ export class LoginPage extends BasePage {
   }
 
   /** Submit the inline register step to create the account, then wait to be routed off /login. */
-  async submitInlineRegister() {
+  /** Pass waitForApp: false when the stage may send the new account to MFA setup, which stays on /login. */
+  async submitInlineRegister({ waitForApp = true }: { waitForApp?: boolean } = {}) {
     const createBtn = this.page.getByTestId('login-register-username-btn');
     await expect(createBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await createBtn.click();
-    await this.page.waitForURL(url => !url.toString().includes('/login'), { timeout: TIMEOUTS.ACTION });
+    if (waitForApp) {
+      await this.page.waitForURL(url => !url.toString().includes('/login'), { timeout: TIMEOUTS.ACTION });
+    }
   }
 
   async waitForLoginSuccess() {

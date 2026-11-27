@@ -74,9 +74,10 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
 
     return (await query).map(d => d.toObject());
   }
+  /** Resolves `null` on a miss, never `undefined`, so a caller's `!== null` guard holds. Same contract as `findById`. */
   async findOne(filter: Record<string, unknown>) {
     const result = await this.model.findOne(filter);
-    return result?.toJSON() as T | null;
+    return (result?.toJSON() ?? null) as T | null;
   }
   async create(data: Omit<T, 'id' | 'updatedAt' | 'createdAt'>) {
     const result = await this.model.create(data);

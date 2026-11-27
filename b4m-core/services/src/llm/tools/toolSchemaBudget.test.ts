@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolBuilder, type ToolBuilderConfig, type BuildToolsArgs } from './ToolBuilder';
-import { b4mTools } from './index';
+import { PRODUCTION_TOOL_NAMES, b4mTools } from './index';
 import { AUTO_ADDED_TOOL_NAMES, resolveEnabledTools } from '../ChatCompletionProcess';
 import { createTokenizer } from '@bike4mind/utils';
 import { MUSIC_MODEL_IDS, VIDEO_MODEL_IDS } from '@bike4mind/common';
@@ -37,14 +37,16 @@ const PER_TOOL_CEILINGS: Record<string, number> = {
 
 /** Any tool without its own line above must stay under this. Catches re-inflating an unlisted tool. */
 const UNLISTED_TOOL_CEILING = 600;
-const AUTO_ADDED_CEILING = 1500;
-const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2300;
+// Auto-added tools (offered on every tool-capable turn, including current_model_details), alone and with the knowledge auto-offer.
+const AUTO_ADDED_CEILING = 1650;
+const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2450;
 /**
- * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised once,
- * for `decide`, whose nested question schema is structure rather than prose: the per-tool ceiling
- * below is what keeps a single description honest.
+ * Headroom for a few new tools, so legitimate growth does not force a ceiling bump. Raised for
+ * `decide`, whose nested question schema is structure rather than prose, and for the four
+ * `production_*` tools, which are built only for a run with a production config (an admin with
+ * Productions on, in agent mode). The per-tool ceiling below is what keeps a single description honest.
  */
-const WHOLE_REGISTRY_CEILING = 11400;
+const WHOLE_REGISTRY_CEILING = 12800;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
@@ -61,6 +63,27 @@ const REPRESENTATIVE_VIDEO_CONFIG = {
 const REPRESENTATIVE_MUSIC_CONFIG = {
   usableModels: MUSIC_MODEL_IDS,
   createJob: vi.fn(),
+};
+// The audio tool is not offered without the host's job functions (see hasAudioToolJobs).
+const REPRESENTATIVE_AUDIO_CONFIG = {
+  jobs: {
+    createSpeechJob: vi.fn(),
+    createSoundEffectJob: vi.fn(),
+    runInline: vi.fn(),
+    readOutput: vi.fn(),
+    cancel: vi.fn(),
+  },
+};
+
+const REPRESENTATIVE_PRODUCTION_CONFIG = {
+  compositions: { get: vi.fn(), update: vi.fn() },
+  image: {},
+  imageModels: [],
+  video: REPRESENTATIVE_VIDEO_CONFIG,
+  music: REPRESENTATIVE_MUSIC_CONFIG,
+  audio: REPRESENTATIVE_AUDIO_CONFIG,
+  findJobs: vi.fn(),
+  referenceImages: vi.fn(),
 };
 
 function buildSchemas(enabledTools: string[]) {
@@ -83,7 +106,12 @@ function buildSchemas(enabledTools: string[]) {
       quest: {} as never,
       saveQuest: vi.fn() as never,
       llm: {} as never,
-      config: { video_generation: REPRESENTATIVE_VIDEO_CONFIG, music_generation: REPRESENTATIVE_MUSIC_CONFIG },
+      config: {
+        video_generation: REPRESENTATIVE_VIDEO_CONFIG,
+        music_generation: REPRESENTATIVE_MUSIC_CONFIG,
+        audio_generation: REPRESENTATIVE_AUDIO_CONFIG,
+        ...Object.fromEntries(PRODUCTION_TOOL_NAMES.map(name => [name, REPRESENTATIVE_PRODUCTION_CONFIG])),
+      },
     } as unknown as BuildToolsArgs) ?? []
   );
 }
@@ -151,6 +179,7 @@ describe('tool schema token budget', () => {
         'blog_edit',
         'blog_publish',
         'create_data_lake',
+        'current_model_details',
         'list_my_data_lakes',
         'navigate_view',
         'save_content_to_data_lake',

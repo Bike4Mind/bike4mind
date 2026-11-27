@@ -60,6 +60,22 @@ describe('NotificationDeduplicator', () => {
       );
     });
 
+    it('keeps user and org names on their labeled lines as literal text', async () => {
+      await deduplicator.handleLowCreditNotification(
+        testUser.userId,
+        'eve <!channel>\n*User ID:* fake',
+        testUser.email,
+        2500,
+        { id: 'org-123', name: 'A & <B>' },
+        webhookUrl
+      );
+
+      const message = mockPostMessageToSlack.mock.calls[0][1] as string;
+      expect(message).toContain('*User:* eve &lt;!channel&gt; *User ID:* fake (test@example.com)');
+      expect(message).toContain('*Organization:* A &amp; &lt;B&gt; (org-123)');
+      expect(message).not.toContain('<!channel>');
+    });
+
     it('should not send duplicate notifications for same tier', async () => {
       await deduplicator.handleLowCreditNotification(
         testUser.userId,
@@ -208,7 +224,7 @@ describe('NotificationDeduplicator', () => {
       expect(mockPostMessageToSlack).toHaveBeenCalledOnce();
       expect(mockPostMessageToSlack).toHaveBeenCalledWith(
         slackUrl,
-        expect.stringContaining('*ERROR* - Database connection failed')
+        expect.objectContaining({ text: 'ERROR on production: Database connection failed' })
       );
     });
 
@@ -288,7 +304,7 @@ describe('NotificationDeduplicator', () => {
       );
 
       expect(mockPostMessageToSlack).toHaveBeenCalledTimes(2);
-      expect(mockPostMessageToSlack).toHaveBeenNthCalledWith(2, slackUrl, expect.stringContaining('`count: 4`'));
+      expect(JSON.stringify(mockPostMessageToSlack.mock.calls[1][1])).toContain('*Seen*\\n4 times in');
 
       vi.useRealTimers();
     });

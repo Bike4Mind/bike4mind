@@ -54,14 +54,20 @@ describe('isStaticAssetPath', () => {
     expect(isStaticAssetPath(['foo.jsx'])).toBe(false);
   });
 
-  it('exempts only the status/tests QA deep link', () => {
+  it.each([
+    ['admin', 'qa', 'tests'],
+    ['status', 'tests'],
+  ])('exempts only the %s QA test deep link', (...prefix) => {
     // Its one dynamic segment is an arbitrary encoded QA key that can end in a file-like token.
-    expect(isStaticAssetPath(['status', 'tests', 'notebook.spec.ts > saves.json'])).toBe(false);
-    expect(isStaticAssetPath(['status', 'tests', 'x.json'])).toBe(false);
-    // The exemption needs both segments: `/status/<file>` alone is still an asset path.
+    expect(isStaticAssetPath([...prefix, 'notebook.spec.ts > saves.json'])).toBe(false);
+    expect(isStaticAssetPath([...prefix, 'x.json'])).toBe(false);
+  });
+
+  it('scopes the QA test exemption to its prefix', () => {
+    // The exemption needs the full prefix: `/status/<file>` alone is still an asset path.
     expect(isStaticAssetPath(['status', 'x.json'])).toBe(true);
-    // The exemption is scoped to the `status/tests` prefix, not to any second segment named
-    // `tests`.
+    expect(isStaticAssetPath(['admin', 'qa', 'x.json'])).toBe(true);
     expect(isStaticAssetPath(['foo', 'tests', 'x.json'])).toBe(true);
+    expect(isStaticAssetPath(['admin', 'tests', 'x.json'])).toBe(true);
   });
 });

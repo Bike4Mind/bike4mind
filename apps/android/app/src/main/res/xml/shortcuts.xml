@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press launcher shortcuts. Each action must match kit AppShortcut, which routes it; each opens a composer and
+     sends nothing. targetPackage is the applicationId, which has no per-build-type suffix. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="ask"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_ask"
+        android:shortcutShortLabel="@string/shortcut_ask_short"
+        android:shortcutLongLabel="@string/shortcut_ask_long">
+        <intent
+            android:action="com.bike4mind.app.action.ASK"
+            android:targetPackage="com.bike4mind.app"
+            android:targetClass="com.bike4mind.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="capture_note"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_note"
+        android:shortcutShortLabel="@string/shortcut_note_short"
+        android:shortcutLongLabel="@string/shortcut_note_long">
+        <intent
+            android:action="com.bike4mind.app.action.CAPTURE_NOTE"
+            android:targetPackage="com.bike4mind.app"
+            android:targetClass="com.bike4mind.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="start_quest"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_quest"
+        android:shortcutShortLabel="@string/shortcut_quest_short"
+        android:shortcutLongLabel="@string/shortcut_quest_long">
+        <intent
+            android:action="com.bike4mind.app.action.START_QUEST"
+            android:targetPackage="com.bike4mind.app"
+            android:targetClass="com.bike4mind.app.MainActivity" />
+    </shortcut>
+</shortcuts>

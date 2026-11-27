@@ -6,6 +6,7 @@ import {
   type IMcpConnectionDocument,
   type IMcpConnectionServerInfo,
   type IMcpConnectionTool,
+  type McpConnectionOwner,
 } from '@bike4mind/common';
 import { mcpConnectionRepository, measureStoredMcpToolsBytes } from '@bike4mind/database';
 import type { RemoteMcpListToolsResult } from '@bike4mind/mcp/remote';
@@ -15,8 +16,8 @@ import {
   computeMcpToolsFingerprint,
   mergeDiscoveredTools,
 } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { invokeRemoteMcp, type InvokeRemoteMcpOptions } from './invokeRemoteMcp';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { invokeRemoteMcp, type InvokeRemoteMcpOptions } from '@bike4mind/server-utils/mcpConnections/invokeRemoteMcp';
 
 /** Compare-and-set attempts before giving up; each loss means a concurrent review or discovery. */
 export const DISCOVERY_MAX_ATTEMPTS = 3;
@@ -41,7 +42,13 @@ function auditDiscovery(
     action,
     requestId: randomUUID().split('-')[0]!,
     userId,
-    metadata: { connectionId: connection.id, host: connection.urlHost, slug: connection.slug, ...extra },
+    metadata: {
+      connectionId: connection.id,
+      host: connection.urlHost,
+      slug: connection.slug,
+      ownerType: connection.ownerType,
+      ...extra,
+    },
   }).success();
 }
 
@@ -73,7 +80,7 @@ function cleanServerInfo(listed: RemoteMcpListToolsResult): IMcpConnectionServer
 
 async function apiKeyRotated(
   connectionId: string,
-  owner: { ownerType: 'user'; ownerKey: string },
+  owner: McpConnectionOwner,
   usedValueEnc: string | null
 ): Promise<boolean> {
   const latest = await mcpConnectionRepository.findByIdWithCredentials(connectionId, owner);
@@ -87,16 +94,18 @@ const nameSha256 = (name: string) => createHash('sha256').update(name, 'utf8').d
  * (new or changed tools wait for review) and stores the result with the fingerprint-and-revision
  * compare-and-set. A loss re-reads and re-merges, so a review saved mid-discovery is kept. The
  * same write marks the connection connected and clears the stale error and auth challenge. Remote
- * failures propagate, already recorded on the connection.
+ * failures propagate, already recorded on the connection. `owner` is the user unless named; the
+ * admin routes name the platform, and `userId` is then the admin whose policy and audit apply.
  */
 export async function discoverConnectionTools(
   connectionId: string,
   userId: string,
-  options: InvokeRemoteMcpOptions = {}
+  options: InvokeRemoteMcpOptions = {},
+  owner: McpConnectionOwner = { ownerType: 'user', ownerKey: userId }
 ): Promise<DiscoveryOutcome> {
   let apiKeyValueEnc: string | null | undefined;
   const listed = await invokeRemoteMcp(
-    { action: 'listTools', connectionId, userId },
+    { action: 'listTools', connectionId, userId, owner },
     {
       ...options,
       onApiKeyLoaded: valueEnc => {
@@ -107,7 +116,6 @@ export async function discoverConnectionTools(
   );
   const { tools: cleaned, dropped: refused } = cleanDiscoveredTools(listed.tools);
   const serverInfo = cleanServerInfo(listed);
-  const owner = { ownerType: 'user' as const, ownerKey: userId };
 
   for (let attempt = 0; attempt < DISCOVERY_MAX_ATTEMPTS; attempt++) {
     const current = await mcpConnectionRepository.findByIdForOwner(connectionId, owner);

@@ -93,14 +93,21 @@ function flushFrames() {
   });
 }
 
-function mount() {
+function mount(agentTurn = false) {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() =>
     root?.render(
       <CssVarsProvider>
-        <BrowserPane sessionId="s1" suspended={false} conversation={conversation} />
+        <BrowserPane
+          sessionId="s1"
+          suspended={false}
+          conversation={conversation}
+          historyEnabled={null}
+          onHistory={() => undefined}
+          agentTurn={agentTurn}
+        />
       </CssVarsProvider>
     )
   );
@@ -224,10 +231,10 @@ describe('the browser pane resize handle', () => {
     flushFrames();
     expect(paneWidth()).toBe(BROWSER_PANE_WIDTH + 200);
 
-    // 42% of a 2000px window, well inside what the conversation can give up.
+    // Everything the 400px sidebar leaves but the conversation's minimum.
     move(0);
     flushFrames();
-    expect(paneWidth()).toBe(840);
+    expect(paneWidth()).toBe(1200);
 
     move(2000);
     flushFrames();
@@ -290,7 +297,13 @@ describe('the browser pane resize handle', () => {
       act(() =>
         root?.render(
           <CssVarsProvider>
-            <BrowserPane sessionId="s1" suspended={suspended} conversation={conversation} />
+            <BrowserPane
+              sessionId="s1"
+              suspended={suspended}
+              conversation={conversation}
+              historyEnabled={null}
+              onHistory={() => undefined}
+            />
           </CssVarsProvider>
         )
       );
@@ -350,7 +363,7 @@ describe('the browser pane resize handle', () => {
     window.localStorage.setItem('b4m.browserPane.width', '800');
     setViewport(1400);
     mount();
-    expect(paneWidth()).toBe(588);
+    expect(paneWidth()).toBe(600);
     press(800);
     release();
     expect(window.localStorage.getItem('b4m.browserPane.width')).toBe('800');
@@ -389,8 +402,8 @@ describe('the browser pane resize handle', () => {
       window.dispatchEvent(new Event('resize'));
     });
     flushFrames();
-    // 42% of 1400.
-    expect(paneWidth()).toBe(588);
+    // 1400 less the sidebar and the conversation's minimum.
+    expect(paneWidth()).toBe(600);
 
     setViewport(2000);
     act(() => {
@@ -477,6 +490,44 @@ describe('the browser pane tab strip', () => {
     });
     expect(plain.defaultPrevented).toBe(false);
     expect(tab).toHaveBeenCalledTimes(4);
+  });
+
+  const menuAction = (target: HTMLElement, testId: string) => {
+    act(() => {
+      target.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })
+      );
+    });
+    act(() => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`)?.click());
+  };
+
+  it('closes every tab from the right-click menu, the active one last', async () => {
+    mount();
+    await settled();
+
+    menuAction(tabs()[1], 'browser-tab-menu-close-all-btn');
+    await settled();
+
+    expect(tab.mock.calls.map(([request]) => request)).toEqual([
+      { sessionId: 's1', action: 'close', tabId: 4 },
+      { sessionId: 's1', action: 'close', tabId: 1 },
+    ]);
+  });
+
+  it('asks before closing a tab the agent is using in the running reply', async () => {
+    setPane.mockResolvedValue({ ...PAGE, tabs: [{ ...PAGE.tabs[0], agentUsedAt: 5 }, PAGE.tabs[1]] });
+    mount(true);
+    await settled();
+
+    menuAction(tabs()[1], 'browser-tab-menu-close-others-btn');
+    expect(tab).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-testid="browser-tab-close-confirm-item"]')?.textContent).toBe(
+      'Example Domain (the agent is using this page)'
+    );
+
+    act(() => document.querySelector<HTMLElement>('[data-testid="browser-tab-close-confirm-btn"]')?.click());
+    await settled();
+    expect(tab).toHaveBeenCalledExactlyOnceWith({ sessionId: 's1', action: 'close', tabId: 1 });
   });
 
   it('says the conversation has no tabs once the last one closed', async () => {

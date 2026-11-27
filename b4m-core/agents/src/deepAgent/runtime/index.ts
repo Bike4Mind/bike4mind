@@ -11,7 +11,30 @@
 export * from './types';
 export { runWakeCycle, MAX_DRIVE_DELTA_PER_WAKE, type WakeDeps, type WakeLogger } from './wakeCycle';
 export { noopRunAct } from './runAct';
-export { resolveToolbeltProfile, TOOLBELT_PROFILES, DEFAULT_TOOLBELT_ROLE, type ToolbeltProfile } from './toolbelts';
+export {
+  resolveToolbeltProfile,
+  registerToolbelts,
+  TOOLBELT_PROFILES,
+  DEFAULT_TOOLBELT_ROLE,
+  type ToolbeltProfile,
+} from './toolbelts';
+export {
+  createAgentExtensionRegistry,
+  CONTRIBUTED_GUARD_PRIORITY_MIN,
+  CONTRIBUTED_GUARD_PRIORITY_MAX,
+  LOW_CONFIDENCE_COMPLETION_MODES,
+  type AgentExtensionContribution,
+  type AgentExtensionListing,
+  type AgentExtensionLogger,
+  type AgentExtensionRegistry,
+  type AgentExtensionSource,
+  type LowConfidenceCompletionMode,
+  type ResolvedOrchestrationProfile,
+  type SurfaceProfileContext,
+  type SurfaceProfileEntry,
+  type ToolMapGuardContext,
+  type ToolMapGuardEntry,
+} from './agentExtensions';
 export {
   renderCharter,
   renderRecentEpisodes,

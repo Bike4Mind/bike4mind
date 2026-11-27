@@ -9,7 +9,8 @@ import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse, createCustomErrorResponse } from '../helpers/responses.js';
 import { orgSchema, projectIdSchema, issueNodeIdSchema, confirmationParams } from '../helpers/schemas.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { getErrorMessage, errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   LIST_ORG_PROJECTS_QUERY,
@@ -32,6 +33,8 @@ import {
   TOOL_UPDATE_PROJECT_ITEM_FIELDS,
 } from '../constants.js';
 
+const log = createStderrLogger('github');
+
 export function registerProjectTools(server: McpServer) {
   // LIST ORGANIZATION PROJECTS - List all projects for an organization
   server.tool(
@@ -44,8 +47,6 @@ export function registerProjectTools(server: McpServer) {
     },
     async ({ org, first, after }) => {
       try {
-        console.error(`[${TOOL_LIST_ORG_PROJECTS}] Fetching projects for org: ${org}`);
-
         interface OrgProjectsQueryResult {
           organization: {
             projectsV2: {
@@ -75,7 +76,7 @@ export function registerProjectTools(server: McpServer) {
           pageInfo: result.organization.projectsV2.pageInfo,
         });
       } catch (error) {
-        console.error(`[${TOOL_LIST_ORG_PROJECTS}] Error:`, error);
+        log.error('failed', { toolName: TOOL_LIST_ORG_PROJECTS, ...errorLogFields(error) });
         return createErrorResponse(error, {
           organization: org,
           hint: 'Ensure you have the "project" OAuth scope enabled and the organization exists.',
@@ -94,8 +95,6 @@ export function registerProjectTools(server: McpServer) {
     },
     async ({ project_id, first }) => {
       try {
-        console.error(`[${TOOL_LIST_PROJECT_FIELDS}] Fetching fields for project: ${project_id}`);
-
         interface ProjectFieldsQueryResult {
           node: {
             fields: {
@@ -126,7 +125,7 @@ export function registerProjectTools(server: McpServer) {
           fields: result.node.fields.nodes,
         });
       } catch (error) {
-        console.error(`[${TOOL_LIST_PROJECT_FIELDS}] Error:`, error);
+        log.error('failed', { toolName: TOOL_LIST_PROJECT_FIELDS, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id });
       }
     }
@@ -142,8 +141,6 @@ export function registerProjectTools(server: McpServer) {
     },
     async ({ project_id, issue_node_id }) => {
       try {
-        console.error(`[${TOOL_GET_PROJECT_ITEM}] Fetching project item for issue: ${issue_node_id}`);
-
         interface ProjectItemQueryResult {
           node: {
             items: {
@@ -179,9 +176,6 @@ export function registerProjectTools(server: McpServer) {
           const projectItem = items.find(item => item.content?.id === issue_node_id);
 
           if (projectItem) {
-            console.error(
-              `[${TOOL_GET_PROJECT_ITEM}] Found issue after searching ${totalItemsSearched} items (${pagesSearched} pages)`
-            );
             return createSuccessResponse({ project_item: projectItem });
           }
 
@@ -190,9 +184,6 @@ export function registerProjectTools(server: McpServer) {
           }
 
           cursor = result.node.items.pageInfo.endCursor;
-          console.error(
-            `[${TOOL_GET_PROJECT_ITEM}] Issue not found in page ${pagesSearched}, searching next page (${totalItemsSearched} items searched so far)`
-          );
         }
 
         // Issue not found after searching all pages
@@ -207,7 +198,7 @@ export function registerProjectTools(server: McpServer) {
             : 'The issue may not be added to this project yet. Use add_issue_to_project to add it.',
         });
       } catch (error) {
-        console.error(`[${TOOL_GET_PROJECT_ITEM}] Error:`, error);
+        log.error('failed', { toolName: TOOL_GET_PROJECT_ITEM, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id, issue_node_id });
       }
     }
@@ -234,7 +225,7 @@ export function registerProjectTools(server: McpServer) {
             contentId: issue_node_id,
           });
         } catch (error) {
-          console.error(`[${TOOL_ADD_ISSUE_TO_PROJECT}] Preview lookup failed:`, error);
+          log.error('preview lookup failed', { toolName: TOOL_ADD_ISSUE_TO_PROJECT, ...errorLogFields(error) });
           return createErrorResponse(error, {
             project_id,
             issue_node_id,
@@ -275,8 +266,6 @@ export function registerProjectTools(server: McpServer) {
 
       // CONFIRMED: Actually add the issue to the project
       try {
-        console.error(`[${TOOL_ADD_ISSUE_TO_PROJECT}] Adding issue ${issue_node_id} to project ${project_id}`);
-
         interface AddProjectItemResult {
           addProjectV2ItemById: {
             item: {
@@ -290,7 +279,7 @@ export function registerProjectTools(server: McpServer) {
           contentId: issue_node_id,
         });
 
-        console.error(`[${TOOL_ADD_ISSUE_TO_PROJECT}] SUCCESS: Added issue to project`);
+        log.info('succeeded', { toolName: TOOL_ADD_ISSUE_TO_PROJECT });
 
         return createSuccessResponse({
           project_id,
@@ -298,7 +287,7 @@ export function registerProjectTools(server: McpServer) {
           item_id: result.addProjectV2ItemById.item.id,
         });
       } catch (error) {
-        console.error(`[${TOOL_ADD_ISSUE_TO_PROJECT}] Error:`, error);
+        log.error('failed', { toolName: TOOL_ADD_ISSUE_TO_PROJECT, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id, issue_node_id });
       }
     }
@@ -377,7 +366,10 @@ export function registerProjectTools(server: McpServer) {
             }),
           ]);
         } catch (error) {
-          console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Preview lookup failed:`, error);
+          log.error('preview lookup failed', {
+            toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS,
+            ...errorLogFields(error),
+          });
           return createErrorResponse(error, {
             project_id,
             item_id,
@@ -453,26 +445,26 @@ export function registerProjectTools(server: McpServer) {
 
       // CONFIRMED: Actually update all fields
       try {
-        console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Updating ${updates.length} fields on item ${item_id}`);
-
         const results: Array<{ field_id: string; success: boolean; error?: string }> = [];
 
         // Update each field sequentially
         for (const update of updates) {
           try {
-            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Updating field ${update.field_id}`);
-
             const kind = classifyFieldUpdate(update);
             const value = kind === 'date' ? toDateOnly(String(update.value)) : update.value;
             const variables = { projectId: project_id, itemId: item_id, fieldId: update.field_id, value };
 
             await octokit.graphql(FIELD_UPDATE_MUTATIONS[kind], variables);
 
-            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] SUCCESS: Updated ${update.field_id}`);
+            log.info('succeeded', { toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS });
             results.push({ field_id: update.field_id, success: true });
           } catch (fieldError) {
             const errorMsg = getErrorMessage(fieldError);
-            console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] ERROR updating ${update.field_id}:`, errorMsg);
+            log.error('field update failed', {
+              toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS,
+              fieldId: update.field_id,
+              ...errorLogFields(fieldError),
+            });
             results.push({ field_id: update.field_id, success: false, error: errorMsg });
           }
         }
@@ -503,7 +495,7 @@ export function registerProjectTools(server: McpServer) {
           isError: !allSucceeded,
         };
       } catch (error) {
-        console.error(`[${TOOL_UPDATE_PROJECT_ITEM_FIELDS}] Error:`, error);
+        log.error('failed', { toolName: TOOL_UPDATE_PROJECT_ITEM_FIELDS, ...errorLogFields(error) });
         return createErrorResponse(error, { project_id, item_id });
       }
     }

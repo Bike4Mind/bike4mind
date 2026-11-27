@@ -19,6 +19,7 @@ import {
 import BaseRepository from '@bike4mind/db-core';
 import { DataLakeModel } from './DataLakeModel';
 import { LakeAccessQueryTextModel } from './LakeAccessQueryTextModel';
+import { Logger } from '@bike4mind/observability';
 
 const ModelName = 'LakeAccessEvent';
 
@@ -72,6 +73,7 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
     // returned counts because a data-lake-public-browse row already has both at zero - see
     // ILakeAccessEvent.servedNothing.
     servedNothing: { type: Boolean, required: false, default: undefined },
+    adminBypassLakeIds: { type: [{ type: String, maxlength: LAKE_ACCESS_IDENTIFIER_MAX_CHARS }], default: undefined },
     surface: { type: String, enum: LAKE_ACCESS_SURFACES, required: true },
     queryTextLogged: { type: Boolean, default: false },
     // No enum: this is a diagnostic join key, not a value this schema's job is to validate - see
@@ -152,9 +154,10 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     // mismatch drops scores entirely rather than risk a silent wrong pairing. Sliced through the
     // SAME cap as returnedChunkIds, never independently.
     if (input.scores && input.scores.length !== chunkIds.length) {
-      console.warn(
-        `[lakeAccessEvent] scores.length (${input.scores.length}) !== chunkIds.length (${chunkIds.length}) - dropping scores`
-      );
+      Logger.warn('[lakeAccessEvent] scores.length !== chunkIds.length - dropping scores', {
+        scoresLength: input.scores.length,
+        chunkIdsLength: chunkIds.length,
+      });
     }
     const scores =
       input.scores && input.scores.length === chunkIds.length
@@ -171,10 +174,12 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         ? supersededCollapsed
         : undefined;
     if (supersededCollapsed !== undefined && filesSupersededCollapsed === undefined) {
-      console.warn(
-        `[lakeAccessEvent] filesSupersededCollapsed (${supersededCollapsed}) is not a non-negative integer - dropping it`
-      );
+      Logger.warn('[lakeAccessEvent] filesSupersededCollapsed is not a non-negative integer - dropping it', {
+        filesSupersededCollapsed: supersededCollapsed,
+      });
     }
+
+    const adminBypassLakeIds = (input.adminBypassLakeIds ?? []).filter(id => input.resolvedLakeIds.includes(id));
 
     // The query-text write happens BEFORE the event, keyed to a pre-generated id, so
     // `queryTextLogged` on the event always reflects the true OUTCOME of the attempt - never just
@@ -223,6 +228,7 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
         // more than absence does, so it is stored as absence rather than as a second way to spell
         // "an ordinary row".
         ...(input.servedNothing ? { servedNothing: true } : {}),
+        ...(adminBypassLakeIds.length ? { adminBypassLakeIds } : {}),
         surface: input.surface,
         queryTextLogged,
         // `|| undefined`, so an empty string is stored as absent rather than indexed: the questId
@@ -330,7 +336,7 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
       } as Partial<ILakeAccessQueryTextDocument>);
       return true;
     } catch (err) {
-      console.warn('[lakeAccessEvent] failed to write query-text sibling', err);
+      Logger.warn('[lakeAccessEvent] failed to write query-text sibling', { error: err });
       return false;
     }
   }

@@ -153,6 +153,6 @@ The most recent 3 tests are shown in a history panel. Each entry shows the model
 
 ## Related Articles
 
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)
 - [Admin Settings](./admin-settings.md)
 - [System Prompts](./system-prompts.md)

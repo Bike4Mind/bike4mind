@@ -1,0 +1,68 @@
+{
+  "qwen3.5:0.8b": {
+    "manifestDigest": "de63045f29755d4721c09d54c9b45c2dadb644f4fd7d604d4cac90d96049971c",
+    "params": {
+      "draft_num_predict": 2,
+      "presence_penalty": 1.5,
+      "temperature": 1,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "qwen3.5:4b": {
+    "manifestDigest": "d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04",
+    "params": {
+      "presence_penalty": 1.5,
+      "temperature": 1,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "gemma4:e4b-it-qat": {
+    "manifestDigest": "ee665637121887cf3befff38abbb1be4ee117c7db867d97a67e29049ecd7e15f",
+    "params": {
+      "temperature": 1,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "gemma4:12b-it-qat": {
+    "manifestDigest": "38044be4f923e5a55264ed7df4eaac2676651a905f735197c504045140c02bd3",
+    "params": {
+      "temperature": 1,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "gemma4:26b-a4b-it-qat": {
+    "manifestDigest": "2dd70431afed94dd3688d790443768c1487ed086b57147ff083851116ae4c4e4",
+    "params": {
+      "temperature": 1,
+      "top_k": 64,
+      "top_p": 0.95
+    }
+  },
+  "qwen3.8:27b": {
+    "manifestDigest": "aaee06c39dcf2437cde036998d960e1fc1494b8191be7cc9657d01e509097813",
+    "params": {
+      "draft_num_predict": 4,
+      "min_p": 0,
+      "presence_penalty": 0,
+      "repeat_penalty": 1,
+      "temperature": 1,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  },
+  "qwen3.8:27b-q8_0": {
+    "manifestDigest": "8f5fb6b71ea00052cbe8545738c55ce61112c4e571cb60ca4dad00b131766039",
+    "params": {
+      "min_p": 0,
+      "presence_penalty": 0,
+      "repeat_penalty": 1,
+      "temperature": 1,
+      "top_k": 20,
+      "top_p": 0.95
+    }
+  }
+}

@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { BackgroundProcessInfo, ChatQueueEvent, ChatStreamEvent } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,8 +12,36 @@ import { appWorktreeRoot, worktreeFolderName } from './project/workspace';
 import type { AccessStore } from './tools/AccessStore';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
-/** A real repository in the user's layout, because resolveWorkspace is what decides the path. */
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
+
+const TEMPLATE_NAME = 'template-repository';
+let template: Promise<string> | undefined;
+
+/**
+ * A real repository in the user's layout, because resolveWorkspace is what decides the path.
+ *
+ * Copied from one built per file: building it takes ten git processes. git records the source,
+ * container and worktree as absolute paths in the files rewritten below.
+ */
 async function repository(name: string): Promise<{ container: string; main: string }> {
+  template ??= buildRepository(TEMPLATE_NAME).then(({ container }) => dirname(container));
+  const from = await template;
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-chip-')));
+  await cp(from, root, { recursive: true });
+  const container = join(root, name);
+  await rename(join(root, TEMPLATE_NAME), container);
+  for (const file of [join(container, 'main', '.git'), join(container, '.bare', 'worktrees', 'main', 'gitdir')]) {
+    const text = await readFile(file, 'utf8');
+    await writeFile(file, text.replaceAll(join(from, TEMPLATE_NAME), container), 'utf8');
+  }
+  const config = join(container, '.bare', 'config');
+  await writeFile(config, (await readFile(config, 'utf8')).replaceAll(from, root), 'utf8');
+  return { container, main: join(container, 'main') };
+}
+
+async function buildRepository(name: string): Promise<{ container: string; main: string }> {
   // realpath because on macOS tmpdir() is a symlink into /private and git reports resolved paths.
   const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-chip-')));
 
@@ -126,8 +154,9 @@ describe('ChatService.updateProject', () => {
    * per change of mind - a user who ticked it, looked at the branch list and picked a different
    * base left a worktree behind for the one they rejected.
    */
-  it('records the worktree choice without creating anything', async () => {
+  it('records the worktree choice and every later pick of base without creating or checking out anything', async () => {
     const { main } = await repository('alpha');
+    await git(main, ['branch', 'feat/chips']);
     const id = await codeSession(main);
     const before = await listWorktrees(main);
 
@@ -140,18 +169,22 @@ describe('ChatService.updateProject', () => {
       workingDirectory: main,
     });
     expect((await service.getSession(id))?.project?.workspaceBranch).toBeUndefined();
+    // The pick is the base of a later cut, so nothing is checked out here.
+    expect(await currentBranch(main)).toBe('main');
+
+    await service.updateProject({ sessionId: id, branch: 'main', workspace: true });
+    await service.updateProject({ sessionId: id, branch: 'feat/one', workspace: true });
+    await service.updateProject({ sessionId: id, branch: 'feat/two', workspace: true });
     expect(await listWorktrees(main)).toEqual(before);
+
+    // Turning it back off returns the session to the project directory.
+    await service.updateProject({ sessionId: id, workspace: false });
+    expect((await service.getSession(id))?.project).toMatchObject({ workspace: false, workingDirectory: main });
   });
 
   describe('worktree with no branch picked', () => {
-    async function masterRepository(name: string): Promise<string> {
-      const { main } = await repository(name);
-      await git(main, ['branch', '-m', 'main', 'master']);
-      return main;
-    }
-
-    it('createCodeSession defaults the base to main instead of refusing, and creates nothing', async () => {
-      const { main } = await repository('default-main-create');
+    it('defaults the base to main instead of refusing, on create and on update, and creates nothing', async () => {
+      const { main } = await repository('default-main');
       const before = await listWorktrees(main);
 
       const created = await service.createCodeSession({ directory: main, workspace: true });
@@ -159,21 +192,16 @@ describe('ChatService.updateProject', () => {
       expect(created).toMatchObject({ ok: true });
       if (!created.ok) return;
       expect(created.session.project).toMatchObject({ branch: 'main', workspace: true, workingDirectory: main });
-      expect(await listWorktrees(main)).toEqual(before);
-    });
 
-    it('updateProject defaults the base to main instead of refusing, and creates nothing', async () => {
-      const { main } = await repository('default-main-update');
-      const before = await listWorktrees(main);
       const id = await codeSession(main, '');
-
       expect(await service.updateProject({ sessionId: id, workspace: true })).toMatchObject({ ok: true });
       expect((await service.getSession(id))?.project?.branch).toBe('main');
       expect(await listWorktrees(main)).toEqual(before);
     });
 
     it('falls back to the repository default when there is no main', async () => {
-      const main = await masterRepository('default-master');
+      const { main } = await repository('default-master');
+      await git(main, ['branch', '-m', 'main', 'master']);
 
       const created = await service.createCodeSession({ directory: main, workspace: true });
 
@@ -181,81 +209,37 @@ describe('ChatService.updateProject', () => {
       if (!created.ok) return;
       expect(created.session.project?.branch).toBe('master');
     });
-
-    it('cuts a new branch from the base at session start and leaves the original checkout alone', async () => {
-      const { main } = await repository('default-start');
-      const created = await service.createCodeSession({ directory: main, workspace: true });
-      if (!created.ok) throw new Error(created.error);
-
-      const session = await store.get(created.session.id);
-      const failure = await (
-        service as unknown as { ensureWorkspace(s: unknown, name: string): Promise<{ error: string } | null> }
-      ).ensureWorkspace(session, 'add a thing');
-
-      expect(failure).toBeNull();
-      const project = (await service.getSession(created.session.id))?.project;
-      expect(project?.workspaceBranch).toBeTruthy();
-      expect(project?.workspaceBranch).not.toBe('main');
-      expect(project?.workingDirectory).not.toBe(main);
-      expect(await currentBranch(project?.workingDirectory ?? '')).toBe(project?.workspaceBranch);
-      expect(await currentBranch(main)).toBe('main');
-    });
   });
 
-  it('leaves nothing behind when the base is picked over and over', async () => {
-    const { main } = await repository('alpha-rethink');
+  it('switches in place with the toggle off: a re-pick does nothing, a pick moves HEAD, a new name is created', async () => {
+    const { main } = await repository('off-switch');
+    await git(main, ['branch', 'feat/chips']);
     const id = await codeSession(main);
     const before = await listWorktrees(main);
+    const head = (await git(main, ['rev-parse', 'HEAD'])).trim();
 
-    await service.updateProject({ sessionId: id, branch: 'main', workspace: true });
-    await service.updateProject({ sessionId: id, branch: 'feat/one', workspace: true });
-    await service.updateProject({ sessionId: id, branch: 'feat/two', workspace: true });
-
-    expect(await listWorktrees(main)).toEqual(before);
-  });
-
-  /** Re-picking the branch already checked out runs no switch and creates no worktree. */
-  it('creates nothing at all with the worktree toggle off', async () => {
-    const { main } = await repository('alpha-off');
-    const id = await codeSession(main);
-    const before = await listWorktrees(main);
-
+    // Re-picking the branch already checked out runs no switch and creates no worktree.
     expect(await service.updateProject({ sessionId: id, branch: 'main' })).toMatchObject({ ok: true });
-
     expect((await service.getSession(id))?.project).toMatchObject({
       branch: 'main',
       workspace: false,
       workingDirectory: main,
     });
-    expect(await listWorktrees(main)).toEqual(before);
-  });
 
-  it('checks the picked branch out in place with the toggle off, so HEAD follows the pick', async () => {
-    const { main } = await repository('off-switch');
-    await git(main, ['branch', 'feat/chips']);
-    const id = await codeSession(main);
-    const before = await listWorktrees(main);
-
+    // An untracked file the switch would carry untouched is no reason to refuse it.
+    await writeFile(join(main, 'scratch.log'), 'noise\n', 'utf8');
     expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({ ok: true });
-
     expect(await currentBranch(main)).toBe('feat/chips');
     expect((await service.getSession(id))?.project).toMatchObject({ branch: 'feat/chips', workingDirectory: main });
-    expect(await listWorktrees(main)).toHaveLength(before.length);
-  });
-
-  it('creates and checks out a new branch from the filter with the toggle off', async () => {
-    const { main } = await repository('off-create');
-    const id = await codeSession(main);
-    const head = (await git(main, ['rev-parse', 'HEAD'])).trim();
 
     expect(await service.updateProject({ sessionId: id, branch: 'feat/brand-new' })).toMatchObject({ ok: true });
-
     expect(await currentBranch(main)).toBe('feat/brand-new');
     expect((await git(main, ['rev-parse', 'HEAD'])).trim()).toBe(head);
     expect((await service.getSession(id))?.project?.branch).toBe('feat/brand-new');
+    expect(await listWorktrees(main)).toHaveLength(before.length);
   });
 
-  it('refuses a toggle-off switch over uncommitted changes, and leaves both sides as they were', async () => {
+  it('refuses a toggle-off switch or new branch over uncommitted changes, leaving both sides as they were', async () => {
     const { main } = await repository('off-dirty');
     await git(main, ['branch', 'feat/chips']);
     const id = await codeSession(main);
@@ -268,64 +252,38 @@ describe('ChatService.updateProject', () => {
     expect(await currentBranch(main)).toBe('main');
     expect(await readFile(join(main, 'README.md'), 'utf8')).toBe('edited\n');
     expect((await service.getSession(id))?.project?.branch).toBe('main');
-  });
-
-  it('refuses a new branch over uncommitted changes too, creating nothing', async () => {
-    const { main } = await repository('off-dirty-create');
-    const id = await codeSession(main);
-    await writeFile(join(main, 'README.md'), 'edited\n', 'utf8');
 
     expect(await service.updateProject({ sessionId: id, branch: 'feat/brand-new' })).toMatchObject({ ok: false });
     expect(await branchExists(main, 'feat/brand-new')).toBe(false);
   });
 
-  it('is not stopped by an untracked file the switch would carry untouched', async () => {
-    const { main } = await repository('off-untracked');
-    await git(main, ['branch', 'feat/chips']);
-    const id = await codeSession(main);
-    await writeFile(join(main, 'scratch.log'), 'noise\n', 'utf8');
-
-    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({ ok: true });
-    expect(await currentBranch(main)).toBe('feat/chips');
-  });
-
-  it('refuses while another session has a turn running in the same folder', async () => {
-    const { main } = await repository('off-shared-turn');
+  it('refuses while another session in the same folder is busy, and only in the same folder', async () => {
+    const { main } = await repository('off-shared');
+    const elsewhere = await repository('off-shared-b');
     await git(main, ['branch', 'feat/chips']);
     const id = await codeSession(main);
     const other = await codeSession(main);
-    (service as unknown as { active: Map<string, AbortController> }).active.set(other, new AbortController());
+    const active = (service as unknown as { active: Map<string, AbortController> }).active;
 
+    active.set(other, new AbortController());
     const result = await service.updateProject({ sessionId: id, branch: 'feat/chips' });
-
-    expect(result).toMatchObject({ ok: false, busy: true });
+    expect(result, 'a turn running').toMatchObject({ ok: false, busy: true });
     expect(await currentBranch(main)).toBe('main');
     expect((await service.getSession(id))?.project?.branch).toBe('main');
-  });
+    active.delete(other);
 
-  it('refuses while another session has a background process alive in the same folder', async () => {
-    const { main } = await repository('off-shared-process');
-    await git(main, ['branch', 'feat/chips']);
-    const id = await codeSession(main);
-    const other = await codeSession(main);
     running = [{ sessionId: other, command: 'pnpm dev', status: 'running' } as BackgroundProcessInfo];
-
-    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' }), 'a background process').toMatchObject({
       ok: false,
       busy: true,
     });
     expect(await currentBranch(main)).toBe('main');
-  });
+    running = [];
 
-  it('is not stopped by a busy session in a different folder', async () => {
-    const { main } = await repository('off-elsewhere');
-    const elsewhere = await repository('off-elsewhere-b');
-    await git(main, ['branch', 'feat/chips']);
-    const id = await codeSession(main);
-    const other = await codeSession(elsewhere.main);
-    (service as unknown as { active: Map<string, AbortController> }).active.set(other, new AbortController());
-
-    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' })).toMatchObject({ ok: true });
+    active.set(await codeSession(elsewhere.main), new AbortController());
+    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips' }), 'busy elsewhere').toMatchObject({
+      ok: true,
+    });
   });
 
   it('refuses a toggle-off switch once the conversation has run', async () => {
@@ -341,17 +299,6 @@ describe('ChatService.updateProject', () => {
     expect(await currentBranch(main)).toBe('main');
   });
 
-  it('checks nothing out when the toggle is on: the pick is the base of a later cut', async () => {
-    const { main } = await repository('on-no-switch');
-    await git(main, ['branch', 'feat/chips']);
-    const id = await codeSession(main);
-
-    expect(await service.updateProject({ sessionId: id, branch: 'feat/chips', workspace: true })).toMatchObject({
-      ok: true,
-    });
-    expect(await currentBranch(main)).toBe('main');
-  });
-
   describe('a branch another worktree has checked out', () => {
     async function heldElsewhere(name: string): Promise<{ container: string; main: string; other: string }> {
       const made = await repository(name);
@@ -360,7 +307,7 @@ describe('ChatService.updateProject', () => {
       return { ...made, other };
     }
 
-    it('is refused with the toggle off before git is asked to switch, naming where it is', async () => {
+    it('is refused with the toggle off before git is asked to switch, naming where it is, and prunable once gone', async () => {
       const { main, other } = await heldElsewhere('held-off');
       const id = await codeSession(main);
 
@@ -370,82 +317,59 @@ describe('ChatService.updateProject', () => {
       expect(result.ok === false && result.error).not.toMatch(/fatal:/i);
       expect(await currentBranch(main)).toBe('main');
       expect((await service.getSession(id))?.project?.branch).toBe('main');
-    });
 
-    /** Neither way on touches this folder, so its uncommitted work is no reason to withhold them. */
-    it('offers the ways on even over uncommitted changes in this folder', async () => {
-      const { main } = await heldElsewhere('held-dirty');
-      const id = await codeSession(main);
+      // Neither way on touches this folder, so its uncommitted work is no reason to withhold them.
+      const readme = await readFile(join(main, 'README.md'), 'utf8');
       await writeFile(join(main, 'README.md'), 'edited\n', 'utf8');
-
       expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({
         ok: false,
         elsewhere: { branch: 'feat/held' },
       });
+      await writeFile(join(main, 'README.md'), readme, 'utf8');
+
+      // A plain-object lookup found Object.prototype.constructor and refused the switch.
+      await git(main, ['branch', 'constructor']);
+      expect(await service.updateProject({ sessionId: id, branch: 'constructor' })).toMatchObject({ ok: true });
+      expect(await currentBranch(main)).toBe('constructor');
+
+      await rm(other, { recursive: true, force: true });
+      expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({
+        ok: false,
+        elsewhere: { branch: 'feat/held', path: other, prunable: true },
+      });
     });
 
-    it('moves the session into that checkout when the user chooses to use it', async () => {
+    it('offers both ways on: moving into that checkout, or a worktree with it as the base', async () => {
       const { main, other } = await heldElsewhere('held-use');
-      const id = await codeSession(main);
       const before = await listWorktrees(main);
 
+      const moved = await codeSession(main);
       expect(
-        await service.updateProject({ sessionId: id, directory: other, branch: 'feat/held', workspace: false })
+        await service.updateProject({ sessionId: moved, directory: other, branch: 'feat/held', workspace: false })
       ).toMatchObject({ ok: true });
-
-      expect((await service.getSession(id))?.project).toMatchObject({
+      expect((await service.getSession(moved))?.project).toMatchObject({
         directory: other,
         workingDirectory: other,
         branch: 'feat/held',
         workspace: false,
       });
-      expect(await currentBranch(main)).toBe('main');
       expect(await listWorktrees(main)).toEqual(before);
-    });
 
-    it('turns the worktree toggle on with it as the base when the user chooses a worktree', async () => {
-      const { main } = await heldElsewhere('held-cut');
-      const id = await codeSession(main);
-
-      expect(await service.updateProject({ sessionId: id, branch: 'feat/held', workspace: true })).toMatchObject({
+      const cut = await codeSession(main);
+      expect(await service.updateProject({ sessionId: cut, branch: 'feat/held', workspace: true })).toMatchObject({
         ok: true,
       });
-
-      expect((await service.getSession(id))?.project).toMatchObject({
+      expect((await service.getSession(cut))?.project).toMatchObject({
         branch: 'feat/held',
         workspace: true,
         workingDirectory: main,
       });
+
+      // Picked as a base once the toggle is already on, with no refusal either.
+      const toggled = await codeSession(main);
+      await service.updateProject({ sessionId: toggled, workspace: true });
+      expect(await service.updateProject({ sessionId: toggled, branch: 'feat/held' })).toMatchObject({ ok: true });
       expect(await currentBranch(main)).toBe('main');
-    });
-
-    it('is picked as a base with the toggle on without any refusal', async () => {
-      const { main } = await heldElsewhere('held-on');
-      const id = await codeSession(main);
-      await service.updateProject({ sessionId: id, workspace: true });
-
-      expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({ ok: true });
-    });
-
-    /** A plain-object lookup found Object.prototype.constructor and refused the switch. */
-    it('still checks out a branch named like an Object member that nothing else holds', async () => {
-      const { main } = await heldElsewhere('held-proto');
-      await git(main, ['branch', 'constructor']);
-      const id = await codeSession(main);
-
-      expect(await service.updateProject({ sessionId: id, branch: 'constructor' })).toMatchObject({ ok: true });
-      expect(await currentBranch(main)).toBe('constructor');
-    });
-
-    it('marks a holder whose folder is gone as prunable', async () => {
-      const { main, other } = await heldElsewhere('held-gone');
-      await rm(other, { recursive: true, force: true });
-      const id = await codeSession(main);
-
-      expect(await service.updateProject({ sessionId: id, branch: 'feat/held' })).toMatchObject({
-        ok: false,
-        elsewhere: { branch: 'feat/held', path: other, prunable: true },
-      });
     });
   });
 
@@ -466,17 +390,7 @@ describe('ChatService.updateProject', () => {
     expect(result.ok === false && result.error).not.toMatch(/fatal:|error:|hint:/i);
   });
 
-  it('turning it back off returns the session to the project directory', async () => {
-    const { main } = await repository('beta');
-    const id = await codeSession(main);
-    await service.updateProject({ sessionId: id, branch: 'feat/chips', workspace: true });
-
-    await service.updateProject({ sessionId: id, workspace: false });
-
-    expect((await service.getSession(id))?.project).toMatchObject({ workspace: false, workingDirectory: main });
-  });
-
-  it('refuses while a background process is still alive in the current working directory', async () => {
+  it('refuses while a background process is alive in the working directory, but not once it has exited', async () => {
     const { main } = await repository('gamma');
     const id = await codeSession(main);
     running = [{ command: 'pnpm dev', status: 'running' } as BackgroundProcessInfo];
@@ -488,13 +402,8 @@ describe('ChatService.updateProject', () => {
     // The refusal must leave the binding untouched, or the session would claim a worktree it
     // never moved to while the process kept running in the old one.
     expect((await service.getSession(id))?.project).toMatchObject({ workspace: false, workingDirectory: main });
-  });
 
-  it('a process that has already exited does not block the change', async () => {
-    const { main } = await repository('delta');
-    const id = await codeSession(main);
     running = [{ command: 'pnpm build', status: 'exited' } as BackgroundProcessInfo];
-
     expect(await service.updateProject({ sessionId: id, branch: 'feat/chips', workspace: true })).toMatchObject({
       ok: true,
     });
@@ -528,24 +437,19 @@ describe('ChatService.updateProject', () => {
    * tools would sit beside every worktree rather than in one, and git answers there for the
    * bare repo - which is where the chip's confident wrong branch name came from.
    */
-  it('refuses the worktree container as a project and points at the checkouts inside', async () => {
+  it('refuses the worktree container as a project, on create and on update, and points at the checkouts inside', async () => {
     const { container, main } = await repository('gamma');
-    const id = await codeSession(main);
 
+    const created = await service.createCodeSession({ directory: container, branch: '', workspace: false });
+    expect(created).toMatchObject({ ok: false });
+    expect(created.ok === false && created.error).toMatch(/not a checkout/i);
+
+    const id = await codeSession(main);
     const result = await service.updateProject({ sessionId: id, directory: container });
 
     expect(result).toMatchObject({ ok: false });
     expect(result.ok === false && result.error).toMatch(/not a checkout/i);
     expect((await service.getSession(id))?.project).toMatchObject({ directory: main });
-  });
-
-  it('refuses to start a session in the container in the first place', async () => {
-    const { container } = await repository('delta');
-
-    const created = await service.createCodeSession({ directory: container, branch: '', workspace: false });
-
-    expect(created).toMatchObject({ ok: false });
-    expect(created.ok === false && created.error).toMatch(/not a checkout/i);
   });
 });
 
@@ -579,7 +483,7 @@ describe('starting a second session in a project whose main worktree moved', () 
    * checked out onto another branch, and the refusal was the app declining to clobber it. The
    * collision is gone now that nothing the app creates shares a parent with the user's folders.
    */
-  it('binds without colliding with the moved checkout', async () => {
+  it('binds with main as the base, or with the folder alone and no branch, and takes the base later', async () => {
     const { service, main } = await serviceOn();
 
     const result = await service.createCodeSession({ directory: main, branch: 'main', workspace: true });
@@ -590,33 +494,24 @@ describe('starting a second session in a project whose main worktree moved', () 
       workspace: true,
       workingDirectory: main,
     });
-  });
 
-  it('succeeds carrying the folder alone, and the session starts with no branch', async () => {
-    const { service, main } = await serviceOn();
+    const alone = await service.createCodeSession({ directory: main });
 
-    const result = await service.createCodeSession({ directory: main });
-
-    expect(result).toMatchObject({ ok: true });
-    const project = result.ok ? (await service.getSession(result.session.id))?.project : null;
-    expect(project).toMatchObject({
+    expect(alone).toMatchObject({ ok: true });
+    if (!alone.ok) return;
+    expect((await service.getSession(alone.session.id))?.project).toMatchObject({
       directory: main,
       branch: '',
       workspace: false,
       workingDirectory: main,
       contextDirectories: [],
     });
-  });
 
-  it('accepts the same choice made deliberately on the new session', async () => {
-    const { service, main } = await serviceOn();
-    const created = await service.createCodeSession({ directory: main });
-    if (!created.ok) throw new Error(created.error);
-
-    const result = await service.updateProject({ sessionId: created.session.id, branch: 'main', workspace: true });
-
-    expect(result).toMatchObject({ ok: true });
-    expect((await service.getSession(created.session.id))?.project?.workspace).toBe(true);
+    // The same choice made deliberately on the new session.
+    expect(await service.updateProject({ sessionId: alone.session.id, branch: 'main', workspace: true })).toMatchObject(
+      { ok: true }
+    );
+    expect((await service.getSession(alone.session.id))?.project?.workspace).toBe(true);
   });
 });
 
@@ -653,7 +548,12 @@ describe('the worktree a Code session gets on its first turn', () => {
     return created.session.id;
   }
 
-  it('cuts the branch and the worktree when the first message is sent', async () => {
+  /**
+   * The branch is named after the prompt: the session is still called 'New chat' at this point,
+   * which is what filled a container with b4m+new-chat-* folders. Reuse is the severe one at this
+   * user's volume: a second turn that cut another branch would leave a worktree per message.
+   */
+  it('cuts the branch and the worktree when the first message is sent, and keeps them after', async () => {
     const { container, main } = await repository('turn-first');
     const id = await bound(main, 'main');
     expect((await service.getSession(id))?.project?.workingDirectory).toBe(main);
@@ -667,6 +567,14 @@ describe('the worktree a Code session gets on its first turn', () => {
       join(appWorktreeRoot(container), worktreeFolderName(project?.workspaceBranch ?? ''))
     );
     expect(project?.workingDirectory).not.toBe(main);
+
+    await service.send(id, 'second');
+    const kept = { workspaceBranch: project?.workspaceBranch, workingDirectory: project?.workingDirectory };
+    expect((await service.getSession(id))?.project, 'a later turn').toMatchObject(kept);
+    expect((await listWorktrees(main)).filter(entry => entry.branch?.startsWith('b4m/'))).toHaveLength(1);
+
+    await service.updateProject({ sessionId: id, branch: 'main', workspace: true });
+    expect((await service.getSession(id))?.project, 'a change not about the base').toMatchObject(kept);
   });
 
   it('cuts a new branch from a base another worktree holds, leaving that checkout alone', async () => {
@@ -682,84 +590,6 @@ describe('the worktree a Code session gets on its first turn', () => {
     expect(project?.workspaceBranch).toMatch(/^b4m\//);
     expect(project?.workingDirectory).not.toBe(other);
     expect(await currentBranch(other)).toBe('feat/held');
-  });
-
-  /**
-   * The session is still called 'New chat' at this point, which is what filled a container with
-   * b4m+new-chat-* folders. The prompt is the first description of the work that exists.
-   */
-  it('names the branch after the prompt rather than the untouched session title', async () => {
-    const { main } = await repository('turn-named');
-    const id = await bound(main, 'main');
-
-    await service.send(id, 'Add a retry to the uploader');
-
-    expect((await service.getSession(id))?.project?.workspaceBranch).toMatch(/^b4m\/add-a-retry-to-the-uploader-/);
-  });
-
-  /**
-   * The severe one at this user's volume: a second turn that cut another branch would leave a
-   * worktree per message.
-   */
-  it('reuses the same worktree on every turn after the first', async () => {
-    const { main } = await repository('turn-again');
-    const id = await bound(main, 'main');
-    await service.send(id, 'first');
-    const first = (await service.getSession(id))?.project;
-
-    await service.send(id, 'second');
-
-    expect((await service.getSession(id))?.project).toMatchObject({
-      workspaceBranch: first?.workspaceBranch,
-      workingDirectory: first?.workingDirectory,
-    });
-    expect((await listWorktrees(main)).filter(entry => entry.branch?.startsWith('b4m/'))).toHaveLength(1);
-  });
-
-  it('keeps the worktree across a later change that is not about the base', async () => {
-    const { main } = await repository('turn-kept');
-    const id = await bound(main, 'main');
-    await service.send(id, 'do the thing');
-    const made = (await service.getSession(id))?.project;
-
-    await service.updateProject({ sessionId: id, branch: 'main', workspace: true });
-
-    expect((await service.getSession(id))?.project).toMatchObject({
-      workspaceBranch: made?.workspaceBranch,
-      workingDirectory: made?.workingDirectory,
-    });
-  });
-
-  it('runs in the project directory, and creates nothing, with the toggle off', async () => {
-    const { main } = await repository('turn-off');
-    const created = await service.createCodeSession({ directory: main, branch: 'main', workspace: false });
-    if (!created.ok) throw new Error(created.error);
-    const before = await listWorktrees(main);
-
-    await service.send(created.session.id, 'do the thing');
-
-    expect((await service.getSession(created.session.id))?.project?.workingDirectory).toBe(main);
-    expect(await listWorktrees(main)).toEqual(before);
-  });
-
-  /**
-   * The refusal moved with the creation: it reaches the user as the turn being turned away,
-   * which is where they are looking, rather than minutes earlier on a toggle.
-   */
-  it('refuses the turn, and stores no prompt, when the worktree cannot be made', async () => {
-    const { container, main } = await repository('turn-blocked');
-    const id = await bound(main, 'feat/chips');
-    await mkdir(join(appWorktreeRoot(container), 'feat+chips'), { recursive: true });
-    await writeFile(join(appWorktreeRoot(container), 'feat+chips', 'stray.txt'), 'not mine\n', 'utf8');
-
-    const sent = await service.send(id, 'do the thing');
-
-    expect(sent.ok).toBe(false);
-    expect(sent.ok === false && sent.error).toMatch(/already exists but is not a git worktree/);
-    expect((await store.get(id))?.messages ?? []).toHaveLength(0);
-    expect((await service.getSession(id))?.project?.workingDirectory).toBe(main);
-    // Untouched, which is the other half of refusing rather than adopting.
-    expect(await readFile(join(appWorktreeRoot(container), 'feat+chips', 'stray.txt'), 'utf8')).toBe('not mine\n');
   });
 
   /**
@@ -821,7 +651,7 @@ describe('the worktree status a first turn reports', () => {
     return created.session.id;
   }
 
-  it('opens, names the branch, and closes before the reply starts', async () => {
+  it('opens, names the branch, and closes before the reply starts, and says nothing on the next turn', async () => {
     const { main } = await repository('status-first');
     const id = await bound(main, 'main');
 
@@ -829,36 +659,36 @@ describe('the worktree status a first turn reports', () => {
 
     const branch = (await service.getSession(id))?.project?.workspaceBranch;
     expect(workspaceEvents()).toEqual([
-      { type: 'workspace', sessionId: id, running: true, base: 'main' },
-      { type: 'workspace', sessionId: id, running: true, base: 'main', branch },
-      { type: 'workspace', sessionId: id, running: false, base: 'main' },
+      { type: 'workspace', sessionId: id, seq: expect.any(Number), running: true, base: 'main' },
+      { type: 'workspace', sessionId: id, seq: expect.any(Number), running: true, base: 'main', branch },
+      { type: 'workspace', sessionId: id, seq: expect.any(Number), running: false, base: 'main' },
     ]);
     const closed = events.findIndex(event => event.type === 'workspace' && !event.running);
     expect(events.findIndex(event => event.type === 'start')).toBeGreaterThan(closed);
-  });
 
-  it('says nothing on a turn whose session is already in its worktree', async () => {
-    const { main } = await repository('status-again');
-    const id = await bound(main, 'main');
-    await service.send(id, 'first');
     events.length = 0;
-
     await service.send(id, 'second');
-
     expect(workspaceEvents()).toEqual([]);
   });
 
-  it('says nothing with the worktree toggle off', async () => {
+  it('runs in the project directory, creates nothing and says nothing with the worktree toggle off', async () => {
     const { main } = await repository('status-off');
     const created = await service.createCodeSession({ directory: main, branch: 'main', workspace: false });
     if (!created.ok) throw new Error(created.error);
+    const before = await listWorktrees(main);
 
     await service.send(created.session.id, 'do the thing');
 
+    expect((await service.getSession(created.session.id))?.project?.workingDirectory).toBe(main);
+    expect(await listWorktrees(main)).toEqual(before);
     expect(workspaceEvents()).toEqual([]);
   });
 
-  it('closes when the worktree cannot be made, and hands back what was typed meanwhile', async () => {
+  /**
+   * The refusal moved with the creation: it reaches the user as the turn being turned away,
+   * which is where they are looking, rather than minutes earlier on a toggle.
+   */
+  it('refuses the turn when the worktree cannot be made, closes, stores no prompt, and hands back what was typed meanwhile', async () => {
     const { container, main } = await repository('status-blocked');
     const id = await bound(main, 'feat/chips');
     await mkdir(join(appWorktreeRoot(container), 'feat+chips'), { recursive: true });
@@ -871,10 +701,15 @@ describe('the worktree status a first turn reports', () => {
     const sent = await service.send(id, 'do the thing');
 
     expect(sent.ok).toBe(false);
+    expect(sent.ok === false && sent.error).toMatch(/already exists but is not a git worktree/);
     expect(await typedAhead).toMatchObject({ ok: true, queued: true });
-    await vi.waitFor(() => expect(queueEvents.some(event => event.returned?.reason === 'refused')).toBe(true));
+    await vi.waitFor(() => expect(queueEvents.some(event => event.returned?.reason === 'refused')).toBe(true), {
+      interval: 5,
+    });
     expect(workspaceEvents().at(-1)).toMatchObject({ running: false });
     expect(service.isSessionBusy(id)).toBe(false);
+    expect((await store.get(id))?.messages ?? []).toHaveLength(0);
+    expect((await service.getSession(id))?.project?.workingDirectory).toBe(main);
   });
 
   it('queues a message sent while the worktree is being cut rather than cutting a second one', async () => {

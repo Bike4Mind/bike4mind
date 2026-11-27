@@ -1,4 +1,5 @@
-import { type ChunkStallReason } from '../../constants/chunking';
+import type { GeneratedAssetLineageEntry } from '../../generatedAsset';
+import { type ChunkStallReason, type ExtractionRefusalReason } from '../../constants/chunking';
 import type { MembershipArm } from '../../constants/lakeMembershipHealth';
 import { IBaseRepository, type IMongoDocument } from '.';
 import { IShareableStaticMethods, type IShareableDocument } from './ShareableDocumentTypes';
@@ -65,7 +66,7 @@ export enum FabFileSourceType {
   SALESFORCE = 'salesforce',
   GOOGLE_DRIVE = 'google_drive',
   SLACK = 'slack',
-  /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
+  /** Admitted from an acquisition proposal, by a person approving it or by a trusted-site rule. */
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
   /**
@@ -74,9 +75,16 @@ export enum FabFileSourceType {
    * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
    * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
    * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
-   * remove (see generatedCopyKeyOf).
+   * remove (see generatedCopyKeyOf). `sourceMetadata.generatedOutputKey` names the chat image the
+   * file holds, with no delete cascade, so copy-generated-image can find the generation behind it.
    */
   TOOL_GENERATED = 'tool_generated',
+  /**
+   * A markdown file converted from a legacy QuestMaster plan or graph. `sourceMetadata` is
+   * `{ sourceKind: 'quest-plan' | 'quest-graph', sourceId, sourceUpdatedAt }`; (userId, sourceId)
+   * keys the conversion's idempotency. Rows carry `storageExempt`.
+   */
+  QUESTMASTER_ARCHIVE = 'questmaster_archive',
 }
 
 /**
@@ -386,6 +394,14 @@ export interface IFabFile {
   noExtractableTextAt?: Date | null;
 
   /**
+   * Why the last chunk pass declined to read this file at all (an over-budget or unopenable
+   * DOCX/XLSX container), or `null` when it read the file. Written on every chunk pass alongside
+   * `noExtractableTextAt`, which still carries the zero-chunk fact the rescue sweep keys on; this
+   * only says why, so readers can tell "too large" from "no text" (`describePipelineStall`).
+   */
+  extractionRefusalReason?: ExtractionRefusalReason | null;
+
+  /**
    * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
    * satisfy (#1662); `null`/absent means no conflict. A report, not a failure: the file stays
    * chunked at its owner-altitude policy. Cleared when a re-chunk or membership change resolves it.
@@ -488,10 +504,16 @@ export interface IFabFile {
 
   /**
    * Set by the doors that hand a client a URL to PUT this row's bytes to (a presign, or the self-host
-   * proxy). Only such a row's landing is judged by the measured-size gate (apps/client/server/s3/uploadSizeGate.ts):
+   * proxy). Only such a row's landing is judged by the measured-size gate (packages/server-utils/src/s3/uploadSizeGate.ts):
    * a server-side door writes bytes it already holds, and judging those would discard its file.
    */
   clientUpload?: boolean;
+
+  /**
+   * The UserApiKey that requested the upload (pages/api/v1/files). Its indexing charge is billed later
+   * in apps/workers/src/queueHandlers/fabFileVectorize.ts, which stamps this on the ledger row.
+   */
+  apiKeyId?: string;
 
   /** Keeps rejected upload tombstones discoverable for object cleanup on event redelivery. */
   uploadRejectedAt?: Date;
@@ -505,6 +527,13 @@ export interface IFabFile {
    * (common/src/storageCharge.ts), which also covers the pre-stamp legacy rows.
    */
   storageChargedAt?: Date;
+
+  /**
+   * The S3 upload claim (`claimStorageCharge`) never charges this row, so the bytes the server wrote
+   * stay uncharged. A later user rewrite (`commitContentRewrite`) still charges normally. Server-stamped
+   * only, via the `storageExempt` adapter of createFabFile; it is not a field of any request schema.
+   */
+  storageExempt?: boolean;
 
   /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
@@ -530,8 +559,8 @@ export interface IFabFile {
   error?: string | null;
 
   /**
-   * Cache the URL of the file for a certain amount of time.
-   * to avoid generating new URLs every request.
+   * Response-only: signed on read and never stored. Legacy rows may still carry them until the
+   * unset migration has run, so readers must not trust a stored value.
    */
   fileUrl?: string;
   presignedUrl?: string;
@@ -546,6 +575,11 @@ export interface IFabFile {
    * body, or a caller could forge the audit trail this exists to provide.
    */
   sourceMetadata?: Record<string, unknown>;
+  /**
+   * For generated files: the FabFiles this one was made from, typed by role. Server-supplied only -
+   * never accepted from a request body - and only real FabFile ids.
+   */
+  derivedFrom?: GeneratedAssetLineageEntry[];
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */
@@ -696,6 +730,7 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   // Content-derived like the rest: the stamp asserts "no text in this file" about bytes the rewrite
   // replaced. Leaving it would keep the rescue sweep's terminal guard closed against the new content.
   noExtractableTextAt: null,
+  extractionRefusalReason: null,
 } as const;
 
 export interface IFabFileListItem {
@@ -1285,7 +1320,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @param ids - The IDs of the files.
    * @returns A promise that resolves to an array of files.
    */
-  findAllByIds(ids: string[]): Promise<IFabFileDocument[]>;
+  findAllByIds(ids: string[], options?: { includeDeleted?: boolean }): Promise<IFabFileDocument[]>;
+  /** Grant cleanup includes tombstones and files detached from the source notebook. */
+  findSharingGrantFilesBySession(sessionId: string, userId?: string): Promise<IFabFileDocument[]>;
+  /**
+   * One ascending-by-`_id` page of these ids (live rows only, summary fields only), resuming strictly
+   * after `afterId`. `hasMore` is true when a row exists past the page.
+   */
+  findPageByIds(
+    ids: string[],
+    options: { afterId?: string; limit: number }
+  ): Promise<{ data: IFabFileDocument[]; hasMore: boolean }>;
   /**
    * Existence only: which of these ids still resolve to a file. Projects `_id` and nothing else -
    * the alternative, `findAllByIds`, hydrates a full mongoose document per id (`tags`, `versions`,
@@ -1339,6 +1384,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       curated?: boolean;
       /** Only files saved by a generation tool (tagged GENERATED_ASSET_TAG); ANDed with `tags`. */
       generated?: boolean;
+      /** Only files NOT saved by a generation tool; the complement of `generated`. */
+      uploaded?: boolean;
+      /** Only generated files whose `sourceMetadata.generation.modelId` is exactly this. */
+      generationModelId?: string;
       fileIds?: string[]; // EXCLUDE these ids ($nin)
       restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },

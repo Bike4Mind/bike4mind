@@ -37,7 +37,7 @@ IntegrationRequestSchema.index({ userId: 1, integrationId: 1 }, { unique: true }
 // Serves the admin requester list (requestersFor) in its sort order, and any integrationId-only query.
 IntegrationRequestSchema.index({ integrationId: 1, createdAt: -1, _id: -1 });
 
-export const IntegrationRequest =
+export const IntegrationRequest: Model<IIntegrationRequestDocument> =
   (mongoose.models.IntegrationRequest as mongoose.Model<IIntegrationRequestDocument>) ||
   model<IIntegrationRequestDocument>('IntegrationRequest', IntegrationRequestSchema);
 
@@ -174,7 +174,7 @@ export class IntegrationRequestRepository extends BaseRepository<IIntegrationReq
     return rows.map(r => r.integrationId);
   }
 
-  /** Account deletion: drop every request the user filed (apps/client/server/services/purgeDeletedUserData.ts). */
+  /** Account deletion: drop every request the user filed (packages/server-utils/src/services/purgeDeletedUserData.ts). */
   async deleteAllForUser(userId: string): Promise<number> {
     const result = await this.model.deleteMany({ userId });
     return result.deletedCount ?? 0;

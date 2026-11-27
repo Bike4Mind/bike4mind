@@ -1,6 +1,8 @@
+import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { ICompletionOptionTools, ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { EMPTY_RESULT_SCORE, FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import {
@@ -28,8 +30,8 @@ export interface WebSearchToolConfig {
   /**
    * Signs every image URL shown to the model so `/api/search-image` can verify one came from an
    * actual search result before fetching it server-side, rather than trusting the model's copy of
-   * it unconditionally. Reuses SECRET_ENCRYPTION_KEY (see ChatCompletionFeatures.telemetryHmacSecret
-   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset (or an
+   * it unconditionally. The apps supply `signingKey('search-image-url')` from
+   * server-utils/src/security/signingKeys.ts. A caller that leaves this unset (or an
    * empty/placeholder value) degrades to plain prose: no image search, no cards prompt, rather
    * than paying for images that would only fail verification and render as "Image unavailable".
    */
@@ -190,11 +192,34 @@ function placeCitable(place: WebSearchPlace, imageUrlSigningSecret: string, canS
 interface WebSearchResult {
   formattedResults: string;
   citables: CitableSource[];
+  /** The provider whose answer this is. Absent when no provider ran: a cache hit, or none configured. */
+  servedBy?: WebSearchProvider['name'];
 }
 
+// The desktop web search tool matches these by their "Web search is ..." prefix (SERVER_NOTICE in
+// apps/desktop/src/main/chat/tools/webTools.ts) and passes them through unframed, so keep the
+// prefix when rewording either sentence.
 export const WEB_SEARCH_NOT_CONFIGURED_MSG =
   'Web search is not configured: an administrator needs to set a Serper API key or a local SearXNG URL ' +
   'in Admin > API Keys. No search was performed.';
+
+export const WEB_SEARCH_UNAVAILABLE_MSG =
+  'Web search is temporarily unavailable: one search provider failed and the other returned nothing, ' +
+  'so the web was not actually searched. Do not conclude that nothing exists for this query; ' +
+  'tell the user the search could not be completed.';
+
+export const WEB_SEARCH_NO_RESULTS_MSG = 'No results found from web search.';
+
+/**
+ * Scores a search that ran but found nothing, or never ran. Prefix matches, because the
+ * image/map prompts can be appended after the base text.
+ */
+export const validateWebSearchResult: ToolResultValidator = result => {
+  if (result.startsWith(WEB_SEARCH_NOT_CONFIGURED_MSG) || result.startsWith(WEB_SEARCH_UNAVAILABLE_MSG)) {
+    return FAILED_RESULT_SCORE;
+  }
+  return result.startsWith(WEB_SEARCH_NO_RESULTS_MSG) ? EMPTY_RESULT_SCORE : undefined;
+};
 
 // A multi-entity comparison fans out to one search per entity plus a refinement or two; past this
 // the model is re-searching rather than answering, and each extra round costs a full model turn.
@@ -241,10 +266,13 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): void {
   if (error instanceof EmptySearchAnswer) return;
-  Logger.globalInstance.error('WebSearch Tool: provider failed while the other answered empty', {
-    provider: provider.name,
-    error: errorMessage(error),
-  });
+  Logger.globalInstance[isExpectedToolError(error) ? 'warn' : 'error'](
+    'WebSearch Tool: provider failed while the other answered empty',
+    {
+      provider: provider.name,
+      error: errorMessage(error),
+    }
+  );
 }
 
 /**
@@ -255,7 +283,10 @@ function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): 
  * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
  * provider that answered so follow-up calls (images, places) go to a live provider. With a backup,
  * results are empty when neither provider has any (both empty, or one empty and the other failed),
- * and it throws only when both failed.
+ * and it throws only when both failed. `providerFailed` marks an empty answer from SearXNG while
+ * the other provider failed: SearXNG fails soft, so a throttled instance answers 200 with nothing
+ * and "no results" is not an answer the caller can trust. An empty SerpAPI answer is a search that
+ * really found nothing, so it stays unflagged.
  */
 export async function searchWithHedge(
   lead: WebSearchProvider,
@@ -263,7 +294,7 @@ export async function searchWithHedge(
   query: string,
   numResults: number,
   searchOptions?: WebSearchOptions
-): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider }> {
+): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider; providerFailed?: boolean }> {
   if (!backup) return { results: await lead.search(query, numResults, searchOptions), servedBy: lead };
 
   const fromLead = lead.search(query, numResults, { ...searchOptions, throwOnError: true });
@@ -309,13 +340,18 @@ export async function searchWithHedge(
     // so this is the only error-level record of the failure (transient attempt failures log at warn).
     if (leadError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(backup, backupError);
-      return { results: [], servedBy: lead };
+      return {
+        results: [],
+        servedBy: lead,
+        providerFailed: lead.name === 'searxng' && !(backupError instanceof EmptySearchAnswer),
+      };
     }
     if (backupError instanceof EmptySearchAnswer) {
       logHedgedProviderFailure(lead, leadError);
-      return { results: [], servedBy: backup };
+      return { results: [], servedBy: backup, providerFailed: backup.name === 'searxng' };
     }
-    throw new Error(
+    const FailureError = isExpectedToolError(leadError) && isExpectedToolError(backupError) ? ExpectedToolError : Error;
+    throw new FailureError(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
         `${backup.name}: ${errorMessage(backupError)}`
     );
@@ -348,11 +384,16 @@ export async function performWebSearch(
     const cached = searchCacheGet(params.query, numResults, isPlaceSearch);
     let results: WebSearchProviderResult[];
     let servedBy = provider;
+    let providerFailed = false;
     if (cached) {
       Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      ({ results, servedBy } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
+      ({
+        results,
+        servedBy,
+        providerFailed = false,
+      } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }
     Logger.globalInstance.log(
@@ -399,6 +440,7 @@ export async function performWebSearch(
         sourceSystem: 'web_search',
         relevanceScore: 1 - index * 0.1, // Higher relevance for earlier results
         fullContext: result.snippet,
+        ...(result.displayHost ? { displayHost: result.displayHost } : {}),
         // Only ever set when images were actually requested/found - keeps the "byte-identical
         // output when include_images is unset" contract honest for the stored citable too, not
         // just the text output below.
@@ -428,7 +470,7 @@ export async function performWebSearch(
         return (
           `${resultLabel(index)} **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
-          `Source: [${safeHostname(result.url)}](${result.url})\n`
+          `Source: [${stripNewlines(result.displayHost ?? safeHostname(result.url))}](${result.url})\n`
         );
       })
       .join('\n');
@@ -448,7 +490,9 @@ export async function performWebSearch(
         (numberedCitables ? `\n${INDEXED_TOOL_CITATION_RULE}\n` : '')
       : imageSection || placeSection
         ? "Here's what I found from searching the web:\n"
-        : 'No results found from web search.';
+        : providerFailed
+          ? WEB_SEARCH_UNAVAILABLE_MSG
+          : WEB_SEARCH_NO_RESULTS_MSG;
     const formattedOutput =
       baseText +
       imageSection +
@@ -456,16 +500,18 @@ export async function performWebSearch(
       (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '') +
       (withPlaces ? `\n${WEB_SEARCH_MAP_PROMPT}` : '');
 
-    return { formattedResults: formattedOutput, citables };
+    return { formattedResults: formattedOutput, citables, servedBy: cached ? undefined : servedBy.name };
   } catch (error) {
-    Logger.globalInstance.error('❌ WebSearch Tool: Error during search:', error);
+    if (error instanceof Error && error.name === 'AbortError') throw new ExpectedToolError(error.message);
+    if (!isExpectedToolError(error)) Logger.globalInstance.error('WebSearch Tool: Error during search:', error);
     throw error;
   }
 }
 
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
-  implementation: (context: ToolContext, config?: WebSearchToolConfig) => {
+  implementation: (context: ToolContext, rawConfig: unknown) => {
+    const config = rawConfig as WebSearchToolConfig | undefined;
     let searchCallCount = 0;
     let providersPromise: Promise<[WebSearchProvider | null, WebSearchProvider | null]> | undefined;
     return {
@@ -510,6 +556,7 @@ export const webSearchTool: ToolDefinition = {
 
         return formattedResults;
       },
+      validateResult: validateWebSearchResult,
       toolSchema: {
         name: 'web_search',
         description:

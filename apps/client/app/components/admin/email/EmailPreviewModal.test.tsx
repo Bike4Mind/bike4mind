@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { EmailSendStatus } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -39,5 +39,17 @@ describe('EmailPreviewModal', () => {
     const iframe = screen.getByTitle('Email Preview') as HTMLIFrameElement;
     expect(iframe.getAttribute('sandbox')).toBe('');
     expect(iframe.getAttribute('sandbox')).not.toContain('allow-same-origin');
+  });
+
+  it('closes on Escape', () => {
+    const onClose = vi.fn();
+    render(
+      <TestWrapper>
+        <EmailPreviewModal open attemptId="a1" onClose={onClose} />
+      </TestWrapper>
+    );
+
+    fireEvent.keyDown(screen.getByTestId('email-preview-modal'), { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

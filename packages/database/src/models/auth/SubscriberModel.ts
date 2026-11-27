@@ -1,5 +1,10 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import { ISubscriberDocument, ISubscriberRepository } from '@bike4mind/common';
+import {
+  ISubscriberDocument,
+  ISubscriberRepository,
+  SUBSCRIBER_SOURCES,
+  SUBSCRIBER_SUSPICIOUS_REASONS,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
@@ -11,7 +16,7 @@ export class SubscriberRepository extends BaseRepository<ISubscriberDocument> im
   }
 
   async findByEmail(email: string) {
-    const result = await this.model.findOne({ email });
+    const result = await this.model.findOne({ email: email.trim().toLowerCase() });
     return result?.toJSON() ?? null;
   }
 
@@ -68,19 +73,56 @@ export class SubscriberRepository extends BaseRepository<ISubscriberDocument> im
     return subscriber.toJSON();
   }
 
-  async countWaiting() {
-    return this.model.countDocuments({
-      deletedAt: null,
-      $or: [{ inviteGenerated: { $ne: true } }, { inviteGenerated: { $exists: false } }],
-    });
+  async clearSignupNetworkBefore(cutoff: Date) {
+    // A retention rewrite is not a subscriber change, so it must not bump updatedAt.
+    const result = await this.model.updateMany(
+      { 'signupNetwork.capturedAt': { $lt: cutoff } },
+      { $set: { signupNetwork: null } },
+      { timestamps: false }
+    );
+    return result.modifiedCount;
+  }
+
+  async countWaiting(options: { limit?: number } = {}) {
+    return this.model.countDocuments(
+      {
+        deletedAt: null,
+        $or: [{ inviteGenerated: { $ne: true } }, { inviteGenerated: { $exists: false } }],
+      },
+      { limit: options.limit }
+    );
   }
 }
+
+// _id: false and no defaults, so a row written before capture existed reads back without either key.
+const SignupNetworkSchema = new Schema(
+  {
+    ipPrefix: { type: String, default: null },
+    userAgent: { type: String, default: null },
+    asn: { type: Number, default: null },
+    asnOrg: { type: String, default: null },
+    country: { type: String, default: null },
+    isDatacenter: { type: Boolean, default: null },
+    ja4: { type: String, default: null },
+    wafAnonIp: { type: Boolean, default: null },
+    wafBotSignal: { type: Boolean, default: null },
+    challengeVerified: { type: Boolean, default: null },
+    capturedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+const SuspiciousSchema = new Schema(
+  { reasons: { type: [{ type: String, enum: SUBSCRIBER_SUSPICIOUS_REASONS }], default: undefined } },
+  { _id: false }
+);
 
 export const SubscriberSchema = new Schema<ISubscriberDocument, ISubscriberModel>(
   {
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    source: { type: String, enum: SUBSCRIBER_SOURCES, default: 'subscribe_page' },
     deletedAt: { type: Date, default: null },
     // Invite generation tracking
     inviteGenerated: { type: Boolean, default: false },
@@ -89,6 +131,8 @@ export const SubscriberSchema = new Schema<ISubscriberDocument, ISubscriberModel
     inviteGeneratedBy: { type: String, default: null },
     startingCredits: { type: Number, default: null },
     startingStorage: { type: Number, default: null },
+    signupNetwork: { type: SignupNetworkSchema, default: undefined },
+    suspicious: { type: SuspiciousSchema, default: undefined },
   },
   {
     timestamps: true,

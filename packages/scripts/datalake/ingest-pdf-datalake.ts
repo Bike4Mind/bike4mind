@@ -45,7 +45,6 @@ import { readFile, stat } from 'fs/promises';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { glob } from 'glob';
-import pLimit from 'p-limit';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
@@ -72,6 +71,7 @@ import {
   isChunkStalled,
   shouldHaltConvergence,
   storageLimitToBytes,
+  limitConcurrency,
 } from '@bike4mind/common';
 import {
   filterPdfCandidates,
@@ -389,7 +389,7 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
   const { accepted, skippedOversize, skippedNonPdf } = filterPdfCandidates(allFiles, maxFileBytes);
 
   console.log(`Hashing ${accepted.length} PDF(s) ...`);
-  const hashLimiter = pLimit(8);
+  const hashLimiter = limitConcurrency(8);
   const hashed: HashedCandidate[] = await Promise.all(
     accepted.map(f =>
       hashLimiter(async () => ({
@@ -508,7 +508,7 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
   // Clamp: each concurrent upload is a concurrent objectCreated lambda invocation.
   const concurrency = Math.min(8, Math.max(1, opts.concurrency));
   console.log(`\nUploading ${toUpload.length} file(s) at concurrency ${concurrency} ...`);
-  const uploadLimiter = pLimit(concurrency);
+  const uploadLimiter = limitConcurrency(concurrency);
   const failures: { file: HashedCandidate; error: string }[] = [];
   let done = 0;
 

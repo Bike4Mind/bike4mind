@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { DAILY_FREE_LIMIT_REACHED_ERROR_CODE, insufficientCreditsError, TooManyRequestsError } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { assertSystemPromptGenerationAllowed } from './systemPromptRateLimit';
+import {
+  SystemPromptRateLimitError,
+  assertSystemPromptGenerationAllowed,
+  logSystemPromptGenerationFailure,
+} from './systemPromptRateLimit';
 
 const NOW = new Date('2026-08-10T03:45:06Z').getTime();
 
@@ -40,5 +45,47 @@ describe('assertSystemPromptGenerationAllowed', () => {
     expect(() =>
       assertSystemPromptGenerationAllowed({ lastSystemPromptGeneratedAt: new Date(NOW) }, 0, NOW)
     ).not.toThrow();
+  });
+});
+
+describe('logSystemPromptGenerationFailure', () => {
+  const makeLogger = () => ({ warn: vi.fn(), error: vi.fn() });
+
+  it('logs a rate-limit refusal at warn, not error', () => {
+    const logger = makeLogger();
+    logSystemPromptGenerationFailure(logger, 'failed:', new SystemPromptRateLimitError('Rate limit exceeded.'));
+    expect(logger.warn).toHaveBeenCalledWith('failed:', 'Rate limit exceeded.');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'free-tier daily cap',
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+      }),
+    ],
+    ['insufficient credits', insufficientCreditsError('Not enough credits.')],
+  ])('logs a %s refusal at warn, not error', (_label, error) => {
+    const logger = makeLogger();
+    logSystemPromptGenerationFailure(logger, 'failed:', error);
+    expect(logger.warn).toHaveBeenCalledWith('failed:', error.message);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps any other BadRequestError at error', () => {
+    const logger = makeLogger();
+    const error = new BadRequestError('System prompt generation is currently disabled');
+    logSystemPromptGenerationFailure(logger, 'failed:', error);
+    expect(logger.error).toHaveBeenCalledWith('failed:', error);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps a provider failure at error', () => {
+    const logger = makeLogger();
+    const error = new Error('upstream 500');
+    logSystemPromptGenerationFailure(logger, 'failed:', error);
+    expect(logger.error).toHaveBeenCalledWith('failed:', error);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });

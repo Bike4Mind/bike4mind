@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   canAdministerOrganization,
+  canAssignOrgRole,
   canManageMemberCreditBudgets,
   canRevokeOrgMember,
   isOrgOwnerOrCurrentAdmin,
+  organizationSeatUsage,
+  organizationSeatsFullMessage,
 } from './organization';
 
 describe('isOrgOwnerOrCurrentAdmin', () => {
@@ -13,8 +16,10 @@ describe('isOrgOwnerOrCurrentAdmin', () => {
     users: [{ userId: 'org-admin-id' }, { userId: 'member-id' }, { userId: 'manager-id' }],
   };
 
-  it('is the predicate behind canManageMemberCreditBudgets', () => {
-    expect(canManageMemberCreditBudgets).toBe(isOrgOwnerOrCurrentAdmin);
+  it('gives canManageMemberCreditBudgets the same answer for every pre-roles actor', () => {
+    for (const id of ['owner-id', 'org-admin-id', 'stale-admin-id', 'member-id', 'stranger-id']) {
+      expect(canManageMemberCreditBudgets({ id }, org)).toBe(isOrgOwnerOrCurrentAdmin({ id }, org));
+    }
   });
 
   it('admits the billing owner even without a users[] row', () => {
@@ -128,5 +133,95 @@ describe('canRevokeOrgMember', () => {
   it('refuses a manager who is no longer on the roster, whoever the target is', () => {
     const stale = { ...org, users: [{ userId: 'member-id' }] };
     expect(canRevokeOrgMember({ id: 'mgr-id' }, stale, 'member-id')).toBe(false);
+  });
+
+  it('leaves a billing manager for the owner to remove', () => {
+    const withBilling = {
+      ...org,
+      billingManagerUserIds: ['billing-id'],
+      users: [...org.users, { userId: 'billing-id' }],
+    };
+    expect(canRevokeOrgMember({ id: 'mgr-id' }, withBilling, 'billing-id')).toBe(false);
+    expect(canRevokeOrgMember({ id: 'owner-id' }, withBilling, 'billing-id')).toBe(true);
+    expect(canRevokeOrgMember({ id: 'billing-id' }, withBilling, 'member-id')).toBe(false);
+  });
+
+  it('lets a manager revoke a pending invitee, who has no users[] row yet', () => {
+    expect(canRevokeOrgMember({ id: 'mgr-id' }, org, 'invitee-id')).toBe(true);
+  });
+});
+
+describe('canAssignOrgRole', () => {
+  const roles = {
+    userId: 'owner',
+    adminUserIds: ['manager', 'manager-2'],
+    billingManagerUserIds: ['billing'],
+    users: [{ userId: 'manager' }, { userId: 'manager-2' }, { userId: 'billing' }, { userId: 'member' }],
+  };
+  const owner = { id: 'owner' };
+  const manager = { id: 'manager' };
+  const billing = { id: 'billing' };
+  const member = { id: 'member' };
+  const platformAdmin = { id: 'outsider', isAdmin: true };
+
+  it.each([
+    ['the owner', owner, 'member', 'billingManager', true],
+    ['the owner', owner, 'manager-2', 'member', true],
+    ['the owner', owner, 'billing', 'manager', true],
+    ['a platform admin', platformAdmin, 'member', 'billingManager', true],
+    ['a manager', manager, 'member', 'manager', true],
+    ['a manager', manager, 'member', 'billingManager', false],
+    ['a manager', manager, 'manager-2', 'member', false],
+    ['a manager', manager, 'billing', 'member', false],
+    ['a manager', manager, 'manager', 'member', false],
+    ['a billing manager', billing, 'member', 'billingManager', false],
+    ['a member', member, 'member', 'manager', false],
+  ] as const)('%s giving %s the role %s -> %s', (_label, actor, target, role, expected) => {
+    expect(canAssignOrgRole(actor, roles, target, role)).toBe(expected);
+  });
+
+  it('never assigns a role to the owner or to someone off the roster', () => {
+    expect(canAssignOrgRole(owner, roles, 'owner', 'member')).toBe(false);
+    expect(canAssignOrgRole(platformAdmin, roles, 'invitee', 'manager')).toBe(false);
+  });
+
+  it('refuses a manager whose own roster row is gone', () => {
+    expect(canAssignOrgRole(manager, { ...roles, users: [{ userId: 'member' }] }, 'member', 'manager')).toBe(false);
+  });
+});
+
+describe('organizationSeatUsage', () => {
+  it('counts the owner, who holds a seat without a users[] row', () => {
+    expect(organizationSeatUsage({ users: [{}, {}], seats: 10 })).toEqual({ used: 3, seats: 10, full: false });
+  });
+
+  it('is not full one seat below capacity', () => {
+    expect(organizationSeatUsage({ users: new Array(8).fill({}), seats: 10 })).toMatchObject({
+      used: 9,
+      full: false,
+    });
+  });
+
+  it('is full once owner plus members reach the paid seats', () => {
+    expect(organizationSeatUsage({ users: new Array(9).fill({}), seats: 10 })).toMatchObject({ used: 10, full: true });
+    expect(organizationSeatUsage({ users: new Array(12).fill({}), seats: 10 }).full).toBe(true);
+  });
+
+  it('treats a missing roster as the owner alone', () => {
+    expect(organizationSeatUsage({ users: null, seats: 1 })).toEqual({ used: 1, seats: 1, full: true });
+  });
+});
+
+describe('organizationSeatsFullMessage', () => {
+  it('says "its only paid seat" for a one-seat org', () => {
+    expect(organizationSeatsFullMessage('Acme', 1)).toBe(
+      'Acme uses its only paid seat. Raise the seat count on its profile before adding anyone.'
+    );
+  });
+
+  it('counts the seats otherwise', () => {
+    expect(organizationSeatsFullMessage('Acme', 3)).toBe(
+      'Acme uses all 3 paid seats. Raise the seat count on its profile before adding anyone.'
+    );
   });
 });

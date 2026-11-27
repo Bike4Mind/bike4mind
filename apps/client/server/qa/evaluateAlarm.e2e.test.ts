@@ -86,7 +86,7 @@ describe('evaluateAlarm', () => {
     expect(await step(deps)).toMatch(/recovered after 5 runs </); // R7
     expect(post).toHaveBeenCalledTimes(4);
     expect(post.mock.calls[0][0]).toBe('https://hooks.example.com/a');
-    expect(post.mock.calls[0][1]).toMatch(/<https:\/\/app\.example\.com\/status\/runs\/[a-f0-9]{24}\|view run>$/);
+    expect(post.mock.calls[0][1]).toMatch(/<https:\/\/app\.example\.com\/admin\/qa\/runs\/[a-f0-9]{24}\|view run>$/);
   });
 
   it('alarms on a first-ever failing run', async () => {

@@ -12,9 +12,13 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: () => chain,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     post: (fn: any) => {
@@ -46,15 +50,17 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
 
 const mockEmailPublish = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: (...args: unknown[]) => mockEmailPublish(...args) } },
 }));
 

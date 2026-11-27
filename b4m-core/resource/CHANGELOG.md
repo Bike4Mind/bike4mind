@@ -1,5 +1,95 @@
 # @bike4mind/resource
 
+## 3.6.0
+
+### Minor Changes
+
+- [#8465](https://github.com/Bike4Mind/bike4mind/pull/8465) [`8ba6c23`](https://github.com/Bike4Mind/bike4mind/commit/8ba6c23d597ff8dfdf966418b1b1818dbe3592a3) Thanks [@maconard](https://github.com/maconard)! - asynchronous function calls for runs longer than a request can wait
+
+### Patch Changes
+
+- [#8353](https://github.com/Bike4Mind/bike4mind/pull/8353) [`8611b8e`](https://github.com/Bike4Mind/bike4mind/commit/8611b8e90d2fb3ac5daab00f1c2ffb8761785c4a) Thanks [@poysama](https://github.com/poysama)! - remove LiveOps triage
+
+## 3.5.0
+
+### Minor Changes
+
+- [#7849](https://github.com/Bike4Mind/bike4mind/pull/7849) [`11494a0`](https://github.com/Bike4Mind/bike4mind/commit/11494a0c114a597c536351a746ae08549aa935a3) Thanks [@onoya](https://github.com/onoya)! - export Productions to MP4 with an ffmpeg render worker and multi-size export pack
+
+- [#8024](https://github.com/Bike4Mind/bike4mind/pull/8024) [`84f6027`](https://github.com/Bike4Mind/bike4mind/commit/84f6027d6a31ec86bb60dba82e315dfa8ea3a24d) Thanks [@poysama](https://github.com/poysama)! - sign with a dedicated secret and per-purpose derived keys
+
+## 3.4.0
+
+### Minor Changes
+
+- [#7580](https://github.com/Bike4Mind/bike4mind/pull/7580) [`bd7f820`](https://github.com/Bike4Mind/bike4mind/commit/bd7f82035d788b7cd87c72ff31b6b4fe131ef674) Thanks [@onoya](https://github.com/onoya)! - deliver push notifications to Android devices over FCM
+
+- [#7774](https://github.com/Bike4Mind/bike4mind/pull/7774) [`72d83d1`](https://github.com/Bike4Mind/bike4mind/commit/72d83d1d230b380d9a8131847eddb59449796ddf) Thanks [@vinchi777](https://github.com/vinchi777)! - add opt-in reaction feedback forwarding
+
+## 3.3.0
+
+### Minor Changes
+
+- [#6744](https://github.com/Bike4Mind/bike4mind/pull/6744) [`88ed8d3`](https://github.com/Bike4Mind/bike4mind/commit/88ed8d3beb899bc9c4f3b5118d0f9941b72ce07b) Thanks [@onoya](https://github.com/onoya)! - data subject erasure from the admin user profile
+
+## 3.2.1
+
+### Patch Changes
+
+- [#7159](https://github.com/Bike4Mind/bike4mind/pull/7159) [`4512d72`](https://github.com/Bike4Mind/bike4mind/commit/4512d72946b2ca0920f1bb54b7fc2bf6a2c6493e) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - finish generated-media purges and batch CDN invalidations
+
+## 3.2.0
+
+### Minor Changes
+
+- [#6403](https://github.com/Bike4Mind/bike4mind/pull/6403) [`2e5e01d`](https://github.com/Bike4Mind/bike4mind/commit/2e5e01db57d70a42054cc03463c00c63b222de05) Thanks [@onoya](https://github.com/onoya)! - APNs push delivery pipeline
+
+## 3.1.1
+
+### Patch Changes
+
+- [#6542](https://github.com/Bike4Mind/bike4mind/pull/6542) [`9703168`](https://github.com/Bike4Mind/bike4mind/commit/970316866b1ab28a5af964f7f22c7e74c8e102fc) Thanks [@jjmarfa](https://github.com/jjmarfa)! - route What's New release notes and highlights through one queue consumer
+
+## 3.1.0
+
+### Minor Changes
+
+- [#6222](https://github.com/Bike4Mind/bike4mind/pull/6222) [`fdb4208`](https://github.com/Bike4Mind/bike4mind/commit/fdb42085c50439ab35a52cbe965d67a5a8a5f6eb) Thanks [@onoya](https://github.com/onoya)! - build shadow-only behavioral evidence for account assessments
+
+- [#6331](https://github.com/Bike4Mind/bike4mind/pull/6331) [`1744e05`](https://github.com/Bike4Mind/bike4mind/commit/1744e051620c28c303b93e69146a392add416abc) Thanks [@poysama](https://github.com/poysama)! - add alarm categories and a cost alarm Slack channel
+
+- [#6370](https://github.com/Bike4Mind/bike4mind/pull/6370) [`f2f54a1`](https://github.com/Bike4Mind/bike4mind/commit/f2f54a120ec107d87e9e21e1f7026e7235b0547a) Thanks [@poysama](https://github.com/poysama)! - rebuild the security dashboard around an incident view
+
+- [#6397](https://github.com/Bike4Mind/bike4mind/pull/6397) [`f8525a6`](https://github.com/Bike4Mind/bike4mind/commit/f8525a657eb827ea30da2a7245430adcfb46ca0e) Thanks [@onoya](https://github.com/onoya)! - add Sign in with Apple
+
+- [#6447](https://github.com/Bike4Mind/bike4mind/pull/6447) [`9062016`](https://github.com/Bike4Mind/bike4mind/commit/9062016db6efbd76191cf5066c71825ac240df38) Thanks [@cgtorniado](https://github.com/cgtorniado)! - self-serve account deletion with step-up, lockdown and 14-day grace
+
+## 3.0.0
+
+### Major Changes
+
+- [#5640](https://github.com/Bike4Mind/bike4mind/pull/5640) [`b8146f3`](https://github.com/Bike4Mind/bike4mind/commit/b8146f33b24b69ee9e3762ab454e9a1b65cad880) Thanks [@jjmarfa](https://github.com/jjmarfa)! - remove the legacy What's New generation pipeline
+
+### Minor Changes
+
+- [#5673](https://github.com/Bike4Mind/bike4mind/pull/5673) [`906bf96`](https://github.com/Bike4Mind/bike4mind/commit/906bf96005592c4a384f777729dae4737d08db1f) Thanks [@erikbethke](https://github.com/erikbethke)! - render owner-only thumbnails for live artifacts
+
+- [#5882](https://github.com/Bike4Mind/bike4mind/pull/5882) [`d887b23`](https://github.com/Bike4Mind/bike4mind/commit/d887b23ed80334510b5105e638c3db9647bb7a68) Thanks [@poysama](https://github.com/poysama)! - post plain-English alarm messages to a dedicated Slack channel
+
+### Patch Changes
+
+- [#5968](https://github.com/Bike4Mind/bike4mind/pull/5968) [`97f9c6c`](https://github.com/Bike4Mind/bike4mind/commit/97f9c6cc482dfff4769e615efe94cea28db0ff76) Thanks [@jarlacut](https://github.com/jarlacut)! - register optional admin and Turnstile secrets in the resource manifest
+
+## 2.0.0
+
+### Major Changes
+
+- [#5257](https://github.com/Bike4Mind/bike4mind/pull/5257) [`068b941`](https://github.com/Bike4Mind/bike4mind/commit/068b941bead19a117b6902b57d9f9a121ed4ad90) Thanks [@onoya](https://github.com/onoya)! - protect stored credentials and private data
+
+### Patch Changes
+
+- [#5243](https://github.com/Bike4Mind/bike4mind/pull/5243) [`727e6f7`](https://github.com/Bike4Mind/bike4mind/commit/727e6f7d6af6405d695d3e703d8285b479c0b81f) Thanks [@onoya](https://github.com/onoya)! - publish Slack completions on AppEventBus and drop SlackEventBus
+
 ## 1.0.1
 
 ### Patch Changes

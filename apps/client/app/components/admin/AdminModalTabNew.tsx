@@ -5,29 +5,22 @@ import {
   FormControl,
   Textarea,
   Checkbox,
-  Modal,
   Grid,
-  ModalDialog,
-  Sheet,
   Tooltip,
   Stack,
   Typography,
   Divider,
   FormLabel,
-  Card,
-  CardContent,
   Chip,
   ChipDelete,
   RadioGroup,
   Radio,
   Box,
-  IconButton,
   Alert,
   Stepper,
   Step,
   StepIndicator,
   StepButton,
-  CircularProgress,
 } from '@mui/joy';
 import { FilePond } from 'react-filepond';
 import 'filepond/dist/filepond.min.css';
@@ -38,20 +31,12 @@ import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 import { IModal, getModalVideoErrors } from '@bike4mind/common';
 
 // Icons
-import CloseIcon from '@mui/icons-material/Close';
-import PreviewIcon from '@mui/icons-material/Preview';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
 import CampaignIcon from '@mui/icons-material/Campaign';
 import ImageIcon from '@mui/icons-material/Image';
 import TextFieldsIcon from '@mui/icons-material/TextFields';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import SaveIcon from '@mui/icons-material/Save';
-import InfoIcon from '@mui/icons-material/Info';
 import { FieldTooltip } from '@client/app/components/help';
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import GroupIcon from '@mui/icons-material/Group';
 import Analytics from '@mui/icons-material/Analytics';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
@@ -65,13 +50,23 @@ import { getS3Url } from '@client/app/utils/s3';
 import { useGetPresignedUrl } from '@client/app/hooks/data/fabFiles';
 import { useConfig } from '@client/app/hooks/data/settings';
 import AdminModalVideoFields from './AdminModalVideoFields';
+import {
+  AdminDialog,
+  AdminDialogFooter,
+  Fact,
+  LoadingState,
+  SectionCard,
+  SegmentedControl,
+  SettingsSection,
+} from './shared';
 import { videoUrlsOf } from '@client/app/components/modals/whatsNewSlideMedia';
 
 interface EditModalProps {
   isOpen: boolean;
   onClose: () => void;
   modalData: IModal | null;
-  onSave: (data: IModal) => void;
+  /** Resolves once the save settles; the caller closes the wizard only on success. */
+  onSave: (data: IModal) => Promise<void>;
   isEditMode: boolean;
 }
 
@@ -96,6 +91,11 @@ const getWizardSteps = (isBanner: boolean) => {
     ];
   }
 };
+
+const TYPE_OPTIONS = [
+  { value: 'modal', label: 'Modal' },
+  { value: 'banner', label: 'Banner' },
+] as const;
 
 // 'whats-new' tag is managed separately in the What's New Modals admin tab
 const TAG_SUGGESTIONS = [
@@ -162,6 +162,10 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
         },
       }
   );
+
+  const initialFields = useRef(modalFields);
+  const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   // Stored and uploaded video URLs pass the form check whatever their host (see AdminModalVideoFields)
   const [trustedVideoUrls, setTrustedVideoUrls] = useState<ReadonlySet<string>>(
@@ -354,7 +358,14 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     setCurrentStep(prev => Math.max(prev - 1, 0));
   };
 
-  const handleSave = () => {
+  const requestClose = () => {
+    if (saving) return;
+    const dirty = files.length > 0 || JSON.stringify(modalFields) !== JSON.stringify(initialFields.current);
+    if (dirty) setConfirmDiscard(true);
+    else onClose();
+  };
+
+  const handleSave = async () => {
     if (!modalFields.numberOfAgrees?.type || !modalFields.numberOfViews?.type) {
       toast.error('Please configure the view and agree counters');
       setCurrentStep(steps.findIndex(s => s.id === 'behavior'));
@@ -367,8 +378,12 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
       return;
     }
 
-    onSave(modalFields.isBanner ? { ...modalFields, video: null } : modalFields);
-    onClose();
+    setSaving(true);
+    try {
+      await onSave(modalFields.isBanner ? { ...modalFields, video: null } : modalFields);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const renderStepContent = () => {
@@ -377,721 +392,555 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     switch (stepId) {
       case 'type':
         return (
-          <Card variant="soft" sx={{ p: 4, textAlign: 'center' }}>
-            <Typography level="h3" sx={{ mb: 3 }}>
+          <SettingsSection>
+            <Typography level="title-md" sx={{ mb: 2 }}>
               What would you like to create?
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={3} justifyContent="center">
-              <Card
-                variant={!modalFields.isBanner ? 'solid' : 'outlined'}
-                color={!modalFields.isBanner ? 'primary' : 'neutral'}
-                sx={{
-                  p: 3,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  '&:hover': { transform: 'scale(1.05)' },
-                }}
-                onClick={() => setModalFields(prev => ({ ...prev, isBanner: false }))}
-              >
-                <NotificationsActiveIcon sx={{ fontSize: 48, mb: 2 }} />
-                <Typography
-                  level="h4"
-                  style={{
-                    color: modalFields.isBanner ? undefined : 'white',
-                  }}
-                >
-                  Modal
-                </Typography>
-                <Typography
-                  level="body-sm"
-                  sx={{ mt: 1 }}
-                  style={{
-                    color: modalFields.isBanner ? undefined : 'white',
-                  }}
-                >
-                  Full-screen overlay with rich content
-                </Typography>
-              </Card>
-
-              <Card
-                variant={modalFields.isBanner ? 'solid' : 'outlined'}
-                color={modalFields.isBanner ? 'primary' : 'neutral'}
-                sx={{
-                  p: 3,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  '&:hover': { transform: 'scale(1.05)' },
-                }}
-                onClick={() => setModalFields(prev => ({ ...prev, isBanner: true }))}
-              >
-                <CampaignIcon sx={{ fontSize: 48, mb: 2 }} />
-                <Typography
-                  level="h4"
-                  style={{
-                    color: modalFields.isBanner ? 'white' : undefined,
-                  }}
-                >
-                  Banner
-                </Typography>
-                <Typography
-                  level="body-sm"
-                  sx={{ mt: 1 }}
-                  style={{
-                    color: modalFields.isBanner ? 'white' : undefined,
-                  }}
-                >
-                  Subtle notification bar
-                </Typography>
-              </Card>
-            </Stack>
-
-            <Alert startDecorator={<InfoIcon />} color="neutral" variant="soft" sx={{ mt: 4, textAlign: 'left' }}>
+            <SegmentedControl
+              options={TYPE_OPTIONS}
+              value={modalFields.isBanner ? 'banner' : 'modal'}
+              onChange={value => setModalFields(prev => ({ ...prev, isBanner: value === 'banner' }))}
+              aria-label="Type"
+              data-testid="admin-modal-wizard-type"
+            />
+            <Typography level="body-sm" sx={{ mt: 1.5, color: 'admin.inkMuted' }}>
               {modalFields.isBanner
-                ? 'Banners are perfect for announcements and non-intrusive notifications'
-                : 'Modals are great for important announcements, feature highlights, and user agreements'}
-            </Alert>
-          </Card>
+                ? 'A subtle notification bar, for announcements that should not interrupt.'
+                : 'A full overlay with rich content, for feature highlights and user agreements.'}
+            </Typography>
+          </SettingsSection>
         );
 
       case 'content':
         return (
-          <Card variant="soft">
-            <CardContent>
-              <Typography level="h4" startDecorator={<TextFieldsIcon />} sx={{ mb: 3 }}>
-                Modal Content
-              </Typography>
+          <SettingsSection>
+            <Typography level="title-md" sx={{ mb: 2 }}>
+              Modal content
+            </Typography>
 
-              <Stack spacing={3}>
-                <FormControl error={!!validationErrors.title}>
-                  <FormLabel>Title *</FormLabel>
-                  <Input
-                    value={modalFields.title || ''}
-                    onChange={e => handleChange('title', e)}
-                    placeholder="Exciting New Feature!"
-                    size="lg"
-                  />
-                  {validationErrors.title && (
-                    <Typography level="body-sm" color="danger">
-                      {validationErrors.title}
-                    </Typography>
-                  )}
-                </FormControl>
+            <Stack spacing={3}>
+              <FormControl error={!!validationErrors.title}>
+                <FormLabel>Title *</FormLabel>
+                <Input
+                  value={modalFields.title || ''}
+                  onChange={e => handleChange('title', e)}
+                  placeholder="Exciting New Feature!"
+                  size="lg"
+                />
+                {validationErrors.title && (
+                  <Typography level="body-sm" color="danger">
+                    {validationErrors.title}
+                  </Typography>
+                )}
+              </FormControl>
 
-                <FormControl>
-                  <FormLabel>Subtitle</FormLabel>
-                  <Input
-                    value={modalFields.subtitle || ''}
-                    onChange={e => handleChange('subtitle', e)}
-                    placeholder="Learn about our latest update"
-                  />
-                </FormControl>
+              <FormControl>
+                <FormLabel>Subtitle</FormLabel>
+                <Input
+                  value={modalFields.subtitle || ''}
+                  onChange={e => handleChange('subtitle', e)}
+                  placeholder="Learn about our latest update"
+                />
+              </FormControl>
 
-                <FormControl error={!!validationErrors.description}>
-                  <FormLabel>Description *</FormLabel>
-                  <Textarea
-                    minRows={4}
-                    value={modalFields.description || ''}
-                    onChange={e => handleChange('description', e)}
-                    placeholder="Provide detailed information about this announcement..."
-                  />
-                  {validationErrors.description && (
-                    <Typography level="body-sm" color="danger">
-                      {validationErrors.description}
-                    </Typography>
-                  )}
-                </FormControl>
+              <FormControl error={!!validationErrors.description}>
+                <FormLabel>Description *</FormLabel>
+                <Textarea
+                  minRows={4}
+                  value={modalFields.description || ''}
+                  onChange={e => handleChange('description', e)}
+                  placeholder="Provide detailed information about this announcement..."
+                />
+                {validationErrors.description && (
+                  <Typography level="body-sm" color="danger">
+                    {validationErrors.description}
+                  </Typography>
+                )}
+              </FormControl>
 
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <Checkbox
-                    checked={modalFields.closeButton}
-                    onChange={e => handleChange('closeButton', e)}
-                    label="Show close button"
-                  />
-                  <Checkbox
-                    checked={modalFields.agreeButton}
-                    onChange={e => handleChange('agreeButton', e)}
-                    label="Include agree/acknowledge button"
-                  />
-                </Stack>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <Checkbox
+                  checked={modalFields.closeButton}
+                  onChange={e => handleChange('closeButton', e)}
+                  label="Show close button"
+                />
+                <Checkbox
+                  checked={modalFields.agreeButton}
+                  onChange={e => handleChange('agreeButton', e)}
+                  label="Include agree/acknowledge button"
+                />
               </Stack>
-            </CardContent>
-          </Card>
+            </Stack>
+          </SettingsSection>
         );
 
       case 'banner-content':
         return (
-          <Card variant="soft">
-            <CardContent>
-              <Typography level="h4" startDecorator={<CampaignIcon />} sx={{ mb: 3 }}>
-                Banner Notification
-              </Typography>
+          <SettingsSection>
+            <Typography level="title-md" sx={{ mb: 2 }}>
+              Banner notification
+            </Typography>
 
-              <Stack spacing={3}>
-                <FormControl error={!!validationErrors.title}>
-                  <FormLabel>Notification Title *</FormLabel>
-                  <Tooltip title="Bold heading shown at the top of the banner (mobile notification style)">
-                    <Input
-                      value={modalFields.title || ''}
-                      onChange={e => handleChange('title', e)}
-                      placeholder="New Feature Available!"
-                      size="lg"
-                    />
-                  </Tooltip>
-                  {validationErrors.title && (
-                    <Typography level="body-sm" color="danger">
-                      {validationErrors.title}
-                    </Typography>
-                  )}
-                </FormControl>
+            <Stack spacing={3}>
+              <FormControl error={!!validationErrors.title}>
+                <FormLabel>Notification Title *</FormLabel>
+                <Tooltip title="Bold heading shown at the top of the banner (mobile notification style)">
+                  <Input
+                    value={modalFields.title || ''}
+                    onChange={e => handleChange('title', e)}
+                    placeholder="New Feature Available!"
+                    size="lg"
+                  />
+                </Tooltip>
+                {validationErrors.title && (
+                  <Typography level="body-sm" color="danger">
+                    {validationErrors.title}
+                  </Typography>
+                )}
+              </FormControl>
 
-                <FormControl error={!!validationErrors.textMessage}>
-                  <FormLabel>Banner Message *</FormLabel>
+              <FormControl error={!!validationErrors.textMessage}>
+                <FormLabel>Banner Message *</FormLabel>
+                <Textarea
+                  minRows={2}
+                  maxRows={3}
+                  value={modalFields.textMessage || ''}
+                  onChange={e => handleChange('textMessage', e)}
+                  placeholder="Dark mode is now available for all users. Try it out in settings!"
+                  startDecorator={<AutoAwesomeIcon />}
+                />
+                {validationErrors.textMessage && (
+                  <Typography level="body-sm" color="danger">
+                    {validationErrors.textMessage}
+                  </Typography>
+                )}
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Detailed Description (Optional)</FormLabel>
+                <Tooltip title="Additional details shown when user expands the banner or for admin reference">
                   <Textarea
-                    minRows={2}
-                    maxRows={3}
-                    value={modalFields.textMessage || ''}
-                    onChange={e => handleChange('textMessage', e)}
-                    placeholder="Dark mode is now available for all users. Try it out in settings!"
-                    startDecorator={<AutoAwesomeIcon />}
+                    minRows={3}
+                    value={modalFields.description || ''}
+                    onChange={e => handleChange('description', e)}
+                    placeholder="Extended information or admin notes (optional)..."
                   />
-                  {validationErrors.textMessage && (
-                    <Typography level="body-sm" color="danger">
-                      {validationErrors.textMessage}
-                    </Typography>
-                  )}
-                </FormControl>
+                </Tooltip>
+              </FormControl>
 
-                <FormControl>
-                  <FormLabel>Detailed Description (Optional)</FormLabel>
-                  <Tooltip title="Additional details shown when user expands the banner or for admin reference">
-                    <Textarea
-                      minRows={3}
-                      value={modalFields.description || ''}
-                      onChange={e => handleChange('description', e)}
-                      placeholder="Extended information or admin notes (optional)..."
-                    />
-                  </Tooltip>
-                </FormControl>
-
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                  <Checkbox
-                    checked={modalFields.closeButton}
-                    onChange={e => handleChange('closeButton', e)}
-                    label="Allow dismissing"
-                  />
-                  <Checkbox
-                    checked={modalFields.agreeButton}
-                    onChange={e => handleChange('agreeButton', e)}
-                    label="Include action button"
-                  />
-                </Stack>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                <Checkbox
+                  checked={modalFields.closeButton}
+                  onChange={e => handleChange('closeButton', e)}
+                  label="Allow dismissing"
+                />
+                <Checkbox
+                  checked={modalFields.agreeButton}
+                  onChange={e => handleChange('agreeButton', e)}
+                  label="Include action button"
+                />
               </Stack>
-            </CardContent>
-          </Card>
+            </Stack>
+          </SettingsSection>
         );
 
       case 'media':
         return (
-          <Card variant="soft">
-            <CardContent>
-              <Typography level="h4" startDecorator={<ImageIcon />} sx={{ mb: 3 }}>
-                Media & Images
-              </Typography>
+          <SettingsSection>
+            <Typography level="title-md" sx={{ mb: 2 }}>
+              Media and images
+            </Typography>
 
-              <Stack spacing={3}>
-                <FormControl>
-                  <FormLabel>Main Image</FormLabel>
-                  <FilePondComponent
-                    ref={pond}
-                    files={files}
-                    onupdatefiles={setFiles}
-                    allowMultiple={false}
-                    maxFiles={1}
-                    allowPaste={false}
-                    acceptedFileTypes={['image/*']}
-                    labelIdle={'Drag & Drop your image or <span class="filepond--label-action">Browse</span>'}
-                    server={{
-                      process: (
-                        fieldName: string,
-                        file: File,
-                        metadata: any,
-                        load: (fileId: string | number) => void,
-                        error: (message: string) => void,
-                        progress: (computable: boolean, loaded: number, total: number) => void,
-                        abort: () => void
-                      ) => {
-                        const abortController = new AbortController();
+            <Stack spacing={3}>
+              <FormControl>
+                <FormLabel>Main Image</FormLabel>
+                <FilePondComponent
+                  ref={pond}
+                  files={files}
+                  onupdatefiles={setFiles}
+                  allowMultiple={false}
+                  maxFiles={1}
+                  allowPaste={false}
+                  acceptedFileTypes={['image/*']}
+                  labelIdle={'Drag & Drop your image or <span class="filepond--label-action">Browse</span>'}
+                  server={{
+                    process: (
+                      fieldName: string,
+                      file: File,
+                      metadata: any,
+                      load: (fileId: string | number) => void,
+                      error: (message: string) => void,
+                      progress: (computable: boolean, loaded: number, total: number) => void,
+                      abort: () => void
+                    ) => {
+                      const abortController = new AbortController();
 
-                        file
-                          .arrayBuffer()
-                          .then(() => {
-                            // Check if aborted during file read
-                            if (abortController.signal.aborted) {
-                              throw new DOMException('Upload cancelled', 'AbortError');
-                            }
+                      file
+                        .arrayBuffer()
+                        .then(() => {
+                          // Check if aborted during file read
+                          if (abortController.signal.aborted) {
+                            throw new DOMException('Upload cancelled', 'AbortError');
+                          }
 
-                            return createFabFileOnServerWithUpload(
-                              {
-                                type: KnowledgeType.FILE,
-                                fileName: file.name,
-                                mimeType: file.type,
-                                fileSize: file.size,
-                                public: true,
-                                purpose: 'modal-media',
-                              },
-                              file,
-                              abortController.signal
-                            );
-                          })
-                          .then(fabFile => {
-                            // Check one final time before completing
-                            if (abortController.signal.aborted) {
-                              throw new DOMException('Upload cancelled', 'AbortError');
-                            }
+                          return createFabFileOnServerWithUpload(
+                            {
+                              type: KnowledgeType.FILE,
+                              fileName: file.name,
+                              mimeType: file.type,
+                              fileSize: file.size,
+                              public: true,
+                              purpose: 'modal-media',
+                            },
+                            file,
+                            abortController.signal
+                          );
+                        })
+                        .then(fabFile => {
+                          // Check one final time before completing
+                          if (abortController.signal.aborted) {
+                            throw new DOMException('Upload cancelled', 'AbortError');
+                          }
 
-                            load(fabFile.id);
-                            if (fabFile.filePath && fabfileBucketName) {
-                              const publicUrl = getS3Url({ bucket: fabfileBucketName, key: fabFile.filePath });
-                              setModalFields(prev => ({ ...prev, imageUrl: publicUrl || '' }));
-                            }
-                          })
-                          .catch((e: any) => {
-                            // Don't show error for user-initiated cancellations
-                            if (e instanceof DOMException && e.name === 'AbortError') {
-                              console.log('Upload cancelled by user');
-                              return; // Silent cancellation
-                            }
+                          load(fabFile.id);
+                          if (fabFile.filePath && fabfileBucketName) {
+                            const publicUrl = getS3Url({ bucket: fabfileBucketName, key: fabFile.filePath });
+                            setModalFields(prev => ({ ...prev, imageUrl: publicUrl || '' }));
+                          }
+                        })
+                        .catch((e: any) => {
+                          // Don't show error for user-initiated cancellations
+                          if (e instanceof DOMException && e.name === 'AbortError') {
+                            console.log('Upload cancelled by user');
+                            return; // Silent cancellation
+                          }
 
-                            console.error(e);
-                            error('Failed to upload file');
-                          });
+                          console.error(e);
+                          error('Failed to upload file');
+                        });
 
-                        // CRITICAL: Return abort function to FilePond
-                        return {
-                          abort: () => {
-                            console.log('Aborting upload for file:', file.name);
-                            abortController.abort();
-                          },
-                        };
-                      },
-                    }}
+                      // CRITICAL: Return abort function to FilePond
+                      return {
+                        abort: () => {
+                          console.log('Aborting upload for file:', file.name);
+                          abortController.abort();
+                        },
+                      };
+                    },
+                  }}
+                />
+
+                <Divider sx={{ my: 2 }}>OR</Divider>
+
+                <Input
+                  value={modalFields.imageUrl || ''}
+                  onChange={e => handleChange('imageUrl', e)}
+                  placeholder="Enter image URL directly"
+                  startDecorator={<ImageIcon />}
+                />
+              </FormControl>
+
+              {modalFields.imageUrl && (
+                <Box sx={{ textAlign: 'center' }}>
+                  <img
+                    src={
+                      modalFields.imageUrl.startsWith('http') && !modalFields.imageUrl.includes('amazonaws.com')
+                        ? `/api/external-image?url=${encodeURIComponent(modalFields.imageUrl)}`
+                        : modalFields.imageUrl
+                    }
+                    alt="Preview"
+                    style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px' }}
                   />
+                </Box>
+              )}
 
-                  <Divider sx={{ my: 2 }}>OR</Divider>
-
-                  <Input
-                    value={modalFields.imageUrl || ''}
-                    onChange={e => handleChange('imageUrl', e)}
-                    placeholder="Enter image URL directly"
-                    startDecorator={<ImageIcon />}
+              {!modalFields.isBanner && (
+                <>
+                  <Divider />
+                  <AdminModalVideoFields
+                    value={modalFields.video}
+                    onChange={video => setModalFields(prev => ({ ...prev, video }))}
+                    bucketName={fabfileBucketName}
+                    trustedUrls={trustedVideoUrls}
+                    onUploaded={url => setTrustedVideoUrls(prev => new Set(prev).add(url))}
                   />
-                </FormControl>
-
-                {modalFields.imageUrl && (
-                  <Box sx={{ textAlign: 'center' }}>
-                    <img
-                      src={
-                        modalFields.imageUrl.startsWith('http') && !modalFields.imageUrl.includes('amazonaws.com')
-                          ? `/api/external-image?url=${encodeURIComponent(modalFields.imageUrl)}`
-                          : modalFields.imageUrl
-                      }
-                      alt="Preview"
-                      style={{ maxWidth: '100%', maxHeight: '200px', borderRadius: '8px' }}
-                    />
-                  </Box>
-                )}
-
-                {!modalFields.isBanner && (
-                  <>
-                    <Divider />
-                    <AdminModalVideoFields
-                      value={modalFields.video}
-                      onChange={video => setModalFields(prev => ({ ...prev, video }))}
-                      bucketName={fabfileBucketName}
-                      trustedUrls={trustedVideoUrls}
-                      onUploaded={url => setTrustedVideoUrls(prev => new Set(prev).add(url))}
-                    />
-                    {validationErrors.video && (
-                      <Typography level="body-sm" color="danger" data-testid="modal-video-step-error">
-                        {validationErrors.video}
-                      </Typography>
-                    )}
-                  </>
-                )}
-              </Stack>
-            </CardContent>
-          </Card>
+                  {validationErrors.video && (
+                    <Typography level="body-sm" color="danger" data-testid="modal-video-step-error">
+                      {validationErrors.video}
+                    </Typography>
+                  )}
+                </>
+              )}
+            </Stack>
+          </SettingsSection>
         );
 
       case 'targeting':
         return (
           <Grid container spacing={3}>
             <Grid xs={12} md={6}>
-              <Card variant="soft">
-                <CardContent>
-                  <Typography level="h4" startDecorator={<CalendarTodayIcon />} sx={{ mb: 3 }}>
-                    Schedule
-                  </Typography>
+              <SettingsSection sx={{ mb: 0, height: '100%' }}>
+                <Typography level="title-md" sx={{ mb: 2 }}>
+                  Schedule
+                </Typography>
 
-                  <Stack spacing={3}>
-                    <FormControl error={!!validationErrors.startDate}>
-                      <FormLabel>Start Date *</FormLabel>
-                      <Input
-                        type="date"
-                        value={modalFields.startDate || ''}
-                        onChange={e => handleChange('startDate', e)}
-                      />
-                    </FormControl>
-
-                    <FormControl error={!!validationErrors.endDate}>
-                      <FormLabel>End Date *</FormLabel>
-                      <Input type="date" value={modalFields.endDate || ''} onChange={e => handleChange('endDate', e)} />
-                    </FormControl>
-
-                    <FormControl>
-                      <FormLabel>Priority</FormLabel>
-                      <Input
-                        type="number"
-                        value={modalFields.priority}
-                        onChange={e => handleChange('priority', e)}
-                        startDecorator={
-                          <FieldTooltip content="Higher priority modals show first" ariaLabel="Help: Priority" />
-                        }
-                      />
-                    </FormControl>
-
-                    <Checkbox
-                      checked={modalFields.enabled}
-                      onChange={e => handleChange('enabled', e)}
-                      label="Enable immediately"
-                      color="success"
+                <Stack spacing={3}>
+                  <FormControl error={!!validationErrors.startDate}>
+                    <FormLabel>Start Date *</FormLabel>
+                    <Input
+                      type="date"
+                      value={modalFields.startDate || ''}
+                      onChange={e => handleChange('startDate', e)}
                     />
-                  </Stack>
-                </CardContent>
-              </Card>
+                  </FormControl>
+
+                  <FormControl error={!!validationErrors.endDate}>
+                    <FormLabel>End Date *</FormLabel>
+                    <Input type="date" value={modalFields.endDate || ''} onChange={e => handleChange('endDate', e)} />
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Priority</FormLabel>
+                    <Input
+                      type="number"
+                      value={modalFields.priority}
+                      onChange={e => handleChange('priority', e)}
+                      startDecorator={
+                        <FieldTooltip content="Higher priority modals show first" ariaLabel="Help: Priority" />
+                      }
+                    />
+                  </FormControl>
+
+                  <Checkbox
+                    checked={modalFields.enabled}
+                    onChange={e => handleChange('enabled', e)}
+                    label="Enable immediately"
+                  />
+                </Stack>
+              </SettingsSection>
             </Grid>
 
             <Grid xs={12} md={6}>
-              <Card variant="soft">
-                <CardContent>
-                  <Typography level="h4" startDecorator={<GroupIcon />} sx={{ mb: 3 }}>
-                    User Targeting
-                  </Typography>
+              <SettingsSection sx={{ mb: 0, height: '100%' }}>
+                <Typography level="title-md" sx={{ mb: 2 }}>
+                  User targeting
+                </Typography>
 
-                  <Stack spacing={2}>
-                    <FormControl>
-                      <FormLabel>User Tags</FormLabel>
-                      <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                        <Input
-                          value={tagInput}
-                          onChange={e => setTagInput(e.target.value)}
-                          onKeyPress={e => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleAddTag(tagInput);
-                            }
-                          }}
-                          placeholder="Add tag..."
+                <Stack spacing={2}>
+                  <FormControl>
+                    <FormLabel>User Tags</FormLabel>
+                    <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
+                      <Input
+                        value={tagInput}
+                        onChange={e => setTagInput(e.target.value)}
+                        onKeyPress={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAddTag(tagInput);
+                          }
+                        }}
+                        placeholder="Add tag..."
+                        size="sm"
+                        sx={{ flex: 1 }}
+                      />
+                      <Button size="sm" onClick={() => handleAddTag(tagInput)} disabled={!tagInput.trim()}>
+                        Add
+                      </Button>
+                    </Stack>
+
+                    <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
+                      {modalFields.tags?.map(tag => (
+                        <Chip
+                          key={tag}
+                          variant="solid"
+                          color="primary"
+                          endDecorator={<ChipDelete onDelete={() => handleRemoveTag(tag)} />}
+                        >
+                          {tag}
+                        </Chip>
+                      ))}
+                    </Stack>
+
+                    <Stack direction="row" spacing={1} flexWrap="wrap">
+                      <Typography level="body-sm" sx={{ mr: 1 }}>
+                        Suggestions:
+                      </Typography>
+                      {TAG_SUGGESTIONS.filter(tag => !modalFields.tags?.includes(tag)).map(tag => (
+                        <Chip
+                          key={tag}
+                          variant="outlined"
                           size="sm"
-                          sx={{ flex: 1 }}
-                        />
-                        <Button size="sm" onClick={() => handleAddTag(tagInput)} disabled={!tagInput.trim()}>
-                          Add
-                        </Button>
-                      </Stack>
+                          onClick={() => handleAddTag(tag)}
+                          sx={{ cursor: 'pointer' }}
+                        >
+                          {tag}
+                        </Chip>
+                      ))}
+                    </Stack>
+                  </FormControl>
 
-                      <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
-                        {modalFields.tags?.map(tag => (
-                          <Chip
-                            key={tag}
-                            variant="solid"
-                            color="primary"
-                            endDecorator={<ChipDelete onDelete={() => handleRemoveTag(tag)} />}
-                          >
-                            {tag}
-                          </Chip>
-                        ))}
-                      </Stack>
-
-                      <Stack direction="row" spacing={1} flexWrap="wrap">
-                        <Typography level="body-sm" sx={{ mr: 1 }}>
-                          Suggestions:
-                        </Typography>
-                        {TAG_SUGGESTIONS.filter(tag => !modalFields.tags?.includes(tag)).map(tag => (
-                          <Chip
-                            key={tag}
-                            variant="outlined"
-                            size="sm"
-                            onClick={() => handleAddTag(tag)}
-                            sx={{ cursor: 'pointer' }}
-                          >
-                            {tag}
-                          </Chip>
-                        ))}
-                      </Stack>
-                    </FormControl>
-
-                    <Alert color="neutral" variant="soft">
-                      <Typography level="body-sm">Leave empty to show to all users</Typography>
-                    </Alert>
-                  </Stack>
-                </CardContent>
-              </Card>
+                  <Alert color="neutral" variant="soft">
+                    <Typography level="body-sm">Leave empty to show to all users</Typography>
+                  </Alert>
+                </Stack>
+              </SettingsSection>
             </Grid>
           </Grid>
         );
 
       case 'behavior':
         return (
-          <Card variant="soft">
-            <CardContent>
-              <Typography level="h4" startDecorator={<Analytics />} sx={{ mb: 3 }}>
-                Display Behavior
-              </Typography>
+          <SettingsSection>
+            <Typography level="title-md" sx={{ mb: 2 }}>
+              Display behavior
+            </Typography>
 
-              <Stack spacing={4}>
-                <FormControl>
-                  <FormLabel>Display Frequency</FormLabel>
-                  <RadioGroup value={counterPreset} onChange={e => handleCounterPresetChange(e.target.value)}>
-                    <Stack spacing={2}>
-                      {Object.entries(COUNTER_PRESETS).map(([key, preset]) => (
-                        <Card key={key} variant="outlined" sx={{ p: 2 }}>
-                          <Radio value={key} label={preset.label} data-testid={`display-frequency-${key}-radio`} />
-                          <Typography level="body-sm" sx={{ ml: 3.5 }}>
-                            {preset.description}
-                          </Typography>
-                        </Card>
-                      ))}
-                    </Stack>
-                  </RadioGroup>
-                </FormControl>
+            <Stack spacing={4}>
+              <FormControl>
+                <FormLabel>Display Frequency</FormLabel>
+                <RadioGroup value={counterPreset} onChange={e => handleCounterPresetChange(e.target.value)}>
+                  <Stack divider={<Box sx={{ borderTop: '1px solid', borderColor: 'admin.border' }} />}>
+                    {Object.entries(COUNTER_PRESETS).map(([key, preset]) => (
+                      <Box key={key} sx={{ py: 1.25 }}>
+                        <Radio value={key} label={preset.label} data-testid={`display-frequency-${key}-radio`} />
+                        <Typography level="body-sm" sx={{ ml: 3.5, color: 'admin.inkMuted' }}>
+                          {preset.description}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Stack>
+                </RadioGroup>
+              </FormControl>
 
-                {counterPreset === 'custom' && (
-                  <Stack direction="row" spacing={2}>
+              {counterPreset === 'custom' && (
+                <Stack direction="row" spacing={2}>
+                  <FormControl sx={{ flex: 1 }}>
+                    <FormLabel>View Threshold</FormLabel>
+                    <Input
+                      type="number"
+                      value={modalFields.numberOfViews?.threshold || 0}
+                      onChange={e =>
+                        setModalFields(prev => ({
+                          ...prev,
+                          numberOfViews: {
+                            ...prev.numberOfViews,
+                            type: prev.numberOfViews?.type || 'customView',
+                            value: prev.numberOfViews?.value || 0,
+                            threshold: parseInt(e.target.value) || 0,
+                          },
+                        }))
+                      }
+                      data-testid="view-threshold-input"
+                    />
+                  </FormControl>
+
+                  {modalFields.agreeButton && (
                     <FormControl sx={{ flex: 1 }}>
-                      <FormLabel>View Threshold</FormLabel>
+                      <FormLabel>Agree Threshold</FormLabel>
                       <Input
                         type="number"
-                        value={modalFields.numberOfViews?.threshold || 0}
+                        value={modalFields.numberOfAgrees?.threshold || 0}
                         onChange={e =>
                           setModalFields(prev => ({
                             ...prev,
-                            numberOfViews: {
-                              ...prev.numberOfViews,
-                              type: prev.numberOfViews?.type || 'customView',
-                              value: prev.numberOfViews?.value || 0,
+                            numberOfAgrees: {
+                              ...prev.numberOfAgrees,
+                              type: prev.numberOfAgrees?.type || 'customAgree',
+                              value: prev.numberOfAgrees?.value || 0,
                               threshold: parseInt(e.target.value) || 0,
                             },
                           }))
                         }
-                        data-testid="view-threshold-input"
+                        data-testid="agree-threshold-input"
                       />
                     </FormControl>
+                  )}
+                </Stack>
+              )}
 
-                    {modalFields.agreeButton && (
-                      <FormControl sx={{ flex: 1 }}>
-                        <FormLabel>Agree Threshold</FormLabel>
-                        <Input
-                          type="number"
-                          value={modalFields.numberOfAgrees?.threshold || 0}
-                          onChange={e =>
-                            setModalFields(prev => ({
-                              ...prev,
-                              numberOfAgrees: {
-                                ...prev.numberOfAgrees,
-                                type: prev.numberOfAgrees?.type || 'customAgree',
-                                value: prev.numberOfAgrees?.value || 0,
-                                threshold: parseInt(e.target.value) || 0,
-                              },
-                            }))
-                          }
-                          data-testid="agree-threshold-input"
-                        />
-                      </FormControl>
-                    )}
-                  </Stack>
-                )}
-
-                <Alert
-                  color="success"
-                  variant="soft"
-                  startDecorator={<CheckCircleIcon />}
-                  data-testid="counter-configuration-alert"
-                >
-                  <Typography level="body-sm">
-                    Counter configuration set to:{' '}
-                    {COUNTER_PRESETS[counterPreset as keyof typeof COUNTER_PRESETS]?.label}
-                  </Typography>
-                </Alert>
-              </Stack>
-            </CardContent>
-          </Card>
+              <Alert
+                color="success"
+                variant="soft"
+                startDecorator={<CheckCircleIcon />}
+                data-testid="counter-configuration-alert"
+              >
+                <Typography level="body-sm">
+                  Counter configuration set to: {COUNTER_PRESETS[counterPreset as keyof typeof COUNTER_PRESETS]?.label}
+                </Typography>
+              </Alert>
+            </Stack>
+          </SettingsSection>
         );
 
       case 'review':
         return (
-          <Grid container spacing={3}>
+          <Grid container spacing={2}>
             <Grid xs={12} md={8}>
-              <Card variant="soft">
-                <CardContent>
-                  <Typography level="h4" startDecorator={<CheckCircleIcon />} sx={{ mb: 3 }}>
-                    Review Your {modalFields.isBanner ? 'Banner' : 'Modal'}
-                  </Typography>
-
-                  <Stack spacing={2}>
-                    <Box>
-                      <Typography level="body-sm" fontWeight="lg">
-                        Type:
-                      </Typography>
-                      <Typography>{modalFields.isBanner ? 'Banner' : 'Modal'}</Typography>
-                    </Box>
-
-                    {!modalFields.isBanner && (
-                      <>
-                        <Box>
-                          <Typography level="body-sm" fontWeight="lg">
-                            Title:
-                          </Typography>
-                          <Typography>{modalFields.title || 'Not set'}</Typography>
-                        </Box>
-                        {modalFields.subtitle && (
-                          <Box>
-                            <Typography level="body-sm" fontWeight="lg">
-                              Subtitle:
-                            </Typography>
-                            <Typography>{modalFields.subtitle}</Typography>
-                          </Box>
-                        )}
-                      </>
-                    )}
-
-                    {modalFields.isBanner && (
-                      <>
-                        <Box>
-                          <Typography level="body-sm" fontWeight="lg">
-                            Notification Title:
-                          </Typography>
-                          <Typography>{modalFields.title || 'Not set'}</Typography>
-                        </Box>
-                        <Box>
-                          <Typography level="body-sm" fontWeight="lg">
-                            Banner Message:
-                          </Typography>
-                          <Typography>{modalFields.textMessage || 'Not set'}</Typography>
-                        </Box>
-                      </>
-                    )}
-
-                    <Box>
-                      <Typography level="body-sm" fontWeight="lg">
-                        Description:
-                      </Typography>
-                      <Typography>{modalFields.description || 'Not set'}</Typography>
-                    </Box>
-
-                    {!modalFields.isBanner && modalFields.video && (
-                      <Box>
-                        <Typography level="body-sm" fontWeight="lg">
-                          Video:
-                        </Typography>
-                        <Typography data-testid="modal-review-video-text">
-                          {[modalFields.video.landscapeUrl && '16:9', modalFields.video.portraitUrl && '9:16']
-                            .filter(Boolean)
-                            .join(' + ') || 'Posters only'}
-                        </Typography>
-                      </Box>
-                    )}
-
-                    <Box>
-                      <Typography level="body-sm" fontWeight="lg">
-                        Schedule:
-                      </Typography>
-                      <Typography>
-                        {modalFields.startDate} to {modalFields.endDate}
-                      </Typography>
-                    </Box>
-
-                    <Box>
-                      <Typography level="body-sm" fontWeight="lg">
-                        Target Users:
-                      </Typography>
-                      <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-                        {modalFields.tags?.length ? (
-                          modalFields.tags.map(tag => (
-                            <Chip key={tag} size="sm" variant="solid" color="primary">
-                              {tag}
-                            </Chip>
-                          ))
-                        ) : (
-                          <Typography>All users</Typography>
-                        )}
-                      </Stack>
-                    </Box>
-
-                    <Box>
-                      <Typography level="body-sm" fontWeight="lg">
-                        Options:
-                      </Typography>
-                      <Stack direction="row" spacing={2} sx={{ mt: 0.5 }}>
-                        {modalFields.enabled && (
-                          <Chip size="sm" color="success">
-                            Enabled
-                          </Chip>
-                        )}
-                        {modalFields.closeButton && <Chip size="sm">Has Close Button</Chip>}
-                        {modalFields.agreeButton && <Chip size="sm">Has Agree Button</Chip>}
-                      </Stack>
-                    </Box>
-                  </Stack>
-
-                  <Alert color="success" variant="soft" sx={{ mt: 3 }} startDecorator={<CheckCircleIcon />}>
-                    Everything looks good! Click &quot;Create&quot; to save your{' '}
-                    {modalFields.isBanner ? 'banner' : 'modal'}.
-                  </Alert>
-                </CardContent>
-              </Card>
+              <SectionCard title={`Review your ${modalFields.isBanner ? 'banner' : 'modal'}`}>
+                <Fact label="Type">{modalFields.isBanner ? 'Banner' : 'Modal'}</Fact>
+                {!modalFields.isBanner && (
+                  <>
+                    <Fact label="Title">{modalFields.title}</Fact>
+                    {modalFields.subtitle && <Fact label="Subtitle">{modalFields.subtitle}</Fact>}
+                  </>
+                )}
+                {modalFields.isBanner && (
+                  <>
+                    <Fact label="Notification title">{modalFields.title}</Fact>
+                    <Fact label="Banner message">{modalFields.textMessage}</Fact>
+                  </>
+                )}
+                <Fact label="Description">{modalFields.description}</Fact>
+                {!modalFields.isBanner && modalFields.video && (
+                  <Fact label="Video" data-testid="modal-review-video-text">
+                    {[modalFields.video.landscapeUrl && '16:9', modalFields.video.portraitUrl && '9:16']
+                      .filter(Boolean)
+                      .join(' + ') || 'Posters only'}
+                  </Fact>
+                )}
+                <Fact label="Schedule">
+                  {modalFields.startDate} to {modalFields.endDate}
+                </Fact>
+                <Fact label="Target users">{modalFields.tags?.length ? modalFields.tags.join(', ') : 'All users'}</Fact>
+                <Fact label="Options">
+                  {[
+                    modalFields.enabled && 'Enabled',
+                    modalFields.closeButton && 'Close button',
+                    modalFields.agreeButton && 'Agree button',
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}
+                </Fact>
+              </SectionCard>
             </Grid>
 
             <Grid xs={12} md={4}>
-              <Card>
-                <CardContent>
-                  <Typography level="h4" startDecorator={<VisibilityIcon />} sx={{ mb: 2 }}>
-                    Preview
-                  </Typography>
-                  <Button
-                    fullWidth
-                    variant="solid"
-                    color="primary"
-                    startDecorator={<PreviewIcon />}
-                    onClick={() => setShowPreview(true)}
-                    sx={{
-                      background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-                      boxShadow: '0 3px 5px 2px rgba(33, 203, 243, .3)',
-                      transition: 'all 0.3s',
-                      '&:hover': {
-                        transform: 'scale(1.02)',
-                        boxShadow: '0 5px 10px 3px rgba(33, 203, 243, .4)',
-                      },
-                    }}
-                  >
-                    Show Live Preview
+              <SectionCard title="Preview" body="custom">
+                <Stack spacing={2} sx={{ p: 2 }}>
+                  <Button variant="outlined" color="neutral" onClick={() => setShowPreview(true)}>
+                    Show live preview
                   </Button>
-
                   {modalFields.imageUrl && (
-                    <Box sx={{ mt: 2, textAlign: 'center' }}>
-                      <img
-                        src={
-                          modalFields.imageUrl.startsWith('http') && !modalFields.imageUrl.includes('amazonaws.com')
-                            ? `/api/external-image?url=${encodeURIComponent(modalFields.imageUrl)}`
-                            : modalFields.imageUrl
-                        }
-                        alt="Preview"
-                        style={{ maxWidth: '100%', maxHeight: '150px', borderRadius: '8px' }}
-                      />
-                    </Box>
+                    <Box
+                      component="img"
+                      src={
+                        modalFields.imageUrl.startsWith('http') && !modalFields.imageUrl.includes('amazonaws.com')
+                          ? `/api/external-image?url=${encodeURIComponent(modalFields.imageUrl)}`
+                          : modalFields.imageUrl
+                      }
+                      alt="Preview"
+                      sx={{
+                        maxWidth: '100%',
+                        maxHeight: 150,
+                        alignSelf: 'center',
+                        borderRadius: 'sm',
+                        border: '1px solid',
+                        borderColor: 'admin.border',
+                      }}
+                    />
                   )}
-                </CardContent>
-              </Card>
+                </Stack>
+              </SectionCard>
             </Grid>
           </Grid>
         );
@@ -1101,139 +950,129 @@ const EditModalNew: React.FC<EditModalProps> = ({ isOpen, onClose, modalData, on
     }
   };
 
+  const noun = modalFields.isBanner ? 'banner' : 'modal';
+
   return (
     <>
-      <Modal open={isOpen} onClose={onClose}>
-        <ModalDialog layout="fullscreen">
-          <Sheet sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-            {/* Header */}
-            <Stack
-              direction="row"
-              justifyContent="space-between"
-              alignItems="center"
-              sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}
+      <AdminDialog
+        open={isOpen}
+        // A stray backdrop click is ignored; every other close path asks first when the draft has edits.
+        onClose={reason => {
+          if (reason !== 'backdropClick') requestClose();
+        }}
+        width={1120}
+        anchorTop
+        title={`${isEditMode ? 'Edit' : 'Create'} ${noun}`}
+        data-testid="admin-modal-wizard-dialog"
+      >
+        <Stepper sx={{ width: '100%', mb: 2 }}>
+          {steps.map((step, index) => (
+            <Step
+              key={step.id}
+              indicator={
+                <StepIndicator
+                  variant={index <= currentStep ? 'solid' : 'outlined'}
+                  sx={
+                    index <= currentStep
+                      ? { bgcolor: 'admin.accent', color: 'admin.surface' }
+                      : { borderColor: 'admin.border', color: 'admin.inkMuted' }
+                  }
+                >
+                  {index < currentStep ? <CheckCircleIcon /> : step.icon}
+                </StepIndicator>
+              }
+              sx={{ '&::after': { bgcolor: index < currentStep ? 'admin.accent' : 'admin.border' } }}
             >
-              <Stack direction="row" spacing={2} alignItems="center">
-                <AutoAwesomeIcon color="primary" />
-                <Typography level="h2">
-                  {isEditMode ? 'Edit' : 'Create'} {modalFields.isBanner ? 'Banner' : 'Modal'}
-                </Typography>
-              </Stack>
+              <StepButton onClick={() => index < currentStep && setCurrentStep(index)}>
+                <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                  {step.label}
+                </Box>
+              </StepButton>
+            </Step>
+          ))}
+        </Stepper>
 
-              <IconButton onClick={onClose} variant="plain">
-                <CloseIcon />
-              </IconButton>
-            </Stack>
+        {renderStepContent()}
 
-            {/* Progress Stepper */}
-            <Box
-              sx={{
-                p: { xs: 2, sm: 3 },
-                borderBottom: '1px solid',
-                borderColor: 'divider',
-                bgcolor: 'background.level1',
-              }}
+        <Box sx={{ position: 'sticky', bottom: 0, zIndex: 1, bgcolor: 'admin.surface' }}>
+          <AdminDialogFooter>
+            <Button
+              variant="outlined"
+              color="neutral"
+              onClick={handleBack}
+              disabled={currentStep === 0}
+              sx={{ mr: 'auto' }}
+              data-testid="admin-modal-wizard-back-btn"
             >
-              <Stepper sx={{ width: '100%' }}>
-                {steps.map((step, index) => (
-                  <Step
-                    key={step.id}
-                    indicator={
-                      <StepIndicator
-                        variant={index === currentStep ? 'solid' : index < currentStep ? 'soft' : 'outlined'}
-                        color={index <= currentStep ? 'primary' : 'neutral'}
-                      >
-                        {index < currentStep ? <CheckCircleIcon /> : step.icon}
-                      </StepIndicator>
-                    }
-                    sx={{
-                      '&::after': {
-                        bgcolor: index < currentStep ? 'primary.500' : 'neutral.300',
-                      },
-                    }}
-                  >
-                    <StepButton onClick={() => index < currentStep && setCurrentStep(index)}>
-                      <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                        {step.label}
-                      </Box>
-                    </StepButton>
-                  </Step>
-                ))}
-              </Stepper>
-            </Box>
-
-            {/* Content Area */}
-            <Box sx={{ flex: 1, overflow: 'auto', p: 3 }}>{renderStepContent()}</Box>
-
-            {/* Footer Actions */}
-            <Stack
-              direction={{ xs: 'column-reverse', sm: 'row' }}
-              justifyContent="space-between"
-              alignItems={{ xs: 'stretch', sm: 'center' }}
-              spacing={{ xs: 2, sm: 0 }}
-              sx={{ p: { xs: 2, sm: 3 }, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.level1' }}
-            >
-              <Button
-                variant="outlined"
-                color="neutral"
-                startDecorator={<ArrowBackIcon />}
-                onClick={handleBack}
-                disabled={currentStep === 0}
-              >
-                Back
+              Back
+            </Button>
+            <Button variant="plain" color="neutral" onClick={requestClose} data-testid="admin-modal-wizard-cancel-btn">
+              Cancel
+            </Button>
+            {currentStep === steps.length - 1 ? (
+              <Button variant="solid" onClick={handleSave} loading={saving} data-testid="admin-modal-wizard-save-btn">
+                {isEditMode ? 'Update' : 'Create'} {noun}
               </Button>
+            ) : (
+              <Button variant="solid" onClick={handleNext} data-testid="admin-modal-wizard-next-btn">
+                Next
+              </Button>
+            )}
+          </AdminDialogFooter>
+        </Box>
+      </AdminDialog>
 
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-                <Button variant="plain" color="neutral" onClick={onClose}>
-                  Cancel
-                </Button>
+      <AdminDialog
+        open={confirmDiscard}
+        onClose={() => setConfirmDiscard(false)}
+        width={420}
+        title="Discard unsaved changes?"
+        data-testid="admin-modal-wizard-discard-dialog"
+      >
+        <Typography level="body-sm">Closing discards your edits to this {noun}.</Typography>
+        <AdminDialogFooter>
+          <Button
+            variant="plain"
+            color="neutral"
+            onClick={() => setConfirmDiscard(false)}
+            data-testid="admin-modal-wizard-keep-btn"
+          >
+            Keep editing
+          </Button>
+          <Button
+            color="danger"
+            onClick={() => {
+              setConfirmDiscard(false);
+              onClose();
+            }}
+            data-testid="admin-modal-wizard-discard-btn"
+          >
+            Discard changes
+          </Button>
+        </AdminDialogFooter>
+      </AdminDialog>
 
-                {currentStep === steps.length - 1 ? (
-                  <Button variant="solid" color="success" startDecorator={<SaveIcon />} onClick={handleSave} size="lg">
-                    {isEditMode ? 'Update' : 'Create'} {modalFields.isBanner ? 'Banner' : 'Modal'}
-                  </Button>
-                ) : (
-                  <Button
-                    variant="solid"
-                    color="primary"
-                    endDecorator={<ArrowForwardIcon />}
-                    onClick={handleNext}
-                    size="lg"
-                  >
-                    Next
-                  </Button>
-                )}
-              </Stack>
-            </Stack>
-          </Sheet>
-        </ModalDialog>
-      </Modal>
-
-      {/* Preview Modal */}
-      {showPreview && (
-        <>
-          {isPreviewLoading ? (
-            <Modal open={true} onClose={() => setShowPreview(false)}>
-              <ModalDialog variant="plain" sx={{ textAlign: 'center', p: 4 }}>
-                <CircularProgress size="lg" />
-                <Typography level="body-lg" sx={{ mt: 2 }}>
-                  Loading preview...
-                </Typography>
-              </ModalDialog>
-            </Modal>
-          ) : (
-            previewData && (
-              <GenericModal
-                {...previewData}
-                isOpen={showPreview}
-                onClose={() => setShowPreview(false)}
-                onAgree={() => setShowPreview(false)}
-                isPreview={true}
-              />
-            )
-          )}
-        </>
-      )}
+      {showPreview &&
+        (isPreviewLoading ? (
+          <AdminDialog
+            onClose={() => setShowPreview(false)}
+            width={360}
+            title="Preview"
+            data-testid="admin-modal-preview-loading-dialog"
+          >
+            <LoadingState label="Loading preview" />
+          </AdminDialog>
+        ) : (
+          previewData && (
+            <GenericModal
+              {...previewData}
+              isOpen={showPreview}
+              onClose={() => setShowPreview(false)}
+              onAgree={() => setShowPreview(false)}
+              isPreview={true}
+            />
+          )
+        ))}
     </>
   );
 };

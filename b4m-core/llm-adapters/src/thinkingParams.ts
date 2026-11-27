@@ -1,15 +1,19 @@
 import {
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
   ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
+  claudeFamilyVersion,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
+  type IMessage,
   type ModelInfo,
   type QueryComplexityType,
   type ReasoningEffort,
   MAX_THINKING_BUDGET_TOKENS,
 } from '@bike4mind/common';
+import { isKimiThinkingAlwaysOn } from './kimiParams';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -34,12 +38,26 @@ export const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 export type AnthropicEffort = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
 
 /**
- * The effort a Claude turn runs at when the caller states none: 'high' normally, 'medium'
- * for QuestMaster. These are the values the two Anthropic backends hardcoded before effort
- * was wired, kept as the default so an unstated turn is priced exactly as it was.
+ * The effort resolveAnthropicEffort sends when the caller states none: 'high' normally,
+ * 'medium' for QuestMaster and for the MEDIUM_DEFAULT_EFFORT_FAMILIES models. The backends
+ * call it only on a turn with thinking enabled; a turn without thinking and without a
+ * reasoningEffort plan sends no effort and runs at the provider's own default, which is
+ * also 'medium' for those models.
  */
 export const DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = 'high';
 export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
+
+/**
+ * Claude family-versions (claudeFamilyVersion) whose unstated effort is 'medium' rather than
+ * DEFAULT_ANTHROPIC_EFFORT, matched across direct, Bedrock-scoped, dated and suffixed ids. A
+ * new family-version keeps 'high' until it is added here.
+ */
+export const MEDIUM_DEFAULT_EFFORT_FAMILIES: ReadonlySet<string> = new Set(['opus-5-5', 'haiku-5-5']);
+
+function hasMediumDefaultEffort(model: string): boolean {
+  const familyVersion = claudeFamilyVersion(model);
+  return familyVersion !== null && MEDIUM_DEFAULT_EFFORT_FAMILIES.has(familyVersion);
+}
 
 /**
  * B4M's six-level `ReasoningEffort` onto Anthropic's five.
@@ -52,7 +70,7 @@ export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
  *
  * 'none' and 'minimal' are OpenAI levels with no Anthropic counterpart, and they never
  * reach the wire. They resolve to 'low' rather than to omission because omitting the
- * parameter leaves the caller on DEFAULT_ANTHROPIC_EFFORT ('high'), so dropping a
+ * parameter leaves the caller on the model's default ('high' or 'medium'), so dropping a
  * least-effort request would bill MORE reasoning than was asked for, not less. 'low' is
  * the least Anthropic can express.
  *
@@ -94,10 +112,10 @@ export function supportsAnthropicEffort(model: string, modelInfo: ModelInfo | un
 /**
  * The effort for one Claude turn. Precedence: the Anthropic-native option, then the
  * cross-provider `reasoningEffort` mapped into Anthropic's vocabulary, then the default
- * for the turn type. A caller stating nothing lands on the default, which is what the
- * backends sent before this was wired.
+ * for the turn type and model.
  */
 export function resolveAnthropicEffort(input: {
+  model?: string;
   questMaster?: boolean;
   anthropicEffort?: AnthropicEffort;
   reasoningEffort?: ReasoningEffort;
@@ -105,20 +123,16 @@ export function resolveAnthropicEffort(input: {
   return (
     input.anthropicEffort ??
     toAnthropicEffort(input.reasoningEffort) ??
-    (input.questMaster === true ? DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT : DEFAULT_ANTHROPIC_EFFORT)
+    (input.questMaster === true
+      ? DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT
+      : input.model !== undefined && hasMediumDefaultEffort(input.model)
+        ? 'medium'
+        : DEFAULT_ANTHROPIC_EFFORT)
   );
 }
 
-/**
- * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
- * models self-manage extended thinking *within* max_tokens, which is a ceiling
- * (they stop at end_turn), not a target - so a larger floor costs nothing on
- * short replies but keeps reasoning from consuming the whole budget and leaving
- * no room for the visible answer. Both paths that size an adaptive model's output
- * budget read it from here: buildThinkingParams (thinking explicitly enabled) and
- * resolveOutputMaxTokens (the default when a caller names no budget).
- */
-export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
+// Lives in common so the settings UI can warn against the same number this module sizes with.
+export { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR };
 
 /**
  * Room reserved for the visible answer above a legacy thinking budget. The API rejects a
@@ -153,6 +167,8 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  *
  * Direct Kimi K3 always reasons and spends it inside `max_completion_tokens` (see the
  * empty-turn guard in kimiBackend), but its row carries no dispatch profile to say so.
+ * Direct K2.7-code (thinking cannot be turned off) and K2.6 and K2.5 (think unless told otherwise,
+ * see kimiParams) are the same shape.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
@@ -161,6 +177,10 @@ const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.DEEPSEEK_FLASH,
   ChatModels.DEEPSEEK_V4_PRO,
   ChatModels.KIMI_K3,
+  ChatModels.KIMI_K2_7_CODE,
+  ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
+  ChatModels.KIMI_K2_6,
+  ChatModels.KIMI_K2_5,
 ]);
 
 /**
@@ -183,6 +203,35 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
   if (REASONING_SUPPORTED_MODELS.has(modelInfo.id)) return true;
   if (REASONS_WITHIN_OUTPUT_BUDGET_IDS.has(modelInfo.id)) return true;
   return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
+}
+
+// Headroom for thinking tokens, which count against Gemini's maxOutputTokens.
+export const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
+
+/**
+ * True when geminiBackend sizes this model's output cap with geminiThinkingOutputCap instead of
+ * sending the requested maxTokens as-is.
+ */
+export function usesGeminiThinkingOutputCap(modelInfo: ModelInfo): boolean {
+  const servedByGemini = modelInfo.adapterFamily
+    ? modelInfo.adapterFamily === 'gemini'
+    : modelInfo.backend === ModelBackend.Gemini;
+  return servedByGemini && modelInfo.can_think === true;
+}
+
+/**
+ * The maxOutputTokens geminiBackend sends for a thinking model: the caller's cap plus thinking
+ * headroom, clamped to the declared cap. callerCapBinds is false when the declared cap is the
+ * tighter bound. completionMeter holds this same number, so both must call this one function.
+ */
+export function geminiThinkingOutputCap(
+  modelInfo: ModelInfo,
+  callerCap: number
+): { maxOutputTokens: number; callerCapBinds: boolean } {
+  const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
+  // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
+  const ceiling = (modelInfo.maxOutputTokensDerived ? undefined : usableTokenCount(modelInfo.max_tokens)) ?? Infinity;
+  return { maxOutputTokens: Math.min(ceiling, wanted), callerCapBinds: wanted < ceiling };
 }
 
 /**
@@ -253,6 +302,22 @@ export function resolveOutputMaxTokens({
     return Math.min(preferred, derivedOutputCeiling(modelInfo, cap));
   }
   return Math.min(preferred, cap);
+}
+
+/**
+ * The reasoning floor an explicit budget falls below, or undefined when it does not. Telemetry
+ * only: resolveOutputMaxTokens still honors the budget, so callers log it (through
+ * sentBelowReasoningFloor in modelSizing.ts, which also accounts for thinking) to trace a reply that
+ * ends empty at max_tokens back to a low setting. The floor is what an unstated budget resolves to
+ * on this model, so a budget at a model cap below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR is not reported.
+ */
+export function belowReasoningFloor(
+  args: Parameters<typeof resolveOutputMaxTokens>[0]
+): { requested: number; floor: number } | undefined {
+  const requested = usableTokenCount(args.requested);
+  if (requested === undefined || !reasonsWithinOutputBudget(args.modelInfo)) return undefined;
+  const floor = resolveOutputMaxTokens({ ...args, requested: undefined });
+  return requested < floor ? { requested, floor } : undefined;
 }
 
 /**
@@ -365,6 +430,7 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
   [ChatModels.CLAUDE_5_5_HAIKU, 'disabled'],
   [ChatModels.CLAUDE_5_5_HAIKU_BEDROCK, 'disabled'],
   // Sonnet 5.5 rejects `disabled`; `between_tools` is its off switch.
+  [ChatModels.CLAUDE_5_5_SONNET, 'between_tools'],
   [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 'between_tools'],
 ]);
 
@@ -377,6 +443,7 @@ const ADAPTIVE_THINKING_OFF_SWITCH: ReadonlyMap<string, 'disabled' | 'between_to
 const ADAPTIVE_THINKING_BY_DEFAULT: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
@@ -399,6 +466,73 @@ const LEGACY_EFFORT_BUDGET_TOKENS: Record<PlannedAnthropicEffort, number> = {
 
 /** The API rejects a legacy thinking budget below this. */
 export const LEGACY_THINKING_MIN_BUDGET_TOKENS = 1024;
+
+const isLegacyThinking = (thinking: unknown): thinking is { type: 'enabled'; budget_tokens: number } =>
+  typeof thinking === 'object' &&
+  thinking !== null &&
+  (thinking as { type?: unknown }).type === 'enabled' &&
+  typeof (thinking as { budget_tokens?: unknown }).budget_tokens === 'number';
+
+const isAdaptiveThinking = (thinking: unknown): thinking is { type: 'adaptive' } =>
+  typeof thinking === 'object' && thinking !== null && (thinking as { type?: unknown }).type === 'adaptive';
+
+const isForcedToolChoice = (toolChoice: unknown): boolean => {
+  const type =
+    typeof toolChoice === 'object' && toolChoice !== null ? (toolChoice as { type?: unknown }).type : undefined;
+  return type === 'any' || type === 'tool';
+};
+
+type CeilingRequestBody = {
+  max_tokens?: unknown;
+  thinking?: unknown;
+  output_config?: unknown;
+  tool_choice?: unknown;
+};
+
+/**
+ * Lowers an Anthropic request body's max_tokens to `ceiling` (ICompletionOptions.outputTokenCeiling),
+ * after buildThinkingParams may have raised it. Shared by the direct and Bedrock paths.
+ *
+ * Thinking is spent inside max_tokens, so it has to fit under the ceiling too:
+ * - A legacy thinking budget comes down under the same answer headroom; one that no longer fits the
+ *   API minimum turns thinking off rather than lifting the ceiling, since the ceiling is what the
+ *   caller can pay for.
+ * - Adaptive thinking has no budget to shrink, only an effort. Below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR
+ *   the default effort can spend the whole ceiling thinking and leave no visible answer, so it drops
+ *   to `low`. That includes a model that thinks unasked (`thinksByDefault`, see
+ *   isAdaptiveThinkingByDefault) on a body that names no thinking, unless a forced tool_choice rules
+ *   thinking out.
+ *
+ * Returns true when the body now carries adaptive thinking it did not carry before.
+ */
+export function applyAnthropicOutputCeiling(
+  body: CeilingRequestBody,
+  ceiling: number | undefined,
+  thinksByDefault = false
+): boolean {
+  // Equal counts as binding: capRoundOutput already min'd the caller's maxTokens down to the ceiling.
+  if (ceiling === undefined || typeof body.max_tokens !== 'number' || body.max_tokens < ceiling) return false;
+  body.max_tokens = ceiling;
+
+  if (isLegacyThinking(body.thinking)) {
+    const budget = Math.min(body.thinking.budget_tokens, ceiling - THINKING_ANSWER_HEADROOM_TOKENS);
+    if (budget >= LEGACY_THINKING_MIN_BUDGET_TOKENS) body.thinking.budget_tokens = budget;
+    else delete body.thinking;
+    return false;
+  }
+
+  if (ceiling >= ADAPTIVE_THINKING_MAX_TOKENS_FLOOR) return false;
+  const thinksUnasked = thinksByDefault && body.thinking === undefined && !isForcedToolChoice(body.tool_choice);
+  if (!isAdaptiveThinking(body.thinking) && !thinksUnasked) return false;
+
+  // `low` is the floor of every adaptive model, so this never raises a caller's effort.
+  // Merged, not assigned: output_config may already carry the structured-output format.
+  const outputConfig = typeof body.output_config === 'object' && body.output_config !== null ? body.output_config : {};
+  body.output_config = { ...outputConfig, effort: 'low' };
+  if (!thinksUnasked) return false;
+  body.thinking = { type: 'adaptive' };
+  return true;
+}
 
 /**
  * What a caller's `reasoningEffort` does to an Anthropic request.
@@ -469,10 +603,35 @@ export function planReasoningEffort(
   };
 }
 
+/**
+ * Whether no request can turn thinking off for `model`: an adaptive Claude id with no entry in
+ * ADAPTIVE_THINKING_OFF_SWITCH (planReasoningEffort runs those at the lowest effort instead),
+ * or a Kimi id that only accepts thinking enabled.
+ */
+export function thinkingCannotBeDisabled(model: string, modelInfo: ModelInfo): boolean {
+  if (isKimiThinkingAlwaysOn(model)) return true;
+  return (
+    modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && !ADAPTIVE_THINKING_OFF_SWITCH.has(model)
+  );
+}
+
 /** Whether `model` thinks adaptively, at the provider default effort, on a request that names no thinking. */
 export function isAdaptiveThinkingByDefault(model: string, modelInfo: ModelInfo): boolean {
   return (
     modelInfo.can_think === true && modelInfo.thinkingStyle === 'adaptive' && ADAPTIVE_THINKING_BY_DEFAULT.has(model)
+  );
+}
+
+/** Whether the caller's `thinking: { enabled: false }` must go out as the model's off switch: it would otherwise think unasked. */
+export function thinkingTurnedOff(
+  model: string,
+  modelInfo: ModelInfo,
+  thinking: { enabled?: boolean } | undefined
+): boolean {
+  return (
+    thinking?.enabled === false &&
+    isAdaptiveThinkingByDefault(model, modelInfo) &&
+    ADAPTIVE_THINKING_OFF_SWITCH.has(model)
   );
 }
 
@@ -491,4 +650,18 @@ export function effortForComplexity(
 ): ReasoningEffort | undefined {
   if (!isAdaptiveThinkingByDefault(model, modelInfo)) return undefined;
   return complexity === 'simple' || complexity === 'contextual' ? 'low' : undefined;
+}
+
+/**
+ * True when the array ends in tool results answering an assistant tool_use message that does not
+ * open with a thinking block - the one shape the API refuses while thinking is on.
+ */
+export function continuesToolTurnWithoutThinking(messages: IMessage[]): boolean {
+  const last = messages.at(-1);
+  const previous = messages.at(-2);
+  if (last?.role !== 'user' || previous?.role !== 'assistant') return false;
+  if (!Array.isArray(last.content) || !last.content.some(block => block.type === 'tool_result')) return false;
+  if (!Array.isArray(previous.content) || !previous.content.some(block => block.type === 'tool_use')) return false;
+  const leadingType: unknown = previous.content[0]?.type;
+  return leadingType !== 'thinking' && leadingType !== 'redacted_thinking';
 }

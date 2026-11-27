@@ -18,6 +18,8 @@ const h = vi.hoisted(() => ({
   buildGitHubLakeAuthorizeUrl: vi.fn(),
 }));
 
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: vi.fn(async () => undefined) }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
@@ -33,11 +35,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
 vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({ getGitHubLakeAppConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
+  getGitHubLakeAppConfig: vi.fn(),
+}));
 // resolveConnectableLake is the REAL one: it is the connect route's org gate, and stubbing it would
 // leave the POST refusal for an appointed admin unproven.
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/github/dataLake/githubLakeConnection')>();
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', async importOriginal => {
+  const actual =
+    await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection')>();
   return {
     buildGitHubLakeAuthorizeUrl: h.buildGitHubLakeAuthorizeUrl,
     requestGitHubLakeDisconnect: h.requestGitHubLakeDisconnect,
@@ -92,17 +97,35 @@ describe('/api/data-lakes/[id]/github-connection - appointed org admin', () => {
     h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: ORG });
   });
 
-  it('GET answers 200 with the status for an appointed admin, flagged as unable to manage', async () => {
-    const { res, json } = makeRes();
-    await run(makeReq('GET', APPOINTED_ADMIN), res);
-    expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 3 }, canManage: false });
+  it('GET 404s an appointed admin with no users[] row, without reading the connection', async () => {
+    const { res } = makeRes();
+    await expect(run(makeReq('GET', APPOINTED_ADMIN), res)).rejects.toThrow(/not found/i);
+    expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
-  it('GET answers a null connection with canManage false for an appointed admin on a lake with none', async () => {
+  it('GET answers 200 with canManage true for an appointed admin who has a users[] row', async () => {
+    h.orgFindById.mockResolvedValue({
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [APPOINTED_ADMIN],
+      users: [{ userId: APPOINTED_ADMIN }],
+    });
+    const { res, json } = makeRes();
+    await run(makeReq('GET', APPOINTED_ADMIN), res);
+    expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 3 }, canManage: true });
+  });
+
+  it('GET answers a null connection with canManage true for a rostered manager when the lake has none', async () => {
+    h.orgFindById.mockResolvedValue({
+      id: ORG,
+      userId: OWNER,
+      adminUserIds: [APPOINTED_ADMIN],
+      users: [{ userId: APPOINTED_ADMIN }],
+    });
     h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, json } = makeRes();
     await run(makeReq('GET', APPOINTED_ADMIN), res);
-    expect(json).toHaveBeenCalledWith({ connection: null, canManage: false });
+    expect(json).toHaveBeenCalledWith({ connection: null, canManage: true });
   });
 
   it.each([

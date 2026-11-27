@@ -102,7 +102,9 @@
     "no_subscription": "ไม่มีการสมัครสมาชิก",
     "x_members": "{{count}} สมาชิก",
     "x_credits": "{{count}} เครดิต",
-    "owner": "เจ้าของ"
+    "roles": {
+      "owner": "เจ้าของ"
+    }
   },
   "session": {
     "typeYourMessage": "พิมพ์ข้อความของคุณที่นี่",

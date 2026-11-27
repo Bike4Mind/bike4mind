@@ -15,14 +15,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const resolveExecutionMementoGatesMock = vi.fn();
 const publishMock = vi.fn();
 
-vi.mock('./resolveExecutionMementoGates', () => ({
+vi.mock('@bike4mind/server-utils/utils/resolveExecutionMementoGates', () => ({
   resolveExecutionMementoGates: (...args: unknown[]) => resolveExecutionMementoGatesMock(...args),
 }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   LLMEvents: { CompletionCompleted: { publish: (...args: unknown[]) => publishMock(...args) } },
 }));
 
-const { resolveAndPublishMementoCompletion } = await import('./publishMementoCompletion');
+const { resolveAndPublishMementoCompletion } = await import('@bike4mind/server-utils/utils/publishMementoCompletion');
 
 const makeLogger = () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), log: vi.fn(), debug: vi.fn() }) as never;
 

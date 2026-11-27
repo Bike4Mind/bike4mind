@@ -8,6 +8,9 @@
  *   - adminsettings: settingValue of every `isSensitive` setting (settingsMap)
  *   - apikeys: the per-user provider `apiKey` field
  *
+ * The deploy-time migration 20260921235955 now runs the plain `adminsettings` encrypt step on every
+ * deploy; this CLI remains for --dry-run, --reencrypt, --decrypt and `apikeys`.
+ *
  * Safety:
  *   - Uses isEncrypted() to skip already-encrypted values (idempotent, re-runnable)
  *   - Skips masked placeholders (values starting with the sensitive-setting mask), which
@@ -29,7 +32,9 @@
  *
  * Coverage (rotation caveat): --reencrypt / --decrypt only touch `adminsettings` and
  *   `apikeys`. Other at-rest ciphertext stores - UserModel accessToken/refreshToken,
- *   OverwatchSocialConnectionModel, SRE per-repo secrets - are NOT covered here, so
+ *   OverwatchSocialConnectionModel, SRE per-repo secrets - are NOT covered here, nor are
+ *   contributed admin settings (definitions registered by extension packages at runtime;
+ *   SENSITIVE_SETTING_KEYS is built from the core settingsMap only), so
  *   SECRET_ENCRYPTION_KEY_PREVIOUS must remain configured after any rotation; dropping it
  *   silently blanks those uncovered stores on read.
  *
@@ -75,7 +80,7 @@ const ACTION_PAST = DECRYPT ? 'decrypted' : REENCRYPT ? 're-encrypted' : 'encryp
 // Guarded read: an unlinked/unprovisioned SST secret throws in the getter itself, so a bare
 // `Resource[name]?.value` never falls through to a `?? process.env` arm. Matches the reader in
 // packages/database/src/priceCatalogBootstrap.ts.
-function getResource(name: string): string | undefined {
+export function getResource(name: string): string | undefined {
   try {
     return (Resource as unknown as Record<string, { value?: string } | undefined>)[name]?.value;
   } catch {
@@ -84,7 +89,7 @@ function getResource(name: string): string | undefined {
 }
 
 // Resource.App also throws when the script runs outside `sst shell`; fall back to the seed env.
-function getStage(): string {
+export function getStage(): string {
   try {
     return Resource.App.stage;
   } catch {
@@ -93,7 +98,7 @@ function getStage(): string {
 }
 
 /** Setting keys tagged isSensitive - the only adminsettings values we encrypt. */
-const SENSITIVE_SETTING_KEYS = new Set(
+export const SENSITIVE_SETTING_KEYS = new Set(
   Object.entries(settingsMap)
     .filter(([, def]) => (def as { isSensitive?: boolean })?.isSensitive === true)
     .map(([key]) => key)

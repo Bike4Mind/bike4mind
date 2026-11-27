@@ -1,22 +1,20 @@
-import {
-  Schedule as DateTimeIcon,
-  Casino as DiceIcon,
-  Image as ImageIcon,
-  MusicNote as MusicIcon,
-  GraphicEq as AudioIcon,
-  Videocam as VideoIcon,
-  Calculate as MathIcon,
-  Schema as MermaidIcon,
-  Search as SearchIcon,
-  Language as WebFetchIcon,
-  WbSunny as WeatherIcon,
-  BarChart as RechartsIcon,
-  History as HistoryIcon,
-  NightsStay as MoonIcon,
-  WbTwilight as SunriseIcon,
-  Satellite as SatelliteIcon,
-  Explore as PlanetIcon,
-} from '@mui/icons-material';
+import DateTimeIcon from '@mui/icons-material/Schedule';
+import DiceIcon from '@mui/icons-material/Casino';
+import ImageIcon from '@mui/icons-material/Image';
+import MusicIcon from '@mui/icons-material/MusicNote';
+import AudioIcon from '@mui/icons-material/GraphicEq';
+import VideoIcon from '@mui/icons-material/Videocam';
+import MathIcon from '@mui/icons-material/Calculate';
+import MermaidIcon from '@mui/icons-material/Schema';
+import SearchIcon from '@mui/icons-material/Search';
+import WebFetchIcon from '@mui/icons-material/Language';
+import WeatherIcon from '@mui/icons-material/WbSunny';
+import RechartsIcon from '@mui/icons-material/BarChart';
+import HistoryIcon from '@mui/icons-material/History';
+import MoonIcon from '@mui/icons-material/NightsStay';
+import SunriseIcon from '@mui/icons-material/WbTwilight';
+import SatelliteIcon from '@mui/icons-material/Satellite';
+import PlanetIcon from '@mui/icons-material/Explore';
 
 export const TOOLS_MAP = {
   web_search: {
@@ -47,6 +45,26 @@ export const TOOLS_MAP = {
   video_generation: {
     name: 'Video Generation',
     description: 'Generate a short video clip',
+    icon: <VideoIcon />,
+  },
+  production_storyboard: {
+    name: 'Storyboard production',
+    description: 'Write the shot list for a production',
+    icon: <VideoIcon />,
+  },
+  production_generate_shot: {
+    name: 'Generate production shots',
+    description: 'Make image takes and video clips',
+    icon: <VideoIcon />,
+  },
+  production_add_audio: {
+    name: 'Add production audio',
+    description: 'Add music, voiceover and sound effects',
+    icon: <MusicIcon />,
+  },
+  production_assemble: {
+    name: 'Assemble production',
+    description: 'Lay out the production timeline',
     icon: <VideoIcon />,
   },
   mermaid_chart: {

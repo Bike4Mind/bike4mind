@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { HelpFeedbackRating, HelpFeedbackReportType } from '@bike4mind/common';
 
@@ -84,6 +84,8 @@ export const useHelpAnalyticsData = (filters?: HelpAnalyticsFilters) => {
       const res = await api.get<HelpAnalyticsData>(url);
       return res.data;
     },
+    // A range change keeps the previous numbers on screen while the new range loads.
+    placeholderData: keepPreviousData,
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,
   });

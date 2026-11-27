@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -59,19 +63,24 @@ vi.mock('@bike4mind/database', () => ({
 // `@bike4mind/common` is deliberately NOT mocked: normalizePublishTags is the thing whose output
 // the guard reads, so a stub would test the mock. Only the heavy publish-service surface is stubbed,
 // far enough for each handler to reach its write.
+// finalize reaches the quota check through planVersionedPublish, which imports it from this module.
+vi.mock('@server/services/publish/checkPublishQuota', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, checkPublishQuota: () => Promise.resolve({ ok: true }) };
+});
 vi.mock('@server/services/publish', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     validateBundle: () => ({ valid: true, violations: [] }),
     checkScopePermission: () => Promise.resolve({ ok: true }),
-    checkPublishQuota: () => Promise.resolve({ ok: true }),
     resolveVisibility: (_tier: string, visibility?: string) => ({ ok: true, visibility: visibility ?? 'private' }),
     buildPublishS3KeyPrefix: () => 'user/owner1/s/',
     buildPublishUrlPath: () => '/p/u/owner1/s',
     invalidatePublishCdn: () => undefined,
     toCacheTarget: () => ({}),
-    mintDraftUploadUrl: () => Promise.resolve('https://example.invalid/put'),
+    mintDraftUploadUrl: () => Promise.resolve({ url: 'https://example.invalid/put' }),
+    consumePublishAction: () => Promise.resolve({ refund: () => Promise.resolve() }),
   };
 });
 

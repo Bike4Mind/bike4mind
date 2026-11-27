@@ -1,0 +1,249 @@
+import { useMemo } from 'react';
+import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
+import type {
+  AdminModelFilter,
+  AdminModelListResponse,
+  AdminModelRow,
+  AdminModelSort,
+  AuditEntry,
+  AdminModelAccessEntry,
+  AuditLogPage,
+  ModelAccessBulkDryRun,
+  ModelAccessBulkRequestInput,
+  ModelAccessBulkResult,
+  ModelAccessEntry,
+  ModelAccessPatchRequest,
+  ModelAccessPatchResult,
+  ModelUserTagCount,
+} from '@bike4mind/common';
+import { api } from '@client/app/contexts/ApiContext';
+import { MODEL_CONFIGURATIONS_QUERY_KEY } from './modelAccessRevision';
+import { ModelConfigurationsResponseSchema } from './modelAccessDraft';
+import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
+
+/**
+ * The admin model console's reads and writes (apps/client/pages/api/admin/models/*). Wire types live in
+ * @bike4mind/common (schemas/adminModels.ts, modelAccess.ts).
+ */
+
+/** Every admin model query sits under this key, so one invalidation refreshes the list, a detail and the counts. */
+export const ADMIN_MODELS_QUERY_KEY = ['admin', 'models'] as const;
+
+export type AdminModelListQuery = {
+  /** Always explicit: the server defaults to `all`, and a missing view in a bulk `{ filter }` selects every model. */
+  filter: AdminModelFilter & { view: NonNullable<AdminModelFilter['view']> };
+  sort?: AdminModelSort;
+  dir?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
+};
+
+/** The list query string the server reads: lists comma-joined, booleans as strings. */
+export const adminModelListParams = ({ filter, sort, dir, page, pageSize }: AdminModelListQuery) => {
+  const params: Record<string, string> = { view: filter.view };
+  if (filter.search) params.search = filter.search;
+  if (filter.providers?.length) params.providers = filter.providers.join(',');
+  if (filter.types?.length) params.types = filter.types.join(',');
+  if (filter.sources?.length) params.sources = filter.sources.join(',');
+  if (filter.showFoundationIds) params.showFoundationIds = 'true';
+  if (sort) params.sort = sort;
+  if (dir) params.dir = dir;
+  if (page) params.page = String(page);
+  if (pageSize) params.pageSize = String(pageSize);
+  return params;
+};
+
+const fetchAdminModels = async (query: AdminModelListQuery): Promise<AdminModelListResponse> =>
+  (await api.get<AdminModelListResponse>('/api/admin/models', { params: adminModelListParams(query) })).data;
+
+export const useAdminModelList = (query: AdminModelListQuery, options: { enabled?: boolean } = {}) =>
+  useQuery({
+    queryKey: [...ADMIN_MODELS_QUERY_KEY, 'list', adminModelListParams(query)],
+    queryFn: () => fetchAdminModels(query),
+    placeholderData: keepPreviousData,
+    enabled: options.enabled ?? true,
+  });
+
+/** The server's search filter accepts 200 characters; a prefix of a longer id still matches it. */
+const SEARCH_MAX = 200;
+/** The server's page size cap (ADMIN_MODEL_PAGE_SIZE_MAX in the discovery service). */
+const LOOKUP_PAGE_SIZE = 500;
+/** A runaway guard only: 5,000 rows is far past any catalog. */
+const LOOKUP_MAX_PAGES = 10;
+
+/** A paged lookup's rows; `truncated` when the page cap stopped it before the server ran out. */
+export type AdminModelLookup = { rows: AdminModelRow[]; truncated: boolean };
+
+/** Every row a filter matches, paged until the server has none left or the page cap is reached. */
+export const fetchAllAdminModels = async (
+  query: Omit<AdminModelListQuery, 'page' | 'pageSize'>
+): Promise<AdminModelLookup> => {
+  const rows: AdminModelRow[] = [];
+  for (let page = 1; page <= LOOKUP_MAX_PAGES; page += 1) {
+    const response = await fetchAdminModels({ ...query, page, pageSize: LOOKUP_PAGE_SIZE });
+    rows.push(...response.models);
+    if (page * LOOKUP_PAGE_SIZE >= response.total || response.models.length === 0) return { rows, truncated: false };
+  }
+  return { rows, truncated: true };
+};
+
+const LOOKUP_CAP = LOOKUP_PAGE_SIZE * LOOKUP_MAX_PAGES;
+/** The one-line notice a picker shows when its lookup was cut at the page cap. */
+export const LOOKUP_TRUNCATED_NOTICE = `Only the first ${LOOKUP_CAP.toLocaleString('en-US')} models are listed here.`;
+
+/** One model's row, found through the list: there is no per-model read yet. Null when no known model has the id. */
+export const useAdminModelRow = (id: string) =>
+  useQuery({
+    queryKey: [...ADMIN_MODELS_QUERY_KEY, 'row', id],
+    queryFn: async (): Promise<AdminModelRow | null> => {
+      const response = await fetchAdminModels({
+        filter: { view: 'all', search: id.slice(0, SEARCH_MAX), showFoundationIds: true },
+        pageSize: LOOKUP_PAGE_SIZE,
+      });
+      return response.models.find(model => model.id === id) ?? null;
+    },
+    enabled: id.length > 0,
+  });
+
+/** Models of one type, for a fallback picker. */
+export const useAdminModelsOfType = (type: string | undefined) =>
+  useQuery({
+    queryKey: [...ADMIN_MODELS_QUERY_KEY, 'of-type', type],
+    queryFn: () =>
+      fetchAllAdminModels({
+        filter: { view: 'all', types: type ? [type] : undefined, showFoundationIds: true },
+        sort: 'name',
+      }),
+    enabled: !!type,
+  });
+
+/** Distinct user tags with how many accounts hold each, for the tag pickers (GET /api/admin/users/tags). */
+export const useAdminUserTags = (enabled = true) =>
+  useQuery({
+    queryKey: ['admin', 'users', 'tags'],
+    queryFn: async () => (await api.get<{ tags: ModelUserTagCount[] }>('/api/admin/users/tags')).data.tags,
+    staleTime: 60_000,
+    enabled,
+  });
+
+/** The tags access entries name, under ADMIN_MODELS_QUERY_KEY so an access write refreshes it with the console. */
+const useAccessEntryTags = (enabled: boolean) =>
+  useQuery({
+    queryKey: [...ADMIN_MODELS_QUERY_KEY, 'entry-tags'],
+    queryFn: async () => {
+      const response = await api.get<unknown>('/api/admin/llm-models/configurations');
+      const { settingValue } = ModelConfigurationsResponseSchema.parse(response.data);
+      return [...new Set(settingValue.flatMap(entry => entry.allowedUserTags))];
+    },
+    staleTime: 60_000,
+    enabled,
+  });
+
+/** Tag choices for the access editors: the tags users hold, with counts, plus tags set only on access entries. */
+export const useAccessTagOptions = (enabled = true) => {
+  const userTags = useAdminUserTags(enabled);
+  const entryTags = useAccessEntryTags(enabled);
+  const options = useMemo(
+    () => [...new Set([...(userTags.data ?? []).map(entry => entry.tag), ...(entryTags.data ?? [])])],
+    [userTags.data, entryTags.data]
+  );
+  const counts = useMemo(() => new Map((userTags.data ?? []).map(entry => [entry.tag, entry.count])), [userTags.data]);
+  return {
+    options,
+    counts,
+    isLoading: userTags.isLoading || entryTags.isLoading,
+    isError: userTags.isError || entryTags.isError,
+    isRetrying: userTags.isFetching || entryTags.isFetching,
+    retry: () => {
+      if (userTags.isError) void userTags.refetch();
+      if (entryTags.isError) void entryTags.refetch();
+    },
+  };
+};
+
+/** Refreshes everything that shows access: this console and every open picker in this tab. */
+export const useInvalidateModelAccess = () => {
+  const queryClient = useQueryClient();
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ADMIN_MODELS_QUERY_KEY }),
+      // Inactive too: a closed picker that stays mounted would otherwise reopen on the old access.
+      queryClient.invalidateQueries({ queryKey: MODEL_CONFIGURATIONS_QUERY_KEY, refetchType: 'all' }),
+    ]);
+};
+
+/**
+ * The write is conditional on `loaded`, the entry as this view read it (null when the model had none): its
+ * `updatedAt` goes out as `expectedUpdatedAt`, never a stamp re-read just before the write.
+ */
+export const patchModelAccess = async (
+  id: string,
+  loaded: AdminModelAccessEntry | ModelAccessEntry | null,
+  body: Omit<ModelAccessPatchRequest, 'expectedUpdatedAt'>
+): Promise<ModelAccessPatchResult> =>
+  (
+    await api.patch<ModelAccessPatchResult>(
+      '/api/admin/models/access',
+      { ...body, expectedUpdatedAt: loaded?.updatedAt ?? null },
+      { params: { id } }
+    )
+  ).data;
+
+export const postModelAccessBulk = async <T extends ModelAccessBulkDryRun | ModelAccessBulkResult>(
+  body: ModelAccessBulkRequestInput
+): Promise<T> => (await api.post<T>('/api/admin/models/access/bulk', body)).data;
+
+/** A failed API call's status and body, for the endpoints whose 409 and 422 carry data to act on. */
+export const apiErrorOf = (error: unknown): { status?: number; data: Record<string, unknown> } => {
+  if (!isAxiosError(error)) return { data: {} };
+  const data = error.response?.data;
+  return {
+    status: error.response?.status,
+    data: data && typeof data === 'object' ? (data as Record<string, unknown>) : {},
+  };
+};
+
+/** The current entry a PATCH 409 carries. */
+export const conflictEntryOf = (error: unknown): ModelAccessEntry | null | undefined => {
+  const { status, data } = apiErrorOf(error);
+  if (status !== 409 || !('entry' in data)) return undefined;
+  return (data.entry as ModelAccessEntry | null) ?? null;
+};
+
+const ADMIN_LOG_LIMIT = 50;
+const PRICE_UNITS = ['per_token', 'per_image', 'per_minute'] as const;
+
+/**
+ * Audit entries that name one model, newest first: its access entry, its prices and its lifecycle suggestion. Each
+ * write records its own target id (model access, model-prices and model-deprecation-status), so they are read
+ * apart and merged.
+ */
+export const useModelAdminLog = (id: string) => {
+  const targetIds = [`llmModelConfigurations:${id}`, ...PRICE_UNITS.map(unit => `${id}:${unit}`), id];
+  const results = useQueries({
+    queries: targetIds.map(targetId => ({
+      queryKey: [...ADMIN_MODELS_QUERY_KEY, 'admin-log', targetId],
+      queryFn: async (): Promise<AuditLogPage> => {
+        const response = await api.get<{ entries: WireAuditEntry[]; nextCursor: string | null }>(
+          '/api/admin/audit-log',
+          { params: { targetKind: 'settings', targetId, limit: String(ADMIN_LOG_LIMIT) } }
+        );
+        return { ...response.data, entries: response.data.entries.map(reviveAuditEntry) };
+      },
+      enabled: id.length > 0,
+    })),
+  });
+  const entries: AuditEntry[] = results
+    .flatMap(result => result.data?.entries ?? [])
+    .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+  return {
+    entries,
+    isLoading: results.some(result => result.isLoading),
+    isError: results.some(result => result.isError),
+    error: results.find(result => result.error)?.error ?? null,
+    /** Some source holds more entries than were read. */
+    truncated: results.some(result => !!result.data?.nextCursor),
+    refetch: () => Promise.all(results.map(result => result.refetch())),
+  };
+};

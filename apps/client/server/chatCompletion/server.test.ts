@@ -1,37 +1,44 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { questReplyText, spendCapExceededError } from '@bike4mind/common';
-import { InsufficientCreditsError } from '@bike4mind/services/llm';
+import { CreditHolderType, TooManyRequestsError, questReplyText } from '@bike4mind/common';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
+import { setModelCatalogProvider } from '@bike4mind/llm-adapters';
+import { FlaggedContentError } from '@bike4mind/utils';
 
-// SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
-// management endpoint the ws-completions route streams through.
+// SST Resource - the internal shared-secret bearer /process checks.
 const mockResource = vi.hoisted(() => ({
   CHAT_COMPLETION_INTERNAL_SECRET: { value: 'test-shared-secret' },
-  websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
   App: { stage: 'test' },
 }));
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
 // The quest-processing-failure metric's emit seam.
 const mockEmitMetrics = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics: mockEmitMetrics }));
 
-// WS connection lookup + fanout seams for the ws-completions route.
-const mockConnectionFind = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/database/social', () => ({ Connection: { find: mockConnectionFind } }));
-const mockSendToConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
-
 // processQuest is the heavy import chain (DB models, services). Mock it so importing the
 // server doesn't drag in the whole world and so we can assert it's invoked on a valid 202.
 const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
+
+// The session turns route has its own suite (external/turnsRoute.test.ts); its import chain builds
+// mongoose models, so here it is only checked to be registered.
+const mockRegisterTurnsRoutes = vi.hoisted(() => vi.fn());
+vi.mock('./external/turnsRoute', () => ({ registerTurnsRoutes: mockRegisterTurnsRoutes }));
+
+// Scale-in protection is driven by the drain set's in-flight count (unit-tested in taskProtection.test.ts).
+const mockProtectionUpdate = vi.hoisted(() => vi.fn());
+vi.mock('./taskProtection', () => ({
+  createTaskProtection: () => ({ update: mockProtectionUpdate, idle: async () => undefined }),
+}));
 
 // questRepository.settleIfUnfinished - the error path's status-guarded terminal write.
 // connectDB/mongoose unused by /process. The remaining repos are pulled in by the completions
@@ -49,16 +56,25 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   // Pulled in by the completions route for org-billed API keys; unused by these
   // personal/JWT cases but must exist or the mocked-module export getter throws.
   organizationRepository: { findById: vi.fn().mockResolvedValue(null) },
+  cacheRepository: {},
+  spendFreezeRepository: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
 }));
 
 // executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
 // callback without a real model call.
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
+const mockLogApiKeyUsage = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+// Completion requests persist a start row before execution; the finish write updates that row.
+const USAGE_LOG_ID = 'usage-log-1';
+const mockBeginCompletionUsage = vi.hoisted(() => vi.fn().mockResolvedValue('usage-log-1'));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
+  ApiKeyUsageManager: { logUsage: mockLogApiKeyUsage, beginCompletionUsage: mockBeginCompletionUsage },
+}));
 
 // Replace the production schema (25+ fields) with a minimal one so the test can drive the
 // 400 (invalid) vs 202 (valid) branches without constructing a full QuestStartBody.
@@ -98,7 +114,12 @@ const mockAuth = vi.hoisted(() => ({
   checkApiKeyRateLimitOrThrow: vi.fn(),
   checkRateLimit: vi.fn(),
 }));
-vi.mock('@server/cli/auth', () => mockAuth);
+vi.mock('@bike4mind/server-utils/cli/auth', () => mockAuth);
+// The real quota module reaches the subscription models, which the @bike4mind/database mock lacks.
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: vi.fn().mockResolvedValue({ release: () => Promise.resolve() }),
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
 
 vi.mock('@server/utils/logCompletionAnalytics', () => ({
   logCompletionAnalytics: vi.fn().mockResolvedValue(undefined),
@@ -112,18 +133,43 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   registerProcessErrorHandlers: vi.fn(),
 }));
-vi.mock('@bike4mind/server-utils/utils/config', () => ({
-  Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' },
+const mockConfig = vi.hoisted(() => ({
+  MONGODB_URI: 'mongodb://x/%STAGE%',
+  STAGE: 'test',
+  JWT_SECRET: 'test-jwt-secret',
+}));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: mockConfig }));
+
+const ipGate = vi.hoisted(() => ({ blocked: false, options: [] as unknown[] }));
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: (options: unknown) => {
+    ipGate.options.push(options);
+    return (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }, next: () => void) =>
+      ipGate.blocked ? res.status(403).json({ error: 'network blocked' }) : next();
+  },
 }));
 
-import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
+import {
+  assertBootSecretsConfigured,
+  checkModelCatalogWired,
+  createApp,
+  drainInFlight,
+  DRAIN_TIMEOUT_MS,
+} from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
+import {
+  QUEST_DISPATCH_MAX_SKEW_MS,
+  QUEST_DISPATCH_SIGNATURE_HEADER,
+  QUEST_DISPATCH_TIMESTAMP_HEADER,
+  signQuestDispatch,
+} from '@server/utils/questDispatchSignature';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -134,7 +180,7 @@ let baseUrl: string;
 beforeAll(async () => {
   const app = createApp();
   await new Promise<void>(resolve => {
-    server = app.listen(0, () => {
+    server = app.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo;
       baseUrl = `http://127.0.0.1:${port}`;
       resolve();
@@ -150,12 +196,35 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const post = (body: unknown, headers: Record<string, string> = {}) =>
-  fetch(`${baseUrl}/process`, {
+// Signs like dispatchQuest unless `signed` is false; explicit headers override the signed ones.
+const post = (
+  body: unknown,
+  headers: Record<string, string> = {},
+  { signed = true, signedAt }: { signed?: boolean; signedAt?: number } = {}
+) => {
+  const raw = JSON.stringify(body);
+  const fields = body as Partial<Record<'questId' | 'userId' | 'sessionId', string>>;
+  const signature = signQuestDispatch(
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+    { questId: fields.questId ?? '', userId: fields.userId ?? '', sessionId: fields.sessionId ?? '' },
+    raw,
+    signedAt
+  );
+  const signatureHeaders = signed
+    ? { [QUEST_DISPATCH_TIMESTAMP_HEADER]: signature.timestamp, [QUEST_DISPATCH_SIGNATURE_HEADER]: signature.signature }
+    : {};
+  return fetch(`${baseUrl}/process`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...signatureHeaders, ...headers },
+    body: raw,
   });
+};
+
+describe('ChatCompletion public routes', () => {
+  it('registers the session turns route with the drain tracker', () => {
+    expect(mockRegisterTurnsRoutes).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
+  });
+});
 
 describe('ChatCompletion /process', () => {
   it('returns 401 when the bearer token is missing', async () => {
@@ -170,9 +239,55 @@ describe('ChatCompletion /process', () => {
     expect(mockProcessQuest).not.toHaveBeenCalled();
   });
 
+  it('returns 401 to every caller while the internal secret is a placeholder, even one presenting it', async () => {
+    const configured = mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value;
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'my-secret-placeholder-value';
+    try {
+      const res = await post(VALID_BODY, { authorization: 'Bearer my-secret-placeholder-value' });
+      expect(res.status).toBe(401);
+      expect(mockProcessQuest).not.toHaveBeenCalled();
+    } finally {
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = configured;
+    }
+  });
+
   it('returns 400 on a malformed payload (and does not process)', async () => {
     const res = await post({ questId: 'q1' }, { authorization: AUTH });
     expect(res.status).toBe(400);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature headers are missing', async () => {
+    const res = await post(VALID_BODY, { authorization: AUTH }, { signed: false });
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the body names a different user than the one signed for', async () => {
+    const signed = signQuestDispatch(
+      mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value,
+      { questId: 'q1', userId: 'u1', sessionId: 's1' },
+      JSON.stringify(VALID_BODY)
+    );
+    const res = await post(
+      { ...VALID_BODY, userId: 'u2' },
+      {
+        authorization: AUTH,
+        [QUEST_DISPATCH_TIMESTAMP_HEADER]: signed.timestamp,
+        [QUEST_DISPATCH_SIGNATURE_HEADER]: signed.signature,
+      }
+    );
+    expect(res.status).toBe(401);
+    expect(mockProcessQuest).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when the dispatch signature is outside the accepted window', async () => {
+    const res = await post(
+      VALID_BODY,
+      { authorization: AUTH },
+      { signedAt: Date.now() - QUEST_DISPATCH_MAX_SKEW_MS - 60_000 }
+    );
+    expect(res.status).toBe(401);
     expect(mockProcessQuest).not.toHaveBeenCalled();
   });
 
@@ -232,6 +347,15 @@ describe('ChatCompletion /process', () => {
     await post(VALID_BODY, { authorization: AUTH });
 
     await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).toHaveBeenCalledWith('Quest processing failed', expect.objectContaining({ error: 'boom' }));
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      'Quest processing ended with an expected provider error',
+      expect.anything()
+    );
     expect(mockCategorizeToolError).toHaveBeenCalledWith('boom');
     expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_NAMESPACE, [
       expect.objectContaining({
@@ -253,6 +377,48 @@ describe('ChatCompletion /process', () => {
         dimensions: { Stage: 'test', Surface: '/process' },
       }),
     ]);
+  });
+
+  it.each([
+    new Error('Anthropic safety classifier refusal'),
+    Object.assign(new Error('Policy refused'), { code: 'cyber_policy' }),
+  ])('settles expected provider refusals without duplicate alerting', async refusal => {
+    mockProcessQuest.mockRejectedValueOnce(refusal);
+    const response = await post(VALID_BODY, { authorization: AUTH });
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('Quest processing ended with an expected provider error', {
+      error: refusal.message,
+    });
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+    expect(mockQuestSettleIfUnfinished).toHaveBeenCalledWith(
+      'q1',
+      expect.objectContaining({ status: 'stopped', type: 'error' })
+    );
+  });
+
+  // The moderation service already logged the flag once at warn; the route must not log or count it again.
+  it('settles a moderation refusal without logging or counting it as a processing failure', async () => {
+    const refusal = new FlaggedContentError(
+      "We're sorry, your prompt has been flagged for potential harmful content on the following categories: violence",
+      ['violence']
+    );
+    mockProcessQuest.mockRejectedValueOnce(refusal);
+    const response = await post(VALID_BODY, { authorization: AUTH });
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
   });
 
   it('still settles the quest and emits the metric when it is a non-Error throw', async () => {
@@ -282,6 +448,18 @@ describe('ChatCompletion /process', () => {
     const res = await post(VALID_BODY, { authorization: AUTH });
     expect(res.status).toBe(202);
     await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+  });
+
+  it('holds scale-in protection while a quest is in flight and releases it when the task is idle', async () => {
+    let finishQuest: () => void = () => undefined;
+    mockProcessQuest.mockImplementationOnce(() => new Promise<void>(resolve => (finishQuest = resolve)));
+
+    await post(VALID_BODY, { authorization: AUTH });
+    await vi.waitFor(() => expect(mockProcessQuest).toHaveBeenCalledTimes(1));
+    expect(mockProtectionUpdate).toHaveBeenLastCalledWith(1);
+
+    finishQuest();
+    await vi.waitFor(() => expect(mockProtectionUpdate).toHaveBeenLastCalledWith(0));
   });
 });
 
@@ -373,6 +551,94 @@ describe('ChatCompletion Dockerfile PID 1', () => {
   });
 });
 
+describe('assertBootSecretsConfigured', () => {
+  afterEach(() => {
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'test-shared-secret';
+    mockConfig.JWT_SECRET = 'test-jwt-secret';
+  });
+
+  it('passes when both secrets are configured', () => {
+    expect(() => assertBootSecretsConfigured()).not.toThrow();
+  });
+
+  it('refuses to start on a placeholder internal secret, naming only the secret', () => {
+    mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value = 'change-me-openssl-rand-hex-32';
+    expect(() => assertBootSecretsConfigured()).toThrow(/^CHAT_COMPLETION_INTERNAL_SECRET is not configured/);
+  });
+
+  it('refuses to start on an empty JWT secret', () => {
+    mockConfig.JWT_SECRET = '';
+    expect(() => assertBootSecretsConfigured()).toThrow(/^JWT_SECRET is not configured/);
+  });
+});
+
+describe('checkModelCatalogWired', () => {
+  const logger = { error: vi.fn() };
+  afterEach(() => {
+    setModelCatalogProvider(null);
+    logger.error.mockClear();
+  });
+
+  it('logs an error when the llm-adapters instance completions read has no catalog provider', () => {
+    expect(checkModelCatalogWired(logger)).toBe(false);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes once the catalog provider is wired on that instance', () => {
+    setModelCatalogProvider(async () => []);
+    expect(checkModelCatalogWired(logger)).toBe(true);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion origin verification', () => {
+  const SECRET = 'origin-secret-value';
+  const GATED = ['/api/ai/v1/completions', '/api/embed/chat'];
+  const call = (path: string, headers: Record<string, string> = {}) =>
+    fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: '{}',
+    });
+
+  beforeEach(() => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', SECRET);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each(GATED)('returns 403 on %s without the header', async path => {
+    expect((await call(path)).status).toBe(403);
+  });
+
+  it.each(GATED)('returns 403 on %s with a wrong or empty header', async path => {
+    expect((await call(path, { 'x-b4m-origin-verify': 'wrong-secret-value!' })).status).toBe(403);
+    expect((await call(path, { 'x-b4m-origin-verify': '' })).status).toBe(403);
+  });
+
+  it.each(GATED)('lets %s through to its handler with the right header', async path => {
+    const res = await call(path, { 'x-b4m-origin-verify': SECRET });
+    expect(res.status).not.toBe(403);
+  });
+
+  it('gates a path registered after the gate that is not one of the known routes', async () => {
+    expect((await call('/api/ai/v1/not-a-route')).status).toBe(403);
+  });
+
+  it('leaves /health and /process to their own checks', async () => {
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+  });
+
+  it('does not gate when ORIGIN_VERIFY_SECRET is unset', async () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    expect((await call('/api/ai/v1/completions')).status).not.toBe(403);
+  });
+});
+
 describe('ChatCompletion /api/ai/v1/completions', () => {
   const VALID_COMPLETION = { model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] };
 
@@ -395,10 +661,22 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
       request_id: res.headers.get('x-request-id'),
     });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLogApiKeyUsage).not.toHaveBeenCalled();
   });
 
-  it('returns 422 JSON on an invalid request body (no execution)', async () => {
-    const res = await postCompletion({ messages: [] }); // missing required `model`
+  it('returns 400 JSON for an empty conversation (no execution)', async () => {
+    const res = await postCompletion({ model: 'claude-test', messages: [] });
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const body = (await res.json()) as { error: string; request_id: string };
+    expect(body.error).toMatch(/^Validation error/);
+    expect(body.error).toContain('messages');
+    expect(body.request_id).toBe(res.headers.get('x-request-id'));
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 JSON on another invalid request body (no execution)', async () => {
+    const res = await postCompletion({ messages: [{ role: 'user', content: 'hi' }] }); // missing required `model`
     expect(res.status).toBe(422);
     expect(res.headers.get('content-type')).toContain('application/json');
     const body = (await res.json()) as { error: string; request_id: string };
@@ -433,6 +711,109 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(params.db.usageEvents).toBeDefined();
     expect(typeof params.requestId).toBe('string');
     expect(text).toContain('data: [DONE]');
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalled());
+    // Let the socket close after finish; the row must still be written exactly once.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith({
+      keyId: 'key1',
+      userId: 'u1',
+      ipAddress: expect.any(String),
+      endpoint: '/api/ai/v1/completions',
+      method: 'POST',
+      responseTime: expect.any(Number),
+      statusCode: 200,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      logger: expect.any(Object),
+      existingLogId: USAGE_LOG_ID,
+      completionObservation: expect.objectContaining({ requestedModel: 'claude-test', outcome: 'completed' }),
+    });
+    expect(mockBeginCompletionUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts an authenticated rate-limited request with its final status and billing owner', async () => {
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'org-key',
+      userId: 'owner',
+      scopes: [],
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockRejectedValueOnce(new TooManyRequestsError('At limit'));
+
+    const res = await postCompletion(VALID_COMPLETION, { 'x-api-key': 'b4m_test', 'user-agent': 'b4m-cli/1.0' });
+    await res.text();
+
+    expect(res.status).toBe(429);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1);
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        keyId: 'org-key',
+        userId: 'owner',
+        statusCode: 429,
+        source: 'cli',
+        ownerType: CreditHolderType.Organization,
+      })
+    );
+  });
+
+  it('counts an API key stream once when the caller disconnects before execution ends', async () => {
+    const execution = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockExecuteCompletion.mockImplementationOnce(async ({ onReady }) => {
+      await onReady();
+      await execution.promise;
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/ai/v1/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+        body: JSON.stringify(VALID_COMPLETION),
+        signal: controller.signal,
+      });
+      await res.body?.getReader().read();
+      controller.abort();
+
+      await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+      expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 200 }));
+    } finally {
+      controller.abort();
+      execution.resolve();
+    }
+  });
+
+  it('counts a caller that disconnects before any response as 499', async () => {
+    const controller = new AbortController();
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockImplementationOnce(() => new Promise(() => {}));
+
+    const request = fetch(`${baseUrl}/api/ai/v1/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_test' },
+      body: JSON.stringify(VALID_COMPLETION),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(mockAuth.checkApiKeyRateLimitOrThrow).toHaveBeenCalled());
+    controller.abort();
+    await request;
+
+    await vi.waitFor(() => expect(mockLogApiKeyUsage).toHaveBeenCalledTimes(1));
+    expect(mockLogApiKeyUsage).toHaveBeenCalledWith(expect.objectContaining({ keyId: 'key1', statusCode: 499 }));
   });
 
   it('falls back to JWT auth when no API key is present', async () => {
@@ -447,10 +828,11 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     const res = await postCompletion(VALID_COMPLETION, { authorization: 'Bearer jwt-token' });
     const text = await res.text();
 
-    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token');
+    expect(mockAuth.verifyJwtToken).toHaveBeenCalledWith('jwt-token', { requireApiAccess: true });
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');
+    expect(mockLogApiKeyUsage).not.toHaveBeenCalled();
   });
 
   // OpenAI-shape consumers send stream/tools/temperature/max_tokens at the top level (not
@@ -515,154 +897,34 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
   });
 });
 
-describe('ChatCompletion /api/ai/v1/ws-completions', () => {
-  const REQUEST_ID = '4c1f7f60-3b1a-4c2e-9b60-6f0d1a2b3c4d';
-  const VALID_WS_COMPLETION = {
-    requestId: REQUEST_ID,
-    model: 'claude-test',
-    messages: [{ role: 'user', content: 'hi' }],
-  };
-
-  const authAsApiKeyUser = () => {
-    mockAuth.verifyApiKey.mockResolvedValue({
-      keyId: 'key1',
-      userId: 'u1',
-      scopes: [],
-      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
-    });
-    mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
-  };
-
-  const postWsCompletion = (body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${baseUrl}/api/ai/v1/ws-completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...headers },
-      body: JSON.stringify(body),
-    });
-
-  /** The completion runs after the 202; poll until the WS fanout emits the given action. */
-  const waitForAction = async (action: string) => {
-    await vi.waitFor(() => {
-      const sent = mockSendToConnection.mock.calls.map(call => call[2]);
-      expect(sent.some(msg => msg.action === action)).toBe(true);
-    });
-    return mockSendToConnection.mock.calls.map(call => call[2]);
-  };
-
-  it('returns 401 when both API key and JWT auth fail (no execution)', async () => {
-    mockAuth.verifyApiKey.mockRejectedValue(new Error('No API key provided'));
-    mockAuth.verifyJwtToken.mockRejectedValue(new Error('No authorization token provided'));
-
-    const res = await postWsCompletion(VALID_WS_COMPLETION);
-    expect(res.status).toBe(401);
-    expect(mockExecuteCompletion).not.toHaveBeenCalled();
-    expect(mockEmitMetrics).not.toHaveBeenCalled();
+describe('ChatCompletion IP block gate', () => {
+  afterEach(() => {
+    ipGate.blocked = false;
   });
 
-  it('returns 400 on an invalid body (missing requestId)', async () => {
-    authAsApiKeyUser();
-    const res = await postWsCompletion({ model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] });
-    expect(res.status).toBe(400);
-    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  it('mounts one app-surface gate', () => {
+    expect(ipGate.options).toEqual([{ surface: 'app' }]);
   });
 
-  it('returns 400 when the user has no active WebSocket connection', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([]);
-
-    const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toContain('No active WebSocket connection');
-    expect(mockExecuteCompletion).not.toHaveBeenCalled();
-  });
-
-  it('202s, then streams chunks and done over the WebSocket in the background', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }, { connectionId: 'conn-2' }]);
-    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
-      await onChunk(['Hello', null], { outputTokens: 5 });
-    });
-
-    const res = await postWsCompletion({ ...VALID_WS_COMPLETION, connectionId: 'conn-2' }, { 'x-api-key': 'b4m_test' });
-    expect(res.status).toBe(202);
-    expect(await res.json()).toEqual({ success: true });
-
-    const sent = await waitForAction('cli_completion_done');
-    // connectionId targets the requesting CLI's connection only.
-    expect(mockSendToConnection.mock.calls.every(call => call[0] === 'conn-2')).toBe(true);
-    expect(mockSendToConnection.mock.calls.every(call => call[1] === 'https://ws.test')).toBe(true);
-    expect(sent.some(msg => msg.action === 'cli_completion_chunk' && msg.requestId === REQUEST_ID)).toBe(true);
-    // The usage-event dual-write seam must be passed through, matching the SSE route.
-    expect(mockExecuteCompletion.mock.calls[0][0].db.usageEvents).toBeDefined();
-  });
-
-  it('falls back to all connections when the requested connectionId is gone', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-new' }]);
-    mockExecuteCompletion.mockResolvedValue(undefined);
-
-    const res = await postWsCompletion(
-      { ...VALID_WS_COMPLETION, connectionId: 'conn-stale' },
-      { 'x-api-key': 'b4m_test' }
-    );
-    expect(res.status).toBe(202);
-
-    await waitForAction('cli_completion_done');
-    expect(mockSendToConnection.mock.calls.every(call => call[0] === 'conn-new')).toBe(true);
-  });
-
-  it('delivers a background completion failure as cli_completion_error over the WebSocket', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
-    mockExecuteCompletion.mockRejectedValue(new Error('model exploded'));
-
-    const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
-    expect(res.status).toBe(202); // the 202 already went out - errors must arrive in-band
-
-    const sent = await waitForAction('cli_completion_error');
-    const errorMsg = sent.find(msg => msg.action === 'cli_completion_error');
-    expect(errorMsg).toMatchObject({ requestId: REQUEST_ID });
-
-    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
-    expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
-      expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
-    );
-  });
-
-  it('does not count a billing rejection on the cli-ws surface', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
-    mockExecuteCompletion.mockRejectedValue(new InsufficientCreditsError('out of credits', 'insufficient_credits'));
-
-    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
-    await waitForAction('cli_completion_error');
-    expect(mockEmitMetrics).not.toHaveBeenCalled();
-  });
-
-  it('does not count a spend-cap rejection on the cli-ws surface', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
-    mockExecuteCompletion.mockRejectedValue(spendCapExceededError('cap hit'));
-
-    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
-    await waitForAction('cli_completion_error');
-    expect(mockEmitMetrics).not.toHaveBeenCalled();
-  });
-
-  it('counts a pre-completion failure on the cli-ws surface', async () => {
-    mockMongoose.connection.readyState = 0;
-    mockConnectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
-    try {
-      const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
-      expect(res.status).toBe(500);
-    } finally {
-      mockMongoose.connection.readyState = 1;
+  it.each(['/api/ai/v1/completions', '/api/embed/chat'])(
+    'refuses %s from a blocked address before auth',
+    async path => {
+      ipGate.blocked = true;
+      const res = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'network blocked' });
+      expect(mockAuth.verifyApiKey).not.toHaveBeenCalled();
+      expect(mockExecuteCompletion).not.toHaveBeenCalled();
     }
+  );
 
-    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
-    expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
-      expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
-    );
-    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  it('leaves the internal /process route and /health alone', async () => {
+    ipGate.blocked = true;
+    expect((await post(VALID_BODY, { authorization: AUTH })).status).toBe(202);
+    expect((await fetch(`${baseUrl}/health`)).status).not.toBe(403);
   });
 });

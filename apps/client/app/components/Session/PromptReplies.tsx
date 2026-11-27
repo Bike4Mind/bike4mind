@@ -17,8 +17,9 @@ import React, {
   createContext,
   ComponentProps,
 } from 'react';
-import ReactMarkdown, { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
+import { ExtraProps, Options as ReactMarkdownOptions } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
+import { StreamingMarkdown } from './markdown/StreamingMarkdown';
 import {
   CITATION_MARKER_TAG,
   CitationMarker,
@@ -30,7 +31,8 @@ import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 import { highlightTextSearch } from '@client/app/components/GenAI/highlight';
-import QuestMasterPreviewCard from '@client/app/components/GenAI/QuestMasterPreviewCard';
+import LegacyQuestMasterNote from '@client/app/components/GenAI/LegacyQuestMasterNote';
+import { isLegacyQuestMasterMessage } from '@client/app/components/GenAI/legacyQuestMasterPlan';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
@@ -42,7 +44,8 @@ import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import ThoughtBubbles from './ThoughtBubbles';
 import CodeArtifactPreviewCard from '../GenAI/CodeArtifactPreviewCard';
 import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
-import { AccountTree as MermaidIcon, InsertDriveFileOutlined } from '@mui/icons-material';
+import MermaidIcon from '@mui/icons-material/AccountTree';
+import InsertDriveFileOutlined from '@mui/icons-material/InsertDriveFileOutlined';
 import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
@@ -62,6 +65,7 @@ import {
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { RetrievalFloorBanner } from './RetrievalFloorBanner';
+import { LowOutputBudgetBanner, useLowOutputBudget } from './LowOutputBudgetBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
@@ -71,7 +75,8 @@ import {
   parseArtifactsWithFallback,
   shouldWarnElidedArtifact,
   validateMermaidSyntax,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
+import { groupReactArtifacts } from '@client/app/utils/reactArtifactGroup';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -80,7 +85,11 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import {
+  parseChartJSON,
+  ChartParseError,
+  getChartErrorMessage,
+} from '@bike4mind/server-utils/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
@@ -107,7 +116,7 @@ import type { CitableSource, WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
-import { isConfirmableMcpTool } from '@client/app/utils/confirmableMcpTool';
+import { isConfirmableMcpTool, isCustomConnectorAction } from '@client/app/utils/confirmableMcpTool';
 import {
   extractChessJson,
   validateChessFen,
@@ -154,6 +163,7 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
 };
 
 const NO_CITABLES: readonly CitableSource[] = [];
+const REPLY_REHYPE_PLUGINS: ReactMarkdownOptions['rehypePlugins'] = [rehypeKatex];
 
 // The web_search places of the reply being rendered, keyed by place id - the only source of map
 // pins. Context for the same identity-stability reason as ReplyCompleteContext above.
@@ -172,7 +182,8 @@ export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
-    const codeContent = String(children).replace(/\n$/, '');
+    // An empty fence has no children at all.
+    const codeContent = String(children ?? '').replace(/\n$/, '');
     const lineCount = codeContent.split('\n').length;
     const inline =
       node?.position?.start.line === node?.position?.end.line &&
@@ -618,9 +629,11 @@ const PromptReplies: FC<PromptReplyProps> = ({
     <>
       <ReplyContainer
         completed={messageData.status === 'done'}
+        settled={messageData.status === 'done' || messageData.status === 'stopped'}
+        streaming={messageData.status === 'running'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
-        reply={messageData.questMasterReply || replies[0]}
+        reply={replies[0]}
         thought={thought}
         images={images}
         generatedFiles={generatedFiles}
@@ -633,7 +646,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         onSendMessage={onSendMessage}
         messageId={messageData.id}
         onEdit={onEdit}
-        questMasterPlanId={messageData.questMasterPlanId}
+        legacyQuestMasterPlan={isLegacyQuestMasterMessage(messageData)}
         agentIds={messageData.agentIds}
         originalPrompt={messageData.promptEnhancement?.originalPrompt}
         enhancedPrompt={messageData.promptEnhancement?.enhancedPrompt}
@@ -782,8 +795,16 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
 }
 
 // The confirm route executes only allowlisted write tools, so any other pending action gets no card.
+const formatConfirmedOutput = (output: string) => {
+  try {
+    return JSON.stringify(JSON.parse(output), null, 2);
+  } catch {
+    return output;
+  }
+};
+
 export const PendingActionButtons: FC<PendingActionButtonsProps> = props =>
-  isConfirmableMcpTool(props.pendingAction.tool) ? (
+  isConfirmableMcpTool(props.pendingAction.tool) || isCustomConnectorAction(props.pendingAction) ? (
     <PendingActionButtonsContent key={props.pendingAction.ts} {...props} />
   ) : null;
 
@@ -796,7 +817,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
   const [isConfirmed, setIsConfirmed] = useState(() => parsedData?.status === 'confirmed');
   const [isCancelled, setIsCancelled] = useState(() => parsedData?.status === 'cancelled');
   const [isReplaced, setIsReplaced] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(
+  const [result, setResult] = useState<{ success: boolean; message: string; url?: string; output?: string } | null>(
     () => parsedData?.result || null
   );
 
@@ -885,6 +906,15 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
             </a>
           </Typography>
         )}
+        {typeof result?.output === 'string' && (
+          <Box
+            component="pre"
+            data-testid="mcp-confirm-output"
+            sx={{ m: 0, mt: 1, p: 1, maxHeight: 300, overflow: 'auto', fontSize: 'xs', whiteSpace: 'pre-wrap' }}
+          >
+            {formatConfirmedOutput(result.output)}
+          </Box>
+        )}
       </Box>
     );
   }
@@ -899,6 +929,7 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
     );
   }
 
+  const customConnector = pendingAction.customConnector;
   const toolDisplayName = pendingAction.tool.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
 
   return (
@@ -914,8 +945,19 @@ const PendingActionButtonsContent: FC<PendingActionButtonsProps> = ({ pendingAct
     >
       <Typography level="body-sm" sx={{ mb: 1.5, fontWeight: 'md' }}>
         Ready to execute: {toolDisplayName}
+        {customConnector && ` on ${customConnector.displayName} (${customConnector.urlHost})`}
       </Typography>
-      <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />
+      {customConnector && (
+        <Box
+          component="pre"
+          data-testid="mcp-custom-action-args"
+          sx={{ m: 0, mb: 1.5, p: 1, maxHeight: 200, overflow: 'auto', fontSize: 'xs', whiteSpace: 'pre-wrap' }}
+        >
+          {JSON.stringify(pendingAction.params, null, 2)}
+        </Box>
+      )}
+      {/* display_* params are injected by the built-in wrappers; on a custom action they are model-supplied. */}
+      {!customConnector && <GitHubProjectActionTarget tool={pendingAction.tool} params={pendingAction.params} />}
       <Stack direction="row" spacing={1}>
         <Button
           size="sm"
@@ -1225,8 +1267,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   search,
   isExpandable = false,
   completed = false,
+  settled = completed,
+  streaming = false,
   errorCode,
-  questMasterPlanId,
+  legacyQuestMasterPlan,
   onSendMessage,
   messageId,
   onEdit,
@@ -1340,11 +1384,36 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
+  const currentReply = reply ?? '';
+  const [imageApproval, setImageApproval] = useState(() => ({
+    reply: currentReply,
+    sources: new Set<string>(),
+  }));
+  // A rewritten reply needs a new set identity so memoized image blocks also reset their approval.
+  const approvedImageSources = currentReply.startsWith(imageApproval.reply) ? imageApproval.sources : new Set<string>();
+  if (currentReply !== imageApproval.reply) {
+    setImageApproval({ reply: currentReply, sources: approvedImageSources });
+  }
+  // Callers may pass a fresh onSendMessage each render; a stable wrapper keeps markdownImage, and with it
+  // replyComponents, from changing every frame and re-rendering every settled block.
+  const onSendMessageRef = useRef(onSendMessage);
+  useEffect(() => {
+    onSendMessageRef.current = onSendMessage;
+  }, [onSendMessage]);
+  const sendFromImage = useCallback<typeof onSendMessage>(
+    (message, options) => onSendMessageRef.current(message, options),
+    []
+  );
   const markdownImage = useCallback(
     ({ alt, src }: ComponentProps<'img'>) => (
-      <ReplyMarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} onSendMessage={onSendMessage} />
+      <ReplyMarkdownImage
+        src={typeof src === 'string' ? src : ''}
+        alt={alt}
+        onSendMessage={sendFromImage}
+        approvedSources={approvedImageSources}
+      />
     ),
-    [onSendMessage]
+    [sendFromImage, approvedImageSources]
   );
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
   // Off until the reply is done and the markers can link, so any other reply keeps its `[N]` as ordinary text (search
@@ -1357,6 +1426,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     ],
     [linksCitationMarkers]
   );
+  const replyComponents = useMemo(
+    () => ({
+      ...markdownComponents,
+      code: codeComponent,
+      img: markdownImage,
+      a: link,
+      [CITATION_MARKER_TAG]: CitationMarker,
+    }),
+    [markdownComponents, codeComponent, markdownImage]
+  );
+  const replyRemarkRehypeOptions = useMemo(() => ({ clobberPrefix: `fn-${messageId ?? 'reply'}-` }), [messageId]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1384,15 +1464,17 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       }),
     [cleanReply, completed, promptMeta?.finishReason]
   );
+  // An empty reply sent with a budget below the model's default gets the actionable notice instead.
+  const lowOutputBudget = useLowOutputBudget(promptMeta?.model?.name, promptMeta?.model?.parameters?.maxTokens);
 
   const { artifacts, processedContent } = useMemo(() => {
     if (!cleanReply) return { artifacts: [], processedContent: '' };
 
     let preprocessedContent = cleanReply;
     if (isStreamingArtifact) {
-      const artifactIndex = preprocessedContent.indexOf('<artifact');
+      const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       if (artifactIndex !== -1) {
-        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trim();
+        preprocessedContent = preprocessedContent.substring(0, artifactIndex).trimEnd();
       }
     } else if (isTruncatedArtifact) {
       preprocessedContent = repairTruncatedArtifact(preprocessedContent);
@@ -1429,6 +1511,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
+  const reactArtifactGroups = useMemo(() => groupReactArtifacts(nonChessArtifacts), [nonChessArtifacts]);
 
   // Resolved ahead of render so an unparseable board yields null rather than an empty
   // artifact Stack (which would still contribute its margins as a phantom gap).
@@ -1522,18 +1605,20 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     completed && suggestedChoices?.options.length && messageId && currentSessionId ? (
       <ReplyChoiceButtons questId={messageId} sessionId={currentSessionId} suggestedChoices={suggestedChoices} />
     ) : null;
+  // Partial grounding coverage: the knowledge-base scan behind this reply stopped short of the
+  // library. Under the reply, as a quiet line, so it reads as a note rather than a fault; shared by
+  // the two render paths below so they cannot drift.
+  const retrievalCoverageNotice = promptMeta?.retrievalCoverage?.partial ? (
+    <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
+  ) : null;
   // One row for both, shared by the two render paths below so they cannot drift.
   const replyActions =
     navSuggestions || choiceButtons ? (
-      <NavigationButtons
-        navigationIntents={navSuggestions ?? []}
-        leading={choiceButtons}
-        label={choiceButtons ? 'Your call' : undefined}
-      />
+      <NavigationButtons navigationIntents={navSuggestions ?? []} leading={choiceButtons} />
     ) : null;
 
-  if (questMasterPlanId) {
-    return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
+  if (legacyQuestMasterPlan) {
+    return <LegacyQuestMasterNote />;
   }
 
   // Out-of-credits errors render as a plain-language notice with an inline "Add Credits"
@@ -1576,7 +1661,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncation that landed before any artifact tag was emitted. Without this the
           bubble renders blank (or stops mid-sentence) with no explanation at all. */}
-      {(truncationNotice === 'reply-empty' ||
+      {truncationNotice === 'reply-empty' && lowOutputBudget && <LowOutputBudgetBanner {...lowOutputBudget} />}
+      {((truncationNotice === 'reply-empty' && !lowOutputBudget) ||
         truncationNotice === 'reply-partial' ||
         truncationNotice === 'reply-degenerate') && (
         <Alert
@@ -1606,14 +1692,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           and the artifact below is shown exactly as generated. */}
       {isElidedArtifact && <ArtifactElisionBanner />}
 
-      {/* Partial grounding coverage: the knowledge-base scan behind this reply stopped short of
-          the library (a candidate cap, a per-turn chunk budget, or documents excluded for an
-          embedding-model mismatch). Sits with the banners above because it reports the same class
-          of fact - the output is less complete than it looks. */}
-      {promptMeta?.retrievalCoverage?.partial && (
-        <RetrievalCoverageBanner reasons={promptMeta.retrievalCoverage.reasons} />
-      )}
-
       {/* A knowledge tool can still ground the turn after forced retrieval came back empty. */}
       {promptMeta?.retrievalFloorRejection && !promptMeta.citables?.length && (
         <RetrievalFloorBanner {...promptMeta.retrievalFloorRejection} />
@@ -1625,6 +1703,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
+          {retrievalCoverageNotice}
           {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
           {replyActions}
         </>
@@ -1637,6 +1716,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               sources={deepResearchState.sources}
               completedSteps={deepResearchState.completedSteps}
               totalExpectedSteps={deepResearchState.totalExpectedSteps}
+              researchCompleted={deepResearchState.completed}
+              turnDone={settled}
+              startTime={deepResearchState.startTime}
+              endTime={deepResearchState.endTime}
             />
           )}
           {agentIds && agentIds.length > 0 && <AgentAttribution agentIds={agentIds} />}
@@ -1664,7 +1747,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 videos.length > 0 ||
                 generationJobs.length > 0 ||
                 audio.length > 0 ||
-                navSuggestions) && (
+                navSuggestions ||
+                retrievalCoverageNotice) && (
                 <Box
                   sx={{
                     position: 'relative',
@@ -1844,24 +1928,18 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // and nothing else: the banners, media grids and artifact
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
-                          <div className="b4m-md">
+                          <div className="b4m-md" data-testid="ai-response-markdown">
                             <ReplyCompleteContext.Provider value={!!completed}>
                               <ReplyPlacesContext.Provider value={placesById}>
                                 <ReplyCitablesContext.Provider value={promptMeta?.citables ?? NO_CITABLES}>
-                                  <ReactMarkdown
-                                    components={{
-                                      ...markdownComponents,
-                                      code: codeComponent,
-                                      img: markdownImage,
-                                      a: link,
-                                      [CITATION_MARKER_TAG]: CitationMarker,
-                                    }}
+                                  <StreamingMarkdown
+                                    text={mathReadyContent}
+                                    streaming={streaming}
+                                    components={replyComponents}
                                     remarkPlugins={replyRemarkPlugins}
-                                    rehypePlugins={[rehypeKatex]}
-                                    remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                                  >
-                                    {mathReadyContent}
-                                  </ReactMarkdown>
+                                    rehypePlugins={REPLY_REHYPE_PLUGINS}
+                                    remarkRehypeOptions={replyRemarkRehypeOptions}
+                                  />
                                 </ReplyCitablesContext.Provider>
                               </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
@@ -1870,6 +1948,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       </>
                     )}
 
+                    {retrievalCoverageNotice}
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
                     {completed && <EnableWebSearchAction reply={cleanReply} />}
                     {replyActions}
@@ -1904,13 +1983,15 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {(chessBoard || nonChessArtifacts.length > 0) && (
         <Stack spacing={2} sx={{ mt: 3, mb: 1 }}>
           {chessBoard}
-          {nonChessArtifacts.map((artifact, index) => (
+          {nonChessArtifacts.map(artifact => (
             <ArtifactRenderer
-              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              key={`${artifact.type}_${artifact.identifier}_${artifact.startIndex}`}
               artifact={artifact}
-              index={index}
+              // The full parse's index, chess included, which is what persistence numbers ids by.
+              index={artifacts.indexOf(artifact)}
               messageId={messageId ?? 'unknown'}
               sessionId={currentSessionId ?? undefined}
+              reactGroup={reactArtifactGroups.get(artifact)}
             />
           ))}
         </Stack>

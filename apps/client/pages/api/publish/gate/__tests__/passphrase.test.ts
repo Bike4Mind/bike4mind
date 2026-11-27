@@ -34,7 +34,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n(),
+}));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
 // PublishedArtifact.findOne(...).select(...).lean() - capture the select string.
@@ -58,7 +60,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
   parsePublishPath: (...a: unknown[]) =>
     mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
-vi.mock('@server/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
+vi.mock('@bike4mind/server-utils/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
 vi.mock('@server/services/publish/passphraseLockout', () => lockout);
 vi.mock('@server/services/publish/loadLiveOwner', () => ({ loadLiveOwner: mocks.loadLiveOwner }));
 vi.mock('bcryptjs', () => ({ default: { compare: () => Promise.resolve(true) } }));
@@ -126,6 +128,37 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
     expect(res._getStatusCode()).toBe(403);
   });
 
+  it('names the offending field on a 400 so a wrong field name is diagnosable', async () => {
+    const { res, promise } = run({ pathname: '/p/u/scope/slug', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    const body = res._getJSONData() as { error: string; details: { path: (string | number)[] }[] };
+    expect(body.error).toBe('Invalid request');
+    expect(body.details.map(d => d.path)).toEqual([['path']]);
+    expect(mocks.findOne).not.toHaveBeenCalled();
+  });
+
+  it('never echoes the submitted passphrase in a 400', async () => {
+    const secret = 'sup3r-secret-passphrase';
+    const { res, promise } = run({ path: 1, passphrase: secret });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getData()).not.toContain(secret);
+  });
+
+  it('never echoes an over-long passphrase when its own field fails validation', async () => {
+    const secret = 'x'.repeat(129);
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: secret });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    const body = res._getJSONData() as { details: { path: (string | number)[] }[] };
+    expect(body.details.map(d => d.path)).toEqual([['passphrase']]);
+    expect(res._getData()).not.toContain(secret);
+  });
+
   it('resolves a share link through the shared shareTokenFilter', async () => {
     mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
     gated();
@@ -135,6 +168,21 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
 
     expect(res._getStatusCode()).toBe(204);
     expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
+  });
+});
+
+describe('POST /api/publish/gate/passphrase - expired share link', () => {
+  // shareTokenFilter excludes revoked and expired entries (pinned against real Mongo in
+  // PublishedArtifactModel.shareToken.test.ts), so an expired link resolves no row.
+  it('404s before checking the passphrase', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    mocks.lean.mockResolvedValue(null);
+
+    const { res, promise } = run({ path: '/a/tok123', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
+    expect(res._getStatusCode()).toBe(404);
   });
 });
 

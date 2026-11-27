@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7-labs@sha256:b99fecfe00268a8b556fad7d9c37ee25d716ae08a5d7320e6d51c4dd83246894
+#
+# Callable function runtime: the Lambda container image that runs Python functions (handler and child in
+# apps/workers/src/callableFunctions, function in infra/callableFunctionRuntime.ts). Build context is the monorepo
+# root. The build stage follows Dockerfile.renderworker's layer order; the final image holds only the handler bundle,
+# the child, and a read-only Pyodide directory with the baked wheels. Every input is pinned: the frontend and both
+# base images by digest, npm packages by the lockfile's integrity hashes, and each wheel by its pyodide-lock.json sha256.
+
+FROM public.ecr.aws/docker/library/node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS deps
+
+RUN corepack enable
+WORKDIR /app
+
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY --parents **/package.json ./
+COPY patches ./patches
+
+# No install scripts: nothing in the bundle is a native addon, so the build needs no compiler toolchain.
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @bike4mind/workers...
+
+# The bake reads only the installed pyodide package and this script; a dependency change re-runs it, a source change does not.
+FROM deps AS pyodide
+COPY apps/workers/src/callableFunctions/bakePyodide.mjs apps/workers/src/callableFunctions/
+RUN node apps/workers/src/callableFunctions/bakePyodide.mjs /out/pyodide
+
+FROM deps AS build
+
+COPY . .
+
+# The handler imports both through their dist builds; server-utils is source-only.
+RUN pnpm turbo build --filter=@bike4mind/common --filter=@bike4mind/observability
+
+WORKDIR /app/apps/workers
+COPY --from=pyodide /out/pyodide/pyodide-lock.json /out/baked/
+# The banner gives bundled CommonJS dependencies a require. The child imports only Node builtins and types, so it is
+# transpiled, not bundled.
+RUN pnpm exec esbuild src/callableFunctions/handler.ts --bundle --platform=node --target=node24 --format=esm \
+        --outfile=/out/task/handler.mjs \
+        "--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" \
+    && pnpm exec esbuild src/callableFunctions/child.ts --platform=node --target=node24 --format=esm \
+        --outfile=/out/task/child.mjs \
+    && node src/callableFunctions/bakePyodide.mjs --check /out/baked
+
+# The function runs on x86_64 (see infra/callableFunctionRuntime.ts); this index digest also serves arm64 builds.
+FROM public.ecr.aws/lambda/nodejs:24@sha256:659129486b70ceab4e72dc7bddb49c84a6c4960725f6a14be7a5c402e83d3759
+
+COPY --from=build /out/task/ ${LAMBDA_TASK_ROOT}/
+COPY --from=pyodide /out/pyodide/ /opt/pyodide/
+
+# Read by handler.ts; the child is spawned with none of this environment.
+ENV CALLABLE_FUNCTION_CHILD_PATH=/var/task/child.mjs \
+    CALLABLE_FUNCTION_PYODIDE_DIR=/opt/pyodide
+
+CMD ["handler.handler"]

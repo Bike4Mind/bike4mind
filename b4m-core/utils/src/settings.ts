@@ -1,10 +1,13 @@
 import {
+  AdminAiStoredConfigSchema,
   IAdminSettings,
   IAdminSettingsRepository,
   IScopedSettingsRepository,
+  isEnforceCreditsLocked,
   ScopeRef,
   SettingKey,
   settingsMap,
+  resolveSettingDefinition,
   resolveTeamPlanSettings,
   TEAM_PLAN_SETTING_KEYS,
   type TeamPlanSettings,
@@ -86,7 +89,9 @@ export function getSettingsValue<K extends SettingKey>(
   settings: Record<string, string>,
   defaultValue?: z.output<(typeof settingsMap)[K]['schema']>
 ): z.output<(typeof settingsMap)[K]['schema']> | undefined {
-  const settingConfig = settingsMap[key];
+  if (key === 'enforceCredits' && isEnforceCreditsLocked()) return true as z.output<(typeof settingsMap)[K]['schema']>;
+
+  const settingConfig = resolveSettingDefinition(key);
   if (!settingConfig) {
     // Log warning but don't break existing code
     Logger.globalInstance.warn(`Unknown setting key: ${key}`);
@@ -94,7 +99,7 @@ export function getSettingsValue<K extends SettingKey>(
   }
 
   const rawValue = settings[key];
-  const parsed = settingConfig.schema.safeParse(rawValue);
+  const parsed = (key === 'adminAiConfig' ? AdminAiStoredConfigSchema : settingConfig.schema).safeParse(rawValue);
 
   if (parsed.success) {
     // A cleared string setting is stored as '' which passes `z.string()`, so without this a blank
@@ -112,6 +117,18 @@ export function getSettingsValue<K extends SettingKey>(
       ? defaultValue
       : (settingConfig.defaultValue as z.output<(typeof settingsMap)[K]['schema']>);
   }
+}
+
+/**
+ * `getSettingsValue` for a key that is not a `SettingKey` literal, i.e. one an extension
+ * registered with `registerContributedSettings`. An unregistered key returns `defaultValue`.
+ */
+export function getContributedSettingValue<T = unknown>(
+  key: string,
+  settings: Record<string, string>,
+  defaultValue?: T
+): T | undefined {
+  return getSettingsValue(key as SettingKey, settings, defaultValue as never) as T | undefined;
 }
 
 /**

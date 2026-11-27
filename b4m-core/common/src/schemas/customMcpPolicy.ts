@@ -103,3 +103,20 @@ export function evaluateCustomMcpPolicy(input: CustomMcpPolicyInput): CustomMcpP
 export function combineCustomMcpPolicyVerdicts(verdicts: readonly CustomMcpPolicyVerdict[]): CustomMcpPolicyVerdict {
   return verdicts.find(verdict => !verdict.allowed) ?? { allowed: true };
 }
+
+/**
+ * The org admin view of a `customMcpPolicy`, served by `/api/organizations/:id/custom-mcp/policy`
+ * (apps/client/server/mcpConnections/orgPolicy.ts) and rendered by the org Connectors tab.
+ */
+export interface OrgCustomMcpPolicyView {
+  policy: CustomMcpPolicy;
+  /** The org has its own override; false means it inherits the platform value. */
+  overridden: boolean;
+  /**
+   * A stored override the schema now refuses. `resolveCustomMcpContext` keeps connectors off for
+   * every member while it stands, so the admin has to save or reset it.
+   */
+  invalidOverride: boolean;
+  /** `EnableMCPServer` AND `EnableCustomMcpConnectors`; an org can close connectors, never open them past this. */
+  platformEnabled: boolean;
+}

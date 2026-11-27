@@ -29,6 +29,7 @@ const sessionParamsMock = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
   apiKeyRepository: {},
+  userRepository: { findById: async (id: string) => ({ id }) },
   dataLakeRepository: {
     findById: (...a: unknown[]) => findByIdMock(...a),
     claimLakeMemoryExtraction: (...a: unknown[]) => claimLakeMemoryExtractionMock(...a),
@@ -48,7 +49,11 @@ vi.mock('@bike4mind/common', () => ({
   MEMENTO_EMBEDDING_MODEL: 'text-embedding-3-small',
   toMementoVector: (v: number[]) => v,
   LAKE_MEMORY_EXTRACTION_LEASE_MS: 15 * 60_000,
+  isTerminalCreditRefusal: (e: { additionalInfo?: { errorCode?: string } }) =>
+    e?.additionalInfo?.errorCode === 'insufficient_credits' ||
+    e?.additionalInfo?.errorCode === 'daily_free_limit_reached',
 }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({ createCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
   dataLakeService: { lakeMembershipScope: () => 'datalake:test', lakeMembershipSignals: () => ({ inLake: true }) },
@@ -58,13 +63,9 @@ vi.mock('@bike4mind/services/llm', () => ({
     evaluate = (...a: unknown[]) => evaluateMock(...a);
   },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: { create: vi.fn() },
-  getProviderFromModel: () => 'openai',
-  resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
-}));
+
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
-vi.mock('@server/memory/mementoLedgerMirror', () => ({
+vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async (...a: unknown[]) => {
     sessionParamsMock(...a);
     return { append: (...b: unknown[]) => appendMock(...b) };
@@ -356,3 +357,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     expect(sourceShredMock).toHaveBeenCalledWith('lake', 'datalake:test', 'owner-1', 'doc-000');
   });
 });
+
+vi.mock('@bike4mind/server-utils/memory/mementoEmbedder', () => ({
+  createMementoEmbedder: () => async () => undefined,
+}));

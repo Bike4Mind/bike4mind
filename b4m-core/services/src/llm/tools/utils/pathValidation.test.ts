@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { isPathAllowed, assertPathAllowed } from './pathValidation';
+import { isPathAllowed, assertPathAllowed, assertWritablePath } from './pathValidation';
 import { mkdtemp, writeFile, rm, symlink, mkdir, realpath } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -230,6 +230,45 @@ describe('pathValidation', () => {
     it('should list allowed directories in error message', () => {
       const extraDir = '/tmp/allowed';
       expect(() => assertPathAllowed('/etc/passwd', [extraDir])).toThrow(extraDir);
+    });
+  });
+
+  describe('assertWritablePath', () => {
+    it('allows ordinary files in the working directory', () => {
+      expect(assertWritablePath('subdir/file.txt')).toBe(join(testDir, 'subdir', 'file.txt'));
+      expect(assertWritablePath('.gitignore')).toBe(join(testDir, '.gitignore'));
+    });
+
+    it.each(['.git/config', '.git/hooks/pre-commit', 'subdir/.git/config', '.GIT/config', '.git./config', '.git'])(
+      'refuses %s inside a git directory',
+      target => {
+        expect(() => assertWritablePath(target, undefined, 'edit')).toThrow(
+          'Cannot edit files inside a .git directory'
+        );
+      }
+    );
+
+    it('refuses a symlink that resolves into a git directory', async () => {
+      await mkdir(join(testDir, '.git'), { recursive: true });
+      await writeFile(join(testDir, '.git', 'config'), '');
+      await symlink(join(testDir, '.git'), join(testDir, 'innocent'));
+      expect(() => assertWritablePath('innocent/config')).toThrow('inside a .git directory');
+    });
+
+    it('checks only the part of the path below the allowed directory', async () => {
+      const workspace = join(testDir, '.git', 'nested-workspace');
+      await mkdir(workspace, { recursive: true });
+      process.chdir(workspace);
+      try {
+        expect(assertWritablePath('notes.txt')).toBe(join(workspace, 'notes.txt'));
+        expect(() => assertWritablePath('.git/config')).toThrow('inside a .git directory');
+      } finally {
+        process.chdir(testDir);
+      }
+    });
+
+    it('still refuses paths outside the allowed directories', () => {
+      expect(() => assertWritablePath('/etc/passwd')).toThrow('outside allowed directories');
     });
   });
 

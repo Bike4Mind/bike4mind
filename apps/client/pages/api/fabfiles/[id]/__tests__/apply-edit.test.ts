@@ -78,7 +78,7 @@ const makeFile = (mimeType: string, overrides: Record<string, unknown> = {}) => 
 
 const call = (newContent: string) => {
   const { req, res } = createMocks({ method: 'POST', query: { id: FILE_ID }, body: { newContent } });
-  Object.assign(req, { user, ability: { can: () => true } });
+  Object.assign(req, { user, ability: { can: () => true }, logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } });
   return handler(req, res).then(() => res);
 };
 
@@ -151,6 +151,8 @@ describe('POST /api/fabfiles/[id]/apply-edit storage accounting', () => {
       const [args] = h.commitContentRewrite.mock.calls[0];
       expect(args).toMatchObject({ fabFileId: FILE_ID, newSize: 30, filter: { filePath: 'files/u1/doc' } });
       expect(args.set.filePath).toEqual(h.upload.mock.calls[0][1]);
+      expect(args.set).not.toHaveProperty('fileUrl');
+      expect(args.set).not.toHaveProperty('fileUrlExpireAt');
     });
 
     it('refuses growth past the quota before uploading the new version', async () => {

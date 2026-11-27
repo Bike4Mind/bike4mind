@@ -6,8 +6,9 @@ In-repo engineering-standards document referenced by [CONTRIBUTING.md](./CONTRIB
 
 Everything committed here is public and permanent. Before you commit, ask: *"Would I be fine seeing this on the front page of Hacker News?"*
 
-- **Never commit secrets** (API keys, tokens, connection strings, `.env`). The gitleaks pre-commit hook + CI scans are a backstop, not the guard. If you leak one: **rotate first, delete second** — history is permanent.
-- No customer/partner names, cloud identifiers (AWS account IDs, ARNs, bucket names — resolve at runtime), internal-tracker issue numbers, or teammate names in code, comments, commits, or branch names.
+- **Never commit secrets** (API keys, tokens, connection strings, `.env`). The gitleaks pre-commit hook and the blocking `secret-scan` CI job (it scans the commits a change adds, on every PR) are a backstop, not the guard. If you leak one: **rotate first, delete second** — history is permanent.
+- No customer/partner names, cloud identifiers (AWS account IDs, ARNs, bucket names: resolve at runtime), internal-tracker issue numbers, or teammate names in code, comments, commits, branch names, PR text, or review comments.
+- **Security controls: describe the change, never the weakness.** A PR, commit or comment about a rate limit, WAF rule, challenge or alarm says what the code now does, not what it closes, what reached it or what is still open; that detail goes on the private tracker. Thank reviewers in the PR conversation, never by name in a commit message. Details in [CONTRIBUTING.md](./CONTRIBUTING.md#pr-description--follow-the-template).
 - **ASCII only** in code and comments - no curly quotes, em-dashes, or other smart punctuation. Two guards enforce this in both the pre-commit hook and CI: `scripts/check-no-control-bytes.sh` rejects raw control bytes anywhere in a changed `.ts`/`.tsx` file, and `scripts/check-no-smart-punctuation.sh` rejects U+2013, U+2014, U+2018, U+2019, U+201C and U+201D in `.ts`/`.tsx`/`.mts`/`.cts` **on added lines only**. So pre-existing prose in a file you touch is not your problem, but every line you add must be ASCII. There is no exemption for user-facing strings: when a typographic character is genuinely wanted, write it as an escape (`'\u2014'`) so it stays visible in review and greppable. Docs (`.md`) are not gated by a script, but the same rule applies by convention.
 - **CRITICAL — never describe premium overlay change details in this public repo.** The premium overlay repos are private, and their change details (features, integrations, fixes, internal codenames) may be sensitive. Commit messages, PR titles, PR bodies, and issues in this repo must never describe *what* changed in an overlay, only that a mechanical, overlay-related change occurred. Put the real "why" (what changed and how it was verified) in the **private** overlay repo's own PR, not here.
 
@@ -25,18 +26,20 @@ GitHub only links a commit to your account when the email is verified there, and
 
 | Task | Command (cached) | Uncached fallback |
 |------|------------------|-------------------|
-| Type check all | `pnpm turbo:typecheck` | `pnpm -r typecheck` |
+| **Verify a branch (default)** | `pnpm verify` | see below |
+| Type check all (what CI gates: TypeScript 7 as `tsgo`) | `pnpm turbo:typecheck` | `pnpm -w typecheck && pnpm -r typecheck` |
+| Type check all, pure tsc (nightly baseline) | `pnpm turbo:typecheck:tsc` | `pnpm -w typecheck:tsc && pnpm -r typecheck:tsc` |
 | Test all | `pnpm turbo:test` | `pnpm -r test` |
 | Lint (CI parity) | `pnpm lint:check` | — |
 | Build core packages | `pnpm turbo:core:build` | `pnpm core:build` |
 | Test one package | `pnpm --filter <pkg> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 
-Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:check`.
+Verify before pushing: `pnpm verify`. It runs `typecheck` and `test` only for the packages your branch changed against `origin/main` (`TURBO_SCM_BASE` overrides), their dependents, and any package whose turbo.json inputs read a changed file (e.g. `workers` for an `apps/client` change), then lints only the changed files. Root config and lockfile changes widen it to the full graph; root `package.json`, lockfile and lint config changes also run the full lint. Extra flags go to turbo: `pnpm verify --concurrency=4` on a busy machine; `--no-lint`, `--tasks typecheck` narrow it. CI still runs everything; reach for the full-repo commands above only when a change is cross-cutting.
 
 ## Project structure
 
 - **`apps/client`** — Next.js app: a Tanstack-Router SPA plus the Pages-API backend (`pages/api/*`). Next.js is used only for the API routes; all client routing is Tanstack Router.
-- **`apps/workers`** - background workers moving out of `apps/client`: the EventBridge handlers (`src/events`), the scheduled cron handlers and triage SQS workers (`src/cron`), the preview data syncer (`src/jobs`), the inbound email parser and analyzer (`src/emailIngestion`), the comms/ops, data-lake pipeline, What's New, image generation, generation job, quest export, lake ingest, agent executor and Slack quest processor queue handlers (`src/queueHandlers`), the S3 upload-complete handlers (`src/s3`), the database migrator, seeder and preview cleaner (`src/database`), the image processor (`src/media`), the CLI tools Lambda (`src/cli`), the security alert processor and attack-simulation runner (`src/security`), the self-host worker runner (`src/selfhost`), and the self-host agent executor (`src/agentExecutor`). Shared server code is moving into `packages/server-utils`; until a file has moved, workers import it from `apps/client/server/*` through an interim `@server/*` alias. The dependency is one-way: `apps/client` must never import `apps/workers` (lint-enforced).
+- **`apps/workers`** - background workers moving out of `apps/client`: the EventBridge handlers (`src/events`), the scheduled cron handlers and triage SQS workers (`src/cron`), the preview data syncer (`src/jobs`), the inbound email parser and analyzer (`src/emailIngestion`), the comms/ops, data-lake pipeline, What's New, image generation, generation job, quest export, lake ingest, agent executor and Slack quest processor queue handlers (`src/queueHandlers`), the S3 upload-complete handlers (`src/s3`), the database migrator, seeder and preview cleaner (`src/database`), the image processor (`src/media`), the CLI tools Lambda (`src/cli`), the MCP call Lambda (`src/mcp`), the security alert processor, attack-simulation runner and cloud security scan (`src/security`), the deep-agent wake handler (`src/deepAgent`), the self-host worker runner (`src/selfhost`), and the self-host agent executor (`src/agentExecutor`). Shared server code is moving into `packages/server-utils`; until a file has moved, workers import it from `apps/client/server/*` through an interim `@server/*` alias. The dependency is one-way: `apps/client` must never import `apps/workers` (lint-enforced).
 - **`docs-site/`** - the public Docusaurus site for docs.bike4mind.com. Every merge to `main` that touches it auto-deploys to production, so everything in it is published. Read [`docs-site/CLAUDE.md`](./docs-site/CLAUDE.md) before editing.
 - **`packages/cli`** — interactive CLI + ReAct agent.
 - **`b4m-core/*`** — the engine, published as `@bike4mind/*` packages (`common`, `utils`, `agents`, `services`, `llm-adapters`, `db-core`, etc.). Core packages live at `b4m-core/<name>` and are symlinked into `node_modules/@bike4mind/<name>`.
@@ -48,6 +51,8 @@ Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:che
 
 Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work as fallback.
 
+- **Many worktrees on one machine:** turbo's local cache defaults to `.turbo/cache` inside each worktree, so a fresh worktree misses on everything. Task hashes are content-based, not path-based, so worktrees can share one store: `export TURBO_CACHE_DIR="$HOME/.cache/turbo-b4m"` in your shell profile (the pre-push hook defaults to it). Prune it occasionally, e.g. `find "${TURBO_CACHE_DIR:-$HOME/.cache/turbo-b4m}" -type f -mtime +14 -delete`.
+- **Pre-push concurrency:** the pre-push hook caps turbo at `--concurrency=25%` of cores, since each typecheck task is itself multi-threaded. Override with `TURBO_CONCURRENCY` (this hook's own variable, not one turbo reads), e.g. `TURBO_CONCURRENCY=4 git push`.
 - Repeat runs are near-instant on a cache hit. `turbo:core:build` builds packages in dependency order (common → utils → agents → services → …).
 - **Do not run `turbo build` unfiltered** — it would try to `next build` the SPA outside its deploy context. Use `pnpm turbo:core:build` / `pnpm turbo:build`.
 - If builds seem stale after a big change, add `--force`.
@@ -58,6 +63,7 @@ Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work
 
 - **Avoid `any`.** Use it only as a last resort and **document why** in a comment.
 - Prefer `unknown` (forces narrowing), generics (`<T extends …>`), union types, or `Record<string, unknown>` over `any`.
+- `no-explicit-any` is an error; legacy uses are baselined per file in `eslint-suppressions.json`. After removing one, run `pnpm lint --prune-suppressions`.
 - ✅ `const data: unknown = await fetch(); if (typeof data === 'object') { … }`
 - ⚠️ `const legacy: any = …; // any: third-party lib ships no types`
 
@@ -94,7 +100,8 @@ Code describes *what* it does and comments explain the *why* that the code can't
 **The `apps/client` unit suite is sharded in CI** across three `test-shards` legs (`Run Tests (client 1/3)` …), each running `--shard=i/3`. vitest slices a hash-sorted list of file paths, so the legs tile the file set exactly and a new test file lands in exactly one of them — nothing to update when you add a test.
 
 - Reproduce one leg locally: `pnpm --filter @bike4mind/client test --shard=2/3`.
-- **Never add a `--` before test-command args in CI.** `pnpm … test -- --shard=2/3` forwards the literal `--` to vitest, which reads the rest as positional path filters: the shard is ignored, the leg silently runs the whole suite, and nothing errors. `packages/scripts/src/checkClientTestShards.test.ts` fails the build if that separator or a leg goes missing.
+- **Never add a pnpm `--` before test-command args in CI.** `pnpm … test -- --shard=2/3` forwards the literal `--` to vitest, which reads the rest as positional path filters: the shard is ignored, the leg silently runs the whole suite, and nothing errors. The legs run through turbo, whose own `--` is required and is not forwarded (`turbo run test … -- --shard=2/3` runs `pnpm run test --shard=2/3`). `packages/scripts/src/checkClientTestShards.test.ts` fails the build if that shape or a leg goes missing.
+- **CI skips a package's tests when its turbo hash matches a cached pass** (`.turbo/cache`, restored per leg; saved only from push to `main`). A test that reads a file outside its package needs that file in its `<pkg>#test` inputs in `turbo.json`, or the package in `WHOLE_REPO_TEST_PACKAGES` in `scripts/turbo-test-cache.mjs` if it scans the repo; `scripts/__tests__/turbo-test-cache.test.mjs` fails the build when neither holds. A test that scans the whole repo can instead be named `*.repo.test.*`: the package's `test:repo` script runs it uncached on CI's `misc` leg, outside the `test` hash and outside `pnpm turbo:test`, so run it locally with `pnpm --filter @bike4mind/client test:repo`.
 - Balance is by file **count**, not duration, so the legs are not equally long. The per-shard duration in each job's summary is how you spot one drifting.
 
 **Element selection:** always use `data-testid` (naming `component-action-element`, e.g. `modal-confirm-btn`) — never CSS class names (MUI/Emotion generates random class names).
@@ -112,6 +119,10 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 ```
 
 **Mocking deep import chains:** if a component's transitive imports reach a context provider via a `@/`/`@client` alias, mock it explicitly, e.g. `vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: () => ({ /* … */ }) }))`.
+
+## Database migrations
+
+- Create core migrations with `pnpm migrate generate "<name>"`, which stamps the id from the current UTC time. **Never hand-pick or reuse an id**: CI rejects an added id that is not a fresh generated timestamp. Ordering below the current max is unnecessary, since every unapplied id runs.
 
 ## MongoDB index guidelines
 
@@ -133,6 +144,7 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - **MUI Joy** (`@mui/joy`) is the primary UI library; use `@mui/system` utilities (`styled`, `keyframes`) for advanced styling.
 - **Do not install or use `@emotion`.**
 - Styled components: `styled('div')(...)` with proper TypeScript types.
+- **Admin UI** (`apps/client/app/components/admin/**`) follows [`DESIGN_GUIDE.md`](./apps/client/app/components/admin/DESIGN_GUIDE.md): page anatomy, the action/save model, shared components and copy rules.
 
 ## Theme mode guidelines
 
@@ -150,6 +162,20 @@ userSchema.index({ organizationId: 1, createdAt: -1 });   // performance indexes
 - Add/expose one by following [`b4m-core/common/src/api-contract/README.md`](./b4m-core/common/src/api-contract/README.md); copy the reference (`chat.contract.ts` + `apps/client/pages/api/chat.ts`).
 - The contract must also satisfy [`CONVENTIONS.md`](./b4m-core/common/src/api-contract/CONVENTIONS.md) (shared error envelope, status table, scope + version rules). Most of it is gated by `assertContractConventions.ts` at spec-generation time, so a violation fails the build.
 - Never call `.openapi()` in a shared schema/contract file (crashes the runtime handler); no `.catch()`/top-level `.transform()` in a public request schema (fail-quiet + not OpenAPI-representable).
+
+## Infrastructure principles
+
+Guardrails for new serverless resources in `infra/`:
+
+1. Default Lambdas to **non-VPC**; add VPC only when reaching private resources.
+2. One queue per (consumer, retry-policy) pair - merge duplicates with a discriminator field.
+3. EventBridge for fan-out and cross-domain notifications; SQS for work queues.
+4. Every async target gets a DLQ (Lambda async, SQS, EventBridge rules).
+5. Cron is a smell for *triggering*; acceptable for *cleanup/reconciliation*.
+6. Per-dev stages bill 24/7 - design for teardown.
+7. Memory tuning beats consolidation for cost - use Lambda Power Tuning on hot paths.
+
+Agent continuation queue depth limits (self-dispatch): a warning tier (`CHECKPOINT_DEPTH_WARNING`) and a hard stop (`MAX_CHECKPOINT_DEPTH`), both defined in `apps/workers/src/queueHandlers/agentExecutor.checkpointDepth.ts`.
 
 ## Dependency management
 

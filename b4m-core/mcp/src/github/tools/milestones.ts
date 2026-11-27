@@ -15,7 +15,8 @@ import {
   confirmationParams,
   paginationParams,
 } from '../helpers/schemas.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import {
   TOOL_CREATE_MILESTONE,
@@ -23,6 +24,8 @@ import {
   TOOL_LIST_MILESTONES,
   TOOL_CLOSE_MILESTONE,
 } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 /**
  * Calculate progress percentage for a milestone
@@ -111,7 +114,6 @@ export function registerMilestoneTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually create the milestone
-      console.error(`[${TOOL_CREATE_MILESTONE}] Attempting to create milestone: ${fullRepoName} - "${title}"`);
 
       try {
         const result = await octokit.issues.createMilestone({
@@ -123,8 +125,7 @@ export function registerMilestoneTools(server: McpServer) {
           state,
         });
 
-        console.error(`[${TOOL_CREATE_MILESTONE}] SUCCESS: Created milestone #${result.data.number}`);
-        console.error(`[${TOOL_CREATE_MILESTONE}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_CREATE_MILESTONE, number: result.data.number });
 
         return createSuccessResponse({
           number: result.data.number,
@@ -138,7 +139,7 @@ export function registerMilestoneTools(server: McpServer) {
           progress_percent: calculateProgressPercent(result.data.open_issues, result.data.closed_issues),
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_MILESTONE}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_MILESTONE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -189,7 +190,6 @@ export function registerMilestoneTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually update the milestone
-      console.error(`[${TOOL_UPDATE_MILESTONE}] Attempting to update milestone #${milestone_number}: ${fullRepoName}`);
 
       try {
         // Build update payload with only provided fields
@@ -211,8 +211,7 @@ export function registerMilestoneTools(server: McpServer) {
           ...updateData,
         });
 
-        console.error(`[${TOOL_UPDATE_MILESTONE}] SUCCESS: Updated milestone #${result.data.number}`);
-        console.error(`[${TOOL_UPDATE_MILESTONE}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_UPDATE_MILESTONE, number: result.data.number });
 
         return createSuccessResponse({
           number: result.data.number,
@@ -227,7 +226,7 @@ export function registerMilestoneTools(server: McpServer) {
           updated_at: result.data.updated_at,
         });
       } catch (error) {
-        console.error(`[${TOOL_UPDATE_MILESTONE}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_UPDATE_MILESTONE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -259,7 +258,7 @@ export function registerMilestoneTools(server: McpServer) {
           page: page || 1,
         });
 
-        console.error(`[${TOOL_LIST_MILESTONES}] SUCCESS: Found ${result.data.length} milestones`);
+        log.info('succeeded', { toolName: TOOL_LIST_MILESTONES });
 
         return createSuccessResponse({
           total_count: result.data.length,
@@ -279,7 +278,7 @@ export function registerMilestoneTools(server: McpServer) {
           })),
         });
       } catch (error) {
-        console.error(`[${TOOL_LIST_MILESTONES}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_LIST_MILESTONES, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -332,7 +331,6 @@ export function registerMilestoneTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually close the milestone
-      console.error(`[${TOOL_CLOSE_MILESTONE}] Attempting to close milestone #${milestone_number}: ${fullRepoName}`);
 
       try {
         const result = await octokit.issues.updateMilestone({
@@ -342,8 +340,7 @@ export function registerMilestoneTools(server: McpServer) {
           state: 'closed',
         });
 
-        console.error(`[${TOOL_CLOSE_MILESTONE}] SUCCESS: Closed milestone #${result.data.number}`);
-        console.error(`[${TOOL_CLOSE_MILESTONE}] URL: ${result.data.html_url}`);
+        log.info('succeeded', { toolName: TOOL_CLOSE_MILESTONE, number: result.data.number });
 
         return createSuccessResponse({
           number: result.data.number,
@@ -356,7 +353,7 @@ export function registerMilestoneTools(server: McpServer) {
           closed_at: result.data.closed_at,
         });
       } catch (error) {
-        console.error(`[${TOOL_CLOSE_MILESTONE}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CLOSE_MILESTONE, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

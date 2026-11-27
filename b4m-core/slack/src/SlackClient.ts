@@ -1,7 +1,27 @@
-import { isPlaceholderValue } from '@bike4mind/common';
+import { escapeSlackText, isPlaceholderValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { WebClient, WebClientEvent, KnownBlock, Block, ChatPostEphemeralArguments } from '@slack/web-api';
+import {
+  WebClient,
+  WebClientEvent,
+  KnownBlock,
+  Block,
+  ChatPostEphemeralArguments,
+  MessageAttachment,
+  MessageMetadata,
+  FilesUploadV2Arguments,
+} from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from './di/registry';
+import { isSlackFileUrl } from './slackFileUrl';
+
+const MAX_FILE_DOWNLOAD_REDIRECTS = 5;
+
+type TruncatableText = { text?: string };
+type TruncatableBlock = {
+  type?: string;
+  text?: string | TruncatableText;
+  fields?: TruncatableText[];
+  elements?: Array<{ text?: string | TruncatableText }>;
+};
 
 /**
  * Slack message metadata for app-to-app communication
@@ -73,6 +93,8 @@ export interface SlackUser {
   id: string;
   name: string;
   real_name?: string;
+  /** Profile display name; for a bot user this is the name shown in mentions */
+  display_name?: string;
   email?: string;
   /** User's timezone as IANA string (e.g., "America/Los_Angeles") */
   tz?: string;
@@ -164,8 +186,8 @@ export interface SlackSearchResult {
     text: string;
     permalink: string;
     no_reactions: boolean;
-    blocks?: Array<any>;
-    attachments?: Array<any>;
+    blocks?: (KnownBlock | Block)[];
+    attachments?: MessageAttachment[];
   }>;
 }
 
@@ -177,9 +199,7 @@ export interface SlackSearchResult {
  * Slack's own text-escaping rules) is sufficient, since those special forms cannot parse without
  * them.
  */
-export function escapeSlackMrkdwn(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+export const escapeSlackMrkdwn = escapeSlackText;
 
 /**
  * Centralized interface for all Slack API interactions via the @slack/web-api SDK.
@@ -215,7 +235,10 @@ export class SlackClient {
       const endpoint = url || 'unknown';
       this.logger.warn(`[Slack] Rate limited on ${endpoint}, retry after ${retrySec}s`);
 
-      const { rateLimitSnapshotRepository } = getSlackDb() as any;
+      // DI exposes repositories as unknown; the bound implementation is the database rate limit snapshot repository.
+      const rateLimitSnapshotRepository = getSlackDb().rateLimitSnapshotRepository as {
+        create(data: Record<string, unknown>): Promise<unknown>;
+      };
       const { cloudwatch } = getSlackDeps();
 
       // Fire-and-forget: persist to MongoDB
@@ -292,10 +315,8 @@ export class SlackClient {
     };
 
     return blocks.map(block => {
-      // any: Slack Block Kit types are a union of many block shapes with deeply nested optional
-      // fields. Proper narrowing for every variant adds significant complexity for a simple
-      // truncation pass - using Record<string, any> lets us inspect/mutate fields generically.
-      const newBlock = { ...block } as unknown as Record<string, any>;
+      // Block Kit is a wide union; only the text-bearing fields matter for truncation, so view it through a narrow shape.
+      const newBlock = { ...block } as unknown as TruncatableBlock;
 
       // 1. Header Blocks
       if (newBlock.type === 'header') {
@@ -320,7 +341,7 @@ export class SlackClient {
 
         // Fields
         if (newBlock.fields && Array.isArray(newBlock.fields)) {
-          newBlock.fields = newBlock.fields.map((field: any) => {
+          newBlock.fields = newBlock.fields.map(field => {
             if (field.text) {
               return {
                 ...field,
@@ -343,7 +364,7 @@ export class SlackClient {
 
       // 4. Context Blocks
       if (newBlock.type === 'context' && newBlock.elements && Array.isArray(newBlock.elements)) {
-        newBlock.elements = newBlock.elements.map((element: any) => {
+        newBlock.elements = newBlock.elements.map(element => {
           // Context elements: image or mrkdwn/plain_text
           if (element.text) {
             if (typeof element.text === 'string') {
@@ -406,7 +427,9 @@ export class SlackClient {
         text: truncatedText,
         thread_ts: threadTs,
         blocks: blocks && blocks.length > 0 ? this.truncateBlocks(blocks) : undefined,
-        metadata: metadata as any, // Slack SDK types may be outdated
+        metadata: metadata as MessageMetadata | undefined,
+        unfurl_links: false,
+        unfurl_media: false,
       });
 
       if (result.ok && result.ts) {
@@ -900,7 +923,7 @@ export class SlackClient {
         channel,
         ts: threadTs,
         include_all_metadata: includeMetadata,
-      } as unknown as any); // include_all_metadata may not be in SDK types yet
+      });
 
       if (!result.ok) {
         this.logger.error('Failed to fetch Slack thread history');
@@ -967,6 +990,7 @@ export class SlackClient {
         id: result.user.id || userId,
         name: result.user.name || userId,
         real_name: result.user.real_name,
+        display_name: result.user.profile?.display_name,
         email: result.user.profile?.email,
         tz: result.user.tz,
         is_admin: result.user.is_admin,
@@ -1036,17 +1060,13 @@ export class SlackClient {
     });
 
     try {
-      // Use type assertion to handle optional thread_ts
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const uploadArgs: any = {
+      const baseArgs = {
         channel_id: channel,
         filename,
         file: content,
         initial_comment: initialComment,
       };
-      if (threadTs) {
-        uploadArgs.thread_ts = threadTs;
-      }
+      const uploadArgs: FilesUploadV2Arguments = threadTs ? { ...baseArgs, thread_ts: threadTs } : baseArgs;
 
       const result = await this.client.files.uploadV2(uploadArgs);
 
@@ -1075,32 +1095,36 @@ export class SlackClient {
   }
 
   /**
-   * Download a file from Slack using url_private
-   * Returns file content as Buffer for upload to S3
+   * Download a private Slack file. The bot token is sent only to a Slack file host over https;
+   * redirects are followed by hand so the token never leaves for another host, and every hop must
+   * be https.
    */
   async downloadFile(url: string, fileName: string): Promise<Buffer> {
     try {
-      this.logger.info('Downloading file from Slack', {
-        fileName,
-        url: url.substring(0, 50) + '...',
-      });
+      if (!isSlackFileUrl(url)) {
+        throw new Error('Refusing to download a Slack file from a non-Slack host');
+      }
+      this.logger.info('Downloading file from Slack', { fileName });
 
-      // Use axios to download file with Slack bot token authorization
-      const axios = await import('axios');
-      const response = await axios.default.get(url, {
-        headers: {
-          Authorization: `Bearer ${this.client.token}`,
-        },
-        responseType: 'arraybuffer',
-      });
+      let current = new URL(url);
+      for (let hop = 0; ; hop++) {
+        const response = await fetch(current, {
+          redirect: 'manual',
+          headers: isSlackFileUrl(current.href) ? { Authorization: `Bearer ${this.client.token}` } : {},
+        });
+        const location = response.headers.get('location');
+        if (response.status >= 300 && response.status < 400 && location) {
+          if (hop >= MAX_FILE_DOWNLOAD_REDIRECTS) throw new Error('Slack file download redirected too many times');
+          current = new URL(location, current);
+          if (current.protocol !== 'https:') throw new Error('Slack file download redirected off https');
+          continue;
+        }
+        if (!response.ok) throw new Error(`Slack file download failed with status ${response.status}`);
 
-      const buffer = Buffer.from(response.data);
-      this.logger.info('File downloaded successfully', {
-        fileName,
-        sizeBytes: buffer.length,
-      });
-
-      return buffer;
+        const buffer = Buffer.from(await response.arrayBuffer());
+        this.logger.info('File downloaded successfully', { fileName, sizeBytes: buffer.length });
+        return buffer;
+      }
     } catch (error) {
       this.logger.error('Error downloading file from Slack', { error, fileName });
       throw error;
@@ -1117,7 +1141,7 @@ export class SlackClient {
    */
   async searchMessages(query: string, count: number = 20, cursor?: string): Promise<SlackSearchResult | null> {
     try {
-      this.logger.info('Searching Slack messages', { query, count, cursor });
+      this.logger.info('Searching Slack messages', { queryLength: query.length, count, cursor });
       const result = await this.client.search.messages({
         query,
         count,
@@ -1395,13 +1419,13 @@ export class SlackClient {
    * @param outputs - Optional outputs from the step
    * @deprecated Use functionCompleteSuccess for new Workflow Steps API
    */
-  async workflowStepCompleted(workflowStepExecuteId: string, outputs?: Record<string, any>): Promise<void> {
+  async workflowStepCompleted(workflowStepExecuteId: string, outputs?: Record<string, unknown>): Promise<void> {
     this.logger.info('Reporting workflow step completion', { workflowStepExecuteId });
 
     try {
       await this.client.workflows.stepCompleted({
         workflow_step_execute_id: workflowStepExecuteId,
-        outputs: outputs as unknown as any,
+        outputs,
       });
       this.logger.info('Successfully reported workflow step completion');
     } catch (err) {

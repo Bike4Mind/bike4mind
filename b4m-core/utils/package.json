@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "8.1.4",
+  "version": "13.1.5",
   "publishConfig": {
     "access": "restricted"
   },
@@ -18,6 +18,16 @@
       "require": {
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
+      }
+    },
+    "./cache/ApplicationCache": {
+      "import": {
+        "types": "./dist/cache/ApplicationCache.d.mts",
+        "default": "./dist/cache/ApplicationCache.mjs"
+      },
+      "require": {
+        "types": "./dist/cache/ApplicationCache.d.cts",
+        "default": "./dist/cache/ApplicationCache.cjs"
       }
     },
     "./artifactParser": {
@@ -70,6 +80,16 @@
         "default": "./dist/imageModeration/index.cjs"
       }
     },
+    "./imageCutout": {
+      "import": {
+        "types": "./dist/imageCutout.d.mts",
+        "default": "./dist/imageCutout.mjs"
+      },
+      "require": {
+        "types": "./dist/imageCutout.d.cts",
+        "default": "./dist/imageCutout.cjs"
+      }
+    },
     "./imageResize": {
       "import": {
         "types": "./dist/imageResize.d.mts",
@@ -98,6 +118,16 @@
       "require": {
         "types": "./dist/escapeRegex.d.cts",
         "default": "./dist/escapeRegex.cjs"
+      }
+    },
+    "./escapeHtml": {
+      "import": {
+        "types": "./dist/escapeHtml.d.mts",
+        "default": "./dist/escapeHtml.mjs"
+      },
+      "require": {
+        "types": "./dist/escapeHtml.d.cts",
+        "default": "./dist/escapeHtml.cjs"
       }
     },
     "./safeObjectKey": {
@@ -200,6 +230,26 @@
         "default": "./dist/videoProviders/index.cjs"
       }
     },
+    "./embeddingProviders": {
+      "import": {
+        "types": "./dist/embeddingProviders/index.d.mts",
+        "default": "./dist/embeddingProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/embeddingProviders/index.d.cts",
+        "default": "./dist/embeddingProviders/index.cjs"
+      }
+    },
+    "./imageProviders": {
+      "import": {
+        "types": "./dist/imageProviders/index.d.mts",
+        "default": "./dist/imageProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageProviders/index.d.cts",
+        "default": "./dist/imageProviders/index.cjs"
+      }
+    },
     "./musicProviders": {
       "import": {
         "types": "./dist/musicProviders/index.d.mts",
@@ -208,6 +258,16 @@
       "require": {
         "types": "./dist/musicProviders/index.d.cts",
         "default": "./dist/musicProviders/index.cjs"
+      }
+    },
+    "./audioProviders": {
+      "import": {
+        "types": "./dist/audioProviders/index.d.mts",
+        "default": "./dist/audioProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/audioProviders/index.d.cts",
+        "default": "./dist/audioProviders/index.cjs"
       }
     },
     "./security": {
@@ -219,6 +279,16 @@
         "types": "./dist/security/index.d.cts",
         "default": "./dist/security/index.cjs"
       }
+    },
+    "./security/testing": {
+      "import": {
+        "types": "./dist/security/testing.d.mts",
+        "default": "./dist/security/testing.mjs"
+      },
+      "require": {
+        "types": "./dist/security/testing.d.cts",
+        "default": "./dist/security/testing.cjs"
+      }
     }
   },
   "files": [
@@ -228,52 +298,44 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "dev": "tsdown --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "generate:webp-wasm": "node scripts/generateWebpDecoderWasm.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
+    "@aws-sdk/client-kms": "^3.1150.0",
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-rekognition": "^3.1150.0",
-    "@aws-sdk/client-s3": "^3.1150.0",
     "@aws-sdk/client-sqs": "^3.1150.0",
-    "@aws-sdk/s3-request-presigner": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/observability": "workspace:*",
-    "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
+    "@jsquash/webp": "1.5.0",
     "@types/aws-lambda": "^8.10.162",
     "axios": "1.20.0",
-    "cheerio": "1.2.0",
     "csv-parse": "^7.0.2",
-    "dayjs": "^1.11.23",
     "file-type": "^22.1.0",
     "image-size": "^2.0.3",
     "jimp": "^1.6.1",
     "jszip": "^3.10.2",
-    "lodash": "^4.18.1",
     "mammoth": "^1.12.3",
-    "mime-types": "^3.0.2",
     "omggif": "^1.0.10",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
     "tldts": "^7.4.13",
     "unpdf": "^1.6.2",
-    "uuid": "^14.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.6"
   },
   "devDependencies": {
     "@babel/standalone": "^8.0.4",
     "@types/babel__standalone": "^7.1.9",
-    "@types/lodash": "^4.17.24",
-    "@types/mime-types": "^3.0.1",
     "esbuild": "0.28.1",
     "msw": "^2.15.0",
     "tsdown": "^0.22.3",

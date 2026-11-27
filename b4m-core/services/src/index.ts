@@ -1,5 +1,7 @@
 export * as referService from './referService';
 export * as userService from './userService';
+export * as abuseService from './abuseService';
+export * as accountArchiveHistoryService from './accountArchive/history';
 export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 // Flat export: callers outside the service (the OAuth ai-token route) must recognize
@@ -9,6 +11,7 @@ export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
 export * as sessionService from './sessionService';
 export * as organizationService from './organizationService';
+export * as spaceService from './spaceService';
 export * as apiKeyService from './apiKeyService';
 export * as promptService from './promptService';
 export * as voiceService from './voiceService';
@@ -29,12 +32,15 @@ export * as tagService from './tagService';
 export * as artifactService from './artifactService';
 export * as notebookExportService from './notebookExportService';
 export * as notebookImportService from './notebookImportService';
+export * as agentConfigurationService from './agentConfigurationService';
 export * as notebookCurationService from './notebookCurationService';
 export * as dataLakeService from './dataLakeService';
 export * as dataLakeResearchService from './dataLakeResearchService';
 export * as scopedSettingsService from './settings';
+export * as fileEmbeddingService from './fileEmbeddingService';
 export * as briefcaseService from './briefcaseService';
 export * as imageTemplateService from './imageTemplateService';
+export * as studioCompositionService from './studioCompositionService';
 export * as cheerioService from './lib/cheerio';
 export * as turndownService from './lib/turndown';
 export * as speechToTextService from './speech';
@@ -45,7 +51,10 @@ export * from './billing';
 export * as spendReconciliationService from './spendReconciliation';
 export * from './soundCost';
 export * from './musicCost';
+export * from './providerCapacity';
 export * from './llm/agentToolMediaCost';
+export * from './llm/attachedAgents';
+export * from './thinkingVisibility';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';
 export * as mementoService from './mementoService';
@@ -62,7 +71,7 @@ export * from './auth';
 // Import these from their subpaths instead:
 //   '@bike4mind/services/llm', '@bike4mind/services/cliCompletions',
 //   '@bike4mind/services/agentProactiveMessagingService'
-// services/src/index.closure.test.ts fails if any of them comes back.
+// services/src/index.closure.repo.test.ts fails if any of them comes back.
 //
 // The tool CONTRACT types are the exception, and they are free: `export type` is
 // erased by tsc, so @vercel/nft follows no edge and no tool code is traced. Tool
@@ -74,7 +83,7 @@ export type { ToolDefinition, ToolContext } from './llm/tools/base/types';
 // Three LLM VALUES stay on the barrel deliberately. All are leaves that reach
 // neither the tool registry nor any heavy dependency (mathjs, isolated-vm,
 // sharp), so re-exporting them costs a few files in the barrel closure and no
-// tracer edge to the registry - measured, and index.closure.test.ts still
+// tracer edge to the registry - measured, and index.closure.repo.test.ts still
 // asserts the registry is unreachable from here. Out-of-repo consumers import
 // them from the root, and severing them buys nothing, so the compat surface is
 // cheaper than the coordinated churn. Anything that DOES reach the registry
@@ -87,7 +96,13 @@ export type { ServerToolExecutor, ServerToolExecutors } from './cliTools/types';
 export * from './latticeService';
 export * from './telemetry';
 export { safeCompareTokens } from '@bike4mind/auth/crypto';
-export { SreAgentService, type SrePatternLookup } from './sreAgentService';
+export {
+  SreAgentService,
+  SreAccountingError,
+  isSreAccountingError,
+  type SreAccountingContext,
+  type SrePatternLookup,
+} from './sreAgentService';
 export { RATE_LIMITED_SENTINEL } from './sreAgentService/tools';
 export * from './audienceVariants';
 // Flat exports for the client components/hooks (which import the contract types
@@ -97,3 +112,4 @@ export * from './prReportService';
 export * as prReportService from './prReportService';
 export * as ncmecService from './ncmecService';
 export * as adminAuditService from './adminAuditService';
+export * as spendFreezeService from './spendFreezeService';

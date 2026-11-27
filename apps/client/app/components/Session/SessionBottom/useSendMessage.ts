@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
+import { thinkingForSend } from '@client/app/utils/thinkingPayload';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
 import { withSubmitMutex } from './withSubmitMutex';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -66,7 +67,14 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
+import {
+  DIRECTOR_TOOLS,
+  classifyQueryComplexity,
+  expandChoiceKey,
+  isImageAttachment,
+  routeQuery,
+  studioFeatureSettingKeys,
+} from '@bike4mind/common';
 import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
 import { recordReplyChoice } from '@client/app/hooks/data/quests';
 import { pickOrchestrationAgent } from '@bike4mind/server-utils/lib/agentOrchestration';
@@ -75,7 +83,8 @@ import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
-import { CommandKey, extractCommandAndParams, handleCommand, isImageModel } from '@client/app/utils/commands';
+import { CommandKey, chatImageSendMode, extractCommandAndParams, isImageModel } from '@client/app/utils/commands';
+import { dispatchSend } from '@client/app/components/Session/chatImageSend';
 import { validateChatInput } from '@client/app/utils/validateChatInput';
 import { effectiveDisabledTools } from '@client/app/utils/effectiveDisabledTools';
 import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup';
@@ -89,6 +98,7 @@ import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 import { shouldBlurComposerAfterSend } from './composerFocus';
+import { isRecordedTutorialTurn } from '../../tutorial/core/walkActive';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -101,7 +111,6 @@ interface UseSendMessageParams {
 }
 
 interface SendClickOptions {
-  forceEnableQuestMaster?: boolean;
   toolsOverride?: B4MLLMTools[];
   /**
    * Extra system context for this one send (a programmatic launch's `systemContext`).
@@ -110,6 +119,10 @@ interface SendClickOptions {
    * first send (`hostCreateSession`) re-dispatches only the prompt, so it does not carry this.
    */
   systemContext?: string;
+  /** Route this one send to the agent executor (still gated on the agent-mode feature flag). */
+  forceAgent?: boolean;
+  /** The Studio production a Direct launch directs; sent with the agent start so the server marks the session. */
+  productionCompositionId?: string;
   /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
   onRefused?: () => void;
 }
@@ -183,8 +196,11 @@ export function useSendMessage({
   // bolt ON and later lost the feature (admin kill switch) would silently keep
   // routing every send to `agent_executor` with no UI to disable it.
   const { settings: userSettings } = useUserSettings();
-  const { isFeatureEnabled } = useFeatureEnabled();
+  const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
+  // Only the admin flags: the server already checked the full Productions access (audience, plan) before it
+  // marked the session, and the executor re-checks Productions access for the user on every run.
+  const productionsFlagOn = studioFeatureSettingKeys('productions').every(isAdminFeatureEnabled);
   // Layer-2 preference. Default `'off'` per IUserPreferences. Only meaningful
   // when Layer-1 (`agentModeFeatureEnabled`, resolved above via
   // `useFeatureEnabled('agentMode')`) is true; non-gated users never reach the
@@ -217,7 +233,6 @@ export function useSendMessage({
     size,
     quality,
     style,
-    isQuestMasterEnabled,
     isMementosEnabled,
     isArtifactsEnabled,
     isAgentsEnabled,
@@ -230,6 +245,8 @@ export function useSendMessage({
     skipAutoOffers,
     thinking,
     enabledMcpServers,
+    disabledMcpConnections,
+    enabledPlatformMcpConnections,
     deepResearchConfig,
     organizationId,
     agentMode,
@@ -244,7 +261,6 @@ export function useSendMessage({
       s.size,
       s.quality,
       s.style,
-      s.isQuestMasterEnabled,
       s.isMementosEnabled,
       s.isArtifactsEnabled,
       s.isAgentsEnabled,
@@ -257,13 +273,14 @@ export function useSendMessage({
       s.skipAutoOffers,
       s.thinking,
       s.enabledMcpServers,
+      s.disabledMcpConnections,
+      s.enabledPlatformMcpConnections,
       s.deepResearchConfig,
       s.organizationId,
       s.agentMode,
       s.disableAutoRouteForThisSession,
     ])
   );
-  const { setState: setLLM } = useLLM;
 
   const [chatInputValue, setChatInputValue, clearDraft] = useChatInput(
     useShallow(s => [s.chatInputValue, s.setChatInputValue, s.clearDraft])
@@ -306,7 +323,6 @@ export function useSendMessage({
   const dispatchedRef = useRef(false);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
-  const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
 
   // Consume a quest launch intent from the /quests page (auto-submit).
   // The /new route records it in a useLayoutEffect, which runs before this
@@ -322,9 +338,6 @@ export function useSendMessage({
       if (intent.autoSubmit) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setPendingAutoSubmitGoal(intent.goal);
-        if (intent.enableQuestMaster) {
-          setEnableQuestMasterOnSubmit(true);
-        }
       }
     }
   }, [setChatInputValue, isOnNewNotebookRoute]);
@@ -415,6 +428,7 @@ export function useSendMessage({
       effectiveCredits,
       enforceCredits,
       selectedModel: model,
+      recordedTutorialTurn: isRecordedTutorialTurn(prompt),
     });
     if (errorMessage) {
       console.error(errorMessage);
@@ -498,14 +512,15 @@ export function useSendMessage({
     let optimisticTmpId: string | null = null;
     const enabledFiles = workBenchFiles.map(file => file.fileName);
     const [command, params] = extractCommandAndParams(liveAI, model, INFINITE_VALUE, prompt, enabledFiles);
+    const imageSendMode = chatImageSendMode(liveAI, model, prompt);
     const userId = currentUser!.id;
     const projectId = routerProjectId;
 
     // Count a template use when a normal (non-slash-command) prompt is sent on an
     // image model whose settings match a saved template. Gate on the ORIGINAL
-    // prompt, not `command` - the send path derives a `/gen_image` command for
-    // image models, so `command` is always set here. Fire-and-forget; further
-    // gated internally (feature flag, AI toggle, image model, settings match).
+    // prompt, not `command` - `command` is always set here (`/llm` for a plain
+    // send). Fire-and-forget; further gated internally (feature flag, AI toggle,
+    // image model, settings match).
     if (isTemplateUseEligiblePrompt(prompt)) recordImageTemplateUse();
 
     // Detect agent mentions and auto-attach them before sending the message.
@@ -593,16 +608,26 @@ export function useSendMessage({
       undefined,
       sessionAgents.map(a => a.id)
     );
-    // Real slash commands (e.g. `/gen_image`, `/roll`) must run
+    // Real slash commands (e.g. `/roll`) and chat image sends must run
     // their own handler even when the Agent-mode toggle is ON - otherwise the
     // executor branch returns before `handler(sessionToSend)` is reached and
-    // the command silently never executes. `/llm` is the implicit default and
+    // the send silently never executes. `/llm` is the implicit default and
     // does NOT count as a real slash command here.
-    const isRealSlashCommand = command !== '/llm' && commandHandlers[command as CommandKey] !== undefined;
+    const isRealSlashCommand =
+      imageSendMode !== undefined || (command !== '/llm' && commandHandlers[command as CommandKey] !== undefined);
     // Gate the override on the Layer-1 flag so a stale persisted
     // `agentMode.enabled` doesn't outlive a feature-flag revocation, and skip
     // it entirely for real slash commands so they keep dispatching normally.
     const agentToggleActive = agentModeFeatureEnabled && agentMode.enabled && !isRealSlashCommand;
+    // A notebook the Studio Direct button started stays in agent mode with the production tools on every turn:
+    // the director's tools exist only in the agent executor, and a plain chat turn would claim work it cannot do.
+    // Without agent mode the turn stays plain chat with its own tools: the chat path cannot run the director's.
+    const directedSession =
+      agentModeFeatureEnabled &&
+      productionsFlagOn &&
+      !isRealSlashCommand &&
+      Boolean(sessionToSend?.productionCompositionId);
+    const toolsOverride = options?.toolsOverride ?? (directedSession ? [...DIRECTOR_TOOLS] : undefined);
     // 'on' = "agent_executor used by default". Treated as a force_agent
     // override on every send (verification: Layer-1 + 'always on' + "hi" ->
     // ReAct dispatched). Layer-1 gated and slash-command-bypassed for the
@@ -656,7 +681,13 @@ export function useSendMessage({
     }
 
     const userOverride: 'force_agent' | undefined =
-      agentToggleActive || agentDefaultOn || classifierUpgraded ? 'force_agent' : undefined;
+      agentToggleActive ||
+      agentDefaultOn ||
+      classifierUpgraded ||
+      (agentModeFeatureEnabled && options?.forceAgent === true) ||
+      (agentModeFeatureEnabled && directedSession)
+        ? 'force_agent'
+        : undefined;
     // Heuristic auto-routing (`routingComplexity === 'complex'` ->
     // agent_executor) is opt-in via the `'auto'` default - never the 'off'
     // default or a bare feature flag. Without this gate, a query the classifier
@@ -747,6 +778,7 @@ export function useSendMessage({
     };
 
     const currentModelInfo = modelInfo?.find(m => m.id === model);
+    const sentThinking = thinkingForSend(thinking, currentModelInfo);
     // Tool-resolution ladder (model-capability gate -> Smart recommendations -> Fast ->
     // briefcase per-message override) extracted to useLLMSettingsAssembly.
     // A briefcase override requiring tools the model can't run REFUSES the send rather
@@ -754,7 +786,7 @@ export function useSendMessage({
     const { effectiveTools, refused } = resolveTools({
       prompt,
       supportsTools: !!currentModelInfo?.supportsTools,
-      toolsOverride: options?.toolsOverride,
+      toolsOverride,
       skipAutoOffers,
       activeSurface: sessionToSend?.surface,
       deniedTools: effectiveDisabledTools(currentSession),
@@ -767,7 +799,7 @@ export function useSendMessage({
     // Tool-directed or context-carrying send: see LLMCommandArgs.skipRapidReply. The ack
     // model sees neither the tools nor the hidden system context, so with either present an
     // instant ack could contradict what the real reply is told to do.
-    const skipRapidReply = (options?.toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
+    const skipRapidReply = (toolsOverride?.length ?? 0) > 0 || systemContext !== undefined;
 
     // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
     // models: for image models "vision" is irrelevant - image-input capability is handled by
@@ -803,7 +835,7 @@ export function useSendMessage({
       notebook: ISessionDocument | null
     ) => Promise<{ session: ISessionDocument; quest: IChatHistoryItemDocument } | void>;
 
-    if (commandHandlers[command as CommandKey]) {
+    if (imageSendMode || commandHandlers[command as CommandKey]) {
       const sessionFileIds = workBenchFiles.map(f => f.id);
       const messageLevelFileIds = sendableMessageFileIds.filter(id => !sessionFileIds.includes(id));
 
@@ -813,12 +845,13 @@ export function useSendMessage({
         perfLogger.log('  - Message contains @:', prompt.includes('@'));
         perfLogger.log('  - Full message:', prompt);
 
-        return await handleCommand(commandHandlers, {
+        return await dispatchSend(commandHandlers, imageSendMode, {
           userId,
           username: currentUser?.username,
           userEmail: currentUser?.email ?? undefined,
           command,
-          params,
+          // An image send takes the prompt as typed, without the /llm history and context prefixes.
+          params: imageSendMode ? prompt : params,
           currentSession: notebook,
           model: model as any,
           workBenchFiles,
@@ -827,13 +860,12 @@ export function useSendMessage({
           promptFileIds: messageLevelFileIds,
           messageOnlyFileIds: sentMessageOnlyFileIds,
           optimisticSessionId: optimisticTmpId ?? undefined,
-          enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           enableAgents: isAgentsEnabled,
           enableLattice: isLatticeEnabled,
           queryClient,
-          thinking,
+          thinking: sentThinking,
           tools: effectiveTools,
           projectId,
           organizationId,
@@ -850,6 +882,8 @@ export function useSendMessage({
           addMessageToSession,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
+          enabledPlatformMcpConnections,
           // TODO: Remove this once. New one is in imageConfig
           size,
           quality,
@@ -876,13 +910,12 @@ export function useSendMessage({
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
           messageOnlyFileIds: sentMessageOnlyFileIds,
-          enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           enableAgents: isAgentsEnabled,
           enableLattice: isLatticeEnabled,
           queryClient,
-          thinking,
+          thinking: sentThinking,
           tools: effectiveTools,
           projectId,
           organizationId,
@@ -895,6 +928,8 @@ export function useSendMessage({
           setChatCompletion,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
+          enabledPlatformMcpConnections,
           optimisticSessionId: optimisticTmpId ?? undefined,
           // Forward Agent-mode state for telemetry / future server-side
           // routing. The chat completion path doesn't branch on this -
@@ -1043,7 +1078,7 @@ export function useSendMessage({
         // ships the user's Smart Tools marked ambient; the server unions them onto the
         // profile it resolves rather than replacing it.
         const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
-          options?.toolsOverride,
+          toolsOverride,
           effectiveTools,
           dispatchAgent?.allowedTools
         );
@@ -1073,9 +1108,7 @@ export function useSendMessage({
           sessionFabFileIds: dispatchSessionFabFileIds.length > 0 ? dispatchSessionFabFileIds : undefined,
           messageFileIds: dispatchMessageFileIds.length > 0 ? dispatchMessageFileIds : undefined,
           messageOnlyFileIds: sentMessageOnlyFileIds.length > 0 ? sentMessageOnlyFileIds : undefined,
-          // LLM runtime knobs. `thinking` is forwarded only when the user
-          // actually enabled it - the LLM store ships a baseline
-          // `{enabled: false, ...}` that would otherwise round-trip needlessly.
+          // LLM runtime knobs.
           temperature: temperature ?? undefined,
           // `safeMaxTokens` (`useTokenLimits.ts`) only guards null/undefined,
           // so a persisted `0` / negative `max_tokens` would slip through and
@@ -1084,7 +1117,9 @@ export function useSendMessage({
           // `agent_execute` dispatch. Forward only when strictly positive so
           // the executor falls back to its built-in default instead.
           maxTokens: safeMaxTokens > 0 ? safeMaxTokens : undefined,
-          thinking: thinking?.enabled ? thinking : undefined,
+          // Forwarded as-is, including `{enabled: false}`: the backends read it
+          // as the off switch for adaptive-by-default models.
+          thinking: sentThinking,
           // Image config (#agent-mode-image-gen). Forwarded only when an image
           // model is resolvable so the executor's image_generation / edit_image
           // tools get a model instead of short-circuiting with "Image model
@@ -1123,7 +1158,20 @@ export function useSendMessage({
           // Per-send system context: the executor folds it into the run's system
           // message, and it is kept off the stored execution and Quest.
           ...systemContextField,
+          ...(options?.productionCompositionId ? { productionCompositionId: options.productionCompositionId } : {}),
         });
+        const directedCompositionId = options?.productionCompositionId;
+        if (directedCompositionId) {
+          // Mirrors the marker the server writes on start, so the next turn in this notebook already routes as
+          // directed. The executor re-checks Productions access each run (not the composition), so a refused marker
+          // only costs the forced route.
+          setCurrentSession(prev =>
+            prev?.id === dispatchSessionId ? { ...prev, productionCompositionId: directedCompositionId } : prev
+          );
+          queryClient.setQueryData<ISessionDocument>(['sessions', dispatchSessionId], prev =>
+            prev ? { ...prev, productionCompositionId: directedCompositionId } : prev
+          );
+        }
         setChatInputValue('');
         clearDraft(dispatchSessionId);
         // A first send from a new notebook drafted under the new-notebook key
@@ -1176,8 +1224,8 @@ export function useSendMessage({
     // stream replaces `statusMessage` on its first update; the error path below
     // clears it if no stream ever lands.
     //
-    // Skipped for real slash commands (`/roll`, `/gen_image`,
-    // etc.) - those handlers don't emit `streamed_chat_completion` WS events,
+    // Skipped for real slash commands (`/roll`, etc.) and chat image
+    // sends - those handlers don't emit `streamed_chat_completion` WS events,
     // so the sentinel would never be overwritten on success and the Stop
     // button would stay stuck after the command returned. `handleLLMCommand`
     // is the only path the chat-completion WS subscription drives.
@@ -1209,7 +1257,7 @@ export function useSendMessage({
       data = await handler(sessionToSend);
     } catch (error: unknown) {
       console.error('Error sending message:', error);
-      // Error toasts are handled in LLMCommand.tsx / ImageGenerationCommand.ts.
+      // Error toasts are handled in LLMCommand.tsx / chatImageSend.ts.
       // Do NOT tear down the optimistic session here - `createOptimisticQuest`
       // (llm.ts) has already written a `**Error:** ...` reply into the quests
       // cache for the user to see. Previously the new-session branch removed
@@ -1271,10 +1319,6 @@ export function useSendMessage({
       }
     }
 
-    if (isQuestMasterEnabled) {
-      setLLM({ isQuestMasterEnabled: false });
-    }
-
     if (data?.session.id) {
       recordSessionActivity(data.session.id);
     }
@@ -1332,19 +1376,15 @@ export function useSendMessage({
   // Auto-submit quest goal when websocket is ready (from /quests New Quest modal)
   useEffect(() => {
     if (pendingAutoSubmitGoal && readyState === ReadyState.OPEN && !submitting) {
-      console.log('🚀 Auto-submitting quest goal:', pendingAutoSubmitGoal, 'enableQM:', enableQuestMasterOnSubmit);
       const goal = pendingAutoSubmitGoal;
-      const shouldEnableQM = enableQuestMasterOnSubmit;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setPendingAutoSubmitGoal(null);
-
-      setEnableQuestMasterOnSubmit(false);
       setTimeout(() => {
-        handleSendClick(goal, { forceEnableQuestMaster: shouldEnableQM });
+        handleSendClick(goal);
       }, 150);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAutoSubmitGoal, readyState, submitting, enableQuestMasterOnSubmit]);
+  }, [pendingAutoSubmitGoal, readyState, submitting]);
 
   // Programmatic submit + briefcase launch handling, extracted to a dedicated
   // hook. Owns the /opti null-session guard, nonce dedup, and timer cleanup.

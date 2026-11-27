@@ -15,9 +15,10 @@ export function classifyError(message: string): SreClassification {
   // if some path still logs one at ERROR. The owning backends now
   // log these at WARN, so this is defense-in-depth. `\bAborted\b` catches the bare
   // `new Error('Aborted')` thrown by the shared retry helpers (retry.ts), which the
-  // other (phrase-based) alternatives would miss.
+  // other (phrase-based) alternatives would miss. The `stream timeout - no ...` alternative mirrors the
+  // wording in llm-adapters/src/llmTimeoutErrors.ts; keep them in sync.
   if (
-    /\bAbortError\b|\bAborted\b|Request aborted|operation was aborted|no streaming response received|stream timeout - no response received/i.test(
+    /\bAbortError\b|\bAborted\b|Request aborted|operation was aborted|no streaming response received|stream timeout - no (?:response|event) received/i.test(
       message
     )
   ) {

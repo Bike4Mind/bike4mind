@@ -1,13 +1,16 @@
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { app, ipcMain, safeStorage, shell } from 'electron';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { app, ipcMain, shell } from 'electron';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import { IPC_CHANNELS } from '@shared/ipc';
+import { currentVersion } from '../appVersion';
 import { MediaStore } from '../chat/media/MediaStore';
 import { createMainLogger } from '../logger';
+import { appSecretCipher } from '../secrets';
 import { AuthService } from './AuthService';
 import { ProfilePhotoCache, type PhotoRecordFile } from './profilePhoto';
-import { TokenVault, type VaultFile } from './tokenVault';
+import { TokenVault } from './tokenVault';
+import { createVaultFile } from './vaultFile';
 import { appWindows } from '../windows';
 
 /**
@@ -15,28 +18,6 @@ import { appWindows } from '../windows';
  * bodies, and an always-on debug channel is how a credential ends up in a console transcript.
  */
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
-
-function vaultFile(path: string): VaultFile {
-  return {
-    async read() {
-      try {
-        return await readFile(path, 'utf8');
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-        throw err;
-      }
-    },
-    async write(contents) {
-      await mkdir(dirname(path), { recursive: true });
-      // Write-then-rename: a crash mid-write would otherwise leave a truncated vault, which
-      // reads back as corrupt and silently signs the user out of every environment at once.
-      // Per process: two instances sharing this userData must not rename each other's half-written file.
-      const temporary = `${path}.${process.pid}.tmp`;
-      await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600 });
-      await rename(temporary, path);
-    },
-  };
-}
 
 function photoRecordFile(path: string): PhotoRecordFile {
   return {
@@ -75,11 +56,11 @@ export function onAuthStateChanged(listener: (state: AuthState) => void): () => 
 export function registerAuth(): AuthService {
   const logger = createMainLogger(VERBOSE);
   const userData = app.getPath('userData');
-  const vault = new TokenVault(safeStorage, vaultFile(join(userData, 'auth-vault.json')), logger);
+  const vault = new TokenVault(appSecretCipher(), createVaultFile(join(userData, 'auth-vault.json')), logger);
   // The same media directory registerChat builds its store over, and deliberately so: that is
   // the only directory the `b4m-media:` handler will serve, and the renderer's CSP admits no
-  // other origin for an image. MediaStore holds no state beyond the path, so a second instance
-  // over it is just a second door onto the same folder.
+  // other origin for an image. This instance owns only the reusable photo bucket; conversation
+  // deletion barriers are owned by the chat store.
   const profilePhotos = new ProfilePhotoCache(
     new MediaStore(join(userData, 'media')),
     photoRecordFile(join(userData, 'profile-photo.json'))
@@ -90,7 +71,7 @@ export function registerAuth(): AuthService {
     logger,
     openExternal: url => shell.openExternal(url),
     devFallback: !app.isPackaged,
-    userAgent: `b4m-desktop/${app.getVersion()}`,
+    userAgent: `b4m-desktop/${currentVersion()}`,
     profilePhotos,
     onStateChanged: state => {
       for (const window of appWindows()) {
@@ -113,6 +94,8 @@ export function registerAuth(): AuthService {
   ipcMain.handle(IPC_CHANNELS.authSetEnvironment, (_event, selection: EnvironmentSelection) =>
     service.setEnvironment(selection)
   );
+  // A sign-in in another instance sharing the vault is picked up when the user comes back here.
+  app.on('browser-window-focus', () => void service.adoptStoredSession());
   ipcMain.handle(IPC_CHANNELS.authOpenAccountPage, (_event, page: AccountPage) => service.openAccountPage(page));
 
   return service;

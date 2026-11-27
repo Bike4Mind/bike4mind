@@ -4,6 +4,7 @@ import { ChatModels } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 vi.mock('./anthropicBackend', () => ({
+  ANTHROPIC_FEDERATED_KEY: Symbol('anthropic-federated-test'),
   AnthropicBackend: vi.fn(function (this: any, key: string) {
     this._mock = 'anthropic';
     this.key = key;
@@ -12,6 +13,7 @@ vi.mock('./anthropicBackend', () => ({
   }),
 }));
 vi.mock('./openaiBackend', () => ({
+  OPENAI_FEDERATED_KEY: Symbol('openai-federated-test'),
   OpenAIBackend: vi.fn(function (this: any, key: string) {
     this._mock = 'openai';
     this.key = key;
@@ -80,6 +82,9 @@ vi.mock('./bedrockBackend/deepseek', () => ({
 
 import {
   getLlmByModel,
+  withProviderCredentialPlan,
+  OPENAI_FEDERATED_KEY,
+  ANTHROPIC_FEDERATED_KEY,
   resetReplacedByOverlay,
   updateReplacedByOverlay,
   UnsupportedAdapterFamilyError,
@@ -117,6 +122,7 @@ describe('getLlmByModel', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns null when modelInfo is undefined', () => {
@@ -129,7 +135,7 @@ describe('getLlmByModel', () => {
     it('returns AnthropicBackend when key is present', () => {
       const result = getLlmByModel(fullApiKeys, { modelInfo, logger });
       expect((result as any)._mock).toBe('anthropic');
-      expect((result as any).key).toBe('anthropic-key');
+      expect((result as any).key).toEqual({ kind: 'static', key: 'anthropic-key' });
     });
 
     it('returns null when key is absent', () => {
@@ -309,6 +315,60 @@ describe('getLlmByModel', () => {
     it('returns null for an unrecognized backend', () => {
       const modelInfo = makeModelInfo({ backend: 'voyageai' as ModelInfo['backend'] });
       expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
+    });
+  });
+
+  describe('trusted key provenance and credential mode', () => {
+    const federatedModes = { openai: 'federated', anthropic: 'federated' } as const;
+    const plan = (
+      keys: ApiKeyTable,
+      platform: { openai: boolean; anthropic: boolean } | undefined,
+      userKeys: string[] = [],
+      modes: { openai: 'static' | 'federated'; anthropic: 'static' | 'federated' } = federatedModes
+    ) => withProviderCredentialPlan(keys, { platformKeys: platform, userKeys: new Set(userKeys), modes });
+
+    it.each([
+      ['openai', undefined],
+      ['openai', 'openai-chat'],
+      ['openai', 'openai-responses'],
+      ['anthropic', undefined],
+      ['anthropic', 'anthropic-messages'],
+    ] as const)(
+      'federates only a marked platform key for %s / %s, keeping it as the fallback',
+      (backend, adapterFamily) => {
+        vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+        const modelInfo = makeModelInfo({ backend, adapterFamily });
+        const keys = { openai: 'platform-key', anthropic: 'platform-key' };
+        const credentialOf = (table: ApiKeyTable): unknown =>
+          (getLlmByModel(table, { modelInfo, logger }) as unknown as { key: unknown }).key;
+        const marked = plan(keys, { openai: true, anthropic: true });
+
+        expect(credentialOf(marked)).toEqual({ kind: 'federated', fallbackKey: 'platform-key' });
+        expect(credentialOf(keys)).toEqual({ kind: 'static', key: 'platform-key' });
+        expect(credentialOf({ ...marked })).toEqual({ kind: 'static', key: 'platform-key' });
+        expect(
+          credentialOf(plan(keys, { openai: true, anthropic: true }, [], { openai: 'static', anthropic: 'static' }))
+        ).toEqual({
+          kind: 'static',
+          key: 'platform-key',
+        });
+        expect(credentialOf(plan(keys, { openai: false, anthropic: false }, [backend]))).toEqual({
+          kind: 'user_key',
+          key: 'platform-key',
+        });
+        const otherProviderShared = plan(keys, { openai: backend !== 'openai', anthropic: backend !== 'anthropic' });
+        expect(credentialOf(otherProviderShared)).toEqual({ kind: 'static', key: 'platform-key' });
+
+        const missing = plan({ ...keys }, { openai: true, anthropic: true });
+        delete (missing as ApiKeyTable)[backend];
+        expect(getLlmByModel(missing, { modelInfo, logger })).toBeNull();
+      }
+    );
+
+    it.each(['openai', 'anthropic'] as const)('passes the bare %s federated sentinel through unchanged', backend => {
+      const sentinel = backend === 'openai' ? OPENAI_FEDERATED_KEY : ANTHROPIC_FEDERATED_KEY;
+      const result = getLlmByModel({ [backend]: sentinel }, { modelInfo: makeModelInfo({ backend }), logger });
+      expect((result as unknown as { key: unknown }).key).toBe(sentinel);
     });
   });
 

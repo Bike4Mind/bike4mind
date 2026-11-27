@@ -5,7 +5,13 @@
  * and the repository are mocked: their behaviour is covered in services and database.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  ForbiddenError,
+  NotFoundError,
+  UnprocessableEntityError,
+} from '@bike4mind/common';
 import {
   asUser,
   fire,
@@ -16,19 +22,25 @@ import {
   videoJob,
 } from '@server/generations/__test__/routeHarness';
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
-vi.mock('@server/utils/userRateTier', async () =>
+vi.mock('@bike4mind/server-utils/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
-vi.mock('@server/utils/orgAccess', async orig =>
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
   (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
@@ -38,15 +50,22 @@ vi.mock('@bike4mind/services/videoJobs', async orig =>
 vi.mock('@bike4mind/database', async orig =>
   (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
-vi.mock('@server/generationJobs/wiring', async () =>
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', async () =>
   (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
-vi.mock('@server/generations/signOutputUrl', async () =>
+vi.mock('@bike4mind/server-utils/generations/signOutputUrl', async () =>
   (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
 vi.mock('@bike4mind/server-utils/videoGenerations/listUsableVideoModels', async orig =>
   (await import('@server/generations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
 );
+const paidCallRun = vi.hoisted(() => ({
+  resolve: vi.fn(async (_req: unknown, run: { runId: string } | undefined, _organizationId?: string | null) =>
+    run ? { attribution: { ...run, purpose: 'tool' as const }, billingOrganizationId: null } : undefined
+  ),
+}));
+vi.mock('@server/completionRuns/paidCallRun', () => ({ resolvePaidCallRun: paidCallRun.resolve }));
+
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../video-generations/index';
@@ -56,6 +75,30 @@ const post = (body: Record<string, unknown>, headers: Record<string, string> = {
 
 describe('POST /api/v1/video-generations', () => {
   beforeEach(resetHarness);
+
+  it.each([true, false])('maps keyframes, infers image mode and preserves draft=%s', async draft => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({
+      model: 'flux-3-video',
+      prompt: 'p',
+      draft,
+      keyframes: [
+        { file_id: 'f1', time_seconds: 0 },
+        { file_id: 'f2', time_seconds: 5 },
+      ],
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({
+      mode: 'image_to_video',
+      draft,
+      keyframes: [
+        { fileId: 'f1', timeSeconds: 0 },
+        { fileId: 'f2', timeSeconds: 5 },
+      ],
+    });
+  });
 
   it('rejects a key lacking ai:generate (403) before creating a job', async () => {
     validateWithScopes([ApiKeyScope.READ_FILES]);
@@ -101,7 +144,7 @@ describe('POST /api/v1/video-generations', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'video_generation', state: 'pending' });
     expect(h.createVideoJob).toHaveBeenCalledWith(
       {
-        user: { id: 'jwt-user', organizationId: null },
+        user: { id: 'jwt-user', organizationId: null, adminRoleWithheld: false },
         source: 'studio',
         request: {
           model: 'gemini-omni-1.1-flash',
@@ -122,6 +165,73 @@ describe('POST /api/v1/video-generations', () => {
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', input_image_file_id: 'f1' });
     await handler(req, res);
     expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ mode: 'image_to_video', inputImageFileId: 'f1' });
+    expect(h.createVideoJob.mock.calls[0][0].user.adminRoleWithheld).toBe(true);
+  });
+
+  it('maps role-tagged inputs to the domain and infers image_to_video from a first_frame', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({
+      model: 'test-video',
+      prompt: 'p',
+      inputs: [
+        { file_id: 'f1', role: 'first_frame' },
+        { file_id: 'r1', role: 'reference' },
+      ],
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    const { request } = h.createVideoJob.mock.calls[0][0];
+    expect(request).toMatchObject({
+      mode: 'image_to_video',
+      inputs: [
+        { role: 'first_frame', fileId: 'f1' },
+        { role: 'reference', fileId: 'r1' },
+      ],
+    });
+    expect(request).not.toHaveProperty('inputImageFileId');
+  });
+
+  it('keeps text_to_video when the inputs carry no first_frame', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [{ file_id: 'r1', role: 'reference' }] });
+    await handler(req, res);
+    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ mode: 'text_to_video' });
+  });
+
+  it('rejects inputs combined with input_image_file_id (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({
+      model: 'test-video',
+      prompt: 'p',
+      input_image_file_id: 'f1',
+      inputs: [{ file_id: 'f1', role: 'first_frame' }],
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'unexpected_input_image' });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { role: 'first_frame', generated_image_key: 'k.png' },
+    { role: 'first_frame', generatedImageKey: 'k.png' },
+    { role: 'first_frame', file_id: 'f1', generatedImageKey: 'k.png' },
+  ])('never takes a generated-image key in inputs (422) before the domain: %o', async input => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [input] });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects an input role the API does not define (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'test-video', prompt: 'p', inputs: [{ file_id: 'f1', role: 'mask' }] });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
   it('namespaces the Idempotency-Key per user and returns 202 on replay', async () => {
@@ -132,6 +242,15 @@ describe('POST /api/v1/video-generations', () => {
     expect(res._getStatusCode()).toBe(202);
     expect(h.createVideoJob.mock.calls[0][0].idempotencyKey).toBe('api:user-1:retry-1');
     expect(h.createVideoJob.mock.calls[0][0].source).toBe('api');
+  });
+
+  it('records the authenticating key on the job so its settlement is attributed to the key', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0].apiKeyId).toBe('k1');
   });
 
   it('the same Idempotency-Key from two org members reaches the domain under different keys', async () => {
@@ -147,8 +266,8 @@ describe('POST /api/v1/video-generations', () => {
     const keys = h.createVideoJob.mock.calls.map(call => call[0].idempotencyKey);
     expect(keys).toEqual(['api:member-a:shared', 'api:member-b:shared']);
     expect(h.createVideoJob.mock.calls.map(call => call[0].user)).toEqual([
-      { id: 'member-a', organizationId: 'org-1' },
-      { id: 'member-b', organizationId: 'org-1' },
+      { id: 'member-a', organizationId: 'org-1', adminRoleWithheld: true },
+      { id: 'member-b', organizationId: 'org-1', adminRoleWithheld: true },
     ]);
   });
 
@@ -159,7 +278,11 @@ describe('POST /api/v1/video-generations', () => {
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
     await handler(req, res);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
-    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: 'billing-org',
+      adminRoleWithheld: true,
+    });
   });
 
   describe('organization_id (the account switcher)', () => {
@@ -171,7 +294,9 @@ describe('POST /api/v1/video-generations', () => {
       validateWithScopes([ApiKeyScope.AI_GENERATE]);
       asUser('user-1', HOME_ORG);
       // The real resolver, so membership is decided by the shareable gate rather than the harness default.
-      const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+        '@bike4mind/server-utils/utils/orgAccess'
+      );
       h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
       h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
         id === MEMBER_ORG || id === HOME_ORG ? { id } : null
@@ -183,7 +308,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: MEMBER_ORG });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: MEMBER_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: MEMBER_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it('rejects an org the caller does not belong to (403) before the domain', async () => {
@@ -197,7 +326,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', organization_id: null });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: null,
+        adminRoleWithheld: true,
+      });
       expect(h.orgFindAccessibleById).not.toHaveBeenCalled();
     });
 
@@ -205,7 +338,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: HOME_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
@@ -238,12 +375,29 @@ describe('POST /api/v1/video-generations', () => {
       h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
     });
 
+    it('carries the key billing owner type to the job', async () => {
+      orgKey();
+      const first = post(base);
+      await handler(first.req, first.res);
+      expect(h.createVideoJob.mock.calls[0][0].apiKeyBillingOwnerType).toBe(CreditHolderType.Organization);
+
+      h.createVideoJob.mockClear();
+      validateWithScopes([ApiKeyScope.AI_GENERATE], 'user-1', { billingOwnerType: CreditHolderType.User });
+      const second = post(base);
+      await handler(second.req, second.res);
+      expect(h.createVideoJob.mock.calls[0][0].apiKeyBillingOwnerType).toBe(CreditHolderType.User);
+    });
+
     it('bills the key org when the body names none', async () => {
       orgKey();
       const { req, res } = post(base);
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it('bills the key org when the body names the same org', async () => {
@@ -251,7 +405,11 @@ describe('POST /api/v1/video-generations', () => {
       const { req, res } = post({ ...base, organization_id: KEY_ORG });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it.each([
@@ -278,7 +436,9 @@ describe('POST /api/v1/video-generations', () => {
     describe('without an org-billed key', () => {
       beforeEach(async () => {
         asUser('user-1', HOME_ORG);
-        const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+        const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+          '@bike4mind/server-utils/utils/orgAccess'
+        );
         h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
         h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
           id === HOME_ORG ? { id } : null
@@ -290,7 +450,11 @@ describe('POST /api/v1/video-generations', () => {
         const { req, res } = post(base);
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
 
@@ -299,7 +463,11 @@ describe('POST /api/v1/video-generations', () => {
         const { req, res } = post({ ...base, organization_id: HOME_ORG });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
       });
 
       it('keeps a session caller on the org the body names', async () => {
@@ -311,7 +479,11 @@ describe('POST /api/v1/video-generations', () => {
         });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'jwt-user', organizationId: HOME_ORG });
+        expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+          id: 'jwt-user',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: false,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
     });
@@ -324,7 +496,11 @@ describe('POST /api/v1/video-generations', () => {
     h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
     await handler(req, res);
-    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: null,
+      adminRoleWithheld: true,
+    });
   });
 
   it.each(['', 'x'.repeat(256), 'bad\u0001key'])('rejects Idempotency-Key %j with 422', async key => {
@@ -489,5 +665,80 @@ describe('GET /api/v1/video-generations', () => {
     await handler(req, res);
     expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ requestedBy: 'member-a' }));
     expect(h.listByRequester.mock.calls[0][0]).not.toHaveProperty('ownerId');
+  });
+});
+
+describe('POST /api/v1/video-generations with a completion run', () => {
+  beforeEach(resetHarness);
+  const RUN_ID = '0b6f3c1e-8a52-4c4e-9d55-3f0a6f2c7d11';
+  const runBody = { runId: RUN_ID, role: 'worker' as const, taskId: 'task-1' };
+  const attribution = { ...runBody, purpose: 'tool' as const };
+
+  it("bills the run's account and hands the run attribution to the domain", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockResolvedValueOnce({ attribution, billingOrganizationId: 'run-org' });
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, undefined);
+    expect(h.resolveBillingOrgId).not.toHaveBeenCalled();
+    const input = h.createVideoJob.mock.calls[0][0];
+    expect(input.user).toMatchObject({ id: 'user-1', organizationId: 'run-org' });
+    expect(input.run).toEqual(attribution);
+  });
+
+  it('passes organization_id to the run check, which refuses a different account (403)', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockRejectedValueOnce(
+      new ForbiddenError('This run bills a different account', { errorCode: 'billing_organization_mismatch' })
+    );
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', run: runBody, organization_id: null });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, null);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it("refuses another caller's run (404) before creating a job", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockRejectedValueOnce(new NotFoundError('Run not found', { errorCode: 'run_not_found' }));
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'run_not_found' });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('answers 422 run_budget_exhausted when the job does not fit the run', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockRejectedValue(
+      new UnprocessableEntityError('run budget used up', { errorCode: 'run_budget_exhausted' })
+    );
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'run_budget_exhausted' });
+  });
+
+  it('sends no run to the domain when none is given', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0]).not.toHaveProperty('run');
+  });
+
+  it('rejects a malformed run (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({
+      model: 'gemini-omni-1.1-flash',
+      prompt: 'p',
+      run: { runId: 'not-a-uuid', role: 'worker' },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 });

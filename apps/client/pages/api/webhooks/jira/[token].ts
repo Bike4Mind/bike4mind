@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 /**
@@ -7,6 +7,8 @@ initializeSlackPackage();
  * Receives Jira webhook events and routes them to Slack channels based on subscriptions.
  *
  * URL format: POST /api/webhooks/jira/{routingToken}
+ * The token is in the path because the URL is registered with Jira; it is redacted from request
+ * logs (server/middlewares/requestLogUrl.ts).
  *
  * Security-critical processing order (sync):
  * 1. Extract routing token from URL
@@ -18,6 +20,7 @@ initializeSlackPackage();
  *
  * Async processing:
  * - Apply subscription filters (project, priority, issue type)
+ * - Check the subscriber can view the event's issue or board in Jira
  * - Format Slack message
  * - POST to Slack webhook URL
  * - Record delivery status
@@ -26,7 +29,7 @@ initializeSlackPackage();
 import { NextApiRequest, NextApiResponse } from 'next';
 import { randomUUID } from 'crypto';
 import { Logger } from '@bike4mind/observability';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import {
   // Entity types
   IJiraWebhookSubscriptionDocument,
@@ -49,7 +52,7 @@ import {
   jiraWebhookDeliveryRepository,
 } from '@bike4mind/database';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { SlackClient, resolveNotificationDestination } from '@bike4mind/slack';
 import {
   verifyJiraSignature,
@@ -58,6 +61,7 @@ import {
   validateJiraPayloadTimestamp,
 } from '@server/integrations/jira/webhookUtils';
 import { WebhookProcessingResult, extractIssueInfo, matchesFilters } from '@server/integrations/jira/types';
+import { canSubscriberViewJiraEvent } from '@server/integrations/jira/subscriberAccess';
 
 /** Consecutive failed deliveries after which a subscription is auto-disabled. */
 const JIRA_AUTO_DISABLE_FAILURE_THRESHOLD = 10;
@@ -375,7 +379,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
 
     let webhookSecret: string;
     try {
-      webhookSecret = decryptSecret(jiraWebhookConfig.secret, encryptionKey);
+      webhookSecret = decryptStoredSecret(jiraWebhookConfig.secret);
     } catch (decryptError) {
       logger.error('[JIRA-WEBHOOK] Failed to decrypt webhook secret', {
         configId: jiraWebhookConfig.id,
@@ -397,7 +401,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       const expiresAt = new Date(jiraWebhookConfig.previousSecretExpiresAt);
       if (expiresAt > new Date()) {
         try {
-          const previousSecret = decryptSecret(jiraWebhookConfig.previousSecret, encryptionKey);
+          const previousSecret = decryptStoredSecret(jiraWebhookConfig.previousSecret);
           const previousResult = verifyJiraSignature(rawBody, signature, previousSecret);
           if (previousResult.valid) {
             signatureResult = previousResult;
@@ -514,6 +518,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     // Capture config values for use in async closure
     const webhookConfigId = jiraWebhookConfig.id;
     const atlassianSiteUrl = jiraWebhookConfig.atlassianSiteUrl;
+    const accessConfig = {
+      atlassianCloudId: jiraWebhookConfig.atlassianCloudId,
+      createdBy: jiraWebhookConfig.createdBy,
+    };
 
     // Process each subscription (fire and forget - don't block response)
     const processSubscriptions = async () => {
@@ -536,6 +544,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
                 await recordDelivery(subscription, JiraWebhookDeliveryStatus.Filtered, 'Issue does not match filters');
                 return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Filtered };
               }
+            }
+
+            const canView = await canSubscriberViewJiraEvent({
+              subscriberUserId: subscription.userId,
+              config: accessConfig,
+              payload,
+            });
+            if (!canView) {
+              await recordDelivery(
+                subscription,
+                JiraWebhookDeliveryStatus.Filtered,
+                'Subscriber cannot view this Jira content'
+              );
+              return { subscriptionId: subscription.id, status: JiraWebhookDeliveryStatus.Filtered };
             }
 
             let botToken: string;

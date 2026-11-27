@@ -1,5 +1,5 @@
 import { Box, Chip, Sheet, Stack, Typography } from '@mui/joy';
-import type { WafRangeInput, WafTopBlockedRulesSeries } from '@/server/security/wafTraffic';
+import type { WafRangeInput, WafTopBlockedRulesSeries } from '@bike4mind/server-utils/security/wafTraffic';
 import { formatRangeLabel } from './wafRangeLabel';
 
 interface WafTopRulesChartProps {

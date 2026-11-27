@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 import { resolveNotificationDestination } from '@bike4mind/slack';
 initializeSlackPackage();
 
@@ -8,7 +8,6 @@ import { User, Session, Agent, Project } from '@bike4mind/database';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 const KeywordRoutingRuleSchema = z.object({
   keywords: z
@@ -70,27 +69,43 @@ const handler = baseApi()
       try {
         const slackSettings = SlackSettingsSchema.parse(req.body);
 
+        // An id the user did not change that no longer resolves (deleted, access lost) is dropped
+        // and reported instead of blocking the save. New or changed ids are still refused.
+        const storedUser = await User.findById(userId).select('slackSettings');
+        const stored = storedUser?.slackSettings ?? {};
+        const removed: Array<{ field: string; id: string }> = [];
+
         // Validate and sanitize keyword routing rules
         if (slackSettings.keywordRouting && slackSettings.keywordRouting.length > 0) {
           const notebookIds = slackSettings.keywordRouting.map(rule => rule.notebookId);
           const uniqueNotebookIds = Array.from(new Set(notebookIds));
+          const queryableNotebookIds = uniqueNotebookIds.filter(id => isValidObjectId(id));
 
           // Verify all notebooks exist and belong to the user
-          const notebooks = await Session.find({
-            _id: { $in: uniqueNotebookIds },
-            userId: userId,
-            deletedAt: { $exists: false },
-          }).select('_id');
+          const notebooks =
+            queryableNotebookIds.length > 0
+              ? await Session.find({
+                  _id: { $in: queryableNotebookIds },
+                  userId: userId,
+                  deletedAt: { $exists: false },
+                }).select('_id')
+              : [];
 
           const validNotebookIds = new Set(notebooks.map((n: { _id: { toString: () => string } }) => n._id.toString()));
 
+          const storedKeywordIds = new Set((stored.keywordRouting ?? []).map(rule => rule.notebookId));
+          const staleIds = new Set<string>();
           for (const notebookId of uniqueNotebookIds) {
-            if (!validNotebookIds.has(notebookId)) {
+            if (validNotebookIds.has(notebookId)) continue;
+            if (!storedKeywordIds.has(notebookId)) {
               return res.status(400).json({
                 error: `Notebook ${notebookId} not found or does not belong to you`,
               });
             }
+            staleIds.add(notebookId);
+            removed.push({ field: 'keywordRouting', id: notebookId });
           }
+          slackSettings.keywordRouting = slackSettings.keywordRouting.filter(rule => !staleIds.has(rule.notebookId));
 
           // Sanitize keywords: lowercase and trim whitespace
           slackSettings.keywordRouting = slackSettings.keywordRouting.map(rule => ({
@@ -100,65 +115,82 @@ const handler = baseApi()
 
           // Filter out rules with empty keywords after sanitization
           slackSettings.keywordRouting = slackSettings.keywordRouting.filter(rule => rule.keywords.length > 0);
+          if (slackSettings.keywordRouting.length === 0) delete slackSettings.keywordRouting;
         }
 
         // Validate defaultNotebookId ownership (mirror keywordRouting above). This value is
         // later dereferenced by Slack handlers (/notebook status, quick-ask routing) with no
-        // ownership re-check, so a foreign notebook id must be rejected at write time.
+        // ownership re-check, so a new or changed foreign notebook id must be rejected at write time.
         if (slackSettings.defaultNotebookId) {
-          if (!isValidObjectId(slackSettings.defaultNotebookId)) {
+          const id = slackSettings.defaultNotebookId;
+          const unchanged = id === stored.defaultNotebookId;
+          if (!isValidObjectId(id) && !unchanged) {
             return res.status(400).json({ error: 'Invalid notebook ID format' });
           }
-          const notebook = await Session.findOne({
-            _id: slackSettings.defaultNotebookId,
-            userId,
-            deletedAt: { $exists: false },
-          }).select('_id');
+          const notebook =
+            isValidObjectId(id) &&
+            (await Session.findOne({ _id: id, userId, deletedAt: { $exists: false } }).select('_id'));
 
           if (!notebook) {
-            return res.status(400).json({ error: 'Default notebook not found or does not belong to you' });
+            if (!unchanged) {
+              return res.status(400).json({ error: 'Default notebook not found or does not belong to you' });
+            }
+            removed.push({ field: 'defaultNotebookId', id });
+            delete slackSettings.defaultNotebookId;
           }
         }
 
         // Same ownership rule for per-agent routing targets. Explicitly configured targets must be owned;
         // the runtime resolveAccessibleNotebookId is more lenient only because lastNotebookId is auto-set.
-        for (const notebookId of Object.values(slackSettings.agentNotebookRouting ?? {})) {
+        const agentRouting: Record<string, string | undefined> = slackSettings.agentNotebookRouting ?? {};
+        const storedAgentRouting: Record<string, string | undefined> = stored.agentNotebookRouting ?? {};
+        for (const [key, notebookId] of Object.entries(agentRouting)) {
           if (!notebookId) continue;
-          if (!isValidObjectId(notebookId)) {
+          const unchanged = notebookId === storedAgentRouting[key];
+          if (!isValidObjectId(notebookId) && !unchanged) {
             return res.status(400).json({ error: 'Invalid notebook ID format' });
           }
-          const notebook = await Session.findOne({
-            _id: notebookId,
-            userId,
-            deletedAt: { $exists: false },
-          }).select('_id');
+          const notebook =
+            isValidObjectId(notebookId) &&
+            (await Session.findOne({ _id: notebookId, userId, deletedAt: { $exists: false } }).select('_id'));
 
           if (!notebook) {
-            return res.status(400).json({ error: 'Agent routing notebook not found or does not belong to you' });
+            if (!unchanged) {
+              return res.status(400).json({ error: 'Agent routing notebook not found or does not belong to you' });
+            }
+            removed.push({ field: `agentNotebookRouting.${key}`, id: notebookId });
+            delete agentRouting[key];
           }
         }
 
         // Validate defaultProjectId access (owner or member, mirroring the customAgentId check).
         if (slackSettings.defaultProjectId) {
-          if (!isValidObjectId(slackSettings.defaultProjectId)) {
+          const id = slackSettings.defaultProjectId;
+          const unchanged = id === stored.defaultProjectId;
+          if (!isValidObjectId(id) && !unchanged) {
             return res.status(400).json({ error: 'Invalid project ID format' });
           }
-          const project = await Project.findOne({
-            _id: slackSettings.defaultProjectId,
-            $or: [{ userId }, { 'users.userId': userId }],
-            deletedAt: { $exists: false },
-          }).select('_id');
+          const project =
+            isValidObjectId(id) &&
+            (await Project.findOne({
+              _id: id,
+              $or: [{ userId }, { 'users.userId': userId }],
+              deletedAt: { $exists: false },
+            }).select('_id'));
 
           if (!project) {
-            return res.status(400).json({ error: 'Default project not found or not accessible' });
+            if (!unchanged) {
+              return res.status(400).json({ error: 'Default project not found or not accessible' });
+            }
+            removed.push({ field: 'defaultProjectId', id });
+            delete slackSettings.defaultProjectId;
           }
         }
 
         if (slackSettings.slackUserId) {
-          const linkedUser = await User.findById(userId).select('slackSettings');
           // Only the OAuth callback may write a Slack identity, so a submitted id that differs
           // from the stored one is a manual claim and is refused.
-          if (linkedUser?.slackSettings?.slackUserId !== slackSettings.slackUserId) {
+          if (stored.slackUserId !== slackSettings.slackUserId) {
             return res.status(400).json({ error: 'Use Connect with Slack to verify your Slack identity' });
           }
         }
@@ -183,18 +215,26 @@ const handler = baseApi()
 
         // Validate custom agent exists and is accessible to user
         if (slackSettings.customAgentId) {
-          if (!isValidObjectId(slackSettings.customAgentId)) {
-            throw new BadRequestError('Invalid agent ID format');
+          const id = slackSettings.customAgentId;
+          const unchanged = id === stored.customAgentId;
+          if (!isValidObjectId(id) && !unchanged) {
+            return res.status(400).json({ error: 'Invalid agent ID format' });
           }
 
-          const agent = await Agent.findOne({
-            _id: slackSettings.customAgentId,
-            $or: [{ userId }, { 'users.userId': userId }],
-            deletedAt: { $exists: false },
-          });
+          const agent =
+            isValidObjectId(id) &&
+            (await Agent.findOne({
+              _id: id,
+              $or: [{ userId }, { 'users.userId': userId }],
+              deletedAt: { $exists: false },
+            }));
 
           if (!agent) {
-            throw new BadRequestError('Selected custom agent not found or not accessible');
+            if (!unchanged) {
+              return res.status(400).json({ error: 'Selected custom agent not found or not accessible' });
+            }
+            removed.push({ field: 'customAgentId', id });
+            delete slackSettings.customAgentId;
           }
         }
 
@@ -238,9 +278,11 @@ const handler = baseApi()
         }
 
         Logger.info(`Updated Slack settings for user ${userId}`);
+        if (removed.length > 0) Logger.warn('Dropped stale Slack settings references', { userId, removed });
         return res.json({
           message: 'Slack settings updated successfully',
           slackSettings: updatedUser.slackSettings,
+          ...(removed.length > 0 && { removed }),
         });
       } catch (error) {
         if (error instanceof z.ZodError) {

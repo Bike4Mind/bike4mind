@@ -1,5 +1,6 @@
-import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
+import { memo, useMemo, type ComponentProps } from 'react';
 import Box from '@mui/joy/Box';
+import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -7,7 +8,11 @@ import rehypeSanitize from 'rehype-sanitize';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import type { ChatImageRef } from '@shared/chat';
+import { BLOCK_COPY_BUTTON_CLASS, CopyMessageButton } from '../CopyMessageButton';
+import { ExternalLink } from '../ExternalLink';
+import { FilePathLink } from '../FilePathLink';
 import { useImageMenu } from '../ImageContextMenu';
+import { FILE_PATH_PROPERTY, rehypeFilePaths } from './filePaths';
 import { fastRenderer } from './highlightElements';
 import { codeBlockSx, markdownSx } from './markdownSx';
 import { closeOpenFence } from './streamingMarkdown';
@@ -26,11 +31,28 @@ import { SYNTAX_THEMES } from './syntaxTheme';
  * buys nothing that markdown does not already say. rehype-sanitize is kept behind that as the
  * second lock rather than the only one; its default schema is also what preserves the
  * `language-*` class on a fence, which is what the highlighter reads the language from.
+ *
+ * rehypeFilePaths runs after the sanitizer, which would strip the attribute it adds.
  */
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
-const REHYPE_PLUGINS = [rehypeSanitize];
+const REHYPE_PLUGINS = [rehypeSanitize, rehypeFilePaths];
 
 type CodeProps = ComponentProps<'code'> & ExtraProps;
+
+/** What a fence with no language hint is highlighted as; it earns no label. */
+const UNKNOWN_LANGUAGE = 'text';
+
+/**
+ * The toolbar as a whole is what hides, background included: hidden, it would still paint over
+ * the end of the first line and catch clicks there. It stays up while the copy button is
+ * reporting an outcome, as revealCopyButtonSx keeps a message's button up.
+ */
+const TOOLBAR_CLASS = 'b4m-codeblock-toolbar';
+const revealToolbarSx = {
+  [`& .${TOOLBAR_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
+  [`&:hover .${TOOLBAR_CLASS}, &:focus-within .${TOOLBAR_CLASS}, & .${TOOLBAR_CLASS}:has([data-state]:not([data-state="idle"]))`]:
+    { opacity: 1, pointerEvents: 'auto' },
+} as const;
 
 /**
  * One fenced block, highlighted.
@@ -50,17 +72,52 @@ const CodeBlock = memo(function CodeBlock({
   mode: 'light' | 'dark';
 }) {
   return (
-    <Box sx={codeBlockSx} data-testid="chat-markdown-code-block" data-language={language}>
-      {/* wrapLines stays off as it was: passing a renderer would otherwise switch it on. */}
-      <SyntaxHighlighter
-        language={language}
-        style={SYNTAX_THEMES[mode]}
-        PreTag="div"
-        renderer={fastRenderer}
-        wrapLines={false}
+    // The toolbar sits outside the scroller so it stays put while a long line scrolls under it.
+    <Box sx={{ position: 'relative', my: 1.5, ...revealToolbarSx }}>
+      <Box sx={codeBlockSx} data-testid="chat-markdown-code-block" data-language={language}>
+        {/* wrapLines stays off as it was: passing a renderer would otherwise switch it on. */}
+        <SyntaxHighlighter
+          language={language}
+          style={SYNTAX_THEMES[mode]}
+          PreTag="div"
+          renderer={fastRenderer}
+          wrapLines={false}
+        >
+          {code}
+        </SyntaxHighlighter>
+      </Box>
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 4,
+          right: 4,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 0.5,
+          borderRadius: 'sm',
+          // Over the code it covers, so the label never reads as part of the code.
+          bgcolor: 'background.level1',
+        }}
+        className={TOOLBAR_CLASS}
+        data-testid="reply-codeblock-toolbar"
       >
-        {code}
-      </SyntaxHighlighter>
+        {language !== UNKNOWN_LANGUAGE && (
+          <Typography
+            level="body-xs"
+            textColor="text.tertiary"
+            sx={{ pl: 0.75 }}
+            data-testid="reply-codeblock-language"
+          >
+            {language}
+          </Typography>
+        )}
+        <CopyMessageButton
+          text={code}
+          label="Copy code"
+          className={BLOCK_COPY_BUTTON_CLASS}
+          testId="reply-codeblock-copy-btn"
+        />
+      </Box>
     </Box>
   );
 });
@@ -106,32 +163,24 @@ function buildComponents(mode: 'light' | 'dark'): Components {
           </code>
         );
       }
-      const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? 'text';
-      return <CodeBlock code={String(children).replace(/\n$/, '')} language={language} mode={mode} />;
+      const language = /language-(\w+)/.exec(className ?? '')?.[1] ?? UNKNOWN_LANGUAGE;
+      // An empty fence has no children at all.
+      return <CodeBlock code={String(children ?? '').replace(/\n$/, '')} language={language} mode={mode} />;
     },
 
     img: ({ node: _node, ...props }) => <MarkdownImage {...props} />,
 
-    /**
-     * A link leaves for the user's browser and never navigates this window.
-     *
-     * Following it in place would replace the app - and the bridge the renderer is holding -
-     * with whatever page the model named. `target="_blank"` is not the answer either: that
-     * still asks Electron to open a window, it just asks for a different one. The href stays
-     * on the anchor so the link reads and copies as a link; the click is what is redirected.
-     */
-    a: ({ href, children, ...props }) => (
-      <a
-        {...props}
-        href={href}
-        data-testid="chat-markdown-link"
-        onClick={(event: MouseEvent<HTMLAnchorElement>) => {
-          event.preventDefault();
-          if (href) void window.b4m.shell.openExternal(href);
-        }}
-      >
-        {children}
-      </a>
+    // A reply cannot write a span (raw HTML is never parsed, see above), so this is rehypeFilePaths' marker.
+    span({ node, children, ...props }) {
+      const path = node?.properties?.[FILE_PATH_PROPERTY];
+      if (typeof path === 'string') return <FilePathLink path={path}>{children}</FilePathLink>;
+      return <span {...props}>{children}</span>;
+    },
+
+    // The same link a prompt draws, so the two open, and look, the same way. Bare urls arrive
+    // here as links too: remark-gfm's autolink literals turn them into ordinary `a` nodes.
+    a: ({ node: _node, ref: _ref, target: _target, ...props }) => (
+      <ExternalLink {...props} testId="chat-markdown-link" />
     ),
   };
 }

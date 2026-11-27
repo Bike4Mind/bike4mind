@@ -1,0 +1,224 @@
+import {
+  ABUSE_SUSPENSION_REASONS,
+  ADMIN_ACTION_REASON_MAX_LENGTH,
+  ADMIN_ACTION_REASON_MIN_LENGTH,
+  isValidAdminActionReason,
+} from '@bike4mind/common';
+
+/**
+ * Preset reasons per audited action. A preset alone is a complete reason, so every label must
+ * satisfy the shared `adminActionReason` rule unchanged; `adminReason.test.ts` pins that against
+ * the server's `parseAdminActionReason`.
+ */
+export const ADMIN_REASON_PRESETS = {
+  subscriptionCancel: ['Customer request', 'Billing dispute', 'Duplicate subscription', 'Account closure'],
+  subscriptionResume: ['Customer changed their mind', 'Canceled in error', 'Customer request'],
+  creditAdjustment: ['Goodwill credit', 'Refund', 'Support request', 'Abuse / automated signups'],
+  // The abuse presets also grade the account's open shadow detections confirmed abuse.
+  suspension: [...ABUSE_SUSPENSION_REASONS, 'Customer request'],
+  reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
+  restriction: ['Abuse / automated signups', 'Suspicious usage', 'Terms violation', 'Under investigation'],
+  limitedTier: ['Abuse / automated signups', 'Suspicious usage', 'Under investigation'],
+  limitedTierLift: ['Reviewed, not abusive', 'Appeal accepted', 'Applied in error'],
+  emailVerification: ['Ownership confirmed by support', 'Bounced or invalid address', 'Internal testing'],
+  emailManualVerify: ['Ownership confirmed by support', 'Internal testing'],
+  feedbackDeletion: ['Spam or abuse', 'Duplicate report', 'Test submission'],
+  profileEdit: ['Customer request', 'Correcting a typo', 'Account recovery, identity verified'],
+  apiKeyTrust: ['Known integration', 'Partner access', 'Suspicious usage'],
+  newAccountSpendCap: ['Verified customer', 'Known high-volume user', 'Suspicious usage'],
+  fileEmbeddingWindowReset: [
+    'Re-indexing after a support request',
+    'Window spent by a failed import',
+    'Internal testing',
+  ],
+  partnerAccount: ['Partner or reseller', 'Contractor or integration partner', 'Marked in error'],
+  internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
+  apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
+  apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  sreTrackingDismiss: ['Known bug', 'Testing', 'Fixed outside the SRE pipeline'],
+  apiKeyModerationException: [
+    'Approved security research',
+    'Violence-related content is core to the product',
+    'Exception no longer needed',
+  ],
+  apiKeyAdminScope: ['Partner integration', 'Internal service', 'Requested by the account owner'],
+  embedKeyRevoke: ['Compromised or leaked key', 'Site no longer embeds the agent', 'Customer request'],
+  publishedPageTakedown: [
+    'Harmful or abusive content',
+    'Phishing or impersonation',
+    'Copyright or trademark claim',
+    'Spam or junk content',
+  ],
+  appFileDelete: ['Outdated or replaced file', 'Uploaded in error', 'No longer used on the site'],
+  publishedPageRestore: ['Report reviewed, not a violation', 'Taken down in error', 'Appeal accepted'],
+  accountTags: ['Account review', 'Support request', 'Internal testing'],
+  orgSegment: ['Pilot or partner access', 'Internal testing', 'Marked in error'],
+  orgGroupTypes: ['Pilot or partner access', 'Plan change', 'Support request'],
+  rateLimitReset: ['Support request', 'Key locked out', 'Counter correction'],
+  productAccess: ['Pilot or partner access', 'Plan change', 'Support request'],
+  systemMessage: ['Account notice', 'Support follow-up', 'Policy warning'],
+  rolePermissionsChange: ['Role scope updated for new duties', 'Role change on the team', 'Least-privilege cleanup'],
+  permissionsChange: ['Joined the support rotation', 'Role change on the team', 'Access no longer needed'],
+  roleChange: ['Joined the admin team', 'Left the admin team', 'Temporary on-call access'],
+  subscriptionGrant: ['Pilot or partner access', 'Billing correction', 'Goodwill grant', 'Internal testing'],
+  userDeletion: ['User requested deletion', 'Spam or bot account', 'Terms of service violation', 'Duplicate account'],
+  deletionVerification: ['Request sent from the email on file', 'Confirmed by reply from the email on file'],
+  deletionCancel: ['User asked to cancel, identity verified', 'Scheduled in error'],
+  dataSubjectExport: [
+    'Access request from the user (GDPR Art. 15)',
+    'Portability request from the user (GDPR Art. 20)',
+    'Request from a legal authority',
+  ],
+  dataSubjectErasure: [
+    'Erasure request from the user (GDPR Art. 17)',
+    'Request from a legal authority',
+    'Consent withdrawn by the user',
+  ],
+  mfaReset: ['Lost authenticator, identity verified', 'New device, identity verified'],
+  sessionRevoke: ['Compromised account', 'Lost or stolen device', 'Suspicious sign-in', 'User request'],
+  impersonation: ['Reproduce a reported bug', 'Investigate a support ticket', 'Check account configuration'],
+  waitlistInvite: [
+    'Approved from the waitlist queue',
+    'Pilot or partner access',
+    'Sales-approved trial',
+    'Internal testing',
+  ],
+  organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
+  grantPackage: [
+    'Pilot or partner access',
+    'Sales-approved campaign',
+    'Event or conference signups',
+    'Internal testing',
+  ],
+  signupGrantBlock: ['Abuse / automated signups', 'Credit farming', 'Suspicious usage', 'Under investigation'],
+  signupGrantUnblock: ['Reviewed, not abusive', 'Blocked in error', 'Appeal accepted'],
+  signupGrantRelease: ['Goodwill grant', 'Support request', 'Verified customer', 'Internal testing'],
+  bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
+  bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
+  compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],
+  subscriptionSync: [
+    'Webhook missed or failed',
+    'Seats out of sync with billing',
+    'Billing correction',
+    'Mismatch review',
+  ],
+  creditRateChange: ['Plan change', 'Goodwill adjustment', 'Billing correction', 'Customer request'],
+  subscriptionRemove: ['Duplicate record', 'Comp no longer needed', 'Test or internal record', 'Billing correction'],
+  seatChange: ['Customer request', 'Team size changed', 'Seats out of sync with billing', 'Billing correction'],
+  paidConversion: ['Trial converting to paid', 'Customer request', 'Sales-approved conversion'],
+  orgMembership: ['Customer request', 'Joined the team', 'Left the team', 'Account cleanup'],
+  homeOrgClear: ['Customer request', 'Billed to the wrong org', 'Service account setup', 'Account cleanup'],
+  orgRoleChange: ['Customer request', 'Owner request', 'Team lead changed'],
+  ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
+  ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
+  signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
+  stripeDisputeResolve: [
+    'Handled in Stripe',
+    'Organization billing contact resolved it',
+    'Duplicate of another dispute',
+  ],
+  spendFreeze: ['Abnormal spend spike', 'Suspected abuse', 'Requested by account owner'],
+  spendFreezeLift: ['Reviewed: spend is legitimate', 'Account owner contacted', 'Resolved with account owner'],
+  stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
+  signupRiskReopen: ['Evidence needs a manual look', 'Linked to known abuse', 'Payment disputed or refunded'],
+  shadowDetectionVerdict: [
+    'Reviewed account activity',
+    'Matches a known abuse pattern',
+    'Known customer or integration',
+    'Not enough data to decide',
+  ],
+  oauthClientRotate: ['Compromised or leaked secret', 'Routine rotation', 'Requested by the app owner'],
+  oauthClientDeactivate: [
+    'App retired',
+    'Compromised or leaked secret',
+    'Suspicious usage',
+    'Requested by the app owner',
+  ],
+  identityProviderDelete: ['Replaced by another provider', 'Domain no longer uses single sign-on', 'Created in error'],
+  platformMcpConnectorRemove: ['No longer needed', 'Server retired', 'Replaced by another connector', 'Added in error'],
+  partnerSignupRule: ['Partner agreement ended', 'Created in error', 'Replaced by another rule', 'Account cleanup'],
+  partnerBackfill: ['Partner onboarding', 'Organization request', 'Rule added after signups', 'Internal testing'],
+  signupDomainHoldRelease: ['Reviewed, domain is legitimate', 'Known customer or partner', 'Domain has aged'],
+  signupDomainHoldConfirm: ['Reviewed, domain is abusive', 'Matches a known abuse pattern', 'Under investigation'],
+  heldSignupGrantRevoke: ['Abuse / automated signups', 'Credit farming', 'Granted in error'],
+  tutorialDraftDelete: ['Superseded by a newer draft', 'Captured in error', 'No longer needed'],
+  knowledgeFileRemoval: ['File no longer needed', 'Outdated instructions', 'Missing file reference'],
+  slackWorkspaceDeactivate: ['Workspace no longer used', 'Customer request', 'Bot misbehaving', 'Security concern'],
+  slackExportCancel: ['Started by mistake', 'Wrong channel or date range', 'Taking too long'],
+  githubDisconnect: [
+    'Switching to a new connection',
+    'Credentials compromised or leaked',
+    'Connection no longer needed',
+  ],
+  githubKeyRotate: ['Routine rotation', 'Key compromised or leaked', 'Key about to expire'],
+  githubRepoAccess: ['Pausing GitHub automation', 'Repository access under review', 'Security incident'],
+  modelAccess: [
+    'Ready for users',
+    'Limit to a test group',
+    'Provider issue',
+    'Cost control',
+    'Replaced by a newer model',
+  ],
+  modelLifecycleAccept: [
+    'Confirmed on the vendor page',
+    'Successor checked against the vendor page',
+    'Provider announced the deprecation',
+    'Experimental or early-access model',
+    'Confirmed with the provider',
+  ],
+  modelLifecycleDismiss: [
+    'Provider signal is wrong',
+    'Model is still supported',
+    'Experimental or early-access model',
+    'Duplicate of another suggestion',
+  ],
+  dlqDiscard: ['Account refused', 'Job obsolete', 'Fixed with no replay needed', 'Bad payload', 'Other'],
+  // Moderation review reasons name the review step, never what the image shows.
+  moderationNoAction: ['Reviewed against the content policy', 'Agreed with the second reviewer'],
+  moderationFalsePositive: [
+    'Reviewed against the content policy',
+    'Known classifier mistake',
+    'Agreed with the second reviewer',
+  ],
+  moderationManualReport: ['Report filed on the web form', 'Filed after the second review'],
+  moderationEscalation: ['Needs a second opinion', 'Unsure which verdict applies', 'Outside my review remit'],
+  modalDelete: ['Outdated announcement', 'Created in error', 'Replaced by a newer modal'],
+} as const satisfies Record<string, readonly string[]>;
+
+export type AdminReasonPresetKey = keyof typeof ADMIN_REASON_PRESETS;
+
+export type AdminReasonDraft = { preset: string | null; note: string };
+
+export const EMPTY_ADMIN_REASON: AdminReasonDraft = { preset: null, note: '' };
+
+/** The reason an Accept on an AiSuggestion prefills; the admin can still edit it before applying. */
+export const ACCEPTED_AI_REASON: AdminReasonDraft = { preset: null, note: 'Accepted AI suggestion' };
+
+export const adminReasonHint = (minLength = ADMIN_ACTION_REASON_MIN_LENGTH): string =>
+  minLength <= 1 ? 'Pick a reason or write one.' : `Pick a reason or write at least ${minLength} characters.`;
+
+export const ADMIN_REASON_HINT = adminReasonHint();
+
+const PRESET_SEPARATOR = ': ';
+
+/** The audited reason string: "Preset: note" when both are given, otherwise whichever is set. */
+export const composeAdminReason = ({ preset, note }: AdminReasonDraft): string => {
+  const trimmedNote = note.trim();
+  if (!preset) return trimmedNote;
+  return trimmedNote ? `${preset}${PRESET_SEPARATOR}${trimmedNote}` : preset;
+};
+
+/** The reason an undo carries: the original one, marked, and still within the shared maximum. */
+export const undoAdminReason = (reason: string): string => `Undo: ${reason}`.slice(0, ADMIN_ACTION_REASON_MAX_LENGTH);
+
+/** `minLength` is for an endpoint whose own reason rule is looser than the shared one; omit it otherwise. */
+export const isAdminReasonComplete = (draft: AdminReasonDraft, minLength?: number): boolean => {
+  const reason = composeAdminReason(draft);
+  if (minLength === undefined) return isValidAdminActionReason(reason);
+  const length = reason.trim().length;
+  return length >= minLength && length <= ADMIN_ACTION_REASON_MAX_LENGTH;
+};
+
+/** Longest note that still keeps the composed reason within the shared maximum. */
+export const maxAdminReasonNoteLength = (preset: string | null): number =>
+  preset ? ADMIN_ACTION_REASON_MAX_LENGTH - preset.length - PRESET_SEPARATOR.length : ADMIN_ACTION_REASON_MAX_LENGTH;

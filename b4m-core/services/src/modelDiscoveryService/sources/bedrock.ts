@@ -1,5 +1,10 @@
-import { LIFECYCLE_SUNSET_STATUSES, ModelBackend, bedrockFoundationIdOf, type ModelRecord } from '@bike4mind/common';
-import { limitConcurrency } from '../concurrency';
+import {
+  LIFECYCLE_SUNSET_STATUSES,
+  ModelBackend,
+  bedrockFoundationIdOf,
+  type ModelRecord,
+  limitConcurrency,
+} from '@bike4mind/common';
 import type {
   DiscoveredModel,
   DiscoveryCredentials,
@@ -65,6 +70,10 @@ export interface BedrockControlPlane {
 
 /** Matches the run's source concurrency cap; ~300 serial round trips would blow the deadline. */
 export const BEDROCK_AVAILABILITY_CONCURRENCY = 4;
+
+/** The disable reasons this source writes; the admin model list maps them to its reasons (adminModelList.ts). */
+export const BEDROCK_NOT_ENTITLED_REASON = 'not entitled in this AWS account';
+export const BEDROCK_NOT_ON_DEMAND_REASON = 'not invocable on demand; use its region-prefixed inference profile id';
 
 const LIFECYCLE_STATUS: Readonly<Record<string, NonNullable<ModelRecord['lifecycle']>['status']>> = {
   ACTIVE: 'active',
@@ -223,9 +232,9 @@ function readBedrock({ summaries, availability, catalogModelIds }: BedrockFacts)
           autoDisabled:
             unauthorized || notOnDemand ? true : isConfirmedInvocable(summary, entitlement) ? false : undefined,
           autoDisabledReason: unauthorized
-            ? 'not entitled in this AWS account'
+            ? BEDROCK_NOT_ENTITLED_REASON
             : notOnDemand
-              ? 'not invocable on demand; use its region-prefixed inference profile id'
+              ? BEDROCK_NOT_ON_DEMAND_REASON
               : undefined,
         }),
       })

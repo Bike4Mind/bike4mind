@@ -4,7 +4,7 @@ import type { PromptScenario } from './ai-latency-helpers';
 
 createAiLatencySuite({
   prompts: config.prompts as PromptScenario[],
-  describeLabel: 'Run 3 simple prompts with expected longer answers',
+  describeLabel: 'Run simple prompts with expected longer answers',
   timeoutMultiplier: 8,
   thresholdSec: config.thresholdSec,
   resultsFilename: 'ai-latency-long-answers-results.json',

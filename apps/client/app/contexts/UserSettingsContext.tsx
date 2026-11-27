@@ -1,8 +1,10 @@
 import {
+  DEFAULT_PROMPT_CACHE_TTL,
   IAdminSettings,
   IUserPreferences,
   redactSettingSecretsForBroadcast,
   type AdminSettingDoc,
+  type PromptCacheTtl,
 } from '@bike4mind/common';
 import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
@@ -23,10 +25,10 @@ import { useUser } from './UserContext';
 import { updateUserToServer } from '../utils/userAPICalls';
 import { useLanguage } from './TranslationProvider';
 import { useSettingsFromServer } from '../hooks/data/settings';
+import { handleModelListRevisionSetting, watchModelListArrivals } from '../hooks/data/modelListRevision';
+import { handleModelAccessRevisionSetting, watchModelAccessArrivals } from '../hooks/data/modelAccessRevision';
 
 export type ExperimentalFeature =
-  | 'enableQuestMaster'
-  | 'enableQuestMasterV5'
   | 'enableMementos'
   | 'enableMementosV2'
   | 'enableArtifacts'
@@ -36,7 +38,6 @@ export type ExperimentalFeature =
   | 'enableDeepResearch'
   | 'enableRapidReply'
   | 'enableResearchEngine'
-  | 'enableBmPi'
   | 'enableLattice'
   | 'enableBriefcase'
   | 'enableHearth'
@@ -62,12 +63,32 @@ export interface UserSettings {
   agentModeDefault: 'off' | 'auto' | 'on';
   showFunTools: boolean;
   showSplashCards: boolean;
+  desktopPromoDismissed: boolean;
+  /** Prompt-cache lifetime for chats that have not picked their own. */
+  promptCacheTtl: PromptCacheTtl;
+}
+
+/** What a preference save reports back beyond the stored preferences. */
+export interface PreferencesSaveResult {
+  /** Present when the save ran the telemetry opt-out deletion; `verified` is false when data may remain. */
+  telemetryDeletion?: { verified: boolean; remainingCount?: number };
+}
+
+export interface UpdatePreferencesOptions {
+  /** Run the telemetry opt-out deletion with this save even when the level is already `none`. */
+  rerunTelemetryDeletion?: boolean;
 }
 
 interface UserSettingsContextProps {
   settings: UserSettings;
-  /** Update local state optimistically and persist to the server. Single source of truth. */
-  updatePreferences: (diff: Partial<IUserPreferences>) => void;
+  /**
+   * Update local state optimistically and persist to the server. Single source of truth.
+   * Resolves with what the server reported, or undefined when the write did not land.
+   */
+  updatePreferences: (
+    diff: Partial<IUserPreferences>,
+    options?: UpdatePreferencesOptions
+  ) => Promise<PreferencesSaveResult | undefined>;
   /** True once a user record has been written into the UserContext store (from
    *  /api/identify, refreshUser, or a WebSocket push). Backed by an explicit,
    *  latched store flag - never derived from field presence. Consumers that
@@ -90,8 +111,6 @@ const defaultSettings: UserSettings = {
   enableAutoScroll: true,
   scrollbarWidth: 10,
   experimentalFeatures: {
-    enableQuestMaster: false,
-    enableQuestMasterV5: false,
     enableMementos: false,
     enableMementosV2: false,
     enableArtifacts: false,
@@ -101,7 +120,6 @@ const defaultSettings: UserSettings = {
     enableDeepResearch: false,
     enableRapidReply: false,
     enableResearchEngine: false,
-    enableBmPi: false,
     enableLattice: false,
     enableHearth: false,
     enableBriefcase: false,
@@ -113,6 +131,8 @@ const defaultSettings: UserSettings = {
   agentModeDefault: 'off',
   showFunTools: false,
   showSplashCards: false,
+  desktopPromoDismissed: false,
+  promptCacheTtl: DEFAULT_PROMPT_CACHE_TTL,
 };
 
 // One id for every settings-write failure - preferences AND language - so a burst of failures
@@ -176,10 +196,19 @@ function writeFailureMessage(error: unknown, fallback: string): string {
 async function persistPreferences(
   userId: string,
   preferences: IUserPreferences,
-  { logLabel, fallbackMessage, rollback }: { logLabel: string; fallbackMessage: string; rollback: () => void }
-): Promise<void> {
+  {
+    logLabel,
+    fallbackMessage,
+    rollback,
+    rerunTelemetryDeletion,
+  }: { logLabel: string; fallbackMessage: string; rollback: () => void; rerunTelemetryDeletion?: boolean }
+): Promise<PreferencesSaveResult | undefined> {
   try {
-    await updateUserToServer(userId, { preferences });
+    const saved = (await updateUserToServer(userId, {
+      preferences,
+      ...(rerunTelemetryDeletion && { rerunTelemetryDeletion: true }),
+    })) as PreferencesSaveResult | null | undefined;
+    return { telemetryDeletion: saved?.telemetryDeletion };
   } catch (error) {
     // The console stays the only place the two write paths are told apart, so keep them named.
     console.warn(`[UserSettings] Failed to write ${logLabel} to server`, error);
@@ -188,6 +217,7 @@ async function persistPreferences(
     if (shouldNotifyWriteFailure(error)) {
       toast.error(writeFailureMessage(error, fallbackMessage), { id: SETTINGS_WRITE_TOAST_ID });
     }
+    return undefined;
   }
 }
 
@@ -205,6 +235,8 @@ const SCALAR_PREF_KEYS = [
   'agentModeDefault',
   'showFunTools',
   'showSplashCards',
+  'desktopPromoDismissed',
+  'promptCacheTtl',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */
@@ -299,7 +331,7 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
 
   // Single entry point: update local state optimistically, then persist to server
   const updatePreferences = useCallback(
-    (diff: Partial<IUserPreferences>) => {
+    async (diff: Partial<IUserPreferences>, options?: UpdatePreferencesOptions) => {
       // Optimistic local update - apply diff to local settings immediately
       setSettings(prev => {
         const next = { ...prev };
@@ -326,7 +358,7 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       }
 
       // Persist to server
-      if (!currentUser?.id) return;
+      if (!currentUser?.id) return undefined;
       // Known race: concurrent toggles may clobber each other if both writes are in-flight
       // simultaneously (second write reads stale currentUser.preferences). Pre-existing behavior,
       // less severe with per-key writes. Fix tracked separately.
@@ -354,9 +386,10 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       // the `users` socket is silent. See useGetIdentify initialData guard.
       const previousPreferences = currentUser.preferences;
       useUser.getState().setCurrentUser({ ...currentUser, preferences: fullPreferences });
-      void persistPreferences(currentUser.id, fullPreferences, {
+      return persistPreferences(currentUser.id, fullPreferences, {
         logLabel: 'preferences',
         fallbackMessage: 'Could not save your preference change. Please try again.',
+        rerunTelemetryDeletion: options?.rerunTelemetryDeletion,
         rollback: () => {
           const store = useUser.getState();
           // The store holds the very object this write set, so a different reference means a
@@ -454,6 +487,10 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
       // remains the source of truth for the real last-4.
       const safe = redactSettingSecretsForBroadcast(data as unknown as AdminSettingDoc) as unknown as IAdminSettings;
       updateAllQueryData(queryClient, 'adminsettings', operation, safe);
+      if (operation === 'write') {
+        handleModelListRevisionSetting(queryClient, safe);
+        handleModelAccessRevisionSetting(queryClient, safe);
+      }
     },
     [queryClient]
   );
@@ -463,6 +500,9 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
     useMemo(() => ({}), []),
     adminSettingsCallback
   );
+
+  useEffect(() => watchModelListArrivals(queryClient), [queryClient]);
+  useEffect(() => watchModelAccessArrivals(queryClient), [queryClient]);
 
   const contextValue = useMemo(
     () => ({ settings, updatePreferences, isHydrated, rawExperimentalPreferences }),

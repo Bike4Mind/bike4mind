@@ -1,7 +1,10 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useSendOTC, useVerifyOTC } from '@client/app/hooks/data/auth';
+import { MFA_SETUP_SIGNED_OUT_TOAST } from '@client/app/utils/mfaSetupCopy';
+import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
+import OtcNoCodeHint from './OtcNoCodeHint';
+import RedirectProductHint, { useRedirectProduct } from './RedirectProductHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -12,6 +15,7 @@ import {
   Button,
   Container,
   FormControl,
+  FormHelperText,
   FormLabel,
   Input,
   Stack,
@@ -24,9 +28,11 @@ import { useNavigate, useRouter } from '@tanstack/react-router';
 import Link from '@mui/joy/Link';
 import Image from 'next/image';
 import GitHubIcon from '@mui/icons-material/GitHub';
+import AppleSignInButton from './AppleSignInButton';
 import OktaIcon from './svgs/flags/OktaIcon';
 import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 import ErrorAlert from './common/ErrorAlert';
+import SignupHoneypot from './SignupHoneypot';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -39,13 +45,14 @@ import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
 import { gray, brand } from '@client/app/utils/themes/colors';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
-import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
+import { applyRedirect } from '@client/app/utils/authRedirect';
 import { isSubmittableOtcCode, OTC_CODE_PLACEHOLDER, sanitizeOtcInput } from '@client/app/utils/otcCode';
 import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { CURRENT_POLICY_VERSION, FirstRunEvents, usernameSchema } from '@bike4mind/common';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { useJoinWaitlist } from '@client/app/hooks/useJoinWaitlist';
 
 const registerSchema = z.object({
   // Same rules the server enforces in registerUser.
@@ -66,12 +73,16 @@ type RegisterStep = 'form' | 'otc';
 const Register: React.FC = () => {
   const { setCurrentUser, currentUser } = useUser();
   const navigate = useNavigate();
+  const joinWaitlist = useJoinWaitlist();
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
+  const redirectProduct = useRedirectProduct();
+  const startOAuthSignIn = useStartOAuthSignIn();
   const { mutate: logEvent } = useLogEvent();
 
   const { mutateAsync: sendOTC, isPending: isSendingOTC } = useSendOTC();
+  const { botFields, honeypotProps } = useSignupBotFields();
   const rateLimit = useOtcRateLimit();
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
 
@@ -82,6 +93,7 @@ const Register: React.FC = () => {
   const [otcCode, setOtcCode] = useState('');
   const [pendingToken, setPendingToken] = useState<string | null>(null);
   const [submittedData, setSubmittedData] = useState<RegisterFormData | null>(null);
+  const [inviteCode, setInviteCode] = useState('');
 
   // MFA state - the verify call can come back as a LOGIN when the email already has an
   // account (the user forgot they registered, or a prior attempt created it), and that
@@ -97,9 +109,7 @@ const Register: React.FC = () => {
       setOtcCode('');
       setPendingToken(null);
       if (mode === 'setup') {
-        toast.info(
-          'Multi-factor authentication setup is required by your administrator. Please complete the setup to continue.'
-        );
+        toast.info(MFA_SETUP_SIGNED_OUT_TOAST);
       } else {
         toast.error('Multi-factor authentication is required to sign in. Please enter your code to continue.');
       }
@@ -109,6 +119,8 @@ const Register: React.FC = () => {
   // Resend cooldown
   const [resendCooldown, setResendCooldown] = useState(0);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Synchronous: isPending re-renders too late to stop a double-clicked Resend starting a second challenge.
+  const resendingRef = useRef(false);
 
   const [emailFocused, setEmailFocused] = React.useState<boolean>(false);
   const [emailBlurred, setEmailBlurred] = React.useState<boolean>(false);
@@ -136,14 +148,9 @@ const Register: React.FC = () => {
 
   const hasRedirectedRef = useRef(false);
 
-  // Gate direct navigation to /register on the open-registration master switch.
-  // The login page already hides the "Sign up" link when this is off, but a user
-  // hitting /register directly would otherwise reach the form, submit, receive an
-  // OTC code, and dead-end on the backend's "invite code required" rejection.
-  // Redirect them to /login instead. Only act once the config has loaded and is
-  // explicitly false - never on the undefined (still-loading) value.
   const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
-  const registrationClosed = !isPublicConfigLoading && publicConfig?.allowOpenRegistration === false;
+  // Only an explicit true opens registration; a failed or partial config request counts as closed.
+  const registrationClosed = !isPublicConfigLoading && publicConfig?.allowOpenRegistration !== true;
 
   useEffect(() => {
     if (currentUser && !hasRedirectedRef.current) {
@@ -152,15 +159,6 @@ const Register: React.FC = () => {
       applyRedirect(router.history, searchParams.get('redirectTo'), '/', true);
     }
   }, [currentUser, router]);
-
-  useEffect(() => {
-    if (registrationClosed && !hasRedirectedRef.current) {
-      hasRedirectedRef.current = true;
-      const searchParams = new URLSearchParams(window.location.search);
-      const redirectTo = searchParams.get('redirectTo');
-      navigate({ to: '/login', search: redirectTo ? { redirectTo } : undefined });
-    }
-  }, [registrationClosed, navigate]);
 
   // Cleanup cooldown timer
   useEffect(() => {
@@ -210,12 +208,13 @@ const Register: React.FC = () => {
 
   const onSubmit = async (data: RegisterFormData) => {
     if (rateLimit.secondsLeft > 0) return;
+    if (registrationClosed && !inviteCode.trim()) return;
     setCreateError(null);
     setServerUsernameError(null);
     setServerEmailError(null);
 
     try {
-      const result = await sendOTC({ email: data.email });
+      const result = await sendOTC({ email: data.email, ...botFields });
 
       // Store pending data for after OTC verification
       setSubmittedData(data);
@@ -230,9 +229,10 @@ const Register: React.FC = () => {
   };
 
   const handleResendCode = async () => {
-    if (resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
+    if (resendingRef.current || resendCooldown > 0 || rateLimit.secondsLeft > 0 || !submittedData) return;
+    resendingRef.current = true;
     try {
-      const result = await sendOTC({ email: submittedData.email });
+      const result = await sendOTC({ email: submittedData.email, ...botFields });
       setPendingToken(result.pendingToken);
       toastOtcCodeSent(t('auth.codeSent'));
       startResendCooldown();
@@ -240,6 +240,8 @@ const Register: React.FC = () => {
       if (rateLimit.handleError(error)) return;
       const errorMessage = rateLimit.errorMessage(error, 'Failed to resend code');
       toast.error(errorMessage);
+    } finally {
+      resendingRef.current = false;
     }
   };
 
@@ -266,6 +268,7 @@ const Register: React.FC = () => {
         email: submittedData.email,
         code: otcCode,
         username: submittedData.username,
+        inviteCode: inviteCode.trim() || undefined,
         pendingToken: pendingToken || undefined,
         clientData,
         // P0-B: the schema's z.literal(true) guarantees both boxes were checked before
@@ -355,17 +358,16 @@ const Register: React.FC = () => {
     return 'Unknown';
   };
 
-  const handleSocialLogin = (provider: 'google' | 'github' | 'okta') => {
-    const redirectUrl = `/api/auth/${provider}`;
-    // Carry redirectTo across the provider round-trip - the full-page navigation
-    // drops the in-URL ?redirectTo=, so merge it onto the provider URL and let the
-    // server re-attach it to /auth/success after callback (see appendRedirectTo).
-    window.location.href = appendRedirectTo(redirectUrl, new URLSearchParams(window.location.search).get('redirectTo'));
+  const handleSocialLogin = (provider: 'google' | 'github' | 'okta' | 'apple') => {
+    // Carried through the signed OAuth state and redeemed if this login creates the account.
+    const code = inviteCode.trim();
+    const startUrl = code ? `/api/auth/${provider}?inviteCode=${encodeURIComponent(code)}` : `/api/auth/${provider}`;
+    startOAuthSignIn(startUrl).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
+    });
   };
 
-  // Avoid flashing the registration form while the open-registration switch is still
-  // loading or when it's off (the effect above redirects to /login).
-  if (isPublicConfigLoading || registrationClosed) {
+  if (isPublicConfigLoading) {
     return (
       <Box
         data-testid="register-config-gate"
@@ -434,79 +436,97 @@ const Register: React.FC = () => {
             >
               {currentStep === 'form' ? t('welcome', { name: theme.branding.name }) : t('auth.checkYourEmail')}
             </Typography>
-            <Typography
-              className="register-subtitle"
-              variant="plain"
-              sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
-            >
-              {currentStep === 'form' ? (
-                t('auth.createAccountDesc')
-              ) : (
-                <Trans
-                  i18nKey="auth.codeSentTo"
-                  values={{ email: submittedData?.email }}
-                  components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
-                />
-              )}
-            </Typography>
+            {currentStep === 'form' && <RedirectProductHint mode="signUp" item={redirectProduct} />}
+            {/* On the form, the product hint already says "Create an account to continue to <product>",
+                so the generic line would say it twice. */}
+            {(currentStep !== 'form' || !redirectProduct) && (
+              <Typography
+                className="register-subtitle"
+                variant="plain"
+                sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
+              >
+                {currentStep === 'form' ? (
+                  t('auth.createAccountDesc')
+                ) : (
+                  <Trans
+                    i18nKey="auth.codeSentTo"
+                    values={{ email: submittedData?.email }}
+                    components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
+                  />
+                )}
+              </Typography>
+            )}
           </Box>
 
           {currentStep === 'form' && (
             <>
-              <Box
-                className="register-social-buttons"
-                sx={{ display: 'flex', gap: '8px', width: '100%', '& > button': { minHeight: '40px' } }}
-              >
-                <Button
-                  className="google-login-button"
-                  type="button"
-                  variant="outlined"
-                  color="neutral"
-                  sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
-                  disabled={isSendingOTC}
-                  onClick={() => handleSocialLogin('google')}
+              <Box hidden={registrationClosed}>
+                <Box
+                  className="register-social-buttons"
+                  sx={{ display: 'flex', gap: '8px', width: '100%', '& > button': { minHeight: '40px' } }}
                 >
-                  <Box display="flex" alignItems="center">
-                    <GoogleColorIcon />
-                    <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
-                      Google
-                    </Typography>
-                  </Box>
-                </Button>
-                <Button
-                  className="github-login-button"
-                  type="button"
-                  variant="outlined"
-                  color="neutral"
-                  sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
-                  disabled={isSendingOTC}
-                  onClick={() => handleSocialLogin('github')}
-                >
-                  <Box display="flex" alignItems="center">
-                    <GitHubIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
-                    <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
-                      GitHub
-                    </Typography>
-                  </Box>
-                </Button>
-                <Button
-                  className="okta-login-button"
-                  type="button"
-                  variant="outlined"
-                  color="neutral"
-                  sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
-                  disabled={isSendingOTC}
-                  onClick={() => handleSocialLogin('okta')}
-                >
-                  <Box display="flex" alignItems="center">
-                    <OktaIcon sx={{ color: '#007DC1' }} />
-                    <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
-                      Okta
-                    </Typography>
-                  </Box>
-                </Button>
+                  <Button
+                    className="google-login-button"
+                    data-testid="register-google-btn"
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('google')}
+                  >
+                    <Box display="flex" alignItems="center">
+                      <GoogleColorIcon />
+                      <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
+                        Google
+                      </Typography>
+                    </Box>
+                  </Button>
+                  <Button
+                    className="github-login-button"
+                    data-testid="register-github-btn"
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('github')}
+                  >
+                    <Box display="flex" alignItems="center">
+                      <GitHubIcon sx={{ color: 'text.primary', width: '16px', height: '16px' }} />
+                      <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
+                        GitHub
+                      </Typography>
+                    </Box>
+                  </Button>
+                  <Button
+                    className="okta-login-button"
+                    data-testid="register-okta-btn"
+                    type="button"
+                    variant="outlined"
+                    color="neutral"
+                    sx={{ flex: 1, minWidth: 0, px: '8px', display: 'flex', gap: '.4rem', borderRadius: '8px' }}
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('okta')}
+                  >
+                    <Box display="flex" alignItems="center">
+                      <OktaIcon sx={{ color: '#007DC1' }} />
+                      <Typography sx={{ color: 'text.primary', fontWeight: 500, fontSize: '14px', marginLeft: '8px' }}>
+                        Okta
+                      </Typography>
+                    </Box>
+                  </Button>
+                </Box>
+                {publicConfig?.appleSignInEnabled && (
+                  <AppleSignInButton
+                    data-testid="register-apple-btn"
+                    label="Sign up with Apple"
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('apple')}
+                  />
+                )}
+                <Divider sx={dividerStyles}>or</Divider>
               </Box>
-              <Divider sx={dividerStyles}>or</Divider>
 
               <Stack className="register-stack" spacing={3}>
                 {/* eslint-disable-next-line react-hooks/refs -- react-hook-form's handleSubmit uses refs internally */}
@@ -616,6 +636,40 @@ const Register: React.FC = () => {
                       </FormControl>
                     </Stack>
 
+                    <FormControl size="sm" required={registrationClosed} sx={{ mt: '16px' }}>
+                      <FormLabel htmlFor="register-invite-code">
+                        {registrationClosed ? t('auth.inviteCodeLabel') : t('auth.inviteCodeOptionalLabel')}
+                      </FormLabel>
+                      <Input
+                        data-testid="register-invite-input"
+                        slotProps={{ input: { id: 'register-invite-code' } }}
+                        value={inviteCode}
+                        onChange={e => setInviteCode(e.target.value)}
+                        sx={inputStyles}
+                      />
+                      {!registrationClosed && (
+                        <FormHelperText
+                          data-testid="register-invite-optional-hint"
+                          sx={{ mt: '6px', color: 'text.tertiary' }}
+                        >
+                          {t('auth.inviteCodeOptionalHint')}
+                        </FormHelperText>
+                      )}
+                      {registrationClosed && (
+                        <Typography level="body-xs" sx={{ mt: '6px', color: 'text.tertiary' }}>
+                          {t('auth.noInviteCode')}{' '}
+                          <Link
+                            component="button"
+                            type="button"
+                            data-testid="register-join-waitlist-link"
+                            onClick={() => joinWaitlist('register_signup_closed', emailValue)}
+                          >
+                            {t('auth.joinWaitlist')}
+                          </Link>
+                        </Typography>
+                      )}
+                    </FormControl>
+
                     {/* P0-B abuse gate: AUP/ToS acceptance + 18+ attestation. Both are
                         z.literal(true) in the schema, so Continue stays disabled until both are
                         checked. The acceptedPolicyVersion sent on OTC verify is the single
@@ -642,6 +696,7 @@ const Register: React.FC = () => {
                               <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>
                                 I agree to the{' '}
                                 <Link
+                                  data-testid="register-terms-link"
                                   href={ExternalLinks.terms}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -651,6 +706,7 @@ const Register: React.FC = () => {
                                 </Link>
                                 ,{' '}
                                 <Link
+                                  data-testid="register-aup-link"
                                   href={ExternalLinks.acceptableUse}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -660,6 +716,7 @@ const Register: React.FC = () => {
                                 </Link>
                                 , and{' '}
                                 <Link
+                                  data-testid="register-privacy-link"
                                   href={ExternalLinks.privacy}
                                   target="_blank"
                                   rel="noopener noreferrer"
@@ -701,7 +758,12 @@ const Register: React.FC = () => {
                         type="submit"
                         fullWidth
                         color="primary"
-                        disabled={!isValid || isSendingOTC || rateLimit.secondsLeft > 0}
+                        disabled={
+                          !isValid ||
+                          isSendingOTC ||
+                          rateLimit.secondsLeft > 0 ||
+                          (registrationClosed && !inviteCode.trim())
+                        }
                         sx={[
                           { borderRadius: '8px', display: 'flex', gap: 1, alignItems: 'center' },
                           isDarkMode ? darkInactive : lightInactive,
@@ -755,6 +817,7 @@ const Register: React.FC = () => {
                       </Typography>
                     </Box>
                   </Box>
+                  <SignupHoneypot {...honeypotProps} />
                 </form>
               </Stack>
             </>
@@ -821,6 +884,7 @@ const Register: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '20px', gap: 2 }}>
                 <Link
                   className="resend-code-link"
+                  data-testid="register-resend-btn"
                   color="primary"
                   onClick={handleResendCode}
                   sx={{
@@ -842,6 +906,7 @@ const Register: React.FC = () => {
                 capped={rateLimit.capped}
                 testId="register-otc-rate-limit-alert"
               />
+              <OtcNoCodeHint testId="register-otc-no-code-hint" />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link

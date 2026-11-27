@@ -4,7 +4,8 @@ import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { z } from 'zod';
-import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import type { Logger } from '@bike4mind/observability';
+import { decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 import { buildMcpToolCacheUpdate } from '@bike4mind/services/llm';
 
 /**
@@ -40,7 +41,7 @@ const buildConfluenceSiteUrl = (url: string | undefined): string => {
 /**
  * Shared logic for finalizing Atlassian connection
  */
-const finalizeConnection = async (userId: string, resourceId: string) => {
+const finalizeConnection = async (logger: Logger, userId: string, resourceId: string) => {
   const user = await userRepository.findById(userId);
 
   if (!user) {
@@ -56,7 +57,6 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
   if (user.atlassianConnect.status !== 'pending_site_selection') {
     // Already connected - this is fine for idempotency
     if (user.atlassianConnect.status === 'connected') {
-      console.log(`[Atlassian Finalize] User ${userId} already connected, skipping`);
       return {
         success: true,
         siteName: user.atlassianConnect.siteName,
@@ -95,8 +95,6 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
     atlassianConnect: updatedAtlassianConnect,
   });
 
-  console.log(`[Atlassian Finalize] User ${userId} selected site: ${selectedResource.name} (${resourceId})`);
-
   // Create or update MCP server with selected resource
   try {
     let atlassianServer = await mcpServerRepository.findOne({
@@ -129,7 +127,6 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
         // Reconnect: clear any prior "confirmed empty" marker so the fetch below is trusted.
         { unset: ['toolSchemasFetchedAt'] }
       );
-      console.log('[Atlassian Finalize] Updated existing MCP server');
     } else {
       atlassianServer = await mcpServerRepository.create({
         ...{ _id: recordId },
@@ -139,12 +136,11 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
         enabled: true,
         tools: [],
       });
-      console.log('[Atlassian Finalize] Created new MCP server');
     }
 
     // Try to get and store available tools (non-blocking)
     try {
-      const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+      const { invokeMcpHandler } = await import('@bike4mind/server-utils/utils/invokeMcpHandler');
       const result = await invokeMcpHandler<any>({
         envVariables: plaintextEnvVariables,
         name: 'atlassian',
@@ -156,13 +152,12 @@ const finalizeConnection = async (userId: string, resourceId: string) => {
       if (atlassianServer) {
         await mcpServerRepository.update(buildMcpToolCacheUpdate(atlassianServer.id, tools));
       }
-      console.log(`[Atlassian Finalize] MCP server configured with ${tools.length} tools`);
     } catch (toolsError) {
-      console.warn('[Atlassian Finalize] Failed to get MCP tools, but connection saved:', toolsError);
+      logger.warn('Atlassian finalize could not fetch MCP tools; connection saved', { userId, error: toolsError });
     }
   } catch (mcpError) {
     // Don't fail the finalize if MCP setup fails
-    console.error('[Atlassian Finalize] MCP server setup failed, but site selection succeeded:', mcpError);
+    logger.error('Atlassian finalize MCP server setup failed; site selection succeeded', { userId, error: mcpError });
   }
 
   return {
@@ -189,18 +184,17 @@ const handler = baseApi()
       const user = await userRepository.findById(userId);
 
       if (!user?.atlassianConnect?.selectedResourceId) {
-        console.error('[Atlassian Finalize] Auto-finalize called but no selectedResourceId found');
+        req.logger.error('Atlassian auto-finalize found no selected resource', { userId });
         return res.redirect('/profile?tab=integrations&atlassian=error');
       }
 
       const resourceId = user.atlassianConnect.selectedResourceId;
-      console.log(`[Atlassian Finalize] Auto-finalizing for user ${userId} with resource ${resourceId}`);
 
-      await finalizeConnection(userId, resourceId);
+      await finalizeConnection(req.logger, userId, resourceId);
 
       return res.redirect('/profile?tab=integrations&atlassian=connected');
     } catch (error) {
-      console.error('[Atlassian Finalize] Auto-finalize error:', error);
+      req.logger.error('Atlassian auto-finalize failed', { userId: req.user.id, error });
       return res.redirect('/profile?tab=integrations&atlassian=error');
     }
   })
@@ -215,13 +209,11 @@ const handler = baseApi()
       const { resourceId } = parseResult.data;
       const userId = req.user.id;
 
-      console.log(`[Atlassian Finalize] Manual finalize for user ${userId} with resource ${resourceId}`);
-
-      const result = await finalizeConnection(userId, resourceId);
+      const result = await finalizeConnection(req.logger, userId, resourceId);
 
       res.status(200).json(result);
     } catch (error) {
-      console.error('[Atlassian Finalize] Error:', error);
+      req.logger.error('Atlassian manual finalize failed', { userId: req.user.id, error });
 
       if (error instanceof BadRequestError) {
         return res.status(400).json({

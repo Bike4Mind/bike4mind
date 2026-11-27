@@ -24,7 +24,7 @@ const THIRD_PARTY: Array<[ModelBackend, string]> = [
   [ModelBackend.DeepSeek, 'DeepSeek'],
   [ModelBackend.VoyageAI, 'Voyage AI'],
 ];
-const SELF_HOSTED = [ModelBackend.Ollama, ModelBackend.LocalImage];
+const SELF_HOSTED = [ModelBackend.Ollama, ModelBackend.OpenAICompatible, ModelBackend.LocalImage];
 
 const route = (backend: ModelBackend) => ({ id: 'some-model', backend });
 

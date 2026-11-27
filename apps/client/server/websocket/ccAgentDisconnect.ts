@@ -3,7 +3,7 @@ import { CcAgentDisconnectAction } from '@bike4mind/common';
 import { resolveBridgeWsAuth } from '@server/websocket/ccAgentAuth';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
 import { connectionUserCanAccessTavern } from '@server/websocket/tavernWsAuth';
-import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
+import { sendToClient, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 /**
@@ -40,6 +40,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     endpoint: 'ws/cc_agent_disconnect',
     logger,
     handlerName: 'CC_AGENT_DISCONNECT',
+    recordKeyUse: false,
   });
   if (!auth) return { statusCode: 401 };
   const { userId, apiKeyId } = auth;
@@ -54,7 +55,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   }
 
   // Tavern access gate: a valid bridge identity isn't enough - the owning user
-  // must be allowed to reach the Tavern (admin or 'tavern' tag), the same
+  // must be allowed to reach the Tavern (admin, developer, or 'tavern' tag), the same
   // predicate the HTTP surface enforces via ensureTavernAccess.
   // Intentionally checked before the instance/device-ownership checks below:
   // run the cheap access predicate first so an unauthorized caller never reaches

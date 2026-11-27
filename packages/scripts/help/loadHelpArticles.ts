@@ -15,7 +15,7 @@ import { glob } from 'glob';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import matter from 'gray-matter';
+import { parseFrontmatter } from '@bike4mind/common/utils/frontmatter';
 import type { HelpHeading, HelpFrontmatter, HelpAccessLevel } from './types.js';
 import { stripMarkdownFormatting, toAnchor } from './utils.js';
 
@@ -192,10 +192,8 @@ export async function loadHelpArticles(): Promise<LoadedHelpArticle[]> {
 
   for (const filePath of files) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
-    const { data: frontmatter, content } = matter(fileContent) as {
-      data: HelpFrontmatter;
-      content: string;
-    };
+    const { data, content } = parseFrontmatter(fileContent);
+    const frontmatter = data as HelpFrontmatter;
 
     const category = getCategory(filePath);
     const topCategory = category.split('/')[0];

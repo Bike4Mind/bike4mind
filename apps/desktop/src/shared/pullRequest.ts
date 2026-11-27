@@ -6,6 +6,8 @@
  * renderer draws it as text and never as markup; see PrStatusBar.
  */
 
+import type { PrAttention, PrIconStatus } from './prAttention';
+
 export type PrState = 'OPEN' | 'MERGED' | 'CLOSED';
 
 export interface PrRef {
@@ -16,8 +18,16 @@ export interface PrRef {
   url: string;
 }
 
-/** How a binding was made. Recorded so a later automatic detection never overrides a manual one by surprise. */
-export type PrBindingSource = 'shell' | 'branch' | 'manual';
+/**
+ * How a binding was made. 'manual' is the user's /pr or pasted URL, 'agent' the agent at the
+ * user's word; both are explicit, and a later automatic detection never overrides them by
+ * surprise. See isExplicitBinding.
+ */
+export type PrBindingSource = 'shell' | 'branch' | 'manual' | 'agent';
+
+export function isExplicitBinding(source: PrBindingSource): boolean {
+  return source === 'manual' || source === 'agent';
+}
 
 /** The automations the CI popover offers, each opt-in for this one PR. */
 export type PrOption = 'autoFix' | 'autoMerge' | 'autoArchive';
@@ -56,6 +66,10 @@ export interface PrBinding extends PrRef {
   lastState?: PrState;
   /** Whether that read found a draft, so the sidebar can tell draft from open without a read. */
   lastDraft?: boolean;
+  /** That read's attention and badges, so the sidebar can draw them, marked stale, before a re-read. See prIconStatus. */
+  lastAttention?: PrAttention;
+  lastBehind?: boolean;
+  lastAutoMerge?: boolean;
   /** Set when auto-archive has fired, so it fires once even if the user unarchives. */
   archivedOnClose?: boolean;
   /**
@@ -167,21 +181,24 @@ export function isFinishedState(state: PrState | undefined): state is 'MERGED' |
 }
 
 /**
- * The four states the bar and the sidebar draw. Both derive it here from the same snapshot, so
- * a conversation's sidebar icon and its bar cannot disagree. A closed draft is closed.
+ * The states the bar and the sidebar draw. Both derive it here from the same snapshot, so a
+ * conversation's sidebar icon and its bar cannot disagree. A closed draft is closed. `queued` is
+ * an open PR in its base branch's merge queue; it reads as open again once the queue lets it go.
  */
-export type PrDisplayState = 'open' | 'draft' | 'merged' | 'closed';
+export type PrDisplayState = 'open' | 'draft' | 'queued' | 'merged' | 'closed';
 
-export function prDisplayState(state: PrState, isDraft = false): PrDisplayState {
+export function prDisplayState(state: PrState, isDraft = false, queued = false): PrDisplayState {
   if (state === 'MERGED') return 'merged';
   if (state === 'CLOSED') return 'closed';
-  return isDraft ? 'draft' : 'open';
+  if (isDraft) return 'draft';
+  return queued ? 'queued' : 'open';
 }
 
 /** What the sidebar shows for one conversation's PR. Built from stored and in-memory state only. */
-export interface PrSummary {
+export interface PrSummary extends PrIconStatus {
   number: number;
-  state: PrDisplayState;
+  /** `owner/repo`, so a search for `owner/repo#N` can tell this PR from another repo's. */
+  repo?: string;
 }
 
 /** main -> renderer push; `summary` null means the conversation no longer has a PR to show. */
@@ -191,7 +208,15 @@ export interface PrSummaryEvent {
 }
 
 export function samePrSummary(a: PrSummary | null | undefined, b: PrSummary | null | undefined): boolean {
-  return a?.number === b?.number && a?.state === b?.state;
+  return (
+    a?.number === b?.number &&
+    a?.state === b?.state &&
+    a?.repo === b?.repo &&
+    a?.attention === b?.attention &&
+    a?.behind === b?.behind &&
+    a?.autoMerge === b?.autoMerge &&
+    a?.stale === b?.stale
+  );
 }
 
 /** Whether `gh` can be used at all. Anything but 'ok' replaces the bar's content with a fix-it line. */
@@ -207,6 +232,8 @@ export interface PrBarState {
   sessionId: string;
   /** Null when the conversation has no PR, or the user dismissed it: no bar. */
   binding: PrBinding | null;
+  /** The user dismissed the bar, but the PR is still this conversation's: offer no second one. */
+  dismissed?: true;
   /** Null until the first read lands. */
   snapshot: PrBarSnapshot | null;
   gh: PrGhStatus;
@@ -234,7 +261,20 @@ export interface PrBarState {
 
 export type PrActionResult = { ok: true } | { ok: false; error: string };
 
+/** An explicit bind's outcome, with the PR it landed on. */
+export type PrBindOutcome = { ok: true; pr: PrRef } | { ok: false; error: string };
+
 const PR_URL_PATTERN = /https:\/\/github\.com\/([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)(?![\d/]*new\b)/g;
+
+/**
+ * GitHub's GraphQL `Int` is 32-bit, and PRs are read in shared batches: one number past it would
+ * fail the read for every PR in the batch, not just its own.
+ */
+const MAX_PR_NUMBER = 2_147_483_647;
+
+export function isPrNumber(number: number): boolean {
+  return Number.isInteger(number) && number > 0 && number <= MAX_PR_NUMBER;
+}
 
 function toRef(owner: string, repo: string, number: number): PrRef {
   return { owner, repo, number, url: `https://github.com/${owner}/${repo}/pull/${number}` };
@@ -250,8 +290,25 @@ export function parsePullRequestUrl(text: string): PrRef | null {
   );
   if (!match) return null;
   const number = Number(match[3]);
-  if (!Number.isSafeInteger(number) || number < 1) return null;
-  return toRef(match[1], match[2], number);
+  return isPrNumber(number) ? toRef(match[1], match[2], number) : null;
+}
+
+/**
+ * A PR as the agent may name one: a URL, `owner/repo#N`, or `#N` / `N` in `repo`. Null when it is
+ * none of these, or a bare number with no repo to resolve it in.
+ */
+export function parsePullRequestTarget(text: string, repo?: { owner: string; repo: string } | null): PrRef | null {
+  const trimmed = text.trim();
+  const url = parsePullRequestUrl(trimmed);
+  if (url) return url;
+  const named = /^([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)#(\d+)$/.exec(trimmed);
+  const bare = named ? null : /^#?(\d+)$/.exec(trimmed);
+  const owner = named ? named[1] : repo?.owner;
+  const name = named ? named[2] : repo?.repo;
+  const digits = named ? named[3] : bare?.[1];
+  if (!owner || !name || !digits) return null;
+  const number = Number(digits);
+  return isPrNumber(number) ? toRef(owner, name, number) : null;
 }
 
 /**
@@ -262,7 +319,7 @@ export function findPullRequestUrls(text: string): PrRef[] {
   const found: PrRef[] = [];
   for (const match of text.matchAll(PR_URL_PATTERN)) {
     const number = Number(match[3]);
-    if (Number.isSafeInteger(number) && number > 0) found.push(toRef(match[1], match[2], number));
+    if (isPrNumber(number)) found.push(toRef(match[1], match[2], number));
   }
   return found;
 }
@@ -273,9 +330,13 @@ export function findPullRequestUrls(text: string): PrRef[] {
  */
 const BINDING_COMMAND = /(^|[\s;&|(])(gh\s+pr\s+create|git\s+push)\b/;
 
+export function isBindingCommand(command: string): boolean {
+  return BINDING_COMMAND.test(command);
+}
+
 /** The PR a shell command's output announces, or null. The last URL wins: it is the one printed on completion. */
 export function pullRequestFromShell(command: string, output: string): PrRef | null {
-  if (!BINDING_COMMAND.test(command)) return null;
+  if (!isBindingCommand(command)) return null;
   const urls = findPullRequestUrls(output);
   return urls.length > 0 ? urls[urls.length - 1] : null;
 }

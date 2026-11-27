@@ -1,12 +1,18 @@
+import {
+  type BoundEmbeddingModel,
+  type EmbeddingRuntime,
+  bindEmbeddingModel,
+  embedOne,
+} from '../embeddingProviders/runtime';
 import { stripToolOutputMarker } from '../artifactParser';
 import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   type AttachmentLakeAccess,
-  dayjs,
   extractSnippetMeta,
   FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItem,
+  IChatHistoryItemDocument,
   IChatHistoryItemRepository,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -31,23 +37,19 @@ import {
   formatChoicesBlock,
   MIN_REPLY_CHOICES,
   visibleReplyText,
+  isPasswordProtectedPdfError,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
 } from '@bike4mind/common';
-import {
-  BaseStorage,
-  EmbeddingFactory,
-  EmbeddingService,
-  detectURLs,
-  fetchAndParseURL,
-  hasURLs,
-} from '@bike4mind/fab-pipeline';
+import { BaseStorage, detectURLs, fetchAndParseURL, hasURLs } from '@bike4mind/fab-pipeline';
 import { getSettingsValue } from '../settings';
 import { Logger } from '@bike4mind/observability';
-import { ensureToolPairingIntegrity } from '@bike4mind/llm-adapters';
+import { ensureToolPairingIntegrity, isConverseBedrockModel } from '@bike4mind/llm-adapters';
 import { getFileContent } from '../fabfile';
 import { escapeRegex } from '../escapeRegex';
+import { signedUrlExpiresAt } from '../signedUrlExpiry';
 import { BadRequestError, CorruptedFileError } from '../errors';
 import { isAxiosError } from 'axios';
-import { ITokenizer } from '../tokenCounting';
+import { ITokenizer, TiktokenTokenizer } from '../tokenCounting';
 import { getFileType } from '../file';
 const MAX_FILE_SIZE = 6000;
 /** Cap on generated images surfaced to the model for editing (keeps the context note small). */
@@ -400,10 +402,21 @@ function researchModeReplyText(results: IChatHistoryItem['researchModeResults'])
   return answers.map((answer, i) => `[Response ${i + 1} of ${answers.length}]\n${answer}`).join('\n\n');
 }
 
-/** The turn's text answer for history: the first non-thinking reply, else its Research Mode answers. */
+/**
+ * The turn's non-thinking reply slots, in order. Slots follow the provider's content blocks, so a
+ * turn that called tools holds the pre-tool preamble first and the final answer in a later slot.
+ */
+export function historyReplySlots(item: Pick<IChatHistoryItem, 'replies'>): string[] {
+  const slots = (item.replies ?? []).filter((r: string) => !r.trim().startsWith('<think>'));
+  // A lone slot passes through untouched so single-slot turns replay exactly as they always have.
+  return slots.length > 1 ? slots.filter(r => r.trim()) : slots;
+}
+
+export const REPLY_SLOT_SEPARATOR = '\n\n';
+
+/** The turn's text answer for history: every non-thinking reply slot, else its Research Mode answers. */
 function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchModeResults'>): string {
-  const reply = item.replies?.find((r: string) => !r.trim().startsWith('<think>'));
-  return reply || researchModeReplyText(item.researchModeResults);
+  return historyReplySlots(item).join(REPLY_SLOT_SEPARATOR) || researchModeReplyText(item.researchModeResults);
 }
 
 /**
@@ -423,21 +436,15 @@ export function isStoppedBeforeReply(
 }
 
 /**
- * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
- * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
+ * Whether the history text ends with the turn's last visible slot, the only place a choices block
+ * belongs. It does not when that slot opens with `<think>`, which `historyReplySlots` leaves out.
  */
-function isFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
+function endsWithFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
   const replies = item.replies ?? [];
-  const firstNonThinkIndex = replies.findIndex(r => !r.trim().startsWith('<think>'));
-  if (firstNonThinkIndex === -1) return false;
-  let lastVisibleIndex = -1;
   for (let i = replies.length - 1; i >= 0; i--) {
-    if (visibleReplyText(replies[i])) {
-      lastVisibleIndex = i;
-      break;
-    }
+    if (visibleReplyText(replies[i])) return !replies[i].trim().startsWith('<think>');
   }
-  return lastVisibleIndex !== -1 && firstNonThinkIndex === lastVisibleIndex;
+  return false;
 }
 
 /**
@@ -491,43 +498,101 @@ function replayableToolCalls(functionCalls: RecordedFunctionCall[] | undefined):
   return replayable.some(fc => fc.returnValue) ? replayable : [];
 }
 
+export type EmbeddingTokenCounter = (text: string) => Promise<number>;
+
+let embeddingTokenizer: TiktokenTokenizer | undefined;
+
+/**
+ * Counts with tiktoken under the embedding model's id (unknown ids fall back to cl100k_base, the
+ * OpenAI embedding encoding). If tiktoken cannot load, the UTF-8 byte length is used: every
+ * byte-level BPE token covers at least one byte, so it never undercounts. The chars/3.5 estimate
+ * used for prompt budgeting is NOT safe here - dense markup and code run well under that ratio.
+ */
+const defaultEmbeddingTokenCounter =
+  (model: string, logger: Logger): EmbeddingTokenCounter =>
+  async text => {
+    try {
+      embeddingTokenizer ??= new TiktokenTokenizer({ logger });
+      // The tokenizer is shared across requests; route its logs through this caller's logger.
+      return await embeddingTokenizer.countTokens(text, model, logger);
+    } catch (error) {
+      logger.warn(
+        'Embedding token count fell back to UTF-8 byte length',
+        error instanceof Error ? error.message : error
+      );
+      return new TextEncoder().encode(text).length;
+    }
+  };
+
+/**
+ * Halves `text` until every piece counts at most `maxTokens`, so no content is dropped. A split
+ * never lands between the halves of a surrogate pair.
+ */
+async function splitToTokenBudget(
+  text: string,
+  maxTokens: number,
+  countTokens: EmbeddingTokenCounter
+): Promise<string[]> {
+  if (text.length <= 1 || (await countTokens(text)) <= maxTokens) return [text];
+
+  let middle = Math.floor(text.length / 2);
+  const before = text.charCodeAt(middle - 1);
+  if (before >= 0xd800 && before <= 0xdbff) middle += 1;
+
+  const [head, tail] = await Promise.all([
+    splitToTokenBudget(text.slice(0, middle), maxTokens, countTokens),
+    splitToTokenBudget(text.slice(middle), maxTokens, countTokens),
+  ]);
+  return [...head, ...tail];
+}
+
 /**
  * Safely generate embeddings for text that might exceed token limits
  * Chunks large text and returns averaged embedding vector
  */
 export async function generateSafeEmbedding(
-  embeddingService: EmbeddingService,
+  embeddingService: BoundEmbeddingModel,
   text: string,
-  logger: Logger
+  logger: Logger,
+  countTokens: EmbeddingTokenCounter = defaultEmbeddingTokenCounter(embeddingService.model, logger)
 ): Promise<number[]> {
-  const modelInfo = embeddingService.getModelInfo();
+  const modelInfo = { contextWindow: embeddingService.maxInputTokens };
   const maxTokens = Math.min(modelInfo.contextWindow - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
-  const estimatedTokens = estimateTokenLength(text);
+  // The character window is only a first cut sized for typical prose; splitToTokenBudget then
+  // re-counts each window and halves any that dense content pushed over the model's limit.
+  const maxChunkLength = Math.floor(maxTokens * CHARS_PER_TOKEN);
+
+  // Text over two windows would need more than 7 chars per token to fit one call, so skip counting
+  // it whole: BPE is quadratic within an unbroken run, and only bounded windows get encoded then.
+  const tokenCount = text.length > maxChunkLength * 2 ? undefined : await countTokens(text);
+  const needsChunking = tokenCount === undefined || tokenCount > maxTokens;
 
   logger.info('Safe embedding generation', {
     textLength: text.length,
-    estimatedTokens,
+    tokenCount,
     maxTokens,
-    needsChunking: estimatedTokens > maxTokens,
+    needsChunking,
   });
 
-  if (estimatedTokens <= maxTokens) {
-    logger.info(`Using embedder ${embeddingService.getModelInfo().model} `);
-    return await embeddingService.generateEmbedding(text);
+  if (!needsChunking) {
+    logger.info(`Using embedder ${embeddingService.model} `);
+    return await embedOne(embeddingService, text);
   }
 
   // Text is too large - chunk it and average the embeddings
-  logger.warn(`Text exceeds embedding token limit (${estimatedTokens} > ${maxTokens}), chunking...`);
+  logger.warn(
+    `Text exceeds embedding token limit (${tokenCount ?? `${text.length} chars`} > ${maxTokens}), chunking...`
+  );
 
-  const maxChunkLength = Math.floor(maxTokens * 3.5); // Convert tokens back to characters
   const chunks: string[] = [];
 
   // Create overlapping chunks
   for (let i = 0; i < text.length; i += maxChunkLength - EMBEDDING_TOKEN_LIMITS.CHUNK_OVERLAP) {
-    const chunk = text.slice(i, i + maxChunkLength);
-    if (chunk.trim().length > 0) {
-      chunks.push(chunk);
+    const window = text.slice(i, i + maxChunkLength);
+    if (window.trim().length === 0) continue;
+    for (const piece of await splitToTokenBudget(window, maxTokens, countTokens)) {
+      if (piece.trim().length > 0) chunks.push(piece);
     }
   }
 
@@ -536,7 +601,7 @@ export async function generateSafeEmbedding(
   const chunkEmbeddings: number[][] = [];
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const embedding = await embeddingService.generateEmbedding(chunks[i]);
+      const embedding = await embedOne(embeddingService, chunks[i]);
       chunkEmbeddings.push(embedding);
       logger.debug(`Generated embedding for chunk ${i + 1}/${chunks.length}`);
     } catch (error) {
@@ -600,6 +665,9 @@ export function resolveHistoryWindowStart(
   return Math.ceil((priorQuestCount - limit) / effectiveStep) * effectiveStep;
 }
 
+/** One replayed turn's prompt message and the tools that turn offered (absent on older quests) and called. */
+export type HistoryToolTurn = { prompt: IMessage; offeredTools?: string[]; calledTools: string[] };
+
 /**
  * Return the previous messages from the database, and the total number of previous messages.
  *
@@ -645,8 +713,8 @@ export async function fetchAndProcessPreviousMessages(
      * a 400 error with Gemini 3 Pro". Revisit once thought_signature is persisted.
      *
      * Deliberately taken as the model id rather than a caller-computed boolean: the prior
-     * design made this an opt-out flag, and a second caller (QuestMasterFeature) went
-     * live without ever setting it. Pass the model here and this stays correct
+     * design made this an opt-out flag, and a second caller went live without ever
+     * setting it. Pass the model here and this stays correct
      * automatically for every caller instead of depending on each one remembering to opt in.
      */
     model?: string;
@@ -676,6 +744,11 @@ export async function fetchAndProcessPreviousMessages(
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
       /**
+       * Image jobs recent turns started (chat's image tools run on the job engine), newest first. Only ids: a job's
+       * output file is known once it settles, so ChatCompletionProcess resolves them owner-scoped at prompt time.
+       */
+      recentImageJobs?: { jobId: string; prompt: string }[];
+      /**
        * Names of tools actually invoked across the returned window, read straight off each
        * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history. Priority
        * 1 (`structuredReplies`) still never fires (nothing writes that field); Priority 2 now does
@@ -685,6 +758,12 @@ export async function fetchAndProcessPreviousMessages(
        * already in hand.
        */
       priorToolNames?: string[];
+      /**
+       * Per replayed turn: its prompt message (the same object as in the returned messages) with the
+       * tools that turn offered and called. Lets deferred tool loading re-add tools where they first
+       * appeared instead of re-writing the history.
+       */
+      toolTurns?: HistoryToolTurn[];
     },
   ]
 > {
@@ -719,6 +798,7 @@ export async function fetchAndProcessPreviousMessages(
 
   // Keep the current prompt if it is the only item, so a session's first prompt stays in history -
   // unless the caller needs history to hold no part of the current turn (see excludeCurrentPrompt).
+  const keptCurrentPrompt = chatHistoryItems.length === 1 && !excludeCurrentPrompt ? chatHistoryItems[0] : undefined;
   if (chatHistoryItems.length > 1 || excludeCurrentPrompt) {
     chatHistoryItems.pop();
   }
@@ -814,9 +894,24 @@ export async function fetchAndProcessPreviousMessages(
   const oldestIncludedQuestId = chatHistoryItems[0]?.id ?? null;
 
   // Convert to IMessage format with tool pairing reconstruction.
+  const toolTurns: HistoryToolTurn[] = [];
   const convertedMessages = chatHistoryItems.reduce((acc, cur) => {
     if (isStoppedBeforeReply(cur)) return acc;
-    if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
+    if (cur.prompt) {
+      const prompt: IMessage = { role: 'user', content: cur.prompt };
+      acc.push(prompt);
+      // The kept current prompt is this turn, not a replayed one: its offeredTools is still the
+      // schema's empty default, which would read as a first turn that offered no tools.
+      if (cur !== keptCurrentPrompt) {
+        toolTurns.push({
+          prompt,
+          offeredTools: cur.promptMeta?.offeredTools,
+          calledTools: (cur.promptMeta?.functionCalls ?? [])
+            .map(fc => fc.name)
+            .filter((name): name is string => Boolean(name)),
+        });
+      }
+    }
 
     const toolCalls = replayableToolCalls(cur.promptMeta?.functionCalls);
 
@@ -848,8 +943,11 @@ export async function fetchAndProcessPreviousMessages(
     // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
     else if (toolCalls.length > 0 && !disableToolReplay) {
-      // Get text reply (excluding thinking blocks)
-      const textReply = historyTextReply(cur);
+      // On a multi-slot turn the first slot is the pre-tool preamble and the rest came after the
+      // tool results, so the answer is replayed after them rather than ahead of the tool_use blocks.
+      const slots = historyReplySlots(cur);
+      const textReply = slots.length > 1 ? slots[0] : historyTextReply(cur);
+      const finalAnswer = slots.slice(1).join(REPLY_SLOT_SEPARATOR);
 
       // Build assistant message with text + tool_use blocks
       const assistantContent: MessageContentObject[] = [];
@@ -887,15 +985,19 @@ export async function fetchAndProcessPreviousMessages(
           is_error: fc.success === false,
         })),
       });
+
+      if (finalAnswer) {
+        const text = stripToolOutputMarker(finalAnswer);
+        const reattach = includeReplyChoices && endsWithFinalVisibleReply(cur);
+        acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
+      }
     }
     // Priority 3: Legacy fallback - text-only replies
     else {
       const textReply = historyTextReply(cur);
       if (textReply) {
         const text = stripToolOutputMarker(textReply);
-        // Only re-attach when the picked slot is also the turn's final visible answer - see
-        // isFinalVisibleReply for why an earlier slot must never get the block.
-        const reattach = includeReplyChoices && isFinalVisibleReply(cur);
+        const reattach = includeReplyChoices && endsWithFinalVisibleReply(cur);
         acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
       }
     }
@@ -903,23 +1005,7 @@ export async function fetchAndProcessPreviousMessages(
     return acc;
   }, new Array<IMessage>());
 
-  // Surface recently generated images so a follow-up turn can edit or animate them
-  // ("make it cartoonish"). Generated images persist as bare storage keys in
-  // quest.images with no fabFile record, so the model otherwise has no handle on
-  // them. Newest first, capped, and filtered to actual image files (quest.images
-  // can also hold .xlsx/other generated artifacts).
-  const recentGeneratedImages: { key: string; prompt: string }[] = [];
-  for (let i = chatHistoryItems.length - 1; i >= 0 && recentGeneratedImages.length < MAX_RECENT_GENERATED_IMAGES; i--) {
-    const item = chatHistoryItems[i];
-    if (!Array.isArray(item.images) || item.images.length === 0) continue;
-    const prompt = (item.prompt ?? '').slice(0, RECENT_IMAGE_PROMPT_PREVIEW_CHARS);
-    for (const key of item.images) {
-      if (recentGeneratedImages.length >= MAX_RECENT_GENERATED_IMAGES) break;
-      if (typeof key === 'string' && EDITABLE_IMAGE_KEY_RE.test(key)) {
-        recentGeneratedImages.push({ key, prompt });
-      }
-    }
-  }
+  const { recentGeneratedImages, recentImageJobs } = collectRecentGeneratedImages(chatHistoryItems);
 
   // Real tool-usage signal for this window - see the field's own doc comment above for why the
   // reconstructed message history cannot answer "was this tool used earlier in the conversation".
@@ -937,9 +1023,68 @@ export async function fetchAndProcessPreviousMessages(
       oldestIncludedQuestId,
       excludedOlderQuestCount,
       recentGeneratedImages,
+      recentImageJobs,
       priorToolNames,
+      toolTurns,
     },
   ];
+}
+
+type RecentGeneratedImages = {
+  recentGeneratedImages: { key: string; prompt: string }[];
+  recentImageJobs: { jobId: string; prompt: string }[];
+};
+
+/**
+ * Recently generated images, so a follow-up turn can edit or animate them ("make it cartoonish"). Legacy
+ * in-process images persist as bare storage keys in quest.images with no fabFile record; image jobs persist as
+ * job refs on quest.generationJobs (the caller resolves them to file ids). Newest first, each capped, and keys
+ * filtered to actual image files (quest.images can also hold .xlsx/other generated artifacts). `chatHistoryItems`
+ * is chronological. Shared by the chat path (fetchAndProcessPreviousMessages) and the agent path
+ * (fetchAgentRecentGeneratedImages), so both notes list the same images.
+ */
+function collectRecentGeneratedImages(chatHistoryItems: readonly IChatHistoryItemDocument[]): RecentGeneratedImages {
+  const recentGeneratedImages: { key: string; prompt: string }[] = [];
+  for (let i = chatHistoryItems.length - 1; i >= 0 && recentGeneratedImages.length < MAX_RECENT_GENERATED_IMAGES; i--) {
+    const item = chatHistoryItems[i];
+    if (!Array.isArray(item.images) || item.images.length === 0) continue;
+    const prompt = (item.prompt ?? '').slice(0, RECENT_IMAGE_PROMPT_PREVIEW_CHARS);
+    for (const key of item.images) {
+      if (recentGeneratedImages.length >= MAX_RECENT_GENERATED_IMAGES) break;
+      if (typeof key === 'string' && EDITABLE_IMAGE_KEY_RE.test(key)) {
+        recentGeneratedImages.push({ key, prompt });
+      }
+    }
+  }
+
+  const recentImageJobs: { jobId: string; prompt: string }[] = [];
+  for (let i = chatHistoryItems.length - 1; i >= 0 && recentImageJobs.length < MAX_RECENT_GENERATED_IMAGES; i--) {
+    const item = chatHistoryItems[i];
+    const imageJobIds = (item.generationJobs ?? []).filter(ref => ref.kind === 'image').map(ref => ref.id);
+    if (imageJobIds.length === 0) continue;
+    const prompt = (item.prompt ?? '').slice(0, RECENT_IMAGE_PROMPT_PREVIEW_CHARS);
+    for (const jobId of imageJobIds) {
+      if (recentImageJobs.length >= MAX_RECENT_GENERATED_IMAGES) break;
+      recentImageJobs.push({ jobId, prompt });
+    }
+  }
+  return { recentGeneratedImages, recentImageJobs };
+}
+
+/**
+ * The agent path's recently generated images (see collectRecentGeneratedImages), read over the same window as
+ * fetchAgentConversationHistory. The agent run seeds text-only history, so without this its model has no handle
+ * on an image an earlier turn generated and cannot edit it.
+ */
+export async function fetchAgentRecentGeneratedImages(
+  session: Pick<ISessionDocument, 'id'>,
+  questCount: number,
+  { db }: { db: { quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'> } }
+): Promise<RecentGeneratedImages> {
+  if (questCount <= 0) return { recentGeneratedImages: [], recentImageJobs: [] };
+  const chatHistoryItems = await db.quests.getMostRecentChatHistory(session.id, questCount);
+  // getMostRecentChatHistory returns newest-first; flip to chronological order.
+  return collectRecentGeneratedImages([...chatHistoryItems].reverse());
 }
 
 /**
@@ -1048,14 +1193,12 @@ export async function getCachedSignedUrl(
 
   const cachedSignedUrl = await db.caches.findByKey(key);
   if (cachedSignedUrl) {
-    return cachedSignedUrl.result;
+    return cachedSignedUrl.result as string;
   }
 
   const expiryInSeconds = 3600; // 1 hour
   const signedUrl = await storage.getSignedUrl(filePath, 'get', { expiresIn: expiryInSeconds });
-  const expiresAt = dayjs()
-    .add(expiryInSeconds * 1000, 'milliseconds')
-    .toDate();
+  const expiresAt = signedUrlExpiresAt(signedUrl, expiryInSeconds);
   await db.caches.createOrUpdate({ key, result: signedUrl, expiresAt });
   return signedUrl;
 }
@@ -1509,7 +1652,7 @@ async function noticeOversizedCanvas(
 }
 
 export async function processFabFilesServer(
-  embeddingFactory: EmbeddingFactory,
+  embeddingFactory: EmbeddingRuntime,
   fabFiles: IFabFileDocument[],
   userPrompt: string,
   /**
@@ -1596,7 +1739,7 @@ export async function processFabFilesServer(
   // Memoize the user prompt vectorization for each embedding model
   const embeddingStartTime = Date.now();
   const userVectorPrompt: { [embeddingModel: string]: number[] } = {};
-  const selectedEmbeddingModel = embeddingFactory.getDefaultEmbeddingModel();
+  const selectedEmbeddingModel = embeddingFactory.defaultModel;
 
   // Embedding the query powers semantic chunk selection over vectorized files, but it is an
   // OPTIMIZATION, not a prerequisite for answering. A failure here - provider down, key revoked or
@@ -1606,7 +1749,7 @@ export async function processFabFilesServer(
   // raw-content path below, so the attachment still reaches the model.
   try {
     userVectorPrompt[selectedEmbeddingModel] = await generateSafeEmbedding(
-      embeddingFactory.createEmbeddingService(selectedEmbeddingModel),
+      bindEmbeddingModel(embeddingFactory, selectedEmbeddingModel),
       userPrompt,
       logger
     );
@@ -1728,7 +1871,9 @@ export async function processFabFilesServer(
             if (
               modelInfo.backend === ModelBackend.Anthropic ||
               modelInfo.id.includes('anthropic') ||
-              modelInfo.id.includes('gemini')
+              modelInfo.id.includes('gemini') ||
+              modelInfo.adapterFamily === 'bedrock-converse' ||
+              isConverseBedrockModel(String(modelInfo.id))
             ) {
               // Check image size before downloading (Anthropic has 5MB base64 limit)
               // We use 3.5MB as safe threshold since base64 encoding adds ~33% overhead
@@ -2128,6 +2273,20 @@ export async function processFabFilesServer(
                 fileName: file.fileName,
                 band: 'read_failed',
                 message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: it appears to be corrupted or deleted. Try uploading it again.`,
+                delivered: false,
+              });
+            } else if (isPasswordProtectedPdfError(e)) {
+              // An expected user outcome: warn without the stack, and tell the user why.
+              logger.warn(`[processFabFilesServer] Skipping password-protected file ${file.fileName}`, {
+                fileId: file.id,
+              });
+              await sendStatusUpdate(`Skipping password-protected file ${file.fileName}`);
+              await db.fabfiles.update({ id: file.id, error: PASSWORD_PROTECTED_PDF_MESSAGE });
+              fileNotices.push({
+                fabFileId: file.id,
+                fileName: file.fileName,
+                band: 'read_failed',
+                message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: ${PASSWORD_PROTECTED_PDF_MESSAGE}`,
                 delivered: false,
               });
             } else if (e instanceof CorruptedFileError) {
@@ -2603,7 +2762,7 @@ export async function buildAndSortMessages(
   if (VERBOSE_CHAT_CONTEXT) {
     if (options.verbose) {
       logger.log('\n=== 🤖 Chat Completion Context ===');
-      logger.log('📝 User Prompt:', userPrompt.map(m => m.content).join('\n'));
+      logger.log(`User Prompt: ${userPrompt.length} message(s)`);
       logger.log('\n📚 Context Summary:');
       logger.log(`• History Messages: ${previousMessages.length}`);
       logger.log(`• Knowledge Files: ${fabMessages.filter(m => m.role === 'user').length}`);

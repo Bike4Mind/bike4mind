@@ -7,7 +7,7 @@
  * would then trace every tool implementation into all ~790 route bundles.
  * Keep it a leaf: no imports, and callers reach it via
  * '@bike4mind/services/llm/toolFinishObserver', never via the ./llm barrel.
- * See services/src/index.closure.test.ts.
+ * See services/src/index.closure.repo.test.ts.
  */
 
 export interface ToolFinishObservation {

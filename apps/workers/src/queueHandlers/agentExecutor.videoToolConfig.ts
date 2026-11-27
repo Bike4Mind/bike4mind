@@ -1,16 +1,14 @@
 /**
- * The `video_generation` tool config for agent-mode runs (the parent and its in-process subagents).
+ * The `video_generation` tool config for agent-mode runs and their subagents.
  *
  * Chat builds the same base config (questProcessor.getVideoToolConfigResolver); agent mode adds the
- * `agentVideoClipsPerRun` per-run cap on top (agentExecutor.generationJobCap.ts). Lambda-dispatched
- * subagents get no native tools at all today (processSubagentDispatch passes no `enabledTools`), so
- * they get no video either; giving them native tools must reuse this config, keyed on the shared `linkedQuestId`.
+ * `agentVideoClipsPerRun` per-run cap on top (agentExecutor.generationJobCap.ts), keyed on the shared `linkedQuestId`.
  * Video jobs hold and settle their own credits, so nothing here touches agentExecutor.billing.ts.
  */
 import type { VideoToolConfig } from '@bike4mind/services/llm/tools';
 import type { Logger } from '@bike4mind/observability';
-import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
 import {
   limitJobsPerRun,
   questGenerationSlots,

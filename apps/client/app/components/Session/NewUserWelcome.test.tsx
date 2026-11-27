@@ -4,6 +4,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ModelAnswerCost } from '@client/app/utils/creditEstimate';
+import type { SignupGrant } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 
 const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
   state: {
@@ -13,7 +15,10 @@ const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
     balance: 9982,
     liveBalance: null as number | null,
     enforceCredits: true,
+    paymentHoldHours: undefined as number | undefined,
     hasComposer: true,
+    emailVerified: true,
+    signupGrant: undefined as SignupGrant | undefined,
     answerCost: { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 } as ModelAnswerCost | null,
   },
   sendPrompt: vi.fn(() => Promise.resolve(true)),
@@ -21,8 +26,16 @@ const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
   logEvent: vi.fn(),
 }));
 
+vi.mock('@client/app/components/tutorial/core/TutorialOffer', () => ({ TutorialOffer: () => null }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'user-1', emailVerified: true, tags: [] } }),
+  useUser: () => ({
+    currentUser: {
+      id: 'user-1',
+      emailVerified: state.emailVerified,
+      signupGrant: state.signupGrant,
+      tags: state.emailVerified ? [] : [PENDING_FREE_CREDITS_TAG],
+    },
+  }),
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({
   useGetOwnSessions: () => ({
@@ -32,7 +45,12 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'enforceCredits' ? state.enforceCredits : undefined),
+  useGetSettingsValue: (key: string) => {
+    if (key === 'enforceCredits') return state.enforceCredits;
+    if (key === 'signupUnlockPaymentHoldHours') return state.paymentHoldHours;
+    return undefined;
+  },
+  useSettingsFromServer: () => ({ data: undefined }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({
   useEffectiveCredits: (options?: { live?: boolean }) =>
@@ -70,7 +88,10 @@ describe('NewUserWelcome', () => {
     state.balance = 9982;
     state.liveBalance = null;
     state.enforceCredits = true;
+    state.paymentHoldHours = undefined;
     state.hasComposer = true;
+    state.emailVerified = true;
+    state.signupGrant = undefined;
     state.answerCost = { modelName: 'Claude Sonnet 5.5', creditsPerAnswer: 54 };
     sendPrompt.mockClear();
     setChatInputValue.mockClear();
@@ -157,6 +178,34 @@ describe('NewUserWelcome', () => {
     expect(screen.getByTestId('new-user-welcome-credits')).toBeInTheDocument();
     expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
   });
+
+  it.each([
+    [undefined, 'all at once when you subscribe or verify a card, once that payment settles (usually within 3 days).'],
+    [24, 'all at once when you subscribe or verify a card, once that payment settles (usually within 1 day).'],
+    [0, 'all at once when you subscribe, or all at once when you verify a card.'],
+  ])(
+    'advertises the configured %s-hour hold once, without promising the maximum staged credits or answers',
+    (holdHours, unlockCopy) => {
+      state.paymentHoldHours = holdHours;
+      state.balance = 0;
+      state.emailVerified = false;
+      state.signupGrant = {
+        stage: 'pending_email',
+        signupCredits: 10000,
+        unlockCredits: 20000,
+        creditsReleased: 0,
+        nextCondition: 'email_verification',
+      };
+      renderWelcome();
+      expect(screen.getByTestId('new-user-welcome-credits')).toHaveTextContent(
+        /^Verify your email to unlock up to 10,000 credits now\.$/
+      );
+      expect(screen.queryByTestId('new-user-welcome-answers-estimate')).not.toBeInTheDocument();
+      // The unlock paths sentence appears once on the card, from the grant status block.
+      expect(screen.getByTestId('signup-grant-unlock-paths')).toHaveTextContent(`The rest unlocks ${unlockCopy}`);
+      expect(screen.getAllByText(/The rest unlocks/)).toHaveLength(1);
+    }
+  );
 
   it('updates, hides and restores the estimate as the selected model changes', () => {
     const { rerender } = renderWelcome();

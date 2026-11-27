@@ -51,13 +51,19 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -103,7 +109,7 @@ vi.mock('@bike4mind/database', async orig => {
 const mockGetGenerationCallbackQueueUrl = vi.fn(
   () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
 );
-vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
 }));
@@ -113,15 +119,26 @@ vi.mock('@bike4mind/server-utils/utils/ssrfProtection', async orig => ({
   assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
 }));
 
-vi.mock('@server/managers/sessionManager', () => ({
+vi.mock('@bike4mind/server-utils/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
-vi.mock('@server/utils/orgAccess', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
 }));
 
-vi.mock('@server/imageGenerations/imageEdit', () => ({
+const paidCallRun = vi.hoisted(() => ({
+  resolve: vi.fn(async (_req: unknown, run: { runId: string } | undefined, _organizationId?: string | null) =>
+    run ? { attribution: { ...run, purpose: 'tool' as const }, billingOrganizationId: null } : undefined
+  ),
+  assertHeadroom: vi.fn(async (_runId: string, _credits: number) => undefined),
+}));
+vi.mock('@server/completionRuns/paidCallRun', () => ({ resolvePaidCallRun: paidCallRun.resolve }));
+vi.mock('@bike4mind/server-utils/billing/runBudgetClaim', () => ({
+  assertRunBudgetHeadroom: paidCallRun.assertHeadroom,
+}));
+
+vi.mock('@bike4mind/server-utils/imageGenerations/imageEdit', () => ({
   getImageEdit: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 
@@ -141,7 +158,15 @@ vi.mock('@server/auth/auth', async orig => {
 import handler from '../image-edits';
 import legacyHandler from '../../ai/edit-image';
 import { questRepository } from '@bike4mind/database';
-import { ApiKeyScope, ApiKeyStatus, CreditHolderType, ImageQuestSchema, NotFoundError } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  CreditHolderType,
+  ForbiddenError,
+  ImageQuestSchema,
+  NotFoundError,
+  UnprocessableEntityError,
+} from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 const USER = { id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false };
@@ -218,6 +243,9 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(res._getJSONData()).toMatchObject({ id: 'quest-1' });
     expect(ImageQuestSchema.safeParse(res._getJSONData()).success).toBe(true);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+    expect(mockInvoke.mock.calls[0][0].adminRoleWithheld).toBe(true);
+    // Carried onto the queued job so its settled ledger row is attributed to the key.
+    expect(mockInvoke.mock.calls[0][0].apiKeyId).toBe('k1');
   });
 
   describe('referenceImageFabFileIds', () => {
@@ -244,6 +272,43 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     });
   });
 
+  describe('FLUX 3 region edits', () => {
+    const region = { prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] };
+    it('queues a valid no-mask region edit without stripping the regions', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { model: 'flux-3-image-klein', fabFileIds: [], edit_regions: [region] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({ model: 'flux-3-image-klein', fabFileIds: [], edit_regions: [region] }),
+        })
+      );
+    });
+    it.each([
+      [{ ...region, bbox: [-0.1, 0, 1, 1] }],
+      [{ ...region, bbox: [0.1001, 0.2, 0.1002, 0.9] }],
+      Array.from({ length: 9 }, () => region),
+    ])('rejects invalid regions before creating a session or queueing', async (...edit_regions) => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { model: 'flux-3-image-klein', fabFileIds: [], edit_regions } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+    it('refuses a painted mask before creating a session or queueing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { model: 'flux-3-image-klein', fabFileIds: ['mask'], edit_regions: [region] },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a body that fails the contract schema (422) before enqueuing the edit', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire({ body: { image: undefined } });
@@ -256,6 +321,17 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
 
   it('serves the legacy /api/ai/edit-image path with the same handler', () => {
     expect(legacyHandler).toBe(handler);
+  });
+
+  // The sunset date is a promise to API clients; the /api/ai/edit-image alias shares this handler (asserted above).
+  it('sends Deprecation, Sunset (2027-02-17) and a Link to /api/v1/image-jobs', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Deprecation')).toBe('@1794873600');
+    expect(res.getHeader('Sunset')).toBe('Wed, 17 Feb 2027 00:00:00 GMT');
+    expect(res.getHeader('Link')).toBe('</api/v1/image-jobs>; rel="successor-version"');
   });
 
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
@@ -334,8 +410,9 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
       // gate stubbed, so this pins the status the route actually returns, not a mocked rejection.
       // Unlike llm.integration.test.ts, orgAccess stays mocked file-wide because the forwarding
       // case below needs mockResolveBillingOrgId to return a fixed org.
-      const { resolveBillingOrgId: realResolveBillingOrgId } =
-        await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      const { resolveBillingOrgId: realResolveBillingOrgId } = await vi.importActual<
+        typeof import('@bike4mind/server-utils/utils/orgAccess')
+      >('@bike4mind/server-utils/utils/orgAccess');
       mockResolveBillingOrgId.mockImplementation(realResolveBillingOrgId);
       mockOrgFindAccessibleById.mockResolvedValueOnce(null);
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
@@ -529,6 +606,74 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
       // An org-billed key follows the key: the mapper hands its org to resolveMediaBillingOrgId,
       // which needs no membership lookup because the body agrees with the key.
       expect(billedOrg()).toBe(KEY_ORG);
+    });
+  });
+
+  describe('run (completion run budget)', () => {
+    const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+    const runBody = { runId: RUN_ID, role: 'worker' as const };
+    const attribution = { ...runBody, purpose: 'tool' as const };
+    const invoked = () => mockInvoke.mock.calls[0][0];
+
+    it("passes the run to the edit as a tool call and bills the run's account", async () => {
+      paidCallRun.resolve.mockResolvedValueOnce({ attribution, billingOrganizationId: 'run-org' });
+      const { req, res } = fire({ apiKey: null, body: { run: runBody } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, undefined);
+      expect(mockResolveBillingOrgId).not.toHaveBeenCalled();
+      expect(invoked().run.attribution).toEqual(attribution);
+      expect(invoked().body.organizationId).toBe('run-org');
+      expect(invoked().body).not.toHaveProperty('run');
+    });
+
+    it("checks the run's headroom through assertRunBudgetHeadroom", async () => {
+      mockInvoke.mockImplementationOnce(async (args: { run?: { assertHeadroom(c: number): Promise<void> } }) => {
+        await args.run?.assertHeadroom(40);
+        return { id: 'quest-1', sessionId: 's1', type: 'message' };
+      });
+      const { req, res } = fire({ apiKey: null, body: { run: runBody } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(paidCallRun.assertHeadroom).toHaveBeenCalledWith(RUN_ID, 40);
+    });
+
+    it("refuses another caller's run (404 run_not_found) before creating a session or enqueuing", async () => {
+      paidCallRun.resolve.mockRejectedValueOnce(new NotFoundError('Run not found', { errorCode: 'run_not_found' }));
+      const { req, res } = fire({ apiKey: null, body: { run: runBody } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'run_not_found' });
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('passes the billing organization to the run check, which refuses a different account (403)', async () => {
+      paidCallRun.resolve.mockRejectedValueOnce(
+        new ForbiddenError('This run bills a different account', { errorCode: 'billing_organization_mismatch' })
+      );
+      const { req, res } = fire({ apiKey: null, body: { run: runBody, organization_id: null } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, null);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 run_budget_exhausted when the run has too little left for the edit', async () => {
+      mockInvoke.mockRejectedValueOnce(
+        new UnprocessableEntityError('run budget used up', { errorCode: 'run_budget_exhausted' })
+      );
+      const { req, res } = fire({ apiKey: null, body: { run: runBody } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData()).toMatchObject({ errorCode: 'run_budget_exhausted' });
+    });
+
+    it('passes no run without one', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invoked().run).toBeUndefined();
     });
   });
 });

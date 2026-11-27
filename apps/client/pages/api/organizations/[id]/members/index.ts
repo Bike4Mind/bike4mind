@@ -1,15 +1,18 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-import { assertDataLakeShareScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeShareScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
-import { logEvent } from '@server/utils/analyticsLog';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
+import { refreshSeatEntitlements } from '@server/organizations/refreshSeatEntitlements';
 import {
   OrganizationEvents,
+  organizationRosterScope,
   toSafeUser,
   toSafeUsers,
   toSafeOrganization,
@@ -17,9 +20,10 @@ import {
   safeUsersResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { userRepository } from '@bike4mind/database/auth';
+import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 
 // No `force` here, deliberately. The service still accepts a seat-ceiling override for the
@@ -39,52 +43,64 @@ const handler = baseApi()
   .get(async (req, res) => {
     const { id: organizationId } = req.query;
 
-    const users = await organizationService.getUsers(
+    const { organization, users } = await organizationService.getRoster(
       req.user,
       { id: organizationId as string },
       { db: { organizations: organizationRepository, users: userRepository } }
     );
+    await recordOrganizationRead(req, [organization], { view: 'roster' });
 
-    return respond(res, safeUsersResponseSchema, toSafeUsers(users, 'same-org'));
+    return respond(res, safeUsersResponseSchema, toSafeUsers(users, organizationRosterScope(req.user, organization)));
   })
-  .post(async (req: Request<{}, {}, { name: string; email: string; level: string }, { id?: string }>, res) => {
-    const { id: userId } = req.user;
-    const { id: organizationId } = req.query;
+  .post(
+    outboundActionGate(),
+    async (req: Request<{}, {}, { name: string; email: string; level: string }, { id?: string }>, res) => {
+      const { id: userId } = req.user;
+      const { id: organizationId } = req.query;
 
-    if (!organizationId) {
-      throw new BadRequestError('Organization ID is required');
-    }
+      if (!organizationId) {
+        throw new BadRequestError('Organization ID is required');
+      }
 
-    const body = addMemberBodySchema.parse(req.body);
-    const { user: newMember } = await withTransaction(async () =>
-      organizationService.addMember(
-        req.user,
-        { organizationId, ...body },
+      // Adding an existing account directly, without an invite it accepts, is a platform-admin
+      // operation. Org owners and managers add people through invitations (sharingService).
+      // Checked before any lookup. Keep in sync with addUser.ts, which applies the same rule.
+      if (!req.user.isAdmin) {
+        throw new ForbiddenError('Members join an organization by accepting an invitation');
+      }
+
+      const body = addMemberBodySchema.parse(req.body);
+      const { user: newMember } = await withTransaction(async () =>
+        organizationService.addMember(
+          req.user,
+          { organizationId, ...body },
+          {
+            db: {
+              organizations: organizationRepository,
+              users: userRepository,
+            },
+            logger: req.logger,
+          }
+        )
+      );
+
+      await logEvent(
         {
-          db: {
-            organizations: organizationRepository,
-            users: userRepository,
+          userId,
+          type: OrganizationEvents.ADD_ORG_MEMBER,
+          metadata: {
+            organizationId,
+            userId: newMember.id,
+            memberEmail: newMember.email || '',
+            memberLevel: newMember.level,
           },
-          logger: req.logger,
-        }
-      )
-    );
-
-    await logEvent(
-      {
-        userId,
-        type: OrganizationEvents.ADD_ORG_MEMBER,
-        metadata: {
-          organizationId,
-          memberEmail: newMember.email || '',
-          memberLevel: newMember.level,
         },
-      },
-      { ability: req.ability }
-    );
+        { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
+      );
 
-    return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
-  })
+      return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
+    }
+  )
   .delete(async (req, res) => {
     // In-handler rather than on `baseApi()`, so GET and POST above keep their current scope
     // behaviour: only this method changes who can reach a data lake. Leaving an org expires the
@@ -108,6 +124,7 @@ const handler = baseApi()
             groups: groupRepository,
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            userApiKeys: userApiKeyRepository,
             ...lakeConfigAuditDb,
           },
           // See the sibling removal route: a key-driven departure must be attributed to the KEY,
@@ -120,6 +137,7 @@ const handler = baseApi()
 
     // After the commit, as on the removal route. The leaver gets no count back: they already know
     // what they were shared.
+    await refreshSeatEntitlements(req.user.id);
     await reportAndNotifyKeptPersonalLakeShares(req.user.id, organization, req.logger);
 
     await logEvent(
@@ -131,7 +149,7 @@ const handler = baseApi()
           organizationId: organization.id,
         },
       },
-      { ability: req.ability }
+      { ability: req.ability, organizationAuditActorUserId: req.user.impersonatedBy ?? req.user.id }
     );
 
     return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));

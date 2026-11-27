@@ -1,0 +1,44 @@
+import { randomUUID } from 'crypto';
+import type { Context } from 'aws-lambda';
+import { Resource } from 'sst';
+import { connectDB } from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { sweepAbuseAssessments } from '@bike4mind/server-utils/security/abuseAssessment/abuseAssessment';
+import { linkedAccountGroupEvidence } from '@bike4mind/server-utils/security/abuseAssessment/linkedAccountEvidence';
+import { applyAutoContainment, liveAutoContainmentDeps } from '@workers/security/autoContainment/executor';
+import { expireInterventionHolds } from '@workers/security/autoContainment/expiry';
+
+/** Stop starting new assessments this long before the Lambda timeout. */
+const STOP_MARGIN_MS = 60_000;
+
+/**
+ * Hourly assessments of unreviewed shadow detections (packages/server-utils/src/security/abuseAssessment),
+ * each judgment handed to automated containment (security/autoContainment, autoContainmentConfig).
+ * A no-op unless abuseAssessmentEnabled, the sweep, a rollout percent and a model are all configured.
+ */
+export async function handler(_event: never, context: Context) {
+  const logger = new Logger().withMetadata({
+    requestId: context.awsRequestId ?? randomUUID(),
+    functionName: context.functionName,
+    stage: Resource.App.stage,
+  });
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
+  // Runs even when assessment is disabled, so holds placed before a disable still get their expiry stamped.
+  try {
+    const expired = await expireInterventionHolds(new Date());
+    if (expired.holds > 0) logger.info('Expired automated intervention holds', expired);
+  } catch (error) {
+    logger.error('Expiring automated intervention holds failed', error);
+  }
+  const result = await sweepAbuseAssessments({
+    logger,
+    shouldStop: () => context.getRemainingTimeInMillis() < STOP_MARGIN_MS,
+    deps: {
+      groupEvidence: linkedAccountGroupEvidence,
+      afterAssessment: item => applyAutoContainment(item, liveAutoContainmentDeps(logger)),
+    },
+  });
+  logger.info('Abuse assessment sweep finished', result);
+  return result;
+}

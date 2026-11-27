@@ -2,10 +2,21 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
+import { wslLocation } from '../../wsl/wslPath';
 import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
-import { isWithin, PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots } from './paths';
+import {
+  hostPhysicalTarget,
+  ownLocation,
+  PathAccessDenied,
+  physicalTarget,
+  realpathNearest,
+  realpathSyncNearest,
+  resolveWithinRoots,
+  withinGuarded,
+} from './paths';
 import { recordRecentFile } from './recentFiles';
 import { protectionFor } from './sandbox';
+import { recordSessionWrite } from './sessionScripts';
 import { requireString, type ApprovalPrompt, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -30,16 +41,33 @@ export const MAX_WRITE_BYTES = 1_000_000;
  */
 export async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
   const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
+  const unresolved = context.unresolvedProtectedPaths?.[0];
+  if (unresolved !== undefined) {
+    throw new PathAccessDenied(
+      requested,
+      `Refused: ${requested} cannot be written to while Desktop cannot resolve the protected folder ${unresolved}. ` +
+        'Try again later.'
+    );
+  }
   const real = await physicalTarget(target);
+  // A Linux link under the WSL share is followed by the distro, which the host's view above does not see.
+  const inDistro = wslLocation(target) ? await hostPhysicalTarget(target).catch(() => null) : undefined;
+  // A delete or move acts on a final link itself, wherever its parent really is.
+  const own = ownLocation(target);
+  const nearest = realpathSyncNearest(target);
+  if (own === null || nearest === null || inDistro === null) {
+    throw new PathAccessDenied(requested, `Refused: ${requested} cannot be written to. Choose a different path.`);
+  }
+  const candidates = [target, real, own, nearest, ...(inDistro === undefined ? [] : [inDistro])];
 
-  if ((context.protectedPaths ?? []).some(guarded => isWithin(guarded, real) || isWithin(guarded, target))) {
+  if (withinGuarded(context.protectedPaths ?? [], candidates)) {
     throw new PathAccessDenied(
       requested,
       `Refused: ${requested} is a protected location and cannot be written to, ` +
         'whatever folders are shared. Choose a different path.'
     );
   }
-  const reason = protectionFor([target, real], 'write');
+  const reason = protectionFor(candidates, 'write');
   if (reason) {
     throw new PathAccessDenied(
       requested,
@@ -825,9 +853,17 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
+/**
+ * "Allow in this chat" on a change to one file covers later changes to that same file in the
+ * conversation, as the `Edit(<path>)` rule offered beside it does for every session.
+ */
+export function fileChangeAllowance(target: string): Pick<ApprovalPrompt, 'chatKey' | 'alwaysCovers'> {
+  return { chatKey: `file-change\x00${target}`, alwaysCovers: `changes to ${target}` };
+}
+
 function toPrompt(plan: WritePlan): ApprovalPrompt {
   remember(plan.key, fingerprint(plan.state.exists, plan.state.content));
-  return { detail: summarizeDiff(plan.diff), key: plan.key, diff: plan.diff };
+  return { detail: summarizeDiff(plan.diff), key: plan.key, diff: plan.diff, ...fileChangeAllowance(plan.target) };
 }
 
 const SNIPPET_CONTEXT_LINES = 4;
@@ -901,6 +937,7 @@ async function applyPlan(plan: WritePlan, context: ToolContext): Promise<string>
   recordOwnWrite(plan.target, fingerprint(plan.state.exists, plan.state.content), fingerprint(true, plan.after));
   approvedState.delete(plan.key);
   recordRecentFile(context, plan.target);
+  await recordSessionWrite(context, plan.target);
 
   // AFTER the write, deliberately: everything above can throw - a revoked root, a stale
   // approval, a stopped turn - and a transcript row showing a diff for a write that never

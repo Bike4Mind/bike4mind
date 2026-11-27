@@ -6,6 +6,7 @@ import type {
   IDataLakeProposalDocument,
   IDataLakeProposalRepository,
   RestoreDataLakeProposalResult,
+  UnapproveDataLakeProposalResult,
   ReviewDataLakeProposalInput,
 } from '@bike4mind/common';
 import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
@@ -15,8 +16,13 @@ const ModelName = 'DataLakeProposal';
 
 interface IDataLakeProposalModel extends Model<IDataLakeProposalDocument> {}
 
+const AutoAdmissionSchema = new Schema(
+  { configId: { type: String, required: true }, trustedDomain: { type: String } },
+  { _id: false }
+);
+
 /**
- * One row per candidate a producer wants admitted to a lake (#1671). The row is the whole safety
+ * One row per candidate a producer wants admitted to a lake. The row is the whole safety
  * mechanism: content reaches a lake only by a human moving one of these to `approved`, and the
  * approval then goes through the ordinary ingestion door. A declined row stays as the source's
  * tombstone. See DataLakeProposalTypes.ts for the field-by-field contract.
@@ -37,11 +43,24 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
       producer: { type: String, required: true },
       runId: { type: String },
       query: { type: String },
+      feedUrl: { type: String, default: null },
       retrievedAt: { type: Date, required: true },
+      sourceTier: { type: String, enum: ['trusted', 'review'] },
+      reviewReason: {
+        type: new Schema(
+          {
+            kind: { type: String, enum: ['rule_match', 'rule_undetermined', 'rule_check_failed'], required: true },
+            conditions: { type: [String], default: undefined },
+          },
+          { _id: false }
+        ),
+        default: undefined,
+      },
     },
     priorDisposition: { type: String, enum: DATA_LAKE_PROPOSAL_STATUSES, default: null },
     reviewedByUserId: { type: String, default: null },
     reviewedAt: { type: Date, default: null },
+    autoAdmission: { type: AutoAdmissionSchema, default: undefined },
     declineReason: { type: String, default: null },
     admittedFabFileId: { type: String, default: null },
   },
@@ -71,7 +90,9 @@ DataLakeProposalSchema.index(
   { unique: true, partialFilterExpression: { status: 'pending' } }
 );
 // The review queue: one lake's pending proposals, newest first.
-DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1 });
+DataLakeProposalSchema.index({ dataLakeId: 1, status: 1, createdAt: -1, _id: -1 });
+// The declined-text check a rule admission makes (hasDeclinedWithTextHash).
+DataLakeProposalSchema.index({ dataLakeId: 1, textHash: 1, status: 1 });
 
 export const DataLakeProposalModel: IDataLakeProposalModel =
   (mongoose.models[ModelName] as IDataLakeProposalModel) ||
@@ -123,18 +144,25 @@ class DataLakeProposalRepository
 
   async listByLake(
     dataLakeId: string,
-    options?: { status?: DataLakeProposalStatus; limit?: number }
+    options?: { status?: DataLakeProposalStatus; limit?: number; after?: { createdAt: Date; id: string } }
   ): Promise<IDataLakeProposalDocument[]> {
+    const after = options?.after;
     const query = this.proposalModel
-      .find({ dataLakeId, ...(options?.status ? { status: options.status } : {}) })
-      .sort({ createdAt: -1 });
+      .find({
+        dataLakeId,
+        ...(options?.status ? { status: options.status } : {}),
+        ...(after
+          ? { $or: [{ createdAt: { $lt: after.createdAt } }, { createdAt: after.createdAt, _id: { $lt: after.id } }] }
+          : {}),
+      })
+      .sort({ createdAt: -1, _id: -1 });
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeProposalDocument);
   }
 
   async claimForReview(id: string, input: ReviewDataLakeProposalInput): Promise<IDataLakeProposalDocument | null> {
-    const { status, reviewedByUserId, reviewedAt, declineReason } = input;
+    const { status, reviewedByUserId, reviewedAt, declineReason, autoAdmission } = input;
     // `status: 'pending'` in the FILTER is the double-review guard: the second writer of a race
     // matches nothing and gets null. Never split into a read then a write.
     const doc = await this.proposalModel.findOneAndUpdate(
@@ -145,6 +173,7 @@ class DataLakeProposalRepository
           reviewedByUserId,
           reviewedAt,
           declineReason: declineReason ?? null,
+          ...(autoAdmission ? { autoAdmission } : {}),
           // A decline keeps the source identity, the reason and the reviewer, and drops the
           // candidate material itself. `textHash` survives on purpose - it is the signal that
           // detects this source coming back materially changed, and a hash is not the material.
@@ -184,15 +213,91 @@ class DataLakeProposalRepository
     }
   }
 
-  async recordAdmission(id: string, fabFileId: string): Promise<void> {
-    await this.proposalModel.updateOne({ _id: id }, { $set: { admittedFabFileId: fabFileId } });
+  async unapprove(id: string): Promise<UnapproveDataLakeProposalResult> {
+    try {
+      // update-validators-off: aggregation-pipeline update, which Mongoose cannot validate
+      const previous = await this.proposalModel.findOneAndUpdate(
+        { _id: id, status: 'approved' },
+        [
+          {
+            $set: {
+              status: 'pending',
+              priorDisposition: { $ifNull: ['$priorDisposition', 'approved'] },
+              reviewedByUserId: null,
+              reviewedAt: null,
+              declineReason: null,
+              admittedFabFileId: null,
+            },
+          },
+          { $unset: 'autoAdmission' },
+        ],
+        { new: false }
+      );
+      if (!previous) return { unapproved: false, reason: 'not_approved' };
+      const proposal = await this.proposalModel.findById(id);
+      return {
+        unapproved: true,
+        proposal: proposal!.toJSON() as IDataLakeProposalDocument,
+        previous: previous.toJSON() as IDataLakeProposalDocument,
+      };
+    } catch (error) {
+      // The pending-uniqueness index: a newer proposal for this source already holds the slot.
+      if ((error as { code?: number }).code !== 11000) throw error;
+      return { unapproved: false, reason: 'pending_exists' };
+    }
+  }
+
+  async rollbackUnapprove(previous: IDataLakeProposalDocument): Promise<void> {
+    await this.proposalModel.updateOne(
+      { _id: previous.id, status: 'pending' },
+      {
+        $set: {
+          status: 'approved',
+          priorDisposition: previous.priorDisposition ?? null,
+          reviewedByUserId: previous.reviewedByUserId ?? null,
+          reviewedAt: previous.reviewedAt ?? null,
+          declineReason: previous.declineReason ?? null,
+          admittedFabFileId: previous.admittedFabFileId ?? null,
+          ...(previous.autoAdmission ? { autoAdmission: previous.autoAdmission } : {}),
+        },
+      },
+      { runValidators: true }
+    );
+  }
+
+  async recordAdmission(id: string, fabFileId: string, trustedDomain?: string): Promise<void> {
+    await this.proposalModel.updateOne(
+      { _id: id },
+      {
+        $set: {
+          admittedFabFileId: fabFileId,
+          ...(trustedDomain ? { 'autoAdmission.trustedDomain': trustedDomain } : {}),
+        },
+      }
+    );
+  }
+
+  async hasDeclinedWithTextHash(dataLakeId: string, textHash: string): Promise<boolean> {
+    return !!(await this.proposalModel.exists({ dataLakeId, textHash, status: 'declined' }));
+  }
+
+  async hasApprovedForSourceKey(dataLakeId: string, canonicalSourceKey: string, excludeId: string): Promise<boolean> {
+    return !!(await this.proposalModel.exists({
+      dataLakeId,
+      canonicalSourceKey,
+      status: 'approved',
+      _id: { $ne: excludeId },
+    }));
   }
 
   async releaseClaim(id: string): Promise<void> {
     try {
       await this.proposalModel.updateOne(
         { _id: id },
-        { $set: { status: 'pending', reviewedByUserId: null, reviewedAt: null, declineReason: null } }
+        {
+          $set: { status: 'pending', reviewedByUserId: null, reviewedAt: null, declineReason: null },
+          $unset: { autoAdmission: '' },
+        }
       );
     } catch (error) {
       // The pending-uniqueness index refused the reopen, which can only mean a fresh proposal for

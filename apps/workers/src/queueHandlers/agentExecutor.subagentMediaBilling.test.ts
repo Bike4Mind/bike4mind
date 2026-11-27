@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
+  resolveThinkingVisibility: vi.fn(async () => 'raw'),
+}));
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 import { ImageModels } from '@bike4mind/common';
 
 // Generated media a dispatched subagent produces is paid upstream whether or not the run
@@ -50,6 +58,23 @@ vi.mock('./agentExecutor.subagentToolConfig', async () => {
   return { ...actual, buildSubagentToolConfig: vi.fn().mockReturnValue({}) };
 });
 
+vi.mock('./agentExecutor.audioToolConfig', () => ({
+  buildAgentAudioToolJobs: vi.fn().mockResolvedValue({}),
+  getAgentAudioToolJobsDeps: vi.fn().mockReturnValue({}),
+}));
+vi.mock('./agentExecutor.imageToolConfig', () => ({
+  buildAgentImageToolConfig: vi.fn().mockResolvedValue(null),
+  getAgentImageToolConfigDeps: vi.fn().mockReturnValue({}),
+}));
+vi.mock('./agentExecutor.videoToolConfig', () => ({
+  buildAgentVideoToolConfig: vi.fn().mockResolvedValue(null),
+  getAgentVideoToolConfigDeps: vi.fn().mockReturnValue({}),
+}));
+vi.mock('./agentExecutor.musicToolConfig', () => ({
+  buildAgentMusicToolConfig: vi.fn().mockResolvedValue(null),
+  getAgentMusicToolConfigDeps: vi.fn().mockReturnValue({}),
+}));
+
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: vi.fn().mockReturnValue({}),
   getGeneratedImageStorage: vi.fn().mockReturnValue({}),
@@ -86,6 +111,7 @@ vi.mock('@bike4mind/services', async () => {
 });
 
 type ToolCallbacks = {
+  onStatusUpdate: (changes: { generationJobs: { id: string; kind: 'music' | 'video' | 'image' }[] }) => Promise<void>;
   onToolStart: (toolName: string, data: unknown) => Promise<void>;
   onToolFinish: (toolName: string, data: unknown) => Promise<void>;
 };
@@ -130,6 +156,8 @@ const childDoc = {
   userId: 'user-1',
   sessionId: 'session-1',
   questId: 'quest-1',
+  linkedQuestId: 'parent-quest',
+  resolvedEnabledTools: ['music_generation', 'video_generation', 'image_generation'],
   organizationId: null,
   parentExecutionId: 'parent-1',
   dagNodeId: 'node-b',
@@ -144,10 +172,30 @@ const mockIncrementCreditsUsed = vi.fn().mockResolvedValue(undefined);
 const mockMarkAborted = vi.fn().mockResolvedValue(undefined);
 const mockCheckAbortFlag = vi.fn().mockResolvedValue(false);
 const mockRecordUsageEvent = vi.fn().mockResolvedValue(undefined);
+const mockAddGenerationJobs = vi.fn().mockResolvedValue(undefined);
+const mockPublishJobs = vi.fn().mockResolvedValue(undefined);
+let rootOverrides: Record<string, unknown> = {};
+
+vi.mock('./agentExecutor.generationJobs', async () => {
+  const actual = await vi.importActual<typeof import('./agentExecutor.generationJobs')>(
+    './agentExecutor.generationJobs'
+  );
+  return {
+    ...actual,
+    publishRunGenerationJobs: (input: Parameters<typeof actual.publishRunGenerationJobs>[0]) =>
+      actual.publishRunGenerationJobs({ ...input, sendWs: mockPublishJobs }),
+  };
+});
 
 vi.mock('@bike4mind/database', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
-  vi.spyOn(actual.agentExecutionRepository, 'findById').mockResolvedValue(childDoc as never);
+  vi.spyOn(actual.agentExecutionRepository, 'findById').mockImplementation(
+    async id =>
+      (id === 'parent-1'
+        ? { ...childDoc, id: 'parent-1', parentExecutionId: undefined, subagentConfig: undefined, ...rootOverrides }
+        : childDoc) as never
+  );
+  vi.spyOn(actual.questRepository, 'addGenerationJobs').mockImplementation((...args) => mockAddGenerationJobs(...args));
   vi.spyOn(actual.agentExecutionRepository, 'claimExecution').mockResolvedValue(true as never);
   vi.spyOn(actual.agentExecutionRepository, 'updateConnectionId').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'markComplete').mockImplementation((...args) => mockMarkComplete(...args));
@@ -172,6 +220,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
   // No model configurations; an unread one fails the run closed (see loadRunnableModels).
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
@@ -196,14 +245,7 @@ let remainingMs = 600_000;
 const lambdaContext = { getRemainingTimeInMillis: () => remainingMs } as never;
 const imagePayload = { model: IMAGE_MODEL_ID, n: 1, paths: ['generated/bicycle.png'] };
 const EXPECTED_IMAGE_CREDITS = 55;
-const audioPayload = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 20 };
-
-// Imported lazily: a static import would load the mocked modules before the fixtures above exist.
-async function expectedAudioCredits() {
-  const { estimateGeneratedMediaUsd } = await import('@bike4mind/services');
-  // Same converter as the `@bike4mind/utils` mock above, over the real estimator.
-  return Math.ceil(estimateGeneratedMediaUsd('audio_generation', audioPayload, []) * 1000);
-}
+const audioPayload = { kind: 'sound_effect' };
 
 async function dagHookMock() {
   const { onDagNodeTerminal } = await import('./agentExecutorDag');
@@ -221,6 +263,7 @@ describe('processSubagentDispatch generated-media billing', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     capturedCallbacks = undefined;
+    rootOverrides = {};
     delegateBehavior = async () => completedResult;
     remainingMs = 600_000;
     deductCreditsWithOrgSupportMock.mockResolvedValue(undefined);
@@ -233,6 +276,83 @@ describe('processSubagentDispatch generated-media billing', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('persists dispatched child jobs on the root reply and sends the root progress frame', async () => {
+    const jobs = [
+      { id: 'song', kind: 'music' },
+      { id: 'clip', kind: 'video' },
+      { id: 'picture', kind: 'image' },
+    ] as const;
+    delegateBehavior = async callbacks => {
+      await callbacks.onStatusUpdate({ generationJobs: [...jobs] });
+      return completedResult;
+    };
+    const { handler } = await import('./agentExecutor');
+    await handler(dagNodeDispatchEvent(), lambdaContext);
+    expect(mockAddGenerationJobs).toHaveBeenCalledWith('parent-quest', jobs);
+    expect(mockPublishJobs).toHaveBeenCalledWith('progress', {
+      executionId: 'parent-1',
+      questId: 'parent-quest',
+      generationJobs: jobs,
+    });
+    expect(mockAddGenerationJobs.mock.invocationCallOrder[0]).toBeLessThan(mockPublishJobs.mock.invocationCallOrder[0]);
+    expect(deductCreditsWithOrgSupportMock).not.toHaveBeenCalled();
+  });
+
+  it('builds only root-enabled media against the shared quest cap', async () => {
+    const { handler } = await import('./agentExecutor');
+    const { buildAgentMusicToolConfig } = await import('./agentExecutor.musicToolConfig');
+    const { buildAgentVideoToolConfig } = await import('./agentExecutor.videoToolConfig');
+    const { buildAgentAudioToolJobs } = await import('./agentExecutor.audioToolConfig');
+    const { buildSharedTools } = await import('@bike4mind/services/llm');
+    await handler(dagNodeDispatchEvent(), lambdaContext);
+    for (const builder of [buildAgentMusicToolConfig, buildAgentVideoToolConfig]) {
+      expect(builder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          questId: 'parent-quest',
+          toolEnabled: true,
+        }),
+        expect.anything()
+      );
+    }
+    expect(buildAgentAudioToolJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ toolEnabled: false }),
+      expect.anything()
+    );
+    expect(buildSharedTools).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        enabledTools: ['music_generation', 'video_generation', 'image_generation'],
+      })
+    );
+  });
+
+  it('threads the root API key to the existing media exclusion builders', async () => {
+    rootOverrides = { apiKeyId: 'root-key' };
+    const { handler } = await import('./agentExecutor');
+    const { buildAgentMusicToolConfig } = await import('./agentExecutor.musicToolConfig');
+    const { buildAgentVideoToolConfig } = await import('./agentExecutor.videoToolConfig');
+    await handler(dagNodeDispatchEvent(), lambdaContext);
+    for (const builder of [buildAgentMusicToolConfig, buildAgentVideoToolConfig]) {
+      expect(builder).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'root-key' }), expect.anything());
+    }
+  });
+
+  it('does not restore root-profile denied media or add a content reader', async () => {
+    rootOverrides = { profileDeniedTools: ['music_generation'], messageFileIds: ['file-1'] };
+    const { handler } = await import('./agentExecutor');
+    const { buildSharedTools } = await import('@bike4mind/services/llm');
+    await handler(dagNodeDispatchEvent(), lambdaContext);
+    expect(buildSharedTools).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        enabledTools: ['video_generation', 'image_generation'],
+      })
+    );
   });
 
   it('deducts the generated-image credits from the wallet and mirrors them onto the child audit counter', async () => {
@@ -282,26 +402,10 @@ describe('processSubagentDispatch generated-media billing', () => {
     expect(settledAt).toBeLessThan((await dagHookMock()).mock.invocationCallOrder[0]);
   });
 
-  it('bills audio priced from the onToolFinish payload', async () => {
+  it('does not bill audio_generation on the dispatch rail: its generation job bills it', async () => {
     delegateBehavior = async callbacks => {
       await callbacks.onToolStart('audio_generation', audioPayload);
       await callbacks.onToolFinish('audio_generation', audioPayload);
-      return completedResult;
-    };
-    const { handler } = await import('./agentExecutor');
-
-    await handler(dagNodeDispatchEvent(), lambdaContext);
-
-    const audioCredits = await expectedAudioCredits();
-    expect(audioCredits).toBeGreaterThan(0);
-    expect(deductCreditsWithOrgSupportMock).toHaveBeenCalledTimes(1);
-    expect(deductCreditsWithOrgSupportMock.mock.calls[0][0]).toMatchObject({ credits: audioCredits });
-    expect(mockIncrementCreditsUsed).toHaveBeenCalledWith('child-1', audioCredits);
-  });
-
-  it('does not bill an image call that started but never delivered', async () => {
-    delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('image_generation', { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' });
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');
@@ -313,9 +417,9 @@ describe('processSubagentDispatch generated-media billing', () => {
     expect(mockIncrementCreditsUsed).not.toHaveBeenCalled();
   });
 
-  it('does not bill audio from the onToolStart payload alone', async () => {
+  it('does not bill an image call that started but never delivered', async () => {
     delegateBehavior = async callbacks => {
-      await callbacks.onToolStart('audio_generation', audioPayload);
+      await callbacks.onToolStart('image_generation', { model: IMAGE_MODEL_ID, n: 1, prompt: 'a bicycle' });
       return completedResult;
     };
     const { handler } = await import('./agentExecutor');

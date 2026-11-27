@@ -90,15 +90,24 @@ describe('getFileIcon', () => {
     [SupportedFabFileMimeTypes.HTML, 'Code'],
     [SupportedFabFileMimeTypes.XML, 'Tag'],
     [SupportedFabFileMimeTypes.JSON, 'Description'],
-    [SupportedFabFileMimeTypes.CSV, 'DataObject'],
+    [SupportedFabFileMimeTypes.CSV, 'TableChart'],
     [SupportedFabFileMimeTypes.YAML, 'DataObject'],
     [SupportedFabFileMimeTypes.TOML, 'DataObject'],
-  ])('renders an svg icon for %s', mimeType => {
+  ])('renders the %s icon', (mimeType, iconName) => {
     const file = makeFile({ mimeType });
     const { container } = render(<TestWrapper>{getFileIcon(file, 48)}</TestWrapper>);
-    expect(container.querySelector('svg')).toBeTruthy();
+    expect(container.querySelector(`[data-testid="${iconName}Icon"]`)).toBeTruthy();
     expect(container.querySelector('img')).toBeNull();
   });
+
+  it.each(['application/csv', 'application/octet-stream', 'text/comma-separated-values'])(
+    'renders the table icon for a .csv file labelled %s',
+    mimeType => {
+      const file = makeFile({ fileName: 'Data.CSV', mimeType });
+      const { container } = render(<TestWrapper>{getFileIcon(file, 48)}</TestWrapper>);
+      expect(container.querySelector('[data-testid="TableChartIcon"]')).toBeTruthy();
+    }
+  );
 
   it('renders generic fallback icon for unrecognized MIME types', () => {
     const file = makeFile({ mimeType: 'application/x-unknown' });
@@ -140,6 +149,17 @@ describe('FileBrowserItem image moderation gating', () => {
     renderWithProviders(<FileBrowserItem file={heldImageFile} viewType="grid" />);
     expect(screen.getByTestId('image-moderation-scanning')).toBeInTheDocument();
     expect(screen.queryByRole('img')).toBeNull();
+  });
+});
+
+describe('FileBrowserItem size', () => {
+  it('lists a file under 1 KB in bytes and a larger one in KB', () => {
+    renderWithProviders(<FileBrowserItem file={makeFile({ id: 'small', fileSize: 46 })} viewType="list" />);
+    expect(screen.getAllByText('46 bytes').length).toBeGreaterThan(0);
+    expect(screen.queryByText('0 KB')).toBeNull();
+
+    renderWithProviders(<FileBrowserItem file={makeFile({ id: 'large', fileSize: 3017 })} viewType="list" />);
+    expect(screen.getAllByText('3 KB').length).toBeGreaterThan(0);
   });
 });
 
@@ -255,5 +275,36 @@ describe('FileBrowserItem inline media', () => {
   it('gives a video file its own icon', () => {
     const { container } = render(<TestWrapper>{getFileIcon(makeFile({ mimeType: 'video/mp4' }), 48)}</TestWrapper>);
     expect(container.querySelector('[data-testid="VideocamIcon"]')).toBeTruthy();
+  });
+});
+
+describe('FileBrowserItem selection', () => {
+  const file = makeFile({ id: 'pick-1', fileName: 'report.csv', mimeType: SupportedFabFileMimeTypes.CSV });
+
+  const renderSelectable = (viewType: 'list' | 'grid') => {
+    const setSelectedIds = vi.fn();
+    renderWithProviders(
+      <FileBrowserInstanceProvider
+        value={{
+          selectedIds: new Set<string>(),
+          setSelectedIds,
+          open: true,
+          setOpen: vi.fn(),
+          fileToShare: null,
+          setFileToShare: vi.fn(),
+          config: {},
+        }}
+      >
+        <FileBrowserItem file={file} viewType={viewType} />
+      </FileBrowserInstanceProvider>
+    );
+    return setSelectedIds;
+  };
+
+  it.each(['list', 'grid'] as const)('%s selects the file when its name is clicked', viewType => {
+    const setSelectedIds = renderSelectable(viewType);
+    fireEvent.click(screen.getByText('report.csv'));
+    expect(setSelectedIds).toHaveBeenCalledTimes(1);
+    expect([...setSelectedIds.mock.calls[0][0]]).toEqual(['pick-1']);
   });
 });

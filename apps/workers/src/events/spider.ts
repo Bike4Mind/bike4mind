@@ -1,3 +1,11 @@
+import {
+  type BoundEmbeddingModel,
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 import { withEventContext } from '@workers/utils/eventContext';
 import {
   determineSessionOperations,
@@ -5,16 +13,15 @@ import {
   type SessionGroomingResult,
   type SpiderOperation,
 } from '@bike4mind/server-utils/utils/sessionOperations';
-import { SpiderEvents, SessionEvents, NotebookCurationEvents } from '@server/utils/eventBus';
+import { SpiderEvents, SessionEvents, NotebookCurationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { sessionRepository } from '@bike4mind/database/auth';
 import { Quest } from '@bike4mind/database/content';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { sendToClient } from '@server/websocket/utils';
-import { v4 as uuidv4 } from 'uuid';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
+
 import crypto from 'crypto';
 import {
   ISessionDocument,
@@ -56,10 +63,6 @@ export interface SpiderStats {
   skipped: number;
 }
 
-export interface EmbeddingService {
-  generateEmbedding: (text: string) => Promise<number[]>;
-}
-
 /** Dependency-injection interface; allows mocking in tests. */
 export interface SpiderDependencies {
   sessionRepository: typeof sessionRepository;
@@ -68,13 +71,13 @@ export interface SpiderDependencies {
   publishTag: typeof SessionEvents.Tag.publish;
   sendProgress: (data: ISpiderProgressUpdateAction) => Promise<void>;
   logger: Logger;
-  embeddingService?: EmbeddingService;
+  embeddingService?: BoundEmbeddingModel;
   embeddingModel?: string;
 }
 
 async function generateEmbeddingsForSession(
   sessionId: string,
-  embeddingService: EmbeddingService,
+  embeddingService: BoundEmbeddingModel,
   embeddingModel: string,
   logger: Logger
 ): Promise<number> {
@@ -112,7 +115,7 @@ async function generateEmbeddingsForSession(
       // Hash to detect content changes on future runs
       const contentHash = crypto.createHash('md5').update(content).digest('hex');
 
-      const vector = await embeddingService.generateEmbedding(content);
+      const vector = await embedOne(embeddingService, content);
 
       await Quest.updateOne(
         { _id: message._id },
@@ -260,7 +263,7 @@ export async function processSession(
   eventPublisher?: RateLimitedEventPublisher
 ): Promise<SessionGroomingResult> {
   if (!session.id) {
-    deps.logger.error(`Session missing id field, skipping. Session name: ${session.name || 'Unknown'}`);
+    deps.logger.error('Session missing id field, skipping');
     return {
       sessionId: 'unknown',
       sessionName: session.name || 'Unknown',
@@ -295,7 +298,7 @@ export async function processSession(
 
     // 2. Curation - trigger if never curated
     if (operations.curation) {
-      const curationJobId = uuidv4();
+      const curationJobId = crypto.randomUUID();
       const payload = {
         sessionId: session.id,
         userId: config.userId,
@@ -313,7 +316,7 @@ export async function processSession(
         });
       } else {
         await deps.publishCuration(payload);
-        deps.logger.info(`Triggered curation for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered curation for session ${session.id}`);
       }
     }
 
@@ -334,7 +337,7 @@ export async function processSession(
         });
       } else {
         await deps.publishSummarize(payload);
-        deps.logger.info(`Triggered summarization for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered summarization for session ${session.id}`);
       }
     }
 
@@ -354,7 +357,7 @@ export async function processSession(
         });
       } else {
         await deps.publishTag(payload);
-        deps.logger.info(`Triggered tagging for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered tagging for session ${session.id}`);
       }
     }
 
@@ -368,7 +371,7 @@ export async function processSession(
       );
       result.messagesEmbedded = embeddedCount;
       if (embeddedCount > 0) {
-        deps.logger.info(`Generated ${embeddedCount} embeddings for session ${session.id} (${session.name})`);
+        deps.logger.info(`Generated ${embeddedCount} embeddings for session ${session.id}`);
       }
     }
 
@@ -574,11 +577,11 @@ export const handler = withEventContext(async (event, logger) => {
           missing,
           model: embeddingModel,
         } = resolveEmbeddingWithKeylessFallback(defaultEmbeddingModel as SupportedEmbeddingModel, apiKeyTable);
-        const requiredProvider = getProviderFromModel(embeddingModel);
+        const requiredProvider = embeddingBackendForModel(embeddingModel);
 
         if (!missing) {
-          const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-          deps.embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+          const embeddingFactory = buildEmbeddingRegistry(embeddingConfig);
+          deps.embeddingService = bindEmbeddingModel(embeddingFactory, embeddingModel);
           deps.embeddingModel = embeddingModel;
           logger.info(`Embedding service configured with model: ${embeddingModel}`);
         } else {
@@ -619,7 +622,7 @@ export const handler = withEventContext(async (event, logger) => {
         wouldEmbed: stats.messagesEmbedded,
         wouldSkip: stats.skipped,
         sampleResults: results.slice(0, 10).map(r => ({
-          name: r.sessionName,
+          sessionId: r.sessionId,
           operations: r.operations,
           skipped: r.skipped,
         })),

@@ -2,31 +2,60 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
 import {
   ApiKeyScope,
+  orgApiKeyReachOf,
   CreditHolderType,
   ForbiddenError,
   InternalServerError,
   ServiceUnavailableError,
   UnauthorizedError,
 } from '@bike4mind/common';
-import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
+import { LEGACY_SCOPE_PASS_LOG, SCOPE_STAGING_ENV_VAR } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { ApiKeyUsageManager } from '@bike4mind/server-utils/managers/apiKeyUsageManager';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
-const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
+const {
+  validateUserApiKeyMock,
+  findOwnerOfDisabledUserApiKeyMock,
+  findByIdMock,
+  resolveUntrustedKeyLimitsMock,
+  isApiKeyAccessAllowedMock,
+  resolveOrgApiKeyReachMock,
+  recordSideAppRefusalMock,
+} = vi.hoisted(() => ({
+  recordSideAppRefusalMock: vi.fn(),
   validateUserApiKeyMock: vi.fn(),
+  findOwnerOfDisabledUserApiKeyMock: vi.fn(),
   findByIdMock: vi.fn(),
+  resolveUntrustedKeyLimitsMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  })),
+  isApiKeyAccessAllowedMock: vi.fn(async (_user: unknown, _billing?: unknown, _req?: unknown) => true),
+  resolveOrgApiKeyReachMock: vi.fn(),
 }));
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: recordSideAppRefusalMock }));
+vi.mock('@server/organizations/orgApiKeyReach', () => ({ resolveOrgApiKeyReach: resolveOrgApiKeyReachMock }));
 
 vi.mock('@bike4mind/services', async importOriginal => ({
   // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
   // loads alongside it (its db deps are mocked here).
   ...(await importOriginal<typeof import('@bike4mind/services')>()),
-  userApiKeyService: { validateUserApiKey: validateUserApiKeyMock },
+  userApiKeyService: {
+    validateUserApiKey: validateUserApiKeyMock,
+    findOwnerOfDisabledUserApiKey: findOwnerOfDisabledUserApiKeyMock,
+  },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ User: { findById: findByIdMock } }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: resolveUntrustedKeyLimitsMock,
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+}));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({
   ApiKeyUsageManager: { logUsage: vi.fn().mockResolvedValue(undefined) },
 }));
@@ -43,13 +72,18 @@ const makeReq = () =>
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   }) as unknown as Request & { logger: { warn: ReturnType<typeof vi.fn> } };
 
-const makeRes = () => ({ once: vi.fn(), statusCode: 200 }) as unknown as Response;
+const makeRes = () => ({ once: vi.fn(), setHeader: vi.fn(), statusCode: 200 }) as unknown as Response;
 
 /** Runs the middleware and reports whether it called next() or threw. */
-const run = async (required: ApiKeyScope[] | undefined, req: Request, alsoRequired?: ApiKeyScope[]) => {
+const run = async (
+  required: ApiKeyScope[] | undefined,
+  req: Request,
+  alsoRequired?: ApiKeyScope[],
+  options?: Parameters<typeof apiKeyAuth>[2]
+) => {
   const next = vi.fn() as unknown as NextFunction;
   try {
-    await apiKeyAuth(required, alsoRequired)(req, makeRes(), next);
+    await apiKeyAuth(required, alsoRequired, options)(req, makeRes(), next);
   } catch (err) {
     return { passed: false, error: err as Error };
   }
@@ -87,6 +121,27 @@ describe('apiKeyAuth scope gate', () => {
     expect((error as ForbiddenError).additionalInfo).toEqual({ required_scopes: [ApiKeyScope.OPTIHASHI_COMPUTE] });
   });
 
+  it('tells a key its own scopes, on the scope 403 as on an admitted call, and nothing for a key that fails', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.FUNCTIONS_INVOKE],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    const scopesHeader = async (required: ApiKeyScope[]) => {
+      const res = makeRes();
+      await apiKeyAuth(required)(makeReq(), res, vi.fn() as unknown as NextFunction).catch(() => undefined);
+      return vi.mocked(res.setHeader).mock.calls.filter(([name]) => name === 'X-Api-Key-Scopes');
+    };
+
+    expect(await scopesHeader([ApiKeyScope.API_KEYS_MANAGE])).toEqual([['X-Api-Key-Scopes', 'functions:invoke']]);
+    expect(await scopesHeader([ApiKeyScope.FUNCTIONS_INVOKE])).toEqual([['X-Api-Key-Scopes', 'functions:invoke']]);
+
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+    expect(await scopesHeader([ApiKeyScope.FUNCTIONS_INVOKE])).toEqual([]);
+  });
+
   it('admits a key that holds a required scope', async () => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,
@@ -119,6 +174,36 @@ describe('apiKeyAuth scope gate', () => {
       'Ignoring unstageable or unknown API key scopes in staging list',
       expect.objectContaining({ rejected: [ApiKeyScope.ADMIN] })
     );
+  });
+
+  it('admits and logs a legacy key on a route that grandfathers legacy keys', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00Z');
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      createdAt,
+    });
+    const req = makeReq();
+    const next = vi.fn() as unknown as NextFunction;
+
+    await apiKeyAuth([ApiKeyScope.ME_READ], undefined, { grandfatherLegacyKeys: true })(req, makeRes(), next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.logger.info).toHaveBeenCalledWith(
+      LEGACY_SCOPE_PASS_LOG,
+      expect.objectContaining({ keyId: 'key-1', requiredScopes: [ApiKeyScope.ME_READ] })
+    );
+    // In-handler checks read the creation date from here to grandfather per method.
+    expect(req.apiKeyInfo?.createdAt).toBe(createdAt);
+  });
+
+  it('403s the same key on a route that does not grandfather legacy keys', async () => {
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(false);
+    expect(req.logger.info).not.toHaveBeenCalledWith(LEGACY_SCOPE_PASS_LOG, expect.anything());
   });
 
   it('leaves a scope-less route open to an ordinary key', async () => {
@@ -215,12 +300,43 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
     expect(bindingOf(req)).toEqual(['lake-a']);
   });
 
+  it('copies the key owner onto req.apiKeyInfo', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation());
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.apiKeyInfo?.userId).toBe('user-1');
+  });
+
   it('leaves the binding undefined for a key that carries none', async () => {
     validateUserApiKeyMock.mockResolvedValue(validation());
     const req = makeReq();
 
     expect((await run(undefined, req)).passed).toBe(true);
     expect(bindingOf(req)).toBeUndefined();
+  });
+
+  it("puts the trust-adjusted rate limit on req.apiKeyInfo, judged against the key's owner", async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ billingOwnerType: CreditHolderType.User }));
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 20, requestsPerDay: 1000 },
+      ownerUntrusted: true,
+    });
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(resolveUntrustedKeyLimitsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      {
+        rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+        billingOwnerType: CreditHolderType.User,
+      },
+      req
+    );
+    expect((req as Request & { apiKeyInfo?: { rateLimit?: unknown } }).apiKeyInfo?.rateLimit).toEqual({
+      requestsPerMinute: 20,
+      requestsPerDay: 1000,
+    });
   });
 });
 
@@ -234,7 +350,8 @@ describe('apiKeyAuth usage log stamping', () => {
   const loggedUsage = async (
     headers: Record<string, string>,
     validationExtra: Record<string, unknown> = {},
-    reqExtra: Record<string, unknown> = {}
+    reqExtra: Record<string, unknown> = {},
+    requiredScopes?: ApiKeyScope[]
   ) => {
     validateUserApiKeyMock.mockResolvedValue({
       isValid: true,
@@ -247,7 +364,7 @@ describe('apiKeyAuth usage log stamping', () => {
     const req = Object.assign(makeReq(), reqExtra);
     req.headers = { ...req.headers, ...headers };
     const res = makeRes();
-    await apiKeyAuth()(req, res, vi.fn() as unknown as NextFunction);
+    await apiKeyAuth(requiredScopes)(req, res, vi.fn() as unknown as NextFunction);
 
     const [event, onFinish] = (res.once as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(event).toBe('finish');
@@ -271,6 +388,23 @@ describe('apiKeyAuth usage log stamping', () => {
     expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({
       metadata: { endpoint: '/api/agents/[id]' },
     });
+  });
+
+  it('emits the USED analytics event for an ordinary key', async () => {
+    await loggedUsage({});
+    expect(logEvent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logEvent).mock.calls[0][0]).toMatchObject({ type: 'User API Key Used' });
+  });
+
+  it('skips the USED analytics event for an ingest key but still logs its usage', async () => {
+    const logged = await loggedUsage(
+      {},
+      { scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'p1' },
+      { method: 'POST', originalUrl: '/api/overwatch/v1/events' },
+      [ApiKeyScope.OVERWATCH_INGEST_WRITE]
+    );
+    expect(logEvent).not.toHaveBeenCalled();
+    expect(logged).toMatchObject({ keyId: 'key-1', endpoint: '/api/overwatch/v1/events' });
   });
 
   it('stamps ownerType organization only for an org-billed key with an organization', async () => {
@@ -302,13 +436,13 @@ describe('apiKeyAuth blocked owner log', () => {
   });
 
   it.each([
-    ['banned', { id: 'user-1', isBanned: true }, 'User not found or banned'],
+    ['banned', { id: 'user-1', isBanned: true }, 'This account is suspended'],
     [
       'suspended',
       { id: 'user-1', moderation: { status: 'suspended' } },
       /suspended for repeated content-policy violations/,
     ],
-    ['disputePending', { id: 'user-1', disputePending: true }, /pending dispute resolution/],
+    ['disputePending', { id: 'user-1', disputePending: true }, /on hold pending a payment review/],
     ['ownerNotFound', null, 'User not found or banned'],
   ])('logs and rejects a %s owner', async (reason, owner, message) => {
     findByIdMock.mockResolvedValue(owner);
@@ -380,5 +514,440 @@ describe('apiKeyAuth infrastructure failures', () => {
     const { error } = await run(undefined, makeReq());
     expect(error).toBeInstanceOf(UnauthorizedError);
     expect(error?.message).toBe('Invalid API key');
+  });
+});
+
+describe('apiKeyAuth admin role', () => {
+  const keyWith = (scopes: ApiKeyScope[]) =>
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'admin-1',
+      scopes,
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByIdMock.mockResolvedValue({ id: 'admin-1', isBanned: false, isAdmin: true });
+  });
+
+  it('treats the owner as a regular user when the key lacks the admin scope', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('judges the trust rate limit against the stored admin role, not the withheld one', async () => {
+    keyWith([ApiKeyScope.AI_CHAT]);
+    const seenIsAdmin: boolean[] = [];
+    resolveUntrustedKeyLimitsMock.mockImplementationOnce(async (owner: unknown, key: { rateLimit: unknown }) => {
+      seenIsAdmin.push((owner as { isAdmin?: boolean }).isAdmin === true);
+      return { rateLimit: key.rateLimit, ownerUntrusted: false };
+    });
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(seenIsAdmin).toEqual([true]);
+    expect(req.apiKeyInfo?.ownerUntrusted).toBe(false);
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('keeps the admin role for a key holding the admin scope', async () => {
+    keyWith([ApiKeyScope.ADMIN]);
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+  });
+
+  it('leaves a session-authenticated admin alone', async () => {
+    const req = makeReq();
+    req.user = { id: 'admin-1', isAdmin: true } as unknown as Request['user'];
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.user?.isAdmin).toBe(true);
+    expect(validateUserApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiKeyAuth paid-only access switch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
+    });
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false, isAdmin: true });
+  });
+
+  it('403s an existing key whose owner the setting denies, and logs without the raw key', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const req = makeReq();
+    const { passed, error } = await run(undefined, req);
+
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(error?.message).toBe('API keys require an active paid subscription');
+    expect(req.user).toBeUndefined();
+    expect(resolveUntrustedKeyLimitsMock).not.toHaveBeenCalled();
+    const call = req.logger.warn.mock.calls.find(
+      ([msg]) => msg === 'API key rejected: apiKeyAccess setting denies this owner'
+    );
+    expect(call?.[1]).toMatchObject({ keyId: 'key-1', userId: 'user-1' });
+    expect(JSON.stringify(call)).not.toContain(KEY);
+  });
+
+  it('applies the trust ceiling after paid access succeeds', async () => {
+    validateUserApiKeyMock.mockResolvedValueOnce({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      billingOwnerType: CreditHolderType.User,
+    });
+    findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, emailVerified: false });
+    const clamped = { requestsPerMinute: 3, requestsPerDay: 1000 };
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({ rateLimit: clamped, ownerUntrusted: true });
+    const req = makeReq();
+
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.apiKeyInfo?.rateLimit).toEqual(clamped);
+    expect(isApiKeyAccessAllowedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveUntrustedKeyLimitsMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('checks the owner before the admin role is withheld, with the key billing owner', async () => {
+    let isAdminAtCheck: boolean | undefined;
+    isApiKeyAccessAllowedMock.mockImplementationOnce(async user => {
+      isAdminAtCheck = (user as { isAdmin?: boolean }).isAdmin;
+      return true;
+    });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(isAdminAtCheck).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        createdByUserId: undefined,
+      },
+      req
+    );
+  });
+
+  it('forwards trusted admin provisioning provenance to the gate without granting admin authority', async () => {
+    validateUserApiKeyMock.mockResolvedValueOnce({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      createdByUserId: 'admin-provisioner',
+    });
+    findByIdMock.mockResolvedValueOnce({ id: 'user-1', isBanned: false, isAdmin: false });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user-1', isAdmin: false }),
+      expect.objectContaining({ createdByUserId: 'admin-provisioner' }),
+      req
+    );
+    expect(req.user?.isAdmin).toBe(false);
+  });
+
+  it('fails closed with a 5xx, not a pass, when the access check cannot read', async () => {
+    isApiKeyAccessAllowedMock.mockRejectedValueOnce(new Error('db down'));
+    const { passed, error } = await run(undefined, makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(InternalServerError);
+  });
+});
+
+describe('apiKeyAuth suspended owner', () => {
+  const ownerQuery = (owner: unknown) => ({ select: () => ({ lean: () => Promise.resolve(owner) }) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+  });
+
+  it('answers a key that suspension disabled with the owner account_suspended notice', async () => {
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValue('user-1');
+    findByIdMock.mockReturnValue(ownerQuery({ isBanned: true, suspensionReasonCategory: 'automated_misuse' }));
+
+    const { passed, error } = await run([ApiKeyScope.AI_CHAT], makeReq());
+
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect((error as ForbiddenError).additionalInfo).toMatchObject({
+      errorCode: 'account_suspended',
+      suspension: { reason_category: 'automated_misuse' },
+    });
+  });
+
+  it('keeps the plain 401 when the disabled key belongs to an account in good standing', async () => {
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValue('user-1');
+    findByIdMock.mockReturnValue(ownerQuery({ isBanned: false }));
+
+    const { error } = await run([ApiKeyScope.AI_CHAT], makeReq());
+
+    expect(error).toBeInstanceOf(UnauthorizedError);
+    expect(error?.message).toBe('Invalid API key');
+  });
+
+  it('keeps the plain 401 when no disabled key matches or the lookup fails', async () => {
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValueOnce(null);
+    expect((await run([ApiKeyScope.AI_CHAT], makeReq())).error?.message).toBe('Invalid API key');
+
+    findOwnerOfDisabledUserApiKeyMock.mockRejectedValueOnce(new Error('db down'));
+    expect((await run([ApiKeyScope.AI_CHAT], makeReq())).error?.message).toBe('Invalid API key');
+    expect(findByIdMock).not.toHaveBeenCalled();
+  });
+
+  it('does not look up an owner for a key refused for another reason', async () => {
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'expired' });
+
+    await run([ApiKeyScope.AI_CHAT], makeReq());
+
+    expect(findOwnerOfDisabledUserApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiKeyAuth with an exchange key', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env[SCOPE_STAGING_ENV_VAR];
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+  });
+
+  const keyWith = (extra: Record<string, unknown>) => ({
+    isValid: true,
+    keyId: 'key-1',
+    userId: 'user-1',
+    scopes: [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ],
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...extra,
+  });
+
+  it('judges the exchange client and puts its unpaid account limits on req.apiKeyInfo', async () => {
+    const unpaidAccountLimits = { requestsPerMinute: 5, requestsPerDay: 50, tokensPerMinute: 300, maxConcurrent: 1 };
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    resolveUntrustedKeyLimitsMock.mockResolvedValueOnce({
+      rateLimit: { requestsPerMinute: 5, requestsPerDay: 50 },
+      ownerUntrusted: true,
+      unpaidAccountLimits,
+    });
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(true);
+    expect(resolveUntrustedKeyLimitsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' }),
+      req
+    );
+    expect(
+      (req as unknown as { apiKeyInfo: { unpaidAccountLimits?: unknown } }).apiKeyInfo.unpaidAccountLimits
+    ).toEqual(unpaidAccountLimits);
+  });
+
+  it('refuses it on a scope-less route', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    const { passed, error } = await run(undefined, makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+  });
+
+  it('admits it on a route that declares one of its scopes and exposes the marker', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    const req = makeReq();
+    expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(true);
+    expect(
+      (req as unknown as { apiKeyInfo: { oauthExchangeClientId?: string } }).apiKeyInfo.oauthExchangeClientId
+    ).toBe('client-1');
+  });
+
+  it('passes the exchange client to the gate, so a starter-only owner is admitted only for that key', async () => {
+    const admitsOnlyExchange = async (_user: unknown, billing?: unknown) =>
+      !!(billing as { oauthExchangeClientId?: string } | undefined)?.oauthExchangeClientId;
+    isApiKeyAccessAllowedMock.mockImplementationOnce(admitsOnlyExchange).mockImplementationOnce(admitsOnlyExchange);
+    validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+    expect((await run([ApiKeyScope.ME_READ], makeReq())).passed).toBe(true);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: 'client-1' }),
+      expect.anything()
+    );
+
+    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    const { passed, error } = await run([ApiKeyScope.ME_READ], makeReq());
+    expect(passed).toBe(false);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ oauthExchangeClientId: undefined }),
+      expect.anything()
+    );
+  });
+
+  it('still admits a personal key with the same scopes on a scope-less route', async () => {
+    validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+    expect((await run(undefined, makeReq())).passed).toBe(true);
+  });
+
+  describe('refusal records', () => {
+    it('records a scope refusal as verified with the exchange client, and logs the client', async () => {
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ oauthExchangeClientId: 'client-1', scopes: [ApiKeyScope.ME_READ] })
+      );
+      const req = makeReq();
+      expect((await run([ApiKeyScope.AI_GENERATE], req)).passed).toBe(false);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledTimes(1);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith({
+        verified: true,
+        clientId: 'client-1',
+        stage: 'use',
+        reason: 'insufficient_scope',
+        status: 403,
+        userId: 'user-1',
+        keyId: 'key-1',
+        endpoint: expect.any(String),
+      });
+      const call = req.logger.warn.mock.calls.find(([msg]) => msg === 'API key scope check failed');
+      expect(call?.[1]).toMatchObject({ oauthClientId: 'client-1' });
+    });
+
+    it('records an access-gate refusal as verified with the exchange client', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      const req = makeReq();
+      expect((await run([ApiKeyScope.ME_READ], req)).passed).toBe(false);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledTimes(1);
+      expect(recordSideAppRefusalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          verified: true,
+          clientId: 'client-1',
+          stage: 'use',
+          reason: 'subscription_required',
+          keyId: 'key-1',
+        })
+      );
+      const call = req.logger.warn.mock.calls.find(([msg]) => String(msg).includes('apiKeyAccess setting denies'));
+      expect(call?.[1]).toMatchObject({ oauthClientId: 'client-1' });
+    });
+
+    it('records nothing for a personal key refused on scope or access', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.ME_READ] }));
+      expect((await run([ApiKeyScope.AI_GENERATE], makeReq())).passed).toBe(false);
+      validateUserApiKeyMock.mockResolvedValue(keyWith({}));
+      isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+      expect((await run([ApiKeyScope.ME_READ], makeReq())).passed).toBe(false);
+      expect(recordSideAppRefusalMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('on a grandfathering route that declares ai:generate', () => {
+    const grandfathering = { grandfatherLegacyKeys: true };
+
+    it('admits an exchange key holding ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ oauthExchangeClientId: 'client-1' }));
+      expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
+    });
+
+    it('refuses an exchange key holding only me:read', async () => {
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ oauthExchangeClientId: 'client-1', scopes: [ApiKeyScope.ME_READ] })
+      );
+      const { passed, error } = await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering);
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(ForbiddenError);
+    });
+
+    it('admits a legacy ordinary key that lacks ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ scopes: [ApiKeyScope.AI_CHAT], createdAt: new Date('2026-01-01T00:00:00Z') })
+      );
+      expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
+    });
+
+    it('refuses an ordinary key created after the legacy cutoff that lacks ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT], createdAt: new Date() }));
+      const { passed, error } = await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering);
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(ForbiddenError);
+    });
+  });
+});
+
+describe('apiKeyAuth org key reach', () => {
+  const ORG_ID = 'org-1';
+  const grants = [{ resourceType: 'group', resourceId: 'g1', permission: 'read' }];
+  const reach = { organizationId: ORG_ID, readGroupIds: ['g1'], dataLakeOrgIds: [] as string[] };
+
+  const validation = (extra: Record<string, unknown>) => ({
+    isValid: true,
+    keyId: 'key-1',
+    userId: 'user-1',
+    scopes: [ApiKeyScope.AI_CHAT],
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    ...extra,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env[SCOPE_STAGING_ENV_VAR];
+    resolveOrgApiKeyReachMock.mockResolvedValue(reach);
+  });
+
+  it("attaches the resolved reach for an org key on that org's service account", async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ orgOwnedGrants: grants, organizationId: ORG_ID }));
+    findByIdMock.mockResolvedValue({
+      id: 'user-1',
+      isBanned: false,
+      isSystem: true,
+      serviceAccountOrganizationId: ORG_ID,
+    });
+    const req = makeReq();
+
+    expect((await run([ApiKeyScope.AI_CHAT], req)).passed).toBe(true);
+
+    expect(resolveOrgApiKeyReachMock).toHaveBeenCalledWith(ORG_ID, grants);
+    expect(orgApiKeyReachOf((req as unknown as { user: object }).user)).toEqual(reach);
+  });
+
+  it("attaches nothing when the resolved user is not that org's service account", async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({ orgOwnedGrants: grants, organizationId: ORG_ID }));
+    findByIdMock.mockResolvedValue({
+      id: 'user-1',
+      isBanned: false,
+      isSystem: true,
+      serviceAccountOrganizationId: 'another-org',
+    });
+    const req = makeReq();
+
+    expect((await run([ApiKeyScope.AI_CHAT], req)).passed).toBe(true);
+
+    expect(resolveOrgApiKeyReachMock).not.toHaveBeenCalled();
+    expect(orgApiKeyReachOf((req as unknown as { user: object }).user)).toBeUndefined();
+  });
+
+  it('attaches nothing for an ordinary key', async () => {
+    validateUserApiKeyMock.mockResolvedValue(validation({}));
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+    const req = makeReq();
+
+    expect((await run([ApiKeyScope.AI_CHAT], req)).passed).toBe(true);
+
+    expect(resolveOrgApiKeyReachMock).not.toHaveBeenCalled();
+    expect(orgApiKeyReachOf((req as unknown as { user: object }).user)).toBeUndefined();
   });
 });

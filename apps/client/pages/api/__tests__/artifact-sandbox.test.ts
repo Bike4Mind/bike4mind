@@ -87,6 +87,9 @@ describe('GET /api/artifact-sandbox', () => {
     // Inline scripts (the artifact's own JS) and the public CDNs remain allowed.
     expect(csp).toMatch(/script-src [^;]*'unsafe-inline'/);
     expect(csp).toMatch(/script-src [^;]*https:\/\/cdn\.jsdelivr\.net/);
+    // The app-shell CSP no longer lists these, so this route's own copy is the only one left.
+    expect(csp).toMatch(/script-src [^;]*https:\/\/unpkg\.com/);
+    expect(csp).toMatch(/script-src [^;]*https:\/\/cdn\.tailwindcss\.com/);
   });
 
   it("sets connect-src 'none' so artifact scripts cannot fetch/XHR/WebSocket out", () => {

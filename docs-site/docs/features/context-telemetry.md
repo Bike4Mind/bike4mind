@@ -42,7 +42,7 @@ You can choose your telemetry level at any time in **Profile > Settings > Help I
 
 ### None
 - No telemetry is collected
-- All your existing telemetry data is permanently deleted
+- The telemetry we can identify from the last 90 days is deleted, and the settings card tells you whether the deletion was confirmed
 - You can re-enable at any time
 
 ### Basic (default)
@@ -54,6 +54,18 @@ You can choose your telemetry level at any time in **Profile > Settings > Help I
 - Everything in Basic, plus detailed diagnostics: context composition breakdown, system prompt details, cache efficiency, truncation patterns, and tool error details
 - Requires your explicit opt-in consent
 - Helps us diagnose complex issues faster
+
+## Turning Telemetry Off
+
+1. In **Profile > Settings > Help Improve Bike4Mind**, click **None**.
+2. In the **Stop Telemetry Collection** dialog, click **Stop & Delete**. This cannot be undone.
+3. Collection stops and the card reads "Collection is stopped."
+4. Bike4Mind deletes the telemetry it can identify from the last 90 days, then checks that none of it is left.
+5. When the check passes, the card shows "Deleted the telemetry we could identify from the last 90 days."
+
+If the deletion cannot be confirmed, the card says so and shows a **Retry deletion** button. Collection stays stopped while you retry. You can also click **None** and **Stop & Delete** again to run the deletion and the check again. If a retry still cannot confirm the deletion, contact support.
+
+The confirmation appears right after the deletion runs. It is not shown again after you reload the page.
 
 ## Your Own Context Breakdown
 
@@ -71,9 +83,9 @@ All telemetry data is **automatically deleted after 90 days**. There is no way t
 
 ## Your Rights
 
-- **Opt out at any time** — Switch to "None" and all historical data is immediately deleted
+- **Opt out at any time** - Switch to "None" to stop collection and delete the telemetry we can identify from the last 90 days. The settings card confirms the deletion, or offers a retry if it cannot
 - **Export your data** - Click "Export telemetry data" next to the telemetry level buttons to download a JSON file of all your telemetry records. This does not include your notebooks or files; use **Export All** on the Notebooks and Knowledge Files cards in General settings for those
-- **Right to erasure** — Handled automatically when you opt out; no need to contact support
+- **Right to erasure** - Runs when you opt out. You only need to contact support if the card still cannot confirm the deletion after a retry
 
 ## Legal Basis
 

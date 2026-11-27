@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
 
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
@@ -52,11 +53,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
-vi.mock('@server/integrations/google/drive/common', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
 }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   disableGitHubConnectionForLake: h.disableGitHubConnectionForLake,
 }));
 vi.mock('@bike4mind/services', () => ({

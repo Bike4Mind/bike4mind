@@ -1,4 +1,10 @@
-import { PermissionDeniedError, getQuestErrorCode } from '@bike4mind/common';
+import {
+  AiAccessRefusedError,
+  PermissionDeniedError,
+  getQuestErrorCode,
+  visibleReplyText,
+  isExpectedToolError,
+} from '@bike4mind/common';
 import type { ICompletionOptionTools } from './backend';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
@@ -8,12 +14,37 @@ export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unkno
 
 /**
  * A tool failure that must end the turn rather than be fed back to the model as a
- * recoverable observation: a declined tool (PermissionDeniedError) or an out-of-credits
- * error (tagged via `getQuestErrorCode`), neither of which any retry can satisfy.
+ * recoverable observation: a declined tool (PermissionDeniedError), an out-of-credits
+ * error (tagged via `getQuestErrorCode`) or an account that lost AI access mid-turn
+ * (AiAccessRefusedError), none of which any retry can satisfy.
  * Also exempts these from the services tool failure guard (toolFailureGuard.ts).
  */
 export function isTerminalToolError(error: unknown): boolean {
-  return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
+  return (
+    error instanceof PermissionDeniedError ||
+    error instanceof AiAccessRefusedError ||
+    getQuestErrorCode(error) !== undefined
+  );
+}
+
+/**
+ * Thrown by the services tool failure guard (toolFailureGuard.ts) in place of running a tool that
+ * already failed repeatedly this turn. An expected refusal, not a new failure: the failures that
+ * tripped it were logged when they happened.
+ */
+export class ToolBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolBlockedError';
+  }
+}
+
+/**
+ * Log level for a tool failure fed back to the model. Adapters that log a failed tool
+ * (Bedrock, Anthropic, Gemini) pick the level through this.
+ */
+export function toolFailureLogLevel(error: unknown): 'warn' | 'error' {
+  return error instanceof ToolBlockedError || isExpectedToolError(error) ? 'warn' : 'error';
 }
 
 /** Whether the named tool is flagged `endsTurnAfterText` in the offered tool list. */
@@ -40,7 +71,7 @@ export function shouldEndTurnAfterTools(
   // Nameless slots are not calls: adapters index tool calls by content-block index, so a text
   // block ahead of the tool leaves an empty entry in the list.
   const names = calledToolNames.filter((name): name is string => Boolean(name));
-  if (names.length === 0 || !roundText?.trim()) return false;
+  if (names.length === 0 || !visibleReplyText(roundText).trim()) return false;
   return names.every(name => isTurnEndingTool(name, tools));
 }
 

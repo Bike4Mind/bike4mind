@@ -6,7 +6,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
-vi.mock('@server/auth/secretRotationGrace', () => ({
+vi.mock('@bike4mind/server-utils/auth/secretRotationGrace', () => ({
   isRotatedSecretWithinGraceWindow: (...args: unknown[]) => mockIsWithinGraceWindow(...args),
 }));
 
@@ -23,10 +23,12 @@ vi.mock('@bike4mind/services', () => ({
 
 const mockFindById = vi.fn();
 const mockAssertAccountStateUsable = vi.fn();
+const mockFindRoles = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: { findById: (...args: unknown[]) => mockFindById(...args) },
+  adminRoleRepository: { findByIds: (...args: unknown[]) => mockFindRoles(...args) },
 }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
@@ -37,14 +39,21 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 
-import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
+import { verifyWsAccessToken, verifyWsAccessTokenClaims, verifyWsSubscriberToken } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ACCOUNT_DELETION_PENDING_CODE, hasAdminPermission } from '@bike4mind/common';
+
+const PENDING_DELETION = {
+  requestedAt: new Date('2026-11-01T00:00:00Z'),
+  scheduledFor: new Date('2026-12-01T00:00:00Z'),
+  source: 'self_serve',
+};
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
@@ -96,6 +105,14 @@ describe('verifyWsAccessToken', () => {
     });
 
     await expect(verifyWsAccessToken('token-123')).rejects.toThrow('blocked');
+  });
+
+  it('rejects a deletion-pending account with the deletion-pending code', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, deletion: PENDING_DELETION });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toMatchObject({
+      additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE },
+    });
   });
 
   it('accepts a legacy token carrying no typ and no tokenVersion against a default-version user', async () => {
@@ -175,10 +192,10 @@ describe('verifyWsAccessToken: enforceMFA for an existing session', () => {
     });
   });
 
-  it('passes the impersonation claim through to the enrollment gate', async () => {
+  it('refuses impersonation on the alternate realtime credential path', async () => {
     mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 0, typ: 'access', impersonatedBy: 'admin-1' });
-    await verifyWsAccessToken('token');
-    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.anything(), { impersonatedBy: 'admin-1' });
+    await expect(verifyWsAccessToken('token')).rejects.toThrow('Impersonated sessions cannot use realtime credentials');
+    expect(mockIsMfaEnrollmentOwed).not.toHaveBeenCalled();
   });
 
   it('fails closed when the enforcement read fails', async () => {
@@ -222,5 +239,72 @@ describe('verifyWsAccessTokenClaims', () => {
 
     expect(claims.tokenVersion).toBe(0);
     expect(claims.expiresAt).toBeUndefined();
+  });
+});
+
+describe('verifyWsSubscriberToken role-held admin permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const DELETED_ROLE_ID = 'c'.repeat(24);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindByKeyName.mockResolvedValue(null);
+    mockIsWithinGraceWindow.mockReturnValue(false);
+    mockVerifyToken.mockReturnValue({ id: 'user-1', tokenVersion: 3, typ: 'access' });
+    mockAssertAccountStateUsable.mockReturnValue(undefined);
+    mockFindRoles.mockResolvedValue([{ permissions: ['settings:manage'] }]);
+  });
+
+  it('counts a permission held only through a role', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, adminRoleIds: [ROLE_ID] });
+
+    const user = await verifyWsSubscriberToken('token-123');
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(hasAdminPermission(user, 'settings:manage')).toBe(true);
+  });
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    mockFindById.mockResolvedValueOnce({ id: 'user-1', tokenVersion: 3, adminRoleIds: [ROLE_ID] });
+    expect(hasAdminPermission(await verifyWsSubscriberToken('token-123'), 'settings:manage')).toBe(true);
+
+    mockFindById.mockResolvedValueOnce({ id: 'user-1', tokenVersion: 3, adminRoleIds: [] });
+    expect(hasAdminPermission(await verifyWsSubscriberToken('token-123'), 'settings:manage')).toBe(false);
+  });
+
+  it('grants nothing for a deleted or malformed role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, adminRoleIds: [DELETED_ROLE_ID, 'not-an-id'] });
+
+    const user = await verifyWsSubscriberToken('token-123');
+
+    expect(mockFindRoles).toHaveBeenCalledWith([DELETED_ROLE_ID]);
+    expect(hasAdminPermission(user, 'settings:manage')).toBe(false);
+  });
+
+  it('fails the request rather than widening access when the role lookup throws', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, adminRoleIds: [ROLE_ID] });
+    mockFindRoles.mockRejectedValue(new Error('db down'));
+
+    await expect(verifyWsSubscriberToken('token-123')).rejects.toThrow('db down');
+  });
+
+  it('does not look up roles for a refused credential', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, adminRoleIds: [ROLE_ID] });
+    mockAssertAccountStateUsable.mockImplementation(() => {
+      throw new Error('blocked');
+    });
+
+    await expect(verifyWsSubscriberToken('token-123')).rejects.toThrow('blocked');
+    expect(mockFindRoles).not.toHaveBeenCalled();
+  });
+
+  it('leaves reauth and unsubscribe verification free of any role lookup', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, adminRoleIds: [ROLE_ID] });
+    mockFindRoles.mockRejectedValue(new Error('db down'));
+
+    await expect(verifyWsAccessToken('token-123')).resolves.toMatchObject({ id: 'user-1' });
+    await expect(verifyWsAccessTokenClaims('token-123')).resolves.toMatchObject({ user: { id: 'user-1' } });
+    expect(mockFindRoles).not.toHaveBeenCalled();
   });
 });

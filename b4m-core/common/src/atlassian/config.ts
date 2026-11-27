@@ -1,6 +1,7 @@
 // Atlassian unified configuration for OAuth-authenticated Jira and Confluence operations
 
 import type { JiraConfig } from '../jira/api';
+import { stderrLogger } from '../logging/stderrLogger';
 import type { ConfluenceConfig } from '../confluence/api';
 
 export type AtlassianEnvKeys = {
@@ -47,8 +48,7 @@ export function getAtlassianConfig(): AtlassianConfig {
   if (!siteUrl) missing.push('ATLASSIAN_SITE_URL');
 
   if (missing.length) {
-    console.error('[Atlassian Config] Missing required environment variables for Atlassian API:');
-    missing.forEach(item => console.error(`   ${item}`));
+    stderrLogger.error('[Atlassian Config] Missing required environment variables for Atlassian API', { missing });
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 

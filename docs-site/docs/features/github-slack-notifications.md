@@ -13,31 +13,31 @@ Get notified in Slack when important things happen on your GitHub repositories �
 
 ### Pull Request Notifications
 
-| Notification | When It Triggers | Who Gets Notified |
-|---|---|---|
-| PR Opened | A new pull request is opened | Requested reviewers |
-| Review Requested | Your review is requested on a PR | The requested reviewer |
-| PR Approved | Your pull request is approved | PR author |
-| Changes Requested | A reviewer requests changes on your PR | PR author |
-| PR Merged | Your pull request is merged | PR author |
-| PR Review Comment | Someone comments on your PR's code | PR author, @mentioned users |
+| Notification      | When It Triggers                       | Who Gets Notified           |
+| ----------------- | -------------------------------------- | --------------------------- |
+| PR Opened         | A new pull request is opened           | Requested reviewers         |
+| Review Requested  | Your review is requested on a PR       | The requested reviewer      |
+| PR Approved       | Your pull request is approved          | PR author                   |
+| Changes Requested | A reviewer requests changes on your PR | PR author                   |
+| PR Merged         | Your pull request is merged            | PR author                   |
+| PR Review Comment | Someone comments on your PR's code     | PR author, @mentioned users |
 
 ### CI/CD Notifications
 
-| Notification | When It Triggers | Who Gets Notified |
-|---|---|---|
-| CI Failed | A GitHub Actions workflow fails | The person who triggered it |
-| CI Passed | A GitHub Actions workflow succeeds (opt-in) | The person who triggered it |
+| Notification | When It Triggers                            | Who Gets Notified           |
+| ------------ | ------------------------------------------- | --------------------------- |
+| CI Failed    | A GitHub Actions workflow fails             | The person who triggered it |
+| CI Passed    | A GitHub Actions workflow succeeds (opt-in) | The person who triggered it |
 
 ### Code & Issue Notifications
 
-| Notification | When It Triggers | Who Gets Notified |
-|---|---|---|
-| Push Commits | Commits pushed to protected branches (main, master, develop, release/*) | Subscribers (except the pusher) |
-| Issue Opened | A new issue is opened | Assignees + subscribers (except the author) |
-| Issue Closed | An issue is closed | Issue author (if closed by someone else) |
-| Issue Assigned | You're assigned to an issue | The assignee |
-| @Mentions | Someone @mentions you in a comment | The mentioned user |
+| Notification   | When It Triggers                                                        | Who Gets Notified                           |
+| -------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
+| Push Commits   | Commits pushed to protected branches (main, master, develop, release/*) | Subscribers (except the pusher)             |
+| Issue Opened   | A new issue is opened                                                   | Assignees + subscribers (except the author) |
+| Issue Closed   | An issue is closed                                                      | Issue author (if closed by someone else)    |
+| Issue Assigned | You're assigned to an issue                                             | The assignee                                |
+| @Mentions      | Someone @mentions you in a comment                                      | The mentioned user                          |
 
 :::tip Push Notifications are Opt-In
 Push commit notifications must be explicitly enabled in your subscription events filter to avoid notification overload from high-activity repos.
@@ -52,14 +52,14 @@ Organization admins configure a single webhook URL that covers the entire team. 
 ### Step 1: Create the Organization Webhook
 
 1. Go to your **Organization** page in Bike4Mind
-2. Click the **Webhooks** tab
+2. Open the **Integrations** tab and pick **Webhooks**
 3. Click **Create Webhook**
 4. You'll see:
    - **Webhook URL** — Copy this to add to GitHub
    - **Secret** — Shown once when created. Copy and save it securely.
 
 :::caution Save Your Secret
-The webhook secret is only displayed once when created. If you lose it, you'll need to rotate (regenerate) it from the Webhooks tab.
+The webhook secret is only displayed once when created. If you lose it, you'll need to rotate (regenerate) it from the Webhooks section of the Integrations tab.
 :::
 
 ### Step 2: Add the Webhook to GitHub
@@ -84,6 +84,7 @@ Add the webhook at the **GitHub organization level** for automatic coverage of a
 GitHub will send a ping event. A green checkmark indicates success.
 
 :::tip Organization vs Repository Webhooks
+
 - **Organization-level webhook** (recommended): Covers all current and future repos automatically
 - **Repository-level webhook**: Only covers that specific repo
 
@@ -94,7 +95,7 @@ For organization webhooks, go to: `github.com/orgs/YOUR-ORG/settings/hooks`
 
 After adding the webhook to GitHub:
 
-1. Return to your Bike4Mind **Organization** → **Webhooks** tab
+1. Return to your Bike4Mind **Organization** > **Integrations** > **Webhooks**
 2. Look for the **Last Delivery** timestamp to confirm events are being received
 3. Try creating a test PR or pushing a commit to verify notifications flow through
 
@@ -104,7 +105,7 @@ After adding the webhook to GitHub:
 
 If you need to regenerate the webhook secret (e.g., if it was exposed):
 
-1. Go to **Organization** → **Webhooks** tab
+1. Go to **Organization** > **Integrations** > **Webhooks**
 2. Click **Rotate Secret**
 3. Copy the new secret and update it in GitHub's webhook settings
 
@@ -143,6 +144,7 @@ Your subscription defaults to **all repos** and **all events** except push notif
 In **Settings** → **Integrations** → **GitHub Integration**, toggle which notifications you want:
 
 **Pull Request Events:**
+
 - **PR Opened** — When someone opens a PR and requests your review
 - **Review Requested** — When your review is specifically requested
 - **PR Approved** — When your PR gets approved
@@ -151,10 +153,12 @@ In **Settings** → **Integrations** → **GitHub Integration**, toggle which no
 - **PR Review Comment** — When someone comments on your PR's code
 
 **CI/CD Events:**
+
 - **CI Failed** — When a workflow run fails for your push
 - **CI Passed** — When a workflow run succeeds (disabled by default — can be noisy)
 
 **Code & Issue Events:**
+
 - **Push Commits** — When commits are pushed to protected branches (opt-in)
 - **Issue Opened** — When someone opens an issue in a repo you're subscribed to
 - **Issue Closed** — When an issue you created is closed
@@ -169,25 +173,25 @@ Each subscription has a delivery history showing all webhook events. Access it b
 
 ### Delivery Statuses
 
-| Status | Meaning |
-|--------|---------|
-| **Success** | You were a notification target and received a Slack message |
-| **Skipped** | You weren't a notification target for this event (see below) |
-| **Failed** | Delivery attempted but failed (Slack error, rate limit, etc.) |
-| **Pending** | Delivery is queued and will be attempted shortly |
+| Status      | Meaning                                                       |
+| ----------- | ------------------------------------------------------------- |
+| **Success** | You were a notification target and received a Slack message   |
+| **Skipped** | You weren't a notification target for this event (see below)  |
+| **Failed**  | Delivery attempted but failed (Slack error, rate limit, etc.) |
+| **Pending** | Delivery is queued and will be attempted shortly              |
 
 ### Why Events Show "Skipped"
 
 **"Skipped"** is normal and expected. It means the event was processed, but you weren't the intended recipient. Common reasons:
 
-| Event Type | Why You See "Skipped" |
-|------------|----------------------|
-| PR Opened | You weren't a requested reviewer |
-| PR Approved/Changes | You're not the PR author |
-| CI Failed/Passed | You didn't trigger the workflow |
-| Push Commits | You were the pusher (no self-notification) |
-| Issue Events | You're not the author, assignee, or mentioned |
-| PR Review Comment | You're not the PR author and weren't @mentioned |
+| Event Type          | Why You See "Skipped"                           |
+| ------------------- | ----------------------------------------------- |
+| PR Opened           | You weren't a requested reviewer                |
+| PR Approved/Changes | You're not the PR author                        |
+| CI Failed/Passed    | You didn't trigger the workflow                 |
+| Push Commits        | You were the pusher (no self-notification)      |
+| Issue Events        | You're not the author, assignee, or mentioned   |
+| PR Review Comment   | You're not the PR author and weren't @mentioned |
 
 **Self-notification prevention:** You won't receive notifications for your own actions. If you open a PR, approve a review, or push commits, you already know — so no notification is sent.
 
@@ -231,7 +235,7 @@ If notifications fail to deliver 10 times consecutively (e.g., Slack connection 
 
 Check these in order:
 
-1. **Org webhook enabled?** Organization page → Webhooks tab → Enabled toggle must be ON
+1. **Org webhook enabled?** Organization page > Integrations > Webhooks > Enabled toggle must be ON
 2. **Subscription enabled?** Settings → Integrations → Webhook Subscriptions → Enabled toggle must be ON
 3. **GitHub connected?** Profile > Integrations > GitHub Integration > Reconnect if your login changed
 4. **Notification toggles on?** Same section → Toggle must be ON for the event type you expect
@@ -270,7 +274,7 @@ Yes. Subscribe to each organization separately in the Webhook Subscriptions sect
 
 **Q: Who can see the webhook secret?**
 
-Only organization admins and managers. The secret is encrypted at rest and masked in the UI.
+Only the organization billing owner and platform admins. The secret is encrypted at rest and masked in the UI.
 
 **Q: Why don't I get notified when I open my own PR?**
 

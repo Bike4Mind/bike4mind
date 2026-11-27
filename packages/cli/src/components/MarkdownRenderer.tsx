@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { marked, type Token, type Tokens } from 'marked';
 import { highlight } from 'cli-highlight';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 
 interface MarkdownRendererProps {
   content: string;
@@ -11,7 +12,8 @@ interface MarkdownRendererProps {
 
 export function MarkdownRenderer({ content, columns: columnsProp }: MarkdownRendererProps) {
   const columns = columnsProp ?? process.stdout.columns ?? 80;
-  const tokens = marked.lexer(content);
+  // Sanitize before lexing so every token, incl. code fed to cli-highlight, is clean.
+  const tokens = marked.lexer(sanitizeTerminalText(content));
 
   return <Box flexDirection="column">{tokens.map((token, idx) => renderToken(token, idx, columns))}</Box>;
 }

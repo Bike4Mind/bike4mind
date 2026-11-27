@@ -1,5 +1,5 @@
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
-import { withWebSocketContext } from './utils';
+import { withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(
@@ -22,5 +22,6 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(
       statusCode: 200,
     };
   },
+  // Must stay database-free: infra/websocket.ts runs this route outside the VPC.
   { skipDatabase: true }
 );

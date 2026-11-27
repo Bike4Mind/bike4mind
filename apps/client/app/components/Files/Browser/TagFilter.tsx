@@ -7,7 +7,8 @@ import IconButton from '@mui/joy/IconButton';
 import MenuButton from '@mui/joy/MenuButton';
 import Menu from '@mui/joy/Menu';
 import MenuItem from '@mui/joy/MenuItem';
-import { Add, Close } from '@mui/icons-material';
+import Add from '@mui/icons-material/Add';
+import Close from '@mui/icons-material/Close';
 import { IFileTag } from '@bike4mind/common';
 
 interface FileBrowserTagFiltersProps {

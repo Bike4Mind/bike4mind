@@ -24,13 +24,13 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: (...args: unknown[]) => mockGitHubForSystem(...args),
   },
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreRecurrenceDetectedMessage: (...args: unknown[]) => mockPostRecurrenceMessage(...args),
 }));
 

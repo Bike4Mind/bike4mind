@@ -1,6 +1,5 @@
 import { Request } from 'express';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { CounterLog } from '@bike4mind/database';
 import { ApiKeyScope, type CompletionSource, type UsageBySourceResponse } from '@bike4mind/common';
 import { z } from 'zod';
@@ -31,12 +30,8 @@ type UsageBySourceQuery = z.infer<typeof QuerySchema>;
  * Reads from CounterLog rather than CreditTransaction because the analytics
  * layer is the right home for "who did what" - the ledger is for $.
  */
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request<{}, {}, {}, UsageBySourceQuery>, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const { hours = 168 } = QuerySchema.parse(req.query);
     const windowEnd = dayjs().utc();
     const windowStart = windowEnd.subtract(hours, 'hour');

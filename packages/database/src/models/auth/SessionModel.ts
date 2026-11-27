@@ -1,4 +1,5 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
 import {
   ShareableDocumentRepository,
@@ -12,18 +13,32 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  ListSessionChangesByUserQuery,
   ListSessionsByUserQuery,
   SearchOptions,
   SESSION_ORIGIN_CHANNELS,
   SessionListFilters,
+  SessionListKeyset,
+  SessionListKeysetField,
+  SessionListPage,
+  SessionListPageOptions,
+  SERVER_OWNED_SESSION_FIELDS,
+  isSessionListKeysetField,
   SessionOriginChannel,
   tagAttemptDueFilter,
+  SessionResponseSchema,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { Quest as QuestModel } from '../content/QuestModel';
+
+// The public session fields, minus the id pair Mongo returns anyway, so findPageByIds cannot load
+// less than toPublicSession (apps/client/server/sessions) emits.
+const PUBLIC_SESSION_PROJECTION = Object.keys(SessionResponseSchema.shape)
+  .filter(key => key !== 'id' && key !== '_id')
+  .join(' ');
 
 // This is the canonical name of the model, used in determining the collection name in Mongo.
 // If this changes, you'll need to adjust a few parallel mentions in the code (build will fail
@@ -47,6 +62,7 @@ const SessionOriginSchema = new Schema(
   {
     channel: { type: String, enum: [...SESSION_ORIGIN_CHANNELS], required: true },
     apiKeyId: { type: String, required: false },
+    slackWorkflow: { type: Boolean, required: false },
   },
   {
     _id: false,
@@ -103,12 +119,41 @@ function ownSessionListQuery(
   return q;
 }
 
+/**
+ * The filter that resumes searchByUserId after `after`, matching its (field, _id) sort. Null when
+ * the keyset cannot address a row (a non-ObjectId id, or a lastUpdated order with no timestamp).
+ */
+function sessionListKeysetClause(
+  field: SessionListKeysetField,
+  direction: 1 | -1,
+  after: SessionListKeyset
+): Record<string, unknown> | null {
+  if (!mongoose.isObjectIdOrHexString(after.id)) return null;
+  const id = new mongoose.Types.ObjectId(after.id);
+  const beyond = direction === 1 ? '$gt' : '$lt';
+  if (field === '_id') return { _id: { [beyond]: id } };
+  if (!after.at) return null;
+  return { $or: [{ [field]: { [beyond]: after.at } }, { [field]: after.at, _id: { [beyond]: id } }] };
+}
+
+function lastKeyset(
+  rows: ReadonlyArray<{ _id: unknown; lastUpdated?: Date | null }>,
+  field: SessionListKeysetField | undefined
+): SessionListKeyset | undefined {
+  const row = rows[rows.length - 1];
+  if (!row || !field) return undefined;
+  if (field === '_id') return { id: String(row._id) };
+  return row.lastUpdated ? { id: String(row._id), at: new Date(row.lastUpdated) } : undefined;
+}
+
 export interface ISessionModel extends Model<ISessionDocument> {}
 
 const SessionSchema = new Schema<ISession, ISessionModel, {}>(
   {
     name: { type: String, required: true },
     userId: { type: String, required: true },
+    retentionOrganizationId: { type: String, immutable: true },
+    organizationId: { type: String, immutable: true },
     lastUpdated: { type: Date, required: true },
     firstCreated: { type: Date, required: true },
     language: { type: String, required: false },
@@ -120,6 +165,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     systemPromptId: { type: String, required: false },
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
+    productionCompositionId: { type: String, required: false },
     disabledTools: [{ type: String, required: false }],
     autoAddedTools: [{ type: String, required: false }],
     disableUserIntegrations: { type: Boolean, required: false },
@@ -131,6 +177,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // No default: unset falls back to the lake selection (see effectiveIncludeLibraryFiles).
     includeLibraryFiles: { type: Boolean, required: false },
+    promptCacheTtl: { type: String, enum: ['5m', '1h'], required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
     // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
@@ -146,6 +193,13 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     temperature: { type: Number, required: false },
     maxToolCalls: { type: Number, required: false, min: 1 },
     autoNamePlaceholder: { type: String, required: false },
+    tutorial: {
+      type: new Schema(
+        { owner: { type: String, enum: ['core'], required: true }, moduleId: { type: String, required: true } },
+        { _id: false }
+      ),
+      required: false,
+    },
     openaiConversationId: { type: String, required: false },
     claudeConversationId: { type: String, required: false },
     summary: { type: String, required: false },
@@ -282,6 +336,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     // No default: $inc needs the field absent or numeric, never null.
     voiceBilledCredits: { type: Number, required: false },
     voiceHoldUserId: { type: String, required: false },
+    voiceHoldApiKeyId: { type: String, required: false },
     ...ShareableDocumentSchema,
   },
   {
@@ -360,17 +415,16 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     findQuery
       .skip(pagination.limit * (pagination.page - 1))
       .limit(pagination.limit + 1)
-      .sort({ [orderBy.field]: orderBy.direction });
+      .sort({ [orderBy.field]: orderBy.direction, _id: orderBy.direction });
 
     const result = await findQuery.exec();
     const hasMore = result.length === pagination.limit + 1;
     if (hasMore) result.pop();
 
-    // Lazy-load message counts for all returned sessions
-    const sessionsWithCounts = await this.populateMessageCounts(result);
+    await this.fillMissingMessageCounts(result);
 
     return {
-      data: sessionsWithCounts,
+      data: result,
       hasMore,
       total,
     };
@@ -481,28 +535,43 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     userId: string,
     options: SearchOptions<ISessionDocument>,
     surface?: string,
-    filters: SessionListFilters = {}
-  ) {
+    filters: SessionListFilters = {},
+    page: SessionListPageOptions = {}
+  ): Promise<SessionListPage> {
     const q = ownSessionListQuery(userId, search, surface, filters);
+    const { pagination, orderBy } = options;
+    const field = String(orderBy.field);
+    const direction = orderBy.direction === 'asc' ? 1 : -1;
+    const keysetField = isSessionListKeysetField(field) ? field : undefined;
 
-    const { pagination, orderBy } = options || {};
+    if (page.after) {
+      if (!keysetField) throw new Error(`searchByUserId cannot resume a keyset when ordered by ${field}`);
+      const clause = sessionListKeysetClause(keysetField, direction, page.after);
+      if (!clause) return { data: [], hasMore: false };
+      q.$and = [clause];
+    }
 
-    const result = await this.sessionModel
+    // _id breaks ties, so rows with an equal sort value keep one order across pages and a keyset
+    // can resume between them. Served by the (deletedAt, userId[, origin.channel], lastUpdated, _id) indexes.
+    const sort: Record<string, 1 | -1> = { [field]: direction };
+    if (field !== '_id') sort._id = direction;
+
+    const query = this.sessionModel
       .find(q)
-      .skip(pagination.limit * (pagination.page - 1))
-      .limit(pagination.limit + 1)
-      .sort({ [orderBy.field]: orderBy.direction });
+      // The route redacts these anyway; not reading them keeps large prompts off the list read.
+      .select(SERVER_OWNED_SESSION_FIELDS.map(name => `-${name}`).join(' '))
+      .sort(sort)
+      .limit(pagination.limit + 1);
+    if (!page.after) query.skip(pagination.limit * (pagination.page - 1));
 
-    const hasMore = result.length === pagination.limit + 1;
+    // Full hydrated documents, not lean(): older clients rely on schema defaults and the `id`
+    // virtual being present on every row.
+    const result = await query.exec();
+    const hasMore = result.length > pagination.limit;
     if (hasMore) result.pop();
+    await this.fillMissingMessageCounts(result);
 
-    // Lazy-load message counts for all returned sessions
-    const sessionsWithCounts = await this.populateMessageCounts(result);
-
-    return {
-      data: sessionsWithCounts,
-      hasMore,
-    };
+    return { data: result, hasMore, last: hasMore ? lastKeyset(result, keysetField) : undefined };
   }
   async listByUserId({ userId, search, surface, filters, beforeId, limit }: ListSessionsByUserQuery) {
     // A non-ObjectId cursor id can never bound a page; callers validate it first (422), so this
@@ -511,6 +580,20 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     const q = ownSessionListQuery(userId, search, surface, filters);
     if (beforeId !== undefined) q._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
     return this.sessionModel.find(q).sort({ _id: -1 }).limit(limit);
+  }
+  async listChangesByUserId({ userId, search, surface, filters, since, after, limit }: ListSessionChangesByUserQuery) {
+    if (after !== undefined && !mongoose.isObjectIdOrHexString(after.id)) return [];
+    const q = ownSessionListQuery(userId, search, surface, filters);
+    const changed: Record<string, unknown>[] = [{ updatedAt: { $gte: since } }];
+    if (after !== undefined) {
+      const afterId = new mongoose.Types.ObjectId(after.id);
+      changed.push({ $or: [{ updatedAt: { $gt: after.at } }, { updatedAt: after.at, _id: { $gt: afterId } }] });
+    }
+    // `search` may already have claimed the top-level $or, so the keyset joins through $and.
+    q.$and = changed;
+    // Tombstones are the point: a deleted session is how a sync learns to drop its copy. Every soft
+    // delete moves updatedAt (softDeletePlugin), so a delete always lands after the caller's mark.
+    return this.sessionModel.find(q).setOptions({ includeDeleted: true }).sort({ updatedAt: 1, _id: 1 }).limit(limit);
   }
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
@@ -546,6 +629,27 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
     const query = this.sessionModel.find({ _id: { $in: usableObjectIds(ids, 'SessionModel.findAllByIds') } });
     return options?.includeDeleted ? query.setOptions({ includeDeleted: true }) : query;
+  }
+
+  /**
+   * One ascending-by-`_id` page of the given ids, public-shape fields only. Same liveness as
+   * `findAllByIds` (the soft-delete plugin hides deleted rows); ids that cannot address a row are skipped.
+   */
+  async findPageByIds(ids: string[], { afterId, limit }: { afterId?: string; limit: number }) {
+    if (afterId !== undefined && !mongoose.isObjectIdOrHexString(afterId)) return { data: [], hasMore: false };
+    const idCondition: Record<string, unknown> = {
+      $in: usableObjectIds(ids, 'SessionModel.findPageByIds').map(id => new mongoose.Types.ObjectId(id)),
+    };
+    if (afterId !== undefined) idCondition.$gt = new mongoose.Types.ObjectId(afterId);
+
+    const result = await this.sessionModel
+      .find({ _id: idCondition })
+      .select(PUBLIC_SESSION_PROJECTION)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    return { data: result.slice(0, limit), hasMore: result.length > limit };
   }
 
   async attachAgent(sessionId: string, agentId: string) {
@@ -708,6 +812,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: 1,
           voiceLastActivityAt: 1,
           voiceBilledCredits: 1,
+          voiceHoldApiKeyId: 1,
         }
       )
       .sort({ voiceSessionStartedAt: 1 })
@@ -720,6 +825,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       voiceSessionStartedAt: s.voiceSessionStartedAt as Date,
       voiceConnectedAt: s.voiceConnectedAt ?? null,
       voiceLastActivityAt: s.voiceLastActivityAt ?? null,
+      voiceHoldApiKeyId: s.voiceHoldApiKeyId ?? null,
       realtime: s.voiceBilledCredits != null,
     }));
   }
@@ -769,25 +875,40 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
         },
-        $unset: { voiceBilledCredits: '', voiceHoldUserId: '' },
+        $unset: { voiceBilledCredits: '', voiceHoldUserId: '', voiceHoldApiKeyId: '' },
       },
-      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1 } }
+      { new: false, projection: { voiceBilledCredits: 1, voiceHoldUserId: 1, voiceHoldApiKeyId: 1 } }
     );
     return before
-      ? { billedCredits: before.voiceBilledCredits ?? null, payerId: before.voiceHoldUserId ?? null }
+      ? {
+          billedCredits: before.voiceBilledCredits ?? null,
+          payerId: before.voiceHoldUserId ?? null,
+          apiKeyId: before.voiceHoldApiKeyId ?? null,
+        }
       : null;
   }
 
   async openVoiceHold(
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+    hold: {
+      voiceReservedCredits: number | null;
+      voiceSessionStartedAt: Date;
+      realtime: boolean;
+      payerId: string;
+      apiKeyId?: string;
+    }
   ) {
     // Conditional on the hold the bootstrap read: once it is settled (null) or, if it held no reserve
     // and so was never claimed, still that start. A concurrent bootstrap that already wrote its own
     // hold makes this match nothing, so only one of them keeps a reserve. The prior start matches
     // only without a reserve: a reserved hold whose settlement failed still owes it (settleVoiceHold),
     // so it must not be overwritten.
+    // A JWT call must not inherit the key of an earlier key-opened call that was never claimed.
+    const unset = {
+      ...(hold.apiKeyId ? {} : { voiceHoldApiKeyId: '' }),
+      ...(hold.realtime ? {} : { voiceBilledCredits: '' }),
+    };
     const { matchedCount } = await this.sessionModel.updateOne(
       {
         _id: sessionId,
@@ -803,10 +924,11 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
           voiceConnectedAt: null,
           voiceLastActivityAt: null,
           voiceHoldUserId: hold.payerId,
+          ...(hold.apiKeyId ? { voiceHoldApiKeyId: hold.apiKeyId } : {}),
           // Realtime holds are billed per response against this marker (server/websocket/voiceSessionEnded.ts).
           ...(hold.realtime ? { voiceBilledCredits: 0 } : {}),
         },
-        ...(hold.realtime ? {} : { $unset: { voiceBilledCredits: '' } }),
+        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
       }
     );
     return matchedCount === 1;
@@ -817,7 +939,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
     };
 
-    const sessions = await this.sessionModel.find({ userId, ...deletedAtFilter }, { _id: 1 });
+    const sessions = await this.sessionModel.find({ userId, ...deletedAtFilter }, { _id: 1 }).lean();
     // Filter out any sessions with null/undefined _id to prevent toString() errors
     return sessions.filter(s => s._id != null).map(s => s._id.toString());
   }
@@ -874,82 +996,82 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return refreshed?.messageCount ?? messageCount;
   }
 
-  /**
-   * Populate message counts for an array of sessions (lazy-load pattern)
-   * Only calculates and caches for sessions that don't have messageCount set
-   *
-   * @param sessions - Array of session documents
-   * @returns The same array with messageCount populated
-   */
-  async populateMessageCounts(sessions: ISessionDocument[]): Promise<ISessionDocument[]> {
+  /** Live (not soft-deleted) quest count per session id; ids with no quests are absent. Read-only. */
+  private async countLiveMessages(sessionIds: string[]): Promise<Map<string, number>> {
+    if (sessionIds.length === 0) return new Map();
     // Prefer injected questModel, fall back to dynamic lookup
     const Quest = this.questModel || mongoose.models.Quest || mongoose.model('Quest');
-
-    // Identify sessions that need messageCount calculated
-    const sessionsNeedingCount = sessions.filter(s => s.messageCount === undefined || s.messageCount === null);
-
-    if (sessionsNeedingCount.length === 0) {
-      return sessions; // All sessions already have counts
-    }
-
-    // Batch count all messages for sessions needing counts
-    const sessionIds = sessionsNeedingCount.map(s => s.id);
-
-    const messageCounts = await Quest.aggregate([
+    const messageCounts: { _id: string; count: number }[] = await Quest.aggregate([
       {
         $match: {
           sessionId: { $in: sessionIds },
           $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
         },
       },
-      {
-        $group: {
-          _id: '$sessionId',
-          count: { $sum: 1 },
-        },
-      },
+      { $group: { _id: '$sessionId', count: { $sum: 1 } } },
     ]);
+    return new Map(messageCounts.map(({ _id, count }) => [_id, count]));
+  }
 
-    // Create a map of sessionId -> messageCount
-    const countMap = new Map(messageCounts.map((mc: { _id: string; count: number }) => [mc._id, mc.count]));
+  /**
+   * Sets an in-memory messageCount on sessions that have none stored, without writing it back:
+   * list reads must not write. Sessions with a stored count keep it.
+   */
+  async fillMissingMessageCounts(sessions: ISessionDocument[]): Promise<void> {
+    const missing = sessions.filter(s => s.messageCount === undefined || s.messageCount === null);
+    const counts = await this.countLiveMessages(missing.map(s => s.id));
+    for (const session of missing) session.messageCount = counts.get(session.id) ?? 0;
+  }
 
-    // Update sessions in database (batch upsert) and in-memory array
-    const bulkOps = sessionsNeedingCount.map(session => {
-      const count = countMap.get(session.id) || 0;
-      session.messageCount = count; // Update in-memory
-
-      return {
-        updateOne: {
-          filter: { _id: session.id },
-          update: { $set: { messageCount: count } },
-        },
-      };
-    });
-
-    if (bulkOps.length > 0) {
-      await this.sessionModel.bulkWrite(bulkOps);
-    }
-
+  /**
+   * Computes and stores messageCount for sessions that have none (the spider grooming job).
+   * Not for read paths: it writes.
+   */
+  async populateMessageCounts(sessions: ISessionDocument[]): Promise<ISessionDocument[]> {
+    const missing = sessions.filter(s => s.messageCount === undefined || s.messageCount === null);
+    if (missing.length === 0) return sessions;
+    await this.fillMissingMessageCounts(missing);
+    await this.sessionModel.bulkWrite(
+      missing.map(session => ({
+        updateOne: { filter: { _id: session.id }, update: { $set: { messageCount: session.messageCount } } },
+      }))
+    );
     return sessions;
   }
 }
 SessionSchema.plugin(softDeletePlugin);
+SessionSchema.plugin(organizationContentPolicyPlugin);
 
 // Optimize session listing - used on homepage and many screens
-SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
+SessionSchema.index(
+  { retentionOrganizationId: 1, deletedAt: 1, _id: 1 },
+  { name: 'retention_sessions_present', partialFilterExpression: { retentionOrganizationId: { $exists: true } } }
+);
+// The own-session list (searchByUserId) sorts by (lastUpdated, _id); the _id suffix lets a keyset page
+// walk the index instead of sorting every session the user has. Replaced the (.., lastUpdated) pair,
+// see migration 20261126094502_ensure-session-list-keyset-indexes.
+SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1, _id: -1 });
 
 // Session list filtered by origin (sidebar "Only API" / "Hide API"); see sessionListFilterQuery.
-SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated: -1 });
+SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated: -1, _id: -1 });
 
 // Keyset pagination for GET /api/v1/sessions (listByUserId): equality on deletedAt/userId, then an
 // index-ordered walk of _id, so a page reads limit+1 rows instead of sorting every session the user has.
 SessionSchema.index({ deletedAt: 1, userId: 1, _id: -1 });
+
+// Change listing for GET /api/v1/sessions?updated_since (listChangesByUserId). No deletedAt prefix:
+// that listing returns tombstones too.
+SessionSchema.index({ userId: 1, updatedAt: 1, _id: 1 });
 
 // Optimize permission and sharing queries
 SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 });
 
 // Optimize global access patterns
 SessionSchema.index({ deletedAt: 1, isGlobalRead: 1 });
+
+// Group-share arm of readAccessArms (the workspace-colleague check in GET /api/users/[id]); without it
+// that $or scans every session.
+SessionSchema.index({ deletedAt: 1, 'groups.groupId': 1 });
 
 // Tag-based search indexes
 SessionSchema.index({ deletedAt: 1, 'tags.name': 1, userId: 1 });
@@ -962,6 +1084,22 @@ SessionSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 // b4m-core/slack/src/handlers/notebook-manager.ts would collide with the deleted row on every
 // retry and the thread could never get a notebook again. A partial filter cannot exclude
 // soft-deleted rows. Migration 20251126202452 drops the index where an old build left it.
+
+// The Slack gear check (apps/client/server/services/gears/catalog.ts). Partial on the subdocument's
+// required channelId, so only Slack-born notebooks are indexed; the query must filter on that same
+// path for the planner to prove the filter is implied.
+export const SESSION_SLACK_NOTEBOOK_INDEX_NAME = 'userId_1_slackNotebook';
+SessionSchema.index(
+  { userId: 1 },
+  {
+    name: SESSION_SLACK_NOTEBOOK_INDEX_NAME,
+    partialFilterExpression: { 'slackMetadata.channelId': { $exists: true } },
+  }
+);
+
+// Sessions that reference a file (findAllWithKnowledgeId, pullKnowledgeIds), read on every file
+// delete, lake purge and lake ingest. Multikey; without it each call walks every session.
+SessionSchema.index({ knowledgeIds: 1, deletedAt: 1 });
 
 // Index for admin/cleanup queries on conversation context by user.
 // Feature queries use findById(sessionId), which hits the default _id index;

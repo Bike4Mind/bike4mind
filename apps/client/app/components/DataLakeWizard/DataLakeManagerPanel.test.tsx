@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
+import { countTagPaths, satisfiesTagPrefix } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeManagerPanel from './DataLakeManagerPanel';
@@ -109,12 +110,33 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // useLakeConvergencePlan.mockReturnValue(...).
     useLakeConvergencePlan: (...args: unknown[]) => useLakeConvergencePlan(...(args as [string, boolean])),
     useConvergeDataLake: () => ({ mutate: convergeMutate, isPending: false }),
-    // Per-lake files: only the selected lake queries (id != null).
-    useDataLakeFiles: (id: string | null) => ({
-      data: id ? { data: lakeFiles } : undefined,
+    // The open lake's tree, its Uncategorized bucket and one folder's files, each answered from
+    // `lakeFiles` the way the routes would (only the selected lake queries, id != null).
+    useDataLakeFiles: (id: string | null, params?: { tag?: string }) => ({
+      data: id
+        ? { data: params?.tag ? lakeFiles.filter(f => f.tags.some(t => t.name === params.tag)) : lakeFiles }
+        : undefined,
       isLoading: false,
       isError: false,
     }),
+    useGetScopedDataLakeTagCounts: (_source: string, lakeIds: readonly string[]) => ({
+      data:
+        lakeIds.length > 0
+          ? { tagCounts: countTagPaths(lakeFiles.map(f => f.tags.map(t => t.name).filter(n => n.startsWith('lk:')))) }
+          : undefined,
+      isLoading: false,
+      isError: false,
+    }),
+    useGetDataLakeUncategorizedFiles: (id: string | null) => {
+      const bucket = lakeFiles.filter(
+        f =>
+          !satisfiesTagPrefix(
+            f.tags.map(t => t.name),
+            'lk:'
+          )
+      );
+      return { data: id ? { data: bucket, total: bucket.length } : undefined, isLoading: false, isError: false };
+    },
     // Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
     // The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
     // `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
@@ -240,9 +262,15 @@ vi.mock('./DataLakeArticlePanel', () => ({
 vi.mock('./DataLakeSettingsModal', () => ({
   // data-origin exposes editingLake's origin so a test can pin that DataLakeManagerPanel
   // actually threads the lake's real origin through, rather than always seeding 'curated'.
-  DataLakeSettingsModal: ({ lake }: { lake: { name: string; origin?: string } | null }) =>
+  DataLakeSettingsModal: ({
+    lake,
+    initialTab,
+  }: {
+    lake: { name: string; origin?: string } | null;
+    initialTab?: string;
+  }) =>
     lake ? (
-      <div data-testid="mock-settings" data-origin={lake.origin}>
+      <div data-testid="mock-settings" data-origin={lake.origin} data-initial-tab={initialTab}>
         {lake.name}
       </div>
     ) : null,
@@ -551,6 +579,50 @@ describe('DataLakeManagerPanel - pending-proposal chip', () => {
     rerenderPanel(rerender);
     await user.hover(screen.getByTestId('datalake-manager-pending-proposals-mine'));
     expect(await screen.findByText('3 sources are waiting for your review')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeManagerPanel - research entry points', () => {
+  it('opens settings on Proposals from the row chip without selecting the lake', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 2 }, theirsLake], isLoading: false });
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-review-proposals-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'proposals');
+    expect(screen.queryByTestId('datalake-settings-btn-mine')).toBeNull();
+  });
+
+  it('opens settings on Research from the lake page', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-research-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'research');
+  });
+
+  it('opens settings on Proposals from the lake page link', async () => {
+    const user = userEvent.setup();
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 2 }, theirsLake], isLoading: false });
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-review-proposals-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'proposals');
+  });
+
+  it('keeps the plain Settings button on the Settings tab', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-settings-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-initial-tab', 'settings');
   });
 });
 

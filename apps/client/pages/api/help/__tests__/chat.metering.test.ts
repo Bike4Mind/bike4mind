@@ -1,0 +1,436 @@
+// @vitest-environment node
+/**
+ * POST /api/help/chat runs a route-picked model on the platform key, so it must hold credits
+ * before retrieval (which embeds the question) and the completion, then settle the reported usage.
+ * The real meterPlatformCompletion + reserveRequestCredits run; only the credit store is faked.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: vi.fn().mockResolvedValue({ release: async () => {} }),
+}));
+import { createMocks } from 'node-mocks-http';
+import {
+  CREDITS_PER_USD_COST,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+  TooManyRequestsError,
+  getEmbeddingModelCost,
+  getTextModelCost,
+  insufficientCreditsError,
+  usdToCredits,
+} from '@bike4mind/common';
+
+const m = vi.hoisted(() => ({
+  enforce: true,
+  hold: vi.fn(),
+  release: vi.fn(),
+  settleHold: vi.fn(),
+  settle: vi.fn(),
+  complete: vi.fn(),
+  search: vi.fn(),
+  recordOperationalUsage: vi.fn(),
+  findOrg: vi.fn(),
+  substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
+  getLlm: vi.fn(),
+}));
+
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: () => {
+    type Mw = (req: unknown, res: unknown, next: () => void) => unknown;
+    const handlers: Mw[] = [];
+    const api = {
+      use: (mw: Mw) => (handlers.push(mw), api),
+      post: (h: Mw) => async (req: unknown, res: unknown) => {
+        for (const mw of [...handlers, h]) {
+          let advanced = false;
+          await mw(req, res, () => {
+            advanced = true;
+          });
+          if (!advanced) return;
+        }
+      },
+    };
+    return api;
+  },
+}));
+vi.mock('@server/middlewares/perUserRateLimit', () => ({ blockedAtZeroTierLimit: (n: number) => n }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+vi.mock('@bike4mind/database', async () => ({
+  ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
+  adminSettingsRepository: {},
+  apiKeyRepository: {},
+  usageEventRepository: { record: async () => undefined },
+  creditTransactionRepository: {},
+  organizationRepository: { findById: m.findOrg },
+  userRepository: {},
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: async () => ({}),
+  getSettingsValue: (name: string) => (name === 'enforceCredits' ? m.enforce : undefined),
+}));
+vi.mock('@bike4mind/services', async () => ({
+  ...(await import('@bike4mind/services/billing/completionMeter')),
+  creditService: {
+    holdCredits: m.hold,
+    releaseCreditHold: m.release,
+    settleCreditHold: m.settleHold,
+    assertSpendNotFrozen: async () => undefined,
+  },
+  organizationService: {},
+  apiKeyService: { getEffectiveLLMApiKeys: async () => ({}) },
+  recordOperationalUsage: m.recordOperationalUsage,
+}));
+vi.mock('@bike4mind/services/llm/modelAdmission', () => ({
+  loadModelConfigurations: async () => [],
+  loadFreeTierAllowedModels: async () => undefined,
+  createModelAdmission: () => ({ admits: async () => true, assert: async () => undefined }),
+}));
+vi.mock('@bike4mind/services/cliCompletions', () => ({ estimateInputTokens: () => 1000 }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async importOriginal => {
+  const real = await importOriginal<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>();
+  return {
+    ...real,
+    resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
+    settleCompletion: (...args: Parameters<typeof real.settleCompletion>) => {
+      m.settle(args[2]);
+      return real.settleCompletion(...args);
+    },
+  };
+});
+
+const MODEL = {
+  id: 'ops-model',
+  type: 'text',
+  backend: 'openai',
+  can_think: false,
+  max_tokens: 65536,
+  pricing: { 200_000: { input: 1e-6, output: 2e-6 } },
+};
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
+  getAvailableModels: async () => [MODEL],
+  getLlmByModel: (...args: unknown[]) => (m.getLlm(...args), { complete: m.complete }),
+}));
+vi.mock('@server/help/retrieval', () => ({ searchHelpContext: m.search }));
+
+const { default: handler } = await import('@pages/api/help/chat');
+
+async function call(extra: Record<string, unknown> = {}) {
+  const { req, res } = createMocks({ method: 'POST', body: { question: 'How do I share a notebook?' } });
+  Object.assign(req, {
+    user: { id: 'u1' },
+    ...extra,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() },
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
+  await (handler as any)(req, res);
+  return res;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.substitute.mockResolvedValue(undefined);
+  m.enforce = true;
+  MODEL.backend = 'openai';
+  MODEL.can_think = false;
+  m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 50 });
+  m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
+  m.search.mockResolvedValue({ context: '## Docs', relevantArticles: [], method: 'keyword' });
+  m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+    await cb(['Use the Share button.']);
+    await cb([null], { inputTokens: 200, outputTokens: 10 });
+  });
+});
+
+describe('POST /api/help/chat metering', () => {
+  it('holds the full Gemini thinking output budget before retrieval or completion', async () => {
+    MODEL.backend = 'gemini';
+    MODEL.can_think = true;
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    // 1000 base prompt tokens + 4000 retrieved-context tokens, and 1000 + 16000 output tokens.
+    const cost = getTextModelCost(MODEL as never, 5000, 17000);
+    expect(m.hold).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredCredits: usdToCredits(cost) }),
+      expect.anything()
+    );
+    expect(m.hold).toHaveBeenCalledBefore(m.search);
+    expect(m.complete).toHaveBeenCalledWith(
+      MODEL.id,
+      expect.anything(),
+      expect.objectContaining({ maxTokens: 1000 }),
+      expect.any(Function)
+    );
+  });
+
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'prices cache-only %s usage on a successful response',
+    async field => {
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['answer'], { inputTokens: 0, outputTokens: 0, [field]: 100 });
+      });
+
+      await call();
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 1e-7 : 1.25e-6);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: expect.closeTo(usd, 12) }));
+      expect(m.release).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['cacheReadInputTokens', 'cacheCreationInputTokens'] as const)(
+    'settles cache-only %s usage when the provider later throws',
+    async field => {
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['partial'], { inputTokens: 0, outputTokens: 0, [field]: 100 });
+        throw new Error('stream disconnected');
+      });
+
+      const res = await call();
+      expect(res._getStatusCode()).toBe(500);
+
+      const usd = 100 * (field === 'cacheReadInputTokens' ? 1e-7 : 1.25e-6);
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ usd: expect.closeTo(usd, 12) }));
+      expect(m.release).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a zero-credit caller with 422 and never calls the provider', async () => {
+    m.hold.mockRejectedValue(insufficientCreditsError('You do not have enough credits.'));
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 422 });
+    expect(m.search).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the free-tier daily cap as its 429 without logging an error', async () => {
+    m.hold.mockRejectedValue(
+      new TooManyRequestsError('Daily free-tier credit limit reached. Try again tomorrow.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const { req, res } = createMocks({ method: 'POST', body: { question: 'How do I share a notebook?' } });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+    Object.assign(req, { user: { id: 'u1' }, logger });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
+    await expect((handler as any)(req, res)).rejects.toMatchObject({ statusCode: 429 });
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('charges a funded caller the priced usage once', async () => {
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(m.hold).toHaveBeenCalledBefore(m.complete);
+    expect(m.settle).toHaveBeenCalledOnce();
+    expect(m.settle).toHaveBeenCalledWith({
+      model: 'ops-model',
+      provider: 'openai',
+      usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      costUsd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      executed: expect.objectContaining({ id: 'ops-model' }),
+      inputTokens: 200,
+      outputTokens: 10,
+    });
+    expect(m.settleHold).toHaveBeenCalledOnce();
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('modelIdentityId');
+  });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const CHEAP = {
+      ...MODEL,
+      id: 'cheap-model',
+      backend: 'gemini',
+      pricing: { 200_000: { input: 1e-7, output: 2e-7 } },
+    };
+
+    it('runs the substitute, bills the requested model and returns the requested id', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+
+      const res = await call();
+
+      expect(m.getLlm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: CHEAP }));
+      expect(m.complete.mock.calls[0][0]).toBe('cheap-model');
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ modelIdentityId: 'ops-model' });
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: 'ops-model',
+          provider: 'openai',
+          usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+          costUsd: expect.closeTo(200 * 1e-7 + 10 * 2e-7, 12),
+          executed: CHEAP,
+        })
+      );
+      expect(res._getJSONData().model).toBe('ops-model');
+    });
+
+    it('charges credits at the requested price', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+
+      await call();
+
+      const raw = (200 * 1e-6 + 10 * 2e-6) * CREDITS_PER_USD_COST;
+      expect(m.settleHold).toHaveBeenCalledOnce();
+      expect([Math.floor(raw), Math.ceil(raw)]).toContain(m.settleHold.mock.calls[0][1]);
+    });
+
+    it('splits credits and cost on the ceilings when no usage is reported', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+      m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['hello'], {});
+      });
+
+      await call();
+
+      const charge = m.settle.mock.calls[0][0];
+      expect(charge).toMatchObject({ model: 'ops-model', executed: CHEAP });
+      expect(charge.usd).toBeGreaterThan(0);
+      expect(charge.costUsd).toBeCloseTo(charge.usd * 0.1, 9);
+    });
+
+    it('splits credits and cost when the provider throws after reporting usage', async () => {
+      m.substitute.mockResolvedValue(CHEAP);
+      m.complete.mockImplementation(async (_model, _messages, _opts, callback) => {
+        await callback(['Partial answer'], { inputTokens: 200, outputTokens: 10 });
+        throw new Error('stream disconnected');
+      });
+
+      await call();
+
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+          costUsd: expect.closeTo(200 * 1e-7 + 10 * 2e-7, 12),
+          executed: CHEAP,
+        })
+      );
+    });
+  });
+
+  it('refunds the hold when the provider throws', async () => {
+    m.complete.mockRejectedValue(new Error('provider down'));
+
+    const res = await call();
+    expect(res._getStatusCode()).toBe(500);
+    expect(m.release).toHaveBeenCalledOnce();
+    expect(m.settleHold).not.toHaveBeenCalled();
+  });
+
+  it('settles reported usage when a stream fails after generation starts', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, callback) => {
+      await callback(['Partial answer'], { inputTokens: 200, outputTokens: 10 });
+      throw new Error('stream disconnected');
+    });
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(500);
+    expect(m.release).not.toHaveBeenCalled();
+    expect(m.settleHold).toHaveBeenCalledOnce();
+    expect(m.settle).toHaveBeenCalledExactlyOnceWith({
+      model: 'ops-model',
+      provider: 'openai',
+      usd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      costUsd: expect.closeTo(200 * 1e-6 + 10 * 2e-6, 12),
+      executed: expect.objectContaining({ id: 'ops-model' }),
+      inputTokens: 200,
+      outputTokens: 10,
+    });
+  });
+
+  it('runs without any hold when credits are not enforced', async () => {
+    m.enforce = false;
+
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(m.complete).toHaveBeenCalled();
+    expect(m.hold).not.toHaveBeenCalled();
+    expect(m.settleHold).not.toHaveBeenCalled();
+  });
+
+  it('records the retrieval query embedding once, billed through recordOperationalUsage', async () => {
+    m.search.mockResolvedValue({
+      context: '## Docs',
+      relevantArticles: [],
+      method: 'vector',
+      embedding: { model: 'text-embedding-3-small', provider: 'openai', inputTokens: 7 },
+    });
+
+    await call();
+
+    expect(m.recordOperationalUsage).toHaveBeenCalledOnce();
+    expect(m.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        feature: 'embedding',
+        model: 'text-embedding-3-small',
+        inputTokens: 7,
+        costUsd: getEmbeddingModelCost('text-embedding-3-small', 7),
+        forceCreditBilling: true,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('caps the response with the maxTokens option the adapters read', async () => {
+    await call();
+    expect(m.complete.mock.calls[0][2]).toMatchObject({ maxTokens: 1000 });
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('max_tokens');
+  });
+
+  describe('embedding charge owner', () => {
+    beforeEach(() => {
+      m.search.mockResolvedValue({
+        context: '## Docs',
+        relevantArticles: [],
+        method: 'vector',
+        embedding: { model: 'text-embedding-3-small', provider: 'openai', inputTokens: 7 },
+      });
+    });
+
+    it('bills the org that holds the reservation', async () => {
+      const org = { id: 'o1' };
+      m.findOrg.mockResolvedValue(org);
+      m.hold.mockResolvedValue({ ownerId: 'o1', ownerType: 'Organization', reservedCredits: 50 });
+
+      await call({ user: { id: 'u1', organizationId: 'o1' } });
+
+      expect(m.findOrg).toHaveBeenCalledWith('o1');
+      expect(m.recordOperationalUsage.mock.calls[0][0].organization).toBe(org);
+    });
+
+    it('bills the user, not their org seat, for a user-billed API key', async () => {
+      m.enforce = false;
+
+      await call({
+        user: { id: 'u1', organizationId: 'o1' },
+        apiKeyInfo: { billingOwnerType: 'User', organizationId: 'o1' },
+      });
+
+      expect(m.findOrg).not.toHaveBeenCalled();
+      expect(m.recordOperationalUsage.mock.calls[0][0].organization).toBeNull();
+    });
+
+    it('records the authenticating API key on the embedding charge', async () => {
+      m.enforce = false;
+
+      await call({ apiKeyInfo: { keyId: 'key-1', billingOwnerType: 'User' } });
+
+      expect(m.recordOperationalUsage.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
+    });
+  });
+
+  it('records no embedding when retrieval did not embed', async () => {
+    await call();
+    expect(m.recordOperationalUsage).not.toHaveBeenCalled();
+  });
+});

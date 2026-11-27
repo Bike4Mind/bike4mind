@@ -54,6 +54,7 @@ const setup = (overrides: Partial<CreateMusicJobDeps> = {}) => {
   const commit = vi.spyOn(repository, 'commit');
   const queue: string[] = [];
   const deps: CreateMusicJobDeps = {
+    assertModelAdmission: vi.fn(async () => {}),
     repository,
     providers: createMusicProviderRegistry([new TestMusicProvider()]),
     getSettings: async () => ({ enforceCredits: true, musicGeneration: undefined }),
@@ -184,6 +185,17 @@ describe('music job end to end with the test provider', () => {
     );
   });
 
+  it('stores the validated request with the generation', async () => {
+    const t = setup();
+    await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generation: expect.objectContaining({ request: expect.objectContaining({ model: expect.any(String) }) }),
+      })
+    );
+  });
+
   it('falls back to the requested duration when the audio cannot be measured', async () => {
     const t = setup({
       providers: createMusicProviderRegistry([
@@ -222,6 +234,7 @@ describe('music job end to end with the test provider', () => {
           prompt: 'a ballad',
           lyrics: 'la la la',
           durationSeconds: expect.closeTo(5, 1),
+          request: expect.objectContaining({ model: 'test-music', prompt: 'a ballad' }),
         },
       })
     );
@@ -277,6 +290,8 @@ describe('music job end to end with the test provider', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
+    // A definitive provider failure generated nothing, so there is no usage row.
+    expect(t.deps.recordUsage).not.toHaveBeenCalled();
     generate.mockRestore();
   });
 
@@ -293,6 +308,22 @@ describe('music job end to end with the test provider', () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    // The provider may have generated and billed the song, so it is recorded as an uncharged error.
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', creditsCharged: 0, costUsd: 0, durationSeconds: 5 })
+    );
+  });
+
+  it('records a submit cut off by the step deadline as an uncharged timeout', async () => {
+    const t = setup();
+    const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    await createMusicJobHandler(t.deps).onTerminal({
+      ...job,
+      state: 'failed',
+      error: { code: 'orphaned_submit', message: 'cut off', cutOffByStepDeadline: true },
+    });
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'timeout', creditsCharged: 0 }));
   });
 
   it('fails a job whose last step crashed mid-generate as orphaned_submit without generating again', async () => {
@@ -467,6 +498,7 @@ describe('music job end to end with the test provider', () => {
     const created = await createMusicJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'output_too_large' } });
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', creditsCharged: 0 }));
   });
 
   it('cancels a job before its submit without generating', async () => {
@@ -535,6 +567,23 @@ describe('music job settlement', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ creditsCharged: charged, costUsd: 0.08, durationSeconds: 95, status: 'ok' })
     );
+  });
+
+  it('records the API key that created the job on its settlement row', async () => {
+    const t = setup({
+      providers: createMusicProviderRegistry([
+        stubProvider(async () => song(30, { reportedDurationSeconds: 95 }), 'gemini-lyria'),
+      ]),
+    });
+    const created = await createMusicJob(
+      { user, request: { model: 'lyria-3.5', prompt: 'x' }, source: 'api', apiKeyId: 'key-1' },
+      t.deps
+    );
+    await t.runToCompletion();
+
+    expect(t.jobOf(created).apiKeyId).toBe('key-1');
+    const [, , entry] = vi.mocked(settleCreditHold).mock.calls[0];
+    expect(entry).toMatchObject({ type: 'music_generation_usage', apiKeyId: 'key-1' });
   });
 
   it('charges a per-second model the seconds it delivered, capped at the hold', async () => {

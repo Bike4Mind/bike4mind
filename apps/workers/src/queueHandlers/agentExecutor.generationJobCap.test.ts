@@ -30,17 +30,21 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-vi.mock('@server/generationJobs/wiring', () => ({
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', () => ({
   getMusicJobDeps: vi.fn(),
   getCreateMusicJobDeps: vi.fn(),
   getVideoJobDeps: vi.fn(),
   getCreateVideoJobDeps: vi.fn(),
+  getCreateImageJobsDeps: vi.fn(),
 }));
-vi.mock('@server/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
-vi.mock('@server/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/musicGenerations/buildMusicToolConfig', () => ({ buildMusicToolConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/videoGenerations/buildVideoToolConfig', () => ({ buildVideoToolConfig: vi.fn() }));
+vi.mock('@bike4mind/server-utils/generationJobs/audioJobWiring', () => ({ buildAudioToolJobs: vi.fn() }));
 
 const { getAgentMusicToolConfigDeps } = await import('./agentExecutor.musicToolConfig');
 const { getAgentVideoToolConfigDeps } = await import('./agentExecutor.videoToolConfig');
+const { getAgentAudioToolJobsDeps } = await import('./agentExecutor.audioToolConfig');
+const { getAgentImageToolConfigDeps } = await import('./agentExecutor.imageToolConfig');
 
 const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
 
@@ -72,6 +76,24 @@ describe('production generation deps factories', () => {
     expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'video');
   });
 
+  it('counts images on the image counter, via the image Quest', async () => {
+    const deps = getAgentImageToolConfigDeps(logger);
+
+    await deps.slots.claim('q-1', 12);
+    await deps.slots.release('q-1');
+
+    expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'image', 12);
+    expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'image');
+  });
+
+  it('reads the image setting key for the run org and returns its value', async () => {
+    const deps = getAgentImageToolConfigDeps(logger);
+
+    await expect(deps.resolveImageLimit({ userId: 'u-1', organizationId: 'org-1' })).resolves.toBe(7);
+
+    expect(h.resolveScopedSetting.mock.calls[0]?.[0]).toBe('agentImagesPerRun');
+  });
+
   it('reads the music setting key for the run org and returns its value', async () => {
     const deps = getAgentMusicToolConfigDeps(logger);
 
@@ -88,5 +110,39 @@ describe('production generation deps factories', () => {
 
     expect(h.scopeForCaller).toHaveBeenCalledWith({ userId: 'u-1', organizationId: 'org-1' });
     expect(h.resolveScopedSetting.mock.calls[0]?.[0]).toBe('agentVideoClipsPerRun');
+  });
+
+  it('counts speech and sound effects on their own counters', async () => {
+    const deps = getAgentAudioToolJobsDeps(logger);
+
+    await deps.speechSlots.claim('q-1', 4);
+    await deps.speechSlots.release('q-1');
+    await deps.soundEffectSlots.claim('q-1', 5);
+    await deps.soundEffectSlots.release('q-1');
+
+    expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'speech', 4);
+    expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'speech');
+    expect(h.claimAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'sound_effect', 5);
+    expect(h.releaseAgentGenerationSlot).toHaveBeenCalledWith('q-1', 'sound_effect');
+  });
+
+  it('reads the speech and sound-effect setting keys for the run org', async () => {
+    const deps = getAgentAudioToolJobsDeps(logger);
+
+    await expect(deps.resolveSpeechLimit({ userId: 'u-1', organizationId: 'org-1' })).resolves.toBe(7);
+    await expect(deps.resolveSoundEffectLimit({ userId: 'u-1', organizationId: 'org-1' })).resolves.toBe(7);
+
+    expect(h.scopeForCaller).toHaveBeenCalledWith({ userId: 'u-1', organizationId: 'org-1' });
+    expect(h.resolveScopedSetting.mock.calls.map(call => call[0])).toEqual([
+      'agentSpeechClipsPerRun',
+      'agentSoundEffectsPerRun',
+    ]);
+  });
+});
+
+describe('agentImagesPerRun setting bounds', () => {
+  it('defaults to 12 and floors at 1', async () => {
+    const { settingsMap } = await import('@bike4mind/common');
+    expect(settingsMap.agentImagesPerRun).toMatchObject({ defaultValue: 12, min: 1 });
   });
 });

@@ -56,6 +56,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
             {
               id: 'msg-1',
               sessionId: 'session-1',
+              pendingAction: { tool: 'send_email', params: { to: 'x' }, ts: 1 },
               promptMeta: {
                 functionCalls: [
                   {
@@ -620,6 +621,16 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(clonedFunctionCalls[0]).toMatchObject({ id: 'call-1', name: 'web_search' });
   });
 
+  it('drops the pending tool approval when the caller only holds a share, and keeps it for the owner', async () => {
+    const shared = makeAdapters('owner-1');
+    await cloneSession('caller-1', { id: 'session-1' }, { db: shared.db, workspaceSessionSettings: {} });
+    expect(shared.created[0]).not.toHaveProperty('pendingAction');
+
+    const owned = makeAdapters('caller-1');
+    await cloneSession('caller-1', { id: 'session-1' }, { db: owned.db, workspaceSessionSettings: {} });
+    expect(owned.created[0].pendingAction).toEqual({ tool: 'send_email', params: { to: 'x' }, ts: 1 });
+  });
+
   // Same store invariant the fork 500 exposed, plus the search-scoping half: a clone made by a
   // share holder becomes THEIR session, so promptMeta.session must name the clone and the cloner -
   // databaseSearcher.ts scopes deep research's internal quest search by promptMeta.session.userId.
@@ -689,5 +700,38 @@ describe('cloneSession - redaction at the copy boundary', () => {
 
     expect(createdSessions[0].knowledgeIds).toEqual([GOOD]);
     expect(db.fabFiles.findAccessibleInIds).not.toHaveBeenCalled();
+  });
+  describe('organization binding', () => {
+    const boundSession = (ownerId: string) => ({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      organizationId: 'org-1',
+      knowledgeIds: [],
+      tags: [],
+    });
+    const organization = { userId: 'owner-1', users: [{ userId: 'member-1', permissions: ['read'] }] };
+
+    it('makes a personal copy when a non-member share holder clones an org-bound session', async () => {
+      const { db, createdSessions } = makeAdapters('owner-1');
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce(boundSession('owner-1'));
+      db.organizations = { findById: vi.fn().mockResolvedValue(organization) };
+
+      await cloneSession('caller-1', { id: 'session-1' }, { db, workspaceSessionSettings: {} });
+
+      expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
+      expect(createdSessions[0].organizationId).toBeUndefined();
+    });
+
+    it('keeps the organization when a member clones it', async () => {
+      const { db, createdSessions } = makeAdapters('owner-1');
+      db.users.findById.mockResolvedValue({ id: 'member-1' });
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce(boundSession('owner-1'));
+      db.organizations = { findById: vi.fn().mockResolvedValue(organization) };
+
+      await cloneSession('member-1', { id: 'session-1' }, { db, workspaceSessionSettings: {} });
+
+      expect(createdSessions[0].organizationId).toBe('org-1');
+    });
   });
 });

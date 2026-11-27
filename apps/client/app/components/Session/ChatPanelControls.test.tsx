@@ -5,17 +5,21 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ChatPanelControls from './ChatPanelControls';
+import type { GetCopyMarkdown } from './useCopySessionMarkdown';
 
 // The copy button's hook reaches SessionsContext and react-query, neither of which the
 // header's own wiring depends on. `copyState` is mutable so a test can render the
 // post-copy state without driving the hook's 2s reset timer.
-const { copyMarkdown, copyState } = vi.hoisted(() => ({
-  copyMarkdown: vi.fn(),
-  copyState: { copied: false },
-}));
-vi.mock('./useCopySessionMarkdown', () => ({
-  useCopySessionMarkdown: () => ({ copyMarkdown, copied: copyState.copied }),
-}));
+const { copyMarkdown, copyState, useCopySessionMarkdown } = vi.hoisted(() => {
+  const copyMarkdown = vi.fn();
+  const copyState = { copied: false };
+  return {
+    copyMarkdown,
+    copyState,
+    useCopySessionMarkdown: vi.fn((_getMarkdown?: GetCopyMarkdown) => ({ copyMarkdown, copied: copyState.copied })),
+  };
+});
+vi.mock('./useCopySessionMarkdown', () => ({ useCopySessionMarkdown }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -37,6 +41,7 @@ const openOptionLabels = () =>
 
 beforeEach(() => {
   copyMarkdown.mockClear();
+  useCopySessionMarkdown.mockClear();
   copyState.copied = false;
   // Distinct from every value the menu can write, so each assertion below fails if the
   // selection never reaches the store.
@@ -44,6 +49,18 @@ beforeEach(() => {
 });
 
 describe('ChatPanelControls layout menu', () => {
+  // The name holds the words on the button, so speech control ("click Dock left") reaches it.
+  it.each([
+    { props: { activeLayout: 'dockRight' as const }, shown: 'Dock left', name: 'Chat layout: Dock left' },
+    { props: { activeLayout: 'dockBottom' as const }, shown: 'Dock bottom', name: 'Chat layout: Dock bottom' },
+    { props: {}, shown: 'Layout', name: 'Chat layout' },
+  ])('names the menu for screen readers, with the text it shows: $shown', ({ props, shown, name }) => {
+    renderControls(props);
+    expect(screen.getByRole('combobox', { name })).toBe(trigger());
+    expect(trigger()).toHaveTextContent(shown);
+    expect(name.toLowerCase()).toContain(shown.toLowerCase());
+  });
+
   it('writes the picked dock direction to the session layout', () => {
     renderControls({ activeLayout: 'dockRight' });
 
@@ -115,6 +132,16 @@ describe('ChatPanelControls layout menu', () => {
   });
 });
 
+describe('ChatPanelControls without docking', () => {
+  // A host that clips a docked panel (e.g. /admin) must not offer a layout it cannot show.
+  it('drops the layout menu but keeps the copy button', () => {
+    renderControls({ dockable: false });
+
+    expect(screen.queryByTestId(`${PREFIX}-layout-select-btn`)).not.toBeInTheDocument();
+    expect(screen.getByTestId(`${PREFIX}-copy-markdown`)).toBeInTheDocument();
+  });
+});
+
 describe('ChatPanelControls copy button', () => {
   it('copies the chat as Markdown on click', () => {
     renderControls({ activeLayout: 'dockRight' });
@@ -122,6 +149,19 @@ describe('ChatPanelControls copy button', () => {
     fireEvent.click(screen.getByTestId(`${PREFIX}-copy-markdown`));
 
     expect(copyMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the caller's getCopyMarkdown to the copy hook", () => {
+    const getCopyMarkdown = () => 'OVERLAY CHAT';
+    renderControls({ getCopyMarkdown });
+
+    expect(useCopySessionMarkdown).toHaveBeenLastCalledWith(getCopyMarkdown);
+  });
+
+  it('leaves the copy hook on the main chat when no getCopyMarkdown is given', () => {
+    renderControls();
+
+    expect(useCopySessionMarkdown).toHaveBeenLastCalledWith(undefined);
   });
 
   it('swaps the copy icon for a tick once a copy has landed', () => {

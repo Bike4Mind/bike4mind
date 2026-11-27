@@ -14,8 +14,9 @@
  * still receive the markers (otherwise we silently regress caching).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ChatModels, type ICacheStrategy } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import AnthropicBedrockBackend from './anthropic';
 import type { IMessage } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '../backend';
@@ -226,15 +227,17 @@ describe('translateStreamChunk', () => {
     expect(c?.tool).toEqual({ name: 'get_weather', id: 'tool_1' });
   });
 
-  it('content_block_start thinking opens a <think> block', () => {
-    expect(first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })?.chunkText).toBe(
-      '<think>'
-    );
+  it('content_block_start thinking defers <think> to the first reasoning text', () => {
+    expect(first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } })?.chunkText).toBe('');
+    expect(
+      first({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } })?.chunkText
+    ).toBe('<think>hmm');
   });
 
   it('content_block_stop closes an open <think> block and resets thinking state', () => {
     // Same backend instance (isInThinkingBlock is stateful): open thinking, then stop.
     first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } });
+    first({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } });
     expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('</think>');
     // Flag reset - a subsequent stop with no open thinking block emits no close tag.
     expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('');
@@ -260,6 +263,26 @@ describe('translateStreamChunk', () => {
   it('message_delta surfaces output tokens; message_stop ends the stream', () => {
     expect(first({ type: 'message_delta', usage: { output_tokens: 20 } })?.usage?.output_tokens).toBe(20);
     expect(backend.translateStreamChunk('claude', { type: 'message_stop' }).done).toBe(true);
+  });
+
+  it('message_delta carries the provider stop_reason onto the chunk', () => {
+    // base.ts reads exactly this field to set CompletionInfo.stopReason, which is what
+    // raises the truncation notice for a max_tokens cut-off.
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_delta',
+      delta: { stop_reason: 'max_tokens' },
+      usage: { output_tokens: 20 },
+    });
+    expect(r.chunk?.stopReason).toBe('max_tokens');
+  });
+
+  it('message_delta omits stopReason when the provider reports none', () => {
+    const r = backend.translateStreamChunk('claude', {
+      type: 'message_delta',
+      delta: {},
+      usage: { output_tokens: 20 },
+    });
+    expect(r.chunk?.stopReason).toBeUndefined();
   });
 
   it('does not throw on null / primitive / unknown-type chunks', () => {
@@ -387,8 +410,63 @@ describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
     );
   });
 
+  it('warns before throwing the refusal, naming the model', () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta)).toThrow(
+        /safety classifier refusal/
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Safety classifier refusal'), {
+        model: ChatModels.CLAUDE_FABLE_5_BEDROCK,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('does not throw for a refusal from a model outside the fallback set', () => {
     expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalDelta)).not.toThrow();
     expect(() => backend.translateChunk(ChatModels.CLAUDE_5_OPUS_BEDROCK, refusalResponse)).not.toThrow();
+  });
+
+  it('settles a Bedrock Fable refusal when the caller has no fallback loop', () => {
+    const settle = { settleRefusal: true };
+    expect(
+      backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta, settle).chunk?.stopReason
+    ).toBe('refusal');
+    expect(backend.translateChunk(ChatModels.CLAUDE_FABLE_5_1_BEDROCK, refusalResponse, settle).chunk?.stopReason).toBe(
+      'refusal'
+    );
+  });
+});
+
+describe('AnthropicBedrockBackend non-streaming stop_reason', () => {
+  const backend = new AnthropicBedrockBackend();
+
+  const response = (stop_reason?: string) => ({
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text: 'answer' }],
+    model: 'x',
+    ...(stop_reason === undefined ? {} : { stop_reason }),
+    usage: { input_tokens: 1, output_tokens: 2 },
+  });
+
+  it('carries stop_reason onto the chunk', () => {
+    expect(backend.translateChunk('claude', response('max_tokens')).chunk?.stopReason).toBe('max_tokens');
+  });
+
+  it('passes a clean end_turn through unchanged', () => {
+    // Only max_tokens / degenerate_repetition raise the truncation notice, so an
+    // ordinary turn is truthful without being banner-eligible.
+    expect(backend.translateChunk('claude', response('end_turn')).chunk?.stopReason).toBe('end_turn');
+  });
+
+  it('does not invent a stop reason when the provider omits it', () => {
+    const result = backend.translateChunk('claude', response());
+
+    expect(result.chunk).toBeDefined();
+    expect(result.chunk).not.toHaveProperty('stopReason');
   });
 });

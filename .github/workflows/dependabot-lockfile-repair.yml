@@ -43,7 +43,7 @@ jobs:
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.actor == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # Base commit: the trusted repair script and the reference lockfile.

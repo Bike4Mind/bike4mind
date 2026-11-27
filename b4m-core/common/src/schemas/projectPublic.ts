@@ -48,6 +48,11 @@ export const CreateProjectRequestSchema = z
   .object({
     name: z.string().min(1).describe('Unique among your live projects.'),
     description: z.string().min(1),
+    organization_id: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Organization context for new content. Requires membership; immutable after creation.'),
     session_ids: z
       .array(z.string().min(1))
       .max(MAX_PROJECT_CREATE_IDS)

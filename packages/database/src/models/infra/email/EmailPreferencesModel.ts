@@ -109,27 +109,6 @@ export class EmailPreferencesRepository
       { $set: { unsubscribeToken: randomUUID() } }
     );
   }
-
-  async resubscribe(email: string, category?: EmailCategory): Promise<void> {
-    const normalizedEmail = email.toLowerCase();
-
-    if (category) {
-      // Remove specific category from unsubscribed list
-      await this.model.findOneAndUpdate({ email: normalizedEmail }, { $pull: { unsubscribedCategories: category } });
-    } else {
-      // Full resubscribe - clear global and all categories
-      await this.model.findOneAndUpdate(
-        { email: normalizedEmail },
-        {
-          $set: {
-            globalUnsubscribe: false,
-            unsubscribedCategories: [],
-            unsubscribedAt: undefined,
-          },
-        }
-      );
-    }
-  }
 }
 
 export const EmailPreferences =

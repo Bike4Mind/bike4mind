@@ -74,6 +74,7 @@ const bound: LakeGitHubConnection = {
   skippedCount: null,
   syncStale: false,
   fileCount: 0,
+  isLastInstallationBinding: true,
   disconnecting: false,
   disconnectStalled: false,
 };

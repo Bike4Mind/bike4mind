@@ -23,7 +23,10 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 
 import { listOf, readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import { musicJob, musicOutput } from '@client/app/hooks/data/__test__/musicGenerationFixtures';
+import { chatImageJobKeys, type ChatImageJob } from '@client/app/hooks/data/imageJobs';
 import { musicGenerationKeys } from '@client/app/hooks/data/musicGenerationKeys';
+import { studioImageJobKeys, type StudioImageJob } from '@client/app/hooks/data/studioImageJobs';
+import { studioRenderKeys } from '@client/app/hooks/data/studioRenders';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 import GenerationUpdatesListener from './GenerationUpdatesListener';
 
@@ -94,6 +97,16 @@ describe('GenerationUpdatesListener', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
   });
 
+  it('refreshes the gallery for a chat card job the gallery does not list yet', async () => {
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob()]));
+    queryClient.setQueryData(videoGenerationKeys.detail('from-chat'), videoJob({ id: 'from-chat', state: 'pending' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'from-chat', kind: 'video', state: 'running' }));
+    expect(detail('from-chat')?.state).toBe('running');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
+  });
+
   it('ignores a frame for an unknown kind of job', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
@@ -101,6 +114,16 @@ describe('GenerationUpdatesListener', () => {
     await send(frame({ id: 'job-1', kind: 'hologram', state: 'running' } as never));
     expect(detail('job-1')?.state).toBe('pending');
     expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('refreshes only the credit balance when an image job finishes and no gallery is loaded', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(invalidate).not.toHaveBeenCalled();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'succeeded' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+    expect(invalidate).not.toHaveBeenCalledWith(expect.objectContaining({ exact: true }));
   });
 
   it('ignores other actions', async () => {
@@ -155,11 +178,13 @@ describe('GenerationUpdatesListener', () => {
       exact: true,
       refetchType: 'all',
     });
-    // The two video details plus the video and music gallery lists.
-    expect(invalidate).toHaveBeenCalledTimes(4);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioRenderKeys.all });
+    // The two video details plus the video, music, Studio image and export lists.
+    expect(invalidate).toHaveBeenCalledTimes(6);
 
     rerender(tree());
-    expect(invalidate).toHaveBeenCalledTimes(4);
+    expect(invalidate).toHaveBeenCalledTimes(6);
   });
 });
 
@@ -299,5 +324,134 @@ describe('GenerationUpdatesListener inactive music details', () => {
     h.readyState = 1;
     rerender(tree());
     await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('GenerationUpdatesListener Studio image jobs', () => {
+  const imageJob = (overrides: Partial<StudioImageJob> = {}): StudioImageJob => ({
+    id: 'img-1',
+    groupId: 'group-1',
+    state: 'pending',
+    request: { model: 'gpt-image-1.5', mode: 'generate', prompt: 'a fox' } as StudioImageJob['request'],
+    error: null,
+    output: null,
+    createdAt: '2026-11-01T00:00:00.000Z',
+    ...overrides,
+  });
+  const seedList = (jobs: StudioImageJob[]) =>
+    queryClient.setQueryData(studioImageJobKeys.list, { pages: [{ data: jobs, next_cursor: null }], pageParams: [] });
+  const cachedState = (id: string) =>
+    queryClient
+      .getQueryData<{ pages: { data: StudioImageJob[] }[] }>(studioImageJobKeys.list)
+      ?.pages[0]?.data.find(job => job.id === id)?.state;
+
+  it('moves a live gallery row forward without refetching', async () => {
+    seedList([imageJob()]);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(cachedState('img-1')).toBe('running');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('never moves a row backwards', async () => {
+    seedList([imageJob({ state: 'storing' })]);
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(cachedState('img-1')).toBe('storing');
+  });
+
+  it('refetches the gallery and the credit balance when a job finishes', async () => {
+    seedList([imageJob({ state: 'running' })]);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'succeeded', output: { contentType: 'image/png' } }));
+    expect(cachedState('img-1')).toBe('succeeded');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['credits-balance'], refetchType: 'all' });
+  });
+
+  it('refetches the gallery for a job it does not hold yet', async () => {
+    seedList([imageJob()]);
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-from-elsewhere', kind: 'image', state: 'pending' }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioImageJobKeys.list });
+  });
+});
+
+describe('GenerationUpdatesListener chat image jobs', () => {
+  const chatJob = (state: ChatImageJob['state']): ChatImageJob =>
+    ({ id: 'img-1', object: 'image_generation', state }) as ChatImageJob;
+  const cachedState = () => queryClient.getQueryData<ChatImageJob>(chatImageJobKeys.detail('img-1'))?.state;
+
+  it('patches a cached card without stepping a live state back', async () => {
+    queryClient.setQueryData(chatImageJobKeys.detail('img-1'), chatJob('storing'));
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'running' }));
+    expect(cachedState()).toBe('storing');
+  });
+
+  it('refetches a cached card when its job finishes', async () => {
+    queryClient.setQueryData(chatImageJobKeys.detail('img-1'), chatJob('running'));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-1', kind: 'image', state: 'succeeded' }));
+    expect(cachedState()).toBe('succeeded');
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: chatImageJobKeys.detail('img-1'),
+      exact: true,
+      refetchType: 'all',
+    });
+  });
+
+  it('leaves an uncached card alone on a terminal frame', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'img-uncached', kind: 'image', state: 'succeeded' }));
+    expect(queryClient.getQueryData(chatImageJobKeys.detail('img-uncached'))).toBeUndefined();
+    expect(invalidate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: chatImageJobKeys.detail('img-uncached') })
+    );
+  });
+
+  it('on reconnect refetches a running card and a succeeded one still waiting for its output', async () => {
+    queryClient.setQueryData(chatImageJobKeys.detail('img-live'), { ...chatJob('running'), id: 'img-live' });
+    queryClient.setQueryData(chatImageJobKeys.detail('img-no-output'), {
+      ...chatJob('succeeded'),
+      id: 'img-no-output',
+      output: null,
+    });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const tree = () => (
+      <QueryClientProvider client={queryClient}>
+        <GenerationUpdatesListener />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree());
+
+    h.readyState = 3;
+    rerender(tree());
+    h.readyState = 1;
+    rerender(tree());
+
+    for (const id of ['img-live', 'img-no-output']) {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: chatImageJobKeys.detail(id),
+        exact: true,
+        refetchType: 'all',
+      });
+    }
+  });
+});
+
+describe('GenerationUpdatesListener render jobs', () => {
+  it('invalidates the export lists on a render frame', async () => {
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+
+    await send(frame({ id: 'r1', kind: 'render', state: 'running', progress: 0.5 }));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: studioRenderKeys.all });
   });
 });

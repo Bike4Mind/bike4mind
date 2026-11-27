@@ -1,13 +1,18 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": ["CI"],
-  "globalPassThroughEnv": ["NODE_OPTIONS"],
+  // Strict env mode hands tasks only declared vars, so without VITEST_MAX_WORKERS here a local
+  // `pnpm verify` gives every vitest pool all host cores (vitest.shared.ts reads it). Pass-through,
+  // not hashed: the worker count does not change results. CI runs --env-mode=loose either way.
+  "globalPassThroughEnv": ["NODE_OPTIONS", "VITEST_MAX_WORKERS"],
   // dataLakeSearchMetrics.test.ts reads infra/dataLakeSearchDashboard.ts to pin the metric names
   // the dashboard graphs, because infra/ cannot import the constants. That file sits outside every
   // package, so without it here a dashboard-only edit is a cache hit for the very test meant to
   // catch it. Global rather than a task input: package-relative escapes resolve differently for
   // the depth-3 overlay packages, and this file changes rarely enough that the blunt key is cheap.
-  "globalDependencies": ["infra/dataLakeSearchDashboard.ts"],
+  //
+  // vitest.shared.ts is the shared base nearly every package's vitest config imports from the root.
+  "globalDependencies": ["infra/dataLakeSearchDashboard.ts", "vitest.shared.ts"],
   "tasks": {
     "codegen": {
       // Not cacheable: output depends on node_modules link state (which overlay
@@ -20,7 +25,9 @@
         "pages/api/premium-*/**",
         "server/premium-generated/**",
         "../../infra/premium-generated/**",
-        "../../packages/scripts/migrate/migrations/premium.generated.ts"
+        "../../packages/server-utils/src/premium-generated/**",
+        "../../packages/scripts/migrate/migrations/premium.generated.ts",
+        "../../packages/scripts/migrate/migrations/core.generated.ts"
       ]
     },
     "build": {
@@ -28,22 +35,16 @@
       "outputs": ["dist/**"],
       "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json"]
     },
+    "typecheck:tsc": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck:tsc": {
+      "dependsOn": ["^build"]
+    },
     "typecheck": {
       "dependsOn": ["codegen", "^build"]
     },
     "//#typecheck": {
-      "dependsOn": ["^build"]
-    },
-    "typecheck:native": {
-      "dependsOn": ["codegen", "^build"]
-    },
-    "//#typecheck:native": {
-      "dependsOn": ["^build"]
-    },
-    "typecheck:fast": {
-      "dependsOn": ["codegen", "^build"]
-    },
-    "//#typecheck:fast": {
       "dependsOn": ["^build"]
     },
     // @bike4mind/scripts consumes packages/scripts/migrate/migrations/premium.generated.ts
@@ -52,33 +53,74 @@
     // only depends on EACH package's own (same-package) "codegen" task, which is a no-op for
     // @bike4mind/scripts. These package-specific overrides add the missing cross-package edge;
     // package-specific config REPLACES the generic entry, so ^build is repeated here.
-    "@bike4mind/scripts#typecheck": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
-    },
-    "@bike4mind/scripts#typecheck:native": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
-    },
-    "@bike4mind/scripts#typecheck:fast": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../server-utils/**", "!../server-utils/node_modules/**"]
-    },
-    // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
-    // cross-package edge as the typecheck overrides above, for the same reason.
-    // checkSnapshotPublishPackages.test.ts reads .github/workflows/snapshot-publish.yaml and every
-    // workspace manifest under the diff roots, which sit outside the package: without them as
-    // inputs, an edit to one replays a cached pass for the very test meant to catch that drift.
-    "@bike4mind/scripts#test": {
+    "@bike4mind/scripts#typecheck:tsc": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "../server-utils/**",
         "!../server-utils/node_modules/**",
-        "$TURBO_ROOT$/.github/workflows/snapshot-publish.yaml",
-        "$TURBO_ROOT$/b4m-core/*/package.json",
-        "$TURBO_ROOT$/packages/*/package.json"
+        "!../server-utils/.turbo/**"
       ]
+    },
+    "@bike4mind/scripts#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../server-utils/**",
+        "!../server-utils/node_modules/**",
+        "!../server-utils/.turbo/**"
+      ]
+    },
+    // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
+    // cross-package edge as the typecheck overrides above, for the same reason.
+    // Several tests read workspace manifests under b4m-core/ and packages/ and the curated lists, which sit outside the
+    // package: without them as inputs, an edit to one replays a cached pass.
+    "@bike4mind/scripts#test": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "../server-utils/**",
+        "!../server-utils/node_modules/**",
+        "!../server-utils/.turbo/**",
+        "$TURBO_ROOT$/b4m-core/*/package.json",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/catalog/model-hub/**"
+      ]
+    },
+    // The curated v3 schema and v2 converter tests read the lists in catalog/model-hub; the chunking
+    // constants test lists the migrations directory.
+    "@bike4mind/common#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/catalog/model-hub/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**"
+      ]
+    },
+    // nativeOutputs.test.ts compares the committed native token files (iOS generated Swift and AccentColor sets,
+    // Android BrandTokens.kt) with the emitters' output: a hand edit to one of them must not replay a cached pass.
+    "@bike4mind/design-tokens#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/apps/ios/Packages/B4MKit/Sources/B4MKit/Theme/Generated/**",
+        "$TURBO_ROOT$/apps/ios/Bike4Mind/Resources/Assets.xcassets/AccentColor.colorset/**",
+        "$TURBO_ROOT$/apps/ios/Widgets/Assets.xcassets/AccentColor.colorset/**",
+        "$TURBO_ROOT$/apps/android/app/src/main/kotlin/com/bike4mind/app/ui/BrandTokens.kt"
+      ]
+    },
+    // mcpRegistryEntry.test.ts checks the published registry entry at the repo root.
+    "@bike4mind/cli#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/mcp-registry/**", "$TURBO_ROOT$/b4m-core/*/src/**"]
+    },
+    // The hook tests run the CLI's bin/hearth-hook.mjs, which is outside cli's build inputs.
+    "@bike4mind/hearth#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/packages/cli/bin/**"]
     },
     // electron-vite writes three bundles (main, preload, renderer) to out/, not dist/, and
     // its config plus the split tsconfigs sit outside the generic task's "src/**" inputs.
@@ -88,7 +130,51 @@
     "@bike4mind/desktop#build": {
       "dependsOn": ["^build"],
       "outputs": ["out/**"],
-      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
+      "inputs": ["src/**", "electron.vite.config.ts", "buildShared.ts", "tsconfig*.json", "package.json"]
+    },
+    // local-models bundles the Curated models list from catalog/model-hub, and its tests validate that file.
+    // Desktop and the CLI get it only through this build, so ^build carries a manifest change to them.
+    "@bike4mind/local-models#build": {
+      "dependsOn": ["codegen", "^build"],
+      "outputs": ["dist/**"],
+      "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json", "$TURBO_ROOT$/catalog/model-hub/**"]
+    },
+    // providerUsagePricing.catalog.test.ts reads the model catalog seed in packages/database.
+    "@bike4mind/services-core#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/database/src/seeds/modelCatalog.seed.json",
+        "$TURBO_ROOT$/infra/alarms.ts",
+        "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/queues.ts"
+      ]
+    },
+    "@bike4mind/database#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/services/src/billing/platformAccounting.ts",
+        "$TURBO_ROOT$/b4m-core/services/src/billing/priceCompletionUsage.ts",
+        "$TURBO_ROOT$/packages/server-utils/src/auth/ability.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/20260921241039_ensure-admin-ai-attempt-retention.ts"
+      ]
+    },
+    "@bike4mind/resource#test": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/elasticmq.conf",
+        "$TURBO_ROOT$/.env.selfhost.example",
+        "$TURBO_ROOT$/selfhost/env-additions.txt"
+      ]
+    },
+    "@bike4mind/local-models#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
     // @bike4mind/workers compiles and tests apps/client/server code through its interim path
     // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
@@ -96,6 +182,18 @@
     // The extra inputs keep a client-only edit from replaying a cached workers result.
     // packages/scripts/help is imported from source (cron/helpDatalakeIngest.ts) and has no build
     // task, so ^build never hashes it - list it here for the same reason.
+    "@bike4mind/workers#typecheck:tsc": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**"
+      ]
+    },
     "@bike4mind/workers#typecheck": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
@@ -104,67 +202,194 @@
         "../client/tsconfig.json",
         "../../packages/scripts/help/**/*.ts",
         "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
-      ]
-    },
-    "@bike4mind/workers#typecheck:native": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../client/**/*.ts",
-        "../client/tsconfig.json",
-        "../../packages/scripts/help/**/*.ts",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
-      ]
-    },
-    "@bike4mind/workers#typecheck:fast": {
-      "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": [
-        "$TURBO_DEFAULT$",
-        "../client/**/*.ts",
-        "../client/tsconfig.json",
-        "../../packages/scripts/help/**/*.ts",
-        "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**"
       ]
     },
     "@bike4mind/workers#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/mcp/src/remote/__fixtures__/remoteFixtureServer.ts",
         "../client/**/*.ts",
         "../client/tsconfig.json",
+        "$TURBO_ROOT$/infra/queues.ts",
+        "$TURBO_ROOT$/infra/analyticsRollup.ts",
+        "$TURBO_ROOT$/infra/cliToolHandler.ts",
+        "$TURBO_ROOT$/infra/database.ts",
+        "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/authAbuseMetric.ts",
+        "$TURBO_ROOT$/elasticmq.conf",
+        "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/**",
+        "$TURBO_ROOT$/packages/scripts/seeders/**",
+        "$TURBO_ROOT$/packages/scripts/utils/**",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../packages/scripts/help/**/*.ts",
         "../../packages/server-utils/**",
-        "!../../packages/server-utils/node_modules/**"
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**"
+      ]
+    },
+    // Mirrors the entry above for the real-Mongo lane; turbo-test-cache.test.mjs keeps them equal.
+    "@bike4mind/workers#test:integration": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/b4m-core/mcp/src/remote/__fixtures__/remoteFixtureServer.ts",
+        "../client/**/*.ts",
+        "../client/tsconfig.json",
+        "$TURBO_ROOT$/infra/queues.ts",
+        "$TURBO_ROOT$/infra/analyticsRollup.ts",
+        "$TURBO_ROOT$/infra/cliToolHandler.ts",
+        "$TURBO_ROOT$/infra/database.ts",
+        "$TURBO_ROOT$/infra/web.ts",
+        "$TURBO_ROOT$/infra/authAbuseMetric.ts",
+        "$TURBO_ROOT$/elasticmq.conf",
+        "$TURBO_ROOT$/b4m-core/services/src/notebookCurationService/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/**",
+        "$TURBO_ROOT$/packages/scripts/seeders/**",
+        "$TURBO_ROOT$/packages/scripts/utils/**",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
+        "../../packages/scripts/help/**/*.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**"
       ]
     },
     // @bike4mind/server-utils is source-only (no build script), so ^build is not relied on to hash
     // its source: an edit there must not replay a cached client result. The package is listed as an
     // input explicitly instead - the workers entries above carry the same glob. Package-specific
     // config REPLACES the generic entry, so dependsOn is repeated here.
+    "@bike4mind/client#typecheck:tsc": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**"
+      ]
+    },
     "@bike4mind/client#typecheck": {
       "dependsOn": ["codegen", "^build"],
-      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**"
+      ]
     },
-    "@bike4mind/client#typecheck:native": {
-      "dependsOn": ["codegen", "^build"],
-      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
-    },
-    "@bike4mind/client#typecheck:fast": {
-      "dependsOn": ["codegen", "^build"],
-      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
-    },
+    // Keyed on its own files plus the outside files its unit and integration suites read. Tests
+    // that scan the whole repo are `*.repo.test.ts`, run uncached by `test:repo` (see
+    // apps/client/vitest.config.mts), which is what keeps this package off WHOLE_REPO_TEST_PACKAGES.
     "@bike4mind/client#test": {
-      "dependsOn": ["^build"],
-      "inputs": ["$TURBO_DEFAULT$", "../../packages/server-utils/**", "!../../packages/server-utils/node_modules/**"]
+      "dependsOn": ["codegen", "^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**",
+        "$TURBO_ROOT$/sst.config.ts",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/packages/premium/*/package.json",
+        "$TURBO_ROOT$/packages/premium/*/src/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**",
+        "$TURBO_ROOT$/scripts/check-no-overlay-literals.sh",
+        "$TURBO_ROOT$/scripts/qa-backfill-slack.mjs",
+        "$TURBO_ROOT$/scripts/__tests__/fixtures/**",
+        "$TURBO_ROOT$/packages/scripts/help/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/apps/workers/src/**",
+        "$TURBO_ROOT$/b4m-core/services/src/**",
+        "$TURBO_ROOT$/scripts/unmetered-provider-call-allowlist.txt",
+        "$TURBO_ROOT$/scripts/unmetered-llm-route-allowlist.txt",
+        "$TURBO_ROOT$/catalog/model-hub/**"
+      ]
+    },
+    // Mirrors the entry above for the real-Mongo lane; turbo-test-cache.test.mjs keeps them equal.
+    "@bike4mind/client#test:integration": {
+      "dependsOn": ["codegen", "^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "../../packages/server-utils/**",
+        "!../../packages/server-utils/node_modules/**",
+        "!../../packages/server-utils/.turbo/**",
+        "$TURBO_ROOT$/sst.config.ts",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/packages/premium/*/package.json",
+        "$TURBO_ROOT$/packages/premium/*/src/**",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrations/**",
+        "$TURBO_ROOT$/scripts/check-no-overlay-literals.sh",
+        "$TURBO_ROOT$/scripts/qa-backfill-slack.mjs",
+        "$TURBO_ROOT$/scripts/__tests__/fixtures/**",
+        "$TURBO_ROOT$/packages/scripts/help/**",
+        "$TURBO_ROOT$/packages/scripts/index.ts",
+        "$TURBO_ROOT$/packages/scripts/migrate/migrationManager.ts",
+        "$TURBO_ROOT$/docs-site/docs/**",
+        "$TURBO_ROOT$/apps/workers/src/**",
+        "$TURBO_ROOT$/b4m-core/services/src/**",
+        "$TURBO_ROOT$/scripts/unmetered-provider-call-allowlist.txt",
+        "$TURBO_ROOT$/scripts/unmetered-llm-route-allowlist.txt",
+        "$TURBO_ROOT$/catalog/model-hub/**"
+      ]
+    },
+    // server-utils reads src/premium-generated/ (written by @bike4mind/client's codegen and
+    // gitignored, so outside $TURBO_DEFAULT$): same cross-package edge as @bike4mind/scripts.
+    "@bike4mind/server-utils#typecheck:tsc": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
+    },
+    "@bike4mind/server-utils#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "src/premium-generated/**"]
     },
     // The wiring tests read app, infra and self-host files outside this package.
     "@bike4mind/server-utils#test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "src/premium-generated/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
+        "../../apps/client/pages/**",
+        "../../apps/client/server/**",
+        "../../apps/workers/src/**",
+        "$TURBO_ROOT$/infra/**",
+        "$TURBO_ROOT$/compose.*.yaml",
+        "$TURBO_ROOT$/selfhost/kubernetes/files/**",
+        "$TURBO_ROOT$/scripts/smoke_selfhost_objectstore.py"
+      ]
+    },
+    // Mirrors the entry above for the real-Mongo lane; turbo-test-cache.test.mjs keeps them equal.
+    "@bike4mind/server-utils#test:integration": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".turbo/test-context",
+        "$TURBO_ROOT$/packages/cli/src/models/curatedDevKey.ts",
+        "$TURBO_ROOT$/packages/scripts/src/curatedCatalog/devKey.ts",
+        "src/premium-generated/**",
+        "$TURBO_ROOT$/catalog/model-hub/curated-v2.json",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
@@ -179,16 +404,38 @@
       "dependsOn": ["^build"],
       "inputs": [
         "$TURBO_DEFAULT$",
+        ".turbo/test-context",
         "$TURBO_ROOT$/turbo.json",
+        "$TURBO_ROOT$/infra/buckets.ts",
+        "$TURBO_ROOT$/apps/client/app/router.tsx",
+        "$TURBO_ROOT$/.changeset/changelog-github-retry.cjs",
+        "$TURBO_ROOT$/.changeset/config.json",
+        "$TURBO_ROOT$/package.json",
+        "$TURBO_ROOT$/pnpm-lock.yaml",
         "../../apps/client/pages/**",
         "../../apps/client/server/**",
         "../../apps/workers/src/**",
+        "../../packages/server-utils/src/**",
         "../services/src/**",
-        "../slack/src/**"
+        "../slack/src/**",
+        "../../packages/server-utils/src/**"
       ]
     },
+    // CI runs test tasks with --only (no dependency builds), which also drops the dependencies from
+    // the hash. .turbo/test-context, written by scripts/turbo-test-cache.mjs, carries their
+    // full-graph hashes back in, so every test task - generic or package-specific - must list it.
+    // scripts/__tests__/turbo-test-cache.test.mjs fails the build when one does not.
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context"]
+    },
+    // The real-Mongo lanes (`*.e2e.test.ts`). Each override mirrors the package's `test` entry.
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".turbo/test-context"]
+    },
+    "test:repo": {
+      "cache": false
     },
     "openapi:generate": {
       "cache": false

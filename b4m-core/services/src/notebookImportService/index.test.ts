@@ -3,6 +3,8 @@ import { DefaultLLMParams } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { NotebookImportService } from './index';
 import type { NotebookImportAdapters } from './index';
+import { createNotebookBundle } from '../notebookExportService/bundle';
+import type { ExportedNotebook } from '../notebookExportService/types';
 
 /**
  * Imported messages are keyed by the presence or absence of `id`. Getting it wrong either failed
@@ -81,6 +83,7 @@ function makeAdapters(
     createArtifact: vi.fn().mockResolvedValue({ id: 'artifact_code_red-circle-a1b2c3_1700000000000_0' }),
     toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
     agentRepository: { create: vi.fn() },
+    findOwnedMediaKeys: vi.fn(async (keys: string[]) => new Set(keys)),
     userRepository: { findById: vi.fn().mockResolvedValue(user) },
     adminSettings: {
       findAll: async () => [{ settingName: 'MaxFileSize', settingValue: String(MAX_FILE_SIZE_MB) }],
@@ -100,6 +103,104 @@ const OPTIONS = {
   importTools: false,
   importAgents: false,
 } as unknown as Parameters<NotebookImportService['importNotebooks']>[2];
+
+describe('v1 and v2 notebook re-import', () => {
+  it.each(['1.0.0', '2.0.0'])('imports %s with message and external knowledge bytes', async version => {
+    const { adapters, bulkCreate } = makeAdapters();
+    const data = new Map<string, Uint8Array>();
+    const source: ExportedNotebook = {
+      ...NOTEBOOK,
+      tags: [],
+      isAutoNamed: false,
+      knowledge: [{ ...KNOWLEDGE_FILE, uploadedAt: '2026-01-01T00:00:00.000Z' }],
+    } as ExportedNotebook;
+    const service = new NotebookImportService(adapters);
+    const options = { ...OPTIONS, importKnowledge: true };
+    const result =
+      version === '1.0.0'
+        ? await service.importNotebooks(
+            'user-1',
+            {
+              exportVersion: version,
+              exportedAt: '2026-01-01T00:00:00.000Z',
+              platform: 'lumina5',
+              notebooks: [source],
+            },
+            options
+          )
+        : await (async () => {
+            await createNotebookBundle([source], async (path, bytes) => {
+              data.set(path, Buffer.from(bytes));
+            });
+            return service.importBundle(
+              'user-1',
+              async path => {
+                const bytes = data.get(path);
+                if (!bytes) throw new Error(`Missing ${path}`);
+                return bytes;
+              },
+              options
+            );
+          })();
+    expect(result.success).toBe(true);
+    expect(result.importedNotebooks).toBe(1);
+    expect(bulkCreate.mock.calls[0][0][0].prompt).toBe('hello');
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledWith(expect.any(String), Buffer.from('hello'));
+  });
+});
+
+describe('bundle import errors and version scope', () => {
+  it('wraps bundle read failures as INVALID_FORMAT', async () => {
+    const { adapters } = makeAdapters();
+    const read = async () => Buffer.from('{');
+    await expect(new NotebookImportService(adapters).importBundle('user-1', read, OPTIONS)).rejects.toMatchObject({
+      name: 'NotebookImportError',
+      code: 'INVALID_FORMAT',
+      message: 'Invalid JSON in manifest.json',
+    });
+  });
+
+  it('rejects reference fan-out before any notebook is written', async () => {
+    const { adapters } = makeAdapters();
+    const data = new Map<string, Uint8Array>();
+    const image = Buffer.alloc(1024 * 1024, 42).toString('base64');
+    const source: ExportedNotebook = {
+      ...NOTEBOOK,
+      tags: [],
+      isAutoNamed: false,
+      chatHistory: Array.from({ length: 50 }, (_, index) => ({
+        ...MESSAGE,
+        id: `message-${index}`,
+        images: [image],
+      })),
+    } as ExportedNotebook;
+    await createNotebookBundle([source], async (path, bytes) => {
+      data.set(path, Buffer.from(bytes));
+    });
+    const read = async (path: string) => {
+      const bytes = data.get(path);
+      if (!bytes) throw new Error(`Missing ${path}`);
+      return bytes;
+    };
+    await expect(new NotebookImportService(adapters).importBundle('user-1', read, OPTIONS)).rejects.toMatchObject({
+      name: 'NotebookImportError',
+      code: 'INVALID_FORMAT',
+      message: 'Bundle byte budget exceeded',
+    });
+    expect(adapters.sessionRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a single-file payload labelled 2.0.0', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      new NotebookImportService(adapters).importNotebooks(
+        'user-1',
+        { ...PAYLOAD, exportVersion: '2.0.0' } as never,
+        OPTIONS
+      )
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_VERSION' });
+  });
+});
 
 /** Runs an import and returns the first message handed to the store. */
 async function runImport(opts: Record<string, unknown>, { existing = [] as unknown[], payload = PAYLOAD } = {}) {
@@ -1380,5 +1481,63 @@ describe("notebook import: generateUniqueName reuses this run's highest suffix a
     // probe each for the second and third notebook (2) is the bound - a regression to
     // restart-from-1 costs at least one more.
     expect(sessionRepository.find).toHaveBeenCalledTimes(5);
+  });
+});
+
+describe('imported message images', () => {
+  it('writes only the image keys the importing user owns', async () => {
+    const { adapters, bulkCreate } = makeAdapters();
+    adapters.findOwnedMediaKeys = vi.fn(async () => new Set(['mine.png']));
+    const payload = {
+      ...PAYLOAD,
+      notebooks: [
+        {
+          ...PAYLOAD.notebooks[0],
+          chatHistory: [{ ...MESSAGE, images: ['mine.png', 'theirs.png', 42, null, 'mine.png'] }],
+        },
+      ],
+    };
+
+    await new NotebookImportService(adapters).importNotebooks('user-1', payload as never, OPTIONS);
+
+    expect(adapters.findOwnedMediaKeys).toHaveBeenCalledWith(['mine.png', 'theirs.png'], 'user-1');
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual(['mine.png', 'mine.png']);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringMatching(/not owned/), { dropped: 1 });
+  });
+
+  it('resolves ownership before an overwrite deletes the messages that may prove it', async () => {
+    const order: string[] = [];
+    const existing = [{ id: 'existing-id', userId: 'user-1', name: NOTEBOOK.name }];
+    const { adapters, bulkCreate } = makeAdapters(existing);
+    adapters.findOwnedMediaKeys = vi.fn(async () => {
+      order.push('lookup');
+      return new Set(['mine.png']);
+    });
+    adapters.chatHistoryRepository.deleteMany = vi.fn(async () => {
+      order.push('delete');
+    });
+    const payload = {
+      ...PAYLOAD,
+      notebooks: [{ ...NOTEBOOK, chatHistory: [{ ...MESSAGE, images: ['mine.png'] }] }],
+    };
+
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      {
+        ...OPTIONS,
+        conflictResolution: 'overwrite',
+      } as never
+    );
+
+    expect(order).toEqual(['lookup', 'delete']);
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual(['mine.png']);
+  });
+
+  it('skips the ownership lookup when no message carries images', async () => {
+    const { adapters, bulkCreate } = makeAdapters();
+    await new NotebookImportService(adapters).importNotebooks('user-1', PAYLOAD as never, OPTIONS);
+    expect(adapters.findOwnedMediaKeys).not.toHaveBeenCalled();
+    expect(bulkCreate.mock.calls[0][0][0].images).toEqual([]);
   });
 });

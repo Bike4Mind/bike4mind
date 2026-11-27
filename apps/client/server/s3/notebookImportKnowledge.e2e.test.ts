@@ -5,7 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { FabFile, Session } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
-import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import { createChatHistoryWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -18,7 +18,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * reported success with a count of the files it had not written.
  *
  * Drives the REAL service through the REAL FabFile model. Run
- * `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
+ * `pnpm --filter @bike4mind/services-core build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  */
 
@@ -82,6 +82,7 @@ function makeService(overrides: Record<string, unknown> = {}, uploaded: string[]
     createArtifact: async () => null,
     toolRepository: { create: async () => null },
     agentRepository: { create: async () => null },
+    findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
     userRepository: { findById: async () => ({ id: USER }) },
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
@@ -244,7 +245,7 @@ describe('notebook import writes knowledge files', () => {
 
     // Import bytes are attacker-supplied, so they must not be pre-cleared. The row is left at the
     // schema default ('pending') and the import handler scans it out of band once the transaction
-    // commits (server/s3/moderateImportedKnowledgeFiles.ts). The file's storage key is surfaced on
+    // commits (packages/server-utils/src/s3/moderateImportedKnowledgeFiles.ts). The file's storage key is surfaced on
     // the result so the handler knows what to scan.
     expect((await FabFile.findOne({ userId: USER }))?.moderationStatus).toBe('pending');
     expect(result.importedKnowledgeFilePaths).toHaveLength(1);

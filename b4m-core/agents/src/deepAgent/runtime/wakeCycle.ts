@@ -58,9 +58,9 @@ export async function runWakeCycle(agentId: string, deps: WakeDeps): Promise<Wak
   const handoff = await deps.store.loadHandoff(agentId);
   const recentEpisodes = await deps.store.recentEpisodes(agentId, recentLimit);
 
-  // Decay drives by the time elapsed since the last wake. First wake (no
-  // handoff) sees no decay.
-  const elapsedMs = handoff ? Math.max(0, nowMs - Date.parse(handoff.lastWakeAt)) : 0;
+  // Decay drives by the time elapsed since the last wake. A first wake sees no decay, including one whose
+  // handoff was seeded (wakeCount 0) while the owner's account was on hold (server-utils wakeMetering).
+  const elapsedMs = handoff && handoff.wakeCount > 0 ? Math.max(0, nowMs - Date.parse(handoff.lastWakeAt)) : 0;
   const drives = decayDrives(charter.drives, elapsedMs);
 
   const log = deps.logger;

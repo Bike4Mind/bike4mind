@@ -1,5 +1,7 @@
-import { Box } from '@mui/joy';
+import { Box, Modal, ModalDialog } from '@mui/joy';
 import KnowledgeViewer from '@client/app/components/Knowledge/KnowledgeViewer';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 
 /**
  * The KnowledgeViewer for hosts whose chat is docked OUTSIDE the explorer (the premium overlay).
@@ -19,9 +21,40 @@ import KnowledgeViewer from '@client/app/components/Knowledge/KnowledgeViewer';
  *   stays - DataLakeExplorer's layout subscription turns its `hide` write into close-and-restore.
  */
 export default function DataLakeRailViewer() {
+  const isMobile = useIsMobile();
+  const viewer = <KnowledgeViewer autoHideOnEmpty={false} showLayoutControls={false} />;
+
+  // Joy's Modal raises the popup z-index variable, so the file Select and download Menu portals
+  // open above this layer instead of behind it.
+  if (isMobile) {
+    return (
+      <Modal open onClose={() => setSessionLayout({ layout: 'hide' })}>
+        <ModalDialog
+          layout="fullscreen"
+          data-testid="datalake-rail-viewer"
+          data-presentation="fullscreen"
+          sx={{ p: 0, borderRadius: 0, display: 'flex', minWidth: 0, minHeight: 0, backgroundColor: 'background.body' }}
+        >
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              display: 'flex',
+              '& .knowledge-viewer-container': { flex: 1, minWidth: 0 },
+            }}
+          >
+            {viewer}
+          </Box>
+        </ModalDialog>
+      </Modal>
+    );
+  }
+
   return (
     <Box
       data-testid="datalake-rail-viewer"
+      data-presentation="rail"
       sx={{
         flex: 1,
         minWidth: 0,
@@ -33,7 +66,7 @@ export default function DataLakeRailViewer() {
         '& .knowledge-viewer-container': { flex: 1, minWidth: 0 },
       }}
     >
-      <KnowledgeViewer autoHideOnEmpty={false} showLayoutControls={false} />
+      {viewer}
     </Box>
   );
 }

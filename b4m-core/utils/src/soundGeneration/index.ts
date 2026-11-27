@@ -4,12 +4,14 @@ import { ElevenLabsSoundGenerator } from './ElevenLabsSoundGenerator';
 import { SoundGenerator } from './types';
 
 export * from './types';
-export { ElevenLabsSoundGenerator } from './ElevenLabsSoundGenerator';
+export { ElevenLabsSoundGenerator, SOUND_GENERATION_TIMEOUT_MS } from './ElevenLabsSoundGenerator';
 export type { ElevenLabsSoundGeneratorConfig } from './ElevenLabsSoundGenerator';
 
 export interface SoundGeneratorOptions {
   /** Injectable HTTP client forwarded to the vendor implementation (tests). */
   fetchImpl?: typeof fetch;
+  /** Provider-fetch deadline override, e.g. what is left of a request budget after waiting for capacity. */
+  timeoutMs?: number;
 }
 
 /**
@@ -25,7 +27,12 @@ export function aiSoundService(
 ): SoundGenerator {
   switch (vendor) {
     case 'elevenlabs':
-      return new ElevenLabsSoundGenerator({ apiKey, logger, fetchImpl: options.fetchImpl });
+      return new ElevenLabsSoundGenerator({
+        apiKey,
+        logger,
+        fetchImpl: options.fetchImpl,
+        timeoutMs: options.timeoutMs,
+      });
     default:
       throw new Error(`Unknown sound generation vendor: ${vendor}`);
   }

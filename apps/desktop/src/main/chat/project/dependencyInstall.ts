@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { BackgroundProcessRegistry } from '../tools/BackgroundProcessRegistry';
+import { MAX_WAIT_SECONDS } from '../tools/backgroundTools';
 import type { WorkspaceOutcome } from './workspace';
 
 export type PackageManager = 'pnpm' | 'yarn' | 'npm' | 'bun';
@@ -92,14 +93,16 @@ export interface InstallRequest {
 /**
  * Installs a freshly created worktree's dependencies.
  *
- * Doing it here moves the wait to the start of the session instead of whenever the model
- * happens to trip over the missing node_modules.
+ * Starting it here, alongside the session's first turn, overlaps the install with whatever the
+ * model does first; the prompt lines tell it how to block on the install once it needs it.
  *
  * Only ever after the app created the worktree itself: install scripts run arbitrary code, so
  * merely opening a folder must not trigger one.
  */
 export class DependencyInstaller {
   private readonly installs = new Map<string, Install>();
+  /** A start still planning, so isInstalling called right after maybeStart does not see 'none'. */
+  private readonly starting = new Map<string, Promise<void>>();
 
   constructor(
     private readonly registry: Pick<BackgroundProcessRegistry, 'start' | 'get' | 'tail'>,
@@ -107,6 +110,23 @@ export class DependencyInstaller {
   ) {}
 
   async maybeStart(request: InstallRequest): Promise<void> {
+    const pending = this.start(request);
+    this.starting.set(request.sessionId, pending);
+    try {
+      await pending;
+    } finally {
+      if (this.starting.get(request.sessionId) === pending) this.starting.delete(request.sessionId);
+    }
+  }
+
+  /** Whether this session has an install still running, once any start under way has planned. */
+  async isInstalling(sessionId: string): Promise<boolean> {
+    await this.starting.get(sessionId)?.catch(() => undefined);
+    const install = this.installs.get(sessionId);
+    return install ? this.registry.get(install.processId, sessionId)?.status === 'running' : false;
+  }
+
+  private async start(request: InstallRequest): Promise<void> {
     if (request.outcome !== 'created') return;
     const plan = await planInstall(request.workingDirectory);
     if (!plan) return;
@@ -125,7 +145,7 @@ export class DependencyInstaller {
    * Coarse on purpose: this text is part of the system prompt, so it changes only when the
    * install starts, ends, or fails - never with progress - and prompt caching mostly survives.
    */
-  promptLines(sessionId: string): string[] {
+  promptLines(sessionId: string, { spawned = false }: { spawned?: boolean } = {}): string[] {
     const install = this.installs.get(sessionId);
     if (!install) return [];
     const info = this.registry.get(install.processId, sessionId);
@@ -137,17 +157,28 @@ export class DependencyInstaller {
       info,
       install,
       () => this.registry.tail(install.processId, sessionId, FAILURE_TAIL_CHARS),
-      this.now()
+      this.now(),
+      spawned
     );
   }
 }
 
-function describe(info: BackgroundProcessInfo, install: Install, tail: () => string | null, now: number): string[] {
+function describe(
+  info: BackgroundProcessInfo,
+  install: Install,
+  tail: () => string | null,
+  now: number,
+  spawned: boolean
+): string[] {
   const handle = `handle ${install.processId}, \`${install.command}\``;
   if (info.status === 'running') {
     return [
-      `Dependencies are installing in the background (${handle}). Check with bash_output before`,
-      'running tests or builds, and do not start another install.',
+      `Dependencies are installing in the background (${handle}). Do not poll it with bash_output`,
+      'in a loop: you are told automatically when it finishes. Do not start another install.',
+      'Do work that does not need node_modules first. Once a step needs them, block on the install',
+      `with one bash_output call: id="${install.processId}", wait_seconds=${MAX_WAIT_SECONDS}.`,
+      // A spawned agent's turn ending counts as the agent finishing, so it cannot wait by ending it.
+      ...(spawned ? ['Never end your turn to wait for it: that reports you as finished. Wait with bash_output.'] : []),
     ];
   }
   if (info.status === 'killed') return [];

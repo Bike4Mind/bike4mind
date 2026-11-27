@@ -18,9 +18,18 @@ import {
   decryptVector,
   encryptVector,
 } from '@bike4mind/server-utils/memory/factCipher';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import {
+  buildEmbeddingRegistry,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/services/llm/embeddingProviders';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'reembedMementos' } });
 
 /** The owner has no credential for the memento embedding provider: definitive, unlike a failed lookup. */
 class MissingEmbeddingCredentialError extends Error {}
@@ -47,8 +56,8 @@ async function createMementoEmbeddingService(userId: string) {
     getSettingsByNames,
   });
 
-  const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  const provider = embeddingBackendForModel(MEMENTO_EMBEDDING_MODEL);
+  const { config, missing } = resolveEmbeddingCredentials(provider, apiKeyTable);
   if (missing) {
     throw new MissingEmbeddingCredentialError(
       `${missing === 'openai' ? 'OpenAI' : missing === 'voyageai' ? 'VoyageAI' : 'Ollama'} ${
@@ -57,7 +66,7 @@ async function createMementoEmbeddingService(userId: string) {
     );
   }
 
-  return new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
+  return bindEmbeddingModel(buildEmbeddingRegistry(config), MEMENTO_EMBEDDING_MODEL);
 }
 
 export async function reembedMementosForUser(
@@ -110,7 +119,7 @@ export async function reembedMementosForUser(
     }
 
     try {
-      const embedding = toMementoVector(await embeddingService.generateEmbedding(memento.summary));
+      const embedding = toMementoVector(await embedOne(embeddingService, memento.summary));
 
       // Vector and stamp are written TOGETHER. Split across two writes, a crash between them leaves a
       // memento claiming a space its vector is not in - worse than the un-stamped state we started in,
@@ -125,7 +134,7 @@ export async function reembedMementosForUser(
       stats.failed += 1;
       const message = `memento ${String(memento._id)}: ${err instanceof Error ? err.message : String(err)}`;
       stats.errors.push(message);
-      console.error(`[reembedMementos] user ${userId} ${message}`);
+      logger.error('Memento re-embed failed', { userId, mementoId: String(memento._id), error: err });
     }
   }
 
@@ -324,7 +333,7 @@ export async function migrateLedgerVectorsForPrincipal(
           continue;
         }
         stats.providerCalls += 1;
-        vector = toMementoVector(await service.generateEmbedding(fact));
+        vector = toMementoVector(await embedOne(service, fact));
       }
 
       const sealed = encryptVector(dek, vector);

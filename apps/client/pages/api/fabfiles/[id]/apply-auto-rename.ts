@@ -46,8 +46,6 @@ const handler = baseApi()
         throw new BadRequestError(`A file with the name "${newFileName}" already exists. Please try again.`);
       }
 
-      console.log(`[Apply Auto-Rename API] Renaming file ${file.fileName} to ${newFileName}`);
-
       // Update the file with the new name
       await FabFile.updateOne(
         { _id: file._id },

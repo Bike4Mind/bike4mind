@@ -70,7 +70,7 @@ vi.mock('@bike4mind/database', () => ({
   lakeMembershipRemovalRepository: {},
   lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/dataLakes/lakeConfigAuditDb', () => ({
   lakeConfigAuditDb: { dataLakeConfigChanges: {} },
 }));

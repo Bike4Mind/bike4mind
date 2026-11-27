@@ -112,11 +112,9 @@ export async function performDeepResearch(
   const startTime = Date.now();
   const timeLimit = duration * 60 * 1000; // Convert minutes to milliseconds
   let topic = params.topic;
-  const log = console.log;
+  const log = (...args: unknown[]) => Logger.debug(...args);
 
-  log(
-    `🔬 Deep Research: Starting research on "${params.topic} with maxDepth ${maxDepth} and duration ${duration} minutes"`
-  );
+  log('Deep Research: Starting research', { topic: params.topic, maxDepth, duration });
 
   const state: ResearchState = {
     findings: [],
@@ -164,7 +162,7 @@ export async function performDeepResearch(
   const [provider, backup] = await resolveWebSearchProviders({ db: context.db });
 
   if (!provider && !firecrawlApp) {
-    log('🔬 Deep Research: no web-search provider or Firecrawl configured');
+    Logger.warn('Deep Research: no web-search provider or Firecrawl configured');
     return {
       success: false,
       error: 'Deep research requires a web search provider (Serper key or SearXNG URL) or Firecrawl to be configured',
@@ -193,7 +191,7 @@ export async function performDeepResearch(
             description: result.description,
           }));
         } catch (error) {
-          log(`🔬 Deep Research: Firecrawl search failed for query "${query}":`, error);
+          Logger.warn('Deep Research: Firecrawl search failed', { query, error });
           // Return empty array so research can continue with other searchers
           return [];
         }
@@ -256,7 +254,7 @@ export async function performDeepResearch(
           message: `Failed to extract content from ${url}`,
           depth: state.depth,
         });
-        log(`🔬 Deep Research: Failed to extract content from ${url}:`);
+        Logger.warn('Deep Research: failed to extract content', { url, error });
         return [];
       }
     });
@@ -298,7 +296,7 @@ export async function performDeepResearch(
         analysisModel = ChatModels.GPT4_1;
         log('🔬 Deep Research: Using GPT-4.1 for analysis');
       } catch (error) {
-        log('🔬 Deep Research: Failed to create OpenAI backend, falling back to selected model');
+        Logger.warn('Deep Research: failed to create OpenAI backend, falling back to selected model', { error });
       }
     } else {
       log(`🔬 Deep Research: No OpenAI key available, using selected model ${config.model || 'default'} for analysis`);
@@ -358,7 +356,7 @@ export async function performDeepResearch(
       const parsed = parseTolerantJson<{ analysis?: AnalysisResult }>(result);
       return parsed?.analysis ?? null;
     } catch (error) {
-      log(`🔬 Deep Research: Error in analyzeAndPlan:`, error);
+      Logger.warn('Deep Research: analyzeAndPlan failed', { error });
       return null;
     }
   };
@@ -429,7 +427,6 @@ export async function performDeepResearch(
             message: `${searcher.name} search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
             depth: state.depth,
           });
-          log(`🔬 Deep Research: ${searcher.name} search failed:`, error);
           // The provider attempts log transient failures at warn, and a search that throws has no
           // caller here to alert on it, so this catch is deep research's only error-level record.
           Logger.globalInstance.error('Deep Research: search failed', {
@@ -552,7 +549,7 @@ export async function performDeepResearch(
       },
     };
   } catch (error) {
-    log(`🔬 Deep Research: Error in iteration ${state.depth}:`, error);
+    Logger.error('Deep Research: iteration failed', { depth: state.depth, error });
     addActivity({
       type: 'thought',
       status: 'error',
@@ -575,7 +572,7 @@ export async function performDeepResearch(
 
 export const deepResearchTool: ToolDefinition = {
   name: 'deep_research',
-  implementation: (context, config) => ({
+  implementation: (context, config: unknown) => ({
     toolFn: async value => {
       const params = value as DeepResearchParams;
       await context.onStart?.('deep_research', params);
@@ -583,7 +580,11 @@ export const deepResearchTool: ToolDefinition = {
       const effectiveParams = {
         topic: params.topic,
       };
-      const result = await performDeepResearch(context, effectiveParams, config ?? {});
+      const result = await performDeepResearch(
+        context,
+        effectiveParams,
+        (config ?? {}) as Parameters<typeof performDeepResearch>[2]
+      );
       return JSON.stringify(result);
     },
     toolSchema: {

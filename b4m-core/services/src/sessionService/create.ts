@@ -30,6 +30,7 @@ import {
 
 const createSessionParametersSchema = z.object({
   name: z.string(),
+  organizationId: z.string().optional(),
   knowledgeIds: z.array(z.string()).optional(),
   artifactIds: z.array(z.string()).optional(),
   agentIds: z.array(z.string()).optional(),
@@ -121,6 +122,10 @@ export interface CreateSessionAdapters {
    * session created on a workspace records none, leaving every such value to that workspace.
    */
   workspaceSessionSettings?: WorkspaceSessionSettingsTable;
+  resolveRetentionOrganization?: (
+    user: IUserDocument,
+    notebookOrganizationId?: string | null
+  ) => Promise<string | undefined>;
 }
 
 export interface CreateSessionOptions {
@@ -195,6 +200,9 @@ export const createSession = async (
 
   const userSetFields = userSetSessionFields(rest, adapters.workspaceSessionSettings, options.userSetFields);
 
+  const parentProject = projectId ? await db.projects.shareable.findAccessibleById(user, projectId) : null;
+  const organizationId = parentProject?.organizationId ?? rest.organizationId;
+
   const buildData: Omit<ISessionDocument, 'id'> = {
     groups: [],
     users: [],
@@ -205,6 +213,7 @@ export const createSession = async (
     lastUsedModel: rest.lastUsedModel ?? null,
 
     ...rest,
+    organizationId,
 
     // After ...rest so the derived value wins over the (absent) request value it stands in for.
     ...(retrievalTags?.length ? { retrievalTags } : {}),
@@ -214,6 +223,7 @@ export const createSession = async (
     ...(options.origin ? { origin: options.origin } : {}),
     ...(userSetFields.length ? { userSetFields } : {}),
     userId: user.id,
+    retentionOrganizationId: await adapters.resolveRetentionOrganization?.(user, organizationId),
     knowledgeIds,
     artifactIds,
     agentIds: authorizedAgentIds,

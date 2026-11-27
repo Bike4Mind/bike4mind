@@ -4,7 +4,10 @@ import { IResearchTask, ResearchTaskStatus, ResearchTaskType } from '@bike4mind/
 import TaskStatusBadge from './TaskStatusBadge';
 import PublicIcon from '@mui/icons-material/Public';
 import StorageIcon from '@mui/icons-material/Storage';
-import { Edit, Delete, Refresh, CalendarToday } from '@mui/icons-material';
+import Edit from '@mui/icons-material/Edit';
+import Delete from '@mui/icons-material/Delete';
+import Refresh from '@mui/icons-material/Refresh';
+import CalendarToday from '@mui/icons-material/CalendarToday';
 import { useRemoveResearchTask, useRetryResearchTask } from '@client/app/hooks/data/researchTasks';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 

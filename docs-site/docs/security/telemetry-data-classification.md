@@ -22,6 +22,8 @@ personal information or secrets in campaign URLs.
 | Checkout consent         | Boolean `attributionConsent` in the checkout request                                             | Request only                                   | Permit or suppress reading attribution cookies |
 | Resolved consent         | App cookie `b4m_consent`, republished on every load                                              | 90 days, cleared when consent resolves unset   | Let the server read the browser's decision     |
 | Purchase attribution     | Stripe subscription metadata `acq_first_*` / `acq_last_*` and MongoDB `Subscription.acquisition` | No automatic expiry configured by this feature | Record the consenting buyer's checkout touches |
+| Purchase visit           | Random server-minted 30-minute visit id in MongoDB `PaymentAttempt.visitId` (not sent to Stripe) | 90 days, the payment attempt's TTL             | Name the visit a purchase was started in       |
+| OAuth client credit      | MongoDB `User.acquisition.oauthTouch`, written by the server                                     | The account's lifetime                         | Credit an account to the OAuth client it was created to sign in to |
 
 The app's three campaign cookies and `b4m_consent` use `path=/` and
 `SameSite=Lax`. They are JavaScript-readable and scoped to the app host. Lax,
@@ -58,26 +60,212 @@ prevents future collection; it does not delete existing Stripe or MongoDB record
 Configured GA conversion events can receive source, medium, and campaign fields
 through the shared consent-gated attribution reader.
 
+## Visits and pages
+
+The app counts visits, and the pages within them, with two first-party events sent
+as the host product's Overwatch events. Both are anonymous: their user is a fixed
+anonymous id, never an account or its pseudonym, even for a signed-in visitor.
+
+A visit is a browser holding the `b4m_vid` cookie. The server mints it on a page
+load that carries none, and sends it again on every page load, which restarts its
+30-minute inactivity window. Nothing else refreshes it, so a visit ends 30 minutes
+after its last page load however long the tab stays in use. A value the server did
+not mint is ignored and replaced. A browser that identifies itself as a bot, or
+sends no user agent, gets no cookie and records nothing.
+
+Each visit sends one `visit` event, with the visit id as its `sessionId`. With
+consent it also carries the referring site's origin (never its path or query), the
+landing path, and the session campaign from `b4m_utm`; without consent it carries
+none of them. While a visitor in the opt-in region has not answered the banner, the
+event is held, marked by the `b4m_vid_pending` cookie, and sent once they answer, or
+without a source if the page is hidden or closed first.
+
+Every page of a visit after its landing sends a `page_view` event with the same
+visit id and the page's path, and nothing else. That covers a page the app moves to
+without a page load, and a later page load in the same visit: a new tab, a typed
+URL, a bookmark, a link or a reload. A reload sends its page again, so a visit's
+`page_view` events can repeat a path. A `page_view` is sent only while consent is
+granted, never while it is declined or not yet given, and pages passed without
+consent are not sent later. A grant sends the page the visitor is on unless this
+page load has already sent it. So a visitor who declines at first, or leaves the
+banner unanswered until the page is hidden, and then grants on the page they landed
+on, records that page as a `page_view`. Within one page load, a change of query
+string or fragment alone, or the page just sent again, sends nothing, and the app
+sends at most 100.
+
+The server records a `page_view` only on a visit whose `visit` event was already
+sent. A page the app moves to is dropped when there is no visit cookie, while the
+visit is held for consent, or after the visit has lapsed, and recording one never
+sets or refreshes a cookie. A page load with no live visit starts a new visit
+instead, and its page is that visit's landing.
+
+The browser sends only the path, cut to 200 characters at a `/`. The server checks
+it again, because anyone can post to these routes: it keeps the path alone, cut at
+any `?` or `#`, replaces each segment shaped like a secret (a UUID, a long hex id,
+or a long letter-and-digit token such as a share or invite link carries) with
+`:token`, and drops a path that holds an address (`@`, or `%40` encoded) entirely.
+
+When a signed-in event is sent during a visit (the daily `active` event, or the
+funnel events of a signup), it carries that visit's id as its `sessionId` beside the
+user's pseudonym. So a visit's landing and pages can be joined to the pseudonymous
+user who was signed in, or signed up, during that visit.
+
+Query strings, fragments, IP addresses and user agents are never sent on these
+events. The server reads the user agent to filter bots, and the client IP for a
+per-IP rate limit whose counter expires with its one-minute window.
+
+| Data       | Storage                                                                  | Lifetime                                            | Purpose                                     |
+| ---------- | ------------------------------------------------------------------------ | --------------------------------------------------- | ------------------------------------------- |
+| Visit id   | App cookie `b4m_vid`: 16 random bytes in hex, `HttpOnly`, `SameSite=Lax` | 30 minutes, refreshed only by a page load           | Tell one visit from the next                |
+| Visit hold | App cookie `b4m_vid_pending`: `1`, no id, `HttpOnly`, `SameSite=Lax`     | Until the `visit` event is sent or the visit lapses | Hold the `visit` event for a consent answer |
+
+| Data  | Sent as                                                                                                                          | Purpose                                             |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Visit | `visit`: anonymous user, visit id as `sessionId`; with consent, referrer origin, `metadata.landingPath` and the campaign (`utm`) | Count visits and where they came from               |
+| Page  | `page_view`: anonymous user, visit id as `sessionId`, `metadata.path`; only with consent, and only on a recorded visit           | Know a visit's later pages and the page it ended on |
+
+Both cookies use `path=/`, and `Secure` outside local development. Unlike the
+campaign cookies, they are not readable by JavaScript.
+
 ## Cross-product signup reporting (self-reported)
+
+### Product-event metadata validation
+
+The shared `emitProductEvent` transport emits only fields with a declared Zod
+validator. Its default vocabulary covers the host's signup, funnel, billing and
+account events. Another product supplies `metadataFields` beside its event
+builders, using that event's own categorical enums, bounded identifiers and
+numeric validators. The product owns its vocabulary; the transport enforces it.
+An event's validators should reuse the product's existing schemas and constants,
+so a payload change and its validation can ship together.
+
+`metadataFields` is a map of synchronous **field** validators, not a whole-object
+schema: each present field is parsed independently. Unknown or invalid fields are
+omitted while valid siblings survive. The shared `userType`, `lane`, `internal`
+and `userAction` validators always take precedence over a product's declarations.
+A product schema cannot broaden those marks. Only flat string, number and boolean
+values are supported; personal information, secrets and arbitrary content must
+not be declared as metadata fields. Dropped-field diagnostics contain field names,
+the event name and product id, never the rejected values.
+
+Products need a transport integration test that sends their real builder payloads
+through `emitProductEvent`, asserting both preserved dimensions and rejection of
+invalid or unknown values. Mocking the emitter does not verify this boundary.
+
+### Reported events
 
 Account creation emits a `signup` event to each Overwatch product named by the
 consenting visitor's campaign touches, for products this deployment holds an
-ingest key for. The host product is excluded, because its own funnel already
-counts its signups.
+ingest key for. The host product is excluded from `signup`, because it already
+receives `signup_completed` for every new account from the signup funnel.
 
-A later payment by that account emits a `purchase` event to the same products:
+An OAuth client can be registered with an Overwatch product. When an account is
+created and its first authorization code goes to such a client within 30 minutes,
+the server that issued the code stores `User.acquisition.oauthTouch` (`source`: the
+client's product, `medium`: `oauth`, `content`: the `client_id`) and emits that
+product the same `signup`, marked `touch: 'oauth'`. It is written once per account,
+only with the same consent the campaign touches need, and never for a synthetic
+account. The browser does not supply it: the product comes from the client's
+registration. A product that a campaign touch already names keeps that touch, and
+is credited once.
+
+A later payment by that account emits a `purchase` event to the host product and
+to the same products:
 each paid individual subscription invoice (first charge, renewal, or seat change,
 from the invoice webhook) and each credit pack (from the payment-intent webhook). The
 credited product comes from the touches stored on the user at signup, not from
 the purchase, because a webhook has no browser and a credit-pack payment carries
-no attribution. Organization invoices are excluded because the checkout user's
-signup source is not the organization's acquisition source. Zero-amount invoices,
-refunds, disputes, and synthetic users send nothing. Each event carries the amount
-collected in major units, the currency, whether it was a subscription or credits,
-and the invoice billing reason. It is
+no attribution. The host product's copy needs no touch, so a user with none stored
+still produces it, with no campaign. Organization invoices are excluded because the
+checkout user's signup source is not the organization's acquisition source.
+Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
+event carries the amount collected in the currency's major unit (dollars, or whole
+yen), the currency, whether it was a subscription or credits, and the invoice
+billing reason. A subscription payment also carries `periodEnd`: the end of the
+period it paid for, in ISO 8601 UTC, taken from the invoice's subscription lines.
+It is left out when the invoice's lines show no subscription period. Each event is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
+
+The host product's copy of a credit-pack purchase, and of the invoice that opened
+a subscription, also names the browser visit the payment was started in. It sends
+the id from the app's visit cookie (`b4m_vid`) as the event's session id, the same
+way the host's `signup_completed` names the visit a signup happened in.
+
+The webhook and the invoice worker have no browser, so the app stores that id in
+its own payment-attempt record (`PaymentAttempt.visitId`) when the payment starts:
+under the payment intent for a credit pack, and under the Checkout session for a
+subscription. It is never sent to Stripe.
+
+Renewals, seat changes and other invoices Stripe raises on its own name no visit.
+The copies sent to credited products never carry a visit, since only the host's
+stream holds the visit it names.
+
+The rest of an individual subscription's lifecycle, and the account's, goes to the
+host product and to the same products in the same way:
+
+- `payment_failed`: a failed subscription invoice (amount due, currency, attempt
+  number, billing reason), once per attempt, or a failed credit-pack payment
+  (amount, currency), once per failed confirmation.
+- `subscription_ended`: from the subscription-deleted webhook, whatever ended it.
+  Carries Stripe's cancellation reason, the plan name and interval, and whole days
+  from the subscription's start to its end.
+- `plan_changed`: the subscription moved to another price. Carries the plan names
+  and intervals on each side and whether it was an upgrade, a downgrade or the same
+  tier, by plan tier.
+- `subscription_cancel_scheduled` and `subscription_cancel_reverted`: a period-end
+  cancellation being set, or withdrawn. Carries the plan name and interval.
+- `account_deleted`: an admin deleted the account. Sent after the deletion
+  commits, from the account as it stood just before it, so like every event here it
+  carries the user's pseudonym, and the host copy carries the stored first-touch
+  campaign. Carries whether the account was a subscriber and whole days since
+  signup. Deleting the account does not erase Overwatch's records keyed by that
+  pseudonym, this event and the account's earlier events included.
+
+Plans are named by plan name and interval, never by Stripe price id. Organization
+subscriptions send none of these. Every copy of these events, and of `purchase`,
+carries `metadata.userAction: false`, because each arrives from a webhook, a worker
+or an admin rather than from the user's own request, and Overwatch would otherwise
+count the user as active on that day. For the same reason, `signup_completed` and
+the other signup-funnel events for an account an admin created carry it too, as do
+`email_verified` and `credits_granted` when an admin verifies an account's email.
+Overwatch also leaves `userAction: false` signups out of its funnel's signup count,
+so an account an admin created is not counted as a signup.
+
+Synthetic accounts (`User.isSynthetic`: test personas and accounts on a configured
+test domain) are marked rather than dropped on the host's own Overwatch events: the
+signup-funnel events (`signup_completed`, `email_verified`, `credits_granted`,
+`first_value`) and the daily `active` event carry `metadata.lane: "synthetic"`, so
+they can be told apart from real accounts. Real users' events carry no lane. The
+billing and account events above, the cross-product `signup`, and the client-side GA4
+and ad-pixel conversions still send nothing for a synthetic account.
+
+Internal accounts (the team's own) are marked the same way, with
+`internal: true` in `metadata`, on every event above that names a user: the
+signup-funnel events, `first_value`, `active`, the billing and account events and
+the cross-product `signup`. An account is internal when `User.isInternal` is set or
+it is an admin. `isInternal` is set at signup for an email on a
+`NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS` domain (and for an admin an admin creates),
+by an admin from the user's internal toggle (`POST
+/api/admin/users/[userId]/internal`, audited), and for accounts that predate it
+by a one-off migration. A synthetic account carries only the synthetic lane, never
+both marks. Real users' events carry neither, and no event ever carries
+`internal: false`, so an absent mark means "not marked", not "verified customer".
+The flag is used for analytics only; nothing reads it to grant or deny access.
+
+For a marked account (synthetic or internal) the daily `active` event is sent once
+per visit rather than once per day, under that visit's id. The visit beacon
+(`POST /api/analytics/visit`) is unauthenticated and carries no user and no lane:
+the browser sends it without the session's bearer token, so the only inputs are a
+body and cookies the visitor controls, and a mark read from them would let anyone
+take a real visit out of the count. A visit is set apart downstream only when a
+marked event of its user arrives under the same visit id, which the per-visit
+`active` provides for every visit a marked account makes while signed in. A visit
+made signed out stays unmarked. The verified-hop events below (`hop_minted` and
+`hop`) name no user either, so they carry no internal mark: a source declares only
+the synthetic lane, for a test persona's run, and with consent a `hop` names the
+visit it was redeemed in, so it joins that visit as described above.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no
@@ -91,9 +279,10 @@ makes. Nothing in this app or at the ingest end checks it against where the
 visitor actually came from, so anyone who puts `?utm_source=<product>` on a link
 they share can cause a real signup to be credited to that product. This is the
 only place where a client-supplied string selects which product's record is
-written; every other emit sends to a product its caller fixed. Every event
-carries `metadata.attribution: 'self-reported'` so a consumer can identify and
-filter it.
+written; every other emit sends to a product its caller fixed. Every event sent
+to a credited product carries `metadata.attribution: 'self-reported'` so a consumer
+can identify and filter it. The host product's copies carry no such marker: the
+host observed the payment or the change itself.
 
 This stream is directional by owner decision, and it stays directional: it is
 never upgraded into a verified one. Do not use these events, or any Overwatch
@@ -137,6 +326,183 @@ site is still attributed by signup until the app loads again and republishes,
 while checkout, which resolves consent in the browser at request time, would
 already see the denial.
 
+## Share-link referrals
+
+Every user can copy a personal share link, `/r/<code>`, from the Invite a friend
+dialog. The code is 8 random characters, minted the first time the user asks for
+their link, and kept on the account as `User.referralCode`. It identifies the
+sharer to the server only and contains no personal information.
+
+The "Built with" pill on embedded published pages and the bar on open-public
+published pages also link through the author's share link, as
+`/r/<code>?via=embed-badge` or `/r/<code>?via=share-bar`, when the author has a
+verified email or an OAuth sign-in. Such an author's code is minted the first time
+one of their pages is served, if they have none yet. These links redirect to the
+same campaign-tagged marketing page the pill and bar linked to before, instead of
+to signup.
+
+Opening a share link whose code belongs to an account stores that code in the app
+cookie `b4m_ref` (`__Host-b4m_ref` outside local development), then redirects to
+signup. The cookie is HttpOnly, `path=/`, `Secure` outside local development, and
+`SameSite=Lax` for the same OAuth-callback reason as the campaign cookies. It lasts
+30 days, and the signup that reads it clears it. A credited signup records the
+sharer in `User.referredByUserId`, the field an email invite sets, and the time in
+`User.referredViaLinkAt`. Crediting also compares the new account's signup IP with
+the IPs the sharer signed up and signed in from (`signupMeta.ip`,
+`loginRecords[].ip`); nothing new is stored from that comparison.
+
+The cookie is not gated on the consent decision, and denying consent does not
+clear it. It holds only the code of a link the visitor chose to open, is never sent
+to a third party, and is used only to credit the signup it leads to.
+
+| Data             | Storage                                                   | Lifetime                                     | Purpose                                    |
+| ---------------- | --------------------------------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| Share code       | MongoDB `User.referralCode`                               | Account lifetime                             | Name the sharer in their link              |
+| Pending referral | App cookie `b4m_ref`                                      | 30 days, cleared by the signup that reads it | Credit a signup to the link's owner        |
+| Link referral    | MongoDB `User.referredByUserId`, `User.referredViaLinkAt` | Account lifetime                             | Referral rewards and the inviter's summary |
+
+Two product events go to host analytics. `referral_link_visit` is
+sent without a user and carries only `known`, whether the code belongs to an
+account, and `via`, which published-page link was followed (`embed-badge`,
+`share-bar`, or `direct` for any other visit). `referral_link_signup` is sent under the new account's pseudonym and
+carries `outcome` (whether the signup was credited, and if not, which rule
+declined it) and `method` (the signup method). Synthetic accounts send no
+`referral_link_signup`. Neither event carries the code or the sharer's identity.
+
+## Team feature-use events
+
+The browser reports in-app actions to the app's own activity log through `POST
+/api/analytics/log-event`. For a signed-in account that is an admin, carries a
+developer tag, or carries the `rounds` user tag, each action that route records
+is also sent to Overwatch as a `quest_feature_used` event, so the team's use of a
+feature can be checked. Requests made with an API key send nothing, and no other
+account's actions are sent.
+
+The event goes to the host product under the user's pseudonym and the visit id
+from `b4m_vid`, as the daily `active` event does. Its metadata is only:
+
+- `feature`: the recorded action's type in snake case, so `Integrations Page
+  Viewed` becomes `integrations_page_viewed`.
+- `internal: true`, whatever the account's flags, and `lane: "synthetic"` as
+  well for a synthetic account. This is the one event that can carry both marks.
+
+The action's own metadata is never sent. At most one event is sent per account
+and feature every 10 minutes on each server instance.
+
+## Verified hops
+
+A verified hop records that a visitor clicked through from another Overwatch
+product to this app, as the source product's own server saw it. Unlike the
+campaign touches above, nothing in it comes from the browser: the source is the
+product whose Overwatch ingest key minted the hop, so no link or parameter can
+name another product as the source.
+
+1. The source's server calls `POST /api/overwatch/v1/hops` with its ingest key
+   when a visitor follows one of its links to this app. The app stores the hop
+   and returns a token that redeems once, within 10 minutes.
+2. The source redirects the browser straight to the app with the token in the
+   `b4m_hop` query parameter.
+3. The page takes the token off its URL at once (`history.replaceState`) and
+   sends it with the visit beacon, which redeems it: the token must carry a valid
+   signature for this app and be unexpired, and the stored hop must be this
+   app's and not yet redeemed. A landing that carries a token is served with
+   `Referrer-Policy: strict-origin`, so the token is not sent as a Referer
+   before the page removes it.
+
+| Data               | Storage                                                                                                                                                                                                                                                         | Lifetime                                                                           | Purpose                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Hop record         | MongoDB `analytics_hops`: hop id, source product, destination, landing path, lane, minted and redeemed times; the source's session id and visitor hash when the source may send them; the visit it was redeemed in, with consent; when a signup was bound to it | 90 days after minting (TTL on `expiresAt`); no expiry once a signup is bound to it | Single-use redeem; check counts against records; evidence a payment may cite |
+| Redeemed hop       | App cookie `b4m_hop` holding the hop id, HttpOnly, `SameSite=Lax`, set only with consent                                                                                                                                                                        | 24 hours                                                                           | Lets a signup that follows find its hop                                      |
+| Verified touch     | User record `acquisition.verifiedTouch`: source product, hop id, redeem time                                                                                                                                                                                    | Account lifetime; deleted with the account                                         | Which product a new account came from, as that product proved                |
+| `hop_minted`       | Overwatch event under the source product: hop id, destination, lane; the source's session id when sent                                                                                                                                                          | Overwatch retention                                                                | Hops minted, per source                                                      |
+| `hop`              | Overwatch event under this app: hop id, source, destination, `verified: true`, lane; the visit id with consent                                                                                                                                                  | Overwatch retention                                                                | Hops redeemed, joined to the visit                                           |
+| `signup_completed` | Overwatch event under this app; for an account with a verified touch, also its `hopId` and `srcProductId`                                                                                                                                                       | Overwatch retention                                                                | Verified hop to signup                                                       |
+
+The cookie and every link between the hop and the visitor (the visit stored on
+the hop, and the `hop` event's session id) use the same server-side gate as
+signup attribution: an explicit `granted` decision. The page publishes its
+resolved decision just before the beacon that carries a token, so the server
+reads that page load's answer. Without consent the hop is still redeemed and
+the `hop` event is still sent, with no visit and no cookie: it is counted in
+aggregate only and links nothing. While the visitor is still being asked, the
+page holds the token and sends it with the beacon that follows the answer, or
+with the one it sends when the tab is hidden or closed first. A tab hidden
+before the answer (on a phone, switching apps while the banner is up) therefore
+redeems the hop with no visit and no cookie, and a grant given on returning
+cannot link it. A token held past its 10 minutes no longer redeems. The source
+follows the same rule on its side and sends no session id or visitor hash
+without its own visitor's consent.
+
+A new account gets a verified touch only when its signup happens in the same
+session as the hop's redeem. Concretely, the signup request carries:
+
+- the `b4m_hop` cookie naming the hop;
+- the visit id (`b4m_vid`) the hop was redeemed in, so a hop from an earlier
+  visit does not bind a later signup (a visit ends after 30 minutes without a
+  page load);
+- a granted consent decision, so a visitor who withdrew consent after landing is
+  not linked.
+
+The hop must also have been redeemed in the last 24 hours and never bound
+before. One hop binds at most one account, even when a browser signs up twice.
+The bind runs on every self-service signup: the OAuth, Okta and SAML callbacks
+and one-time-code verification. A SAML signup is usually not bound, because its
+IdP returns by a cross-site POST, which carries no Lax cookie. Accounts an admin
+creates never read the creator's cookies. A bound hop record has no expiry,
+because a payment may later cite it. The record names no account. What links it
+to one is the account's verified touch, deleted with the account, and the
+`hopId` on that account's `signup_completed` event, kept for that event's
+retention.
+
+The token is a bearer value. It is never rendered into a page, the app never
+logs it, and the recorded landing path never includes it. It is in the URL of
+the one landing request, so a CDN or firewall access log of that request can
+hold it; by then it is redeemed or within minutes of expiring.
+
+A verified hop says which product a click came from. It does not change the
+rule above: a count that money or a contract depends on still comes from
+host-owned, Stripe-reconciled paid conversions, and what weight a hop carries in
+that is a policy decision made outside this app. Minting, redeeming and lane
+stamping are treated as money-path code.
+
+The Overwatch ingest route (`POST /api/overwatch/v1/events`) refuses
+`hop_minted` from every key, and `hop` from every key but the host app's own,
+event by event.
+
+The two events leave this app by different paths. The mint route puts
+`hop_minted` straight onto the Overwatch ingest queue, as the ingest route does,
+so only `OVERWATCH_INGEST_ENABLED` switches it off. The redeem sends `hop` the
+way the app sends its own product events, to `OVERWATCH_INGEST_URL`, so
+`B4M_ANALYTICS_ENABLED=false` also stops it. With the app's analytics switched
+off, mints are still counted and redeems are not.
+
+### What a source site must do
+
+1. Point each link to this app at the source's own server endpoint, for example
+   `GET /out/b4m?path=/new`, so the click is a top-level navigation the visitor
+   made. Mint only there: not on page render, not for a prefetch
+   (`Sec-Purpose: prefetch`), and not for a known crawler.
+2. In that endpoint, call `POST /api/overwatch/v1/hops` with the source's ingest
+   key in `x-api-key` and a JSON body
+   `{ dest: "bike4mind", path, srcSessionId, srcVisitorHash, lane }`. Only
+   `dest` is required. Send `srcSessionId` and `srcVisitorHash` only with the
+   visitor's consent, and send a hash, never a raw identifier. Never send a
+   source product: the body is refused if it names one. A test persona's run
+   sends `lane: "synthetic"`.
+3. Answer the visitor with a 302 straight to the returned `url`
+   (`<app><path>?b4m_hop=<token>`), with `Cache-Control: no-store`. No
+   intermediate page and no second hop: a cached or bounced redirect would replay
+   one token to many visitors, and all but the first would be refused.
+4. Never put the token in HTML, a link, a log or analytics. It is returned to the
+   source's server only.
+5. If the mint fails (any non-201, including 429 and 503), redirect to the same
+   path on this app without a token. The visitor always arrives; only the hop is
+   lost.
+
+The endpoint allows 120 mints a minute per key, on top of the key's own request
+limits. It answers 400 for an invalid body, 401 or 403 for a missing, wrong-scope
+or unbound key, and 503 while ingest is switched off or hops are not configured.
+
 ## Troubleshooting missing attribution
 
 - Confirm consent was granted when checkout was requested. Cookie presence alone
@@ -147,9 +513,14 @@ already see the denial.
   invoice's processing and the MongoDB subscription record.
 - The admin subscription API includes acquisition, but the subscription table
   has no dedicated acquisition column.
-- For a missing cross-product purchase, check the user's stored signup acquisition,
-  the source product's ingest key, and the purchase failure warning in analytics logs.
-  Organization invoices do not emit cross-product purchases.
+- For a missing cross-product purchase or lifecycle event, check the user's stored
+  signup acquisition, the source product's ingest key, and the billing event failure
+  warning in analytics logs. Organization subscriptions emit none of them.
+- For one missing from the host product, check the host's own ingest key: its copy
+  needs no stored acquisition.
+- For a host `purchase` that names no visit, check that the payment was started
+  from a browser holding the visit cookie and that `PaymentAttempt.visitId` was
+  recorded under its payment intent or Checkout session. Renewals never name one.
 
 ## API-key usage log
 
@@ -162,6 +533,150 @@ Every request to a `baseApi` route that authenticates with an API key writes one
 | Latency        | Response time in milliseconds     | 90 days (TTL index) | Usage stats                                      |
 | Client IP      | `ipAddress`, resolved server-side | 90 days (TTL index) | Abuse and security investigation, anomaly alerts |
 | Key and owner  | `keyId` and `userId`              | 90 days (TTL index) | Attribute usage to a key and its owner           |
+
+Streaming HTTP API-key completion requests can additionally record a server-observed start time, correlation id, requested model and explicit completion outcome in `ApiKeyUsageLog.completionObservation`. The start is written after authentication and before execution, then the same server-owned log row is updated on response completion or disconnect. A missing terminal response keeps an unknown outcome; status `0` means no HTTP response was recorded. Daily-cap rejections are separate from successful completions, and HTTP transport status is separate from in-band stream outcome. No prompts, messages, response bodies or key secrets are added. These fields use the existing 90-day API-log TTL, including retained security logs after account deletion; no source retention is extended.
+
+## Client usage
+
+Every authenticated request to a `baseApi` route records which client the account used on the user record (`clientUsage`): the web app, the desktop app, the CLI, or the API (an API key or an OAuth token without a first-party client header). The desktop app and the CLI name themselves in their `User-Agent` and `X-B4M-Client` headers, so the value is a claim the caller makes, used only for statistics and for hiding the desktop app prompt, never for access decisions. A record is written at most once a day per client, or sooner when the client reports a new version. Impersonation sessions, sign-ins still waiting on MFA, system accounts and accounts pending deletion write nothing. The account owner and admins can see it, and it is deleted with the account.
+
+| Data           | Storage                                                         | Lifetime                                    | Purpose                                         |
+| -------------- | --------------------------------------------------------------- | ------------------------------------------- | ----------------------------------------------- |
+| Client seen    | `clientUsage.<web, desktop, cli or api>.firstSeenAt`, `lastSeenAt` | Account lifetime; deleted with the account | Usage statistics, hiding the desktop app prompt |
+| Client version | `clientUsage.<desktop or cli>.version`, at most 32 characters   | Account lifetime; deleted with the account | Usage statistics                                |
+
+## Related advisory accounts
+
+The admin AI advisory can derive one-hop review candidates from exact signup and successful-login IP observations in the preceding seven days. It reads existing user signup metadata and AuthEvent records, returns the matching account ids, current display names, IP and observation kinds to authorized admins, and does not persist another evidence store or extend source retention. Reads are bounded and high-population addresses are discounted. The candidate scan sends no extra data to an AI provider and does not apply an abuse verdict or account action to a linked candidate. Capped and failed coverage are reported separately.
+
+## Coordinated completion observations
+
+An hourly job, controlled by `shadowDetectionRecordingEnabled`, reads existing successful `completion_api` UsageEvent settlements from the preceding 24 hours. Results are capped at 5,000 events and 1,000 eligible accounts, processing is bounded, and database reads have time limits. Unavailable account activity remains a barrier when comparing contiguous runs. No prompts, response bodies, model names, key identifiers or network observations are copied.
+
+The derived `ShadowDetection` record stores the ordered participant ids, settlement time range, repeated-round counts, request-count ranges, timing summaries, and coverage flags. One ordered group is deduplicated within a UTC activity day; reviewed records remain immutable. Records follow the existing 365-day shadow detection TTL. Purging any participant removes the whole ordered observation. The detector is review-only and is excluded from automatic containment and automatic risk-review approval decisions.
+
+When advisory model assessment is enabled, its allowlisted summary can include ordered pseudonymous member references, counts, relative timing summaries, coverage flags and an explicit review-only marker. It sends no participant identifiers or absolute settlement timestamps. Missing source data or omitted participants are represented as incomplete evidence. This uses the assessment's existing retention and budget controls; it does not train model weights.
+
+## Synchronized completion observations
+
+The existing hourly completion observation job can read bounded API-key request metadata from the preceding 24 hours. It derives repeated account subsets with closely timed starts and requested-model switches. It stores participant ids, first/last observation times, burst and switch counts, relative skew, outcome counts and explicit legacy/capped coverage in `ShadowDetection.completionSynchrony`. Model names and request correlation ids are not copied into this derived record. Source reads have time limits; result and processing caps are explicit. Old request rows without start/model metadata are incomplete coverage, never reconstructed from settlement times.
+
+For matched cohorts, a separate bounded UsageEvent read can add a snapshot of total API-completion credits charged, grant-funded credits and unknown funding in the scan's 24-hour window. This is cohort-wide spending, not only matched bursts. Grants include non-signup rewards. Failed or capped reads remain unavailable or incomplete, without suppressing the timing observation.
+
+Unreviewed observations refresh from newer scan snapshots, including settled outcomes and recovered funding evidence without requiring another request burst. Older scans cannot overwrite newer snapshots, and reviewed records stay immutable. Derived observations use the existing 365-day shadow-record TTL and are removed when any participant is purged. API source logs retain their existing 90-day security retention. The provider summary uses only pseudonymous member references, counts, relative timing, funding totals and coverage flags; it includes no absolute start timestamps, models or correlation ids. These detections are excluded from automated containment and automatic risk-review approval decisions. Any manual grant block uses the existing credit-adjustment permissions, preview and audit flow.
+
+## Manual campaign watches
+
+Admins can save a fixed group of accounts for manual follow-up independently of the rolling AI advisory. A watch contains its name, member user ids, an optional source detection id, owner id, status, revision and lifecycle timestamps. It also stores a hash of the originally selected ids to avoid duplicate open watches. It does not copy account names, emails, IPs, fingerprints or request histories. Account details are read from current user records when a watch is opened.
+
+Watch records have no automatic expiry; closing a watch retains it in the Closed list. Account purge removes that account's membership and clears its ownership without deleting a watch shared with other accounts. Lifecycle writes require an audit reason and use the admin audit log's retention policy. Watches enable no automated alerts or enforcement.
+
+## Usage pattern signals
+
+A scheduled job, off by default behind the `usagePatternSignalsEnabled` admin setting, derives a usage profile for recently active free-tier accounts and stores the latest result per user in the `UserUsagePatternSignals` collection. It collects no new raw data: every input already exists in `UsageEvent`, `ApiKeyUsageLog` or `UserApiKey`. The result is for admin review only and triggers no automatic action on the account, its keys or its balance. Paid accounts get a marker with no signals.
+
+| Data              | Storage                                                                                                                   | Lifetime                                         | Purpose      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------ |
+| Signals           | Per signal (API-key share, request cadence, balance polling, key-mint timing): value, triggered flag, weight, explanation | 30 days after last checked (TTL on `computedAt`) | Admin review |
+| Score and outcome | `score`, `needsReview`, `skipped` reason, `computedAt`, keyed by `userId`                                                 | 30 days after last checked (TTL on `computedAt`) | Admin review |
+
+## Advisory abuse assessments
+
+The per-account summary can also include bounded request counts from the retained
+API-key log: successful responses, identity checks, admin-route requests, selected
+refusal statuses and server errors. The summary records its window, partial coverage,
+sample size and truncation, or a failed read. It sends no raw endpoints, request IPs
+or key identifiers. An empty partial log is not proof that no attempts occurred.
+These derived fields use the assessment summary's existing retention policy.
+
+Off by default behind the `abuseAssessmentEnabled` and `abuseAssessmentConfig` admin settings, an admin action or an hourly job can ask a Decisions model to judge a shadow detection as abuse, legitimate automation or insufficient evidence. The model receives only a pseudonymous summary built from an allowlist: detector name, window, a hosting-network flag, per-signal counts and thresholds, and per-account ages and counts from the stored behavioral evidence, with accounts named `acct_1`, `acct_2` and so on. It never receives an IP, network number, country, email, user id, prompt, document or free text. Calls use the platform's provider key and a platform budget, never the assessed account's credits or keys. The result is for admin review only and triggers no automatic action on the account, its access, its credits or its review state.
+
+The allowlisted account profile can also include signup-method and network flags, provider-aware email-shape flags, relative minutes to two-factor setup and first spend, up to five recorded model identifiers with spending shares, and counts of nearby signups sharing an IP, JA4, canonical mailbox or non-consumer mail domain. No raw shared value or linked-account identifier enters the provider payload. Profile reads are bounded to the accounts retained in the summary; unavailable profiles or link reads remain null. These derived facts use existing account, authentication and usage records and add no raw collection or source-retention extension.
+
+The same model call can return probabilities for fixed evidence-factor questions. Up to three allowlisted factor keys and finite probabilities are stored as `AbuseAssessment.reasons` for the same 365-day assessment retention. No generated explanation text is stored. The factors describe the supplied evidence rather than measuring causal contributions to the overall verdict.
+
+| Data              | Storage                                                                                                | Lifetime                       | Purpose                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------ |
+| Summary sent      | `AbuseAssessment.featureSummary`, the exact pseudonymous summary the model received                    | 365 days (TTL on `assessedAt`) | Admin review, audit of what was sent |
+| Judgment          | `result`, probabilities, confidence, or an `unknown` result with a failure code                        | 365 days (TTL on `assessedAt`) | Admin review                         |
+| Versions and cost | Model id and reported version, policy and evidence versions, cost in USD, trigger, requesting admin id | 365 days (TTL on `assessedAt`) | Admin review, budget accounting      |
+
+## Advisory signup domain hold assessments
+
+Off by default behind the `signupDomainHoldAssessmentEnabled` and `signupDomainHoldAssessmentConfig` admin settings, a scheduled job can ask a Decisions model to judge a signup domain hold placed on a recently registered domain as abuse, legitimate or insufficient evidence. The model receives only a summary computed by the platform: the domain's age in days, a mail-provider class, whether the domain's website answers and has content and whether it describes a temporary or disposable mail service (both judged by the platform), signup counts and timing, and counts of distinct networks, network operators and countries across the held signups, with a hosting-network share. It never receives the domain name, an email, an IP, a network number, a user id or any text from the domain's website. Calls use the platform's provider key and a platform budget. A confident abuse judgment confirms the hold, which keeps the signups' free credits held, and an admin can still release it. A confident legitimate judgment releases the hold only when a separate auto-release setting is on and checks computed by the platform also pass; it then pays only the signups it judged, and the domain is re-held on a new risk signal.
+
+| Data       | Storage                                                                                       | Lifetime                  | Purpose                 |
+| ---------- | --------------------------------------------------------------------------------------------- | ------------------------- | ----------------------- |
+| Judgment   | `SignupDomainReview.assessment`: judgment and confidence, or a failure code and attempt count | Lifetime of the hold row  | Admin review            |
+| Versions   | Model id, policy version, assessment time                                                     | Lifetime of the hold row  | Admin review            |
+| Detection  | A shadow detection per judged hold, with the held account ids and the summary's counts        | Shadow detection lifetime | Admin review, precision |
+| Call count | The domain name and a count of model calls for it, in the platform cache                      | 24 hours                  | Per-domain call cap     |
+
+## Signup and login network metadata
+
+Every self-service signup stores the network it came from on the new account (`signupMeta`), written once. Every successful signup and sign-in also writes one `AuthEvent` row. Admin-created accounts and impersonation sessions write neither. The network number (ASN) and country come from headers the CDN sets; when they are absent the fields are empty, never guessed. A failed write never blocks sign-in. Both are visible only to admins, and both are deleted with the account, except for the coarse fields copied to Stripe (see below). The full IP on `signupMeta` is kept for the same 90 days as the `AuthEvent` rows; after that the daily `signupIpRetention` job replaces it with its /24 (IPv4) or /48 (IPv6) prefix. The other `signupMeta` fields stay for the account's lifetime. Two other stores keep sign-in IPs outside this retention: `User.loginRecords[].ip` holds the full IP of the most recent sign-ins for the account's lifetime, and `UserAuthAuditLog.actorIp` keeps it for 12 months (TTL index).
+
+| Data          | Storage                                                                                                                                   | Lifetime                                                                               | Purpose                                             |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Client IP     | `signupMeta.ip`, `AuthEvent.ip`                                                                                                           | 90 days in full, then /24 or /48 prefix for the account lifetime / 90 days (TTL index) | Abuse and security investigation                    |
+| User agent    | `signupMeta.userAgent`, `AuthEvent`                                                                                                       | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
+| Network (ASN) | `asn`, plus operator for hosting ASNs                                                                                                     | Account lifetime / 90 days (TTL index)                                                 | Spot signups from one network or a hosting provider |
+| Country       | ISO country code                                                                                                                          | Account lifetime / 90 days (TTL index)                                                 | Abuse and security investigation                    |
+| Hosting flag  | `isDatacenter`                                                                                                                            | Account lifetime / 90 days (TTL index)                                                 | Flag signups from cloud and hosting networks        |
+| OAuth client  | `AuthEvent.clientId` on signup rows: the OAuth client the account was created through                                                     | 90 days (TTL index)                                                                    | Attribute signups to the app they came through      |
+| Stripe copy   | Stripe Customer and PaymentIntent metadata `signup_asn`, `signup_country`, `signup_is_datacenter`, plus PaymentIntent `account_age_hours` | No automatic expiry; not removed on account deletion                                   | Stripe Radar fraud rules                            |
+
+The ASN, country and hosting flag are also copied to Stripe as `signup_asn`, `signup_country` and `signup_is_datacenter`: onto the Stripe Customer when it is created or at its next credit purchase or individual subscription checkout, and onto every credit-purchase PaymentIntent, which also carries the account's age in whole hours as `account_age_hours`. Stripe Radar rules read them there. The IP, user agent, network operator and email are never copied. This copy is visible to anyone with Stripe Dashboard access, and deleting the account does not remove it from Stripe.
+
+Each time an OAuth authorization code is redeemed for tokens, the platform records which app the user signed in to: one `OAuthClientSignIn` row per user and OAuth client, holding the user id, the client id, the first sign-in time and the last sign-in time. A failed or unredeemed authorization does not write it, and refreshing tokens does not update it. It is visible only to admins, kept for the account's lifetime, and deleted with the account.
+
+| Data        | Storage                                                                    | Lifetime                                   | Purpose                                                       |
+| ----------- | -------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------- |
+| App sign-in | `OAuthClientSignIn`: `userId`, `clientId`, `firstSignInAt`, `lastSignInAt` | Account lifetime, deleted with the account | Show which apps a user signs in to and count users per client |
+
+`signupMeta.challengeVerified` records `true` only after a real server-verified challenge pass; skipped or unavailable checks remain null or absent. It shares the other non-IP signup metadata's admin-only access, account lifetime, and account-deletion behavior. Signed signup tokens carry this observation only to preserve it through verification; public test secrets and fail-open checks do not establish proof. On email sign-up the proof is single-use, because the signed token is consumed. On OAuth sign-up it is per-flow: the signed state is not consumed, so every callback that reuses the same state within its 5-minute lifetime records the same pass.
+
+Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
+
+`signupGrantAssessment.signals` stores the numeric and boolean values the signup risk collector observed (for example a datacenter flag and recent signup counts from the same network), recorded once at email verification so candidate policies can be replayed offline. It holds no IP address or other free text, is visible only to admins, and is kept for the account lifetime and deleted with the account. It is absent when no collector ran or the collector failed.
+
+## Waitlist signup network metadata
+
+A waitlist request (the public subscribe form, or a sign-up attempt while registration is closed) stores a smaller copy of the same network capture on the `Subscriber` row as `signupNetwork`. These people have no account yet, so the full IP is never stored: only its /24 (IPv4) or /48 (IPv6) prefix is kept. The daily `signupIpRetention` job clears the whole `signupNetwork` object once it is 90 days old. The waitlist row itself stays until an admin deletes it. The data is shown only to admins, in the network column of the Invite Center waitlist.
+
+| Field              | Stored as                                                                         | Retention | Purpose                                           |
+| ------------------ | --------------------------------------------------------------------------------- | --------- | ------------------------------------------------- |
+| IP prefix          | `signupNetwork.ipPrefix`, /24 or /48 only                                         | 90 days   | Attribute probing and repeat signups to a network |
+| User agent         | `signupNetwork.userAgent`, first 512 characters                                   | 90 days   | Abuse investigation                               |
+| Network and region | `asn`, operator for hosting ASNs, ISO country code, `isDatacenter`                | 90 days   | Spot signups from one network or a host           |
+| Edge signals       | `ja4` TLS fingerprint, WAF anonymous-IP and bot labels (null when not forwarded)  | 90 days   | Tie waitlist probes to other traffic              |
+| Challenge outcome  | `challengeVerified`: `true` after a server-verified Turnstile pass, otherwise null | 90 days   | Tell challenged signups from unchallenged ones    |
+
+A waitlist name that contains HTML or script markup, starts with a spreadsheet-formula character (`=`, `+`, `-`, `@`), or contains control characters is stored with `suspicious.reasons` listing which. Such a row gets the same response as any other signup and no Slack alert. The flag stays for the life of the row.
+
+## Account behavioral evidence
+
+Each account carries one summary of what the server recorded about it over the trailing 30 days, kept on the user document and replaced whole on every refresh. It holds counts, booleans and timestamps only: sign-in and signup counts, distinct IP and network counts (never the addresses), API key counts, completed and failed request counts, credits spent, active agent executions, and counts of sensitive account actions such as failed step-up checks. Each fact records its source, how many records backed it and when the newest one was written. It never holds IP addresses, fingerprints, prompt or document text, or client-reported data. The summary is visible only to admins, is removed with the account, and does not change the account's review state or access.
+
+A failed refresh stores a short error message (200 characters at most) and a timestamp on the same record. Operational metrics for refresh lag, failures and volume carry no user identifiers or content.
+
+| Data                | Storage                | Lifetime                   | Purpose                                       |
+| ------------------- | ---------------------- | -------------------------- | --------------------------------------------- |
+| Evidence summary    | `riskEvidence.summary` | Account lifetime, replaced | Give admins context when reviewing an account |
+| Refresh diagnostics | `riskEvidence.refresh` | Account lifetime, replaced | Show when and why a refresh failed            |
+
+## Feedback report context
+
+Each feedback report stores where it was written as `clientContext` on the report document, so a bug can be reproduced without asking the reporter. The browser sends the page, app version, platform, window size and selected model. The server validates each field on its own, drops any it cannot accept, and reads the user agent from the request itself rather than from the browser's payload. The page keeps the route only: the query string and hash are dropped, and any long opaque path segment (a reset link or signed URL token) is replaced with `:redacted`. The context is diagnostic only and never used for authorization. Reporters can read it on their own reports, admins on all reports, and it appears in the admin CSV export. Reports from before this was captured have no context.
+
+| Data        | Storage                                                           | Lifetime                      | Purpose                               |
+| ----------- | ----------------------------------------------------------------- | ----------------------------- | ------------------------------------- |
+| Page        | `clientContext.path`, route only, first 200 characters            | Lives with the report; no TTL | Reproduce the report on the same page |
+| App version | `clientContext.appVersion`                                        | Lives with the report; no TTL | Tie the report to a release           |
+| Platform    | `clientContext.platform`: `web` (also accepts `desktop`, `ios`)   | Lives with the report; no TTL | Triage by app surface                 |
+| Window size | `clientContext.viewport`: width and height in pixels              | Lives with the report; no TTL | Reproduce layout issues               |
+| Model       | `clientContext.model`: the model selected in the client           | Lives with the report; no TTL | Reproduce model-specific issues       |
+| User agent  | `clientContext.userAgent`, read server-side, first 300 characters | Lives with the report; no TTL | Identify the browser and OS           |
 
 ## Chat turn timing
 
@@ -197,17 +712,96 @@ Integration requests themselves ("request this integration") are product data, n
 
 Bike4Mind Desktop can send aggregate activity to a team's Fleet. It sends nothing until two things are true: Fleet's installer has written `~/.claude/fleet/bike4mind-desktop.json` on the machine (mode 0600; Desktop ignores a copy other users can read), and the user has turned on "Share activity with Fleet" in Desktop's Profile. Turning the switch off deletes everything not yet sent. Desktop posts OTLP/HTTP JSON logs to the Fleet origin in that file, at `/v1/logs`, from the main process, with the team telemetry key the file holds. The key never reaches the renderer and is never logged.
 
-| Data       | Sent as                                                                               | Purpose                                      |
-| ---------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
-| Who        | `user.email` and `fleet.install.id`, from the installer file                          | Attribute activity to a person in Fleet      |
-| App        | `service.name` `bike4mind-desktop`, `service.version`                                 | Tell Desktop apart from other tools          |
-| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                | Replies and active time per person and day   |
+| Data       | Sent as                                                                                                                                    | Purpose                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
+| Who        | `user.email` and `fleet.install.id`, from the installer file                                                                               | Attribute activity to a person in Fleet      |
+| App        | `service.name` `bike4mind-desktop`, `service.version`                                                                                      | Tell Desktop apart from other tools          |
+| Reply      | `bike4mind_desktop.session`: event id, conversation id, duration in ms                                                                     | Replies and active time per person and day   |
 | Usage      | On the reply record: `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `credits_milli` (credits x 1000) | Which models a person uses and what they use |
-| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                              | Tool use by category                         |
-| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit` | Which repositories a person works in         |
+| Tool call  | `bike4mind_desktop.tool`: the above plus a category only                                                                                   | Tool use by category                         |
+| Repository | `bike4mind_desktop.repository`: owner/name from the `origin` remote, `view` or `edit`                                                      | Which repositories a person works in         |
 
 The model id is the one the conversation is set to, for example `claude-opus-5`. Token counts and credits are the server's own figures for that reply, as the reply shows them. A reply that was resumed reports only what was added since the earlier part. A reply record names one model, so what the `explore` sub-agent spends is counted under the conversation's own model rather than the one that sub-agent ran on. None of it is message content.
 
 The tool category is one of `shell`, `editor`, `browser`, `mcp`, `agent` or `other`; a tool's name, its input and its output are never sent. Messages, prompts, model output, file contents, commands and paths are never sent. Unsent events wait in `fleet-activity-queue.json` (mode 0600) under the app's data folder and keep their event ids, so a retried batch is counted once.
 
 Repository identity uses the last two components of a supported network remote. The host and any earlier namespace components are omitted: a GitLab `group/subgroup/project` is reported as `subgroup/project`, and matching owner/name pairs on different hosts are combined. This is an activity label, not a globally unique repository identifier.
+
+## Model availability monitoring
+
+Hosted model monitoring publishes aggregate counts to CloudWatch. The
+`UnavailableModelReferences` count covers unavailable configured model pins and
+fallback references. `LifecycleSuggestions` counts unresolved operator review
+items, and `LifecycleDateChanges` counts lifecycle date changes observed by model
+discovery. The metrics use deployment stage and runtime host dimensions; they
+contain no user, session, prompt, reply, or provider credential fields.
+
+Diagnostic logs identify the affected model, its configuration reference path or
+fallback surface, and the availability problem. Audit failures record an error
+message. You use these records to identify broken model references and review
+lifecycle changes. Metrics follow CloudWatch retention, and logs follow the
+deployment's configured log retention. This operational monitoring does not send
+product usage events to third-party analytics services.
+
+## API request and web-fetch diagnostics
+
+Outside development mode, `req-timing` records request duration, database-connect
+duration, whether the container is cold, response status, whether headers were
+sent, and whether the response ended before completion. It includes `userId`
+when the request has a user. Treat these records as account-associated operational
+data. A status is only a sent response status when `headersSent` is true.
+
+After input validation, the `web-fetch` API route records the target hostname and
+an outcome of `ok`, `refused`, or `error`. The target's user information, port,
+path, query, and fragment are excluded. Validation failures emit no `web-fetch`
+line, and insufficient credits count as `error`. These lines inherit the request
+logger's request id, method, API route path, deployment stage, client IP, and
+trace id when present; the API route path is distinct from the fetched URL.
+
+You use these logs to diagnose request latency, response failures, and fetch
+outcomes. They are operational logs rather than consent-gated product analytics
+events. Hosted API logs go to CloudWatch with one-week retention configured by
+the deployment. Self-hosted logs go to the runtime's console output; you control
+their collection and retention. These log additions do not send events to
+third-party analytics services.
+
+## Credit hold monitoring
+
+Credit reservations write structured operational logs with the billing owner id
+and type, feature label, lifecycle (`request` or `completion`), outcome, and
+transaction duration in milliseconds. The duration includes transaction retries,
+not provider work or preflight checks. Failed reservation transactions are also
+recorded; requests that reserve no credits do not emit a latency sample.
+
+Hosted logs publish `HoldLatency` (milliseconds) and `SettlementsAfterSweep`
+(count) through CloudWatch embedded metrics. `HoldLatency` carries `Stage`,
+`Lifecycle` and `Outcome` (`held` or `error`) dimensions, so failed reservations
+do not share a series with successful holds; `SettlementsAfterSweep` carries only
+`Stage` and `Lifecycle`. Owner ids and hold ids stay in logs, not metric
+dimensions. Self-host installations write the same observations without embedded
+CloudWatch metrics. Metrics follow CloudWatch retention; logs follow the
+deployment's configured log retention. No prompts, responses, credentials, or
+third-party analytics events are included.
+
+`SettlementsAfterSweep` counts settlement attempts whose pending hold and completed
+receipt are both absent. This is a missing-hold signal, not proof that the sweep
+removed it: an earlier explicit refund or an expired settlement receipt can also
+cause it. Completed receipt retries do not increment it. Repeated late settlement
+calls each increment the count; use distinct hold ids to count affected holds,
+and correlate them with the sweep's refund logs to confirm sweep attribution.
+
+To find per-owner p99 reservation latency, select the relevant runtime log groups
+and time range in CloudWatch Logs Insights:
+
+```text
+filter event = "creditHoldTelemetry" and ispresent(HoldLatency)
+| stats count(*) as samples, pct(HoldLatency, 99) as p99Ms by Stage, ownerType, ownerId, lifecycle, outcome
+| sort p99Ms desc
+```
+
+To count late settlement attempts and affected holds:
+
+```text
+filter event = "creditHoldTelemetry" and SettlementsAfterSweep = 1
+| stats sum(SettlementsAfterSweep) as attempts, count_distinct(holdId) as holds by Stage, lifecycle
+```

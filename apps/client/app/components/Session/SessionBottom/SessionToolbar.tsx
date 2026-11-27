@@ -4,7 +4,8 @@ import { Box, CircularProgress } from '@mui/joy';
 import Button from '@mui/joy/Button';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
-import { StopCircleSharp, Check } from '@mui/icons-material';
+import StopCircleSharp from '@mui/icons-material/StopCircleSharp';
+import Check from '@mui/icons-material/Check';
 import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 
@@ -356,6 +357,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                           disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
                           size="md"
                           onClick={async () => await handleSendClick()}
+                          aria-label={t('session.sendMessage')}
                           data-testid="send-message-btn"
                         >
                           {submitting || pendingAutoSubmitGoal || isModelsLoading ? (

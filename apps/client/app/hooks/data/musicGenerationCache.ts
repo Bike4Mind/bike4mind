@@ -12,14 +12,14 @@ export type MusicGenerationPage = GenerationJobPage<MusicGeneration>;
 export type MusicGenerationList = GenerationJobList<MusicGeneration>;
 export type MusicJobLiveUpdate = GenerationJobLiveUpdate;
 
-const musicCache = createGenerationJobCache<MusicGeneration, MusicJobLiveUpdate>(
+export const musicGenerationCache = createGenerationJobCache<MusicGeneration, MusicJobLiveUpdate>(
   musicGenerationKeys,
   (cached, update) => ({ ...cached, state: update.state })
 );
 
-export const seedMusicGeneration = musicCache.seed;
-export const prependMusicGeneration = musicCache.prepend;
-export const upsertMusicGeneration = musicCache.upsert;
-export const reconcileFetchedMusicGeneration = musicCache.reconcileFetched;
-export const reconcileFetchedMusicGenerationPage = musicCache.reconcileFetchedPage;
-export const patchMusicGeneration = musicCache.patch;
+export const seedMusicGeneration = musicGenerationCache.seed;
+export const prependMusicGeneration = musicGenerationCache.prepend;
+export const upsertMusicGeneration = musicGenerationCache.upsert;
+export const reconcileFetchedMusicGeneration = musicGenerationCache.reconcileFetched;
+export const reconcileFetchedMusicGenerationPage = musicGenerationCache.reconcileFetchedPage;
+export const patchMusicGeneration = musicGenerationCache.patch;

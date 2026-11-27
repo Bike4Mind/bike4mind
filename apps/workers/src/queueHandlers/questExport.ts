@@ -11,13 +11,14 @@ import { secureParameters, getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from '@bike4mind/fab-pipeline';
-import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { sendToClient } from '@server/websocket/utils';
+import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { filterReadableQuests } from '@server/utils/sessionAccess';
+import { filterReadableQuests } from '@bike4mind/server-utils/utils/sessionAccess';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
-import { resolveProxyTarget } from '@bike4mind/server-utils/utils/appFileProxy';
+import { generatedKeyFromProxyPath } from '@bike4mind/server-utils/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import {
   ChatModels,
   isImageServeable,
@@ -25,7 +26,11 @@ import {
   stripSearchResultCardFences,
   type CitableSource,
 } from '@bike4mind/common';
-import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@workers/queueHandlers/orgFeedbackSummary';
+import {
+  OrgFeedbackSummaryPayload,
+  runOrgFeedbackSummary,
+  type CheckRunBudget,
+} from '@workers/queueHandlers/orgFeedbackSummary';
 import { getSubQuestStatusIcon } from '@bike4mind/server-utils/shared/subQuestStatusPresentation';
 import { extractReplies } from '@bike4mind/server-utils/shared/replyUtils';
 import { z } from 'zod';
@@ -115,8 +120,7 @@ function extractImageUrls(content: string, imageArrays: string[][]): string[] {
 
 /**
  * Raw bucket / CloudFront URLs, plus generated images served from the app's own CDN origin
- * (`<cdnUrl>/generated/<key>`, see generatedFiles.ts) - the shape the chat UI renders and users
- * copy into plans. Other CDN prefixes (org-files, admin-logos, ...) stay out of scope.
+ * (legacy `<cdnUrl>/generated/<key>` links stored in content) - the shape users copy into plans. Other CDN prefixes (org-files, admin-logos, ...) stay out of scope.
  */
 function isStorageImageUrl(url: string): boolean {
   if (url.includes('.amazonaws.com') || url.includes('cloudfront.net')) return true;
@@ -147,8 +151,8 @@ function extractS3Key(url: string): string {
 
 /**
  * Determines which storage holds the image and its key there. A raw S3 URL names its bucket in
- * the host; a CDN URL routes by path, where CloudFront strips `/generated/` before the generated
- * bucket (infra/buckets.ts), so the key is the bare name `quest.images` and the access check use.
+ * the host; a legacy `<cdnUrl>/generated/<key>` link maps to the generated bucket by path, so the
+ * key is the bare name `quest.images` and the access check use.
  */
 function resolveImageSource(url: string): {
   storage: S3Storage;
@@ -168,9 +172,9 @@ function resolveImageSource(url: string): {
     }
     return { storage: getFilesStorage(), label: 'files', key };
   }
-  const target = resolveProxyTarget(key);
-  if (target?.bucket === 'generated') {
-    return { storage: getGeneratedImageStorage(), label: 'generatedImages', key: target.key };
+  const generatedKey = generatedKeyFromProxyPath(key);
+  if (generatedKey !== null) {
+    return { storage: getGeneratedImageStorage(), label: 'generatedImages', key: generatedKey };
   }
   return { storage: getFilesStorage(), label: 'files', key };
 }
@@ -333,8 +337,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // a malformed message into a 422 the wrapper swallows instead of a retry loop into the DLQ.
   const message = secureParameters(JSON.parse(body), QueuePayload);
 
-  const checkBudget = () => {
-    if (context.getRemainingTimeInMillis() < 1000) throw new Error('Quest export run budget exhausted');
+  const checkBudget: CheckRunBudget = (minimumRemainingMs = 1000) => {
+    if (context.getRemainingTimeInMillis() < minimumRemainingMs) throw new Error('Quest export run budget exhausted');
   };
   if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
     await runOrgFeedbackSummary(message, logger, checkBudget);
@@ -626,7 +630,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       'Generating executive summary...'
     );
 
-    const summary = await generateSummary(markdown, plan.goal, logger, userId);
+    const requester = userId ? await userRepository.findById(userId) : null;
+    const summary =
+      requester && !aiAccessDeniedMessage(requester)
+        ? await generateSummary(markdown, plan.goal, logger, userId)
+        : null;
     if (summary) {
       logger.info('Executive summary generated successfully');
     } else {

@@ -11,11 +11,11 @@ export interface TrustedDevice {
   isCurrent: boolean;
 }
 
-const QUERY_KEY = ['trusted-devices'];
+export const TRUSTED_DEVICES_QUERY_KEY = ['trusted-devices'] as const;
 
 export function useTrustedDevices(enabled = true) {
   return useQuery({
-    queryKey: QUERY_KEY,
+    queryKey: TRUSTED_DEVICES_QUERY_KEY,
     queryFn: async () => {
       const response = await api.get<{ devices: TrustedDevice[] }>('/api/auth/trusted-devices');
       return response.data.devices;
@@ -31,7 +31,7 @@ export function useRevokeTrustedDevice() {
       const response = await api.delete(`/api/auth/trusted-devices/${id}`);
       return response.data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: TRUSTED_DEVICES_QUERY_KEY }),
   });
 }
 
@@ -42,6 +42,6 @@ export function useRevokeAllTrustedDevices() {
       const response = await api.delete('/api/auth/trusted-devices');
       return response.data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: TRUSTED_DEVICES_QUERY_KEY }),
   });
 }

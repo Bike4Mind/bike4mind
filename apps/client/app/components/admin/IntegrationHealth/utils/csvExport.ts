@@ -1,5 +1,6 @@
 import { toCsv } from '@client/app/utils/csv';
 import type { IntegrationDashboardResponse } from '../types';
+import { integrationStatusView, lastCheckedTime } from './integrationStatus';
 
 export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
   const rows: string[][] = [];
@@ -20,18 +21,20 @@ export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
   ]);
 
   for (const entry of data.integrations) {
+    const checked = lastCheckedTime(entry.lastCheckedAt) !== null;
     rows.push([
       entry.name,
-      entry.status === 'unhealthy' ? 'down' : entry.status,
-      String(entry.latencyMs),
-      `${(entry.successRate * 100).toFixed(1)}%`,
+      integrationStatusView(entry).label.toLowerCase(),
+      checked ? String(entry.latencyMs) : '',
+      checked ? `${(entry.successRate * 100).toFixed(1)}%` : '',
       String(entry.consecutiveFailures),
       entry.circuitBreaker.mode,
       String(entry.circuitBreaker.available),
-      entry.rateLimit?.remaining != null ? String(entry.rateLimit.remaining) : '--',
-      entry.rateLimit?.limit != null ? String(entry.rateLimit.limit) : '--',
-      entry.rateLimit?.usagePercent != null ? `${entry.rateLimit.usagePercent}%` : '--',
-      entry.lastCheckedAt,
+      // Empty, not '--': toCsv quotes any cell starting with '-' (formula guard), so '--' exported as '--.
+      entry.rateLimit?.remaining != null ? String(entry.rateLimit.remaining) : '',
+      entry.rateLimit?.limit != null ? String(entry.rateLimit.limit) : '',
+      entry.rateLimit?.usagePercent != null ? `${entry.rateLimit.usagePercent}%` : '',
+      entry.lastCheckedAt ?? 'never',
       entry.error || '',
     ]);
   }

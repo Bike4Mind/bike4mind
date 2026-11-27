@@ -1,8 +1,7 @@
 import { categorizeEvent } from '@server/admin/categorizeEvent';
 import { Request } from 'express';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import { CounterLog, cacheRepository } from '@bike4mind/database';
 import { cacheService } from '@bike4mind/services';
@@ -79,15 +78,11 @@ async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMet
     query.counterName = eventFilter;
   }
 
-  console.log('📊 Event metrics query filters:', { dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter });
-
   // Query counter logs with filters, sorted by most recent first
   const counterLogs = await CounterLog.find(query)
     .sort({ datetime: -1 })
     .limit(1000) // Limit for performance
     .lean();
-
-  console.log(`Found ${counterLogs.length} event logs`);
 
   // Transform the data into the format expected by the frontend
   let metrics: EventMetricResponse[] = counterLogs.map(log => {
@@ -118,6 +113,16 @@ async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMet
   return metrics;
 }
 
+/**
+ * Analytics events no longer record prompt text (see LLMEvents.QUEUE_HANDLER_START_HEARD_PROMPT),
+ * but older rows and cached responses may still hold it. Prompt text is a support read, never a metric.
+ */
+function withoutPromptText(metric: EventMetricResponse): EventMetricResponse {
+  if (!metric.metadata || !('promptMessage' in metric.metadata)) return metric;
+  const { promptMessage: _promptMessage, ...metadata } = metric.metadata;
+  return { ...metric, metadata };
+}
+
 const ONE_MINUTE_MS = 60 * 1000;
 // Measured off the two dashboards that call this (app/components/admin/EventMetrics and
 // SlackMetrics, both through useEventMetrics): one request per distinct applied filter set behind
@@ -128,20 +133,11 @@ const ONE_MINUTE_MS = 60 * 1000;
 // near 10 in a minute, so 30 leaves headroom while still bounding the uncached recache path.
 export const EVENT_METRICS_RATE_LIMIT = 30;
 
-// Chained after baseApi so auth has run and the limiter keys on req.user.id rather than the
-// client IP. It also runs ahead of the isAdmin check below, so a non-admin who empties their own
-// bucket is refused with 429 instead of 403 - both refuse, and the bucket is per principal. The
-// requiredScopes gate below only constrains API-key callers; browser/JWT admins are unaffected.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// Chained after adminApi so auth has run and the limiter keys on req.user.id rather than the
+// client IP. requiredScopes only constrains API-key callers; browser/JWT admins are unaffected.
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: EVENT_METRICS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-event-metrics' }))
   .get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
-    // Check if user has admin permissions
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
-    console.log('Event metrics API called');
-
     try {
       const { recache, ...filters } = req.query;
 
@@ -153,10 +149,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         logger: req.logger,
       });
 
-      console.log(`Returning ${metrics.length} event metrics (cached: ${!recache})`);
-      return res.json(metrics);
+      return res.json(metrics.map(withoutPromptText));
     } catch (error) {
-      console.error('Error fetching event metrics:', error);
+      req.logger.error('Error fetching event metrics', { error });
       return res.status(500).json({
         error: 'Failed to fetch event metrics',
         message: error instanceof Error ? error.message : 'Unknown error',

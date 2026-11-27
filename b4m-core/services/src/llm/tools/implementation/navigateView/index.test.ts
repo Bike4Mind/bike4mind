@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { registerContributedViews, resetContributedViews } from '@bike4mind/common';
 import { navigateViewTool } from './index';
 
 const makeContext = (isAdmin: boolean) =>
@@ -30,5 +31,53 @@ describe('navigate_view tool', () => {
     const { description } = navigateViewTool.implementation(makeContext(false), {}).toolSchema;
     expect(description).toContain('in the same response as your answer');
     expect(description).toContain('never followed by more prose');
+  });
+});
+
+describe('navigate_view tool with a contributed view', () => {
+  afterEach(resetContributedViews);
+
+  const suggestions = [{ viewId: 'admin.ext.example', reason: 'Open the example page' }];
+  const register = () =>
+    registerContributedViews([
+      {
+        id: 'admin.ext.example',
+        section: 'admin',
+        label: 'Example page',
+        description: 'An example page used by tests',
+        navigationType: 'route',
+        target: '/admin/ext/example',
+        keywords: [],
+        requiresAdmin: true,
+      },
+    ]);
+
+  it('accepts the contributed id from an admin and returns its route intent', async () => {
+    register();
+    const output = await navigateViewTool.implementation(makeContext(true), {}).toolFn({ suggestions });
+
+    const parsed = JSON.parse(output);
+    expect(parsed.__navigationIntents).toBe(true);
+    expect(parsed.intents).toEqual([
+      {
+        viewId: 'admin.ext.example',
+        label: 'Example page',
+        description: 'An example page used by tests',
+        navigationType: 'route',
+        target: '/admin/ext/example',
+        reason: 'Open the example page',
+      },
+    ]);
+  });
+
+  it('matches nothing for a non-admin', async () => {
+    register();
+    const output = await navigateViewTool.implementation(makeContext(false), {}).toolFn({ suggestions });
+    expect(output).toBe('No valid navigation views matched the provided viewIds.');
+  });
+
+  it('matches nothing when no view is contributed', async () => {
+    const output = await navigateViewTool.implementation(makeContext(true), {}).toolFn({ suggestions });
+    expect(output).toBe('No valid navigation views matched the provided viewIds.');
   });
 });

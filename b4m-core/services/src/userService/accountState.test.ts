@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { accountBlockReasons, entersBlockedState, type AccountStateFields } from './accountState';
+import {
+  ACCOUNT_BANNED_MESSAGE,
+  ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  ACCOUNT_SUSPENDED_MESSAGE,
+  accountBlockReasons,
+  accountBlockedMessage,
+  aiAccessDeniedMessage,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+  entersBlockedState,
+  entersSuspension,
+  isPersonaExpired,
+  suspensionReasons,
+  isAiAccessRevoked,
+  isAiAccessRefusal,
+  type AccountStateFields,
+} from './accountState';
 
 const clean: AccountStateFields = {};
 
@@ -66,5 +83,153 @@ describe('entersBlockedState', () => {
     ],
   ])('is false on %s', (_label, previous, next) => {
     expect(entersBlockedState(previous, next)).toBe(false);
+  });
+});
+
+describe('suspensionReasons', () => {
+  it('omits the dispute hold', () => {
+    expect(suspensionReasons({ isBanned: true, disputePending: true })).toEqual(['banned']);
+    expect(suspensionReasons({ disputePending: true })).toEqual([]);
+  });
+});
+
+describe('entersSuspension', () => {
+  it.each([
+    ['ban', { isBanned: true }],
+    ['suspension', { moderation: { status: 'suspended' as const } }],
+  ])('is true when the account becomes %s', (_label, next) => {
+    expect(entersSuspension(clean, next)).toBe(true);
+  });
+
+  it('is true when a suspension lands on a disputed account', () => {
+    expect(entersSuspension({ disputePending: true }, { disputePending: true, isBanned: true })).toBe(true);
+  });
+
+  it.each([
+    ['a dispute flag alone', clean, { disputePending: true }],
+    ['re-banning a banned account', { isBanned: true }, { isBanned: true }],
+    ['unbanning', { isBanned: true }, { isBanned: false }],
+  ])('is false on %s', (_label, previous, next) => {
+    expect(entersSuspension(previous, next)).toBe(false);
+  });
+});
+
+describe('isAiAccessRevoked', () => {
+  it('revokes AI access for a moderated user', () => {
+    expect(isAiAccessRevoked({ isModerated: true })).toBe(true);
+  });
+
+  it.each([false, null, undefined])('keeps AI access when isModerated is %s', isModerated => {
+    expect(isAiAccessRevoked({ isModerated })).toBe(false);
+  });
+
+  it('is not an account block reason, so a moderated user can still sign in', () => {
+    expect(accountBlockReasons({ isModerated: true } as AccountStateFields)).toEqual([]);
+  });
+});
+
+describe('accountBlockedMessage', () => {
+  it('names the first block reason and ignores AI-only restrictions', () => {
+    expect(accountBlockedMessage({ disputePending: true })).toBe(ACCOUNT_DISPUTE_PENDING_MESSAGE);
+    expect(accountBlockedMessage({ isModerated: true } as AccountStateFields)).toBeNull();
+    expect(accountBlockedMessage(clean)).toBeNull();
+  });
+});
+
+describe('aiAccessDeniedMessage', () => {
+  it('holds AI access during signup review without blocking sign-in or revoking manual access', () => {
+    const user = { isBanned: false, isModerated: false, riskScore: { reviewState: 'pending' as const } };
+    expect(aiAccessDeniedMessage(user)).toBe(AI_ACCESS_PENDING_REVIEW_MESSAGE);
+    expect(accountBlockReasons(user)).toEqual([]);
+    expect(isAiAccessRevoked(user)).toBe(false);
+  });
+
+  it.each(['none', 'approved'] as const)('allows AI access for review state %s', reviewState => {
+    expect(aiAccessDeniedMessage({ riskScore: { reviewState } })).toBeNull();
+  });
+
+  it.each([null, undefined])('allows existing accounts with riskScore %s', riskScore => {
+    expect(aiAccessDeniedMessage({ riskScore })).toBeNull();
+  });
+
+  it.each(['pending', 'approved'] as const)('preserves a manual restriction when review is %s', reviewState => {
+    expect(aiAccessDeniedMessage({ isModerated: true, riskScore: { reviewState } })).toBe(AI_ACCESS_REVOKED_MESSAGE);
+  });
+
+  it.each([
+    [{ isBanned: true }, ACCOUNT_BANNED_MESSAGE],
+    [{ disputePending: true }, ACCOUNT_DISPUTE_PENDING_MESSAGE],
+    [{ moderation: { status: 'suspended' as const } }, ACCOUNT_SUSPENDED_MESSAGE],
+  ])('denies AI access to a blocked account %o', (state, message) => {
+    expect(aiAccessDeniedMessage(state)).toBe(message);
+    expect(aiAccessDeniedMessage({ ...state, riskScore: { reviewState: 'approved' } })).toBe(message);
+  });
+
+  it('reports the block reason ahead of a manual restriction, in accountBlockReasons order', () => {
+    expect(aiAccessDeniedMessage({ isBanned: true, disputePending: true, isModerated: true })).toBe(
+      ACCOUNT_BANNED_MESSAGE
+    );
+  });
+
+  it.each(['suspend_pending', 'throttled'] as const)('does not deny AI access for moderation status %s', status => {
+    expect(aiAccessDeniedMessage({ moderation: { status } })).toBeNull();
+  });
+
+  it('allows a clean account', () => {
+    expect(aiAccessDeniedMessage({ isBanned: false, disputePending: false, isModerated: false })).toBeNull();
+  });
+
+  it('denies AI access while the account is scheduled for deletion, behind a block reason', () => {
+    const deletion = { scheduledFor: new Date('2026-11-17T00:00:00.000Z') };
+    expect(aiAccessDeniedMessage({ deletion })).toBe(AI_ACCESS_DELETION_PENDING_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion, isBanned: true })).toBe(ACCOUNT_BANNED_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion: null })).toBeNull();
+  });
+});
+
+describe('isAiAccessRefusal', () => {
+  const forbidden = (message: string) => Object.assign(new Error(message), { statusCode: 403 });
+
+  it.each<[string, Parameters<typeof aiAccessDeniedMessage>[0]]>([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+    ['deletion-pending', { deletion: { scheduledFor: new Date() } }],
+    ['moderated', { isModerated: true }],
+    ['review-held', { riskScore: { reviewState: 'pending' } }],
+  ])('classifies the gate refusal for a %s account', (_, user) => {
+    const message = aiAccessDeniedMessage(user);
+    expect(message).not.toBeNull();
+    expect(isAiAccessRefusal(forbidden(message!))).toBe(true);
+  });
+
+  it('does not classify an unrelated 403, another status, or a non-error', () => {
+    expect(isAiAccessRefusal(forbidden('Unauthorized. Admin access required.'))).toBe(false);
+    expect(isAiAccessRefusal(Object.assign(new Error(ACCOUNT_BANNED_MESSAGE), { statusCode: 500 }))).toBe(false);
+    expect(isAiAccessRefusal(new Error(ACCOUNT_BANNED_MESSAGE))).toBe(false);
+    expect(isAiAccessRefusal(ACCOUNT_BANNED_MESSAGE)).toBe(false);
+  });
+});
+
+describe('isPersonaExpired', () => {
+  const now = new Date('2026-11-10T12:00:00.000Z');
+
+  it('is false for an account that is not a persona', () => {
+    expect(isPersonaExpired({ personaExpiresAt: new Date(now.getTime() - 1000) }, now)).toBe(false);
+    expect(isPersonaExpired({ isPersona: false }, now)).toBe(false);
+  });
+
+  it('is false for a persona whose expiry is in the future', () => {
+    expect(isPersonaExpired({ isPersona: true, personaExpiresAt: new Date(now.getTime() + 1000) }, now)).toBe(false);
+  });
+
+  it.each([
+    ['past', new Date('2026-11-10T11:59:59.000Z')],
+    ['equal to now', new Date('2026-11-10T12:00:00.000Z')],
+    ['missing', undefined],
+    ['null', null],
+    ['an invalid date string', 'not-a-date'],
+  ])('is true for a persona whose expiry is %s', (_label, personaExpiresAt) => {
+    expect(isPersonaExpired({ isPersona: true, personaExpiresAt }, now)).toBe(true);
   });
 });

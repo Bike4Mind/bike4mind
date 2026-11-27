@@ -1,0 +1,322 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`projectFunctionSchema > renders the llm surface 1`] = `
+{
+  "description": "Checks a simply supported beam under a uniform load
+Outputs: deflection (m), within_limit, reactions (N).",
+  "name": "beam_check",
+  "parameters": {
+    "additionalProperties": false,
+    "description": "Beam and load",
+    "properties": {
+      "label": {
+        "description": "Length: at most 80.",
+        "type": "string",
+      },
+      "load": {
+        "description": "Unit: N/m. Range: 0 <= value < 1000000.",
+        "type": "number",
+      },
+      "material": {
+        "description": "Beam material. Length: at most 20. Default: "steel".",
+        "enum": [
+          "steel",
+          "timber",
+        ],
+        "type": "string",
+      },
+      "notes": {
+        "description": "Items: at most 3.",
+        "items": {
+          "type": "string",
+        },
+        "type": "array",
+      },
+      "segments": {
+        "description": "Unit: 1. Default: 2.",
+        "enum": [
+          1,
+          2,
+          4,
+        ],
+        "type": "integer",
+      },
+      "span": {
+        "description": "Beam span. Unit: m. Range: 0 < value <= 10. Default: 1.",
+        "type": "number",
+      },
+      "supports": {
+        "description": "Items: 2 to 5.",
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "fixed": {
+              "description": "Whether the support resists rotation",
+              "type": "boolean",
+            },
+            "position": {
+              "description": "Unit: m. Range: value >= 0.",
+              "type": "number",
+            },
+          },
+          "required": [
+            "position",
+          ],
+          "type": "object",
+        },
+        "type": "array",
+      },
+      "temperature": {
+        "description": "Unit: K. Range: value > 0.",
+        "type": "number",
+      },
+      "verbose": {
+        "description": "Default: false.",
+        "type": "boolean",
+      },
+    },
+    "required": [
+      "span",
+      "load",
+      "supports",
+    ],
+    "type": "object",
+  },
+}
+`;
+
+exports[`projectFunctionSchema > renders the mcp surface 1`] = `
+{
+  "description": "Checks a simply supported beam under a uniform load",
+  "inputSchema": {
+    "additionalProperties": false,
+    "description": "Beam and load",
+    "properties": {
+      "label": {
+        "maxLength": 80,
+        "type": "string",
+      },
+      "load": {
+        "exclusiveMaximum": 1000000,
+        "minimum": 0,
+        "type": "number",
+        "unit": "N/m",
+      },
+      "material": {
+        "default": "steel",
+        "description": "Beam material.",
+        "enum": [
+          "steel",
+          "timber",
+        ],
+        "maxLength": 20,
+        "type": "string",
+      },
+      "notes": {
+        "items": {
+          "type": "string",
+        },
+        "maxItems": 3,
+        "type": "array",
+      },
+      "segments": {
+        "default": 2,
+        "enum": [
+          1,
+          2,
+          4,
+        ],
+        "type": "integer",
+        "unit": "1",
+      },
+      "span": {
+        "default": 1,
+        "description": "Beam span",
+        "exclusiveMinimum": 0,
+        "maximum": 10,
+        "type": "number",
+        "unit": "m",
+      },
+      "supports": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "fixed": {
+              "description": "Whether the support resists rotation",
+              "type": "boolean",
+            },
+            "position": {
+              "minimum": 0,
+              "type": "number",
+              "unit": "m",
+            },
+          },
+          "required": [
+            "position",
+          ],
+          "type": "object",
+        },
+        "maxItems": 5,
+        "minItems": 2,
+        "type": "array",
+      },
+      "temperature": {
+        "exclusiveMinimum": 0,
+        "minimum": 0,
+        "type": "number",
+        "unit": "K",
+      },
+      "verbose": {
+        "default": false,
+        "type": "boolean",
+      },
+    },
+    "required": [
+      "span",
+      "load",
+      "supports",
+    ],
+    "type": "object",
+  },
+  "name": "beam_check",
+  "outputSchema": {
+    "additionalProperties": false,
+    "properties": {
+      "deflection": {
+        "type": "number",
+        "unit": "m",
+      },
+      "reactions": {
+        "items": {
+          "type": "number",
+          "unit": "N",
+        },
+        "minItems": 2,
+        "type": "array",
+      },
+      "within_limit": {
+        "type": "boolean",
+      },
+    },
+    "type": "object",
+  },
+}
+`;
+
+exports[`projectFunctionSchema > renders the rest surface 1`] = `
+{
+  "description": "Checks a simply supported beam under a uniform load",
+  "inputs": {
+    "additionalProperties": false,
+    "description": "Beam and load",
+    "properties": {
+      "label": {
+        "maxLength": 80,
+        "type": "string",
+      },
+      "load": {
+        "exclusiveMaximum": 1000000,
+        "minimum": 0,
+        "type": "number",
+        "unit": "N/m",
+      },
+      "material": {
+        "default": "steel",
+        "description": "Beam material.",
+        "enum": [
+          "steel",
+          "timber",
+        ],
+        "maxLength": 20,
+        "type": "string",
+      },
+      "notes": {
+        "items": {
+          "type": "string",
+        },
+        "maxItems": 3,
+        "type": "array",
+      },
+      "segments": {
+        "default": 2,
+        "enum": [
+          1,
+          2,
+          4,
+        ],
+        "type": "integer",
+        "unit": "1",
+      },
+      "span": {
+        "default": 1,
+        "description": "Beam span",
+        "exclusiveMinimum": 0,
+        "maximum": 10,
+        "type": "number",
+        "unit": "m",
+      },
+      "supports": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "fixed": {
+              "description": "Whether the support resists rotation",
+              "type": "boolean",
+            },
+            "position": {
+              "minimum": 0,
+              "type": "number",
+              "unit": "m",
+            },
+          },
+          "required": [
+            "position",
+          ],
+          "type": "object",
+        },
+        "maxItems": 5,
+        "minItems": 2,
+        "type": "array",
+      },
+      "temperature": {
+        "exclusiveMinimum": 0,
+        "minimum": 0,
+        "type": "number",
+        "unit": "K",
+      },
+      "verbose": {
+        "default": false,
+        "type": "boolean",
+      },
+    },
+    "required": [
+      "span",
+      "load",
+      "supports",
+    ],
+    "type": "object",
+  },
+  "name": "beam_check",
+  "outputs": {
+    "additionalProperties": false,
+    "properties": {
+      "deflection": {
+        "type": "number",
+        "unit": "m",
+      },
+      "reactions": {
+        "items": {
+          "type": "number",
+          "unit": "N",
+        },
+        "minItems": 2,
+        "type": "array",
+      },
+      "within_limit": {
+        "type": "boolean",
+      },
+    },
+    "type": "object",
+  },
+}
+`;

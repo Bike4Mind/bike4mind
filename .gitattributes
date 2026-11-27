@@ -115,3 +115,6 @@ scripts/__tests__/apply-sre-fix.test.cjs export-ignore
 # `git archive` never touches. Dropped from the public snapshot rather than rewriting the
 # release history line-by-line. Keep in sync with scripts/check-export-ignore.sh INTENDED.
 **/CHANGELOG.md export-ignore
+
+# Generated schema is compared byte for byte by `curated:schema --check`.
+catalog/model-hub/schema/*.json text eol=lf

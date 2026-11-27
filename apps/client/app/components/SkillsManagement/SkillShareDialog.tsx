@@ -83,7 +83,7 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
     try {
       const user = await lookupUserByEmail(trimmed);
       if (!user) {
-        setError(`No user found with email "${trimmed}"`);
+        setError(`No one in your organizations has the email "${trimmed}"`);
         return;
       }
       if (user.id === skill.userId) {
@@ -94,10 +94,7 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
         setError('That user is already on the share list');
         return;
       }
-      setRows(prev => [
-        ...prev,
-        { userId: user.id, permissions: [Permission.read], label: user.email ?? user.name ?? user.id },
-      ]);
+      setRows(prev => [...prev, { userId: user.id, permissions: [Permission.read], label: trimmed }]);
       setEmail('');
     } catch {
       setError('Failed to look up that user. Try again.');

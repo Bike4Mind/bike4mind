@@ -1,4 +1,6 @@
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { paneDocument } from '@shared/artifactPaneDocument';
 import type { BrowserPaneState } from '@shared/ipc';
 
 /**
@@ -15,6 +17,7 @@ const contents = vi.hoisted(() => {
     /** Urls of the frames below the top one. */
     subframes: [] as string[],
     stops: 0,
+    inputEvents: [] as unknown[],
     nextId: 0,
     /** Every contents made, in order, so a test can reach a tab's own handlers. */
     made: [] as Array<{
@@ -26,9 +29,18 @@ const contents = vi.hoisted(() => {
       destroy: () => void;
     }>,
     loads: [] as Array<{ id: number; url: string }>,
+    /** Ids of the contents reloaded, in order. */
+    reloads: [] as number[],
     load: (_url: string): Promise<void> => Promise.resolve(),
-    script: (): Promise<unknown> => Promise.resolve(null),
+    script: (_code: string): Promise<unknown> => Promise.resolve(null),
     capture: (..._args: unknown[]): Promise<unknown> => Promise.resolve({ isEmpty: () => true }),
+    /** The DevTools protocol, shared by every contents: what a command answers, and who attached. */
+    cdp: (_method: string, _params?: unknown): Promise<unknown> => Promise.reject(new Error('no DevTools')),
+    debuggerAttached: false,
+    /** What each manager's partition registered with `protocol.handle`, by scheme. */
+    protocols: new Map<string, (request: { url: string }) => Response>(),
+    attaches: 0,
+    detaches: 0,
     emit(event: string, ...args: unknown[]) {
       for (const handler of state.handlers.get(event) ?? []) handler({}, ...args);
     },
@@ -72,8 +84,24 @@ vi.mock('electron', () => {
         contents.loads.push({ id, url });
         return contents.load(url);
       },
-      executeJavaScript: () => contents.script(),
+      focus: () => undefined,
+      reload: () => void contents.reloads.push(id),
+      sendInputEvent: (input: unknown) => contents.inputEvents.push(input),
+      executeJavaScript: (code: string) => contents.script(code),
       capturePage: (...args: unknown[]) => contents.capture(...args),
+      debugger: {
+        isAttached: () => contents.debuggerAttached,
+        attach: () => {
+          if (contents.debuggerAttached) throw new Error('Another debugger is already attached');
+          contents.debuggerAttached = true;
+          contents.attaches += 1;
+        },
+        detach: () => {
+          contents.debuggerAttached = false;
+          contents.detaches += 1;
+        },
+        sendCommand: (method: string, params?: unknown) => contents.cdp(method, params),
+      },
       stop: () => {
         contents.stops += 1;
         contents.loadingMainFrame = false;
@@ -131,11 +159,25 @@ vi.mock('electron', () => {
         this.visible = visible;
       };
     },
+    /** A PNG "decodes" to an image that remembers its bytes, at a Retina viewport. */
+    nativeImage: {
+      createFromBuffer: (bytes: Buffer) => ({
+        isEmpty: () => bytes.length === 0,
+        getSize: () => ({ width: 2560, height: 1600 }),
+        resize: ({ width }: { width: number }) => ({ toPNG: () => Buffer.from(`${bytes.toString()}@${width}`) }),
+        toPNG: () => bytes,
+      }),
+    },
     session: {
       fromPartition: () => ({
         setPermissionRequestHandler: () => undefined,
         setPermissionCheckHandler: () => undefined,
         on: () => undefined,
+        protocol: {
+          handle: (scheme: string, handler: (request: { url: string }) => Response) => {
+            contents.protocols.set(scheme, handler);
+          },
+        },
         webRequest: {
           onBeforeRequest: () => undefined,
           onCompleted: () => undefined,
@@ -188,6 +230,46 @@ describe('BrowserManager page deadlines', () => {
       ]);
     });
 
+  it('refuses deferred execution in an origin adopted after the call was made', async () => {
+    const page = await openPage();
+    const probe = vi.fn(() => 'private result');
+    contents.script = async code => {
+      contents.url = 'https://mail.example.com/inbox';
+      return runInNewContext(code, { location: { origin: 'https://mail.example.com' }, probe });
+    };
+
+    await expect(page.evaluate('probe()')).rejects.toThrow(/changed origin before/);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fallback key after origin changes during an Enter form probe', async () => {
+    const page = await openPage();
+    contents.inputEvents = [];
+    contents.script = async () => {
+      contents.url = 'https://mail.example.com/inbox';
+      return false;
+    };
+
+    await expect(page.press('Enter')).rejects.toThrow(/changed origin before/);
+    expect(contents.inputEvents).toEqual([]);
+  });
+
+  it.each(['probe()', 'const value = probe(); return value;'])(
+    'executes same-origin expressions or statements through the origin guard: %s',
+    async expression => {
+      const page = await openPage();
+      const probe = vi.fn(() => 'permitted result');
+      contents.script = async code =>
+        runInNewContext(code, {
+          location: { origin: new URL(contents.url).origin },
+          probe,
+        });
+
+      await expect(page.evaluate(expression)).resolves.toBe('permitted result');
+      expect(probe).toHaveBeenCalledOnce();
+    }
+  );
+
   it('stops a load that never answers and says so, rather than reporting the old page as loaded', async () => {
     const page = await openPage();
     contents.load = () => never();
@@ -224,7 +306,16 @@ describe('BrowserManager page deadlines', () => {
 
   it('stops a load holding a snapshot past the deadline, which lets the snapshot run', async () => {
     const page = await openPage();
-    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false };
+    const model = {
+      url: 'u',
+      title: 't',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [],
+      actions: [],
+      claims: [],
+      truncated: false,
+    };
+    const snap = { url: 'u', title: 't', text: 'partial page', truncated: false, model };
     contents.script = () => heldBehindLoad(snap);
 
     const reading = page.snapshot(1000);
@@ -273,13 +364,16 @@ describe('BrowserManager page deadlines', () => {
     });
   });
 
-  it('bounds a screenshot of a page that never paints', async () => {
+  it('bounds a screenshot of a page that never paints, and lets go of the debugger it attached', async () => {
     const page = await openPage();
-    contents.capture = () => never();
+    contents.cdp = () => never();
+    contents.detaches = 0;
 
     const capturing = expect(page.screenshot()).rejects.toThrow(/did not paint a frame to capture within 15 seconds/);
     await vi.advanceTimersByTimeAsync(15_000);
     await capturing;
+    expect(contents.debuggerAttached).toBe(false);
+    expect(contents.detaches).toBe(1);
   });
 
   it('lists every frame a screenshot would show, the top one first', async () => {
@@ -443,6 +537,20 @@ describe('BrowserManager tabs', () => {
     await context().closeTab(3);
     expect(lastState().activeTabId).toBe(1);
     expect(internals(manager).byContents.size).toBe(1);
+  });
+
+  it('stamps a tab the agent takes and pushes it, and leaves one the user opened unstamped', async () => {
+    await manager.tab('s', 'new');
+    expect(lastState().tabs[0].agentUsedAt).toBe(0);
+
+    const before = Date.now();
+    await context().page();
+    expect(lastState().tabs[0].agentUsedAt).toBeGreaterThanOrEqual(before);
+
+    await manager.tab('s', 'new');
+    expect(lastState().tabs.map(tab => (tab.agentUsedAt ?? 0) > 0)).toEqual([true, false]);
+    await context().selectTab(2);
+    expect(lastState().tabs.map(tab => (tab.agentUsedAt ?? 0) > 0)).toEqual([true, true]);
   });
 
   it('never reuses an id within the conversation, even after every tab closed', async () => {
@@ -868,5 +976,509 @@ describe('BrowserManager holding the pane for an overlay', () => {
     manager.setPane(window, 'other', null);
     expect(shown(manager)).toBeUndefined();
     expect(view(page)).toMatchObject({ visible: true, bounds: { x: 0, y: 0, width: 1280, height: 800 } });
+  });
+});
+
+describe('BrowserManager screenshots', () => {
+  const SURFACE_ERROR = 'Current display surface not available for capture';
+  const bounds = { x: 1440, y: 40, width: 560, height: 760 };
+  const frame = {
+    isEmpty: () => false,
+    getSize: () => ({ width: 1120, height: 1520 }),
+    toPNG: () => Buffer.from('pane'),
+  };
+  const png = (text: string) => ({ data: Buffer.from(text).toString('base64') });
+
+  let manager: InstanceType<typeof BrowserManager>;
+  let window: InstanceType<typeof BrowserWindow>;
+  let cdp: ReturnType<typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>>;
+  const page = () => manager.context('s', async () => undefined).page();
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = 'https://example.com/';
+    contents.debuggerAttached = false;
+    contents.attaches = 0;
+    contents.detaches = 0;
+    contents.capture = () => Promise.resolve(frame);
+    cdp = vi.fn(() => Promise.resolve(png('devtools')));
+    contents.cdp = cdp;
+    manager = new BrowserManager();
+    window = new BrowserWindow();
+  });
+
+  it('draws a parked page through DevTools, which needs no display surface, at the tool viewport', async () => {
+    const capture = vi.fn(() => Promise.reject(new Error(SURFACE_ERROR)));
+    contents.capture = capture;
+
+    await expect((await page()).screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(capture).not.toHaveBeenCalled();
+    expect(cdp).toHaveBeenCalledWith('Page.captureScreenshot', { format: 'png' });
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+    expect(contents.debuggerAttached).toBe(false);
+  });
+
+  it.each(['did-start-navigation', 'did-frame-navigate'] as const)(
+    'discards a screenshot after a transient frame navigation recorded by %s',
+    async event => {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      const capture = Promise.withResolvers<typeof frame>();
+      contents.capture = () => capture.promise;
+      const result = expect(tab.screenshot()).rejects.toThrow(/changed while the screenshot/);
+      contents.subframes = ['https://mail.example.com/inbox'];
+      contents.emit(event, 'https://mail.example.com/inbox', false, false);
+      contents.subframes = [];
+      capture.resolve(frame);
+
+      await result;
+    }
+  );
+
+  it('captures a page on screen in the pane as before, without the debugger', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('pane'));
+    expect(cdp).not.toHaveBeenCalled();
+    expect(contents.attaches).toBe(0);
+  });
+
+  it('falls back to DevTools when the pane has no surface or an empty frame to read', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+
+    contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    contents.capture = () => Promise.resolve({ isEmpty: () => true });
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(contents.detaches).toBe(2);
+  });
+
+  it('never calls capturePage on a held page, which would put it back on screen', async () => {
+    const tab = await page();
+    manager.setPane(window, 's', bounds);
+    manager.setPane(window, 's', null);
+    const capture = vi.fn(() => Promise.resolve(frame));
+    contents.capture = capture;
+
+    await expect(tab.screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('says what to do instead when neither capture works, rather than passing on the Chromium error', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+      contents.cdp = () => Promise.reject(new Error('Target closed'));
+
+      const failure = await tab.screenshot().catch((err: Error) => err);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toMatch(/^Could not capture a screenshot of this page\. browser_snapshot/);
+      expect((failure as Error).message).not.toContain(SURFACE_ERROR);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(SURFACE_ERROR));
+      expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('says the page rendered nothing when DevTools draws an empty frame', async () => {
+    contents.cdp = () => Promise.resolve({ data: '' });
+    await expect((await page()).screenshot()).rejects.toThrow('The page rendered nothing to capture yet.');
+  });
+
+  /** Each DevTools command waits for its own answer, in the order they were sent. */
+  const heldCommands = () => {
+    const answers: Array<(result: unknown) => void> = [];
+    contents.cdp = () => new Promise(resolve => answers.push(resolve));
+    return answers;
+  };
+
+  it('does not start an abandoned fallback while a retry is using the debugger', async () => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      let answer: (image: unknown) => void = () => undefined;
+      contents.capture = () => new Promise(resolve => (answer = resolve));
+
+      const timedOut = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await timedOut;
+
+      // The retry is mid-DevTools capture when the abandoned capturePage comes back empty.
+      const answers = heldCommands();
+      contents.capture = () => Promise.reject(new Error(SURFACE_ERROR));
+      const retry = tab.screenshot();
+      await vi.advanceTimersByTimeAsync(0);
+      answer({ isEmpty: () => true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(answers).toHaveLength(1);
+
+      answers[0](png('retry'));
+      await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
+      expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+      expect(contents.debuggerAttached).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['empty', 'rejected'])('does not attach after a timed-out pane capture returns %s', async outcome => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      manager.setPane(window, 's', bounds);
+      let finish: () => void = () => undefined;
+      contents.capture = () =>
+        new Promise((resolve, reject) => {
+          finish = () => (outcome === 'empty' ? resolve({ isEmpty: () => true }) : reject(new Error(SURFACE_ERROR)));
+        });
+      const timedOut = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await timedOut;
+      finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cdp).not.toHaveBeenCalled();
+      expect(contents.attaches).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a later capture alive when the first times out and finishes late', async () => {
+    vi.useFakeTimers();
+    try {
+      const tab = await page();
+      const answers = heldCommands();
+      const first = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const second = tab.screenshot();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await first;
+      expect(contents.debuggerAttached).toBe(true);
+      expect(contents.detaches).toBe(0);
+      answers[0](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('second'));
+      await expect(second).resolves.toEqual(Buffer.from('second@1280'));
+      expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])('keeps late cleanup out of a new capture (external debugger: %s)', async external => {
+    vi.useFakeTimers();
+    try {
+      contents.debuggerAttached = external;
+      const tab = await page();
+      const answers = heldCommands();
+      const first = expect(tab.screenshot()).rejects.toThrow(/did not paint a frame/);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await first;
+      expect(contents.debuggerAttached).toBe(external);
+      expect(contents.detaches).toBe(external ? 0 : 1);
+
+      const retry = tab.screenshot();
+      answers[0](png('late'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(contents.debuggerAttached).toBe(true);
+      answers[1](png('retry'));
+      await expect(retry).resolves.toEqual(Buffer.from('retry@1280'));
+      expect(contents.debuggerAttached).toBe(external);
+      expect(contents.attaches).toBe(external ? 0 : 2);
+      expect(contents.detaches).toBe(external ? 0 : 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets two screenshots from one round share the debugger, detaching after the last', async () => {
+    const tab = await page();
+    const answers = heldCommands();
+    const first = tab.screenshot();
+    const second = tab.screenshot();
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+
+    answers[0](png('first'));
+    await expect(first).resolves.toEqual(Buffer.from('first@1280'));
+    expect(contents.debuggerAttached).toBe(true);
+    answers[1](png('second'));
+    await expect(second).resolves.toEqual(Buffer.from('second@1280'));
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 1, detaches: 1 });
+  });
+
+  it('uses a debugger something else attached, and leaves it attached', async () => {
+    contents.debuggerAttached = true;
+
+    await expect((await page()).screenshot()).resolves.toEqual(Buffer.from('devtools@1280'));
+    expect({ attaches: contents.attaches, detaches: contents.detaches }).toEqual({ attaches: 0, detaches: 0 });
+    expect(contents.debuggerAttached).toBe(true);
+  });
+});
+
+describe('BrowserManager snapshot indexing', () => {
+  const snapshot = {
+    url: 'https://example.com/',
+    title: 'Example',
+    text: 'moon',
+    truncated: false,
+    model: {
+      url: 'https://example.com/',
+      title: 'Example',
+      capturedAt: '2026-10-24T12:00:00.000Z',
+      blocks: [{ id: 'b1', kind: 'text', text: 'moon' }],
+      actions: [],
+      claims: [],
+      truncated: false,
+    },
+  };
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.loadingMainFrame = false;
+    contents.script = () => Promise.resolve(snapshot);
+  });
+
+  it('passes the validated snapshot and owning session identity to the indexer', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const first = await manager.context('first', async () => undefined).page();
+    const second = await manager.context('second', async () => undefined).page();
+    const parsed = await first.snapshot(1000);
+    expect(index).toHaveBeenLastCalledWith('first', parsed);
+    expect(index.mock.calls[0][1]).toBe(parsed);
+    await second.snapshot(1000);
+    expect(index).toHaveBeenLastCalledWith('second', snapshot);
+    manager.closeAll();
+  });
+
+  it.each(['synchronous', 'asynchronous'])('reports %s indexing failures without losing the snapshot', async kind => {
+    const error = new Error('history disk failure');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const manager = new BrowserManager(undefined, undefined, () => {
+        if (kind === 'synchronous') throw error;
+        return Promise.reject(error);
+      });
+      const page = await manager.context('first', async () => undefined).page();
+      await expect(page.snapshot(1000)).resolves.toEqual(snapshot);
+      expect(warn).toHaveBeenCalledWith('BROWSER: could not index page snapshot:', error);
+      manager.closeAll();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not send an invalid snapshot to the indexer', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const page = await manager.context('first', async () => undefined).page();
+    contents.script = () => Promise.resolve({ ...snapshot, model: { ...snapshot.model, capturedAt: 'invalid' } });
+    await expect(page.snapshot(1000)).rejects.toThrow();
+    expect(index).not.toHaveBeenCalled();
+    manager.closeAll();
+  });
+
+  it('ignores a late snapshot from a closed tab even if the same session reopened', async () => {
+    const index = vi.fn();
+    const manager = new BrowserManager(undefined, undefined, index);
+    const page = await manager.context('first', async () => undefined).page();
+    let finish: (value: typeof snapshot) => void = () => undefined;
+    contents.script = () =>
+      new Promise(resolve => {
+        finish = resolve;
+      });
+    const pending = page.snapshot(1000);
+    manager.closeAll();
+    await manager.context('first', async () => undefined).page();
+    finish(snapshot);
+    await pending;
+    expect(index).not.toHaveBeenCalled();
+    manager.closeAll();
+  });
+});
+
+describe('BrowserManager opening an artifact', () => {
+  let states: BrowserPaneState[];
+  let manager: InstanceType<typeof BrowserManager>;
+  const lastState = () => states.at(-1)!;
+  const serve = (url: string) => contents.protocols.get('b4m-artifact')!({ url });
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = '';
+    contents.loads = [];
+    contents.reloads = [];
+    contents.protocols.clear();
+    contents.load = url => {
+      contents.url = url;
+      contents.emit('did-navigate', url, 200);
+      return Promise.resolve();
+    };
+    states = [];
+    manager = new BrowserManager((_sessionId, state) => states.push(state));
+  });
+
+  afterEach(() => manager.closeAll());
+
+  it('loads the artifact from a fresh view url served on the browser partition', async () => {
+    const state = await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    const url = contents.loads.at(-1)!.url;
+    expect(url).toMatch(/^b4m-artifact:\/\/view\/[0-9a-f-]{36}$/);
+    expect(state).toMatchObject({ url, activeTabId: 1, error: '' });
+    const response = serve(url);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Security-Policy')).toContain("connect-src 'none'");
+    await expect(response.text()).resolves.toBe('<title>Chart</title><p>hi</p>');
+  });
+
+  it('opens in a new tab rather than replacing a page the conversation is on', async () => {
+    await manager.navigate('s', 'http://localhost:3080/');
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+    expect(contents.loads.map(load => load.url)).toEqual([
+      'http://localhost:3080/',
+      expect.stringMatching(/^b4m-artifact:\/\/view\//),
+    ]);
+  });
+
+  it('switches to the tab already showing a keyed artifact instead of opening it again', async () => {
+    await manager.navigate('s', 'http://localhost:3080/');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.tab('s', 'select', 1);
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+    expect(contents.loads).toHaveLength(2);
+  });
+
+  it('opens a keyed artifact again once its tab has left it or its content changed', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    await manager.navigate('s', 'http://localhost:3080/');
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+
+    await manager.openArtifact('s', 'Chart', '<p>v2</p>', 'chart');
+    expect(lastState()).toMatchObject({ activeTabId: 3 });
+  });
+
+  it('keeps opening a new tab for an artifact sent without a key', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+  });
+
+  it('forgets every artifact when all browsers close', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+    const url = contents.loads.at(-1)!.url;
+
+    manager.closeAll();
+
+    expect(serve(url).status).toBe(404);
+  });
+
+  describe('when a reply updates it', () => {
+    const update = (content: string, identifier = 'chart', type = 'html') => ({
+      id: 'reply-artifact',
+      identifier,
+      type,
+      mimeType: 'text/html',
+      title: 'Chart v2',
+      content,
+    });
+    // The fake shares one current url between its contents, so a test sets the url every tab reports.
+    const tabUrl = () => contents.loads.at(-1)!.url;
+
+    it('reloads a background tab showing it in place, without switching to it', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+      const url = tabUrl();
+      await manager.openArtifact('s', 'Other', '<p>other</p>', 'other');
+      contents.url = url;
+      const loadsBefore = contents.loads.length;
+      const statesBefore = states.length;
+
+      manager.refreshArtifacts('s', [update('<p>v2</p>')]);
+
+      expect(contents.reloads).toEqual([contents.loads[0].id]);
+      expect(contents.loads).toHaveLength(loadsBefore);
+      expect(states.slice(statesBefore).every(state => state.activeTabId === 2)).toBe(true);
+      await expect(serve(url).text()).resolves.toBe('<title>Chart v2</title><p>v2</p>');
+    });
+
+    it('switches to the reloaded tab when the updated version is opened again', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+      const url = tabUrl();
+      await manager.openArtifact('s', 'Other', '<p>other</p>', 'other');
+      contents.url = url;
+      manager.refreshArtifacts('s', [update('<p>v2</p>')]);
+      const loadsBefore = contents.loads.length;
+
+      await manager.openArtifact('s', 'Chart v2', '<p>v2</p>', 'chart');
+
+      expect(contents.loads).toHaveLength(loadsBefore);
+      expect(lastState()).toMatchObject({ activeTabId: 1, tabs: [{ id: 1 }, { id: 2 }] });
+    });
+
+    it('leaves alone an artifact no tab is showing, and opens nothing', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+
+      manager.refreshArtifacts('s', [update('<p>v2</p>', 'something-else')]);
+      manager.refreshArtifacts('other-session', [update('<p>v2</p>')]);
+
+      expect(contents.reloads).toEqual([]);
+      expect(lastState()).toMatchObject({ activeTabId: 1, tabs: [{ id: 1 }] });
+    });
+
+    it('leaves a tab that has since navigated away, or was opened without an identifier', async () => {
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>', 'chart');
+      await manager.navigate('s', 'http://localhost:3080/');
+      await manager.openArtifact('s', 'Chart', '<p>v1</p>');
+
+      manager.refreshArtifacts('s', [update('<p>v2</p>')]);
+
+      expect(contents.reloads).toEqual([]);
+    });
+
+    it('rebuilds a non-HTML artifact as the same wrapped page the Artifacts menu opens it with', async () => {
+      await manager.openArtifact(
+        's',
+        'Logo',
+        paneDocument({ type: 'svg', title: 'Logo', content: '<svg>1</svg>' }),
+        'logo'
+      );
+      const url = tabUrl();
+
+      manager.refreshArtifacts('s', [{ ...update('<svg>2</svg>', 'logo', 'svg'), title: 'Logo' }]);
+
+      expect(contents.reloads).toHaveLength(1);
+      await expect(serve(url).text()).resolves.toBe(
+        paneDocument({ type: 'svg', title: 'Logo', content: '<svg>2</svg>' })
+      );
+      const loadsBefore = contents.loads.length;
+      await manager.openArtifact(
+        's',
+        'Logo',
+        paneDocument({ type: 'svg', title: 'Logo', content: '<svg>2</svg>' }),
+        'logo'
+      );
+      expect(contents.loads).toHaveLength(loadsBefore);
+    });
+  });
+
+  it('still refuses the scheme when it is typed into the url bar', async () => {
+    await expect(manager.navigate('s', 'b4m-artifact://view/abc')).rejects.toThrow(/http and https/);
+    expect(contents.loads).toEqual([]);
   });
 });

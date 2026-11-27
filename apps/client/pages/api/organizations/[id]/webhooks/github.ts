@@ -8,6 +8,7 @@
  * - Requires user to have update access on the organization
  * - Secret is encrypted at rest using AES-256-GCM
  * - Routing token is unique per organization
+ * - The plain secret is returned only by create (POST) and rotate-secret; GET and PUT always mask it
  *
  * @route POST /api/organizations/[id]/webhooks/github - Create webhook config
  * @route GET /api/organizations/[id]/webhooks/github - Get config (secret masked)
@@ -20,8 +21,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { orgWebhookConfigRepository } from '@bike4mind/database/infra';
 import { webhookSubscriptionRepository } from '@bike4mind/database/infra';
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
-import { encryptSecret, decryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { IOrgWebhookConfigRequest, IOrgWebhookConfigResponse } from '@bike4mind/common';
@@ -45,14 +48,14 @@ function getWebhookUrl(routingToken: string): string {
   return `${baseUrl}/api/webhooks/github/${routingToken}`;
 }
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // POST - Create organization webhook config
   .post(
-    asyncHandler<{}, IOrgWebhookConfigResponse, IOrgWebhookConfigRequest, { id?: string }>(async (req, res) => {
+    asyncHandler<{}, unknown, IOrgWebhookConfigRequest, { id?: string }>(async (req, res) => {
       const orgId = req.query.id!;
       const user = req.user!;
 
-      await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (existingConfig) {
@@ -90,6 +93,14 @@ const handler = baseApi()
         enabled: true,
       });
 
+      await recordAdminActionFromRequest(req, {
+        action: 'org.webhook.created',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: org.id, displayName: org.name },
+        summary: 'created the GitHub webhook configuration',
+        details: { webhookConfigId: webhookConfig.id, repos, subscribedEvents },
+      });
+
       // Return response with plain secret (one-time reveal)
       const response: IOrgWebhookConfigResponse = {
         id: webhookConfig.id,
@@ -112,12 +123,11 @@ const handler = baseApi()
   )
   // GET - Get organization webhook config
   .get(
-    asyncHandler<{}, IOrgWebhookConfigResponse, unknown, { id?: string; revealSecret?: string }>(async (req, res) => {
+    asyncHandler<{}, IOrgWebhookConfigResponse, unknown, { id?: string }>(async (req, res) => {
       const orgId = req.query.id!;
       const user = req.user!;
-      const revealSecret = req.query.revealSecret === 'true';
 
-      await verifyOrgOwner(user, orgId);
+      await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
       const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
       if (!webhookConfig) {
@@ -126,21 +136,10 @@ const handler = baseApi()
 
       const subscriberCount = await webhookSubscriptionRepository.countByOrganization(orgId);
 
-      // Decrypt and optionally reveal secret
-      let secretDisplay: string;
-      const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
-
-      if (revealSecret && encryptionKey) {
-        // Reveal the actual secret (for copying to GitHub)
-        const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
-        secretDisplay = decryptedSecret;
-      } else if (encryptionKey) {
-        // Show masked version
-        const decryptedSecret = decryptSecret(webhookConfig.secret, encryptionKey);
-        secretDisplay = maskSecret(decryptedSecret);
-      } else {
-        secretDisplay = '****';
-      }
+      // The plain secret is never returned here; only the last-4 mask.
+      const secretDisplay = Config.SECRET_ENCRYPTION_KEY
+        ? maskSecret(decryptStoredSecret(webhookConfig.secret))
+        : '****';
 
       const response: IOrgWebhookConfigResponse = {
         id: webhookConfig.id,
@@ -154,8 +153,7 @@ const handler = baseApi()
         createdAt: webhookConfig.createdAt,
         updatedAt: webhookConfig.updatedAt,
         webhookUrl: getWebhookUrl(webhookConfig.routingToken),
-        secret: revealSecret ? secretDisplay : undefined,
-        secretMasked: revealSecret ? undefined : secretDisplay,
+        secretMasked: secretDisplay,
         subscriberCount,
       };
 
@@ -164,112 +162,128 @@ const handler = baseApi()
   )
   // PUT - Update organization webhook config
   .put(
-    asyncHandler<{}, IOrgWebhookConfigResponse, Partial<IOrgWebhookConfigRequest>, { id?: string }>(
-      async (req, res) => {
-        const orgId = req.query.id!;
-        const user = req.user!;
+    asyncHandler<{}, unknown, Partial<IOrgWebhookConfigRequest>, { id?: string }>(async (req, res) => {
+      const orgId = req.query.id!;
+      const user = req.user!;
 
-        await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
-        const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
-        if (!existingConfig) {
-          throw new NotFoundError('Webhook configuration not found');
-        }
-
-        const { repos, subscribedEvents, enabled } = req.body || {};
-
-        // Update allowed fields
-        const updates: Record<string, unknown> = {};
-
-        if (repos !== undefined) {
-          if (!Array.isArray(repos)) {
-            throw new BadRequestError('repos must be an array');
-          }
-          updates.repos = repos;
-        }
-
-        if (subscribedEvents !== undefined) {
-          if (!Array.isArray(subscribedEvents)) {
-            throw new BadRequestError('subscribedEvents must be an array');
-          }
-          updates.subscribedEvents = subscribedEvents;
-        }
-
-        if (enabled !== undefined) {
-          updates.enabled = enabled;
-        }
-
-        if (Object.keys(updates).length === 0) {
-          throw new BadRequestError('No valid fields to update');
-        }
-
-        const updatedConfig = await orgWebhookConfigRepository.update({
-          id: existingConfig.id,
-          ...updates,
-        });
-
-        if (!updatedConfig) {
-          throw new Error('Failed to update webhook configuration');
-        }
-
-        const subscriberCount = await webhookSubscriptionRepository.countByOrganization(orgId);
-
-        let secretMasked = '****';
-        const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
-        if (encryptionKey) {
-          const decryptedSecret = decryptSecret(updatedConfig.secret, encryptionKey);
-          secretMasked = maskSecret(decryptedSecret);
-        }
-
-        const response: IOrgWebhookConfigResponse = {
-          id: updatedConfig.id,
-          organizationId: updatedConfig.organizationId,
-          routingToken: updatedConfig.routingToken,
-          repos: updatedConfig.repos,
-          subscribedEvents: updatedConfig.subscribedEvents,
-          createdBy: updatedConfig.createdBy,
-          enabled: updatedConfig.enabled,
-          lastDeliveryAt: updatedConfig.lastDeliveryAt,
-          createdAt: updatedConfig.createdAt,
-          updatedAt: updatedConfig.updatedAt,
-          webhookUrl: getWebhookUrl(updatedConfig.routingToken),
-          secretMasked,
-          subscriberCount,
-        };
-
-        return res.status(200).json(response);
+      const existingConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
+      if (!existingConfig) {
+        throw new NotFoundError('Webhook configuration not found');
       }
-    )
+
+      const { repos, subscribedEvents, enabled } = req.body || {};
+
+      // Update allowed fields
+      const updates: Record<string, unknown> = {};
+
+      if (repos !== undefined) {
+        if (!Array.isArray(repos)) {
+          throw new BadRequestError('repos must be an array');
+        }
+        updates.repos = repos;
+      }
+
+      if (subscribedEvents !== undefined) {
+        if (!Array.isArray(subscribedEvents)) {
+          throw new BadRequestError('subscribedEvents must be an array');
+        }
+        updates.subscribedEvents = subscribedEvents;
+      }
+
+      if (enabled !== undefined) {
+        updates.enabled = enabled;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        throw new BadRequestError('No valid fields to update');
+      }
+
+      const updatedConfig = await orgWebhookConfigRepository.update({
+        id: existingConfig.id,
+        ...updates,
+      });
+
+      if (!updatedConfig) {
+        throw new Error('Failed to update webhook configuration');
+      }
+
+      await recordAdminActionFromRequest(req, {
+        action: 'org.webhook.updated',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: org.id, displayName: org.name },
+        summary: 'updated the GitHub webhook configuration',
+        changes: Object.keys(updates).map(field => ({
+          field,
+          before: existingConfig[field as 'repos' | 'subscribedEvents' | 'enabled'],
+          after: updates[field],
+        })),
+        details: { webhookConfigId: existingConfig.id },
+      });
+
+      const subscriberCount = await webhookSubscriptionRepository.countByOrganization(orgId);
+
+      let secretMasked = '****';
+      const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
+      if (encryptionKey) {
+        const decryptedSecret = decryptStoredSecret(updatedConfig.secret);
+        secretMasked = maskSecret(decryptedSecret);
+      }
+
+      const response: IOrgWebhookConfigResponse = {
+        id: updatedConfig.id,
+        organizationId: updatedConfig.organizationId,
+        routingToken: updatedConfig.routingToken,
+        repos: updatedConfig.repos,
+        subscribedEvents: updatedConfig.subscribedEvents,
+        createdBy: updatedConfig.createdBy,
+        enabled: updatedConfig.enabled,
+        lastDeliveryAt: updatedConfig.lastDeliveryAt,
+        createdAt: updatedConfig.createdAt,
+        updatedAt: updatedConfig.updatedAt,
+        webhookUrl: getWebhookUrl(updatedConfig.routingToken),
+        secretMasked,
+        subscriberCount,
+      };
+
+      return res.status(200).json(response);
+    })
   )
   // DELETE - Delete organization webhook config
   .delete(
-    asyncHandler<{}, { success: boolean; message: string; deletedSubscriptions?: number }, unknown, { id?: string }>(
-      async (req, res) => {
-        const orgId = req.query.id!;
-        const user = req.user!;
+    asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
+      const orgId = req.query.id!;
+      const user = req.user!;
 
-        await verifyOrgOwner(user, orgId);
+      const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
-        const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
-        if (!webhookConfig) {
-          throw new NotFoundError('Webhook configuration not found');
-        }
-
-        // Cascade delete: also remove all subscriptions for this organization
-        const deletedSubscriptions = await webhookSubscriptionRepository.deleteByOrganization(orgId);
-
-        await orgWebhookConfigRepository.delete(webhookConfig.id);
-
-        return res.status(200).json({
-          success: true,
-          message:
-            deletedSubscriptions > 0
-              ? `Webhook configuration deleted. ${deletedSubscriptions} subscription(s) were also removed.`
-              : 'Webhook configuration deleted successfully',
-          deletedSubscriptions,
-        });
+      const webhookConfig = await orgWebhookConfigRepository.findByOrganizationId(orgId);
+      if (!webhookConfig) {
+        throw new NotFoundError('Webhook configuration not found');
       }
-    )
+
+      // Cascade delete: also remove all subscriptions for this organization
+      const deletedSubscriptions = await webhookSubscriptionRepository.deleteByOrganization(orgId);
+
+      await orgWebhookConfigRepository.delete(webhookConfig.id);
+      await recordAdminActionFromRequest(req, {
+        action: 'org.webhook.deleted',
+        actorScope: 'organization',
+        target: { kind: 'organization', id: org.id, displayName: org.name },
+        summary: 'deleted the GitHub webhook configuration',
+        details: { webhookConfigId: webhookConfig.id, deletedSubscriptions },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message:
+          deletedSubscriptions > 0
+            ? `Webhook configuration deleted. ${deletedSubscriptions} subscription(s) were also removed.`
+            : 'Webhook configuration deleted successfully',
+        deletedSubscriptions,
+      });
+    })
   );
 
 export const config = {

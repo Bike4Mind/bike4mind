@@ -36,7 +36,7 @@ vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: {},
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: vi.fn(),
 }));
 
@@ -112,7 +112,7 @@ describe.skip('/api/sessions', () => {
 
   describe('DELETE /api/sessions', () => {
     it('should delete all user sessions when authorized', async () => {
-      const { logEvent } = await import('@server/utils/analyticsLog');
+      const { logEvent } = await import('@bike4mind/server-utils/utils/analyticsLog');
       const { Session: SessionModel } = await import('@bike4mind/database/auth');
       const handler = (await import('@pages/api/sessions/index')).default;
 

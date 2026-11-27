@@ -73,10 +73,12 @@ describe('ci.yml test-shard worker budgets', () => {
   // Each package's vitest sizes its pool to the whole runner, so two packages at once is two
   // pools on the same cores. A per-package cap is no substitute: pnpm runs dependents last, so the
   // heaviest packages end up alone on a pool capped at a fraction of the box.
+  // Two commands: the unit run and the integration lane step, which shares the same rule. Both go
+  // through turbo, whose own scheduler would otherwise run packages in parallel.
   it('runs one package at a time in every leg', () => {
-    const runLines = contents.split('\n').filter(line => /^\s*pnpm --recursive\b.*"\$SHARD_SCRIPT"/.test(line));
-    expect(runLines, 'the sharded test command was not found - has the step moved?').toHaveLength(1);
-    expect(runLines[0]).toMatch(/--workspace-concurrency=1\s/);
+    const runLines = contents.split('\n').filter(line => /^\s*pnpm exec turbo run "\$SHARD_SCRIPT"/.test(line));
+    expect(runLines, 'the sharded test commands were not found - have the steps moved?').toHaveLength(2);
+    for (const line of runLines) expect(line).toMatch(/\s--concurrency=1\s/);
   });
 
   it('declares a budget on the matrix legs', () => {

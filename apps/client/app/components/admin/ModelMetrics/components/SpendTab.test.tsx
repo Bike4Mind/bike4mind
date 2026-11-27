@@ -1,11 +1,18 @@
-import React from 'react';
-import { describe, it, expect } from 'vitest';
+import React, { cloneElement, type ReactElement } from 'react';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { SpendTab, SpendTabView } from './SpendTab';
 import type { SpendData } from '@bike4mind/common';
 import { spendMockData } from '../utils/spendMockData';
+
+// ResponsiveContainer measures 0x0 in jsdom and renders no children; give the chart a fixed size.
+vi.mock('recharts', async importOriginal => ({
+  ...(await importOriginal<typeof import('recharts')>()),
+  ResponsiveContainer: ({ children }: { children: ReactElement<{ width?: number; height?: number }> }) =>
+    cloneElement(children, { width: 600, height: 300 }),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -37,7 +44,7 @@ describe('SpendTabView', () => {
   it('flags a truncated account list as "top N of M" (byAccount < Active Accounts KPI)', () => {
     // spendMockData: 7 account rows, Active Accounts KPI = 47.
     render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
-    expect(screen.getByText('Top Spend by Account')).toBeInTheDocument();
+    expect(screen.getByText('Top spend by account')).toBeInTheDocument();
     expect(screen.getByTestId('spend-account-truncation')).toHaveTextContent('Showing top 7 of 47 accounts by spend.');
   });
 
@@ -48,8 +55,43 @@ describe('SpendTabView', () => {
       byAccount: spendMockData.byAccount.slice(0, 2),
     };
     render(<SpendTabView data={data} />, { wrapper: TestWrapper });
-    expect(screen.getByText('Spend by Account')).toBeInTheDocument();
+    expect(screen.getByText('Spend by account')).toBeInTheDocument();
     expect(screen.queryByTestId('spend-account-truncation')).not.toBeInTheDocument();
+  });
+
+  it('marks a flagged account and shows the banner, leaving unflagged rows bare', () => {
+    const [hot, calm, ...rest] = spendMockData.byAccount;
+    const data: SpendData = {
+      ...spendMockData,
+      byAccount: [{ ...hot, flags: ['dailyCost', 'errorRate'] }, calm, ...rest],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    const banner = screen.getByTestId('spend-account-flag-banner');
+    expect(banner).toHaveTextContent('1 account is over a limit');
+    expect(banner).toHaveAttribute('role', 'alert');
+    const hotRow = screen.getByTestId(`spend-account-row-${hot.accountId}`);
+    expect(within(hotRow).getByTestId('spend-account-flag-dailyCost')).toHaveTextContent('Cost/day');
+    expect(within(hotRow).getByTestId('spend-account-flag-errorRate')).toHaveTextContent('Errors');
+    const calmRow = screen.getByTestId(`spend-account-row-${calm.accountId}`);
+    expect(within(calmRow).queryByTestId(/^spend-account-flag-/)).not.toBeInTheDocument();
+  });
+
+  it('shows a dash for p95 when the account has no recorded latency', () => {
+    const [timed, untimed, ...rest] = spendMockData.byAccount;
+    const data: SpendData = {
+      ...spendMockData,
+      byAccount: [{ ...timed, p95LatencyMs: 4000 }, { ...untimed, p95LatencyMs: 0 }, ...rest],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId(`spend-account-p95-${timed.accountId}`)).toHaveTextContent('4,000ms');
+    expect(screen.getByTestId(`spend-account-p95-${untimed.accountId}`)).toHaveTextContent('--');
+  });
+
+  it('shows no flag banner when no account is flagged', () => {
+    render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('spend-account-flag-banner')).not.toBeInTheDocument();
   });
 
   it('renders a cost-by-model bar for every model', () => {
@@ -134,6 +176,9 @@ describe('SpendTabView', () => {
           requests: 5,
           creditsUsed: 1234,
           costPerRequest: 2.468,
+          errorRate: 0,
+          p95LatencyMs: 900,
+          flags: [],
         },
       ],
       byModel: [{ modelId: 'm1', modelName: 'Custom Model One', estCost: 12.34, requests: 5, share: 1 }],
@@ -147,6 +192,30 @@ describe('SpendTabView', () => {
     expect(screen.getByText('Custom period vs Custom prior')).toBeInTheDocument();
     expect(within(screen.getByTestId('spend-by-account-table')).getByText('Zzyzx Corp')).toBeInTheDocument();
     expect(within(screen.getByTestId('spend-by-model-bars')).getByText('Custom Model One')).toBeInTheDocument();
+  });
+
+  it('plots daily cost by MM-DD with dollar ticks', () => {
+    const data: SpendData = {
+      ...spendMockData,
+      dailyCost: [
+        { date: '2026-01-01', cost: 12 },
+        { date: '2026-01-02', cost: 30 },
+        { date: '2026-01-03', cost: 18 },
+      ],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    const chart = screen.getByTestId('spend-daily-cost-trend');
+    const ticks = (axis: 'x' | 'y') =>
+      [...chart.querySelectorAll(`.recharts-${axis}Axis-tick-labels .recharts-cartesian-axis-tick-value`)].map(
+        tick => tick.textContent
+      );
+    expect(ticks('x')).toEqual(['01-01', '01-02', '01-03']);
+    expect(ticks('y')).toEqual(['$10', '$15', '$20', '$25', '$30']);
+    expect(within(chart).getByText('Date')).toBeInTheDocument();
+    expect(within(chart).getByText('Cost (USD)')).toBeInTheDocument();
+    expect(chart.querySelectorAll('.recharts-area-dot')).toHaveLength(3);
+    expect(chart.querySelector('.recharts-area-dot')).toHaveAttribute('r', '3');
   });
 });
 

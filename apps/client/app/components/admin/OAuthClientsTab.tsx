@@ -1,49 +1,75 @@
 import { useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
 import {
   Alert,
   Box,
   Button,
   Checkbox,
   Chip,
-  Divider,
+  DialogContent,
   FormControl,
   FormHelperText,
   FormLabel,
   IconButton,
   Input,
-  LinearProgress,
-  Modal,
-  ModalClose,
-  ModalDialog,
+  Link,
+  MenuItem,
   Option,
   Select,
   Sheet,
   Stack,
   Switch,
-  Table,
   Textarea,
   Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
-import KeyIcon from '@mui/icons-material/VpnKey';
 import CopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { CreateOAuthClientInput, OAuthClientView, OAuthClientWithSecret } from '@bike4mind/common';
 import {
+  OAUTH_CLIENT_SCOPES,
+  OAUTH_FEDERATED_DEFAULT_SCOPES,
+  isOAuthClientScope,
+  isOptInScope,
+  type CreateOAuthClientInput,
+  type OAuthClientUnpaidAccountLimits,
+  type OAuthClientView,
+  type OAuthClientWithSecret,
+  type OAuthFederatedIdpInput,
+  type UpdateOAuthClientInput,
+} from '@bike4mind/common';
+import {
+  OAUTH_CLIENTS_QUERY_KEY as QUERY_KEY,
+  OAUTH_CLIENT_STATS_QUERY_KEY,
   fetchOAuthClients,
+  fetchOAuthClientStats,
   createOAuthClient,
   updateOAuthClient,
   rotateOAuthClientSecret,
 } from '@client/app/utils/oauthClientAPICalls';
+import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-
-const QUERY_KEY = 'admin-oauth-clients';
+import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
+import { AdminTab } from './adminSidebarConfig';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
+import { useAdminModal } from './useAdminModal';
+import {
+  ADMIN_REASON_PRESETS,
+  ActionDialog,
+  AdminDialog,
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  type DataColumn,
+} from './shared';
+import { ADMIN_REGION_GAP } from './shared/adminStyles';
+import { RowActionsMenu } from './shared/RowActionsMenu';
+import { AdminPermissionAction, useFullAdminOnlyReason } from './shared/MissingPermission';
+import { usersTabLinkSearch } from './Users/usersTabSearch';
 
 type FederatedForm = {
   enabled: boolean;
@@ -57,15 +83,19 @@ type FederatedForm = {
 type CreateForm = {
   name: string;
   redirectUris: string;
+  postLogoutRedirectUris: string;
   firstParty: boolean;
   federated: FederatedForm;
+  unpaidAccountsAllowed: boolean;
 };
 
 const emptyCreateForm: CreateForm = {
   name: '',
   redirectUris: '',
+  postLogoutRedirectUris: '',
   firstParty: false,
   federated: { enabled: false, subjectSource: 'sub', issuer: '', audience: '', providerName: '', jwksUri: '' },
+  unpaidAccountsAllowed: true,
 };
 
 const parseUris = (text: string) =>
@@ -76,26 +106,447 @@ const parseUris = (text: string) =>
 
 const blankToUndefined = (value: string) => value.trim() || undefined;
 
+const federatedInput = (f: FederatedForm): OAuthFederatedIdpInput => ({
+  subjectSource: f.subjectSource,
+  issuer: blankToUndefined(f.issuer),
+  audience: blankToUndefined(f.audience),
+  jwksUri: blankToUndefined(f.jwksUri),
+  ...(f.subjectSource === 'identities' ? { providerName: blankToUndefined(f.providerName) } : {}),
+});
+
 export function buildCreatePayload(form: CreateForm): CreateOAuthClientInput {
-  const { federated } = form;
+  const postLogoutRedirectUris = parseUris(form.postLogoutRedirectUris);
   return {
     name: form.name,
     redirectUris: parseUris(form.redirectUris),
+    ...(postLogoutRedirectUris.length ? { postLogoutRedirectUris } : {}),
     clientType: form.firstParty ? 'first-party' : 'relying-party',
-    ...(federated.enabled
-      ? {
-          federatedIdp: {
-            subjectSource: federated.subjectSource,
-            issuer: blankToUndefined(federated.issuer),
-            audience: blankToUndefined(federated.audience),
-            jwksUri: blankToUndefined(federated.jwksUri),
-            ...(federated.subjectSource === 'identities'
-              ? { providerName: blankToUndefined(federated.providerName) }
-              : {}),
-          },
-        }
-      : {}),
+    ...(form.federated.enabled ? { federatedIdp: federatedInput(form.federated) } : {}),
+    ...(form.federated.enabled && !form.unpaidAccountsAllowed ? { unpaidAccountsAllowed: false } : {}),
   };
+}
+
+type EditForm = {
+  redirectUris: string;
+  postLogoutRedirectUris: string;
+  scopes: string[];
+  federated: FederatedForm;
+  overwatchProductId: string;
+  unpaidAccountsAllowed: boolean;
+  unpaidLimits: UnpaidLimitsForm;
+};
+
+type UnpaidLimitsForm = { enabled: boolean; rpm: string; rpd: string; tpm: string; concurrent: string };
+type UnpaidLimitFormKey = Exclude<keyof UnpaidLimitsForm, 'enabled'>;
+
+type UnpaidLimitField = {
+  formKey: UnpaidLimitFormKey;
+  key: keyof OAuthClientUnpaidAccountLimits;
+  label: string;
+  unit: string;
+  min: number;
+  max: number;
+  testid: string;
+  settingKey: string;
+  settingDefault: number;
+};
+
+// Bounds keep in sync with oauthClientUnpaidAccountLimitsSchema in oauthClient.ts.
+const UNPAID_LIMIT_FIELDS: UnpaidLimitField[] = [
+  {
+    formKey: 'rpm',
+    key: 'requestsPerMinute',
+    label: 'Requests per minute',
+    unit: '/min',
+    min: 1,
+    max: 10000,
+    testid: 'rpm',
+    settingKey: 'apiKeyUntrustedRateLimitPerMin',
+    settingDefault: 20,
+  },
+  {
+    formKey: 'rpd',
+    key: 'requestsPerDay',
+    label: 'Requests per day',
+    unit: '/day',
+    min: 0,
+    max: 1000000,
+    testid: 'rpd',
+    settingKey: 'apiKeyUntrustedRequestsPerDay',
+    settingDefault: 0,
+  },
+  {
+    formKey: 'tpm',
+    key: 'tokensPerMinute',
+    label: 'Tokens per minute',
+    unit: 'tokens/min',
+    min: 0,
+    max: 100000000,
+    testid: 'tpm',
+    settingKey: 'apiKeyUntrustedTokensPerMin',
+    settingDefault: 0,
+  },
+  {
+    formKey: 'concurrent',
+    key: 'maxConcurrent',
+    label: 'Concurrent completions',
+    unit: 'at once',
+    min: 0,
+    max: 1000,
+    testid: 'concurrent',
+    settingKey: 'apiKeyUntrustedMaxConcurrent',
+    settingDefault: 0,
+  },
+];
+
+const DEFAULT_UNPAID_LIMITS: OAuthClientUnpaidAccountLimits = {
+  requestsPerMinute: 20,
+  requestsPerDay: 0,
+  tokensPerMinute: 0,
+  maxConcurrent: 0,
+};
+
+const formatCount = (n: number) => n.toLocaleString('en-US');
+
+const parseLimitText = (text: string): number | null => {
+  const digits = text.trim().replace(/,/g, '');
+  return /^\d+$/.test(digits) ? Number(digits) : null;
+};
+
+export const validateUnpaidLimit = (field: UnpaidLimitField, text: string): string | null => {
+  const n = parseLimitText(text);
+  if (n === null) return 'Enter a whole number';
+  if (n < field.min || n > field.max) return `Must be between ${formatCount(field.min)} and ${formatCount(field.max)}`;
+  return null;
+};
+
+const unpaidLimitsFromForm = (form: UnpaidLimitsForm): OAuthClientUnpaidAccountLimits | null => {
+  const limits: Partial<OAuthClientUnpaidAccountLimits> = {};
+  for (const field of UNPAID_LIMIT_FIELDS) {
+    if (validateUnpaidLimit(field, form[field.formKey])) return null;
+    limits[field.key] = parseLimitText(form[field.formKey]) ?? 0;
+  }
+  return limits as OAuthClientUnpaidAccountLimits;
+};
+
+const unpaidLimitsToForm = (limits: OAuthClientUnpaidAccountLimits, enabled: boolean): UnpaidLimitsForm => ({
+  enabled,
+  rpm: formatCount(limits.requestsPerMinute),
+  rpd: formatCount(limits.requestsPerDay),
+  tpm: formatCount(limits.tokensPerMinute),
+  concurrent: formatCount(limits.maxConcurrent),
+});
+
+const describeUnpaidLimits = (l: OAuthClientUnpaidAccountLimits): string =>
+  [
+    l.requestsPerMinute ? `${formatCount(l.requestsPerMinute)}/min` : 'no per-minute limit',
+    l.requestsPerDay ? `${formatCount(l.requestsPerDay)}/day` : 'no daily limit',
+    l.tokensPerMinute ? `${formatCount(l.tokensPerMinute)} tokens/min` : 'no token limit',
+    l.maxConcurrent ? `${formatCount(l.maxConcurrent)} at once` : 'no concurrency limit',
+  ].join(', ');
+
+// A stored trust config without subjectSource is the 'identities' shape (see resolveOAuthFederatedIdp).
+export function federatedFormFromClient(client: OAuthClientView): FederatedForm {
+  const idp = client.federatedIdp;
+  return {
+    enabled: !!idp,
+    subjectSource: idp?.subjectSource ?? 'identities',
+    issuer: idp?.issuer ?? '',
+    audience: idp?.audience ?? '',
+    providerName: idp?.providerName ?? '',
+    jwksUri: idp?.jwksUri ?? '',
+  };
+}
+
+export const editFormFromClient = (client: OAuthClientView): EditForm => ({
+  redirectUris: client.redirectUris.join('\n'),
+  postLogoutRedirectUris: (client.postLogoutRedirectUris ?? []).join('\n'),
+  scopes: client.allowedScopes,
+  federated: federatedFormFromClient(client),
+  overwatchProductId: client.overwatchProductId ?? '',
+  unpaidAccountsAllowed: client.unpaidAccountsAllowed !== false,
+  unpaidLimits: unpaidLimitsToForm(client.unpaidAccountLimits ?? DEFAULT_UNPAID_LIMITS, !!client.unpaidAccountLimits),
+});
+
+/** Only the fields the admin changed, so an unrelated save never trips the server's concurrent-edit guards. */
+export function buildEditPayload(client: OAuthClientView, form: EditForm): UpdateOAuthClientInput {
+  const payload: UpdateOAuthClientInput = {};
+
+  const uris = parseUris(form.redirectUris);
+  if (JSON.stringify(uris) !== JSON.stringify(client.redirectUris)) payload.redirectUris = uris;
+  const logoutUris = parseUris(form.postLogoutRedirectUris);
+  if (JSON.stringify(logoutUris) !== JSON.stringify(client.postLogoutRedirectUris ?? [])) {
+    payload.postLogoutRedirectUris = logoutUris;
+  }
+
+  const stored = new Set(client.allowedScopes);
+  const wanted = new Set(form.scopes);
+  if (stored.size !== wanted.size || [...wanted].some(scope => !stored.has(scope))) {
+    payload.allowedScopes = [
+      ...client.allowedScopes.filter(scope => wanted.has(scope)),
+      ...OAUTH_CLIENT_SCOPES.filter(scope => wanted.has(scope) && !stored.has(scope)),
+    ];
+  }
+
+  const before = federatedFormFromClient(client);
+  const after = form.federated;
+  if (after.enabled !== before.enabled || (after.enabled && JSON.stringify(after) !== JSON.stringify(before))) {
+    payload.federatedIdp = after.enabled ? federatedInput(after) : null;
+  }
+
+  const product = form.overwatchProductId.trim();
+  if (product !== (client.overwatchProductId ?? '')) payload.overwatchProductId = product || null;
+  if (form.unpaidAccountsAllowed !== (client.unpaidAccountsAllowed !== false)) {
+    payload.unpaidAccountsAllowed = form.unpaidAccountsAllowed;
+  }
+
+  const storedLimits = client.unpaidAccountLimits;
+  // The server refuses unpaid limits on a non-federated client, so dropping federation drops them too.
+  if (form.federated.enabled && form.unpaidLimits.enabled) {
+    const wanted = unpaidLimitsFromForm(form.unpaidLimits);
+    if (wanted && (!storedLimits || UNPAID_LIMIT_FIELDS.some(f => wanted[f.key] !== storedLimits[f.key]))) {
+      payload.unpaidAccountLimits = wanted;
+    }
+  } else if (storedLimits) {
+    payload.unpaidAccountLimits = null;
+  }
+  return payload;
+}
+
+export const removedScopes = (client: OAuthClientView, payload: UpdateOAuthClientInput): string[] =>
+  payload.allowedScopes ? client.allowedScopes.filter(scope => !payload.allowedScopes?.includes(scope)) : [];
+
+function FederatedTrustFields({
+  value,
+  onChange,
+  testIdPrefix,
+  audiencePlaceholder,
+}: {
+  value: FederatedForm;
+  onChange: (patch: Partial<FederatedForm>) => void;
+  testIdPrefix: string;
+  audiencePlaceholder: string;
+}) {
+  return (
+    <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }}>
+      <Stack spacing={1.25}>
+        <FormControl>
+          <FormLabel>Subject source</FormLabel>
+          <Select
+            value={value.subjectSource}
+            onChange={(_e, v) => v && onChange({ subjectSource: v })}
+            data-testid={`${testIdPrefix}-subject-select`}
+          >
+            <Option value="sub">sub - app signs in against B4M directly</Option>
+            <Option value="identities">identities - app&apos;s Cognito pool federates B4M</Option>
+          </Select>
+        </FormControl>
+        <FormControl required>
+          <FormLabel>Issuer</FormLabel>
+          <Input
+            value={value.issuer}
+            onChange={e => onChange({ issuer: e.target.value })}
+            slotProps={{ input: { 'data-testid': `${testIdPrefix}-issuer-input` } }}
+          />
+        </FormControl>
+        <FormControl required={value.subjectSource === 'identities'}>
+          <FormLabel>Audience</FormLabel>
+          <Input
+            placeholder={value.subjectSource === 'sub' ? audiencePlaceholder : ''}
+            value={value.audience}
+            onChange={e => onChange({ audience: e.target.value })}
+            slotProps={{ input: { 'data-testid': `${testIdPrefix}-audience-input` } }}
+          />
+        </FormControl>
+        {value.subjectSource === 'identities' && (
+          <FormControl required>
+            <FormLabel>Provider name</FormLabel>
+            <Input
+              value={value.providerName}
+              onChange={e => onChange({ providerName: e.target.value })}
+              slotProps={{ input: { 'data-testid': `${testIdPrefix}-provider-input` } }}
+            />
+          </FormControl>
+        )}
+        <FormControl required={value.subjectSource === 'sub'}>
+          <FormLabel>JWKS URI</FormLabel>
+          <Input
+            placeholder={
+              value.subjectSource === 'sub' ? '<issuer>/api/oauth/jwks' : 'Defaults to <issuer>/.well-known/jwks.json'
+            }
+            value={value.jwksUri}
+            onChange={e => onChange({ jwksUri: e.target.value })}
+            slotProps={{ input: { 'data-testid': `${testIdPrefix}-jwks-input` } }}
+          />
+        </FormControl>
+      </Stack>
+    </Sheet>
+  );
+}
+
+const UNPAID_ACCOUNTS_LABEL = 'Starter and free accounts may use this app';
+
+function UnpaidAccountsToggle({
+  checked,
+  onChange,
+  testid,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  testid: string;
+}) {
+  return (
+    <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+      <Box>
+        <FormLabel>{UNPAID_ACCOUNTS_LABEL}</FormLabel>
+        <FormHelperText sx={{ mt: 0 }}>
+          Under the paid-only API key switch, keys from this app&apos;s AI-token exchange work for accounts without a
+          paid plan. Off keeps this app paid-only.
+        </FormHelperText>
+      </Box>
+      <Switch
+        checked={checked}
+        onChange={e => onChange(e.target.checked)}
+        slotProps={{ input: { 'data-testid': testid } }}
+      />
+    </FormControl>
+  );
+}
+
+function UnpaidAccountLimitsFields({
+  value,
+  onChange,
+  stored,
+  unpaidAllowed,
+}: {
+  value: UnpaidLimitsForm;
+  onChange: (patch: Partial<UnpaidLimitsForm>) => void;
+  stored: OAuthClientUnpaidAccountLimits | undefined;
+  unpaidAllowed: boolean;
+}) {
+  const { authedSettingsLoaded, getSettingNumber, getSettingBoolean } = useAdminSettings();
+  const globals: OAuthClientUnpaidAccountLimits | null = authedSettingsLoaded
+    ? {
+        requestsPerMinute: getSettingNumber('apiKeyUntrustedRateLimitPerMin', 20),
+        requestsPerDay: getSettingNumber('apiKeyUntrustedRequestsPerDay', 0),
+        tokensPerMinute: getSettingNumber('apiKeyUntrustedTokensPerMin', 0),
+        maxConcurrent: getSettingNumber('apiKeyUntrustedMaxConcurrent', 0),
+      }
+    : null;
+  const trustGateOff = authedSettingsLoaded && !getSettingBoolean('apiKeyTrustGateEnabled', true);
+
+  const toggle = (enabled: boolean) =>
+    onChange(enabled ? unpaidLimitsToForm(stored ?? globals ?? DEFAULT_UNPAID_LIMITS, true) : { enabled: false });
+
+  return (
+    <Stack spacing={1.25} data-testid="oauth-client-edit-unpaid-limits-section">
+      <Box>
+        <Typography level="title-md">Unpaid account limits</Typography>
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+          Limits for keys this app mints for accounts without a plan or approval. Paid and approved accounts are not
+          affected.
+        </Typography>
+      </Box>
+
+      {trustGateOff && (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid="oauth-client-edit-unpaid-limits-trust-gate-text"
+        >
+          The API key trust gate is off, so no account is limited as unpaid.
+        </Typography>
+      )}
+
+      {!unpaidAllowed && (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid="oauth-client-edit-unpaid-limits-disabled-hint"
+        >
+          {`Unpaid accounts cannot use this app. Turn on "${UNPAID_ACCOUNTS_LABEL}" for these limits to apply.`}
+        </Typography>
+      )}
+
+      <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <FormLabel>Use custom limits for unpaid accounts</FormLabel>
+        <Switch
+          checked={value.enabled}
+          disabled={!unpaidAllowed}
+          onChange={e => toggle(e.target.checked)}
+          slotProps={{ input: { 'data-testid': 'oauth-client-edit-unpaid-limits-switch' } }}
+        />
+      </FormControl>
+
+      {!value.enabled && globals && (
+        <Typography
+          level="body-sm"
+          sx={{ color: 'admin.inkMuted' }}
+          data-testid="oauth-client-edit-unpaid-limits-global-text"
+        >
+          {`Using global limits: ${describeUnpaidLimits(globals)}.`}
+        </Typography>
+      )}
+
+      {value.enabled && (
+        <>
+          <Stack direction="row" gap={1.5} flexWrap="wrap" useFlexGap>
+            {UNPAID_LIMIT_FIELDS.map(field => {
+              const text = value[field.formKey];
+              const error = validateUnpaidLimit(field, text);
+              const globalValue = globals?.[field.key];
+              return (
+                <FormControl
+                  key={field.formKey}
+                  error={!!error}
+                  disabled={!unpaidAllowed}
+                  sx={{ flex: '1 1 12rem', minWidth: 0 }}
+                >
+                  <FormLabel>{field.label}</FormLabel>
+                  <Input
+                    value={text}
+                    placeholder={globalValue === undefined ? undefined : formatCount(globalValue)}
+                    onChange={e => onChange({ [field.formKey]: e.target.value })}
+                    onBlur={() => {
+                      const n = parseLimitText(text);
+                      if (n !== null) onChange({ [field.formKey]: formatCount(n) });
+                    }}
+                    slotProps={{
+                      input: {
+                        inputMode: 'numeric',
+                        'data-testid': `oauth-client-edit-unpaid-limits-${field.testid}-input`,
+                        style: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
+                      },
+                    }}
+                    endDecorator={
+                      <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                        {field.unit}
+                      </Typography>
+                    }
+                  />
+                  {(error || globalValue !== undefined) && (
+                    <FormHelperText>
+                      {error ?? (globalValue === 0 ? 'Global: no limit' : `Global: ${formatCount(globalValue ?? 0)}`)}
+                    </FormHelperText>
+                  )}
+                  {field.formKey === 'tpm' && (
+                    <FormHelperText>
+                      Counts every token in a request, cache reads included. Size it from full counted tokens, not
+                      billed input.
+                    </FormHelperText>
+                  )}
+                </FormControl>
+              );
+            })}
+          </Stack>
+          <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+            0 means no limit of that kind. Each key&apos;s own rate limit still applies. Changes take up to a minute to
+            apply.
+          </Typography>
+        </>
+      )}
+    </Stack>
+  );
 }
 
 function CopyField({ label, value, testid }: { label: string; value: string; testid: string }) {
@@ -134,45 +585,126 @@ function SecretModal({
   onClose: () => void;
 }) {
   return (
-    <Modal
-      open
-      onClose={(_event, reason) => {
+    <AdminDialog
+      title={rotated ? 'Client secret rotated' : 'OAuth client registered'}
+      width={640}
+      // AdminDialog hands Joy's close reason through. The secret is shown once, so Esc and a backdrop
+      // click must not dismiss it. The close button (reason closeClick) and Done close it; Esc and
+      // backdrop are pinned in OAuthClientsTab.test.tsx.
+      onClose={reason => {
         if (reason === 'backdropClick' || reason === 'escapeKeyDown') return;
         onClose();
       }}
+      data-testid="oauth-client-secret-modal"
     >
-      <ModalDialog size="lg" sx={{ width: 640, maxWidth: '95vw' }} data-testid="oauth-client-secret-modal">
-        <Typography level="h4">{rotated ? 'Client secret rotated' : 'OAuth client registered'}</Typography>
-        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-          {result.client.name}
+      <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+        {result.client.name}
+      </Typography>
+      <Alert color="warning" startDecorator={<WarningRoundedIcon />} sx={{ my: 1.5 }}>
+        <Typography level="body-sm" data-testid="oauth-client-secret-notice">
+          The client secret will not be shown again. Copy it now and store it in the app&apos;s secret manager.
+          {rotated && ' The previous secret has stopped working.'}
         </Typography>
-        <Alert color="warning" startDecorator={<WarningRoundedIcon />} sx={{ my: 1.5 }}>
-          <Typography level="body-sm" data-testid="oauth-client-secret-notice">
-            The client secret will not be shown again. Copy it now and store it in the app&apos;s secret manager.
-            {rotated && ' The previous secret has stopped working.'}
-          </Typography>
-        </Alert>
-        <Stack spacing={1.5}>
-          <CopyField label="Client ID" value={result.client.clientId} testid="oauth-client-secret-modal-client-id" />
-          <CopyField label="Client secret" value={result.clientSecret} testid="oauth-client-secret-modal-secret" />
-        </Stack>
-        <Stack direction="row" justifyContent="flex-end" mt={2}>
-          <Button onClick={onClose} data-testid="oauth-client-secret-done-btn">
-            Done
-          </Button>
-        </Stack>
-      </ModalDialog>
-    </Modal>
+      </Alert>
+      <Stack spacing={1.5}>
+        <CopyField label="Client ID" value={result.client.clientId} testid="oauth-client-secret-modal-client-id" />
+        <CopyField label="Client secret" value={result.clientSecret} testid="oauth-client-secret-modal-secret" />
+      </Stack>
+      <Stack direction="row" justifyContent="flex-end" mt={2}>
+        <Button onClick={onClose} data-testid="oauth-client-secret-done-btn">
+          Done
+        </Button>
+      </Stack>
+    </AdminDialog>
+  );
+}
+
+const UsageDash = () => (
+  <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }}>
+    {'\u2014'}
+  </Typography>
+);
+
+/** DataTable hides `[data-row-actions]` until the row is hovered or focused, so the copy button appears on hover. */
+function ClientIdCell({ clientId }: { clientId: string }) {
+  const { copied, handleCopyToClipboard } = useCopyToClipboard();
+  return (
+    <Stack direction="row" alignItems="center" gap={0.5} sx={{ minWidth: 0 }}>
+      <Typography level="body-xs" noWrap title={clientId} sx={{ fontFamily: 'monospace', minWidth: 0 }}>
+        {clientId}
+      </Typography>
+      <Box data-row-actions sx={{ display: 'inline-flex', flexShrink: 0 }}>
+        <Tooltip title={copied ? 'Copied' : 'Copy client ID'}>
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label="Copy client ID"
+            onClick={() => handleCopyToClipboard(clientId)}
+            data-testid={`oauth-client-copy-id-${clientId}`}
+            sx={{ '--IconButton-size': '22px', minHeight: 22, minWidth: 22, color: 'admin.inkMuted' }}
+          >
+            {copied ? <CheckIcon sx={{ fontSize: 14 }} /> : <CopyIcon sx={{ fontSize: 13 }} />}
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </Stack>
+  );
+}
+
+const isConfidential = (client: OAuthClientView) => client.tokenEndpointAuthMethod === 'client_secret_post';
+
+function ClientRowMenu({
+  client,
+  onEdit,
+  onRotate,
+  onViewUsage,
+  writeBlocked,
+}: {
+  client: OAuthClientView;
+  onEdit: () => void;
+  onRotate: () => void;
+  onViewUsage: () => void;
+  writeBlocked: string | null;
+}) {
+  return (
+    <RowActionsMenu testId={`oauth-client-actions-${client.clientId}`} ariaLabel={`Actions for ${client.name}`}>
+      <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+        {disabled => (
+          <MenuItem disabled={disabled} onClick={onEdit} data-testid={`oauth-client-edit-${client.clientId}`}>
+            Edit client
+          </MenuItem>
+        )}
+      </AdminPermissionAction>
+      <MenuItem onClick={onViewUsage} data-testid={`oauth-client-usage-${client.clientId}`}>
+        View usage
+      </MenuItem>
+      {isConfidential(client) && (
+        <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+          {disabled => (
+            <MenuItem disabled={disabled} onClick={onRotate} data-testid={`oauth-client-rotate-${client.clientId}`}>
+              Rotate secret
+            </MenuItem>
+          )}
+        </AdminPermissionAction>
+      )}
+    </RowActionsMenu>
   );
 }
 
 export default function OAuthClientsTab() {
   const queryClient = useQueryClient();
+  const writeBlocked = useFullAdminOnlyReason();
+  const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreateForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<OAuthClientView | null>(null);
-  const [editUris, setEditUris] = useState('');
+  const [editForm, setEditForm] = useState<EditForm | null>(null);
+  const [narrowing, setNarrowing] = useState<{
+    removed: string[];
+    dropsTrust: boolean;
+    payload: UpdateOAuthClientInput;
+  } | null>(null);
   const [rotateTarget, setRotateTarget] = useState<OAuthClientView | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<OAuthClientView | null>(null);
   // The secret is held in state and in the create/rotate mutation result; both are cleared when the modal closes (gcTime 0).
@@ -183,7 +715,13 @@ export default function OAuthClientsTab() {
     isPending,
     isError,
     error: listError,
+    refetch,
   } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
+  // Separate from the list so a stats failure never breaks the tab; it shows dashes instead.
+  const { data: usage, isError: usageFailed } = useQuery({
+    queryKey: [OAUTH_CLIENT_STATS_QUERY_KEY],
+    queryFn: fetchOAuthClientStats,
+  });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
 
   const createMutation = useMutation({
@@ -198,13 +736,24 @@ export default function OAuthClientsTab() {
   });
 
   const editMutation = useMutation({
-    mutationFn: (client: OAuthClientView) => updateOAuthClient(client.id, { redirectUris: parseUris(editUris) }),
+    mutationFn: ({ client, payload }: { client: OAuthClientView; payload: UpdateOAuthClientInput }) =>
+      updateOAuthClient(client.id, { ...payload, expectedUpdatedAt: client.updatedAt }),
     onSuccess: client => {
       invalidate();
+      setNarrowing(null);
       setEditTarget(null);
-      toast.success(`Updated redirect URIs for ${client.name}`);
+      toast.success(`Updated ${client.name}`);
     },
-    onError: (error: unknown) => setFormError(getErrorMessage(error)),
+    onError: (error: unknown) => {
+      invalidate();
+      setNarrowing(null);
+      const message = getErrorMessage(error);
+      setFormError(
+        isAxiosError(error) && error.response?.status === 409
+          ? `${message} Close and reopen this client to load the latest changes.`
+          : message
+      );
+    },
   });
 
   const activeMutation = useMutation({
@@ -236,7 +785,7 @@ export default function OAuthClientsTab() {
   };
 
   const openEdit = (client: OAuthClientView) => {
-    setEditUris(client.redirectUris.join('\n'));
+    setEditForm(editFormFromClient(client));
     setFormError(null);
     setEditTarget(client);
   };
@@ -244,176 +793,294 @@ export default function OAuthClientsTab() {
   const setFederated = (patch: Partial<FederatedForm>) =>
     setCreateForm(f => ({ ...f, federated: { ...f.federated, ...patch } }));
 
-  return (
-    <Box sx={{ p: 2 }} data-testid="oauth-clients-tab">
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
-        <Box>
-          <Typography level="h4">OAuth Clients</Typography>
-          <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 620 }}>
-            Apps registered to use &quot;Sign in with Bike4Mind&quot;. Each client authenticates at the token endpoint
-            with its secret, and may only redirect to its registered URIs (exact match).
-          </Typography>
-        </Box>
-        <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="oauth-client-add-btn">
-          Register client
-        </Button>
-      </Stack>
+  const setEditFederated = (patch: Partial<FederatedForm>) =>
+    setEditForm(f => f && { ...f, federated: { ...f.federated, ...patch } });
 
-      {isPending && <LinearProgress sx={{ mb: 1 }} />}
+  const toggleEditFederated = (enabled: boolean) =>
+    setEditForm(
+      f =>
+        f && {
+          ...f,
+          federated: { ...f.federated, enabled },
+          scopes: enabled ? [...new Set([...f.scopes, ...OAUTH_FEDERATED_DEFAULT_SCOPES])] : f.scopes,
+        }
+    );
+
+  const toggleEditScope = (scope: string, checked: boolean) =>
+    setEditForm(f => f && { ...f, scopes: checked ? [...f.scopes, scope] : f.scopes.filter(s => s !== scope) });
+
+  const setEditUnpaidLimits = (patch: Partial<UnpaidLimitsForm>) =>
+    setEditForm(f => f && { ...f, unpaidLimits: { ...f.unpaidLimits, ...patch } });
+
+  const unpaidLimitsInvalid =
+    !!editForm?.federated.enabled &&
+    editForm.unpaidLimits.enabled &&
+    UNPAID_LIMIT_FIELDS.some(f => validateUnpaidLimit(f, editForm.unpaidLimits[f.formKey]));
+
+  const saveEdit = () => {
+    if (!editTarget || !editForm) return;
+    setFormError(null);
+    const payload = buildEditPayload(editTarget, editForm);
+    if (Object.keys(payload).length === 0) return setEditTarget(null);
+    const removed = removedScopes(editTarget, payload);
+    const dropsTrust = payload.federatedIdp === null && !!editTarget.federatedIdp;
+    if (removed.length || dropsTrust) return setNarrowing({ removed, dropsTrust, payload });
+    editMutation.mutate({ client: editTarget, payload });
+  };
+
+  const columns: DataColumn<OAuthClientView>[] = [
+    {
+      id: 'name',
+      label: 'Name',
+      width: '10rem',
+      render: client => (
+        <Stack gap={0.5} alignItems="flex-start" sx={{ minWidth: 0 }}>
+          <Typography
+            level="body-sm"
+            fontWeight="lg"
+            textColor="text.primary"
+            noWrap
+            title={client.name}
+            sx={{ maxWidth: '100%' }}
+            data-testid={`oauth-client-name-${client.clientId}`}
+          >
+            {client.name}
+          </Typography>
+          {client.federatedIdp && (
+            <Chip size="sm" variant="soft" color="neutral">
+              federated
+            </Chip>
+          )}
+          {client.unpaidAccountLimits && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              title={describeUnpaidLimits(client.unpaidAccountLimits)}
+              data-testid={`oauth-client-unpaid-limits-chip-${client.clientId}`}
+            >
+              custom unpaid limits
+            </Chip>
+          )}
+        </Stack>
+      ),
+    },
+    {
+      id: 'clientId',
+      label: 'Client ID',
+      width: '14rem',
+      render: client => <ClientIdCell clientId={client.clientId} />,
+    },
+    {
+      id: 'signups',
+      label: 'Sign-ups (7d / 30d)',
+      width: '8.5rem',
+      render: client => {
+        const counts = usage?.[client.clientId];
+        if (usageFailed || !counts) return <UsageDash />;
+        return (
+          <Link
+            component="button"
+            type="button"
+            level="body-sm"
+            onClick={() =>
+              navigate({
+                to: '/admin',
+                search: usersTabLinkSearch({ signupClient: client.clientId, signedUp: 'month' }),
+              })
+            }
+            data-testid={`oauth-client-signups-link-${client.clientId}`}
+          >
+            {`${counts.signups7d} / ${counts.signups30d}`}
+          </Link>
+        );
+      },
+    },
+    {
+      id: 'activeUsers',
+      label: 'Active users (7d / 30d)',
+      width: '8.5rem',
+      render: client => {
+        const counts = usage?.[client.clientId];
+        if (usageFailed || !counts) return <UsageDash />;
+        return (
+          <Typography level="body-sm" data-testid={`oauth-client-active-users-${client.clientId}`}>
+            {`${counts.activeUsers7d} / ${counts.activeUsers30d}`}
+          </Typography>
+        );
+      },
+    },
+    {
+      id: 'type',
+      label: 'Type',
+      width: '8rem',
+      render: client => (
+        <Stack gap={0.25} alignItems="flex-start">
+          <Chip size="sm" variant="soft" color="neutral">
+            {client.clientType}
+          </Chip>
+          {!isConfidential(client) && (
+            <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+              public (PKCE)
+            </Typography>
+          )}
+        </Stack>
+      ),
+    },
+    {
+      id: 'redirectUris',
+      label: 'Redirect URIs',
+      render: client => (
+        <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+          {client.redirectUris.map(uri => (
+            <Typography key={uri} level="body-xs" noWrap title={uri} sx={{ fontFamily: 'monospace', maxWidth: '100%' }}>
+              {uri}
+            </Typography>
+          ))}
+        </Stack>
+      ),
+    },
+    {
+      id: 'scopes',
+      label: 'Scopes',
+      width: '12rem',
+      render: client => (
+        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+          {client.allowedScopes.map(scope => (
+            <Chip key={scope} size="sm" variant="outlined">
+              {scope}
+            </Chip>
+          ))}
+        </Stack>
+      ),
+    },
+    {
+      id: 'active',
+      label: 'Active',
+      width: '5rem',
+      render: client => (
+        <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+          {disabled => (
+            <Switch
+              size="sm"
+              checked={client.isActive}
+              disabled={disabled || (activeMutation.isPending && activeMutation.variables?.client.id === client.id)}
+              onChange={() =>
+                client.isActive ? setDeactivateTarget(client) : activeMutation.mutate({ client, isActive: true })
+              }
+              slotProps={{ input: { 'data-testid': `oauth-client-toggle-${client.clientId}` } }}
+            />
+          )}
+        </AdminPermissionAction>
+      ),
+    },
+    {
+      id: 'createdAt',
+      label: 'Created',
+      width: '7rem',
+      render: client => (
+        <Typography level="body-xs" noWrap sx={client.createdAt ? undefined : { color: 'admin.inkMuted' }}>
+          {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : '-'}
+        </Typography>
+      ),
+    },
+  ];
+
+  return (
+    <Stack sx={{ gap: ADMIN_REGION_GAP, minWidth: 0 }} data-testid="oauth-clients-tab">
+      <AdminPageHeader
+        title="OAuth clients"
+        count={isPending || (isError && clients.length === 0) ? undefined : clients.length}
+        description={
+          'Apps registered to use "Sign in with Bike4Mind". Each client authenticates at the token endpoint with its secret, and may only redirect to its registered URIs (exact match). Active users counts people who signed in through the app since sign-in tracking began, so it includes existing accounts.'
+        }
+        actions={
+          <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+            {disabled => (
+              <Button
+                size="sm"
+                startDecorator={<AddIcon />}
+                disabled={disabled}
+                onClick={openCreate}
+                data-testid="oauth-client-add-btn"
+              >
+                Register client
+              </Button>
+            )}
+          </AdminPermissionAction>
+        }
+      />
 
       {isError && clients.length > 0 && (
-        <Alert color="warning" variant="soft" sx={{ mb: 1 }} data-testid="oauth-clients-refresh-error">
+        <Alert color="warning" variant="soft" data-testid="oauth-clients-refresh-error">
           {`Could not refresh OAuth clients, showing the last loaded list: ${getErrorMessage(listError)}`}
         </Alert>
       )}
 
-      {isError && clients.length === 0 ? (
-        <Alert color="danger" variant="soft" data-testid="oauth-clients-load-error">
-          {`Could not load OAuth clients: ${getErrorMessage(listError)}`}
-        </Alert>
-      ) : !isPending && clients.length === 0 ? (
-        <Sheet variant="soft" sx={{ borderRadius: 'md', py: 6, px: 3, textAlign: 'center' }}>
-          <Typography level="title-md" data-testid="oauth-clients-empty">
-            No OAuth clients registered yet
-          </Typography>
-        </Sheet>
-      ) : (
-        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-          <Table stickyHeader hoverRow sx={{ '--TableCell-headBackground': 'var(--joy-palette-background-level1)' }}>
-            <thead>
-              <tr>
-                <th style={{ width: 160 }}>Name</th>
-                <th style={{ width: 240 }}>Client ID</th>
-                <th style={{ width: 120 }}>Type</th>
-                <th>Redirect URIs</th>
-                <th style={{ width: 200 }}>Scopes</th>
-                <th style={{ width: 80, textAlign: 'center' }}>Active</th>
-                <th style={{ width: 110 }}>Created</th>
-                <th style={{ width: 100, textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.map(client => {
-                const isConfidential = client.tokenEndpointAuthMethod === 'client_secret_post';
-                return (
-                  <tr
-                    key={client.id}
-                    data-testid={`oauth-client-row-${client.clientId}`}
-                    style={{ opacity: client.isActive ? 1 : 0.55 }}
-                  >
-                    <td>
-                      <Typography level="body-sm" fontWeight="lg" textColor="text.primary">
-                        {client.name}
-                      </Typography>
-                      {client.federatedIdp && (
-                        <Chip size="sm" variant="soft" color="warning">
-                          federated
-                        </Chip>
-                      )}
-                    </td>
-                    <td>
-                      <Typography level="body-xs" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                        {client.clientId}
-                      </Typography>
-                    </td>
-                    <td>
-                      <Chip
-                        size="sm"
-                        variant="soft"
-                        color={client.clientType === 'first-party' ? 'primary' : 'neutral'}
-                      >
-                        {client.clientType}
-                      </Chip>
-                      {!isConfidential && (
-                        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                          public (PKCE)
-                        </Typography>
-                      )}
-                    </td>
-                    <td>
-                      <Stack spacing={0.25}>
-                        {client.redirectUris.map(uri => (
-                          <Typography
-                            key={uri}
-                            level="body-xs"
-                            sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
-                          >
-                            {uri}
-                          </Typography>
-                        ))}
-                      </Stack>
-                    </td>
-                    <td>
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                        {client.allowedScopes.map(scope => (
-                          <Chip key={scope} size="sm" variant="outlined">
-                            {scope}
-                          </Chip>
-                        ))}
-                      </Stack>
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <Switch
-                        size="sm"
-                        color={client.isActive ? 'success' : 'neutral'}
-                        checked={client.isActive}
-                        disabled={activeMutation.isPending && activeMutation.variables?.client.id === client.id}
-                        onChange={() =>
-                          client.isActive
-                            ? setDeactivateTarget(client)
-                            : activeMutation.mutate({ client, isActive: true })
-                        }
-                        slotProps={{ input: { 'data-testid': `oauth-client-toggle-${client.clientId}` } }}
-                      />
-                    </td>
-                    <td>
-                      <Typography level="body-xs">
-                        {client.createdAt ? new Date(client.createdAt).toLocaleDateString() : '-'}
-                      </Typography>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                        <Tooltip title="Edit redirect URIs">
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            onClick={() => openEdit(client)}
-                            data-testid={`oauth-client-edit-${client.clientId}`}
-                          >
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        {isConfidential && (
-                          <Tooltip title="Rotate secret">
-                            <IconButton
-                              size="sm"
-                              variant="plain"
-                              color="warning"
-                              onClick={() => setRotateTarget(client)}
-                              data-testid={`oauth-client-rotate-${client.clientId}`}
-                            >
-                              <KeyIcon />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                      </Stack>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-        </Sheet>
-      )}
+      <DataTable
+        label="OAuth clients"
+        testId="oauth-clients-table"
+        rows={clients}
+        columns={columns}
+        getRowId={client => client.id}
+        rowTestId={client => `oauth-client-row-${client.clientId}`}
+        loading={isPending}
+        error={
+          isError && clients.length === 0 ? `Could not load OAuth clients: ${getErrorMessage(listError)}` : undefined
+        }
+        onRetry={() => void refetch()}
+        empty={
+          <Box data-testid="oauth-clients-empty">
+            <EmptyState
+              title="No OAuth clients registered yet"
+              description="Register an app to let it offer Sign in with Bike4Mind."
+              action={
+                <AdminPermissionAction requirement="settings:manage" blockedReason={writeBlocked}>
+                  {disabled => (
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      startDecorator={<AddIcon />}
+                      disabled={disabled}
+                      onClick={openCreate}
+                      data-testid="oauth-clients-empty-add-btn"
+                    >
+                      Register client
+                    </Button>
+                  )}
+                </AdminPermissionAction>
+              }
+            />
+          </Box>
+        }
+        rowActions={client => (
+          <ClientRowMenu
+            client={client}
+            onEdit={() => openEdit(client)}
+            onRotate={() => setRotateTarget(client)}
+            writeBlocked={writeBlocked}
+            onViewUsage={() => {
+              useCreditAnalysisStore.getState().openSideApps(client.clientId);
+              useAdminModal.getState().setActiveTab(AdminTab.CreditAnalytics);
+            }}
+          />
+        )}
+        // Fixed columns total 76.5rem; redirect URIs take the rest and truncate. Below 85rem the table
+        // scrolls sideways inside its frame.
+        minWidth="85rem"
+        maxHeight="none"
+        pagination={false}
+      />
 
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)}>
-        <ModalDialog
-          sx={{ minWidth: 460, maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}
-          data-testid="oauth-client-create-modal"
-        >
-          <ModalClose />
-          <Typography level="h4">Register OAuth client</Typography>
-          <Divider sx={{ my: 1 }} />
+      <AdminDialog
+        open={createOpen}
+        onClose={() => !createMutation.isPending && setCreateOpen(false)}
+        closeDisabled={createMutation.isPending}
+        title="Register OAuth client"
+        width={560}
+        data-testid="oauth-client-create-modal"
+      >
+        <DialogContent>
           <Stack spacing={1.5}>
             <FormControl required>
               <FormLabel>Name</FormLabel>
@@ -441,6 +1108,20 @@ export default function OAuthClientsTab() {
               </FormHelperText>
             </FormControl>
 
+            <FormControl>
+              <FormLabel>Post-logout redirect URIs</FormLabel>
+              <Textarea
+                minRows={1}
+                placeholder="https://app.example.com/signed-out"
+                value={createForm.postLogoutRedirectUris}
+                onChange={e => setCreateForm(f => ({ ...f, postLogoutRedirectUris: e.target.value }))}
+                slotProps={{ textarea: { 'data-testid': 'oauth-client-post-logout-uris-input' } }}
+              />
+              <FormHelperText>
+                Optional. Where the app may return users after signing them out of Bike4Mind.
+              </FormHelperText>
+            </FormControl>
+
             <Checkbox
               label="First-party client (B4M-owned; receives a full session instead of a scoped token)"
               checked={createForm.firstParty}
@@ -452,7 +1133,7 @@ export default function OAuthClientsTab() {
               <Box>
                 <FormLabel>Federated trust</FormLabel>
                 <FormHelperText sx={{ mt: 0 }}>
-                  Lets the app mint per-user AI keys via /api/oauth/ai-token. Cannot be added later.
+                  Lets the app mint per-user AI keys via /api/oauth/ai-token.
                 </FormHelperText>
               </Box>
               <Switch
@@ -463,61 +1144,20 @@ export default function OAuthClientsTab() {
             </FormControl>
 
             {createForm.federated.enabled && (
-              <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }}>
-                <Stack spacing={1.25}>
-                  <FormControl>
-                    <FormLabel>Subject source</FormLabel>
-                    <Select
-                      value={createForm.federated.subjectSource}
-                      onChange={(_e, value) => value && setFederated({ subjectSource: value })}
-                      data-testid="oauth-client-federated-subject-select"
-                    >
-                      <Option value="sub">sub - app signs in against B4M directly</Option>
-                      <Option value="identities">identities - app&apos;s Cognito pool federates B4M</Option>
-                    </Select>
-                  </FormControl>
-                  <FormControl required>
-                    <FormLabel>Issuer</FormLabel>
-                    <Input
-                      value={createForm.federated.issuer}
-                      onChange={e => setFederated({ issuer: e.target.value })}
-                      slotProps={{ input: { 'data-testid': 'oauth-client-federated-issuer-input' } }}
-                    />
-                  </FormControl>
-                  <FormControl required={createForm.federated.subjectSource === 'identities'}>
-                    <FormLabel>Audience</FormLabel>
-                    <Input
-                      placeholder={createForm.federated.subjectSource === 'sub' ? 'Defaults to the new client_id' : ''}
-                      value={createForm.federated.audience}
-                      onChange={e => setFederated({ audience: e.target.value })}
-                      slotProps={{ input: { 'data-testid': 'oauth-client-federated-audience-input' } }}
-                    />
-                  </FormControl>
-                  {createForm.federated.subjectSource === 'identities' && (
-                    <FormControl required>
-                      <FormLabel>Provider name</FormLabel>
-                      <Input
-                        value={createForm.federated.providerName}
-                        onChange={e => setFederated({ providerName: e.target.value })}
-                        slotProps={{ input: { 'data-testid': 'oauth-client-federated-provider-input' } }}
-                      />
-                    </FormControl>
-                  )}
-                  <FormControl required={createForm.federated.subjectSource === 'sub'}>
-                    <FormLabel>JWKS URI</FormLabel>
-                    <Input
-                      placeholder={
-                        createForm.federated.subjectSource === 'sub'
-                          ? '<issuer>/api/oauth/jwks'
-                          : 'Defaults to <issuer>/.well-known/jwks.json'
-                      }
-                      value={createForm.federated.jwksUri}
-                      onChange={e => setFederated({ jwksUri: e.target.value })}
-                      slotProps={{ input: { 'data-testid': 'oauth-client-federated-jwks-input' } }}
-                    />
-                  </FormControl>
-                </Stack>
-              </Sheet>
+              <FederatedTrustFields
+                value={createForm.federated}
+                onChange={setFederated}
+                testIdPrefix="oauth-client-federated"
+                audiencePlaceholder="Defaults to the new client_id"
+              />
+            )}
+
+            {createForm.federated.enabled && (
+              <UnpaidAccountsToggle
+                checked={createForm.unpaidAccountsAllowed}
+                onChange={unpaidAccountsAllowed => setCreateForm(f => ({ ...f, unpaidAccountsAllowed }))}
+                testid="oauth-client-unpaid-accounts-switch"
+              />
             )}
 
             {formError && (
@@ -527,7 +1167,12 @@ export default function OAuthClientsTab() {
             )}
 
             <Stack direction="row" justifyContent="flex-end" spacing={1}>
-              <Button variant="plain" color="neutral" onClick={() => setCreateOpen(false)}>
+              <Button
+                variant="plain"
+                color="neutral"
+                disabled={createMutation.isPending}
+                onClick={() => setCreateOpen(false)}
+              >
                 Cancel
               </Button>
               <Button
@@ -538,108 +1183,258 @@ export default function OAuthClientsTab() {
                 loading={createMutation.isPending}
                 data-testid="oauth-client-create-submit-btn"
               >
-                Register
+                Register client
               </Button>
             </Stack>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </DialogContent>
+      </AdminDialog>
 
-      <Modal open={!!editTarget} onClose={() => setEditTarget(null)}>
-        <ModalDialog sx={{ minWidth: 460, maxWidth: 560 }} data-testid="oauth-client-edit-modal">
-          <ModalClose />
-          <Typography level="h4">Edit redirect URIs</Typography>
+      <AdminDialog
+        open={!!editTarget}
+        onClose={() => !editMutation.isPending && setEditTarget(null)}
+        closeDisabled={editMutation.isPending}
+        title="Edit OAuth client"
+        width={560}
+        data-testid="oauth-client-edit-modal"
+      >
+        <DialogContent>
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             {editTarget?.name}
           </Typography>
-          <Divider sx={{ my: 1 }} />
-          <FormControl required>
-            <Textarea
-              minRows={3}
-              value={editUris}
-              onChange={e => setEditUris(e.target.value)}
-              slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-uris-input' } }}
-            />
-            <FormHelperText>One absolute URL per line, matched exactly.</FormHelperText>
-          </FormControl>
+          {editTarget && editForm && (
+            <Stack spacing={2}>
+              <FormControl required>
+                <FormLabel>Redirect URIs</FormLabel>
+                <Textarea
+                  minRows={3}
+                  value={editForm.redirectUris}
+                  onChange={e => setEditForm(f => f && { ...f, redirectUris: e.target.value })}
+                  slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-uris-input' } }}
+                />
+                <FormHelperText>One absolute URL per line, matched exactly.</FormHelperText>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Post-logout redirect URIs</FormLabel>
+                <Textarea
+                  minRows={1}
+                  value={editForm.postLogoutRedirectUris}
+                  onChange={e => setEditForm(f => f && { ...f, postLogoutRedirectUris: e.target.value })}
+                  slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-post-logout-uris-input' } }}
+                />
+                <FormHelperText>Optional. Same rules as redirect URIs.</FormHelperText>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Scopes</FormLabel>
+                <Stack spacing={0.75}>
+                  {[...OAUTH_CLIENT_SCOPES, ...editTarget.allowedScopes.filter(s => !isOAuthClientScope(s))].map(
+                    scope => {
+                      const checked = editForm.scopes.includes(scope);
+                      const optInBlocked =
+                        isOptInScope(scope) &&
+                        !checked &&
+                        !(editForm.federated.enabled && editTarget.clientType === 'relying-party');
+                      return (
+                        <Checkbox
+                          key={scope}
+                          label={scope}
+                          checked={checked}
+                          disabled={scope === 'openid' || optInBlocked}
+                          onChange={e => toggleEditScope(scope, e.target.checked)}
+                          slotProps={{ input: { 'data-testid': `oauth-client-edit-scope-${scope}` } }}
+                        />
+                      );
+                    }
+                  )}
+                </Stack>
+                <FormHelperText>
+                  Opt-in scopes need a federated relying-party client. Removing a scope takes effect for every user of
+                  this client.
+                </FormHelperText>
+              </FormControl>
+
+              <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <Box>
+                  <FormLabel>Federated trust</FormLabel>
+                  <FormHelperText sx={{ mt: 0 }}>
+                    Lets the app mint per-user AI keys via /api/oauth/ai-token. Turning it on ticks ai:generate and
+                    me:read.
+                  </FormHelperText>
+                </Box>
+                <Switch
+                  checked={editForm.federated.enabled}
+                  onChange={e => toggleEditFederated(e.target.checked)}
+                  slotProps={{ input: { 'data-testid': 'oauth-client-edit-federated-switch' } }}
+                />
+              </FormControl>
+
+              {editForm.federated.enabled && (
+                <FederatedTrustFields
+                  value={editForm.federated}
+                  onChange={setEditFederated}
+                  testIdPrefix="oauth-client-edit-federated"
+                  audiencePlaceholder="Defaults to this client_id"
+                />
+              )}
+
+              {editForm.federated.enabled && (
+                <UnpaidAccountsToggle
+                  checked={editForm.unpaidAccountsAllowed}
+                  onChange={unpaidAccountsAllowed => setEditForm(f => f && { ...f, unpaidAccountsAllowed })}
+                  testid="oauth-client-edit-unpaid-accounts-switch"
+                />
+              )}
+
+              {editForm.federated.enabled && (
+                <UnpaidAccountLimitsFields
+                  value={editForm.unpaidLimits}
+                  onChange={setEditUnpaidLimits}
+                  stored={editTarget.unpaidAccountLimits}
+                  unpaidAllowed={editForm.unpaidAccountsAllowed}
+                />
+              )}
+
+              <FormControl>
+                <FormLabel>Overwatch product</FormLabel>
+                <Input
+                  value={editForm.overwatchProductId}
+                  placeholder="None"
+                  onChange={e => setEditForm(f => f && { ...f, overwatchProductId: e.target.value })}
+                  slotProps={{ input: { 'data-testid': 'oauth-client-edit-overwatch-product-input' } }}
+                />
+                <FormHelperText>
+                  An account created to sign in to this client is credited to this Overwatch product, and so are its
+                  payments. Empty credits no product.
+                </FormHelperText>
+              </FormControl>
+            </Stack>
+          )}
           {formError && (
             <Alert color="danger" variant="soft" data-testid="oauth-client-edit-error">
               {formError}
             </Alert>
           )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 1 }}>
-            <Button variant="plain" color="neutral" onClick={() => setEditTarget(null)}>
+            <Button
+              variant="plain"
+              color="neutral"
+              disabled={editMutation.isPending}
+              onClick={() => setEditTarget(null)}
+            >
               Cancel
             </Button>
             <Button
               loading={editMutation.isPending}
-              onClick={() => {
-                setFormError(null);
-                if (editTarget) editMutation.mutate(editTarget);
-              }}
+              disabled={unpaidLimitsInvalid}
+              onClick={saveEdit}
               data-testid="oauth-client-edit-save-btn"
             >
-              Save
+              Save changes
             </Button>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </DialogContent>
+      </AdminDialog>
 
-      <Modal open={!!rotateTarget} onClose={() => setRotateTarget(null)}>
-        <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-rotate-modal">
-          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'warning.500' }} />}>
-            Rotate client secret
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Typography level="body-sm">
-            Generate a new secret for <b>{rotateTarget?.name}</b>? The current secret stops working immediately, so the
-            app cannot sign users in until it is updated with the new one.
-          </Typography>
+      <AdminDialog
+        open={!!narrowing}
+        onClose={() => !editMutation.isPending && setNarrowing(null)}
+        closeDisabled={editMutation.isPending}
+        role="alertdialog"
+        title={narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
+        data-testid="oauth-client-edit-narrow-modal"
+      >
+        <DialogContent>
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+            {narrowing?.removed.map(scope => (
+              <Chip key={scope} size="sm" variant="soft" color="neutral">
+                {scope}
+              </Chip>
+            ))}
+          </Stack>
+          {!!narrowing?.removed.length && (
+            <Typography level="body-sm" sx={{ mt: 1 }}>
+              Apps that still request a removed scope get invalid_scope at /authorize, for every user. Grants users
+              already approved are kept, but ai-token and federated-admin calls that need a removed scope fail with
+              invalid_scope, because the client no longer has it.
+            </Typography>
+          )}
+          {narrowing?.dropsTrust && (
+            <Typography level="body-sm" sx={{ mt: 1 }}>
+              Removing the trust config stops the AI-token exchange for every user of this client (403).
+            </Typography>
+          )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setRotateTarget(null)}>
+            <Button
+              variant="plain"
+              color="neutral"
+              disabled={editMutation.isPending}
+              onClick={() => setNarrowing(null)}
+            >
               Cancel
             </Button>
             <Button
-              color="warning"
-              loading={rotateMutation.isPending}
-              onClick={() => rotateTarget && rotateMutation.mutate(rotateTarget)}
-              data-testid="oauth-client-rotate-confirm-btn"
+              loading={editMutation.isPending}
+              onClick={() =>
+                editTarget && narrowing && editMutation.mutate({ client: editTarget, payload: narrowing.payload })
+              }
+              data-testid="oauth-client-edit-narrow-confirm-btn"
             >
-              Rotate secret
+              {narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
             </Button>
           </Stack>
-        </ModalDialog>
-      </Modal>
+        </DialogContent>
+      </AdminDialog>
 
-      <Modal open={!!deactivateTarget} onClose={() => setDeactivateTarget(null)}>
-        <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-deactivate-modal">
-          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'danger.500' }} />}>
-            Deactivate client
-          </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Typography level="body-sm">
+      {/* Both endpoints are audited but take no reason, so the dialogs collect one without sending it. */}
+      <ActionDialog
+        open={!!rotateTarget}
+        onClose={() => setRotateTarget(null)}
+        title="Rotate client secret"
+        description={
+          <>
+            Generate a new secret for <b>{rotateTarget?.name}</b>? The current secret stops working immediately, so the
+            app cannot sign users in until it is updated with the new one.
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientRotate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Rotate secret"
+        pending={rotateMutation.isPending}
+        onConfirm={() => {
+          if (rotateTarget) rotateMutation.mutate(rotateTarget);
+        }}
+        data-testid="oauth-client-rotate-modal"
+        testIds={{ confirm: 'oauth-client-rotate-confirm-btn' }}
+      />
+
+      <ActionDialog
+        open={!!deactivateTarget}
+        onClose={() => setDeactivateTarget(null)}
+        title="Deactivate client"
+        description={
+          <>
             Deactivate <b>{deactivateTarget?.name}</b>? It can no longer start sign-ins or exchange codes for tokens
             until it is reactivated.{' '}
             {deactivateTarget?.clientType === 'first-party'
               ? 'Sessions it already created are not ended.'
               : 'Access tokens it already issued stay valid until they expire.'}{' '}
             Nothing is deleted.
-          </Typography>
-          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
-            <Button variant="plain" color="neutral" onClick={() => setDeactivateTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="danger"
-              loading={activeMutation.isPending}
-              onClick={() => deactivateTarget && activeMutation.mutate({ client: deactivateTarget, isActive: false })}
-              data-testid="oauth-client-deactivate-confirm-btn"
-            >
-              Deactivate
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+          </>
+        }
+        reasonPresets={ADMIN_REASON_PRESETS.oauthClientDeactivate}
+        reasonAudited={false}
+        tone="danger"
+        confirmLabel="Deactivate client"
+        pending={activeMutation.isPending}
+        onConfirm={() => {
+          if (deactivateTarget) activeMutation.mutate({ client: deactivateTarget, isActive: false });
+        }}
+        data-testid="oauth-client-deactivate-modal"
+        testIds={{ confirm: 'oauth-client-deactivate-confirm-btn' }}
+      />
 
       {secretResult && (
         <SecretModal
@@ -652,6 +1447,6 @@ export default function OAuthClientsTab() {
           }}
         />
       )}
-    </Box>
+    </Stack>
   );
 }

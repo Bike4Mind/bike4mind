@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const mockRecoverAccounting = vi.fn().mockResolvedValue(undefined);
+vi.mock('./sreQueueAccounting', () => ({
+  recoverSreQueueAccounting: (...args: unknown[]) => mockRecoverAccounting(...args),
+}));
+
 const mockGetSettingsValue = vi.fn();
 const mockAtomicTransition = vi.fn();
+const mockHasCompletedRevisionAccounting = vi.fn().mockResolvedValue(false);
+const mockCompleteRevisionAccounting = vi.fn().mockResolvedValue(undefined);
 const mockCountConsecutiveFailures = vi.fn();
 const mockCountFixesDispatchedToday = vi.fn();
 const mockFindByPrNumber = vi.fn();
@@ -17,6 +24,8 @@ vi.mock('@bike4mind/database', () => ({
     deleteByKey: (...args: unknown[]) => mockDeleteByKey(...args),
   },
   sreErrorTrackingRepository: {
+    hasCompletedRevisionAccounting: (...args: unknown[]) => mockHasCompletedRevisionAccounting(...args),
+    completeRevisionAccounting: (...args: unknown[]) => mockCompleteRevisionAccounting(...args),
     atomicTransition: (...args: unknown[]) => mockAtomicTransition(...args),
     countConsecutiveFailures: (...args: unknown[]) => mockCountConsecutiveFailures(...args),
     countFixesDispatchedToday: (...args: unknown[]) => mockCountFixesDispatchedToday(...args),
@@ -27,6 +36,11 @@ vi.mock('@bike4mind/database', () => ({
 
 const mockRevise = vi.fn();
 vi.mock('@bike4mind/services/sreAgentService', () => ({
+  SreAccountingError: class extends Error {
+    constructor(reason: string) {
+      super(reason);
+    }
+  },
   SreAgentService: class {
     revise(...args: unknown[]) {
       return mockRevise(...args);
@@ -46,7 +60,7 @@ vi.mock('@bike4mind/services', () => ({
 
 const mockHasCommentWithMarker = vi.fn();
 const mockAddIssueComment = vi.fn();
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn().mockResolvedValue({
       getFileContent: vi.fn(),
@@ -103,7 +117,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsByNames: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -121,7 +135,7 @@ const mockPostSreRevisionStartedMessage = vi.fn();
 const mockPostSreFixFailureMessage = vi.fn();
 const mockPostSreAnalysisFailureMessage = vi.fn();
 const mockPostSreRateLimitedMessage = vi.fn();
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreNoFixNeededMessage: (...args: unknown[]) => mockPostSreNoFixNeededMessage(...args),
   postSreRevisionStartedMessage: (...args: unknown[]) => mockPostSreRevisionStartedMessage(...args),
   postSreFixFailureMessage: (...args: unknown[]) => mockPostSreFixFailureMessage(...args),
@@ -137,7 +151,11 @@ import { runSreRevision } from './sreRevision';
 // the SQS body and invokes the extracted function, mirroring what the merged
 // sreJob handler does for jobType: 'revision'.
 function dispatch(event: { Records: { body: string }[] }, _ctx: unknown, logger: unknown) {
-  return runSreRevision(JSON.parse(event.Records[0].body), logger as never);
+  return runSreRevision(
+    JSON.parse(event.Records[0].body),
+    logger as never,
+    { attribution: { executionId: 'revision-execution' } } as never
+  );
 }
 
 function makeSqsEvent(body: Record<string, unknown>) {
@@ -174,6 +192,9 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 describe('sreRevision handler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRecoverAccounting.mockResolvedValue(undefined);
+    mockHasCompletedRevisionAccounting.mockResolvedValue(false);
+    mockCompleteRevisionAccounting.mockResolvedValue(undefined);
     mockGetSettingsValue.mockResolvedValue({ enabled: true });
     mockCountConsecutiveFailures.mockResolvedValue(0);
     mockCountFixesDispatchedToday.mockResolvedValue(0);
@@ -550,4 +571,26 @@ describe('sreRevision handler', () => {
       expect(mockClaimCiRetry).not.toHaveBeenCalled();
     });
   });
+});
+
+it('propagates pending original accounting before revision state changes or inference', async () => {
+  vi.clearAllMocks();
+  const error = new Error('accounting pending');
+  mockRecoverAccounting.mockRejectedValueOnce(error);
+  await expect(runSreRevision({} as never, {} as never, {} as never)).rejects.toBe(error);
+  expect(mockAtomicTransition).not.toHaveBeenCalled();
+  expect(mockRevise).not.toHaveBeenCalled();
+});
+
+it('acknowledges an already completed revision without inference or repeated business actions', async () => {
+  vi.clearAllMocks();
+  mockRecoverAccounting.mockResolvedValue(undefined);
+  mockHasCompletedRevisionAccounting.mockResolvedValueOnce(true);
+  await runSreRevision(makeRevisionRequest() as never, mockLogger, {
+    attribution: { executionId: 'revision-execution' },
+  } as never);
+  expect(mockRevise).not.toHaveBeenCalled();
+  expect(mockAtomicTransition).not.toHaveBeenCalled();
+  expect(mockSendToQueue).not.toHaveBeenCalled();
+  expect(mockCompleteRevisionAccounting).not.toHaveBeenCalled();
 });

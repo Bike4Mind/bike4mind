@@ -3,10 +3,10 @@
  * and other users browse, import (a copy of the approved snapshot) and rate it.
  *
  * Only `currentApprovedVersionId` content is ever served to non-authors; pending/rejected versions
- * are readable by the author and reviewers only (apps/client/server/skillMarket/market.ts).
+ * are readable by the author and reviewers only (packages/server-utils/src/skillMarket/market.ts).
  */
 
-export type SkillListingVisibility = 'public' | 'organization' | 'unlisted';
+export type SkillListingVisibility = 'public' | 'organization' | 'space' | 'unlisted';
 
 export type SkillListingStatus = 'in_review' | 'approved' | 'rejected' | 'delisted' | 'withdrawn';
 
@@ -21,6 +21,9 @@ export type SkillRiskTier = 'clean' | 'review' | 'high';
 export const SKILL_LISTING_TAG_PATTERN = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const SKILL_LISTING_MAX_TAGS = 5;
 
+/** Request header carrying an unlisted listing's share token to the listing detail routes. */
+export const SKILL_SHARE_TOKEN_HEADER = 'x-share-token';
+
 /** `critical` fails the scan; `high` / `medium` raise the tier; `low` is informational. */
 export type SkillScanSeverity = 'critical' | 'high' | 'medium' | 'low';
 
@@ -30,6 +33,8 @@ export interface ISkillScanFinding {
   message: string;
   excerpt?: string;
   source: 'rules' | 'classifier';
+  /** Supporting file the finding is in; absent for the SKILL.md fields. */
+  file?: string;
 }
 
 /** Machine-generated from the body + allowedTools, never from the author's description. */
@@ -42,6 +47,12 @@ export interface ISkillHonestSummary {
   mismatchNote?: string;
 }
 
+/** A UTF-8 text file shipped beside SKILL.md, at a path under `scripts/` or `references/` (utils/skillFiles.ts). */
+export interface ISkillFile {
+  path: string;
+  content: string;
+}
+
 /** The skill fields a version freezes. */
 export interface ISkillSnapshot {
   name: string;
@@ -49,7 +60,11 @@ export interface ISkillSnapshot {
   body: string;
   argumentHint?: string;
   allowedTools?: string[];
+  claudeCodeAllowedTools?: string[];
+  claudeCodeModel?: string;
   disableModelInvocation?: boolean;
+  /** Sorted by path; absent when the skill has none. */
+  files?: ISkillFile[];
 }
 
 export interface ISkillListing {
@@ -59,6 +74,7 @@ export interface ISkillListing {
   authorName?: string;
   visibility: SkillListingVisibility;
   organizationId?: string;
+  spaceId?: string;
   tags: string[];
   status: SkillListingStatus;
   /** Unguessable token for unlisted links (192 bits). Never returned to non-authors of public/org listings. */
@@ -69,7 +85,7 @@ export interface ISkillListing {
   pendingVersion?: number | null;
   /** Monotonic counter used to number new versions. */
   latestVersion: number;
-  /** Organization listings' Claude Code plugin name: assigned at first approval, never changed. */
+  /** Organization and Space listings' Claude Code plugin name: assigned at first approval, never changed. */
   claudePluginName?: string;
 
   // Denormalized from the current approved version so browse/search/cards read only the listing.
@@ -132,6 +148,22 @@ export interface ISkillListingVersion {
   updatedAt: Date;
 }
 
+/** An org's or Space's curated set of its listings, served as one Claude Code plugin in its feed. Exactly one owner. */
+export interface ISkillBundle {
+  id: string;
+  organizationId?: string;
+  spaceId?: string;
+  name: string;
+  description: string;
+  /** Claude Code plugin name, unique in the org feed alongside listings' `claudePluginName`. */
+  pluginName: string;
+  /** Member listings in the admin's order; the zip orders skills by directory name instead. */
+  listingIds: string[];
+  createdByUserId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 /** One row per (listing, importer). Also carries the importer's rating, so rating requires an import. */
 export interface ISkillListingImport {
   id: string;
@@ -173,7 +205,7 @@ export interface ISkillImportedFrom {
 
 /** Server-computed on GET /api/skills and /api/skills/[id] for imported copies. */
 export interface ISkillMarketStatus {
-  state: 'current' | 'stale' | 'delisted' | 'removed';
+  state: 'current' | 'stale' | 'delisted' | 'removed' | 'hidden';
   importedVersion: number;
   latestVersion?: number;
   locallyModified: boolean;

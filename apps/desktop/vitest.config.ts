@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { sharedTest } from '../../vitest.shared';
 
 export default defineConfig({
@@ -13,7 +13,16 @@ export default defineConfig({
   test: {
     ...sharedTest,
     environment: 'node',
+    globalSetup: [resolve(__dirname, 'vitest.globalSetup.ts')],
     setupFiles: [resolve(__dirname, 'vitest.setup.ts')],
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // `*.repo.test.*` run only from `test:repo` (CI's misc leg, uncached): they build or read
+    // beyond this package and are slow by design.
+    ...(process.env.REPO_TEST_LANE === 'repo'
+      ? { include: ['src/**/*.repo.test.ts'] }
+      : {
+          include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+          exclude: [...configDefaults.exclude, '**/*.repo.test.ts'],
+        }),
+    reporters: ['default', resolve(__dirname, 'vitest.budgetReporter.ts')],
   },
 });

@@ -10,6 +10,8 @@ import {
   useConnectOrgSlack,
   useDisconnectOrgSlack,
 } from '@client/app/hooks/data/useOrgSlackWorkspace';
+import OrgSlackApiPosting from './OrgSlackApiPosting';
+import OrgSlackFeedback from './OrgSlackFeedback';
 import { useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
 
@@ -34,7 +36,7 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
       const errorMessages: Record<string, string> = {
         access_denied: 'Slack authorization was denied.',
         invalid_state: 'Authorization expired. Please try again.',
-        workspace_taken: 'This Slack workspace is already connected to another organization.',
+        workspace_taken: 'This Slack workspace is already connected to another team.',
         token_exchange_failed: 'Failed to connect. Please try again.',
         slack_unavailable: 'Slack is temporarily unavailable. Please try again later.',
         server_error: 'An unexpected error occurred. Please try again.',
@@ -57,7 +59,7 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
       type: 'danger',
       title: 'Disconnect Slack Workspace',
       description:
-        'Are you sure you want to disconnect this Slack workspace? Team members will no longer receive Slack notifications from this organization.',
+        'Are you sure you want to disconnect this Slack workspace? Team members will no longer receive Slack notifications from this team, and API posting is turned off for every channel.',
       onOk: () => {
         disconnectMutation.mutate(organization.id);
       },
@@ -156,6 +158,12 @@ const OrgSlackIntegration: FC<OrgSlackIntegrationProps> = ({ organization }) => 
             Your team can now link their personal Slack accounts via Settings to receive notifications.
           </Alert>
         )}
+
+        {workspace.enabled && (
+          <OrgSlackApiPosting organizationId={organization.id} organizationName={organization.name} />
+        )}
+
+        <OrgSlackFeedback organizationId={organization.id} canEnable={workspace.enabled} />
 
         <Box>
           <Button

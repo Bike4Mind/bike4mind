@@ -1,5 +1,8 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { AccountCredits, AccountPlan, AccountProfile, AccountTier } from '@shared/account';
+import { feedbackDeliveryFailed } from '@bike4mind/common';
+import type { AccountCredits, AccountPlan, AccountProfile, AccountTier, CreditExpiry } from '@shared/account';
+import type { DesktopUser } from '@shared/auth';
+import type { FeedbackSubmitResult } from '@shared/feedback';
 
 /**
  * Built for exactly this: the route exempts its reads from the daily rate limit so a client
@@ -11,9 +14,13 @@ const TIERS: readonly AccountTier[] = ['free', 'basic', 'pro', 'other'];
 
 /** The fields of `MeResponse` this client reads. Everything else on the wire is ignored. */
 interface WireMe {
-  credits?: { balance?: unknown };
+  credits?: { balance?: unknown; monthly_allowance?: unknown; expiring?: unknown };
   tier?: unknown;
-  subscription?: { plan_name?: unknown; interval?: unknown; current_period_ends_at?: unknown } | null;
+  subscription?: {
+    plan_name?: unknown;
+    interval?: unknown;
+    current_period_ends_at?: unknown;
+  } | null;
 }
 
 export interface AccountServiceLogger {
@@ -54,9 +61,66 @@ export class AccountService {
     return this.profile().then(profile => profile.credits);
   }
 
+  async sendFeedback(content: unknown, user?: DesktopUser): Promise<FeedbackSubmitResult> {
+    const api = this.deps.getApiClient();
+    if (!api || !user) return { ok: false, error: 'Sign in to send feedback.' };
+    if (typeof content !== 'string' || !content.trim()) {
+      return { ok: false, error: 'Write a message before sending feedback.' };
+    }
+
+    try {
+      const response = await api.post<{
+        contentStored?: boolean;
+        contentTruncated?: boolean;
+        delivery?: { channels?: { slack?: { outcome?: string }; email?: { outcome?: string } } };
+      }>('/api/feedback', {
+        userId: user.id,
+        username: user.username ?? 'Unknown',
+        userEmail: user.email ?? 'Unknown',
+        tags: ['feedback', 'cs'],
+        content,
+      });
+      const deliveryFailed = feedbackDeliveryFailed(response.delivery);
+      if (response.contentStored === false) {
+        return {
+          ok: false,
+          error: 'Your feedback was received, but we could not save the message text - please try again.',
+        };
+      }
+      if (response.contentTruncated && deliveryFailed) {
+        return {
+          ok: true,
+          warning:
+            'Your feedback was saved (trimmed a bit), but we could not notify the team - please contact support if it is urgent.',
+        };
+      }
+      if (response.contentTruncated) {
+        return {
+          ok: true,
+          warning: 'Your feedback was saved, but it was long enough that we had to trim it a bit.',
+        };
+      }
+      if (deliveryFailed) {
+        return {
+          ok: true,
+          warning: 'Saved your feedback, but we could not notify the team - please contact support if it is urgent.',
+        };
+      }
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'Could not submit your feedback. Please try again.' };
+    }
+  }
+
   private async read(): Promise<AccountProfile> {
     const api = this.deps.getApiClient();
-    if (!api) return { credits: { balance: null, error: 'Sign in to see your balance.' }, plan: null, tier: null };
+    if (!api) {
+      return {
+        credits: { balance: null, monthlyAllowance: null, error: 'Sign in to see your balance.' },
+        plan: null,
+        tier: null,
+      };
+    }
 
     try {
       const response = await api.get<WireMe>(ME_PATH);
@@ -64,17 +128,34 @@ export class AccountService {
       if (balance === null) {
         this.deps.logger.warn('ACCOUNT: /api/v1/me answered without a credit balance');
         return {
-          credits: { balance: null, error: 'This server did not report a balance.' },
+          credits: {
+            balance: null,
+            monthlyAllowance: readMonthlyAllowance(response),
+            error: 'This server did not report a balance.',
+          },
           plan: readPlan(response),
           tier: readTier(response),
         };
       }
-      return { credits: { balance }, plan: readPlan(response), tier: readTier(response) };
+      const expiring = readExpiring(response);
+      return {
+        credits: {
+          balance,
+          monthlyAllowance: readMonthlyAllowance(response),
+          ...(expiring === null ? {} : { expiring }),
+        },
+        plan: readPlan(response),
+        tier: readTier(response),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(`ACCOUNT: balance lookup failed: ${message}`);
       return {
-        credits: { balance: null, error: 'Could not read your balance from this server.' },
+        credits: {
+          balance: null,
+          monthlyAllowance: null,
+          error: 'Could not read your balance from this server.',
+        },
         plan: null,
         tier: null,
       };
@@ -92,6 +173,34 @@ export function readBalance(wire: unknown): number | null {
   if (!wire || typeof wire !== 'object') return null;
   const balance = (wire as WireMe).credits?.balance;
   return typeof balance === 'number' && Number.isFinite(balance) ? balance : null;
+}
+
+export function readMonthlyAllowance(wire: unknown): number | null {
+  if (!wire || typeof wire !== 'object') return null;
+  const allowance = (wire as WireMe).credits?.monthly_allowance;
+  return typeof allowance === 'number' && Number.isFinite(allowance) && allowance >= 0 ? allowance : null;
+}
+
+/**
+ * The expiry schedule out of a `/api/v1/me` body, or null when the server did not state one.
+ *
+ * All or nothing: dropping one malformed entry would understate what expires and so overstate
+ * the runway projected from it, which is worse than projecting without a schedule at all.
+ */
+export function readExpiring(wire: unknown): CreditExpiry[] | null {
+  if (!wire || typeof wire !== 'object') return null;
+  const expiring = (wire as WireMe).credits?.expiring;
+  if (!Array.isArray(expiring)) return null;
+  const schedule: CreditExpiry[] = [];
+  for (const entry of expiring as unknown[]) {
+    if (!entry || typeof entry !== 'object') return null;
+    const { amount, expires_at: expiresAtIso } = entry as { amount?: unknown; expires_at?: unknown };
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return null;
+    const expiresAt = typeof expiresAtIso === 'string' ? Date.parse(expiresAtIso) : Number.NaN;
+    if (!Number.isFinite(expiresAt)) return null;
+    schedule.push({ amount, expiresAt });
+  }
+  return schedule.sort((a, b) => a.expiresAt - b.expiresAt);
 }
 
 /**

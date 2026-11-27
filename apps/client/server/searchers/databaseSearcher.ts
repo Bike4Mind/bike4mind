@@ -8,6 +8,9 @@ import type { Searcher, SearchResult } from '@bike4mind/services/llm';
 import type { IChatHistoryItemRepository, IChatHistoryItemDocument } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'databaseSearcher' } });
 
 export interface DatabaseSearcherOptions {
   questsRepository: IChatHistoryItemRepository;
@@ -27,7 +30,7 @@ export function createDatabaseSearcher(options: DatabaseSearcherOptions): Search
     name: 'Internal Database',
     search: async (query: string): Promise<SearchResult[]> => {
       try {
-        console.log(`Database Searcher query: ${query}`);
+        logger.debug('Database Searcher query', { queryLength: query.length });
         const questsPromise = questsRepository.find({
           'promptMeta.session.userId': userId,
           prompt: { $regex: escapeRegex(query), $options: 'i' },
@@ -46,7 +49,7 @@ export function createDatabaseSearcher(options: DatabaseSearcherOptions): Search
           type: 'database',
         }));
       } catch (error) {
-        console.error('Database search error:', error);
+        logger.error('Database search error', { error });
         return [];
       }
     },

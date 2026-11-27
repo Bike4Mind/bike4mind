@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -12,11 +12,14 @@ import {
   INCONSISTENCY_KINDS,
   LAKE_FINDING_DETECTORS,
   LAKE_FINDING_STATUSES,
+  lakeFindingListResponseSchema,
   type ILakeFindingListItem,
 } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { recordLakeRead } from '@server/dataLakes/recordLakeRead';
+import { respond } from '@server/utils/respond';
 
 const ListQuery = z.object({
   status: z.enum(LAKE_FINDING_STATUSES).optional(),
@@ -92,7 +95,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           : [],
     }));
 
-    return res.json({ data, hasMore: findings.length > pageLimit });
+    if (page.length > 0) {
+      const fileIds = page.flatMap(f => f.sources.map(s => s.fabFileId));
+      await recordLakeRead(req, { lakeIds: [lake.id], fileIds, surface: 'data-lake-findings' });
+    }
+
+    return respond(res, lakeFindingListResponseSchema, { data, hasMore: findings.length > pageLimit });
   });
 
 export const config = { api: { externalResolver: true } };

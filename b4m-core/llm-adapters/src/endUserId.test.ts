@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'crypto';
-import { toProviderEndUserId } from './endUserId';
+import { toPlatformEndUserProviderId, toProviderEndUserId } from './endUserId';
 
 describe('toProviderEndUserId', () => {
   it('returns undefined for empty/absent input so the field can be omitted', () => {
@@ -37,5 +37,31 @@ describe('toProviderEndUserId', () => {
 
   it('trims surrounding whitespace before hashing so equivalent ids collapse', () => {
     expect(toProviderEndUserId('  user-123  ')).toBe(toProviderEndUserId('user-123'));
+  });
+});
+
+describe('toPlatformEndUserProviderId', () => {
+  const owner = '507f1f77bcf86cd799439011';
+
+  it('is a stable 64-char hex digest', () => {
+    const id = toPlatformEndUserProviderId(owner, 'customer_42');
+    expect(id).toMatch(/^[0-9a-f]{64}$/);
+    expect(toPlatformEndUserProviderId(owner, 'customer_42')).toBe(id);
+  });
+
+  it("differs from the key owner's own identifier and from the plain hash of owner:end_user_id", () => {
+    const id = toPlatformEndUserProviderId(owner, 'customer_42');
+    expect(id).not.toBe(toProviderEndUserId(owner));
+    expect(id).not.toBe(toProviderEndUserId(`${owner}:customer_42`));
+  });
+
+  it('separates end users of one platform and the same end_user_id across platforms', () => {
+    const other = '507f1f77bcf86cd799439012';
+    expect(toPlatformEndUserProviderId(owner, 'a')).not.toBe(toPlatformEndUserProviderId(owner, 'b'));
+    expect(toPlatformEndUserProviderId(owner, 'a')).not.toBe(toPlatformEndUserProviderId(other, 'a'));
+  });
+
+  it('cannot be shifted across the owner/end-user boundary', () => {
+    expect(toPlatformEndUserProviderId('ab', 'c')).not.toBe(toPlatformEndUserProviderId('a', 'bc'));
   });
 });

@@ -129,3 +129,14 @@ describe('POST /api/cc-bridge/pair', () => {
     expect(refs.create).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/cc-bridge/pair - org service account', () => {
+  it('refuses a service-account caller and mints nothing', async () => {
+    const { run } = call({
+      user: { ...tavernUser, isSystem: true, serviceAccountOrganizationId: 'org-1' },
+      body: {},
+    });
+    await expect(run()).rejects.toMatchObject({ statusCode: 403 });
+    expect(refs.create).not.toHaveBeenCalled();
+  });
+});

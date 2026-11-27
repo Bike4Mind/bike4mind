@@ -1,0 +1,11 @@
+Pixel art sprite sheet, 16-bit SNES-style, small cute aquarium fish, crisp hard pixel edges, dark 1px outlines, consistent scale and style, soft muted colours, no anti-aliasing, no text, no labels, no letters, no grid lines. Fully transparent background. Exactly 4 rows and 5 columns, evenly spaced with clear empty gaps between every sprite, every sprite the same size, each sprite's lowest point aligned on its row's baseline.
+Row 1: a round coral-red fish with a cream belly, plain unstriped body and a short rounded tail.
+Row 2: a tall teal fish with long trailing top and bottom fins.
+Row 3: a small plump yellow fish with blue spots and big eyes.
+Row 4: a slender lavender fish with a long flowing veil tail.
+The same 5 poses in the same order in every row, left to right:
+Column 1 SWIM: side view facing right, fins spread, tail mid-sweep, swimming calmly.
+Column 2 FRONT: facing the viewer head-on, eyes wide open looking straight out, fins raised a little as if to get attention.
+Column 3 REST: side view facing right, lying settled and content with fins relaxed, eyes open.
+Column 4 SLEEP: side view facing right, lying low with fins tucked in, eyes peacefully closed.
+Column 5 PALE: side view facing right, tilted onto its side, all its colours faded to pale washed-out grey, fins drooping, dull tired eyes.

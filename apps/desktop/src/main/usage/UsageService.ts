@@ -1,4 +1,5 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { own } from '@shared/ownKeys';
 import type { AccountUsageResult, UsageWindowId } from '@shared/usage';
 import {
   dailyBars,
@@ -23,7 +24,7 @@ const WINDOW_DAYS: Record<UsageWindowId, number> = {
 
 /** The renderer names the window, so it is checked rather than trusted to index the table. */
 export function isUsageWindow(value: unknown): value is UsageWindowId {
-  return typeof value === 'string' && value in WINDOW_DAYS;
+  return typeof value === 'string' && own(WINDOW_DAYS, value) !== undefined;
 }
 
 /**

@@ -2,6 +2,7 @@ import {
   ChunkClaimLostError,
   countCodePoints,
   DocumentDateSource,
+  type ExtractionRefusalReason,
   IFabFileChunkDocument,
   IFabFileRepository,
   IUserDocument,
@@ -105,6 +106,11 @@ export interface PreparedFabFileChunks {
    */
   documentDate: Date | null;
   documentDateSource: DocumentDateSource | null;
+  /**
+   * Why the chunker declined to read the file, or `null` when it read it. Always written, like
+   * `serverTextHash`, so a later pass that reads the file clears a refusal from an earlier one.
+   */
+  extractionRefusalReason: ExtractionRefusalReason | null;
 }
 
 /**
@@ -171,6 +177,8 @@ export const prepareFabFileChunks = async (
   // metadata-only backfill script applies the identical rule.
   const { documentDate, documentDateSource } = resolveDocumentDate(fabFile, chunker.getDocumentDate());
 
+  const extractionRefusalReason = chunker.getExtractionRefusal()?.reason ?? null;
+
   return {
     fabFileId: fabFile.id,
     embeddingModel,
@@ -182,6 +190,7 @@ export const prepareFabFileChunks = async (
     serverTextHash,
     documentDate,
     documentDateSource,
+    extractionRefusalReason,
   };
 };
 
@@ -299,6 +308,11 @@ export const commitFabFileChunks = async (
     // on the count because `chunkFabfile` also commits an empty result, and the chunk handler stamps
     // that case immediately after.
     ...(chunks.length > 0 ? { noExtractableTextAt: null } : {}),
+
+    // Why this pass produced no chunks when the chunker refused the file outright. Written
+    // unconditionally; `noExtractableTextAt` (stamped by the chunk handler) still carries the
+    // zero-chunk fact the rescue sweep keys on, this only refines the notice the owner sees.
+    extractionRefusalReason: prepared.extractionRefusalReason,
 
     // Clear the pending-rebuild stamp (#1939): this run IS the rebuild it recorded. Unconditional
     // like the two clears above, and safe to be so because nothing else writes this field - and

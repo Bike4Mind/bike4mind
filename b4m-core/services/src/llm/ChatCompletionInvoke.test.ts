@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
-import { ChatCompletionInvokeParamsSchema } from '@bike4mind/common';
+import {
+  ChatCompletionInvokeParamsSchema,
+  type IUserDocument,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  NotFoundError,
+} from '@bike4mind/common';
 import { ChatCompletionInvoke } from './ChatCompletionInvoke';
 import { QuestStartBodySchema } from './questStartBody';
 import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } from '@bike4mind/llm-adapters';
@@ -8,6 +14,15 @@ import { getAvailableModels, resetReplacedByOverlay, updateReplacedByOverlay } f
 // for the rejected-caller test, and used as a downstream sentinel (the "no model
 // found" BadRequestError) proving the owner/sharee cases got PAST the access check
 // rather than asserting the whole multi-step invoke() pipeline.
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+const gate = vi.hoisted(() => ({
+  loadFreeTierAllowedModels: vi.fn(async (): Promise<ReadonlySet<string> | undefined> => undefined),
+}));
+vi.mock('./modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./modelAdmission')>()),
+  loadFreeTierAllowedModels: gate.loadFreeTierAllowedModels,
+}));
+
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: vi.fn(),
@@ -49,6 +64,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset().mockResolvedValue([]);
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn() },
       organizations: { findById: vi.fn() },
       quests: { findById: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -56,11 +72,11 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     };
   });
 
-  const makeInvoke = () =>
+  const makeInvoke = (user: Partial<IUserDocument> = { id: ATTACKER_ID, tags: [] }) =>
     new ChatCompletionInvoke({
       db: mockDb,
       logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as any,
-      user: { id: ATTACKER_ID, tags: [] } as any,
+      user: user as IUserDocument,
       invokeLambda: vi.fn(),
     } as any);
 
@@ -70,6 +86,33 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
     expect(mockedGetAvailableModels).not.toHaveBeenCalled();
     expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing session with a 404 logged at warn, before any quest, credit or session write', async () => {
+    mockDb.sessions.findById.mockResolvedValue(null);
+    const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const invoke = new ChatCompletionInvoke({
+      db: mockDb,
+      logger,
+      user: { id: OWNER_ID, tags: [] },
+      invokeLambda: vi.fn(),
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+
+    const rejection = invoke.invoke({
+      body: { ...body, questId: 'quest-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    await expect(rejection).rejects.toBeInstanceOf(NotFoundError);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 404, message: 'Session not found' });
+
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('session not found'));
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(mockedGetAvailableModels).not.toHaveBeenCalled();
+    expect(mockDb.quests.findById).not.toHaveBeenCalled();
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+    expect(mockDb.quests.update).not.toHaveBeenCalled();
     expect(mockDb.sessions.update).not.toHaveBeenCalled();
   });
 
@@ -117,6 +160,154 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       expect.objectContaining({ skipAutoOffers: true, promptMode: 'raw' })
     );
   });
+
+  // The in-chat QuestMaster plan path is retired: an older client may still send its fields, and
+  // the turn must run as an ordinary completion without consulting the old setting or allowance.
+  it('dispatches an ordinary turn for a request that still sends the retired QuestMaster fields', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const dispatch = vi.fn();
+    const invoke = new ChatCompletionInvoke({
+      db: mockDb,
+      logger: { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      user: { id: OWNER_ID, tags: [] },
+      invokeLambda: dispatch,
+    } as unknown as ConstructorParameters<typeof ChatCompletionInvoke>[0]);
+
+    await invoke.invoke({
+      body: {
+        ...body,
+        enableQuestMaster: true,
+        questMaster: { questMasterPlanId: 'plan', questId: 'main', subQuestId: 'sub' },
+      } as typeof body,
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    expect(dispatch).toHaveBeenCalledOnce();
+    const dispatched = dispatch.mock.calls[0][0];
+    expect(dispatched.questId).toBe('quest-1');
+    expect(dispatched).not.toHaveProperty('enableQuestMaster');
+    expect(dispatched).not.toHaveProperty('questMaster');
+    expect(dispatched).not.toHaveProperty('questMasterStartId');
+    expect(dispatched).not.toHaveProperty('questAdmittedAs');
+    expect(mockDb.adminSettings.getSettingsValue).not.toHaveBeenCalledWith('EnableQuestMaster');
+  });
+
+  const enrolledGrant = {
+    stage: 'signup' as const,
+    signupCredits: 12,
+    unlockCredits: 28,
+    creditsReleased: 12,
+    nextCondition: 'verification' as const,
+  };
+
+  it.each(['session', 'apiKey', 'internal'] as const)(
+    'stores no signup activity on a quest created through %s',
+    async authOrigin => {
+      mockedGetAvailableModels.mockResolvedValue([
+        { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+      ] as never);
+      mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+      mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+      await makeInvoke({ id: OWNER_ID, tags: [], signupGrant: enrolledGrant }).invoke({
+        body,
+        userId: OWNER_ID,
+        authOrigin,
+        ...(authOrigin === 'apiKey' ? { apiKeyId: 'key1' } : {}),
+      });
+
+      expect(mockDb.quests.create.mock.calls[0][0]).not.toHaveProperty('signupActivity');
+    }
+  );
+
+  it.each(['session', 'apiKey', 'internal'] as const)(
+    'stores no signup activity when a failed turn is retried through %s',
+    async authOrigin => {
+      mockedGetAvailableModels.mockResolvedValue([
+        { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+      ] as never);
+      const priorQuest = { id: 'quest-1', sessionId: 'session-1', status: 'error', prompt: body.message };
+      mockDb.quests.findById.mockResolvedValue(priorQuest);
+      mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+      await makeInvoke({ id: OWNER_ID, signupGrant: enrolledGrant }).invoke({
+        body: { ...body, questId: 'quest-1' },
+        userId: OWNER_ID,
+        authOrigin,
+        ...(authOrigin === 'apiKey' ? { apiKeyId: 'key1' } : {}),
+      });
+      const [updated, options] = mockDb.quests.update.mock.calls[0];
+      expect(updated).toEqual(expect.objectContaining({ id: 'quest-1', status: 'running' }));
+      expect(updated).not.toHaveProperty('signupActivity');
+      expect(options).toEqual({ unset: ['errorCode', 'turnTiming', 'questMasterPlanId'] });
+    }
+  );
+
+  async function retryQuestWithLakeSaves(storedPrompt: string) {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.findById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'session-1',
+      status: 'error',
+      prompt: storedPrompt,
+      lakeSaveCount: 5,
+    });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    await makeInvoke({ id: OWNER_ID }).invoke({
+      body: { ...body, questId: 'quest-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    return mockDb.quests.update.mock.calls[0];
+  }
+
+  it('keeps the data lake save count when a turn is retried, so earlier saves still count', async () => {
+    const [updated, options] = await retryQuestWithLakeSaves(body.message);
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options.unset).not.toContain('lakeSaveCount');
+  });
+
+  it('resets the data lake save count when the retried prompt was edited', async () => {
+    const [updated, options] = await retryQuestWithLakeSaves(`${body.message} (before edit)`);
+    expect(updated).not.toHaveProperty('lakeSaveCount');
+    expect(options).toEqual({ unset: ['errorCode', 'turnTiming', 'questMasterPlanId', 'lakeSaveCount'] });
+  });
+
+  it('clears a legacy plan id when a turn written by the retired plan feature is retried', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.findById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'session-1',
+      status: 'done',
+      prompt: body.message,
+      questMasterPlanId: 'plan-1',
+      questMasterReply: '{"title":"Plan"}',
+    });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const quest = await makeInvoke({ id: OWNER_ID }).invoke({
+      body: { ...body, questId: 'quest-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+
+    // The returned quest is the ack the client caches, so it must not carry the old plan id either.
+    expect(quest?.questMasterPlanId).toBeUndefined();
+    const [updated, options] = mockDb.quests.update.mock.calls[0];
+    expect(updated).toHaveProperty('questMasterReply', null);
+    expect(options.unset).toEqual(['errorCode', 'turnTiming', 'questMasterPlanId']);
+  });
+
   // Same boundary: a workflow-style caller's integration isolation would silently lapse on the
   // async path, handing a prompt the user did not write their MCP servers, agents and skills.
   it('carries disableUserIntegrations onto questStartParams', async () => {
@@ -154,6 +345,38 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ deniedTools: ['create_data_lake'] }));
   });
   // Same boundary: dropped here, a key-driven lake write would be audited as the key's owner.
+  it.each([false, true])('carries authoritative file admission %s through the queued schema', async allowed => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as never);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const invoke = makeInvoke();
+    const forgedBody = {
+      ...body,
+      fileInputsAllowed: !allowed,
+      messageFileIds: ['private-canary'],
+      fabFileIds: ['session-canary'],
+    };
+    await invoke.invoke({
+      body: forgedBody,
+      userId: OWNER_ID,
+      authOrigin: 'apiKey',
+      apiKeyId: 'key1',
+      fileInputsAllowed: allowed,
+    });
+    const queued = (invoke as unknown as { questStartParams: unknown }).questStartParams;
+    const parsed = QuestStartBodySchema.parse(JSON.parse(JSON.stringify(queued)));
+    expect(parsed.fileInputsAllowed).toBe(allowed);
+    expect(parsed.apiKeyId).toBe('key1');
+    expect(parsed.messageFileIds).toEqual(allowed ? ['private-canary'] : []);
+    expect(parsed.fabFileIds).toEqual(allowed ? ['session-canary'] : []);
+    expect(mockDb.quests.create.mock.calls[0][0].fabFileIds).toEqual(allowed ? ['private-canary'] : []);
+    expect(ChatCompletionInvokeParamsSchema.parse({ ...body, fileInputsAllowed: true })).not.toHaveProperty(
+      'fileInputsAllowed'
+    );
+  });
+
   it('carries the server-set apiKeyId onto questStartParams', async () => {
     mockedGetAvailableModels.mockResolvedValue([
       { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
@@ -167,6 +390,54 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
     expect((invoke as any).questStartParams).toEqual(
       expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'key1' })
     );
+    expect(mockDb.quests.create.mock.calls[0][0]).not.toHaveProperty('signupActivity');
+  });
+  // Same boundary: dropped here, the worker's first_value would name no visit.
+  it('carries the server-set visitId onto questStartParams, and never one from the body', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const visitId = 'a'.repeat(32);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'session', visitId });
+    expect((invoke as any).questStartParams.visitId).toBe(visitId);
+
+    const forged = makeInvoke();
+    await forged.invoke({
+      body: { ...body, visitId: 'b'.repeat(32) } as never,
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect((forged as any).questStartParams).not.toHaveProperty('visitId');
+  });
+  // A retried turn is a new request: it names the visit it was retried in, not the first attempt's.
+  it("carries the retry request's visitId when a quest is retried", async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.findById.mockResolvedValue({ id: 'quest-1', sessionId: 'session-1', status: 'error' });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+    const visitId = 'c'.repeat(32);
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body: { ...body, questId: 'quest-1' }, userId: OWNER_ID, authOrigin: 'session', visitId });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ questId: 'quest-1', visitId }));
+  });
+  it('carries a withheld admin role onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1', adminRoleWithheld: true });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ adminRoleWithheld: true }));
   });
   // The positive signal a session-only tool checks; dropped here, the async worker would see none.
   it('carries the server-set authOrigin onto questStartParams', async () => {
@@ -215,7 +486,6 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       deepResearchConfig: { maxDepth: 1 },
       extraContextMessages: [{ role: 'user' as const, content: 'context' }],
       dashboardParams: { dashboardDataSources: [{ sourceName: 'source', data: 1 }] },
-      enableQuestMaster: true,
       promptMode: 'grounded' as const,
       skipAutoOffers: true,
       disableUserIntegrations: true,
@@ -228,10 +498,11 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
       enableLattice: true,
       tools: ['web_search'],
       mcpServers: ['server-1'],
+      disabledMcpConnections: ['acme'],
+      enabledPlatformMcpConnections: ['a'.repeat(24)],
       projectId: 'project-1',
       organizationId: 'org-1',
       toolPromptId: 'tool-prompt-1',
-      questMaster: { questMasterPlanId: 'plan-1', questId: 'quest-0', subQuestId: 'sub-1' },
       researchMode: { enabled: false, configurations: [] },
       fallbackModel: 'gpt-4',
       timezone: 'Asia/Tokyo',
@@ -297,10 +568,12 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
   });
 
   beforeEach(() => {
+    gate.loadFreeTierAllowedModels.mockReset().mockResolvedValue(undefined);
     mockedGetAvailableModels.mockReset();
     logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     invokeLambda = vi.fn();
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: {
         findById: vi.fn().mockResolvedValue({ id: 'session-1', userId: OWNER_ID, users: [], agentIds: [] }),
         update: vi.fn().mockResolvedValue(undefined),
@@ -360,6 +633,127 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     expect(mockDb.quests.update).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'error', reply: expect.stringContaining(`"${SUCCESSOR_ID}" is not accessible`) })
     );
+    // Only the paid-plan refusal is downgraded to warn; any other refusal still logs at error.
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
+  });
+
+  // invoke() records an admission refusal on the error quest rather than throwing, so the ForbiddenError
+  // is observable through the logged message and the quest reply.
+  it('passes the free-tier allowlist into admission, refusing a model outside it for a caller without a paid plan', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+    const getEntitlements = vi.fn().mockResolvedValue(['base']);
+
+    const invoke = makeInvoke({ getEntitlements });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect(gate.loadFreeTierAllowedModels).toHaveBeenCalledWith(mockDb.adminSettings);
+    expect((invoke as any).questStartParams).toBeNull();
+    // The caller's plan, not a fault: logged at warn so it does not page.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
+    expect(logger.error).not.toHaveBeenCalledWith(expect.stringContaining('is not admitted'));
+    expect(mockDb.recordLimitEvent).toHaveBeenCalledWith({
+      userId: OWNER_ID,
+      kind: 'model_requires_paid_plan',
+      model: SUCCESSOR_ID,
+    });
+    expectErrorWithoutPin('requires a paid plan');
+  });
+
+  it('still refuses with the paid-plan reply when recording the refusal fails', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+    mockDb.recordLimitEvent.mockRejectedValue(new Error('db down'));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockResolvedValue(['base']) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expectErrorWithoutPin('requires a paid plan');
+  });
+
+  it('answers a failed entitlement read with a retryable error, not the upgrade prompt', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockRejectedValue(new Error('subscription DB down')) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).toBeNull();
+    expectErrorWithoutPin('Could not verify your plan');
+    expect(mockDb.quests.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reply: expect.stringContaining('requires a paid plan') })
+    );
+  });
+
+  it('admits the same model once the caller holds the paid-plan entitlement', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockResolvedValue(['base', 'plan:paid']) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
+    expect((invoke as any).questStartParams).not.toBeNull();
+  });
+
+  it("refuses a model outside the request organization's model policy, and runs it with no organization", async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+    mockDb.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      modelPolicy: { allowedProviders: null, allowedModels: ['some-other-model'], allowedTools: null },
+    });
+
+    const refused = makeInvoke();
+    await refused.invoke({
+      body: { ...bodyFor(SUCCESSOR_ID), organizationId: 'org-1' },
+      userId: OWNER_ID,
+      authOrigin: 'session',
+    });
+    expect(mockDb.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(Reflect.get(refused, 'questStartParams')).toBeNull();
+    expectErrorWithoutPin(`"${SUCCESSOR_ID}" is not allowed by your organization`);
+
+    const personal = makeInvoke();
+    await personal.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+    expect(Reflect.get(personal, 'questStartParams')).not.toBeNull();
+  });
+
+  it('refuses an org-disallowed model for an API-key caller with a 403 before creating the quest', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+    mockDb.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      modelPolicy: { allowedProviders: null, allowedModels: ['some-other-model'], allowedTools: null },
+    });
+
+    await expect(
+      makeInvoke().invoke({
+        body: { ...bodyFor(SUCCESSOR_ID), organizationId: 'org-1' },
+        userId: OWNER_ID,
+        authOrigin: 'apiKey',
+        apiKeyId: 'key1',
+      })
+    ).rejects.toMatchObject({ additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE } });
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses an API-key caller naming a built-in tool outside the organization's policy, and strips it silently for a session", async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as never);
+    mockDb.organizations.findById.mockResolvedValue({
+      id: 'org-1',
+      modelPolicy: { allowedProviders: null, allowedModels: null, allowedTools: ['dice_roll'] },
+    });
+    const body = { ...bodyFor(SUCCESSOR_ID), organizationId: 'org-1', tools: ['dice_roll', 'image_generation'] };
+
+    const refused = makeInvoke();
+    const refusal = refused.invoke({ body, userId: OWNER_ID, authOrigin: 'apiKey', apiKeyId: 'key1' });
+    await expect(refusal).rejects.toMatchObject({
+      message: 'Tools not allowed by your organization: image_generation',
+      additionalInfo: { errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(mockDb.quests.create).not.toHaveBeenCalled();
+
+    const session = makeInvoke();
+    await session.invoke({ body, userId: OWNER_ID, authOrigin: 'session' });
+    expect(Reflect.get(session, 'questStartParams')).not.toBeNull();
   });
 
   const pinnedModels = () =>
@@ -627,6 +1021,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset();
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn().mockResolvedValue(undefined) },
       organizations: { findById: vi.fn() },
       // Echo the created document back so questStartParams carries the promptMeta actually written,

@@ -1,16 +1,16 @@
+import { type EmbeddingRuntime } from '@bike4mind/utils/embeddingProviders';
 import {
   IChatHistoryItemDocument,
   ISessionDocument,
   IMessage,
   ModelInfo,
-  QuestMasterParamsSchema,
   detectAgentMentions,
   buildAgentPersonaPrompt,
 } from '@bike4mind/common';
-import { EmbeddingFactory } from '@bike4mind/utils';
+
 import { IAgent } from '@bike4mind/common';
 import { ChatCompletionFeature, ChatCompletionContext } from '../ChatCompletionFeatures';
-import { z } from 'zod';
+import { findUsableAttachedAgents } from '../attachedAgents';
 
 export class AgentDetectionFeature implements ChatCompletionFeature {
   constructor(private service: ChatCompletionContext) {
@@ -21,7 +21,6 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
     messages: IMessage[];
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
   }): Promise<void> {
     // No cleanup needed
   }
@@ -36,7 +35,6 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
     historyCount: number;
     fabFileIds: string[];
     questId: string;
-    questMaster?: any;
   }): Promise<{ shouldContinue: boolean }> {
     const { message, quest, session } = args;
 
@@ -54,10 +52,16 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
 
     // Get attached agents
     if (attachedAgentIds.length > 0) {
-      const attachedAgents = await Promise.all(
-        attachedAgentIds.map(agentId => this.service.db.agents.findById(agentId))
+      // The session owner's reach counts too, so collaborators keep the agent its owner attached.
+      const sessionOwner =
+        session.userId && session.userId !== this.service.user.id
+          ? await this.service.db.users.findById(session.userId)
+          : null;
+      agentsToProcess = await findUsableAttachedAgents(
+        attachedAgentIds,
+        [this.service.user, sessionOwner],
+        this.service.db.agents
       );
-      agentsToProcess = attachedAgents.filter(agent => agent !== null);
       this.service.logger.log(`🔍 Found ${agentsToProcess.length} valid attached agents`);
 
       // Log agent details including system prompt availability
@@ -85,10 +89,11 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
 
       this.service.logger.log(`🚨 SEARCHING for trigger words: ${triggerWordsToSearch.join(', ')}`);
 
-      const mentionedAgents = await this.service.db.agents.findByTriggerWords(
-        triggerWordsToSearch,
-        this.service.user.id
-      );
+      // A mention summons only the user's own agents: a share entry is written by the agent's owner
+      // alone, so a shared agent joins a chat only when the recipient attaches it.
+      const mentionedAgents = (
+        await this.service.db.agents.findByTriggerWords(triggerWordsToSearch, this.service.user.id)
+      ).filter(agent => String(agent.userId) === this.service.user.id);
 
       agentsToProcess = mentionedAgents;
       this.service.logger.log(
@@ -130,7 +135,7 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument & { _agentsToProcess?: IAgent[] },
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {

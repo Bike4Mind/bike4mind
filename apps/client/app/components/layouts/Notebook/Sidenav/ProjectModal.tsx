@@ -9,7 +9,7 @@ import {
   Typography,
   Autocomplete,
 } from '@mui/joy';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { toast } from 'sonner';
 import { IProjectDocument } from '@bike4mind/common';
 import { useSearchProjects, useAddSessionsToProject } from '@client/app/hooks/data/projects';

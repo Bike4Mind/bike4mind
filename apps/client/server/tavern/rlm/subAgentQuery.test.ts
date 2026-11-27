@@ -354,6 +354,28 @@ describe('subAgentQuery abort accounting', () => {
     expect(createSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('reserves prompt input at one token per byte, so a concurrent fan-out cannot pass the cap', async () => {
+    createSpy.mockReset();
+    createSpy.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      usage: { input_tokens: 300_000, output_tokens: 10 },
+    });
+    // Each 300K-char prompt reserves ~$0.31; at 4 chars per token it reserved ~$0.08 and both fit.
+    const session = new ReplSession({
+      sessionId: 'estimate-fanout',
+      executor: 'in-process-unsafe',
+      budget: { maxSubLlmCalls: 10, maxCostUsd: 0.5 },
+    });
+    const { subAgentQuery } = toolsFor(session);
+    const prompt = 'x'.repeat(300_000);
+
+    const results = await Promise.allSettled([subAgentQuery({ prompt }), subAgentQuery({ prompt })]);
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    const rejected = results.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
+    expect(rejected?.reason).toBeInstanceOf(BudgetExceededError);
+  });
+
   it('still releases the slot when the dispatch itself fails before the provider', async () => {
     // The contrast that makes the settle-on-abort correct rather than a
     // blanket "book everything": nothing was billed here, so the slot and

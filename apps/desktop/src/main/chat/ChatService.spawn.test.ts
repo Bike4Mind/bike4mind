@@ -3,12 +3,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
-import type { ChatSessionSummary, ChatSpawnSuggestion, ChatStreamEvent, SpawnSuggestionResult } from '@shared/chat';
+import type {
+  ChatSession,
+  ChatSessionSummary,
+  ChatSpawnSuggestion,
+  ChatStreamEvent,
+  SpawnSuggestionResult,
+} from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService } from './ChatService';
+import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
 import type { ModelMemory } from './ModelPreference';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -137,6 +147,10 @@ describe('ChatService spawn caps', () => {
     return latest?.type === 'spawn-suggestions' ? latest.suggestions.filter(entry => entry.status === 'pending') : [];
   }
 
+  function spawnTitles(prefix: string, count: number): string[] {
+    return Array.from({ length: count }, (_unused, index) => `${prefix}-${index}`);
+  }
+
   /** Start the named suggestions all at once, as several clicks on their cards would. */
   async function startSuggested(sessionId: string, titles: readonly string[]): Promise<SpawnSuggestionResult[]> {
     const wanted = await vi.waitUntil(
@@ -167,35 +181,64 @@ describe('ChatService spawn caps', () => {
       .filter(call => call?.name === name);
   }
 
-  it('refuses the fourth parallel spawn rather than letting a turn fan out without limit', async () => {
+  it('refuses the parallel spawn past the cap rather than letting a turn fan out without limit', async () => {
     const parent = await codeSession();
-    await service.send(parent.id, 'do four things at once');
+    await service.send(parent.id, 'do too many things at once');
     await awaitStream(0);
 
-    requestSpawns(streams[0], 4, 'fan');
-    await vi.waitUntil(() => settledCalls('session_spawn').length === 4, { timeout: 5000, interval: 5 });
+    requestSpawns(streams[0], MAX_CONCURRENT_SPAWNED + 1, 'fan');
+    await vi.waitUntil(() => settledCalls('session_spawn').length === MAX_CONCURRENT_SPAWNED + 1, {
+      timeout: 5000,
+      interval: 5,
+    });
 
-    // Four starts at once, so the cap is tested against the parallel path: a check that read
+    // Every start at once, so the cap is tested against the parallel path: a check that read
     // the count before awaiting the create would let every one of them through.
-    const results = await startSuggested(parent.id, ['fan-0', 'fan-1', 'fan-2', 'fan-3']);
+    const results = await startSuggested(parent.id, spawnTitles('fan', MAX_CONCURRENT_SPAWNED + 1));
     const refused = results.filter(result => !result.ok);
-    expect(results.filter(result => result.ok)).toHaveLength(3);
+    expect(results.filter(result => result.ok)).toHaveLength(MAX_CONCURRENT_SPAWNED);
     expect(refused).toHaveLength(1);
     expect(refused[0]).toMatchObject({ error: expect.stringMatching(/already running, which is the limit/) });
 
     const sessions = await store.list();
-    expect(sessions.filter(session => session.origin)).toHaveLength(3);
+    expect(sessions.filter(session => session.origin)).toHaveLength(MAX_CONCURRENT_SPAWNED);
+  });
+
+  it('still accepts a message the user types into a spawned session while the cap is full', async () => {
+    const parent = await codeSession();
+    await service.send(parent.id, 'fill the slots');
+    await awaitStream(0);
+    requestSpawns(streams[0], MAX_CONCURRENT_SPAWNED, 'fill');
+    const filled = await startSuggested(parent.id, spawnTitles('fill', MAX_CONCURRENT_SPAWNED));
+    expect(filled.every(result => result.ok)).toBe(true);
+
+    // Settle one child so it can take a turn, then refill its slot: the cap is full again and the
+    // settled child is idle, which is the state a person would type into.
+    const settled = await awaitStreamOf('task fill-0');
+    settled.write(frame({ type: 'content', text: 'done with it' }));
+    settled.write(frame('[DONE]'));
+    await vi.waitUntil(() => events.some(event => event.type === 'done' && event.content === 'done with it'), {
+      timeout: 5000,
+      interval: 5,
+    });
+    requestSpawns(await awaitStreamOf('fill the slots'), 1, 'refill');
+    expect((await startSuggested(parent.id, ['refill-0']))[0]?.ok).toBe(true);
+    requestSpawns(await awaitStreamOf('fill the slots'), 1, 'over');
+    expect((await startSuggested(parent.id, ['over-0']))[0]?.ok).toBe(false);
+
+    const idle = (await store.list()).find(session => session.title === 'fill-0');
+    expect((await service.send(idle!.id, 'a word from the user')).ok).toBe(true);
   });
 
   it('frees a concurrency slot when a spawned session finishes, and not before', async () => {
     const parent = await codeSession();
     await service.send(parent.id, 'fill the slots');
     await awaitStream(0);
-    requestSpawns(streams[0], 3, 'fill');
-    const filled = await startSuggested(parent.id, ['fill-0', 'fill-1', 'fill-2']);
+    requestSpawns(streams[0], MAX_CONCURRENT_SPAWNED, 'fill');
+    const filled = await startSuggested(parent.id, spawnTitles('fill', MAX_CONCURRENT_SPAWNED));
     expect(filled.every(result => result.ok)).toBe(true);
 
-    // A fourth while all three are still replying is refused: the cap counts runs in flight.
+    // One more while all of them are still replying is refused: the cap counts runs in flight.
     requestSpawns(await awaitStreamOf('fill the slots'), 1, 'over');
     expect((await startSuggested(parent.id, ['over-0']))[0]?.ok).toBe(false);
 
@@ -264,6 +307,19 @@ describe('ChatService spawn caps', () => {
     const child = (await store.list()).find(session => session.origin);
     expect(child?.project).toEqual(parentSession?.project);
     expect(child?.origin).toMatchObject({ parentSessionId: parent.id, depth: 1, seedPrompt: 'task grants-0' });
+    // The model wrote this prompt, so it is marked as such rather than as the user's words.
+    // The seed turn is sent in the background after startSpawnSuggestion resolves, so wait for it.
+    const seedMessage = await vi.waitUntil(
+      async () => {
+        const childSession = child ? await store.get(child.id) : undefined;
+        return childSession?.messages.find(message => message.role === 'user');
+      },
+      { timeout: 5000, interval: 5 }
+    );
+    expect(seedMessage).toMatchObject({
+      content: expect.stringContaining('task grants-0'),
+      seed: true,
+    });
 
     // The schema is the enforcement point for "cannot widen": there is no argument through
     // which a directory, a branch or a worktree could be asked for in the first place.
@@ -274,5 +330,123 @@ describe('ChatService spawn caps', () => {
       'title',
       'summary',
     ]);
+  });
+});
+
+describe('sideChat', () => {
+  describe('ChatService.startSideChat', () => {
+    let store: SessionStore;
+    let service: ChatService;
+    let post: ReturnType<typeof vi.fn>;
+    let project: string;
+
+    beforeEach(async () => {
+      project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-side-chat-')));
+      store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-side-chat-sessions-')), 'test-model');
+      post = vi.fn();
+      const modelMemory: ModelMemory = { read: async () => null, record: async () => {} };
+      service = new ChatService({
+        store,
+        access: { list: async () => [] } as unknown as AccessStore,
+        modelMemory,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () =>
+          ({
+            get: vi.fn().mockResolvedValue({}),
+            getAxiosInstance: () => ({ post }),
+          }) as unknown as AuthenticatedApiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit: () => undefined,
+      });
+    });
+
+    async function chatParent(approvalMode?: ChatSession['approvalMode']): Promise<ChatSession> {
+      const created = await store.create('test-model', { approvalMode });
+      await store.appendMessage(created.id, {
+        id: 'u1',
+        role: 'user',
+        content: 'What is a monad?',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      });
+      const stored = await store.appendMessage(created.id, {
+        id: 'a1',
+        role: 'assistant',
+        content: 'A monoid in the category of endofunctors.',
+        createdAt: '2026-01-01T00:00:01.000Z',
+      });
+      return stored!;
+    }
+
+    it('starts a child of the conversation, opening with the passage and an excerpt', async () => {
+      const parent = await chatParent();
+      const result = await service.startSideChat({ sessionId: parent.id, selection: ' category of endofunctors ' });
+      if (!result.ok) throw new Error(result.error);
+
+      expect(result.session.origin).toEqual({
+        parentSessionId: parent.id,
+        depth: 1,
+        seedPrompt: 'category of endofunctors',
+        kind: 'side-chat',
+      });
+      expect(result.session.mode).toBe('chat');
+
+      const child = await store.get(result.session.id);
+      expect(child?.messages).toHaveLength(1);
+      const [opening] = child!.messages;
+      expect(opening).toMatchObject({
+        role: 'user',
+        system: true,
+        display: '> category of endofunctors',
+        sideChatOf: { sessionId: parent.id, title: parent.title },
+      });
+      expect(opening.content).toContain('User: What is a monad?');
+      expect(opening.content).toContain('> category of endofunctors');
+    });
+
+    it('leaves the parent untouched and starts no turn', async () => {
+      const parent = await chatParent();
+      await service.startSideChat({ sessionId: parent.id, selection: 'monoid' });
+      expect((await store.get(parent.id))?.messages).toEqual(parent.messages);
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['full', 'auto'],
+      ['auto', 'auto'],
+      ['ask', 'ask'],
+    ] as const)('gives a parent with %s approval a side chat with %s approval', async (approvalMode, expected) => {
+      const parent = await chatParent(approvalMode);
+      const result = await service.startSideChat({ sessionId: parent.id, selection: 'monoid' });
+      if (!result.ok) throw new Error(result.error);
+      expect(result.session.approvalMode).toBe(expected);
+      expect((await store.get(result.session.id))?.approvalMode).toBe(expected);
+    });
+
+    it("shares a Code parent's checkout rather than cutting a worktree", async () => {
+      const created = await service.createCodeSession({ directory: project, branch: '', workspace: false });
+      if (!created.ok) throw new Error(created.error);
+      const result = await service.startSideChat({ sessionId: created.session.id, selection: 'this line' });
+      if (!result.ok) throw new Error(result.error);
+      expect(result.session.mode).toBe('code');
+      expect(result.session.project).toEqual(created.session.project);
+    });
+
+    it('refuses an empty highlight, an unknown conversation and one at the nesting limit', async () => {
+      const parent = await chatParent();
+      expect(await service.startSideChat({ sessionId: parent.id, selection: '   ' })).toMatchObject({ ok: false });
+      expect(
+        await service.startSideChat({ sessionId: '00000000-0000-4000-8000-000000000000', selection: 'x' })
+      ).toEqual({
+        ok: false,
+        error: 'That conversation no longer exists.',
+      });
+
+      const first = await service.startSideChat({ sessionId: parent.id, selection: 'a' });
+      if (!first.ok) throw new Error(first.error);
+      const second = await service.startSideChat({ sessionId: first.session.id, selection: 'b' });
+      if (!second.ok) throw new Error(second.error);
+      const third = await service.startSideChat({ sessionId: second.session.id, selection: 'c' });
+      expect(third).toMatchObject({ ok: false });
+    });
   });
 });

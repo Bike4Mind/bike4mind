@@ -46,7 +46,6 @@ const baseArgs = {
   historyCount: 0,
   fabFileIds: [],
   questId: 'q1',
-  questMaster: undefined,
 };
 
 describe('SkillsFeature', () => {

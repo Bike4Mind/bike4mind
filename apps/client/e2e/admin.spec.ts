@@ -1,7 +1,28 @@
+import type { APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestUsers } from './helpers/test-users';
-import { apiCreateInviteCode } from './helpers/api';
+import {
+  apiGetMfaCode,
+  apiCloseInviteCode,
+  apiCreateGrantPackage,
+  apiCreateInviteCode,
+  apiCreatePackageInviteCode,
+  apiDeactivateGrantPackage,
+  apiDeleteInviteCode,
+  apiDeletePartnerRuleByDomain,
+} from './helpers/api';
+
+const baseURL = process.env.API_URL || 'http://localhost:3000';
+
+// Deleting a user needs a step-up within the last few minutes; the test admin is enrolled in MFA.
+async function stepUp(request: APIRequestContext, admin: { accessToken: string; email: string }) {
+  const res = await request.post(`${baseURL}/api/auth/step-up`, {
+    headers: { Authorization: `Bearer ${admin.accessToken}` },
+    data: { method: 'totp', code: await apiGetMfaCode(request, admin.email) },
+  });
+  expect(res.ok(), `step-up failed: ${res.status()}`).toBe(true);
+}
 
 // Generate unique test data to avoid collisions across runs
 const timestamp = Date.now();
@@ -39,6 +60,62 @@ test.describe('Admin - Navigation', () => {
       timeout: TIMEOUTS.NAVIGATION,
     });
   });
+
+  test('dashboard panel has no horizontal scroll at phone width', async ({ page, basePage, adminPage }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/admin?tab=dashboard');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+    await expect(adminPage.page.getByTestId('admin-dashboard')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
+
+    const panel = page.getByRole('tabpanel').filter({ has: page.getByTestId('admin-dashboard') });
+    const { scrollWidth, clientWidth } = await panel.evaluate(el => ({
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    }));
+    expect(scrollWidth).toBe(clientWidth);
+  });
+
+  test('invite center deep links land on their section', async ({ page, basePage, adminPage }) => {
+    // The legacy waitlist slug still works and keeps the section.
+    await page.goto('/admin?tab=subscribers&inviteSection=pending');
+    await page.waitForLoadState('domcontentloaded');
+    await basePage.dismissModals();
+
+    await expect(adminPage.page.getByTestId('invite-center-section-pending')).toBeVisible({
+      timeout: TIMEOUTS.NAVIGATION,
+    });
+    await expect(page).toHaveURL(/tab=waitlist/);
+    await expect(page).toHaveURL(/inviteSection=pending/);
+
+    await adminPage.page.getByTestId('invite-center-sections-waitlist-btn').click();
+    await expect(adminPage.page.getByTestId('invite-center-section-waitlist')).toBeVisible();
+    await expect(page).not.toHaveURL(/inviteSection=/);
+  });
+
+  for (const [slug, section] of [
+    ['registration-invites', 'invites'],
+    ['partner-signup-rules', 'partners'],
+    ['held-signup-grants', 'pending'],
+  ]) {
+    test(`retired ${slug} link lands on the ${section} Invite Center section`, async ({
+      page,
+      basePage,
+      adminPage,
+    }) => {
+      await page.goto(`/admin?tab=${slug}`);
+      await page.waitForLoadState('domcontentloaded');
+      await basePage.dismissModals();
+
+      await expect(adminPage.page.getByTestId(`invite-center-section-${section}`)).toBeVisible({
+        timeout: TIMEOUTS.NAVIGATION,
+      });
+      await expect(page).toHaveURL(
+        new RegExp(`tab=waitlist.*inviteSection=${section}|inviteSection=${section}.*tab=waitlist`)
+      );
+      expect(await page.evaluate(() => window.location.search)).not.toContain(slug);
+    });
+  }
 });
 
 // Independent tests - can run in parallel within workers
@@ -53,27 +130,22 @@ test.describe('Admin - User Search & Sort', () => {
     await adminPage.searchUser(searchTerm);
 
     // Verify search results contain a user row with the admin email
-    await expect(adminPage.page.getByTestId('admin-user-card').filter({ hasText: admin.email }).first()).toBeVisible({
-      timeout: TIMEOUTS.ACTION,
-    });
+    await expect(adminPage.getUserRow(admin.email).first()).toBeVisible({ timeout: TIMEOUTS.ACTION });
   });
 
   test('should sort user list', async ({ adminPage }) => {
     await adminPage.gotoAdmin();
     await adminPage.navigateToUsersTab();
 
-    // Sort by name
-    await adminPage.setSortBy('name');
-
-    // Toggle to ascending
-    await adminPage.toggleSortOrder();
-
-    // Verify that the sort controls reflect the new state
-    const sortButton = adminPage.page.getByTestId('admin-sort-order-btn');
-    await expect(sortButton).toBeVisible();
+    // First click sorts by name ascending, the second flips it
+    const header = adminPage.page.getByRole('columnheader', { name: 'User' });
+    await adminPage.sortByColumn('user');
+    await expect(header).toHaveAttribute('aria-sort', 'ascending');
+    await adminPage.sortByColumn('user');
+    await expect(header).toHaveAttribute('aria-sort', 'descending');
 
     // Verify at least one user is displayed after sorting
-    await expect(adminPage.page.locator('[data-testid^="user-name-"]').first()).toBeVisible({
+    await expect(adminPage.page.locator('tr[data-testid^="admin-users-row-"]').first()).toBeVisible({
       timeout: TIMEOUTS.VISIBLE,
     });
   });
@@ -81,8 +153,9 @@ test.describe('Admin - User Search & Sort', () => {
 
 // Dependent tests - must run in order (create -> edit -> delete)
 test.describe('Admin - User CRUD', () => {
-  test('should create, edit, and delete a user', async ({ adminPage }) => {
-    test.slow();
+  test('should create, edit, and delete a user', async ({ adminPage, request }) => {
+    // The slow-test budget plus the wait for the asynchronous erasure in the delete step.
+    test.setTimeout(TIMEOUTS.TEST * 3 + TIMEOUTS.ACCOUNT_ERASURE);
 
     await test.step('create a new user', async () => {
       await adminPage.gotoAdmin();
@@ -105,14 +178,29 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.searchUser(TEST_USER.name);
       await adminPage.waitForUserVisible(TEST_USER.name);
 
-      await adminPage.clickUserProfileButton(TEST_USER.name);
-      await adminPage.fillProfileField('Name:', EDITED_NAME);
-      await adminPage.saveProfileChanges();
-      await adminPage.closeModal();
+      await adminPage.openEditProfileDialog(TEST_USER.name);
+      await adminPage.fillEditProfileName(EDITED_NAME);
+      await adminPage.saveEditProfile();
 
-      // Verify the edit persisted by searching for the new name
+      // Verify the edit persisted by searching for the new name (the edit happened on the profile page)
+      await adminPage.navigateToUsersTab();
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
+    });
+
+    await test.step('credits tab shows the system-sourced cost card', async () => {
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToUsersTab();
+      await adminPage.searchUser(EDITED_NAME);
+      await adminPage.waitForUserVisible(EDITED_NAME);
+
+      await adminPage.openUserProfile(EDITED_NAME);
+      await adminPage.page.getByTestId('user-profile-tab-credits').click();
+      await expect(adminPage.page.getByTestId('user-credits-system-cost')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      // A user created moments ago has triggered no system work yet.
+      await expect(adminPage.page.getByTestId('user-credits-system-cost-today')).toContainText('$0.00', {
+        timeout: TIMEOUTS.ACTION,
+      });
     });
 
     await test.step('delete user', async () => {
@@ -121,15 +209,15 @@ test.describe('Admin - User CRUD', () => {
       await adminPage.searchUser(EDITED_NAME);
       await adminPage.waitForUserVisible(EDITED_NAME);
 
-      await adminPage.clickUserAdminButton(EDITED_NAME);
-      await adminPage.typeDeleteConfirmation();
+      await adminPage.openUserProfile(EDITED_NAME);
       await adminPage.clickDeleteUserButton();
       await adminPage.fillDeleteReason();
+      await adminPage.typeDeleteConfirmation();
+      await stepUp(request, getTestUsers().admin);
       await adminPage.confirmDeleteUser();
 
       // Verify user no longer appears in search
-      await adminPage.searchUser(EDITED_NAME);
-      await expect(adminPage.page.getByTestId(`user-name-${EDITED_NAME}`)).toBeHidden({ timeout: TIMEOUTS.ACTION });
+      await adminPage.waitForUserErased(EDITED_NAME);
     });
   });
 });
@@ -177,5 +265,84 @@ test.describe.serial('Admin - Invite Code Management', () => {
       await adminPage.refreshInvites();
       await adminPage.waitForAvailableCount(availableBaseline);
     });
+  });
+});
+
+test.describe.serial('Admin - Grant package partner domains', () => {
+  test('adds, edits and unlinks a partner domain inside the package form', async ({ adminPage, request }) => {
+    const { accessToken } = getTestUsers().admin;
+    const domain = `pkg-${timestamp}-e2e.com`;
+    const { id: packageId } = await apiCreateGrantPackage(request, accessToken, `E2E domains ${timestamp}`);
+    const page = adminPage.page;
+
+    try {
+      await test.step('add a domain to the saved package', async () => {
+        await page.goto('/admin?tab=waitlist&inviteSection=packages');
+        await page.getByTestId(`grant-package-row-${packageId}`).click();
+        await expect(page.getByTestId('grant-package-domains-empty')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+        await page.getByTestId('grant-package-add-domain-btn').click();
+        await page.getByTestId('partner-rule-domain-input').locator('input').fill(domain);
+        await page.getByTestId('grant-package-domain-add-save-btn').click();
+        await expect(page.getByTestId(`grant-package-domain-row-${domain}`)).toContainText('Enabled', {
+          timeout: TIMEOUTS.ACTION,
+        });
+      });
+
+      await test.step('disable it from the package form', async () => {
+        await page.getByTestId(`grant-package-domain-edit-btn-${domain}`).click();
+        await page.getByTestId('partner-rule-enabled-switch').click();
+        await page.getByTestId('grant-package-domain-edit-save-btn').click();
+        await expect(page.getByTestId(`grant-package-domain-row-${domain}`)).toContainText('Disabled', {
+          timeout: TIMEOUTS.ACTION,
+        });
+      });
+
+      await test.step('unlink it; the rule stays listed under Partner signups', async () => {
+        await page.getByTestId(`grant-package-domain-edit-btn-${domain}`).click();
+        await page.getByTestId('grant-package-domain-unlink-btn').click();
+        await expect(page.getByTestId('grant-package-domains-empty')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+        await page.getByTestId('grant-package-cancel-btn').click();
+
+        await page.getByTestId('invite-center-sections-partners-btn').click();
+        await page.getByTestId('partner-rule-search-input').fill(domain);
+        await expect(page.getByTestId(`partner-rule-row-${domain}`)).toBeVisible({ timeout: TIMEOUTS.ACTION });
+      });
+    } finally {
+      await apiDeletePartnerRuleByDomain(request, accessToken, domain);
+      await apiDeactivateGrantPackage(request, accessToken, packageId);
+    }
+  });
+
+  test('asks for a reason before reopening a closed package-linked code', async ({ adminPage, request }) => {
+    const { accessToken } = getTestUsers().admin;
+    const { id: packageId } = await apiCreateGrantPackage(request, accessToken, `E2E reopen ${timestamp}`);
+    const { id: inviteId, code } = await apiCreatePackageInviteCode(request, accessToken, packageId);
+    await apiCloseInviteCode(request, accessToken, inviteId);
+    const page = adminPage.page;
+
+    try {
+      await adminPage.gotoAdmin();
+      await adminPage.navigateToInviteCenter();
+      await adminPage.switchToInviteCodesTab();
+      await page.getByTestId('invite-used-tab').click();
+      const row = page.getByTestId('invite-code-card').filter({ hasText: code });
+      await expect(row).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+      await row.getByTestId(/^invite-row-actions-/).click();
+      await page.getByTestId('invite-set-open-btn').click();
+
+      const dialog = page.getByTestId('invite-reopen-reason-dialog');
+      await expect(dialog).toBeVisible({ timeout: TIMEOUTS.MODAL });
+      await page.getByTestId('invite-reopen-reason-dialog-reason-input-preset-0').click();
+      await page.getByTestId('invite-reopen-reason-dialog-confirm-btn').click();
+      await expect(dialog).toBeHidden({ timeout: TIMEOUTS.ACTION });
+
+      await page.getByTestId('invite-available-tab').click();
+      await expect(page.getByTestId('invite-code-card').filter({ hasText: code })).toBeVisible({
+        timeout: TIMEOUTS.ACTION,
+      });
+    } finally {
+      await apiDeleteInviteCode(request, accessToken, inviteId);
+      await apiDeactivateGrantPackage(request, accessToken, packageId);
+    }
   });
 });

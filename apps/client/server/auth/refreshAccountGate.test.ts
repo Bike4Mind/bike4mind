@@ -12,7 +12,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 
-import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { refuseBlockedRotatedSession } from './refreshAccountGate';
 
 const USABLE = { isBanned: false, disputePending: false };
@@ -30,7 +30,7 @@ describe('refuseBlockedRotatedSession', () => {
   });
 
   it.each([
-    ['a banned', { isBanned: true }, UnauthorizedError],
+    ['a banned', { isBanned: true }, ForbiddenError],
     ['a disputed', { disputePending: true }, ForbiddenError],
     ['a suspended', { moderation: { status: 'suspended' } }, ForbiddenError],
   ])('revokes the rotated session and rethrows for %s account', async (_label, state, ErrorClass) => {
@@ -48,7 +48,7 @@ describe('refuseBlockedRotatedSession', () => {
     await expect(
       // any: only error() is read off the Logger here.
       refuseBlockedRotatedSession({ sid: 'sid-1', user: { isBanned: true } }, logger as any)
-    ).rejects.toBeInstanceOf(UnauthorizedError);
+    ).rejects.toBeInstanceOf(ForbiddenError);
 
     expect(logger.error).toHaveBeenCalled();
   });

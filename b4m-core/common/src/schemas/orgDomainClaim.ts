@@ -1,0 +1,44 @@
+import { z } from 'zod';
+import { Permission } from '../types/entities/ShareableDocumentTypes';
+
+/** Canonical ObjectId strings at domain route and storage boundaries. */
+export const orgDomainPathIdSchema = z
+  .string()
+  .regex(/^[a-f\d]{24}$/i)
+  .toLowerCase();
+
+export const ORG_DOMAIN_JOIN_POLICIES = ['off', 'suggest', 'auto-join'] as const;
+
+/** Hard cap on domain claims (pending + verified) a single organization may hold. */
+export const MAX_ORG_DOMAIN_CLAIMS = 20;
+
+/**
+ * ACL row written for a user joining through a domain claim: the same read-only row `addMember`
+ * writes.
+ */
+export const ORG_DOMAIN_MEMBER_PERMISSIONS: readonly Permission[] = [Permission.read];
+
+/**
+ * Bare domain (trim + lowercase, the same normalization as `normalizeSignupRuleDomain`). Public mail
+ * providers pass here on purpose: the claim service rejects them so the API can say why.
+ */
+const orgDomainSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(3, 'Domain is required')
+  .max(253, 'Domain is too long')
+  .regex(/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/, 'Enter a bare domain like example.com (no @ or path)');
+
+export const addOrgDomainSchema = z.object({ domain: orgDomainSchema }).strict();
+
+export const updateOrgDomainPolicySchema = z.object({ policy: z.enum(ORG_DOMAIN_JOIN_POLICIES) }).strict();
+
+/** A Space never auto-joins anyone, so its claims take only these policies. */
+export const SPACE_DOMAIN_JOIN_POLICIES = ['off', 'suggest'] as const;
+
+export const updateSpaceDomainPolicySchema = z.object({ policy: z.enum(SPACE_DOMAIN_JOIN_POLICIES) }).strict();
+
+export type AddOrgDomainInput = z.infer<typeof addOrgDomainSchema>;
+export type UpdateOrgDomainPolicyInput = z.infer<typeof updateOrgDomainPolicySchema>;
+export type UpdateSpaceDomainPolicyInput = z.infer<typeof updateSpaceDomainPolicySchema>;

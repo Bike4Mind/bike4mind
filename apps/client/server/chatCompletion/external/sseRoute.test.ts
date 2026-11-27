@@ -2,15 +2,41 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import { request as httpRequest, type Server } from 'http';
 import express from 'express';
+import { OutputBudgetExhaustedError } from '@bike4mind/llm-adapters';
 import type { z } from 'zod';
-import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@server/cli/auth';
+import { checkApiKeyRateLimitOrThrow, checkRateLimit } from '@bike4mind/server-utils/cli/auth';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
+const mockApiUsage = vi.hoisted(() => ({
+  beginCompletionUsage: vi.fn(async () => 'log-id'),
+  logUsage: vi.fn(async () => undefined),
+}));
+vi.mock('@bike4mind/server-utils/managers/apiKeyUsageManager', () => ({ ApiKeyUsageManager: mockApiUsage }));
 const mockLoggerError = vi.hoisted(() => vi.fn());
 const mockLoggerWarn = vi.hoisted(() => vi.fn());
+const mockCheckFreeTierDailySpendCap = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/billing/freeTierDailyCapGate', () => ({
+  checkFreeTierDailySpendCap: mockCheckFreeTierDailySpendCap,
+}));
+// Real entitlements pull in mongoose models at import time, which the @bike4mind/database mock lacks.
+const isApiKeyAccessAllowedMock = vi.hoisted(() => vi.fn(async (_user: unknown, _billing?: unknown) => true));
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing))) throw new ForbiddenError(message);
+    },
+  };
+});
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({ resolveThinkingVisibility: vi.fn() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -19,6 +45,7 @@ vi.mock('@bike4mind/observability', () => ({
     debug = vi.fn();
     updateMetadata = vi.fn();
   },
+  describeErrorCause: () => undefined,
 }));
 
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
@@ -50,6 +77,11 @@ vi.mock('@bike4mind/services/llm', async () => {
   };
 });
 
+const mockFindCompletionRun = vi.hoisted(() => vi.fn());
+const mockRaiseRunBudget = vi.hoisted(() => vi.fn());
+const mockCreateCompletionRun = vi.hoisted(() => vi.fn());
+const mockFindActiveFreeze = vi.hoisted(() => vi.fn());
+const mockRecordPlatformEndUser = vi.hoisted(() => vi.fn());
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const dbConnection = vi.hoisted(() => ({ readyState: 1 }));
 vi.mock('@bike4mind/database', () => ({
@@ -58,18 +90,41 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: vi.fn().mockResolvedValue(null) },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: {},
   cacheRepository: {},
+  completionRunRepository: {
+    findById: mockFindCompletionRun,
+    raiseBudget: mockRaiseRunBudget,
+    create: mockCreateCompletionRun,
+  },
+  spendFreezeRepository: { findActiveForSubject: mockFindActiveFreeze },
   User: {},
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key-1', name: 'cli' }) },
+  platformEndUserRepository: { recordSeen: mockRecordPlatformEndUser },
 }));
 
-const mockResolveContractAuth = vi.hoisted(() => vi.fn());
-vi.mock('@server/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
+const mockResolveActiveOrg = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/resolveActiveOrg', () => ({ resolveActiveOrg: mockResolveActiveOrg }));
 
-vi.mock('@server/cli/auth', () => ({
+const mockResolveContractAuth = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/cli/resolveContractAuth', () => ({ resolveContractAuth: mockResolveContractAuth }));
+
+const quotaRelease = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockAdmitApiKeyCompletion = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+  NO_COMPLETION_QUOTA: { release: () => Promise.resolve() },
+}));
+
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   checkRateLimit: vi.fn().mockResolvedValue(undefined),
   checkApiKeyRateLimitOrThrow: vi.fn().mockResolvedValue(undefined),
 }));
@@ -82,7 +137,9 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   cacheService: { get: mockCacheGet, set: vi.fn(), ttl: mockCacheTtl },
 }));
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async importOriginal => ({
+  rateLimitRefusalInfo: (await importOriginal<typeof import('@bike4mind/server-utils/utils/apiKeyRateLimitCheck')>())
+    .rateLimitRefusalInfo,
   extractApiKeyFromHeaders: vi.fn(),
   checkApiKeyRateLimit: mockCheckApiKeyRateLimit,
 }));
@@ -98,18 +155,25 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
 
+import { userRepository } from '@bike4mind/database';
 import { registerExternalRoutes } from './sseRoute';
+import { toPlatformEndUserProviderId } from '@bike4mind/llm-adapters';
 import {
   ApiErrorSchema,
+  ApiKeyScope,
   BadRequestError,
   CompletionStreamEventSchema,
+  CompletionsUnprocessableErrorSchema,
   createCompletionContract,
+  DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   ForbiddenError,
   HTTPError,
   InsufficientCreditsErrorSchema,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   ScopeForbiddenErrorSchema,
   TooManyRequestsError,
   UnauthorizedError,
+  UnprocessableEntityError,
   spendCapExceededError,
 } from '@bike4mind/common';
 
@@ -135,6 +199,8 @@ beforeAll(async () => {
 afterAll(() => server?.close());
 
 beforeEach(() => {
+  mockFindActiveFreeze.mockResolvedValue(null);
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: quotaRelease });
   mockResolveContractAuth.mockResolvedValue({
     method: 'apiKey',
     userId: 'user-1',
@@ -153,6 +219,34 @@ afterEach(() => {
 
 const COMPLETIONS_URL = () => `${baseUrl}/api/ai/v1/completions`;
 const COMPLETION = { model: 'test-model', messages: [{ role: 'user', content: 'hi' }] };
+const UPSTREAM_CALLER_ERRORS = [400, 404, 413, 422].flatMap(status => [
+  { name: `SDK ${status}`, status, properties: { status } },
+  { name: `Axios ${status}`, status, properties: { isAxiosError: true, response: { status } } },
+  { name: `AWS ${status}`, status, properties: { $metadata: { httpStatusCode: status } } },
+]);
+const UPSTREAM_OPERATOR_ERRORS = [
+  [404, 'models/gemini-2.5-flash is no longer available to new users'],
+  [404, 'The model `gpt-x` does not exist or you do not have access to it.'],
+  [404, 'Claude Fable 5 is not available. Please use Opus 4.8'],
+  [400, 'Your credit balance is too low to access the Anthropic API.'],
+  [400, 'You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.'],
+  [404, 'The model claude-3-5-haiku-20241022 does not exist'],
+  [400, 'The provided model identifier is invalid'],
+  [404, 'Model not available'],
+  [400, 'API key not valid. Please pass a valid API key.'],
+  [400, 'The API key is invalid'],
+  [400, 'Invalid API key'],
+  [400, 'The API key has expired'],
+  [400, 'The API key is missing'],
+] as const;
+const UPSTREAM_CALLER_MESSAGES = [
+  "Tool parameter 'model' does not exist",
+  'The model rejected the request: tool lookup does not exist',
+  'Tool schema property api_key is required',
+  'Tool schema property api_key must be a string',
+  'Model does not support assistant prefill',
+  'Token limit exceeded',
+] as const;
 
 function post(body: unknown = COMPLETION) {
   return fetch(COMPLETIONS_URL(), {
@@ -224,6 +318,23 @@ describe('JWT rate limiting', () => {
     expect(vi.mocked(logCompletionAnalytics)).toHaveBeenCalledWith(expect.objectContaining({ source: 'desktop' }));
   });
 
+  it("passes the client's session id through to the completion, for its ledger row", async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' }, { ...COMPLETION, sessionId: 's-1' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's-1' }));
+  });
+
+  it('rejects an oversized session id instead of storing it', async () => {
+    expect((await postAs({}, { ...COMPLETION, sessionId: 'x'.repeat(129) })).status).toBe(422);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('resolves thinking visibility for the caller', async () => {
+    expect((await postAs({})).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ getThinkingVisibility: resolveThinkingVisibility })
+    );
+  });
+
   /**
    * User-Agent wins, and x-b4m-client is only consulted when there is none - the same precedence
    * `resolveApiCompletionSource` uses, so the tier and the source attribution cannot disagree.
@@ -245,6 +356,71 @@ describe('JWT rate limiting', () => {
     const body = await expectJsonError(res, 429);
     expect(res.headers.get('retry-after')).toBe('900');
     expect(String(body.error)).toMatch(/^Rate limit exceeded/);
+  });
+
+  it('answers a free-tier daily cap refusal with 429, Retry-After and its errorCode, not a 422', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(res.headers.get('retry-after')).toBe('3600');
+    expect(body.errorCode).toBe(DAILY_FREE_LIMIT_REACHED_ERROR_CODE);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('API-key completion outcome evidence', () => {
+  it('records a daily-cap refusal without starting provider work', async () => {
+    mockCheckFreeTierDailySpendCap.mockRejectedValueOnce(
+      new TooManyRequestsError('Daily free usage limit reached.', {
+        errorCode: DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
+        retryAfter: 3600,
+      })
+    );
+    const res = await post();
+    await expectJsonError(res, 429);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockApiUsage.beginCompletionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ completionObservation: expect.objectContaining({ outcome: 'unknown' }) })
+    );
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 429,
+        existingLogId: 'log-id',
+        completionObservation: expect.objectContaining({ outcome: 'daily_cap_rejected' }),
+      })
+    );
+  });
+  it('records a failed in-band stream separately from its HTTP 200 response', async () => {
+    mockExecuteCompletion.mockImplementationOnce(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      throw new Error('Synthetic provider fault');
+    });
+    const res = await post();
+    expect(res.status).toBe(200);
+    await res.text();
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 200,
+        completionObservation: expect.objectContaining({ outcome: 'failed' }),
+      })
+    );
+  });
+
+  it('records the failure code when a provider error fails the request', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status: 503 }));
+    const res = await post();
+    expect(res.status).toBe(500);
+    await res.text();
+    expect(mockApiUsage.logUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completionObservation: expect.objectContaining({ outcome: 'failed', failureCode: 'http_503' }),
+      })
+    );
   });
 });
 
@@ -424,9 +600,10 @@ describe('POST /api/ai/v1/completions - stream', () => {
 
   const RAW_UPSTREAM =
     '{"error":{"code":404,"message":"models/gemini-2.5-flash is no longer available to new users","status":"NOT_FOUND"}}';
+  const RAW_CALLER_UPSTREAM =
+    '{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}';
 
   it.each([
-    [404, 'provider_error', 'Model provider returned an error (upstream 404)'],
     [401, 'provider_rejected', 'Model provider rejected our credentials'],
     [403, 'provider_rejected', 'Model provider denied access to this model'],
     [undefined, 'provider_error', 'Model provider returned an error'],
@@ -448,6 +625,56 @@ describe('POST /api/ai/v1/completions - stream', () => {
           error: expect.objectContaining({ message: RAW_UPSTREAM }),
         })
       );
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', upstream);
+    }
+  );
+
+  it.each(UPSTREAM_CALLER_ERRORS)(
+    'classifies an upstream $name after the stream opened as a sanitized, non-retryable caller error',
+    async ({ status, properties }) => {
+      const upstream = Object.assign(new Error(RAW_CALLER_UPSTREAM), properties);
+      mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
+
+      const text = await (await post()).text();
+      expect(errorFrame(text)).toMatchObject({
+        code: 'invalid_request',
+        message: 'The model provider rejected the request',
+      });
+      expect(text).not.toContain('at least one message');
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        '[CLI_LLM] Handler error',
+        expect.objectContaining({ upstreamStatus: status })
+      );
+      expect(mockLoggerError).not.toHaveBeenCalled();
+      expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(UPSTREAM_CALLER_MESSAGES)('keeps caller input error %s non-retryable after streaming', async message => {
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(Object.assign(new Error(message), { status: 400 })));
+
+    const text = await (await post()).text();
+    expect(errorFrame(text).code).toBe('invalid_request');
+    expect(text).not.toContain(message);
+    expect(mockLoggerError).not.toHaveBeenCalled();
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+  });
+
+  it.each(UPSTREAM_OPERATOR_ERRORS)(
+    'keeps an operator-side upstream %s (%s) after the stream opened as provider_error at error',
+    async (status, raw) => {
+      const upstream = Object.assign(new Error(raw), { status });
+      mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
+
+      const text = await (await post()).text();
+      expect(errorFrame(text)).toMatchObject({
+        code: 'provider_error',
+        message: `Model provider returned an error (upstream ${status})`,
+      });
+      expect(mockLoggerError).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+      expect(text).not.toContain(raw);
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', upstream);
     }
   );
 
@@ -512,8 +739,16 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     expect(ScopeForbiddenErrorSchema.safeParse(body).success).toBe(true);
   });
 
-  it('answers a schema failure with 422 naming the failing path, before authenticating', async () => {
-    const body = await expectJsonError(await post({ messages: [] }), 422);
+  it('answers an empty conversation with 400 before authenticating or logging an error', async () => {
+    const body = await expectJsonError(await post({ model: 'test-model', messages: [] }), 400);
+    expect(String(body.error)).toContain('messages');
+    expect(mockResolveContractAuth).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+
+  it('answers other schema failures with 422 naming the failing path, before authenticating', async () => {
+    const body = await expectJsonError(await post({ messages: [{ role: 'user', content: 'hi' }] }), 422);
     expect(String(body.error)).toContain('model');
     expect(mockResolveContractAuth).not.toHaveBeenCalled();
   });
@@ -557,6 +792,77 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     expect(body.errorCode).toBe('unknown_model');
   });
 
+  it('answers an adapter empty-message refusal with 400 and no error-level log', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new BadRequestError('request must contain at least one non-empty user or assistant message')
+    );
+
+    const body = await expectJsonError(await post(), 400);
+    expect(body.error).toBe('request must contain at least one non-empty user or assistant message');
+    expect(mockLoggerError).not.toHaveBeenCalled();
+  });
+
+  it.each(UPSTREAM_CALLER_ERRORS)(
+    'answers an upstream $name with sanitized 400 invalid_request JSON and warns',
+    async ({ status, properties }) => {
+      const raw = 'upstream rejected secret-model-name with private request details';
+      mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), properties));
+
+      const body = await expectJsonError(await post(), 400);
+      expect(body).toMatchObject({
+        error: 'The model provider rejected the request',
+        errorCode: 'invalid_request',
+      });
+      expect(JSON.stringify(body)).not.toContain('secret-model-name');
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        '[CLI_LLM] Handler error',
+        expect.objectContaining({ upstreamStatus: status, error: expect.objectContaining({ message: raw }) })
+      );
+      expect(mockLoggerError).not.toHaveBeenCalled();
+      expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(UPSTREAM_CALLER_MESSAGES)('keeps caller input error %s as a sanitized 400', async message => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(message), { status: 400 }));
+
+    const body = await expectJsonError(await post(), 400);
+    expect(body.errorCode).toBe('invalid_request');
+    expect(JSON.stringify(body)).not.toContain(message);
+    expect(mockLoggerError).not.toHaveBeenCalled();
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+  });
+
+  it.each(UPSTREAM_OPERATOR_ERRORS)(
+    'keeps an operator-side upstream %s (%s) as a 500 and logs it at error',
+    async (status, raw) => {
+      mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error(raw), { status }));
+
+      const body = await expectJsonError(await post(), 500);
+      expect(body.error).toBe('Internal error');
+      expect(JSON.stringify(body)).not.toContain(raw);
+      expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+      expect(mockLoggerError).toHaveBeenCalledWith(
+        '[CLI_LLM] Handler error',
+        expect.objectContaining({ upstreamStatus: status })
+      );
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', expect.objectContaining({ status }));
+    }
+  );
+
+  it.each([429, 500, 503])('keeps an upstream %s as a 500 and logs it at error', async status => {
+    mockExecuteCompletion.mockRejectedValueOnce(Object.assign(new Error('provider failed'), { status }));
+
+    const body = await expectJsonError(await post(), 500);
+    expect(body.error).toBe('Internal error');
+    expect(mockLoggerError).toHaveBeenCalledWith(
+      '[CLI_LLM] Handler error',
+      expect.objectContaining({ upstreamStatus: status })
+    );
+    expect(mockLoggerWarn).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith('cli-sse', expect.objectContaining({ status }));
+  });
+
   it('answers a refused tool search request with 400 and its errorCode', async () => {
     mockExecuteCompletion.mockRejectedValueOnce(
       new BadRequestError('no tool search here', { errorCode: 'tool_search_unsupported' })
@@ -574,11 +880,62 @@ describe('POST /api/ai/v1/completions - pre-stream failures are JSON with a real
     expect(InsufficientCreditsErrorSchema.safeParse(body).success).toBe(true);
   });
 
+  it('answers a run whose credit budget is used up with 422 run_budget_exhausted', async () => {
+    mockExecuteCompletion.mockRejectedValueOnce(
+      new UnprocessableEntityError("This run's credit budget is used up.", {
+        errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+      })
+    );
+    const body = await expectJsonError(await post(), 422);
+    expect(body.errorCode).toBe(RUN_BUDGET_EXHAUSTED_ERROR_CODE);
+    expect(CompletionsUnprocessableErrorSchema.safeParse(body).success).toBe(true);
+  });
+
   it('keeps spend_cap_exceeded distinct on a pre-stream 422', async () => {
     mockExecuteCompletion.mockRejectedValueOnce(spendCapExceededError('key hit its cap'));
     const body = await expectJsonError(await post(), 422);
     expect(body.errorCode).toBe('spend_cap_exceeded');
     expect(InsufficientCreditsErrorSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('answers a frozen caller with 403 spend_frozen, its scope, and no reason, before the cap or the provider', async () => {
+    mockFindActiveFreeze.mockResolvedValue({
+      scopeType: 'apiKey',
+      frozenAt: new Date('2026-11-16T00:00:00.000Z'),
+      reason: 'internal note',
+    });
+    const body = await expectJsonError(await post(), 403);
+    expect(body).toMatchObject({
+      errorCode: 'spend_frozen',
+      frozenScope: 'api_key',
+      frozenAt: '2026-11-16T00:00:00.000Z',
+    });
+    expect(JSON.stringify(body)).not.toContain('internal note');
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('checks the user, billing org and key, and tells executeCompletion the freeze was already checked', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User' },
+    });
+    await (await post()).text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: null, apiKeyId: 'key-1' });
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ spendFreezeChecked: true, apiKeyBillingOwnerType: 'User' })
+    );
+  });
+
+  it('keeps the acting user in the subject of an org-billed key', async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'Organization', organizationId: 'org-1' },
+    });
+    await (await post()).text();
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith({ userId: 'user-1', organizationId: 'org-1', apiKeyId: 'key-1' });
   });
 
   it('answers a catalogued model without a backend with 503 provider_not_configured', async () => {
@@ -676,7 +1033,8 @@ describe('POST /api/ai/v1/completions - body-parser and method failures', () => 
 });
 
 describe('POST /api/ai/v1/completions - rate limits from the real limiters', () => {
-  const loadActualAuth = () => vi.importActual<typeof import('@server/cli/auth')>('@server/cli/auth');
+  const loadActualAuth = () =>
+    vi.importActual<typeof import('@bike4mind/server-utils/cli/auth')>('@bike4mind/server-utils/cli/auth');
 
   it('turns a JWT limiter throw into a 429 with Retry-After', async () => {
     const actual = await loadActualAuth();
@@ -699,6 +1057,8 @@ describe('POST /api/ai/v1/completions - rate limits from the real limiters', () 
       allowed: false,
       error: 'Rate limit exceeded: 10 requests per minute. Try again in 12 seconds.',
       retryAfter: 12,
+      limitType: 'minute',
+      limit: 10,
       headers: { 'X-RateLimit-Limit-Minute': 10, 'X-RateLimit-Remaining-Minute': 0 },
     });
 
@@ -707,6 +1067,9 @@ describe('POST /api/ai/v1/completions - rate limits from the real limiters', () 
     expect(res.headers.get('retry-after')).toBe('12');
     expect(res.headers.get('x-ratelimit-limit-minute')).toBe('10');
     expect(res.headers.get('x-ratelimit-remaining-minute')).toBe('0');
+    expect(body.errorCode).toBe('api_key_rate_limit_exceeded');
+    expect(body.limit).toBe(10);
+    expect(body.windowSeconds).toBe(60);
     expect(body).not.toHaveProperty('retryAfter');
     expect(body).not.toHaveProperty('rateLimitHeaders');
   });
@@ -792,17 +1155,46 @@ describe('POST /api/ai/v1/completions - failures after the stream opened', () =>
     [
       'bedrock 400 without $metadata',
       { name: 'ValidationException', $fault: 'client' },
-      'Model provider returned an error (upstream 400)',
+      'The model provider rejected the request',
     ],
-  ])('sanitizes an %s into a provider_error frame without the raw message', async (_name, shape, message) => {
+  ])('sanitizes an %s into an error frame without the raw message', async (name, shape, message) => {
     const upstream = Object.assign(new Error(RAW), shape, { isAxiosError: 'response' in shape });
     mockExecuteCompletion.mockImplementationOnce(failAfterReady(upstream));
 
     const res = await post();
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(errorFrame(text)).toMatchObject({ code: 'provider_error', message });
+    expect(errorFrame(text)).toMatchObject({
+      code: name === 'bedrock 400 without $metadata' ? 'invalid_request' : 'provider_error',
+      message,
+    });
     expect(text).not.toContain('secret-model-name');
+  });
+
+  it('classifies an exhausted caller max_tokens in-band and logs it at warn', async () => {
+    mockExecuteCompletion.mockImplementationOnce(
+      failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'secret-model-name'))
+    );
+
+    const text = await (await post({ ...COMPLETION, max_tokens: 256 })).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'output_budget_exhausted' });
+    expect(text).not.toContain('secret-model-name');
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['non-positive', 0],
+  ])('keeps a %s max_tokens budget that ran out as provider_error, still at warn', async (_label, maxTokens) => {
+    mockLoggerError.mockClear();
+    mockExecuteCompletion.mockImplementationOnce(failAfterReady(new OutputBudgetExhaustedError('DeepSeek', 'm')));
+
+    const text = await (
+      await post(maxTokens === undefined ? COMPLETION : { ...COMPLETION, max_tokens: maxTokens })
+    ).text();
+    expect(errorFrame(text)).toMatchObject({ code: 'provider_error' });
+    expect(mockLoggerWarn).toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
+    expect(mockLoggerError).not.toHaveBeenCalledWith('[CLI_LLM] Handler error', expect.anything());
   });
 
   it('classifies a Bedrock AccessDeniedException as provider_rejected and logs its status', async () => {
@@ -898,5 +1290,518 @@ describe('POST /api/ai/v1/completions - failure analytics', () => {
       '[CLI_LLM] Handler error',
       expect.objectContaining({ upstreamStatus: undefined })
     );
+  });
+});
+
+describe('POST /api/ai/v1/completions - admin role on the reloaded owner', () => {
+  type ScopeActor = (<U extends { isAdmin?: boolean }>(actor: U) => U) | undefined;
+  const scopeActorOfCall = (): ScopeActor => mockExecuteCompletion.mock.calls[0][0].scopeActor;
+  const asKey = (scopes: string[]) =>
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes },
+    });
+
+  it('withholds an admin owner role for a key without the admin scope', async () => {
+    asKey([ApiKeyScope.AI_CHAT]);
+    expect((await post()).status).toBe(200);
+    expect(scopeActorOfCall()?.({ isAdmin: true }).isAdmin).toBe(false);
+  });
+
+  it('keeps the role for a key with the admin scope', async () => {
+    asKey([ApiKeyScope.AI_CHAT, ApiKeyScope.ADMIN]);
+    expect((await post()).status).toBe(200);
+    expect(scopeActorOfCall()).toBeUndefined();
+  });
+
+  it('keeps the role for a JWT session', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    expect((await postAs({})).status).toBe(200);
+    expect(scopeActorOfCall()).toBeUndefined();
+  });
+});
+
+describe('POST /api/ai/v1/completions - untrusted owner quotas', () => {
+  it("admits an API-key completion against the owner's quotas and holds a slot for it", async () => {
+    mockResolveContractAuth.mockResolvedValue({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', billingOwnerType: 'User', ownerUntrusted: true },
+    });
+    expect((await post()).status).toBe(200);
+    expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+      owner: 'user-1',
+      ownerUntrusted: true,
+      billingOwnerType: 'User',
+      holdSlot: true,
+    });
+  });
+
+  it('does not apply them to a JWT session', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' });
+    expect((await postAs({})).status).toBe(200);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
+  });
+
+  it('frees the slot after a completed stream', async () => {
+    const res = await post();
+    await res.text();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
+  });
+
+  it('frees the slot when the completion fails', async () => {
+    mockExecuteCompletion.mockRejectedValue(new Error('boom'));
+    const res = await post();
+    await res.text();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalled());
+  });
+
+  it('holds the slot after the client disconnects until the completion settles, then frees it', async () => {
+    let finishCompletion: () => void = () => {};
+    mockExecuteCompletion.mockImplementation(async (params: ExecuteParams) => {
+      await params.onReady?.();
+      await new Promise<void>(resolve => {
+        finishCompletion = resolve;
+      });
+    });
+    const controller = new AbortController();
+    const res = await fetch(COMPLETIONS_URL(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'b4m_live_test' },
+      body: JSON.stringify(COMPLETION),
+      signal: controller.signal,
+    });
+    expect(res.status).toBe(200);
+    controller.abort();
+    // Long enough for the server to see the socket close.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(quotaRelease).not.toHaveBeenCalled();
+
+    finishCompletion();
+    await vi.waitFor(() => expect(quotaRelease).toHaveBeenCalledTimes(1));
+  });
+
+  it('answers a refused quota with a 429, its errorCode and Retry-After, without starting the completion', async () => {
+    mockAdmitApiKeyCompletion.mockRejectedValue(
+      new TooManyRequestsError('Token rate limit exceeded', { errorCode: 'token_rate_limit_exceeded', retryAfter: 12 })
+    );
+    const res = await post();
+    const body = await expectJsonError(res, 429);
+    expect(body.errorCode).toBe('token_rate_limit_exceeded');
+    expect(res.headers.get('retry-after')).toBe('12');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('daily cap billing target', () => {
+  it.each([undefined, 'team-org'])('uses the completion billing target %s', async organizationId => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT], organizationId },
+    });
+
+    const response = await post();
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', billingOrganizationId: organizationId })
+    );
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+  });
+});
+
+describe('POST /api/ai/v1/completions - billing organization choice', () => {
+  const jwtUser = { id: 'user-1', isAdmin: false };
+  const asJwt = () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce(jwtUser as never);
+  };
+  const orgBilledKey = () =>
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+  const expectBilledTo = (organizationId: string | undefined) => {
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+    expect(mockCheckFreeTierDailySpendCap).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOrganizationId: organizationId })
+    );
+    expect(mockFindActiveFreeze).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: organizationId ?? null })
+    );
+  };
+
+  it.each([
+    ['omitted', {}],
+    ['null', { organization_id: null }],
+  ])('bills a signed-in caller personally when organization_id is %s', async (_label, extra) => {
+    asJwt();
+    await (await post({ ...COMPLETION, ...extra })).text();
+
+    expectBilledTo(undefined);
+    expect(mockResolveActiveOrg).not.toHaveBeenCalled();
+  });
+
+  it('bills the named organization when the signed-in caller may use it', async () => {
+    asJwt();
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    await (await post({ ...COMPLETION, organization_id: ' org-2 ' })).text();
+
+    expect(mockResolveActiveOrg).toHaveBeenCalledWith({ user: jwtUser }, 'org-2');
+    expectBilledTo('org-2');
+  });
+
+  it('refuses an organization the signed-in caller may not use before any completion', async () => {
+    asJwt();
+    mockResolveActiveOrg.mockRejectedValueOnce(
+      new ForbiddenError('You are not a member of the selected organization.')
+    );
+
+    await expectJsonError(await post({ ...COMPLETION, organization_id: 'org-9' }), 403);
+
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockCheckFreeTierDailySpendCap).not.toHaveBeenCalled();
+    expect(mockFindActiveFreeze).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization-billed key that names another organization', async () => {
+    orgBilledKey();
+
+    const body = await expectJsonError(await post({ ...COMPLETION, organization_id: 'org-2' }), 403);
+
+    expect(body.errorCode).toBe('billing_organization_mismatch');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses an organization-billed key that asks for personal credits', async () => {
+    orgBilledKey();
+
+    await expectJsonError(await post({ ...COMPLETION, organization_id: null }), 403);
+
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['omitted', {}],
+    ["set to the key's organization", { organization_id: 'org-1' }],
+  ])('bills the key organization when organization_id is %s', async (_label, extra) => {
+    orgBilledKey();
+    await (await post({ ...COMPLETION, ...extra })).text();
+
+    expectBilledTo('org-1');
+  });
+});
+
+describe('POST /api/ai/v1/completions - run attribution', () => {
+  const RUN_ID = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+  const RUN = { runId: RUN_ID, role: 'worker', purpose: 'explore', taskId: 'task-1' };
+  const storedRun = (overrides: Record<string, unknown> = {}) => ({
+    runId: RUN_ID,
+    userId: 'user-1',
+    ownerType: 'User',
+    ownerId: 'user-1',
+    createdAt: new Date(),
+    ...overrides,
+  });
+
+  it('passes a run the caller minted through to the completion', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const res = await post({ ...COMPLETION, run: RUN });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
+  // Only POST /api/v1/completion-runs/{runId}/budget raises a run budget; a completion only draws on it.
+  it('never changes a run budget from a worker completion, whatever root session or budget it names', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ rootSessionId: 'root-a', budgetCredits: 500 }));
+
+    const res = await post({
+      ...COMPLETION,
+      sessionId: 'root-b',
+      rootSessionId: 'root-b',
+      budgetCredits: 1_000_000,
+      run: { ...RUN, budgetCredits: 1_000_000, rootSessionId: 'root-b' },
+    });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockRaiseRunBudget).not.toHaveBeenCalled();
+    expect(mockCreateCompletionRun).not.toHaveBeenCalled();
+    const [completion] = mockExecuteCompletion.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(completion.run).toEqual(RUN);
+    expect(completion).not.toHaveProperty('budgetCredits');
+    expect(completion).not.toHaveProperty('rootSessionId');
+  });
+
+  it('rejects evaluation attribution without a verified run before provider execution', async () => {
+    await expectJsonError(await post({ ...COMPLETION, evaluation: { version: 1, requestId: RUN_ID } }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('requires evaluation attribution on an evaluation run', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ evaluation: { version: 1 } }));
+    await expectJsonError(await post({ ...COMPLETION, run: RUN }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects evaluation attribution on an ordinary run', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+    await expectJsonError(await post({ ...COMPLETION, run: RUN, evaluation: { version: 1, requestId: RUN_ID } }), 400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown run with a 404 before the stream opens or the provider is called', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(null);
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses another user's run exactly as it refuses an unknown one", async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ userId: 'user-2', ownerId: 'user-2' }));
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('refuses a personal run on an org-billed key, since the run would bill a different owner', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses a teammate's run on the same org-billed key, since the minting user must match", async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(
+      storedRun({ userId: 'user-2', ownerType: 'Organization', ownerId: 'org-1' })
+    );
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it("refuses the caller's run minted for another org when the key bills a different org", async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-B', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-A' }));
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('honours a run minted for an organization when the completion names that organization', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'user-1', isAdmin: false } as never);
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-2' }));
+
+    const res = await post({ ...COMPLETION, run: RUN, organization_id: 'org-2' });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ run: RUN, billingOrganizationId: 'org-2' })
+    );
+  });
+
+  it('refuses a personal run on a completion that names an organization, since the payers differ', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({ method: 'jwt', userId: 'user-1' });
+    vi.mocked(userRepository.findById).mockResolvedValueOnce({ id: 'user-1', isAdmin: false } as never);
+    mockResolveActiveOrg.mockResolvedValueOnce('org-2');
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const body = await expectJsonError(await post({ ...COMPLETION, run: RUN, organization_id: 'org-2' }), 404);
+
+    expect(body.errorCode).toBe('run_not_found');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('accepts an uppercased id for an owned run and forwards the normalized id', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+
+    const res = await post({ ...COMPLETION, run: { ...RUN, runId: RUN_ID.toUpperCase() } });
+    await res.text();
+
+    expect(res.status).toBe(200);
+    expect(mockFindCompletionRun).toHaveBeenCalledWith(RUN_ID);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: RUN }));
+  });
+
+  it('accepts an org run on the org-billed key that minted it', async () => {
+    mockResolveContractAuth.mockResolvedValueOnce({
+      method: 'apiKey',
+      userId: 'user-1',
+      apiKeyInfo: { keyId: 'key-1', userId: 'user-1', organizationId: 'org-1', billingOwnerType: 'Organization' },
+    });
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun({ ownerType: 'Organization', ownerId: 'org-1' }));
+
+    const res = await post({ ...COMPLETION, run: RUN });
+    await res.text();
+
+    expect(res.status).toBe(200);
+  });
+
+  it('looks nothing up for an unattributed request', async () => {
+    await (await post()).text();
+
+    expect(mockFindCompletionRun).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ run: undefined }));
+  });
+
+  type SettlingParams = ExecuteParams & { onSettled?: (outcome: unknown) => void; requestId?: string };
+  const settleWith = (committed: boolean) => async (params: SettlingParams) => {
+    await params.onReady?.();
+    await params.onChunk(['', 'hello'], { outputTokens: 5, creditsUsed: 9, usdCost: 0.009 });
+    params.onSettled?.({ requestId: params.requestId, committed, creditsCharged: committed ? 7 : 0, usdCost: 0.009 });
+  };
+
+  it('sends one settled event after the content and before [DONE], carrying the run and the caller request id', async () => {
+    mockFindCompletionRun.mockResolvedValueOnce(storedRun());
+    mockExecuteCompletion.mockImplementationOnce(settleWith(true));
+
+    const res = await postAs(
+      { 'x-api-key': 'b4m_live_test', 'x-request-id': 'caller-req-1' },
+      { ...COMPLETION, run: RUN }
+    );
+    const text = await res.text();
+
+    const sent = frames(text).filter(f => f.type !== 'meta');
+    expect(sent.map(f => f.type)).toEqual(['content', 'settled']);
+    expect(CompletionStreamEventSchema.parse(sent[1])).toEqual({
+      type: 'settled',
+      requestId: 'caller-req-1',
+      creditsCharged: 7,
+      usdCost: 0.009,
+      runId: RUN_ID,
+    });
+    expect(text.indexOf('"settled"')).toBeLessThan(text.indexOf('[DONE]'));
+  });
+
+  it('sends a settled event without a runId on an unattributed request', async () => {
+    mockExecuteCompletion.mockImplementationOnce(settleWith(true));
+
+    const settled = frames(await (await post()).text()).find(f => f.type === 'settled');
+
+    expect(settled).toBeDefined();
+    expect(settled).not.toHaveProperty('runId');
+  });
+
+  it('sends no settled event when settlement did not commit', async () => {
+    mockExecuteCompletion.mockImplementationOnce(settleWith(false));
+
+    const text = await (await post()).text();
+
+    expect(frames(text).some(f => f.type === 'settled')).toBe(false);
+    expect(text).toContain('[DONE]');
+  });
+});
+
+describe('end_user_id', () => {
+  const platformKey = { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_END_USER_ID] };
+
+  it("sends a platform key's end user to the provider as the namespaced id and records it", async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'apiKey', userId: 'user-1', apiKeyInfo: platformKey });
+    mockRecordPlatformEndUser.mockResolvedValue(undefined);
+
+    expect((await post({ ...COMPLETION, end_user_id: 'customer_42' })).status).toBe(200);
+
+    const providerEndUserId = toPlatformEndUserProviderId('user-1', 'customer_42');
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', providerEndUserId })
+    );
+    expect(mockRecordPlatformEndUser).toHaveBeenCalledWith({
+      providerEndUserId,
+      keyOwnerId: 'user-1',
+      apiKeyId: 'key-1',
+      endUserId: 'customer_42',
+    });
+  });
+
+  it('still completes when recording the end user fails', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'apiKey', userId: 'user-1', apiKeyInfo: platformKey });
+    mockRecordPlatformEndUser.mockRejectedValue(new Error('db down'));
+
+    expect((await post({ ...COMPLETION, end_user_id: 'customer_42' })).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalled();
+  });
+
+  it('leaves the provider id to the owner when no end_user_id is sent', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'apiKey', userId: 'user-1', apiKeyInfo: platformKey });
+
+    expect((await post()).status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledWith(expect.objectContaining({ providerEndUserId: undefined }));
+    expect(mockRecordPlatformEndUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'a key without ai:end-user-id',
+      { method: 'apiKey', userId: 'user-1', apiKeyInfo: { ...platformKey, scopes: [ApiKeyScope.AI_CHAT] } },
+    ],
+    ['a JWT session', { method: 'jwt', userId: 'user-1' }],
+  ])('refuses end_user_id from %s with a 400 end_user_id_not_allowed', async (_name, auth) => {
+    mockResolveContractAuth.mockResolvedValue(auth);
+
+    const body = await expectJsonError(await post({ ...COMPLETION, end_user_id: 'customer_42' }), 400);
+    expect(body.errorCode).toBe('end_user_id_not_allowed');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockRecordPlatformEndUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['over 64 characters', 'a'.repeat(65)],
+    ['outside the charset', 'customer 42'],
+    ['an email', 'jane@example.com'],
+  ])('rejects an end_user_id that is %s with a 400 invalid_end_user_id', async (_name, endUserId) => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'apiKey', userId: 'user-1', apiKeyInfo: platformKey });
+
+    const body = await expectJsonError(await post({ ...COMPLETION, end_user_id: endUserId }), 400);
+    expect(body.errorCode).toBe('invalid_end_user_id');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockRecordPlatformEndUser).not.toHaveBeenCalled();
+  });
+
+  it('checks the format before the credential, so a malformed value on a session is invalid_end_user_id', async () => {
+    mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'user-1' });
+
+    const body = await expectJsonError(await post({ ...COMPLETION, end_user_id: 'jane@example.com' }), 400);
+    expect(body.errorCode).toBe('invalid_end_user_id');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });

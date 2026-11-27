@@ -12,6 +12,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { registerGitHubTools } from './registerTools.js';
 import { getRepositoryFromIssueNodeId, getRepositoryFromProjectItemId } from './helpers/whitelist.js';
+import { createStderrLogger } from '../shared/stderrLog.js';
+
+const log = createStderrLogger('github');
 
 const server = new McpServer({
   name: 'github-mcp',
@@ -29,11 +32,11 @@ await server.connect(transport);
 
 // Handle graceful shutdown
 const shutdown = async () => {
-  console.error('GitHub MCP Server shutting down...');
+  log.info('shutting down');
   try {
     await server.close();
   } catch (error) {
-    console.error('Error during shutdown:', error);
+    log.error('error during shutdown', { error });
   }
   process.exit(0);
 };
@@ -45,11 +48,11 @@ process.on('SIGHUP', shutdown);
 
 // Handle uncaught errors
 process.on('uncaughtException', error => {
-  console.error('Uncaught exception in GitHub MCP Server:', error);
+  log.error('uncaught exception', { error });
   shutdown();
 });
 
 process.on('unhandledRejection', reason => {
-  console.error('Unhandled rejection in GitHub MCP Server:', reason);
+  log.error('unhandled rejection', { reason });
   shutdown();
 });

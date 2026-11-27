@@ -6,7 +6,7 @@
  * processFabFilesServer, which takes this as a dependency). See issue #660.
  */
 import type { Logger } from '@bike4mind/observability';
-import imageSize from 'image-size';
+import { imageSize } from 'image-size';
 
 /** Bedrock rejects images >2000px in multi-image requests. */
 const MAX_IMAGE_DIMENSION_PX = 2000;

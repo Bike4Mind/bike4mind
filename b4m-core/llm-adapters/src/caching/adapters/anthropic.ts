@@ -1,6 +1,6 @@
 import { ICachingAdapter } from './base';
 import { ICacheStrategy, CacheUsageStats, ModelBackend } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { Logger } from '@bike4mind/observability';
 
 /**
  * Anthropic's hard ceiling on `cache_control` markers per request. Exceeding it fails the
@@ -92,6 +92,38 @@ function withoutMarker(block: unknown): unknown {
 }
 
 /**
+ * Gives every marker in `messages`, a caller's own content-block markers included, the request's
+ * `cacheControl`. For a backend that reports cache writes without a 5m/1h split (Bedrock), settlement
+ * prices every write at the request TTL (withRequestTtlWrites in @bike4mind/common), so a caller
+ * marker left at 5m would bill at the 1-hour rate. Returns `params` itself when it holds no messages.
+ */
+export function withRequestTtlMarkers(
+  params: Record<string, unknown>,
+  cacheControl: Record<string, unknown>
+): Record<string, unknown> {
+  if (!Array.isArray(params.messages)) return params;
+  const stamp = (block: unknown): unknown =>
+    hasMarker(block) ? { ...(block as Record<string, unknown>), cache_control: cacheControl } : block;
+  return {
+    ...params,
+    messages: params.messages.map(message => {
+      const record = message as Record<string, unknown> | null;
+      if (!record || !Array.isArray(record.content)) return message;
+      return {
+        ...record,
+        content: record.content.map(block => {
+          const stamped = stamp(block);
+          const inner = (block as Record<string, unknown> | null)?.content;
+          return Array.isArray(inner)
+            ? { ...(stamped as Record<string, unknown>), content: inner.map(stamp) }
+            : stamped;
+        }),
+      };
+    }),
+  };
+}
+
+/**
  * Request-level chokepoint for the 4-marker ceiling, run on the final body right before send by
  * both `anthropicBackend.ts` and `bedrockBackend/anthropic.ts`. Markers are attached from several
  * independent places (per-message `cache` flags, `cache: true` system messages, applyCaching above,
@@ -162,8 +194,7 @@ export function capCacheControlMarkers(params: Record<string, unknown>, logger?:
     dropped: dropped.map(describeSite),
     limit: MAX_CACHE_CONTROL_BLOCKS,
   };
-  if (logger) logger.warn(message, detail);
-  else console.warn(message, JSON.stringify(detail));
+  (logger ?? Logger.globalInstance).warn(message, detail);
 
   return capped;
 }
@@ -229,6 +260,7 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     const messagesParam = modifiedParams.messages as unknown[] | undefined;
     if (strategy.cacheConversationHistory && Array.isArray(messagesParam) && messagesParam.length > 0) {
       const messages = [...messagesParam] as Record<string, unknown>[];
+      // Mirrored by withFirstRoundCacheBreakpoints in services/cliCompletions.ts; keep the two in sync.
       let anchorIndex = messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0);
       // A mid-conversation tool change is the only system message left in the list, and its blocks take no cache_control.
       while (anchorIndex >= 0 && messages[anchorIndex].role === 'system') anchorIndex--;
@@ -307,16 +339,15 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     // the ceiling is the interesting one, so that logs at `info`; quieter requests stay at
     // `debug` rather than adding a line to every LLM call in the platform.
     //
-    // The at-ceiling line falls back to `console` like the two branches below, because the
-    // Bedrock call site passes no logger (`bedrockBackend/anthropic.ts`, see its TODO) and Bedrock
+    // The at-ceiling line falls back to the global Logger like the two branches below, because the
+    // Bedrock call site passes no logger (`bedrockBackend/anthropic.ts`) and Bedrock
     // is the backend this cap exists for - gating it on `logger` would emit the census only on the
     // path that does not reproduce. The `debug` half stays logger-only: it is the high-volume one.
     const census = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
     const nearCap = outbound.total >= MAX_CACHE_CONTROL_BLOCKS;
     if (nearCap) {
       const message = '[PromptCache] cache_control census at the ceiling';
-      if (logger) logger.info(message, census);
-      else console.info(message, JSON.stringify(census));
+      (logger ?? Logger.globalInstance).info(message, census);
     } else if (logger) {
       logger.debug('[PromptCache] cache_control census', census);
     }
@@ -324,13 +355,11 @@ export class AnthropicCachingAdapter implements ICachingAdapter {
     if (outbound.total > MAX_CACHE_CONTROL_BLOCKS) {
       const message = `[PromptCache] request exceeds the ${MAX_CACHE_CONTROL_BLOCKS}-block cache_control limit on arrival (${outbound.total}); capCacheControlMarkers will strip the excess before send`;
       const detail = { inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-      if (logger) logger.warn(message, detail);
-      else console.warn(message, JSON.stringify(detail));
+      (logger ?? Logger.globalInstance).warn(message, detail);
     } else if (dropped.length > 0) {
       const message = `[PromptCache] cache_control budget exhausted (limit ${MAX_CACHE_CONTROL_BLOCKS}); skipped breakpoints: ${dropped.join(', ')}`;
       const detail = { dropped, inbound, outbound, limit: MAX_CACHE_CONTROL_BLOCKS };
-      if (logger) logger.warn(message, detail);
-      else console.warn(message, JSON.stringify(detail));
+      (logger ?? Logger.globalInstance).warn(message, detail);
     }
 
     return modifiedParams;

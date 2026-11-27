@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { buildBundleScriptSrc, resolveDocOrigin } from '@server/services/publish/viewerSecurity';
+import { buildBundleScriptSrc } from '@bike4mind/server-utils/services/publish/viewerSecurity';
+import { buildSandboxAssetOrigins } from '@server/artifacts/sandboxAssetOrigins';
 
 /**
  * GET /api/artifact-sandbox - HTML iframe target for client-rendered artifacts.
@@ -37,17 +38,7 @@ const SANDBOX_CDN_SCRIPT_HOSTS =
 function buildArtifactSandboxCsp(req: NextApiRequest): string {
   const headers = req.headers ?? {};
   const blessedScriptSrc = buildBundleScriptSrc(headers.host, headers['x-forwarded-proto']);
-  const assetOrigins = [resolveDocOrigin(headers.host, headers['x-forwarded-proto'])];
-  const cdn = process.env.NEXT_PUBLIC_CDN_URL;
-  if (cdn && !cdn.startsWith('/')) {
-    try {
-      const url = new URL(cdn);
-      if (url.protocol === 'https:' && !/[\s;,'"*\\]/.test(url.origin)) assetOrigins.push(url.origin);
-    } catch {
-      console.warn('[artifact-sandbox] ignoring invalid CDN URL');
-    }
-  }
-  const assets = [...new Set(assetOrigins)].join(' ');
+  const assets = buildSandboxAssetOrigins(headers);
   return [
     "default-src 'none'",
     `style-src 'unsafe-inline' ${assets} https://fonts.googleapis.com https://fonts.bunny.net https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://unpkg.com`,

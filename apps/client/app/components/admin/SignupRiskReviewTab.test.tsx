@@ -1,0 +1,584 @@
+import React from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useUser } from '@client/app/contexts/UserContext';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+import type { SignupRiskReviewRow } from '@client/app/hooks/data/signupRiskReviews';
+import { UndoToastProvider } from './shared';
+
+// The data hooks are mocked so each path is driven directly; the route behind them is covered by
+// pages/api/admin/__tests__/signup-risk-reviews.test.ts.
+const m = vi.hoisted(() => ({
+  useSignupRiskReviews: vi.fn(),
+  mutate: vi.fn(),
+  mutateAsync: vi.fn(),
+  accept: vi.fn(),
+  search: {} as Record<string, unknown>,
+  navigate: vi.fn(),
+  openProfile: vi.fn(),
+  bulkAbuse: vi.fn(),
+  reset: vi.fn(),
+}));
+vi.mock('@client/app/hooks/data/signupRiskReviews', () => ({
+  useSignupRiskReviews: m.useSignupRiskReviews,
+  useSignupRiskReviewDecision: () => ({
+    mutate: m.mutate,
+    mutateAsync: m.mutateAsync,
+    reset: m.reset,
+    isPending: false,
+    error: null,
+  }),
+}));
+vi.mock('@client/app/hooks/data/aiAssessmentSuggestions', () => ({
+  useAcceptAssessmentSuggestion: () => ({ mutate: m.accept, isPending: false }),
+}));
+vi.mock('@tanstack/react-router', () => ({
+  useSearch: () => m.search,
+  useNavigate: () => m.navigate,
+  useRouter: () => undefined,
+}));
+vi.mock('./Users/Profile/useOpenUserProfile', () => ({ useOpenUserProfile: () => m.openProfile }));
+vi.mock('./Users/BulkAbuseResponseModal', () => ({
+  default: (props: { selectedUserIds: string[]; onExecuted: () => void }) => {
+    m.bulkAbuse(props.selectedUserIds);
+    return (
+      <button type="button" data-testid="bulk-abuse-stub" onClick={props.onExecuted}>
+        stub
+      </button>
+    );
+  },
+}));
+
+import SignupRiskReviewTab from './SignupRiskReviewTab';
+import { advisoryTooltip } from './SignupAdvisoryCell';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+
+const renderTab = () =>
+  render(
+    <CssVarsProvider theme={appTheme}>
+      <UndoToastProvider>
+        <SignupRiskReviewTab />
+      </UndoToastProvider>
+    </CssVarsProvider>
+  );
+
+const row = (over: Partial<SignupRiskReviewRow> = {}): SignupRiskReviewRow => ({
+  userId: 'u1',
+  email: 'bot1@burner-example.com',
+  username: 'bot1',
+  domain: 'burner-example.com',
+  createdAt: '2026-10-20T10:00:00.000Z',
+  score: 80,
+  signals: [{ signal: 'quickApiKey', points: 15, reason: 'First API key created 3 minutes after signup' }],
+  computedAt: '2026-10-20T11:00:00.000Z',
+  creditsSpent: 1200,
+  apiKeysCreated: 3,
+  grantHeld: false,
+  advisory: null,
+  ...over,
+});
+
+const ROWS = [
+  row(),
+  row({
+    userId: 'u2',
+    email: 'jane@example.org',
+    username: 'jane',
+    domain: 'example.org',
+    score: 55,
+    signals: [{ signal: 'fastSpend', points: 20, reason: 'Spent 900 credits in the first hour' }],
+    creditsSpent: 0,
+    apiKeysCreated: 0,
+  }),
+];
+
+const queue = (data: SignupRiskReviewRow[], over: Record<string, unknown> = {}) => ({
+  data: { data, truncated: false, reviewThreshold: 50 },
+  error: null,
+  isPending: false,
+  refetch: vi.fn(),
+  ...over,
+});
+
+const approveFirstRow = async () => {
+  fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+  fireEvent.click(await screen.findByTestId('signup-risk-approve-u1'));
+  fireEvent.click(await screen.findByTestId('signup-risk-approve-reason-preset-0'));
+  fireEvent.click(screen.getByTestId('signup-risk-approve-confirm-btn'));
+};
+
+beforeEach(() => {
+  useUser.setState({ currentUser: { id: 'admin-1', isAdmin: true } as never });
+  vi.clearAllMocks();
+  m.search = {};
+  m.useSignupRiskReviews.mockReturnValue(queue(ROWS));
+});
+
+describe('SignupRiskReviewTab', () => {
+  it('lists flagged accounts with their risk tone, signals and activity, leaving the outer padding to the admin page frame', () => {
+    renderTab();
+    const style = getComputedStyle(screen.getByTestId('admin-signup-risk-review-tab'));
+    for (const side of [style.paddingTop, style.paddingRight, style.paddingBottom, style.paddingLeft]) {
+      expect(parseFloat(side || '0')).toBe(0);
+    }
+
+    const high = screen.getByTestId('signup-risk-row-u1');
+    expect(within(high).getByText('High risk')).toBeTruthy();
+    expect(within(high).getByText('Quick API key')).toBeTruthy();
+    expect(within(high).getByText('1,200')).toBeTruthy();
+    expect(within(screen.getByTestId('signup-risk-row-u2')).getByText('Medium risk')).toBeTruthy();
+    expect(screen.queryByTestId('signup-risk-truncated')).toBeNull();
+  });
+
+  it('puts the high risk cut halfway between a custom review threshold and 100', () => {
+    m.useSignupRiskReviews.mockReturnValue(
+      queue(ROWS, { data: { data: ROWS, truncated: false, reviewThreshold: 20 } })
+    );
+    renderTab();
+
+    expect(within(screen.getByTestId('signup-risk-row-u1')).getByText('High risk')).toBeTruthy();
+    expect(within(screen.getByTestId('signup-risk-row-u2')).getByText('Medium risk')).toBeTruthy();
+  });
+
+  it('shows the username only when it differs from the email local part', () => {
+    m.useSignupRiskReviews.mockReturnValue(queue([row(), row({ userId: 'u3', username: 'renamed-bot' })]));
+    renderTab();
+
+    expect(within(screen.getByTestId('signup-risk-row-u1')).queryByText('bot1')).toBeNull();
+    expect(within(screen.getByTestId('signup-risk-row-u3')).getByText('renamed-bot')).toBeTruthy();
+  });
+
+  it('says when the queue is capped', () => {
+    m.useSignupRiskReviews.mockReturnValue({
+      ...queue(ROWS),
+      data: { data: ROWS, truncated: true, reviewThreshold: 50 },
+    });
+    renderTab();
+
+    expect(screen.getByTestId('signup-risk-truncated')).toBeTruthy();
+  });
+
+  it('filters by the signal in the URL and offers to clear it when nothing matches', () => {
+    m.search = { riskSignal: 'fastSpend' };
+    const { unmount } = renderTab();
+    expect(screen.queryByTestId('signup-risk-row-u1')).toBeNull();
+    expect(screen.getByTestId('signup-risk-row-u2')).toBeTruthy();
+    unmount();
+
+    m.search = { riskSignal: 'datacenterNetwork' };
+    renderTab();
+    expect(screen.getByText('No matching accounts')).toBeTruthy();
+    fireEvent.click(screen.getByText('Clear filters'));
+    expect(m.navigate).toHaveBeenCalled();
+  });
+
+  it('keeps the email search out of the URL', () => {
+    renderTab();
+
+    fireEvent.change(screen.getByTestId('admin-filter-search-input'), { target: { value: 'jane' } });
+
+    expect(screen.queryByTestId('signup-risk-row-u1')).toBeNull();
+    expect(screen.getByTestId('signup-risk-row-u2')).toBeTruthy();
+    expect(m.navigate).not.toHaveBeenCalled();
+  });
+
+  it('approves with a required reason and offers an undo that reopens the review', async () => {
+    m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: [], grantReleasedUserIds: [] })
+    );
+    m.mutateAsync.mockResolvedValue({
+      updatedUserIds: ['u1'],
+      skippedUserIds: [],
+      failedUserIds: [],
+      grantReleasedUserIds: [],
+    });
+    renderTab();
+
+    await approveFirstRow();
+
+    expect(m.openProfile).not.toHaveBeenCalled();
+    expect(m.mutate).toHaveBeenCalledWith(
+      { action: 'approve', userIds: ['u1'], reason: 'Verified legitimate user' },
+      expect.anything()
+    );
+    expect(screen.getByTestId('undo-toast-message').textContent).toBe('Approved 1 account');
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() =>
+      expect(m.mutateAsync).toHaveBeenCalledWith({
+        action: 'reopen',
+        userIds: ['u1'],
+        reason: 'Undid approval: Verified legitimate user',
+      })
+    );
+  });
+
+  it('reports accounts that failed while still offering undo for the rest', async () => {
+    m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: ['u2'], grantReleasedUserIds: [] })
+    );
+    renderTab();
+
+    await approveFirstRow();
+
+    expect(screen.getByTestId('signup-risk-failed').textContent).toContain('1 account could not be approved');
+    expect(screen.getByTestId('undo-toast-message').textContent).toBe('Approved 1 account');
+  });
+
+  it('marks held signup credits and says approval pays them for good', async () => {
+    m.useSignupRiskReviews.mockReturnValue(queue([row({ grantHeld: true, signals: [] }), ROWS[1]]));
+    m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+      options.onSuccess({ updatedUserIds: ['u1'], skippedUserIds: [], failedUserIds: [], grantReleasedUserIds: ['u1'] })
+    );
+    renderTab();
+
+    expect(screen.getByTestId('signup-risk-grant-held-u1').textContent).toBe('Credits held');
+    expect(screen.queryByTestId('signup-risk-grant-held-u2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+    fireEvent.click(await screen.findByTestId('signup-risk-approve-u1'));
+    expect((await screen.findByTestId('signup-risk-approve-grant-note')).textContent).toContain(
+      'Undo does not take them back'
+    );
+    fireEvent.click(screen.getByTestId('signup-risk-approve-reason-preset-0'));
+    fireEvent.click(screen.getByTestId('signup-risk-approve-confirm-btn'));
+
+    expect(screen.getByTestId('undo-toast-message').textContent).toBe('Approved 1 account and paid held credits to 1');
+  });
+
+  it('clears a stale decision error when the approve dialog opens', () => {
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+    fireEvent.click(screen.getByTestId('signup-risk-approve-u1'));
+
+    expect(m.reset).toHaveBeenCalled();
+  });
+
+  it('offers no undo when every account was already decided elsewhere', async () => {
+    m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+      options.onSuccess({ updatedUserIds: [], skippedUserIds: ['u1'], failedUserIds: [], grantReleasedUserIds: [] })
+    );
+    renderTab();
+
+    await approveFirstRow();
+
+    expect(m.mutate).toHaveBeenCalled();
+    expect(screen.queryByTestId('undo-toast')).toBeNull();
+  });
+
+  it('suspends the selection through the bulk abuse response dialog', () => {
+    renderTab();
+
+    for (const id of ['u1', 'u2'])
+      fireEvent.click(within(screen.getByTestId(`admin-table-select-${id}`)).getByRole('checkbox'));
+    fireEvent.click(screen.getByTestId('signup-risk-bulk-suspend-btn'));
+
+    expect(m.bulkAbuse).toHaveBeenCalledWith(['u1', 'u2']);
+    fireEvent.click(screen.getByTestId('bulk-abuse-stub'));
+    expect(m.useSignupRiskReviews.mock.results[0].value.refetch).toHaveBeenCalled();
+    expect(screen.queryByTestId('admin-bulk-action-bar')).toBeNull();
+  });
+
+  it('suspends one account from its row menu without opening the profile', async () => {
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u2'));
+    fireEvent.click(await screen.findByTestId('signup-risk-suspend-u2'));
+
+    expect(m.bulkAbuse).toHaveBeenCalledWith(['u2']);
+    expect(m.openProfile).not.toHaveBeenCalled();
+  });
+
+  it('opens the user profile when a row is activated', () => {
+    renderTab();
+
+    fireEvent.click(screen.getByTestId('signup-risk-row-u2'));
+
+    expect(m.openProfile).toHaveBeenCalledWith('u2');
+  });
+
+  it('shows an empty queue with a refresh action', () => {
+    const empty = queue([]);
+    m.useSignupRiskReviews.mockReturnValue(empty);
+    renderTab();
+
+    expect(screen.getByText('No accounts are waiting for review')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('signup-risk-reset-btn'));
+    expect(empty.refetch).toHaveBeenCalled();
+  });
+
+  describe('automatic approvals', () => {
+    const autoApproved = {
+      userId: 'u9',
+      email: 'payer@example.org',
+      username: 'payer',
+      score: 62,
+      policy: 'settled_payment' as const,
+      decidedAt: '2026-11-02T10:00:00.000Z',
+    };
+    const withAutoApproved = () =>
+      m.useSignupRiskReviews.mockReturnValue(
+        queue(ROWS, { data: { data: ROWS, truncated: false, reviewThreshold: 50, autoApproved: [autoApproved] } })
+      );
+    const reopen = async () => {
+      fireEvent.click(screen.getByTestId('signup-risk-reopen-u9'));
+      fireEvent.click(await screen.findByTestId('signup-risk-reopen-reason-preset-0'));
+      fireEvent.click(screen.getByTestId('signup-risk-reopen-confirm-btn'));
+    };
+
+    it('hides the section when nothing was approved automatically', () => {
+      renderTab();
+
+      expect(screen.queryByTestId('signup-risk-auto-approved')).toBeNull();
+    });
+
+    it('lists an automatic approval with its evidence and reopens it with a reason', async () => {
+      withAutoApproved();
+      m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+        options.onSuccess({ updatedUserIds: ['u9'], skippedUserIds: [], failedUserIds: [], grantReleasedUserIds: [] })
+      );
+      renderTab();
+
+      const listed = screen.getByTestId('signup-risk-auto-approved-row-u9');
+      expect(listed.textContent).toContain('payer@example.org');
+      expect(listed.textContent).toContain('Settled payment');
+
+      await reopen();
+
+      expect(m.mutate).toHaveBeenCalledWith(
+        { action: 'reopen', userIds: ['u9'], reason: 'Evidence needs a manual look' },
+        expect.anything()
+      );
+      await waitFor(() => expect(screen.queryByTestId('signup-risk-reopen-confirm-btn')).toBeNull());
+    });
+
+    it('keeps the dialog open and says so when the reopen failed on the server', async () => {
+      withAutoApproved();
+      m.mutate.mockImplementation((_decision, options: { onSuccess: (result: unknown) => void }) =>
+        options.onSuccess({ updatedUserIds: [], skippedUserIds: [], failedUserIds: ['u9'], grantReleasedUserIds: [] })
+      );
+      renderTab();
+
+      await reopen();
+
+      expect((await screen.findByTestId('signup-risk-reopen-error')).textContent).toContain('Reopening failed');
+      expect(screen.getByTestId('signup-risk-reopen-confirm-btn')).toBeTruthy();
+    });
+  });
+
+  it('shows an advisory model verdict, offering the AI suggestion only for abuse', () => {
+    m.useSignupRiskReviews.mockReturnValue(
+      queue([
+        row({
+          advisory: {
+            assessmentId: 'c'.repeat(24),
+            detectionId: 'd1',
+            detector: 'signupNetworkBurst',
+            result: 'abuse',
+            confidence: 0.82,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
+            newerVerdicts: 0,
+          },
+        }),
+        row({
+          userId: 'u2',
+          email: 'jane@example.org',
+          advisory: {
+            assessmentId: 'c'.repeat(24),
+            detectionId: 'd2',
+            detector: 'signupNetworkBurst',
+            result: 'legitimate_automation',
+            confidence: null,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
+            newerVerdicts: 0,
+          },
+        }),
+        row({
+          userId: 'u3',
+          email: 'sam@example.net',
+          advisory: {
+            assessmentId: 'c'.repeat(24),
+            detectionId: 'd3',
+            detector: 'signupNetworkBurst',
+            result: 'insufficient_evidence',
+            confidence: 0.4,
+            assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
+            newerVerdicts: 0,
+          },
+        }),
+      ])
+    );
+    renderTab();
+
+    const chip = (userId: string) =>
+      within(screen.getByTestId(`signup-risk-advisory-${userId}`)).getByTestId('admin-status-chip');
+    expect(screen.getByTestId('signup-risk-ai-u1-chip').textContent).toContain('Likely abuse: keep in review');
+    expect(screen.getByTestId('signup-risk-ai-u1-chip').getAttribute('data-tone')).toBe('neutral');
+    expect(screen.queryByTestId('signup-risk-advisory-u1')).toBeNull();
+    expect(chip('u2').textContent).toBe('Model: legit automation');
+    expect(chip('u2').getAttribute('data-tone')).toBe('neutral');
+    expect(chip('u3').textContent).toBe('Model: unsure');
+    expect(chip('u3').getAttribute('data-tone')).toBe('neutral');
+  });
+
+  it('words the advisory tooltip with the detector, confidence, age and other verdicts', () => {
+    const now = new Date('2026-11-02T10:00:00.000Z').getTime();
+    const advisory = {
+      assessmentId: 'c'.repeat(24),
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst' as const,
+      result: 'abuse' as const,
+      confidence: 0.82,
+      assessedAt: '2026-11-02T10:00:00.000Z',
+      otherVerdicts: 0,
+      newerVerdicts: 0,
+    };
+
+    const single = advisoryTooltip(advisory, now);
+    expect(single).toContain('(Signup network burst)');
+    expect(single).toContain('82% confident');
+    expect(single).not.toContain('other verdict');
+    expect(single).toContain('It never approves or blocks an account.');
+    expect(advisoryTooltip({ ...advisory, confidence: null }, now)).not.toContain('confident');
+
+    const overNewer = advisoryTooltip({ ...advisory, otherVerdicts: 2, newerVerdicts: 1 }, now);
+    expect(overNewer).toContain('This abuse verdict is shown over 1 newer verdict; 2 other verdicts on this account.');
+
+    const abuseIsNewest = advisoryTooltip({ ...advisory, otherVerdicts: 1 }, now);
+    expect(abuseIsNewest).toContain(' 1 other verdict on this account.');
+    expect(abuseIsNewest).not.toContain('shown over');
+  });
+
+  it('never claims an abuse verdict on a non-abuse advisory with other verdicts', () => {
+    const now = new Date('2026-11-02T10:00:00.000Z').getTime();
+    const tooltip = advisoryTooltip(
+      {
+        assessmentId: 'c'.repeat(24),
+        detectionId: 'd1',
+        detector: 'signupNetworkBurst',
+        result: 'insufficient_evidence',
+        confidence: 0.6,
+        assessedAt: '2026-11-02T10:00:00.000Z',
+        otherVerdicts: 2,
+        newerVerdicts: 0,
+      },
+      now
+    );
+
+    expect(tooltip).toContain(' 2 other verdicts on this account.');
+    expect(tooltip).not.toContain('abuse');
+  });
+
+  it('shows no advisory chip on a row with no verdict', () => {
+    renderTab();
+
+    expect(screen.queryByTestId('signup-risk-advisory-u1')).toBeNull();
+    expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+    fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+    expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+  });
+
+  describe('accepting or overriding the abuse assessment', () => {
+    const ASSESSMENT_ID = 'c'.repeat(24);
+    const advisoryOf = (result: 'abuse' | 'legitimate_automation') => ({
+      assessmentId: ASSESSMENT_ID,
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst' as const,
+      result,
+      confidence: 0.9,
+      assessedAt: '2026-11-02T10:00:00.000Z',
+      otherVerdicts: 0,
+      newerVerdicts: 0,
+    });
+
+    it('posts the accept with the surface, user and assessment, changing nothing else', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+      fireEvent.click(await screen.findByTestId('signup-risk-accept-assessment-u1'));
+
+      expect(m.accept).toHaveBeenCalledWith(
+        { surface: 'signupRiskReview', userId: 'u1', assessmentId: ASSESSMENT_ID },
+        expect.anything()
+      );
+      expect(m.mutate).not.toHaveBeenCalled();
+    });
+
+    it('accepts with the row shortcut', () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      fireEvent.keyDown(screen.getByTestId('signup-risk-row-u1'), { key: 'a' });
+
+      expect(m.accept).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens the approve dialog on override and sends the aiDecision on confirm', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+      fireEvent.click(await screen.findByTestId('signup-risk-override-assessment-u1'));
+      expect(screen.getByTestId('signup-risk-approve-dialog')).toBeTruthy();
+      expect(m.mutate).not.toHaveBeenCalled();
+      fireEvent.click(await screen.findByTestId('signup-risk-approve-reason-preset-0'));
+      fireEvent.click(screen.getByTestId('signup-risk-approve-confirm-btn'));
+
+      expect(m.mutate).toHaveBeenCalledWith(
+        {
+          action: 'approve',
+          userIds: ['u1'],
+          reason: 'Verified legitimate user',
+          aiDecision: { assessmentId: ASSESSMENT_ID },
+        },
+        expect.anything()
+      );
+    });
+
+    it('sends no aiDecision when approving the same row the ordinary way', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('abuse') })]));
+      renderTab();
+
+      await approveFirstRow();
+
+      expect(m.mutate.mock.calls[0][0]).not.toHaveProperty('aiDecision');
+    });
+
+    it.each(['accepted', 'overridden'] as const)(
+      'offers no accept or override once the assessment is %s',
+      async decision => {
+        m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: { ...advisoryOf('abuse'), decision } })]));
+        renderTab();
+
+        fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+        await screen.findByTestId('signup-risk-approve-u1');
+        expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+        expect(screen.queryByTestId('signup-risk-override-assessment-u1')).toBeNull();
+        expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+        expect(screen.getByTestId('signup-risk-decision-u1')).toHaveTextContent(
+          decision === 'accepted' ? 'Accepted' : 'Overridden'
+        );
+        fireEvent.keyDown(screen.getByTestId('signup-risk-row-u1'), { key: 'a' });
+        expect(m.accept).not.toHaveBeenCalled();
+      }
+    );
+
+    it('offers no accept or override on a non-abuse verdict', async () => {
+      m.useSignupRiskReviews.mockReturnValue(queue([row({ advisory: advisoryOf('legitimate_automation') })]));
+      renderTab();
+
+      fireEvent.click(screen.getByTestId('signup-risk-actions-u1'));
+      await screen.findByTestId('signup-risk-approve-u1');
+      expect(screen.queryByTestId('signup-risk-accept-assessment-u1')).toBeNull();
+      expect(screen.queryByTestId('signup-risk-override-assessment-u1')).toBeNull();
+      expect(screen.queryByTestId('signup-risk-ai-u1')).toBeNull();
+    });
+  });
+});

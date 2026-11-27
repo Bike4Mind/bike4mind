@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -43,6 +43,9 @@ describe('InboxTabs', () => {
     h.index = 0;
     h.setIndex.mockClear();
   });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('shows Messages first, unchanged', () => {
     renderTabs();
@@ -52,10 +55,13 @@ describe('InboxTabs', () => {
   });
 
   it('selects the feedback tab and lazy-loads the rollup with the default window, under the tab label only', async () => {
+    // React throttles revealing a resolved Suspense boundary by 300ms; fake timers skip that wait.
+    vi.useFakeTimers();
     h.index = 2;
     renderTabs();
     expect(screen.getByTestId('inbox-tab-feedback')).toHaveAttribute('aria-selected', 'true');
-    const panel = await screen.findByTestId('feedback-panel');
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    const panel = screen.getByTestId('feedback-panel');
     expect(panel).toHaveTextContent('F|T');
     expect(panel).toHaveAttribute('data-show-heading', 'false');
   });

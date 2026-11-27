@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope } from '@bike4mind/common';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -19,8 +20,10 @@ const mockFindMetadataByIds = vi.fn();
 const mockFindMetadataBySessionId = vi.fn();
 const mockFindPageBySessionId = vi.fn();
 const mockRecordAudit = vi.fn();
+const mockFindUserById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { findById: (...a: unknown[]) => mockFindSessionById(...a) },
+  userRepository: { findById: (...a: unknown[]) => mockFindUserById(...a) },
   fabFileRepository: {
     findMetadataByIds: (...a: unknown[]) => mockFindMetadataByIds(...a),
     findMetadataBySessionId: (...a: unknown[]) => mockFindMetadataBySessionId(...a),
@@ -37,15 +40,19 @@ const SUPPORT_CASE = 'ZD-4821';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
-function call(handler: unknown, options: { isAdmin?: boolean; hasUser?: boolean; query?: object; headers?: object }) {
+function call(
+  handler: unknown,
+  options: { isAdmin?: boolean; adminPermissions?: string[]; hasUser?: boolean; query?: object; headers?: object }
+) {
   const { req, res } = createMocks({
     method: 'GET',
     query: options.query ?? { id: SESSION, supportCase: SUPPORT_CASE },
     headers: options.headers ?? {},
   });
   if (options.hasUser !== false) {
-    (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    (req as unknown as { user: { isAdmin: boolean; adminPermissions?: string[]; id: string } }).user = {
       isAdmin: options.isAdmin ?? false,
+      adminPermissions: options.adminPermissions,
       id: 'admin-1',
     };
   }
@@ -109,14 +116,28 @@ beforeEach(() => {
   mockFindMetadataBySessionId.mockResolvedValue({ data: [], hasMore: false });
   mockFindPageBySessionId.mockResolvedValue({ data: [], hasMore: false });
   mockRecordAudit.mockResolvedValue({ id: 'audit-1' });
+  mockFindUserById.mockResolvedValue({ id: 'owner-9' });
 });
 
 describe('GET /api/admin/sessions/[id] - support read gate', () => {
   it('rejects a non-admin before touching the session', async () => {
     const { run } = call(sessionHandler, { isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindSessionById).not.toHaveBeenCalled();
     expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delegate holding a different permission', async () => {
+    const { run } = call(sessionHandler, { isAdmin: false, adminPermissions: ['settings:manage'] });
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
+    expect(mockFindSessionById).not.toHaveBeenCalled();
+  });
+
+  it('serves a support:read delegate and audits the read', async () => {
+    const { res, run } = call(sessionHandler, { isAdmin: false, adminPermissions: ['support:read'] });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecordAudit).toHaveBeenCalledOnce();
   });
 
   it('rejects an unauthenticated caller', async () => {
@@ -149,6 +170,33 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
     // The audit row keys off the loaded document, not the request string, so a
     // lowercase audit query still finds an uppercase-addressed read.
     expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION }));
+  });
+
+  it('refuses a session whose owner is scheduled for deletion, without auditing a read', async () => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', deletion: { scheduledFor: new Date() } });
+    const { run } = call(sessionHandler, { isAdmin: true });
+    await expect(run()).rejects.toThrow(/scheduled for deletion/);
+    expect(mockFindUserById).toHaveBeenCalledWith('owner-9');
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a full admin', { isAdmin: true }],
+    ['a delegated admin', { adminPermissions: ['support:read'] }],
+    ['an admin role member', { adminRoleIds: ['role-1'] }],
+  ])('refuses a support:read delegate a session owned by %s, without auditing a read', async (_label, owner) => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', ...owner });
+    const { run } = call(sessionHandler, { isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(run()).rejects.toThrow('Only full administrators can read the content of users with admin access');
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it('lets a full admin read a session owned by an admin', async () => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', adminPermissions: ['support:read'] });
+    const { res, run } = call(sessionHandler, { isAdmin: true });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRecordAudit).toHaveBeenCalledOnce();
   });
 
   it('404s an unknown session without auditing', async () => {
@@ -200,7 +248,10 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
 
   it('records the API key when the read is made with one', async () => {
     const { req, run } = call(sessionHandler, { isAdmin: true });
-    (req as unknown as { apiKeyInfo: { keyId: string } }).apiKeyInfo = { keyId: 'key-abc' };
+    (req as unknown as { apiKeyInfo: { keyId: string; scopes: string[] } }).apiKeyInfo = {
+      keyId: 'key-abc',
+      scopes: [ApiKeyScope.ADMIN],
+    };
     await run();
     expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ actorApiKeyId: 'key-abc' }));
   });
@@ -276,8 +327,16 @@ describe('GET /api/admin/sessions/[id] - support read gate', () => {
 describe('GET /api/admin/sessions/[id]/quests - conversation read', () => {
   it('rejects a non-admin', async () => {
     const { run } = call(questsHandler, { isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow('Missing permission: support:read');
     expect(mockFindPageBySessionId).not.toHaveBeenCalled();
+  });
+
+  it('refuses a support:read delegate the conversation of an admin', async () => {
+    mockFindUserById.mockResolvedValue({ id: 'owner-9', isAdmin: true });
+    const { run } = call(questsHandler, { isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(run()).rejects.toThrow(/only full administrators/i);
+    expect(mockFindPageBySessionId).not.toHaveBeenCalled();
+    expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 
   it('returns prompts and replies for the requested page and audits what was read', async () => {

@@ -1,5 +1,6 @@
 import { IChatHistoryItem, type CitableSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import type { Block, KnownBlock } from '@slack/web-api';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 import { CommandHandler } from '../CommandHandler';
 import { createLoadingBar } from '../utils/loadingBar';
@@ -97,7 +98,7 @@ export function splitTextIntoBlocks(
 
 /** Return type for formatAgentResponse. */
 export interface FormattedAgentResponse {
-  blocks: any[];
+  blocks: (KnownBlock | Block)[];
 }
 
 // Helper function to format agent response with Slack Block Kit.
@@ -108,7 +109,7 @@ export function formatAgentResponse(
   toolsUsed?: string[],
   citables?: CitableSource[]
 ): FormattedAgentResponse {
-  const blocks: any[] = [];
+  const blocks: (KnownBlock | Block)[] = [];
 
   // Agent header with emoji based on agent type
   const agentEmoji =
@@ -169,7 +170,8 @@ export async function sendMessageToNotebookAndGetResponse(
     messageTs: string;
   },
   returnEarly: boolean = false, // If true, don't wait for AI - Quest Processor will handle response
-  additionalTools: string[] = [] // Extra tools to enable (e.g., confirm/cancel pending action)
+  additionalTools: string[] = [], // Extra tools to enable (e.g., confirm/cancel pending action)
+  untrustedHistory: string = ''
 ): Promise<{ text: string | null; citables?: CitableSource[] }> {
   // Update status: Saving to notebook
   if (statusCallback) await statusCallback(`${createLoadingBar(10)} Saving to notebook...`);
@@ -234,7 +236,8 @@ export async function sendMessageToNotebookAndGetResponse(
       fabFileIds,
       createdQuest.id,
       false, // Don't wait for completion - Quest Processor handles the rest
-      additionalTools
+      additionalTools,
+      untrustedHistory
     );
     logger.debug('🔔 [ASYNC-NOTIFY] AI triggered successfully, returning early', {
       questId: createdQuest.id,
@@ -255,7 +258,8 @@ export async function sendMessageToNotebookAndGetResponse(
     fabFileIds,
     createdQuest.id, // Pass the quest ID to use the existing quest instead of creating a new one
     true, // waitForCompletion
-    additionalTools
+    additionalTools,
+    untrustedHistory
   );
 
   // The map fence (if any) refers to places by id only, resolved against the citables the

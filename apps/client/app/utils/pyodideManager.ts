@@ -19,7 +19,20 @@
  * 5. Execution interruption by dropping the sandbox
  */
 
-import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from '@client/app/workers/pyodide/types';
+import {
+  SANDBOX_RUNNING_MESSAGE,
+  type PyodideWorkerMessage,
+  type PyodideWorkerResponse,
+  type ExecutionResult,
+} from '@client/app/workers/pyodide/types';
+import {
+  FUNCTION_CONTRACT_LIMITS,
+  FUNCTION_RESULT_TOO_LARGE_MESSAGE,
+  capFunctionProblems,
+  functionJsonBytes,
+  type FunctionContractProblem,
+  randomUuid,
+} from '@bike4mind/common';
 import {
   SUPPORTED_PYTHON_PACKAGES,
   describePythonImportError,
@@ -28,6 +41,15 @@ import {
 
 /** The sandbox route. Framed with `allow-scripts` ONLY - never `allow-same-origin`. */
 export const PYODIDE_SANDBOX_SRC = '/api/pyodide-sandbox';
+
+/**
+ * `data` reaches the admin-listed data origins and is where scripts execute; `none` reaches only the Pyodide
+ * distribution and is where functions are read and called. One frame at a time: switching reloads Pyodide.
+ */
+export type PyodideSandboxNetwork = 'data' | 'none';
+
+export const pyodideSandboxSrc = (network: PyodideSandboxNetwork): string =>
+  network === 'none' ? `${PYODIDE_SANDBOX_SRC}?network=none` : PYODIDE_SANDBOX_SRC;
 
 /**
  * How long to wait for the sandbox handshake before giving up.
@@ -67,6 +89,125 @@ export type { ExecutionResult } from '@client/app/workers/pyodide/types';
 
 /** Default execution timeout in milliseconds (30 seconds) */
 const EXECUTION_TIMEOUT_MS = 30000;
+/** Reading FUNCTION runs the module's top level, which should only define things (ms). */
+export const FUNCTION_READ_TIMEOUT_MS = 10000;
+
+/** Timed from the worker's Running status, so package loading is not counted. */
+export const runTimeLimitMessage = (timeoutMs: number): string =>
+  `Stopped at the time limit of ${Math.round(timeoutMs / 1000)} s.`;
+
+/**
+ * JSON for `run`'s keyword arguments. A whole number of 1e21 or more is written out in digits, since
+ * JSON.stringify writes `1e+21`, which Python reads as a float.
+ */
+export function toPythonJson(value: unknown): string {
+  if (typeof value === 'number' && Number.isInteger(value) && Math.abs(value) >= 1e21) {
+    // The shortest form, `2.5e+22`, spelled out: the number as written, not the binary value's every digit.
+    const [mantissa, exponent] = String(value).split('e');
+    const [whole, fraction = ''] = mantissa.split('.');
+    return `${whole}${fraction}${'0'.repeat(Number(exponent) - fraction.length)}`;
+  }
+  if (Array.isArray(value)) return `[${value.map(item => toPythonJson(item ?? null)).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, item]) => item !== undefined);
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${toPythonJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** A function call read back from the sandbox. `contract` and `value` are parsed but not yet validated. */
+export interface PythonFunctionCall {
+  success: boolean;
+  contract?: unknown;
+  value?: unknown;
+  /** Output problems only Python could see, such as 3.0 for an integer; in the shape the contract validator uses. */
+  outputProblems?: FunctionContractProblem[];
+  output: string;
+  error?: string;
+  executionTime: number;
+}
+
+export const PYTHON_SCRIPT_BUSY = 'Another Python script is already running';
+
+// The sandbox wrapper in sandboxWorkerBody.ts applies the same caps before posting; these checks stay the authority.
+const MAX_FUNCTION_OUTPUT_CHARS = 100_000;
+const FUNCTION_CONTRACT_TOO_LARGE = `The function contract is larger than ${FUNCTION_CONTRACT_LIMITS.maxContractBytes / 1024} KB.`;
+export const FUNCTION_RESULT_TOO_LARGE = FUNCTION_RESULT_TOO_LARGE_MESSAGE;
+export const FUNCTION_RESULT_UNREADABLE = 'The function returned a result that could not be read.';
+
+/**
+ * Every field of a `call-result` is guest data: types are checked, and each JSON text is size-capped
+ * before it is parsed.
+ */
+function readFunctionCallResult(raw: unknown): PythonFunctionCall {
+  const result: Record<string, unknown> = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const output = typeof result.output === 'string' ? result.output.slice(0, MAX_FUNCTION_OUTPUT_CHARS) : '';
+  const executionTime =
+    typeof result.executionTime === 'number' && Number.isFinite(result.executionTime) ? result.executionTime : 0;
+  const refuse = (error: string): PythonFunctionCall => ({ success: false, output, error, executionTime });
+
+  const parsed: { contract?: unknown; value?: unknown; outputProblems?: unknown } = {};
+  const fields = [
+    {
+      key: 'contract',
+      field: 'contractJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxContractBytes,
+      tooLarge: FUNCTION_CONTRACT_TOO_LARGE,
+    },
+    {
+      key: 'value',
+      field: 'valueJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
+      tooLarge: FUNCTION_RESULT_TOO_LARGE,
+    },
+    {
+      key: 'outputProblems',
+      field: 'outputProblemsJson',
+      limit: FUNCTION_CONTRACT_LIMITS.maxResultBytes,
+      tooLarge: FUNCTION_RESULT_TOO_LARGE,
+    },
+  ] as const;
+  for (const { key, field, limit, tooLarge } of fields) {
+    const text = result[field];
+    if (text === undefined) continue;
+    if (typeof text !== 'string') return refuse(FUNCTION_RESULT_UNREADABLE);
+    // A UTF-8 encoding is never shorter than the UTF-16 length, so the cheap check runs first.
+    if (text.length > limit || functionJsonBytes(text) > limit) return refuse(tooLarge);
+    try {
+      parsed[key] = JSON.parse(text);
+    } catch {
+      return refuse(FUNCTION_RESULT_UNREADABLE);
+    }
+  }
+  const { outputProblems, ...values } = parsed;
+  if (outputProblems !== undefined && !isProblemList(outputProblems)) return refuse(FUNCTION_RESULT_UNREADABLE);
+
+  const error =
+    typeof result.error === 'string'
+      ? describePythonImportError(result.error.slice(0, MAX_FUNCTION_OUTPUT_CHARS))
+      : undefined;
+  return {
+    success: result.success === true && error === undefined,
+    ...values,
+    ...(outputProblems ? { outputProblems: capFunctionProblems(outputProblems) } : {}),
+    output,
+    error,
+    executionTime,
+  };
+}
+
+function isProblemList(value: unknown): value is FunctionContractProblem[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      entry =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof (entry as Record<string, unknown>).path === 'string' &&
+        typeof (entry as Record<string, unknown>).message === 'string'
+    )
+  );
+}
 
 export interface PyodideManagerState {
   isLoading: boolean;
@@ -101,6 +242,17 @@ class PyodideManager {
   private baseUrl?: string;
   private executeResolver: ((result: ExecutionResult) => void) | null = null;
   private executeRejecter: ((error: Error) => void) | null = null;
+  private callResolver: ((result: PythonFunctionCall) => void) | null = null;
+  private callRejecter: ((error: Error) => void) | null = null;
+  private callNonce: string | null = null;
+  private network: PyodideSandboxNetwork = 'data';
+  // Whose code has run in the current frame; null while no guest code has run in it. Code from two owners never
+  // shares an interpreter or a Worker, so a different owner gets a fresh frame.
+  private owner: string | null = null;
+  // The pending run's time limit, armed once when the worker reports Running and never re-armed, so guest code that
+  // posts the same status cannot extend it.
+  private runLimitMs: number | null = null;
+  private runTimer: ReturnType<typeof setTimeout> | null = null;
   private initResolver: (() => void) | null = null;
   private initRejecter: ((error: Error) => void) | null = null;
   private initIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -127,7 +279,7 @@ class PyodideManager {
       }
 
       const frame = document.createElement('iframe');
-      frame.src = PYODIDE_SANDBOX_SRC;
+      frame.src = pyodideSandboxSrc(this.network);
       frame.setAttribute('sandbox', PYODIDE_SANDBOX_TOKENS);
       frame.setAttribute('aria-hidden', 'true');
       frame.setAttribute('title', 'Python execution sandbox');
@@ -225,8 +377,8 @@ class PyodideManager {
     }
   }
 
-  private postToSandbox(message: PyodideWorkerMessage): void {
-    this.frame?.contentWindow?.postMessage(message, '*');
+  private postToSandbox(message: PyodideWorkerMessage, transfer: Transferable[] = []): void {
+    this.frame?.contentWindow?.postMessage(message, '*', transfer);
   }
 
   private handleWorkerMessage(msg: PyodideWorkerResponse): void {
@@ -257,6 +409,10 @@ class PyodideManager {
         break;
 
       case 'executing':
+        if (msg.message === SANDBOX_RUNNING_MESSAGE && this.runLimitMs !== null && !this.runTimer) {
+          const limit = this.runLimitMs;
+          this.runTimer = setTimeout(() => this.interrupt(runTimeLimitMessage(limit)), limit);
+        }
         this.updateState({ isExecuting: true, executionStatus: msg.message, streamingOutput: '' });
         break;
 
@@ -269,6 +425,7 @@ class PyodideManager {
       case 'result':
         this.updateState({ isExecuting: false, executionStatus: null });
         if (this.executeResolver) {
+          this.clearRunLimit();
           const { result } = msg;
           this.executeResolver(result.error ? { ...result, error: describePythonImportError(result.error) } : result);
           this.executeResolver = null;
@@ -276,8 +433,26 @@ class PyodideManager {
         }
         break;
 
+      case 'call-result':
+        // Guest code can post this during an execute or a call; only the pending call's own nonce ends it.
+        if (this.callResolver && this.callNonce !== null && msg.nonce === this.callNonce) {
+          this.clearRunLimit();
+          this.updateState({ isExecuting: false, executionStatus: null });
+          this.callResolver(readFunctionCallResult(msg.result));
+          this.callResolver = null;
+          this.callRejecter = null;
+          this.callNonce = null;
+        }
+        break;
+
       case 'error':
+        // Guest code can post this too, then keep looping; dropping the frame is what stops it.
+        if (this.executeResolver || this.callResolver) {
+          this.interrupt(msg.error);
+          break;
+        }
         this.clearInitWatchdog();
+        this.clearRunLimit();
         this.updateState({
           isLoading: false,
           isExecuting: false,
@@ -296,8 +471,50 @@ class PyodideManager {
           this.executeResolver = null;
           this.executeRejecter = null;
         }
+        if (this.callRejecter) {
+          this.callRejecter(new Error(msg.error));
+          this.callResolver = null;
+          this.callRejecter = null;
+          this.callNonce = null;
+        }
         break;
     }
+  }
+
+  private clearRunLimit(): void {
+    if (this.runTimer) clearTimeout(this.runTimer);
+    this.runTimer = null;
+    this.runLimitMs = null;
+  }
+
+  /**
+   * Load Pyodide in a frame with `network` reach, replacing a frame with the other reach. Refuses while a run is
+   * pending, since replacing the frame would end it.
+   */
+  private async prepareSandbox(network: PyodideSandboxNetwork, owner: string): Promise<void> {
+    this.refuseIfBusy();
+    if (this.network !== network) {
+      this.network = network;
+      if (this.frame || this.initPromise) this.dropSandbox();
+    }
+    this.releaseForeignSandbox(owner);
+    this.owner = owner;
+    if (this.state.isReady && this.frame) return;
+    await this.initialize();
+    // An interrupt landed after the load settled; its replacement frame is not ready yet.
+    if (!this.frame || !this.state.isReady) throw new Error('Execution interrupted');
+    // Another caller switched the frame while this one waited for it to load.
+    if (this.network !== network || this.owner !== owner) throw new Error(PYTHON_SCRIPT_BUSY);
+  }
+
+  private releaseForeignSandbox(owner: string): void {
+    if (this.owner !== null && this.owner !== owner && (this.frame || this.initPromise)) this.dropSandbox();
+  }
+
+  // Called again after every await: a second caller would replace the first one's resolver and leave its promise
+  // unsettled forever.
+  private refuseIfBusy(): void {
+    if (this.executeResolver || this.callResolver) throw new Error(PYTHON_SCRIPT_BUSY);
   }
 
   /**
@@ -310,9 +527,14 @@ class PyodideManager {
   }
 
   /**
-   * Initialize Pyodide (lazy-loaded singleton)
+   * Load Pyodide. With `owner`, a frame another owner's code has run in is replaced first, so that owner's first run
+   * finds a clean frame already loaded. Refuses while a run is pending rather than ending it.
    */
-  async initialize(): Promise<void> {
+  async initialize(owner?: string): Promise<void> {
+    if (owner !== undefined && this.owner !== null && this.owner !== owner) {
+      this.refuseIfBusy();
+      this.releaseForeignSandbox(owner);
+    }
     if (this.state.isReady && this.frame) {
       return;
     }
@@ -354,25 +576,25 @@ class PyodideManager {
    * Runs in a Worker inside the opaque-origin sandbox frame, so it won't freeze the UI and
    * cannot reach the app origin. Use interrupt() to stop execution (e.g., for infinite loops).
    *
+   * @param owner - Whose code this is, such as the artifact id; a different owner than the last run gets a new sandbox
    * @param code - Python code to execute
    * @param packages - Optional list of packages to load before execution
    * @param timeoutMs - Execution timeout in milliseconds (default: 30s)
    */
-  async execute(code: string, packages: string[] = [], timeoutMs = EXECUTION_TIMEOUT_MS): Promise<ExecutionResult> {
-    await this.initialize();
-
-    if (!this.frame) {
-      throw new Error('Python sandbox not available');
-    }
-    // One sandbox, one run: a second caller would replace the first one's resolver and leave
-    // its promise unsettled forever.
-    if (this.executeResolver) {
-      throw new Error('Another Python script is already running');
-    }
+  async execute(
+    owner: string,
+    code: string,
+    packages: string[] = [],
+    timeoutMs = EXECUTION_TIMEOUT_MS
+  ): Promise<ExecutionResult> {
+    await this.prepareSandbox('data', owner);
+    this.refuseIfBusy();
+    if (this.network !== 'data' || this.owner !== owner) throw new Error(PYTHON_SCRIPT_BUSY);
 
     return new Promise<ExecutionResult>((resolve, reject) => {
       this.executeResolver = resolve;
       this.executeRejecter = reject;
+      this.runLimitMs = timeoutMs;
 
       // Cleared here, not only on the worker's first message, so a run never shows the
       // previous run's output.
@@ -383,21 +605,48 @@ class PyodideManager {
   }
 
   /**
-   * Interrupt the current execution by tearing down the sandbox.
-   * This immediately stops infinite loops or long-running code.
-   * A new sandbox is spawned on the next execution.
+   * Read the code's FUNCTION contract and, unless `params` is null, call `run(**params)`, in the network-free
+   * frame. Shares execute()'s single-run guard and is stopped the same way, by interrupt(). Reading the contract
+   * alone is held to `FUNCTION_READ_TIMEOUT_MS` unless a limit is given. `owner` is as for execute().
    */
-  interrupt(): void {
-    if (!this.frame) {
-      return;
-    }
+  async callFunction(
+    owner: string,
+    code: string,
+    packages: string[] = [],
+    params: Record<string, unknown> | null = null,
+    timeoutMs = params === null ? FUNCTION_READ_TIMEOUT_MS : EXECUTION_TIMEOUT_MS,
+    files: { name: string; bytes: ArrayBuffer }[] = []
+  ): Promise<PythonFunctionCall> {
+    await this.prepareSandbox('none', owner);
+    this.refuseIfBusy();
+    // An execute started while this await settled has already switched to the frame with data origins.
+    if (this.network !== 'none' || this.owner !== owner) throw new Error(PYTHON_SCRIPT_BUSY);
 
-    // Removing the frame destroys the Worker inside it, which is what actually stops a
-    // `while True:`. A 'cancel' message would only be observed between steps.
-    // Settle a load still in flight (teardown settles a pending handshake), so a caller
-    // awaiting initialize() hears about the interrupt instead of hanging on it.
+    const paramsJson = params === null ? null : toPythonJson(params);
+    const nonce = randomUuid();
+    return new Promise<PythonFunctionCall>((resolve, reject) => {
+      this.callResolver = resolve;
+      this.callRejecter = reject;
+      this.callNonce = nonce;
+      this.runLimitMs = timeoutMs;
+      this.updateState({ isExecuting: true, streamingOutput: '' });
+      // Transferred, not cloned: the buffers move to the frame and are unusable here afterwards.
+      this.postToSandbox(
+        { type: 'call', code, packages, paramsJson, timeoutMs, nonce, files },
+        files.map(file => file.bytes)
+      );
+    });
+  }
+
+  /**
+   * Removing the frame destroys the Worker inside it, which is what actually stops a `while True:`; a 'cancel'
+   * message would only be observed between steps. A load still in flight is settled (teardown settles a pending
+   * handshake), so a caller awaiting initialize() hears about it instead of hanging on it.
+   */
+  private dropSandbox(): void {
     const rejectInit = this.initRejecter;
     this.teardownSandbox();
+    this.owner = null;
     this.initPromise = null;
     this.initResolver = null;
     this.initRejecter = null;
@@ -410,18 +659,41 @@ class PyodideManager {
       loadProgress: 0,
       loadedPackages: new Set(),
     });
+  }
+
+  /**
+   * Interrupt the current execution by tearing down the sandbox, then load a new one, so the next run needs no
+   * click. `reason` is the error the pending run resolves with; the time limit passes its own.
+   */
+  interrupt(reason = 'Execution interrupted'): void {
+    if (!this.frame) {
+      return;
+    }
+    this.clearRunLimit();
+    this.dropSandbox();
 
     // Resolve pending execution with cancellation (include any output captured before interrupt)
     if (this.executeResolver) {
       this.executeResolver({
         success: false,
         output: this.state.streamingOutput,
-        error: 'Execution interrupted',
+        error: reason,
         plots: [],
         executionTime: 0,
       });
       this.executeResolver = null;
       this.executeRejecter = null;
+    }
+    if (this.callResolver) {
+      this.callResolver({
+        success: false,
+        output: this.state.streamingOutput,
+        error: reason,
+        executionTime: 0,
+      });
+      this.callResolver = null;
+      this.callRejecter = null;
+      this.callNonce = null;
     }
 
     // Re-initialize so the Run button becomes enabled again

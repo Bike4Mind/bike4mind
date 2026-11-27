@@ -18,6 +18,13 @@ export interface ModalVideo {
 
 export type ModalVideoField = keyof ModalVideo;
 
+export interface ModalStillImage {
+  landscapeUrl?: string | null;
+  portraitUrl?: string | null;
+}
+
+export type ModalStillImageField = keyof ModalStillImage;
+
 // Origins the app CSP allows in media-src and img-src on every deploy (apps/client/proxy.ts); keep in sync
 const MODAL_MEDIA_HOST_SUFFIXES = ['.amazonaws.com', '.cloudfront.net'];
 const MODAL_MEDIA_URL_MAX_LENGTH = 2048;
@@ -88,6 +95,35 @@ export function createModalVideoSchema(policy: ModalMediaUrlPolicy = {}) {
 
 export const ModalVideoSchema = createModalVideoSchema();
 
+/** Per-field problems with a still image, empty when it is valid. */
+export function getModalStillImageErrors(
+  image: ModalStillImage | null | undefined,
+  policy: ModalMediaUrlPolicy = {}
+): Partial<Record<ModalStillImageField, string>> {
+  const errors: Partial<Record<ModalStillImageField, string>> = {};
+  if (!image) return errors;
+  for (const field of ['landscapeUrl', 'portraitUrl'] as const) {
+    const url = image[field];
+    if (url && !isAllowedModalMediaUrl(url, policy)) errors[field] = MODAL_MEDIA_URL_HINT;
+  }
+  return errors;
+}
+
+/** The still image's fields with no host check, for reading stored or upstream data written under another policy. */
+export const ModalStillImageShapeSchema = z.object({
+  landscapeUrl: z.string().nullable().optional(),
+  portraitUrl: z.string().nullable().optional(),
+});
+
+/** Still frame for a modal slide, in the same two orientations as the video. */
+export function createModalStillImageSchema(policy: ModalMediaUrlPolicy = {}) {
+  return ModalStillImageShapeSchema.superRefine((image, ctx) => {
+    for (const [field, message] of Object.entries(getModalStillImageErrors(image, policy))) {
+      ctx.addIssue({ code: 'custom', path: [field], message });
+    }
+  });
+}
+
 /**
  * Generation metadata for auto-generated modals (e.g., What's New).
  * Only populated for modals created by automated workflows.
@@ -136,6 +172,8 @@ export interface IModal {
   imageUrl: string | null;
   images?: ModalImage[] | null;
   video?: ModalVideo | null;
+  /** Release-note slides only (set by releaseNoteToModal); the Modal model does not persist it. */
+  stillImage?: ModalStillImage | null;
   textMessage: string | null;
   /** Generation metadata for auto-generated modals (null for manual modals) */
   generationMetadata?: IGenerationMetadata | null;

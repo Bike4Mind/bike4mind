@@ -59,7 +59,7 @@ export interface V2Options {
   /**
    * Topicality floor. Defaults to 0 (`recall`'s default: keep everything, so an empty query still
    * degrades to the profile). Production supplies a floor calibrated to the embedding model in use -
-   * see MIN_RELEVANCE_BY_MODEL in apps/client/server/memory/recallMementosV2.ts, and `tuning.test.ts`
+   * see MIN_RELEVANCE_BY_MODEL in packages/server-utils/src/memory/recallMementosV2.ts, and `tuning.test.ts`
    * here for how that number is chosen.
    */
   minRelevance?: number;

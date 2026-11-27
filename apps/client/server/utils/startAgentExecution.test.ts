@@ -18,7 +18,15 @@ const {
   mockFindRememberedApprovals,
   mockUserFindById,
   mockPinFiles,
+  mockAdmitApiKeyCompletion,
+  mockSessionUpdate,
+  mockFindOwnedComposition,
+  mockIsStudioFeatureEnabled,
 } = vi.hoisted(() => ({
+  mockAdmitApiKeyCompletion: vi.fn(),
+  mockSessionUpdate: vi.fn(),
+  mockFindOwnedComposition: vi.fn(),
+  mockIsStudioFeatureEnabled: vi.fn(),
   mockUserFindById: vi.fn(),
   mockPinFiles: vi.fn(),
   mockSend: vi.fn(),
@@ -45,7 +53,8 @@ vi.mock('@aws-sdk/client-lambda', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { findById: mockSessionFindById },
+  sessionRepository: { findById: mockSessionFindById, update: mockSessionUpdate },
+  studioCompositionRepository: { findOwned: mockFindOwnedComposition },
   organizationRepository: { findById: mockOrgFindById },
   agentExecutionRepository: {
     cleanupStaleActive: mockCleanupStaleActive,
@@ -58,18 +67,26 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockUserFindById },
 }));
 
-vi.mock('@server/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
+vi.mock('@bike4mind/server-utils/middlewares/studioFeatureFlag', () => ({
+  isStudioFeatureEnabled: mockIsStudioFeatureEnabled,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitApiKeyCompletion: mockAdmitApiKeyCompletion,
+}));
+
+vi.mock('@bike4mind/server-utils/managers/sessionCrud', () => ({ pinFilesToSessionKnowledge: mockPinFiles }));
 
 vi.mock('@bike4mind/server-utils/utils/settleStrandedQuests', () => ({
   settleStrandedQuests: mockSettleStrandedQuests,
 }));
 
-vi.mock('@server/utils/agentExecutorFunctionName', () => ({
+vi.mock('@bike4mind/server-utils/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
-import { ApiKeyScope, CreditHolderType, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
-import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
+import { ApiKeyScope, CreditHolderType, DATA_LAKE_TOOL_NAMES, FILE_READ_TOOL_NAMES } from '@bike4mind/common';
+import { startAgentExecution, sweepMemoSize, type StartAgentExecutionInput } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
 
@@ -84,7 +101,9 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } 
  */
 let currentUserId = 'u1';
 
-const input = (overrides: { userId: string } & Record<string, unknown>) => {
+const input = (
+  overrides: Partial<StartAgentExecutionInput> & Pick<StartAgentExecutionInput, 'userId'>
+): StartAgentExecutionInput => {
   currentUserId = overrides.userId;
   return {
     sessionId: 's1',
@@ -92,6 +111,7 @@ const input = (overrides: { userId: string } & Record<string, unknown>) => {
     query: 'optimize this',
     model: 'claude-opus-5',
     connectionId: HEADLESS_CONNECTION_ID,
+    apiKeyInfo: undefined,
     ...overrides,
   };
 };
@@ -116,9 +136,68 @@ beforeEach(() => {
   mockFindRememberedApprovals.mockResolvedValue(null);
   mockUserFindById.mockImplementation(async (id: string) => ({ id }));
   mockPinFiles.mockResolvedValue(undefined);
+  mockAdmitApiKeyCompletion.mockResolvedValue({ release: vi.fn() });
+  mockSessionUpdate.mockResolvedValue(null);
+  mockFindOwnedComposition.mockImplementation(async (id: string, userId: string) => ({ id, userId }));
+  mockIsStudioFeatureEnabled.mockResolvedValue(true);
 });
 
 describe('startAgentExecution', () => {
+  it.each([HEADLESS_CONNECTION_ID, 'websocket-connection'])(
+    'refuses an over-quota key on %s before dispatch or persistence',
+    async connectionId => {
+      const error = new Error('Token rate limit exceeded');
+      mockAdmitApiKeyCompletion.mockRejectedValueOnce(error);
+      await expect(
+        startAgentExecution(
+          input({
+            userId: 'quota-' + connectionId,
+            connectionId,
+            apiKeyInfo: {
+              keyId: 'k1',
+              scopes: [ApiKeyScope.AI_CHAT],
+              ownerUntrusted: true,
+              billingOwnerType: CreditHolderType.User,
+            },
+          }),
+          logger
+        )
+      ).rejects.toBe(error);
+      expect(mockAdmitApiKeyCompletion).toHaveBeenCalledWith({
+        owner: 'quota-' + connectionId,
+        ownerUntrusted: true,
+        billingOwnerType: CreditHolderType.User,
+        holdSlot: false,
+      });
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+      expect(mockQuestCreate).not.toHaveBeenCalled();
+      expect(mockSend).not.toHaveBeenCalled();
+    }
+  );
+
+  it('stamps the connected app on an exchange-key start and not on a personal-key start', async () => {
+    const keyInfo = {
+      keyId: 'k1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: false,
+      billingOwnerType: CreditHolderType.User,
+    } satisfies NonNullable<StartAgentExecutionInput['apiKeyInfo']>;
+    await startAgentExecution(
+      input({ userId: 'exchange-start', apiKeyInfo: { ...keyInfo, oauthExchangeClientId: 'app-a' } }),
+      logger
+    );
+    expect(mockCreateExecution).toHaveBeenLastCalledWith(expect.objectContaining({ oauthClientId: 'app-a' }));
+
+    await startAgentExecution(input({ userId: 'personal-start', apiKeyInfo: keyInfo }), logger);
+    expect(mockCreateExecution.mock.calls.at(-1)?.[0]).not.toHaveProperty('oauthClientId');
+  });
+
+  it('leaves signed-in starts outside the API-key quota', async () => {
+    await startAgentExecution(input({ userId: 'signed-in-quota' }), logger);
+    expect(mockAdmitApiKeyCompletion).not.toHaveBeenCalled();
+    expect(mockSend).toHaveBeenCalledOnce();
+  });
+
   it('creates the execution, persists the prompt Quest, and dispatches the Lambda', async () => {
     const result = await startAgentExecution(input({ userId: 'happy-path' }), logger);
 
@@ -217,6 +296,88 @@ describe('startAgentExecution', () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 
+  it('refuses confidenceOverrides from a non-admin before creating anything', async () => {
+    const result = await startAgentExecution(
+      input({ userId: 'overrides-non-admin', confidenceOverrides: [0.1] }),
+      logger
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'confidence_overrides_forbidden',
+      message: 'Only an admin can set confidence overrides',
+    });
+    expect(mockCreateExecution).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it('refuses confidenceOverrides when the caller cannot be loaded', async () => {
+    mockUserFindById.mockResolvedValueOnce(null);
+    const result = await startAgentExecution(input({ userId: 'overrides-ghost', confidenceOverrides: [0.1] }), logger);
+
+    expect(result).toMatchObject({ ok: false, reason: 'confidence_overrides_forbidden' });
+    expect(mockCreateExecution).not.toHaveBeenCalled();
+  });
+
+  it('stores an admin caller confidenceOverrides on the execution', async () => {
+    mockUserFindById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+    const result = await startAgentExecution(
+      input({ userId: 'overrides-admin', confidenceOverrides: [0.9, 0.1] }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.9, 0.1] }));
+  });
+
+  it('refuses confidenceOverrides from an admin key without the admin scope', async () => {
+    mockUserFindById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+    const result = await startAgentExecution(
+      input({
+        userId: 'overrides-admin-narrow-key',
+        confidenceOverrides: [0.1],
+        apiKeyInfo: {
+          keyId: 'k1',
+          scopes: [ApiKeyScope.AI_CHAT],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
+      logger
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'confidence_overrides_forbidden' });
+    expect(mockCreateExecution).not.toHaveBeenCalled();
+  });
+
+  it('stores confidenceOverrides from an admin key holding the admin scope', async () => {
+    mockUserFindById.mockImplementation(async (id: string) => ({ id, isAdmin: true }));
+    const result = await startAgentExecution(
+      input({
+        userId: 'overrides-admin-admin-key',
+        confidenceOverrides: [0.1],
+        apiKeyInfo: {
+          keyId: 'k1',
+          scopes: [ApiKeyScope.ADMIN, ApiKeyScope.AI_CHAT],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
+      logger
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: [0.1] }));
+    expect(mockCreateExecution.mock.calls[0][0]).not.toHaveProperty('adminRoleWithheld');
+  });
+
+  it('skips the admin lookup for a run without confidenceOverrides', async () => {
+    await startAgentExecution(input({ userId: 'no-overrides' }), logger);
+
+    expect(mockUserFindById).not.toHaveBeenCalled();
+    expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ confidenceOverrides: undefined }));
+  });
+
   it('rejects a missing session', async () => {
     const cmd = input({ userId: 'no-session' });
     mockSessionFindById.mockResolvedValue(null);
@@ -250,9 +411,10 @@ describe('startAgentExecution', () => {
     const orgKey = {
       keyId: 'k-org',
       scopes: [ApiKeyScope.AI_CHAT],
+      ownerUntrusted: false,
       billingOwnerType: CreditHolderType.Organization,
       organizationId: KEY_ORG,
-    };
+    } satisfies NonNullable<StartAgentExecutionInput['apiKeyInfo']>;
 
     beforeEach(() => {
       mockOrgFindById.mockResolvedValue({ id: KEY_ORG, userId: 'owner', users: [{ userId: 'holder' }] });
@@ -264,6 +426,38 @@ describe('startAgentExecution', () => {
       expect(result).toMatchObject({ ok: true });
       expect(mockCreateExecution.mock.calls[0][0].organizationId).toBe(KEY_ORG);
       expect(dispatchedPayload()).toMatchObject({ organizationId: KEY_ORG });
+    });
+
+    it('refuses tools the billing org disallows with org_tool_not_allowed and creates nothing', async () => {
+      mockOrgFindById.mockResolvedValue({
+        id: KEY_ORG,
+        userId: 'owner',
+        users: [{ userId: 'holder' }],
+        modelPolicy: { allowedTools: [] },
+      });
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, enabledTools: ['web_search'] }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: 'org_tool_not_allowed' });
+      expect(result.ok ? '' : result.message).toContain('web_search');
+      expect(mockCreateExecution).not.toHaveBeenCalled();
+    });
+
+    it('starts with tools the billing org allows', async () => {
+      mockOrgFindById.mockResolvedValue({
+        id: KEY_ORG,
+        userId: 'owner',
+        users: [{ userId: 'holder' }],
+        modelPolicy: { allowedTools: ['web_search'] },
+      });
+      const result = await startAgentExecution(
+        input({ userId: 'holder', apiKeyInfo: orgKey, enabledTools: ['web_search'] }),
+        logger
+      );
+
+      expect(result).toMatchObject({ ok: true });
     });
 
     it("accepts the key's own org", async () => {
@@ -326,7 +520,12 @@ describe('startAgentExecution', () => {
 
     it('leaves a user-billed key on the named-org membership rules', async () => {
       mockOrgFindById.mockResolvedValue({ userId: 'owner', users: [{ userId: 'member' }] });
-      const userKey = { keyId: 'k-user', scopes: [ApiKeyScope.AI_CHAT], billingOwnerType: CreditHolderType.User };
+      const userKey = {
+        keyId: 'k-user',
+        scopes: [ApiKeyScope.AI_CHAT],
+        ownerUntrusted: false,
+        billingOwnerType: CreditHolderType.User,
+      } satisfies NonNullable<StartAgentExecutionInput['apiKeyInfo']>;
 
       const result = await startAgentExecution(
         input({ userId: 'member', apiKeyInfo: userKey, organizationId: 'org1' }),
@@ -481,6 +680,80 @@ describe('startAgentExecution', () => {
     expect(mockQuestCreate.mock.calls[0][0].prompt).not.toContain('Extra instructions');
   });
 
+  describe('productionCompositionId (a Studio Direct launch)', () => {
+    const compositionId = '64b7f0c2a1b2c3d4e5f60718';
+
+    it('marks the session before dispatch when Productions is open and the caller owns the composition', async () => {
+      mockSend.mockImplementationOnce(async () => {
+        // The executor's first run must already read the marker.
+        expect(mockSessionUpdate).toHaveBeenCalledWith({ id: 's1', productionCompositionId: compositionId });
+      });
+      const result = await startAgentExecution(
+        input({ userId: 'directed-run', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockIsStudioFeatureEnabled).toHaveBeenCalledWith('productions', { user: { id: 'directed-run' } });
+      expect(mockFindOwnedComposition).toHaveBeenCalledWith(compositionId, 'directed-run');
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(dispatchedPayload()).not.toHaveProperty('productionCompositionId');
+    });
+
+    it('ignores the id, without refusing the run, when Productions is closed to the caller', async () => {
+      mockIsStudioFeatureEnabled.mockResolvedValueOnce(false);
+      const result = await startAgentExecution(
+        input({ userId: 'directed-closed', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockFindOwnedComposition).not.toHaveBeenCalled();
+      expect(mockSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it("ignores another user's composition", async () => {
+      mockFindOwnedComposition.mockResolvedValueOnce(null);
+      const result = await startAgentExecution(
+        input({ userId: 'directed-foreign', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('never marks a session from an API-key run', async () => {
+      await startAgentExecution(
+        input({
+          userId: 'directed-key',
+          productionCompositionId: compositionId,
+          apiKeyInfo: {
+            keyId: 'k1',
+            scopes: [ApiKeyScope.AI_CHAT],
+            ownerUntrusted: false,
+            billingOwnerType: CreditHolderType.User,
+          },
+        }),
+        logger
+      );
+
+      expect(mockIsStudioFeatureEnabled).not.toHaveBeenCalled();
+      expect(mockSessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('still dispatches when the mark fails', async () => {
+      mockSessionUpdate.mockRejectedValueOnce(new Error('write failed'));
+      const result = await startAgentExecution(
+        input({ userId: 'directed-write-fails', productionCompositionId: compositionId }),
+        logger
+      );
+
+      expect(result.ok).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('omits systemContext from the start payload when the caller sends none', async () => {
     await startAgentExecution(input({ userId: 'no-system-context-run' }), logger);
 
@@ -505,23 +778,53 @@ describe('startAgentExecution', () => {
 
   it('derives the scope denials from the key and persists them so every invocation re-applies them', async () => {
     await startAgentExecution(
-      input({ userId: 'scoped-key', apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] } }),
+      input({
+        userId: 'scoped-key',
+        apiKeyInfo: {
+          keyId: 'k1',
+          scopes: [ApiKeyScope.AI_CHAT],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(
-      input({ userId: 'writer', apiKeyInfo: { keyId: 'k2', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      input({
+        userId: 'writer',
+        apiKeyInfo: {
+          keyId: 'k2',
+          scopes: [ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(input({ userId: 'session' }), logger);
 
-    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_TOOL_NAMES]);
+    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual([
+      ...DATA_LAKE_TOOL_NAMES,
+      ...FILE_READ_TOOL_NAMES,
+    ]);
     expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
     expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('scopeDeniedTools');
+    expect(mockCreateExecution.mock.calls[0][0].adminRoleWithheld).toBe(true);
+    expect(mockCreateExecution.mock.calls[1][0].adminRoleWithheld).toBe(true);
+    expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('adminRoleWithheld');
   });
 
   it('persists the authenticating key so the executor can attribute lake writes to it', async () => {
     await startAgentExecution(
-      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      input({
+        userId: 'keyed',
+        apiKeyInfo: {
+          keyId: 'key-1',
+          scopes: [ApiKeyScope.DATALAKE_WRITE],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(input({ userId: 'session' }), logger);
@@ -532,7 +835,15 @@ describe('startAgentExecution', () => {
 
   it('persists how the run was authenticated, so its tools and child runs see it', async () => {
     await startAgentExecution(
-      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      input({
+        userId: 'keyed',
+        apiKeyInfo: {
+          keyId: 'key-1',
+          scopes: [ApiKeyScope.DATALAKE_WRITE],
+          ownerUntrusted: false,
+          billingOwnerType: CreditHolderType.User,
+        },
+      }),
       logger
     );
     await startAgentExecution(input({ userId: 'session', apiKeyInfo: undefined }), logger);
@@ -625,6 +936,7 @@ describe('startAgentExecution', () => {
     const result = await startAgentExecution(input({ userId: 'invoke-fails' }), logger);
 
     expect(result).toMatchObject({ ok: false, reason: 'dispatch_failed', executionId: 'exec1' });
+    expect(result).not.toHaveProperty('dispatchUnconfirmed');
     expect(mockQuestDeleteOne).toHaveBeenCalledWith({ _id: 'quest1' });
   });
 
@@ -658,7 +970,9 @@ describe('container startup transport', () => {
       const result = await startAgentExecution(input({ userId: 'lost-ack' }), logger);
       expect(result).toMatchObject({
         ok: false,
+        reason: 'dispatch_failed',
         executionId: 'exec1',
+        dispatchUnconfirmed: true,
         message: expect.stringContaining('could not be confirmed'),
       });
       expect(result).toMatchObject({ message: expect.stringContaining('exec1') });

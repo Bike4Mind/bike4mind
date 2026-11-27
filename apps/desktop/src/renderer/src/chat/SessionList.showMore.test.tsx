@@ -2,11 +2,14 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
+import type { LocalHistoryResult } from '@shared/history';
+import { LOCAL_HISTORY_CHANGED } from './localHistory';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS, type SidebarSectionsState } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { SessionList } from './SessionList';
+import { localHostConnections } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -77,7 +80,6 @@ function render({
         <SessionList
           sessions={sessions}
           mode={mode}
-          onModeChange={() => {}}
           loading={false}
           activeId={activeId}
           statuses={statuses}
@@ -93,6 +95,7 @@ function render({
           onTogglePin={() => {}}
           onToggleArchived={() => {}}
           onRename={() => {}}
+          onDownload={() => {}}
           userSections={userSections}
           sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
         />
@@ -126,6 +129,7 @@ function typeSearch(text: string) {
 }
 
 beforeEach(() => {
+  Object.assign(window, { b4m: { host: localHostConnections() } });
   directory = `/work/project-${++projectSeq}`;
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -152,14 +156,9 @@ describe('SessionList project cap', () => {
     expect(showMore()?.textContent).toBe('Show more');
   });
 
-  it('renders only 20 rows for a 500-session project', () => {
-    render({ sessions: projectSessions(500) });
-    expect(all('chat-session-item')).toHaveLength(20);
-    expect(showMore()).not.toBeNull();
-  });
-
   it('reveals 10 per click, and the last click reveals the remainder and removes the button', () => {
     render({ sessions: projectSessions(35) });
+    expect(showMore()?.tagName).toBe('BUTTON');
     click(showMore());
     expect(groupTitles()).toHaveLength(30);
     expect(showMore()).not.toBeNull();
@@ -198,9 +197,9 @@ describe('SessionList project cap', () => {
   });
 
   it('shows every match uncapped while searching', () => {
-    render({ sessions: projectSessions(500) });
+    render({ sessions: projectSessions(60) });
     typeSearch('Task');
-    expect(groupTitles()).toHaveLength(500);
+    expect(groupTitles()).toHaveLength(60);
     expect(showMore()).toBeNull();
     typeSearch('');
     expect(groupTitles()).toHaveLength(20);
@@ -232,7 +231,7 @@ describe('SessionList project cap', () => {
     const onSelect = vi.fn();
     render({ sessions: projectSessions(25), onSelect });
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit9', key: '9', metaKey: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit9', key: '9', altKey: true }));
     });
     expect(onSelect).toHaveBeenCalledWith('s8');
   });
@@ -283,14 +282,6 @@ describe('SessionList project cap', () => {
     expect(titles[0]).toBe('Newest');
     expect(titles).not.toContain('Task 24');
   });
-
-  it('is a focusable button', () => {
-    render({ sessions: projectSessions(25) });
-    const more = showMore() as HTMLButtonElement;
-    expect(more.tagName).toBe('BUTTON');
-    act(() => more.focus());
-    expect(document.activeElement).toBe(more);
-  });
 });
 
 describe('SessionList user section cap', () => {
@@ -306,5 +297,118 @@ describe('SessionList user section cap', () => {
     click(query('sidebar-section-show-more-btn'));
     expect(all('chat-session-item', section)).toHaveLength(30);
     expect(query('sidebar-section-show-more-btn')).toBeNull();
+  });
+});
+
+describe('SessionList local history', () => {
+  const result: LocalHistoryResult = {
+    id: 'page-1',
+    kind: 'page',
+    sessionId: 's0',
+    title: 'Saved page',
+    snippet: '<mark>needle</mark> content',
+    capturedAt: '2026-10-01T00:00:00.000Z',
+  };
+  const searchHistory = vi.fn<(query: string) => Promise<LocalHistoryResult[]>>();
+  let historyChanged: () => void = () => {};
+  const unsubscribe = vi.fn();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    searchHistory.mockReset();
+    unsubscribe.mockReset();
+    Object.assign(window, {
+      b4m: {
+        host: localHostConnections(),
+        chat: {
+          searchHistory,
+          onHistoryChanged: (listener: () => void) => {
+            historyChanged = listener;
+            return unsubscribe;
+          },
+        },
+      },
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const search = async (text: string) => {
+    typeSearch(text);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+  };
+
+  it('finds saved page content and opens its conversation', async () => {
+    searchHistory.mockResolvedValue([result]);
+    const onSelect = vi.fn();
+    render({ sessions: projectSessions(1), onSelect });
+    await search('needle');
+    expect(searchHistory).toHaveBeenCalledWith('needle');
+    expect(query('local-history-results')?.textContent).toContain('Page: Saved page');
+    expect(query('local-history-results')?.textContent).not.toContain('<mark>');
+    click(query('local-history-result'));
+    expect(onSelect).toHaveBeenCalledWith('s0');
+  });
+
+  it('hides previous matches immediately and ignores an overtaken search', async () => {
+    let resolvePending!: (results: LocalHistoryResult[]) => void;
+    const pending = new Promise<LocalHistoryResult[]>(resolve => {
+      resolvePending = resolve;
+    });
+    searchHistory.mockResolvedValueOnce([result]).mockReturnValueOnce(pending).mockResolvedValueOnce([]);
+    render({ sessions: projectSessions(1) });
+    await search('needle');
+    expect(query('local-history-result')).not.toBeNull();
+    typeSearch('second');
+    expect(query('local-history-result')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    await search('third');
+    await act(async () => {
+      resolvePending([result]);
+    });
+    expect(query('local-history-result')).toBeNull();
+  });
+
+  it('refreshes after clear and session changes, and reports failed searches', async () => {
+    searchHistory
+      .mockResolvedValueOnce([result])
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('Index unavailable'));
+    const sessions = projectSessions(1);
+    render({ sessions });
+    await search('needle');
+    await act(async () => {
+      window.dispatchEvent(new Event(LOCAL_HISTORY_CHANGED));
+    });
+    expect(query('local-history-result')).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(searchHistory).toHaveBeenCalledTimes(2);
+    render({ sessions: [...sessions] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(query('local-history-error')?.textContent).toContain('Index unavailable');
+    typeSearch('');
+    expect(query('local-history-error')).toBeNull();
+    expect(query('local-history-result')).toBeNull();
+  });
+  it('refreshes an unchanged query when a newly captured page changes the index', async () => {
+    searchHistory.mockResolvedValueOnce([]).mockResolvedValueOnce([result]);
+    render({ sessions: projectSessions(1) });
+    await search('needle');
+    expect(query('local-history-result')).toBeNull();
+    act(() => historyChanged());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(query('local-history-result')).not.toBeNull();
+    act(() => root?.unmount());
+    root = null;
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

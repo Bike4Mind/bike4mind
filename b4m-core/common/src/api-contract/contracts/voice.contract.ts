@@ -5,8 +5,10 @@ import { EXAMPLE_SESSION_ID } from '../exampleIds';
 import {
   ApiErrorSchema,
   InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
   ProviderNotConfiguredErrorSchema,
   ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
 } from '../../schemas/chat';
 import {
   CreateVoiceSessionRequestSchema,
@@ -119,8 +121,8 @@ export const createVoiceSessionContract = defineEndpoint({
     403: {
       description:
         `The API key does not hold \`ai:generate\`, ${FEATURE_DISABLED}, or the caller already has the ` +
-        'maximum number of concurrent voice sessions open (end one first).',
-      schema: ScopeForbiddenErrorSchema,
+        `maximum number of concurrent voice sessions open (end one first). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
     },
     404: {
       description: 'The `sessionId` does not exist or is not owned by the caller (a malformed id is also a 404).',
@@ -137,6 +139,13 @@ export const createVoiceSessionContract = defineEndpoint({
         'Request body failed validation, or the caller cannot afford the up-front reservation - the latter ' +
         'is tagged `errorCode: "insufficient_credits"`.',
       schema: InsufficientCreditsErrorSchema,
+    },
+    429: {
+      description:
+        'Rate limit exceeded, or the account used up its tokens-per-minute allowance ' +
+        '(`errorCode: "token_rate_limit_exceeded"`; `Retry-After` says when the window drains).',
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
     },
     502: {
       description: 'ElevenLabs failed to provision the conversation; any reserved credits are refunded.',

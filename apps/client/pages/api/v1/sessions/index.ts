@@ -1,9 +1,10 @@
 import { sessionService, dataLakeService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
+import { decodeCursor, decodeTimeIdCursor, encodeCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
+  adminSettingsRepository,
   agentRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
@@ -16,7 +17,7 @@ import {
   User,
   activityRepository,
 } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {
@@ -25,8 +26,6 @@ import {
   redactSessionForClient,
   createSessionContract,
   listSessionsContract,
-  type ISessionDocument,
-  type SessionResponse,
   ApiKeyScope,
   BadRequestError,
   ForbiddenError,
@@ -36,11 +35,13 @@ import {
 } from '@bike4mind/common';
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { ActivityType } from '@bike4mind/server-utils/config/activityType';
-import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
+import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { CreateSessionRequestBody } from '../../../../types/api';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { toPublicSession } from '@server/sessions/toPublicSession';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { resolveRetentionOrganization } from '@bike4mind/server-utils/organizations/retentionOwnership';
 
 /**
  * The only fields a key holding `ai:generate` WITHOUT `notebooks:write` may set. Everything else
@@ -63,6 +64,10 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
   const userId = req.user.id;
   const body = req.validated;
   const { projectId } = body;
+  if (body.organizationId) {
+    const { resolveActiveOrg } = await import('@bike4mind/server-utils/utils/resolveActiveOrg');
+    body.organizationId = await resolveActiveOrg(req, body.organizationId);
+  }
 
   // The route gate admits ai:generate so a generate-only key can open a bare session. Anything
   // beyond that needs notebooks:write; a JWT caller has no apiKeyInfo and is unaffected.
@@ -179,7 +184,9 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
         // Merges a static lake's admin-set groundingMode override in, so resolveLakeSessionDefaults
         // below (which reads `lake.groundingMode` off this return value) actually sees it.
         fallbackLakeSettings: fallbackLakeSettingsRepository,
+        settings: adminSettingsRepository,
       },
+      logger: req.logger,
     });
     const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
     createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
@@ -204,11 +211,15 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
       // route. It is only needed when files are actually attached, so paying for it lazily keeps the
       // route's static imports as they were.
       resolveLakeAccess: async () =>
-        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+        (await import('@bike4mind/server-utils/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
       // The attachment door's lake arms, so a supplied lake file passes the access check.
       resolveAttachmentLakeAccess: async () =>
-        (await import('@server/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(req.user, req.logger)(),
+        (await import('@bike4mind/server-utils/dataLakes/attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user,
+          req.logger
+        )(),
       workspaceSessionSettings: premiumWorkspaceSessionSettings,
+      resolveRetentionOrganization,
     },
     { origin: resolveSessionOrigin(req) }
   );
@@ -285,38 +296,37 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
 });
 
 const LIST_CURSOR_SCOPE = 'v1.sessions';
-
-/**
- * Explicit allowlist onto the public SessionResponse shape. Redaction already strips the
- * server-owned fields; the allowlist additionally keeps every undocumented internal field off
- * the wire, so a new ISession field is private until someone adds it here and to the schema.
- */
-function toPublicSession(session: ISessionDocument): SessionResponse {
-  const redacted = redactSessionForClient(session);
-  return {
-    id: redacted.id,
-    _id: redacted.id,
-    name: redacted.name,
-    userId: redacted.userId,
-    knowledgeIds: redacted.knowledgeIds,
-    artifactIds: redacted.artifactIds,
-    tags: redacted.tags?.map(({ name, strength }) => ({ name, strength })),
-    forceKnowledgeRetrieval: redacted.forceKnowledgeRetrieval,
-    retrievalTags: redacted.retrievalTags,
-    lakeScopeExplicit: redacted.lakeScopeExplicit,
-    lastUsedModel: redacted.lastUsedModel,
-    firstCreated: redacted.firstCreated,
-    lastUpdated: redacted.lastUpdated,
-  };
-}
+/** A separate scope, so a cursor from one listing order can never page the other. */
+const CHANGES_CURSOR_SCOPE = 'v1.sessions.changes';
 
 // Lists only the caller's OWN sessions (userId match); shared sessions stay on the SPA's
 // GET /api/sessions/shared. Paged by _id rather than lastUpdated: lastUpdated moves on every edit,
-// which would skip or repeat rows across pages.
+// which would skip or repeat rows across pages. With `updated_since` it is a change feed instead:
+// (updatedAt, _id) ascending, tombstones included, so a row edited mid-walk moves ahead of the
+// cursor and is read again rather than skipped.
 const listSessionsRouter = nextRouteForContract(listSessionsContract, {
   exemptReadsFromDailyRateLimit: true,
 }).get(async (req, res) => {
-  const { limit, cursor, search, surface, origin } = req.validatedQuery;
+  const { limit, cursor, search, surface, origin, updated_since: updatedSince } = req.validatedQuery;
+  const filters = origin ? { origin } : undefined;
+  if (updatedSince !== undefined) {
+    const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, CHANGES_CURSOR_SCOPE);
+    const rows = await sessionRepository.listChangesByUserId({
+      userId: req.user.id,
+      search,
+      surface,
+      filters,
+      since: new Date(updatedSince),
+      after,
+      limit: limit + 1,
+    });
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextCursor =
+      rows.length > limit ? encodeTimeIdCursor(CHANGES_CURSOR_SCOPE, { at: last.updatedAt, id: last.id }) : null;
+    return res.json({ data: page.map(toPublicSession), next_cursor: nextCursor });
+  }
+
   const beforeId = cursor === undefined ? undefined : decodeCursor(cursor, LIST_CURSOR_SCOPE);
   // A decoded id is client-controlled; keep a malformed one away from Mongo.
   if (beforeId !== undefined && !isValidObjectId(beforeId)) {
@@ -327,7 +337,7 @@ const listSessionsRouter = nextRouteForContract(listSessionsContract, {
     userId: req.user.id,
     search,
     surface,
-    filters: origin ? { origin } : undefined,
+    filters,
     beforeId,
     limit: limit + 1,
   });

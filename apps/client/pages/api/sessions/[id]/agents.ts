@@ -1,10 +1,17 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sessionRepository, agentRepository, sessionAgentConfigRepository, withTransaction } from '@bike4mind/database';
+import {
+  sessionRepository,
+  agentRepository,
+  sessionAgentConfigRepository,
+  userRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { findUsableAttachedAgents } from '@bike4mind/services';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { presentAgentsForViewer } from '@server/agents/presentAgentsForViewer';
-import { assertSessionAccess } from '@server/utils/sessionAccess';
-import { IAgentDocument, redactSessionForClient } from '@bike4mind/common';
+import { assertSessionAccess } from '@bike4mind/server-utils/utils/sessionAccess';
+import { redactSessionForClient } from '@bike4mind/common';
 
 const handler = baseApi()
   .get(
@@ -15,13 +22,11 @@ const handler = baseApi()
         throw new BadRequestError('Invalid session ID');
       }
 
-      await assertSessionAccess(sessionId, req.user!.id);
+      const session = await assertSessionAccess(sessionId, req.user!.id);
 
       const agentIds = await sessionRepository.getAttachedAgents(sessionId);
-      const agents = await Promise.all(agentIds.map(agentId => agentRepository.findById(agentId)));
-
-      // Filter out any null/undefined results (deleted agents)
-      const validAgents = agents.filter((agent): agent is IAgentDocument => agent != null);
+      const sessionOwner = session.userId !== req.user!.id ? await userRepository.findById(session.userId) : null;
+      const validAgents = await findUsableAttachedAgents(agentIds, [req.user!, sessionOwner], agentRepository);
 
       res.json({ agents: await presentAgentsForViewer(validAgents, req.user!.id) });
     })

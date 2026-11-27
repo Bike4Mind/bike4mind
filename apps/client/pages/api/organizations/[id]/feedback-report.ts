@@ -5,9 +5,9 @@ import { FEEDBACK_SUBJECTS, OrgFeedbackReport } from '@bike4mind/common';
 import { orgFeedbackReport } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveReportWindow } from '@server/utils/orgFeedbackWindow';
 import { Request, Response } from 'express';
 import { z } from 'zod';
@@ -40,7 +40,7 @@ const handler = baseApi()
     // caller may not administer, so this route cannot be used to enumerate org ids - do not
     // "improve" the non-member branch into a ForbiddenError.
     const organizationId = String(req.query.id ?? '');
-    await verifyOrgAccess(req.user, organizationId);
+    await verifyOrgPermission(req.user, organizationId, 'manageContent');
 
     const members = await organizationRepository.findMemberUserIds(organizationId);
     const report = await orgFeedbackReport({

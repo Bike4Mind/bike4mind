@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import nc from 'next-connect';
@@ -15,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findBySecretName: vi.fn() },
 }));
-vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));
@@ -23,7 +30,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 // The admin toggle, flipped per test. The decision itself mirrors mfaEnforcement.ts (unit-tested
 // there); here it only has to depend on the setting and the user's enrollment.
 const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
-vi.mock('./mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: async (user: { mfa?: { totpEnabled?: boolean } }, opts: { impersonatedBy?: unknown } = {}) => {
     if (enforcement.readFails) throw new Error('settings read failed');
     return enforcement.enforced && !opts.impersonatedBy && !user.mfa?.totpEnabled;
@@ -99,6 +106,7 @@ describe('auth middleware: enforceMFA on a session that existed before it was tu
     ['POST', '/api/auth/mfa/setup'],
     ['POST', '/api/auth/mfa/verify-setup'],
     ['POST', '/api/auth/mfa/cancel-setup'],
+    ['POST', '/api/auth/mfa/enrollment-abandoned'],
     ['GET', '/api/auth/mfa/status'],
     ['GET', '/api/settings/fetch'],
     ['GET', '/api/identify'],

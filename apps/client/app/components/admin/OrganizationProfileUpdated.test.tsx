@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { IOrganizationDocument, WithId } from '@bike4mind/common';
@@ -14,7 +14,13 @@ vi.mock('@client/app/hooks/data/useOrgStorageUsage', () => ({
   useOrgStorageUsage: () => ({ data: { usedBytes: 0, limitBytes: 50_000_000 }, isError: false }),
 }));
 vi.mock('./OrganizationGroupTypesCard', () => ({ default: () => null }));
+vi.mock('./OrganizationSegmentCard', () => ({ default: () => null }));
+vi.mock('./OrganizationApiKeysCard', () => ({ default: () => null }));
 vi.mock('./OrganizationGroupMembersCard', () => ({ default: () => null }));
+// Stubbed here because it reads the router.
+vi.mock('./Billing/OrganizationBillingSection', () => ({
+  OrganizationBillingSection: ({ orgId }: { orgId: string }) => <div data-testid="stub-org-billing">{orgId}</div>,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -32,6 +38,13 @@ const setLimit = (value: string) =>
 
 const sentData = () => mutateAsync.mock.calls[0][0].data;
 
+describe('OrganizationProfileUpdated - billing', () => {
+  it('shows the read-only billing overview for this organization', () => {
+    renderModal(makeOrg());
+    expect(screen.getByTestId('stub-org-billing')).toHaveTextContent('org1');
+  });
+});
+
 describe('OrganizationProfileUpdated - storage limit', () => {
   beforeEach(() => {
     mutateAsync.mockReset();
@@ -42,6 +55,13 @@ describe('OrganizationProfileUpdated - storage limit', () => {
     renderModal(makeOrg({ storageLimit: 50 }));
 
     expect(screen.getByTestId('admin-org-storage-limit-input')).toHaveValue('50');
+  });
+
+  it('does not turn a plan allowance into an override when saving other settings', () => {
+    renderModal(makeOrg({ storageLimit: 50_000, planStorageLimit: 50_000, storageLimitOverride: null }));
+    expect(screen.getByTestId('admin-org-storage-limit-input')).toHaveValue('');
+    fireEvent.click(screen.getByTestId('admin-org-update-btn'));
+    expect(sentData()).not.toHaveProperty('storageLimit');
   });
 
   it('sends a changed fractional limit as a number', () => {
@@ -98,5 +118,67 @@ describe('OrganizationProfileUpdated - storage limit', () => {
     setLimit('-1');
 
     expect(screen.getByTestId('admin-org-update-btn')).toBeDisabled();
+  });
+
+  it('keeps a changed credit balance out of the settings save', () => {
+    renderModal(makeOrg({ currentCredits: 100 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '200' } });
+    fireEvent.click(screen.getByTestId('admin-org-update-btn'));
+
+    expect(sentData()).not.toHaveProperty('currentCredits');
+    expect(sentData()).not.toHaveProperty('creditReason');
+  });
+
+  it('adjusts credits through the audited action dialog with a before/after preview', async () => {
+    renderModal(makeOrg({ currentCredits: 100 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '0' } });
+    fireEvent.click(screen.getByTestId('org-profile-adjust-credits-btn'));
+
+    expect(screen.getByTestId('org-profile-credit-preview-before')).toHaveTextContent('100');
+    expect(screen.getByTestId('org-profile-credit-preview-after')).toHaveTextContent('0');
+    expect(screen.getByTestId('org-profile-credit-dialog-confirm-btn')).toBeDisabled();
+    fireEvent.click(screen.getByTestId('org-profile-credit-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-dialog-confirm-btn'));
+
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith({
+        orgId: 'org1',
+        data: { currentCredits: 0, creditReason: 'Goodwill credit' },
+      })
+    );
+  });
+
+  it('updates the summary from the committed credit response without replacing the open form', async () => {
+    mutateAsync.mockResolvedValue({ currentCredits: 800 });
+    renderModal(makeOrg({ currentCredits: 500 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '900' } });
+    fireEvent.click(screen.getByTestId('org-profile-adjust-credits-btn'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-dialog-confirm-btn'));
+    const creditsTile = screen.getAllByTestId('admin-stat-tile').find(tile => tile.textContent?.startsWith('Credits'))!;
+    await waitFor(() => expect(within(creditsTile).getByText('800')).toBeInTheDocument());
+    expect(screen.getByTestId('org-profile-credits-input')).toHaveValue('800');
+  });
+
+  it('keeps the committed summary and draft when a credit save fails', async () => {
+    mutateAsync.mockRejectedValue(new Error('Save failed'));
+    renderModal(makeOrg({ currentCredits: 500 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '800' } });
+    fireEvent.click(screen.getByTestId('org-profile-adjust-credits-btn'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('org-profile-credit-dialog-confirm-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
+    const creditsTile = screen.getAllByTestId('admin-stat-tile').find(tile => tile.textContent?.startsWith('Credits'))!;
+    expect(within(creditsTile).getByText('500')).toBeInTheDocument();
+    expect(screen.getByTestId('org-profile-credits-input')).toHaveValue('800');
+    expect(screen.getByTestId('org-profile-credit-dialog')).toBeInTheDocument();
+  });
+
+  it('blocks fractional credits instead of sending a fractional ledger adjustment', () => {
+    renderModal(makeOrg({ currentCredits: 100 }));
+    fireEvent.change(screen.getByTestId('org-profile-credits-input'), { target: { value: '0.5' } });
+
+    expect(screen.getByTestId('org-profile-credits-error')).toHaveTextContent('whole number');
+    expect(screen.getByTestId('org-profile-adjust-credits-btn')).toBeDisabled();
   });
 });

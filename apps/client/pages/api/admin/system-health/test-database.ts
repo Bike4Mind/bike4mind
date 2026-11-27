@@ -1,9 +1,8 @@
 import { Request, Response } from 'express';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import mongoose from 'mongoose';
 
 export interface TestDatabaseResult {
@@ -12,7 +11,10 @@ export interface TestDatabaseResult {
   error?: string;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(
     rateLimit({
       limit: 5,
@@ -20,10 +22,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     try {
       const startTime = Date.now();
 
@@ -52,7 +50,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
-      console.error('Error testing database connection:', error);
+      req.logger.error('Error testing database connection', { error });
       return res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to test database connection',

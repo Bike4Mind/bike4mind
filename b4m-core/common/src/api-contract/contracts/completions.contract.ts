@@ -5,9 +5,12 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { CompletionRequestSchema, CompletionStreamEventSchema } from '../../schemas/cliCompletions';
 import {
   ApiErrorSchema,
-  InsufficientCreditsErrorSchema,
+  ModelPolicyForbiddenErrorSchema,
+  CompletionsUnprocessableErrorSchema,
   ProviderNotConfiguredErrorSchema,
   CompletionsBadRequestErrorSchema,
+  RunNotFoundErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
 } from '../../schemas/chat';
 
 /**
@@ -18,8 +21,8 @@ import {
  * resolveContractAuth, but owns the stream itself. See the api-contract README:
  * an SSE transport adapter is deferred until a second streaming endpoint exists.
  *
- * 401, the scope 403 and 405 are injected by registerContract; 405 cannot be declared
- * here because it is outside the conventions' status table.
+ * 401 and 405 are injected by registerContract; 405 cannot be declared here because
+ * it is outside the conventions' status table.
  */
 export const createCompletionContract = defineEndpoint({
   method: 'post',
@@ -29,15 +32,31 @@ export const createCompletionContract = defineEndpoint({
   description:
     'OpenAI-compatible completion. A successful request is ALWAYS answered with an SSE stream ' +
     '(`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` ' +
-    'events carrying `usage`/`credits`, terminated by `data: [DONE]`. The terminal event carries ' +
+    'events carrying `usage`/`credits`, then one `settled` event once credits are committed (the charge can be 0), terminated by `data: [DONE]`. The terminal event carries ' +
     '`stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note ' +
     'that omitting `max_tokens` on the request lets the server size the output ceiling for the ' +
     'model (recommended for reasoning models, which spend thinking tokens inside that ceiling). ' +
     'A message `content` may be a string or an array of parts; image parts are accepted in ' +
     'OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a ' +
     '`source`) form and are translated to whatever the target model speaks. ' +
+    'A final non-blank assistant message is an assistant prefill, except a server-tool continuation ending in ' +
+    '`server_tool_use` or `tool_search_tool_result`. Plain system prompts and blank messages are ignored. ' +
+    "Check the model's " +
+    '`supports_assistant_prefill` field from `GET /api/v1/models` before sending one. ' +
     'Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
-    'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` and `backend: "anthropic"`, ' +
+    'END USERS. A key that serves many end users of your own product, and that an administrator has granted ' +
+    '`ai:end-user-id`, may send `end_user_id` (your opaque id for the end user) so that, on models served directly by ' +
+    'OpenAI or Anthropic, the model provider sees each end user separately rather than your whole account as one ' +
+    '(other providers receive no end-user identifier).\n\n' +
+    'RUNS AND SETTLEMENT. To group the spend of a multi-agent run (a root session and the workers it spawns), ' +
+    'mint a run id with `POST /api/v1/completion-runs` and send it as `run` on each request. Spend is recorded ' +
+    'against the run, never charged twice. The `settled` event (`{ type, requestId, creditsCharged, usdCost, runId }`) ' +
+    'arrives after the last content event and before `[DONE]`, once the charge is committed: `creditsCharged` is ' +
+    "what the ledger recorded, which can be below the terminal event's `credits.used` when the balance capped it, " +
+    'and `requestId` is the `X-Request-ID` you sent (or a generated one). Use it to count a settled charge once when ' +
+    'your client sees the same event twice (replay or reconnect). Send a fresh `X-Request-ID` per request: reusing one ' +
+    'does not deduplicate charges, since the server charges every request.\n\n' +
+    'TOOL SEARCH. On a model whose `GET /api/v1/models` row has `supports_tool_search: true` (`backend` `"anthropic"` or `"bedrock"`), ' +
     'a `tools` entry may set `toolSchema.defer_loading: true`, and a `{ "serverTool": { "type": ' +
     '"tool_search_tool_regex_20251119", "name": "tool_search_tool_regex" } }` (or the `bm25` pair) entry adds ' +
     "Anthropic's tool search, so deferred definitions load only when the model searches for them. The stream then " +
@@ -46,19 +65,22 @@ export const createCompletionContract = defineEndpoint({
     '`tool_result`. When the server-run search loop hits its iteration limit the stream ends with `stopReason: ' +
     '"pause_turn"`; continue by re-sending the conversation with that assistant turn\'s provider blocks echoed. ' +
     'A client-side search may return `{ "type": "tool_reference", "tool_name": "..." }` blocks inside ' +
-    "a `tool_result`'s content. On every other model, Bedrock-served Claude included, `defer_loading` is ignored (every " +
+    "a `tool_result`'s content. On every other model `defer_loading` is ignored (every " +
     'tool is sent as usual) and a server tool, a `tool_reference` or an echoed tool search block is refused with a ' +
     '`400` rather than run without it.\n\n' +
     'ERRORS. Everything checked before the model provider is called fails with a JSON error body and ' +
-    'a real HTTP status, before any stream opens: a malformed or otherwise invalid request or an unknown `model` `400` (`errorCode: "unknown_model"` for the latter), a bad ' +
-    'credential `401`, a key without a required scope `403` (with `required_scopes`), a body over 25 MB ' +
-    '`413`, a body that fails schema validation `422`, insufficient credits `422` with ' +
-    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a rate limit `429` with `Retry-After`, and a catalogued model ' +
+    'a real HTTP status, before any stream opens: an empty `messages` array, a conversation with no non-empty user or assistant message (system-only, or only blank content), a malformed request, or an unknown `model` `400` (`errorCode: "unknown_model"` for an unknown model), a bad ' +
+    'credential `401`, a key without a required scope `403` (with `required_scopes`), a free-tier account calling a model outside the free-tier allowlist `403` with `errorCode: "model_requires_subscription"` (upgrade the plan or pick a free-tier model), a model the caller\'s organization policy does not allow `403` with `errorCode: "org_model_not_allowed"`, paused spending `403` with `errorCode: "spend_frozen"`, a body over 25 MB ' +
+    '`413`, any other body that fails schema validation `422`, insufficient credits `422` with ' +
+    '`errorCode: "insufficient_credits"` (personal or org balance, or an org per-member credit cap), a `run` minted with a budget that has too little left for even a short answer `422` with `errorCode: "run_budget_exhausted"` (retry once in-flight requests on the run settle, or raise the run budget; buying credits does not), a rate limit `429` with `Retry-After`, a `run` that does not exist or that another user or billing owner minted `404` with `errorCode: "run_not_found"`, and a catalogued model ' +
     'whose provider is not configured on this deployment, or a model that could only come from a self-hosted model server (Ollama, local image) that is currently unreachable, `503` with `errorCode: "provider_not_configured"` (retryable). ' +
+    'A provider rejection of caller input that happens before the stream opens is also a JSON `400`, with ' +
+    '`errorCode: "invalid_request"` (do not retry it unchanged). ' +
     'Once the stream has opened the status stays `200` and a failure arrives as one terminal in-band ' +
     "`error` event. Branch on that event's `code`, never on `message`, which is prose and may change: " +
-    '`insufficient_credits` (buy credits) when credits run out mid-generation, `provider_rejected` when the model provider ' +
-    'refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), and ' +
+    '`insufficient_credits` (buy credits) when credits run out mid-generation, `invalid_request` when the provider rejects caller input (do not retry it unchanged), `provider_rejected` when the model provider ' +
+    'refused our credentials, `content_blocked` when the model declined the request (do not retry it unchanged), ' +
+    '`output_budget_exhausted` when a reasoning model spent your whole `max_tokens` thinking and wrote no answer (raise `max_tokens` or omit it; do not retry it unchanged), and ' +
     '`provider_error` for any other provider failure. Treat `code` as optional.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
@@ -85,7 +107,8 @@ export const createCompletionContract = defineEndpoint({
     },
     400: {
       description:
-        'Malformed or otherwise invalid request (no `errorCode`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): ' +
+        'Malformed or otherwise invalid request (no `errorCode`), a model that rejects a final assistant message ' +
+        '(`errorCode: "assistant_prefill_unsupported"`), provider-rejected caller input (`errorCode: "invalid_request"`), or a `model` the caller cannot use (`errorCode: "unknown_model"`): ' +
         'not in the catalog or not available to the caller. List valid ids with `GET /api/v1/models`. Tool search requests ' +
         'are refused with: `tool_search_unsupported` (a server tool, `tool_reference` or echoed tool search block on a model ' +
         'that cannot serve tool search here), `all_tools_deferred` (every tool deferred and no server tool), ' +
@@ -93,15 +116,36 @@ export const createCompletionContract = defineEndpoint({
         'naming a tool not in `tools`, or carrying no string `tool_name`). Mid-conversation tool changes are refused with: ' +
         '`tool_changes_unsupported` (a `tool_addition` / `tool_removal` system message on a model that cannot serve it ' +
         'here), `invalid_tool_change` (a malformed block, or one placed where the provider does not accept it), and ' +
-        '`unknown_tool_reference` (a changed tool not in `tools`).',
+        '`unknown_tool_reference` (a changed tool not in `tools`). `end_user_id` sent on a credential other than an ' +
+        'API key holding `ai:end-user-id` is refused with `end_user_id_not_allowed`; a malformed `end_user_id` is ' +
+        'refused with `invalid_end_user_id`.',
       schema: CompletionsBadRequestErrorSchema,
     },
+    403: {
+      description:
+        'The API key does not hold any of the required scopes, the account is suspended (`errorCode: "account_suspended"`), ' +
+        'a free-tier account named a model outside the free-tier allowlist (`errorCode: "model_requires_subscription"`), ' +
+        `the caller's organization policy does not allow the model (\`errorCode: "org_model_not_allowed"\`), a signed-in caller named an \`organization_id\` they are not a member of, or an organization-billed API key named a different \`organization_id\` (\`errorCode: "billing_organization_mismatch"\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: ModelPolicyForbiddenErrorSchema,
+    },
+    404: {
+      description:
+        'The `run` does not exist, or another user or billing owner minted it (`errorCode: "run_not_found"`). ' +
+        'Mint one with `POST /api/v1/completion-runs` using the same credential.',
+      schema: RunNotFoundErrorSchema,
+    },
     413: { description: 'Request body over 25 MB.', schema: ApiErrorSchema },
+    409: {
+      description:
+        'Evaluation receipt already exists or another evaluation request remains unresolved. Recover the owner-scoped run evaluation receipts before continuing.',
+      schema: ApiErrorSchema,
+    },
     422: {
       description:
         'The body failed schema validation, or the caller cannot afford the request ' +
-        '(`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap).',
-      schema: InsufficientCreditsErrorSchema,
+        '(`errorCode: "insufficient_credits"`: personal or org balance, or an org per-member credit cap), ' +
+        'or the `run` budget has too little left (`errorCode: "run_budget_exhausted"`).',
+      schema: CompletionsUnprocessableErrorSchema,
     },
     429: {
       description: 'Rate limit exceeded.',
@@ -113,7 +157,7 @@ export const createCompletionContract = defineEndpoint({
       description:
         "Temporarily unavailable: the model's provider is not configured on this deployment, or the self-hosted " +
         'model server that lists it (Ollama, local image) is unreachable (`errorCode: "provider_not_configured"`), ' +
-        'or the database is unreachable (no `errorCode`). Retry later.',
+        'or the database is unreachable, including while verifying the plan of a free-tier model caller (no `errorCode`). Retry later.',
       schema: ProviderNotConfiguredErrorSchema,
     },
   },

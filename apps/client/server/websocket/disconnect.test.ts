@@ -25,7 +25,7 @@ vi.mock('@bike4mind/services', () => ({
 
 vi.mock('@server/websocket/ccAgentHearth', () => ({ reportCcAgentPresence: vi.fn() }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn(),
   withWebSocketContext: (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler,
 }));
@@ -53,6 +53,21 @@ describe('$disconnect', () => {
     expect(mockFindOneAndDelete).toHaveBeenCalledWith({ connectionId: 'conn-1' });
     expect(mockRemoveConnectionSubscribers).toHaveBeenCalledWith('conn-1');
     expect(mockUpdateLogoutTime).toHaveBeenCalledWith('user-1', expect.anything());
+  });
+
+  it('marks the user offline without stamping lastActiveAt', async () => {
+    await run();
+
+    expect(mockUserUpdateOne).toHaveBeenCalledWith({ _id: 'user-1' }, { isOnline: false });
+  });
+
+  it('writes nothing to the user while another connection is still open', async () => {
+    mockCountDocuments.mockResolvedValue(1);
+
+    await run();
+
+    expect(mockUserUpdateOne).not.toHaveBeenCalled();
+    expect(mockUpdateLogoutTime).not.toHaveBeenCalled();
   });
 
   it('still pulls the subscribers when the row is already gone', async () => {

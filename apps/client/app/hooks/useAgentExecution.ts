@@ -46,6 +46,7 @@ import {
 } from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
+import { randomUuid } from '@bike4mind/common';
 
 // Mirror the shape the server validates in
 // `apps/client/server/websocket/agentExecute.ts`. Kept inline because the
@@ -127,6 +128,8 @@ interface AgentExecuteStart {
    * Server-capped at `PROMPT_TEXT_MAX`.
    */
   systemContext?: string;
+  /** The Studio production a Direct launch directs; the server marks the session with it (see startAgentExecution). */
+  productionCompositionId?: string;
 }
 
 interface AgentExecuteAbort {
@@ -802,7 +805,7 @@ export function useAgentExecutionDispatch() {
 
   return useMemo(() => {
     const reconnect = (sessionId?: string, executionId?: string, retryAllowed = true) => {
-      const requestId = crypto.randomUUID();
+      const requestId = randomUuid();
       useAgentExecutionStore.getState().registerReconnectRequest(requestId, sessionId, executionId, retryAllowed);
       sendJsonMessage({
         action: 'agent_execute',

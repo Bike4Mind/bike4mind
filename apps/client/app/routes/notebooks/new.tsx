@@ -9,7 +9,7 @@ import { setQuestLaunchIntent, consumeTrustedQuestLaunch } from '@client/app/uti
 const NewNotebookPage = () => {
   const { setCurrentSession, setCurrentSessionId, setWorkBenchAgents } = useSessions();
   const { clearAllSessions } = useWorkBenchActions();
-  const search = useSearch({ strict: false }) as { questmaster?: string; goal?: string; article?: string };
+  const search = useSearch({ strict: false }) as { goal?: string; article?: string };
   const navigate = useNavigate();
   const hasProcessedQuestParams = useRef(false);
   // Snapshotted at mount, deliberately NOT a dependency below: this reset is a one-time "blank
@@ -34,7 +34,6 @@ const NewNotebookPage = () => {
       setQuestLaunchIntent({
         goal: search.goal,
         autoSubmit: trusted,
-        enableQuestMaster: trusted && search.questmaster === 'true',
       });
       if (trusted) {
         setPreparingQuest(search.goal);
@@ -43,7 +42,7 @@ const NewNotebookPage = () => {
       // auto-submit (the intent itself is in-memory and consume-once).
       void navigate({ to: '/new', search: {}, replace: true });
     }
-  }, [search.goal, search.questmaster, setPreparingQuest, navigate]);
+  }, [search.goal, setPreparingQuest, navigate]);
 
   // Runs on entering /new, from anywhere: the shell keeps the chat mounted, but mounts this
   // component only while /new is the matched child.

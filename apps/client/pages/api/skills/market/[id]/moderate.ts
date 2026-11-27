@@ -2,9 +2,14 @@
 import { z } from 'zod';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { SkillListing, SkillListingReport, SkillListingVersion } from '@bike4mind/database';
-import { organizationRepository } from '@bike4mind/database/infra';
 import { ConflictError, ForbiddenError, NotFoundError } from '@bike4mind/common';
-import { canDelistListing, canRestoreListing, findListing, notifyUser } from '@server/skillMarket/market';
+import {
+  adminAudienceIdsFor,
+  canDelistListing,
+  canRestoreListing,
+  findListing,
+  notifyUser,
+} from '@bike4mind/server-utils/skillMarket/market';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 
 const bodySchema = z.discriminatedUnion('action', [
@@ -26,11 +31,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const body = bodySchema.parse(req.body);
   const listing = await findListing(String(req.query.id));
   if (!listing) throw new NotFoundError('Listing not found');
-  const adminOrgIds = await organizationRepository.findIdsAdministeredBy(actor.id);
-  if (!canDelistListing(listing, actor, adminOrgIds)) {
+  const adminAudience = await adminAudienceIdsFor(actor.id);
+  if (!canDelistListing(listing, actor, adminAudience)) {
     throw new ForbiddenError("You don't have permission to moderate this listing");
   }
-  if (body.action === 'restore' && !canRestoreListing(listing, actor, adminOrgIds)) {
+  if (body.action === 'restore' && !canRestoreListing(listing, actor, adminAudience)) {
     throw new ForbiddenError('Only a platform moderator can restore this listing');
   }
   const listingId = String(listing.id);

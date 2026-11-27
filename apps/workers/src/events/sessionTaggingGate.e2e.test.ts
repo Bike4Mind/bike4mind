@@ -51,7 +51,7 @@ vi.mock('sst', () => ({
 // Passthrough so the raw handler runs without connectDB / Config; this test owns the connection.
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (fn: unknown) => fn }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Tag: { schema: { parse: (properties: unknown) => properties }, publish: vi.fn() },
     Summarize: { publish: vi.fn() },
@@ -60,7 +60,7 @@ vi.mock('@server/utils/eventBus', () => ({
   NotebookCurationEvents: { Start: { publish: vi.fn() } },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({
       modelId: 'test-model',
@@ -81,6 +81,11 @@ vi.mock('@client/services/operationsModelService', () => ({
 
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: vi.fn(),
+}));
+
+// The credit gate is covered by its own tests; here every payer can fund the call.
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({
+  payerCanFundSessionOperation: vi.fn(async () => true),
 }));
 
 import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
@@ -145,7 +150,7 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
   });
 
-  // The completion was billed before the parse failed, so the notebook earns a backoff stamp -
+  // The completion is billed after the write even when the parse failed, so the notebook earns a backoff stamp -
   // but NOT a `taggedAt`, which would close the gate forever on a notebook that was never tagged.
   // Gate and counter are asserted together on the same real rows: they are two statements of one
   // rule, and this file exists because a comment is not enough to keep them in step.

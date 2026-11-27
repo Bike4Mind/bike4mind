@@ -562,7 +562,7 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
   pendingConnector?: DataLakePendingConnector;
   /**
    * Whether a GitHub lake connection row (enabled or not) is bound to this lake, read flag-free as
-   * apps/client/server/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
+   * packages/server-utils/src/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
    * `pendingConnector`, and only when the list route wires the lookup; absent means unknown.
    */
   hasGitHubConnection?: boolean;
@@ -707,6 +707,22 @@ export const DATA_LAKES: DataLakeConfig[] = [
 /** Static-registry lake ids - see `openLakeTagPrefix`'s doc comment for what this set decides. */
 export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
 
+const REGISTRY_LAKE_KEYS = new Set(DATA_LAKES.flatMap(l => [l.id, l.slug]));
+
+/**
+ * True when `value` is a static-registry lake's id or slug. Lookups by id-or-slug resolve the
+ * registry lake for such a key ahead of any org-less DB lake, and no DB lake may be created at,
+ * or moved org-less with, such a slug (createDataLake, setLakeVisibility).
+ */
+export const isRegistryLakeKey = (value: string): boolean => REGISTRY_LAKE_KEYS.has(value);
+
+/**
+ * The slugs under which DB lakes replace a same-keyed registry lake in a merged list. Only an
+ * org-scoped lake does, matching `findBySlug`; an org-less row never stands in for a registry lake.
+ */
+export const registryOverridingSlugs = (lakes: readonly { slug: string; organizationId?: unknown }[]): Set<string> =>
+  new Set(lakes.filter(lake => !!lake.organizationId).map(lake => lake.slug));
+
 /**
  * A lake's normalized file-tag prefix, but ONLY if the lake is in the static registry
  * (`STATIC_LAKE_IDS`) - `undefined` for a dynamic (user-created) lake's prefix, which is
@@ -715,7 +731,7 @@ export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
  *
  * The shared place "is this lake's prefix an OPEN one" is decided BY ID MEMBERSHIP in the static
  * registry, so every consumer that reverses a content-tag-prefix match back to a specific lake -
- * `grantingLakes`/`isFileInAccessibleLake` (`apps/client/server/dataLakes/grantingLakes.ts`,
+ * `grantingLakes`/`isFileInAccessibleLake` (`packages/server-utils/src/dataLakes/grantingLakes.ts`,
  * naming the grantor of a single already-authorized file), `splitTagPrefixes` (same file's
  * barrel, scoping a browse/search query), and `attributeAccessedLakeIds`
  * (`b4m-core/services/src/dataLakeService/attributeAccessedLakes.ts`, naming the lake a retrieved

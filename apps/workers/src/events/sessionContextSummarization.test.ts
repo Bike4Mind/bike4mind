@@ -6,23 +6,27 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   complete: vi.fn(),
   recordUsage: vi.fn(),
+  findUser: vi.fn(),
+  payerCanFund: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: { ContextSummarize: { schema: { parse: (properties: unknown) => properties } } },
 }));
 vi.mock('@bike4mind/database', () => ({
   Quest: { find: vi.fn(() => ({ sort: async () => h.quests })) },
   Session: { findById: async () => h.session },
   sessionRepository: { update: h.update },
+  userRepository: { findById: h.findUser },
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: {
     getOperationsModel: async () => ({ modelId: 'test-model', modelInfo: {}, llm: { complete: h.complete } }),
   },
 }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({ recordSessionOperationalUsage: h.recordUsage }));
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
 
 import { handler } from './sessionContextSummarization';
 
@@ -36,6 +40,8 @@ const run = () =>
 describe('sessionContextSummarization stopped turns', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findUser.mockResolvedValue({ id: 'user-1' });
+    h.payerCanFund.mockResolvedValue(true);
     h.session = { id: 'session-1', userId: 'user-1', contextSummary: 'Existing context' };
     h.quests = [
       { id: '000000000000000000000001', prompt: 'partial ask', status: 'stopped', replies: ['partial answer'] },
@@ -72,5 +78,33 @@ describe('sessionContextSummarization stopped turns', () => {
       id: 'session-1',
       contextSummaryUpToQuestId: '000000000000000000000002',
     });
+  });
+
+  it.each([null, { id: 'user-1', riskScore: { reviewState: 'pending' } }, { id: 'user-1', isModerated: true }])(
+    'skips the model and billing when the owner cannot use AI: %j',
+    async user => {
+      h.findUser.mockResolvedValue(user);
+      await run();
+      expect(h.findUser).toHaveBeenCalledWith('user-1');
+      expect(h.complete).not.toHaveBeenCalled();
+      expect(h.recordUsage).not.toHaveBeenCalled();
+      expect(h.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('leaves the summary boundary alone and runs no model when the payer cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+    await run();
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'user-1' }));
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('does not run the model when the account lookup fails', async () => {
+    h.findUser.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(run()).rejects.toThrow('database unavailable');
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
   });
 });

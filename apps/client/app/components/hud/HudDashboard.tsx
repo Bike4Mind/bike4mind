@@ -6,6 +6,7 @@ import TerminalIcon from '@mui/icons-material/Terminal';
 import CircleIcon from '@mui/icons-material/Circle';
 import { useWebsocket, ReadyState } from '@client/app/contexts/WebsocketContext';
 import type { IKeepCommandResultAction } from '@bike4mind/common';
+import { randomUuid } from '@bike4mind/common';
 
 interface ActivityEntry {
   id: string;
@@ -44,7 +45,7 @@ export default function HudDashboard() {
       });
 
       const entry: ActivityEntry = {
-        id: crypto.randomUUID(),
+        id: randomUuid(),
         timestamp: new Date(),
         type: success ? 'received' : 'error',
         message: success ? `Result received for ${requestId.slice(0, 8)}...` : `Error: ${error || 'Unknown error'}`,
@@ -62,14 +63,14 @@ export default function HudDashboard() {
   }, [activity]);
 
   const addActivity = useCallback((type: ActivityEntry['type'], message: string) => {
-    setActivity(prev => [...prev, { id: crypto.randomUUID(), timestamp: new Date(), type, message }]);
+    setActivity(prev => [...prev, { id: randomUuid(), timestamp: new Date(), type, message }]);
   }, []);
 
   const sendCommand = useCallback(
     (commandType: 'read_file' | 'list_directory') => {
       if (!filePath.trim()) return;
 
-      const requestId = crypto.randomUUID();
+      const requestId = randomUuid();
       setPendingRequests(prev => new Set(prev).add(requestId));
       addActivity('sent', `${commandType}: ${filePath}`);
 

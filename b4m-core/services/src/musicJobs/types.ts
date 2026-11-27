@@ -1,4 +1,6 @@
 import type {
+  ApiKeyBillingOwnerType,
+  CompletionRunAttribution,
   GeneratedAssetMetadata,
   GenerationJobSource,
   IGenerationJobDocumentOf,
@@ -13,6 +15,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { MusicProviderRegistry } from '@bike4mind/utils/musicProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+import type { RunBudgetAdapters } from '../generationJobs/types';
 import type { SaveGeneratedAssetResult } from '../generatedAssets';
 
 // Stamped on the job as deadlineAt at create; the engine fails a pending job past it.
@@ -27,8 +30,8 @@ export type MusicJobDeps = {
   resolveApiKey(providerId: MusicProviderId, userId: string): Promise<string | null>;
   /**
    * saveGeneratedAsset bound to the user's files. Idempotent per `generation.jobId`. `signal` is the step's
-   * lease-bounded signal; its abort must reject rather than report an ordinary save failure. The handler then
-   * falls back to saveToGeneratedBucket with a fresh bounded signal, so the song is still kept.
+   * lease-bounded signal; its abort must reject rather than report an ordinary save failure. storeGeneratedOutput
+   * then falls back to saveToGeneratedBucket with a fresh bounded signal, so the song is still kept.
    */
   saveToFiles(params: {
     userId: string;
@@ -53,14 +56,26 @@ export type MusicJobDeps = {
     costUsd: number;
     /** Seconds the provider delivered (uncapped), the usage event's units; costUsd is priced on it. */
     durationSeconds: number;
-    /** `refusal` for a block the provider billed: spend with no song delivered. */
-    status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
+    /**
+     * `refusal` for a block the provider billed: spend with no song delivered. `error` / `timeout` for a failed job
+     * whose provider call may still have been billed (charged nothing to the user).
+     */
+    status: Extract<UsageEventStatus, 'ok' | 'refusal' | 'error' | 'timeout'>;
   }): Promise<void>;
+  /** Claims and releases a job's share of a completion run's budget; required to create a job with a `run`. */
+  runBudget?: RunBudgetAdapters;
   now(): Date;
   logger: Logger;
 };
 
 export type CreateMusicJobDeps = MusicJobDeps & {
+  /** organizationId is the org the job bills (input.user.organizationId), so its model policy applies. */
+  assertModelAdmission(
+    userId: string,
+    modelId: string,
+    adminRoleWithheld?: boolean,
+    organizationId?: string | null
+  ): Promise<void>;
   engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
   /** The refusal detail when the user's Files quota lacks room for `bytes` more (the song is saved there, as saveToFiles does); undefined when there is room. */
   checkStorageFor(userId: string, bytes: number): Promise<StorageLimitErrorInfo | undefined>;
@@ -70,14 +85,23 @@ export type CreateMusicJobDeps = MusicJobDeps & {
 export const MAX_MUSIC_BYTES_PER_SECOND = 40_000;
 
 export type CreateMusicJobInput = {
-  user: { id: string; organizationId: string | null };
+  user: { id: string; organizationId: string | null; adminRoleWithheld?: boolean };
   /** Untrusted: parsed and validated by createMusicJob. */
   request: unknown;
   source: GenerationJobSource;
+  /** The UserApiKey that authenticated the request, kept on the job for its settlement row. */
+  apiKeyId?: string;
+  /**
+   * Whether that key bills its owner or an organization. No longer read by the spend freeze check, which keeps
+   * the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
   idempotencyKey?: string;
   /** The notebook and message the song belongs to, for in-chat producers. */
   sessionId?: string;
   questId?: string;
+  /** The completion run the job is made for: its hold is claimed against the run's budget (resolvePaidCallRun). */
+  run?: CompletionRunAttribution;
 };
 
 export type CreateMusicJobErrorCode =

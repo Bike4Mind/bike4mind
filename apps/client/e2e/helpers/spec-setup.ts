@@ -1,4 +1,4 @@
-import { test as setup } from '@playwright/test';
+import { test as setup } from '../waf-test';
 import { seedAuthStorageState } from './auth-seed';
 import { apiCreateTestUser, apiUpdateUserPreferences } from './api';
 import { getTestRunId, saveSpecUser, getE2ETestId } from './test-users';
@@ -15,6 +15,8 @@ interface SpecUserConfig {
   prefs?: Record<string, unknown>;
   /** Starting credit balance; omit for the default effectively-unlimited grant. */
   initialCredits?: number;
+  /** Pass true for a spec whose user sends invites or other trust-gated outbound actions. */
+  apiKeyTrustApproved?: boolean;
   afterCreate?: (ctx: {
     request: import('@playwright/test').APIRequestContext;
     accessToken: string;
@@ -37,6 +39,7 @@ export function setupSpecUser(config: SpecUserConfig) {
       ...(config.tags && { tags: config.tags }),
       ...(config.includePredefinedTags !== undefined && { includePredefinedTags: config.includePredefinedTags }),
       ...(config.initialCredits !== undefined && { initialCredits: config.initialCredits }),
+      ...(config.apiKeyTrustApproved && { apiKeyTrustApproved: true }),
     };
 
     const result = await apiCreateTestUser(request, userConfig);

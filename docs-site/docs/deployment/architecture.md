@@ -205,7 +205,7 @@ Check your actual costs in AWS Console → Billing → Cost Explorer. Below are 
 ### Costs NOT Included (Separate)
 
 - **MongoDB Atlas**: $57-500+/month depending on tier
-- **AWS DocumentDB**: ~$730+/month for smallest instance
+- **AWS DocumentDB** (deprecated): ~$730+/month for smallest instance
 - **External AI APIs** (OpenAI, Anthropic direct): Variable based on usage
 
 ### Key Cost Drivers
@@ -255,7 +255,7 @@ Check your actual costs in AWS Console → Billing → Cost Explorer. Below are 
 
 | Service | Purpose |
 |---------|---------|
-| DocumentDB or MongoDB Atlas | Primary database (users, sessions, quests, files metadata) |
+| MongoDB Atlas (or the deprecated DocumentDB) | Primary database (users, sessions, quests, files metadata) |
 
 For database setup, see [DocumentDB Setup](/databases/documentdb-setup).
 
@@ -268,7 +268,7 @@ For database setup, see [DocumentDB Setup](/databases/documentdb-setup).
 | imageGenerationQueue | AI image creation |
 | imageEditQueue | Image manipulation |
 | researchEngineQueue | Research tasks |
-| whatsNewGenerationQueue | Feature announcements |
+| whatsNewGenerationQueue | Release notes and What's New highlights |
 | notebookCurationQueue | Content curation |
 | agentProactiveMessageQueue | Proactive agent messages |
 | slackExportQueue | Slack channel exports |

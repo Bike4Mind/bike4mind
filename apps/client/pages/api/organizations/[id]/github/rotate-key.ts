@@ -17,12 +17,13 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { encryptSecret } from '@bike4mind/server-utils/security/secretEncryption';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { BadRequestError, InternalServerError, NotFoundError } from '@bike4mind/utils';
-import { validatePrivateKeyFormat } from '@server/utils/validators';
+import { validatePrivateKeyFormat } from '@bike4mind/server-utils/utils/validators';
 import { Logger } from '@bike4mind/observability';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { logKeyRotated } from '@server/integrations/github/githubConnectionAuditLog';
 
 const logger = new Logger({ metadata: { component: 'org-github-rotate-key' } });
@@ -34,7 +35,7 @@ const RotateKeySchema = z.object({
   privateKey: z.string().min(1, 'privateKey is required').max(MAX_PRIVATE_KEY_LENGTH, 'privateKey too long'),
 });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: 3,
@@ -45,7 +46,7 @@ const handler = baseApi()
     const orgId = req.query.id as string;
     const user = req.user!;
 
-    await verifyOrgOwner(user, orgId);
+    const org = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     const parseResult = RotateKeySchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -85,11 +86,18 @@ const handler = baseApi()
       tokenCachedAt: undefined,
     });
 
-    logKeyRotated({
+    await logKeyRotated({
       connectionId: connection.id,
       organizationId: orgId,
       actorUserId: user.id,
       connectionType: 'github_app',
+    });
+    await recordAdminActionFromRequest(req, {
+      action: 'org.github_connection.key_rotated',
+      actorScope: 'organization',
+      target: { kind: 'organization', id: org.id, displayName: org.name },
+      summary: 'rotated the GitHub App private key',
+      details: { connectionId: connection.id },
     });
 
     logger.info('[Org] Rotated GitHub App private key', {

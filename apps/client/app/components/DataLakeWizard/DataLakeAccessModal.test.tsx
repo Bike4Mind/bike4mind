@@ -4,33 +4,45 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { LakeAccessView, LakeOwnershipCandidateList } from '@bike4mind/common';
+import type { LakeAccessViewWithAdminBypass, LakeOwnershipCandidateList } from '@bike4mind/common';
 import { DataLakeAccessModal } from './DataLakeAccessModal';
 
 const downloadCsv = vi.fn();
-let viewState: {
-  data?: { view: LakeAccessView; canTransferOwnership: boolean; readerGrantsEnforced: boolean };
-  isLoading: boolean;
-  isError: boolean;
-  error?: unknown;
-};
-let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
 const transferMutate = vi.fn();
 const cancelOfferMutate = vi.fn();
 const grantMutate = vi.fn();
 /** `mutateAsync`, because the confirm dialog awaits the DELETE to decide whether to close. */
 const revokeMutate = vi.fn();
-let revokePending = false;
-/** The in-flight DELETE's own input, which is what scopes the pending state to one row. */
-let revokeVariables: { principalType: string; principalId: string } | undefined;
+const mockState: {
+  view: {
+    data?: { view: LakeAccessViewWithAdminBypass; canTransferOwnership: boolean; readerGrantsEnforced: boolean };
+    isLoading: boolean;
+    isError: boolean;
+    error?: unknown;
+  };
+  candidates: { data?: LakeOwnershipCandidateList; isLoading: boolean; isError?: boolean };
+  revokePending: boolean;
+  /** The in-flight DELETE's own input, which is what scopes the pending state to one row. */
+  revokeVariables: { principalType: string; principalId: string } | undefined;
+} = {
+  view: { isLoading: true, isError: false },
+  candidates: { isLoading: true },
+  revokePending: false,
+  revokeVariables: undefined,
+};
+let user: ReturnType<typeof userEvent.setup>;
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useLakeAccessView: () => viewState,
-  useLakeOwnershipCandidates: () => candidatesState,
+  useLakeAccessView: () => mockState.view,
+  useLakeOwnershipCandidates: () => mockState.candidates,
   useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
   useCancelLakeOwnershipOffer: () => ({ mutateAsync: cancelOfferMutate, isPending: false }),
   useGrantLakeAccess: () => ({ mutateAsync: grantMutate, isPending: false }),
-  useRevokeLakeAccess: () => ({ mutateAsync: revokeMutate, isPending: revokePending, variables: revokeVariables }),
+  useRevokeLakeAccess: () => ({
+    mutateAsync: revokeMutate,
+    isPending: mockState.revokePending,
+    variables: mockState.revokeVariables,
+  }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
@@ -39,7 +51,7 @@ vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastError(...a)
 
 /** Open the confirmation for one grant row, which is now the only path to a DELETE. */
 const openRevokeConfirm = async (principalTestId: string) => {
-  await userEvent.click(screen.getByTestId(`datalake-access-revoke-${principalTestId}`));
+  await user.click(screen.getByTestId(`datalake-access-revoke-${principalTestId}`));
   return screen.getByTestId('datalake-revoke-modal');
 };
 
@@ -48,7 +60,7 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const fullView: LakeAccessView = {
+const fullView: LakeAccessViewWithAdminBypass = {
   lakeId: 'lake1',
   lakeName: 'Sales Intelligence',
   grants: [
@@ -75,6 +87,7 @@ const fullView: LakeAccessView = {
       principalName: 'Bob',
       readCount: 7,
       noResultCount: 2,
+      adminBypassReadCount: 0,
       firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
       lastAccessedAt: new Date('2026-08-10T00:00:00.000Z'),
       surfaces: ['chat-kb-search'],
@@ -101,7 +114,7 @@ const lake = { id: 'lake1', name: 'Sales Intelligence' };
 /** A loaded access view. `canTransferOwnership` defaults off - the server decides it, not the client.
  *  `readerGrantsEnforced` defaults ON here so the disclosure note is opt-in per test rather than
  *  present in every unrelated assertion. */
-const loaded = (view: LakeAccessView, canTransferOwnership = false, readerGrantsEnforced = true) => ({
+const loaded = (view: LakeAccessViewWithAdminBypass, canTransferOwnership = false, readerGrantsEnforced = true) => ({
   data: { view, canTransferOwnership, readerGrantsEnforced },
   isLoading: false,
   isError: false,
@@ -109,10 +122,14 @@ const loaded = (view: LakeAccessView, canTransferOwnership = false, readerGrants
 
 beforeEach(() => {
   vi.clearAllMocks();
-  revokePending = false;
-  revokeVariables = undefined;
-  viewState = loaded(fullView);
-  candidatesState = { data: { scope: 'organization', candidates: [], organizationName: 'Acme' }, isLoading: false };
+  user = userEvent.setup({ delay: null });
+  mockState.revokePending = false;
+  mockState.revokeVariables = undefined;
+  mockState.view = loaded(fullView);
+  mockState.candidates = {
+    data: { scope: 'organization', candidates: [], organizationName: 'Acme' },
+    isLoading: false,
+  };
 });
 
 describe('DataLakeAccessModal', () => {
@@ -132,12 +149,23 @@ describe('DataLakeAccessModal', () => {
     expect(screen.getByTestId('datalake-access-history-table')).toBeInTheDocument();
   });
 
+  it('shows the platform admin access count only when it is non-zero', () => {
+    const entry = fullView.history[0];
+    mockState.view = loaded({ ...fullView, history: [{ ...entry, adminBypassReadCount: 2 }] });
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.getByTestId('datalake-access-history-admin-bypass')).toHaveTextContent('Platform admin access: 2');
+
+    mockState.view = loaded({ ...fullView, history: [{ ...entry, adminBypassReadCount: 0 }] });
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.queryByTestId('datalake-access-history-admin-bypass')).not.toBeInTheDocument();
+  });
+
   it('qualifies access history as a lower bound whether or not it has rows', () => {
     const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     // Present alongside real rows: a populated table must not read as the complete record either.
     expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(/lower bound/i);
 
-    viewState = loaded({ ...fullView, history: [], historyTruncated: false });
+    mockState.view = loaded({ ...fullView, history: [], historyTruncated: false });
     rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
     expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(
       /not proof that no one has read this lake/i
@@ -168,7 +196,7 @@ describe('DataLakeAccessModal', () => {
   });
 
   it('says not reported, rather than cap-free, when no read measured the cap', () => {
-    viewState = loaded({ ...fullView, candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 } });
+    mockState.view = loaded({ ...fullView, candidateCapPressure: { turnsWithSignal: 0, turnsAtCap: 0 } });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
   });
@@ -177,7 +205,7 @@ describe('DataLakeAccessModal', () => {
     // A cached response from before the field, or an older server: rendering blank would read as
     // "measured, nothing to report".
     const { candidateCapPressure: _omitted, ...withoutPressure } = fullView;
-    viewState = loaded(withoutPressure as LakeAccessView);
+    mockState.view = loaded(withoutPressure as LakeAccessViewWithAdminBypass);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-cap-pressure')).toHaveTextContent(/not reported for this window/i);
   });
@@ -196,7 +224,7 @@ describe('DataLakeAccessModal', () => {
   it('says not reported for supersession when no read ran the collapse', () => {
     // The COMMON case, not an edge: the collapse is admin-gated and ships off, so a lake whose
     // reads never ran it must not read as a lake with no duplicate generations.
-    viewState = loaded({
+    mockState.view = loaded({
       ...fullView,
       supersessionPressure: { turnsWithSignal: 0, turnsWithSuppression: 0, filesSuppressed: 0 },
     });
@@ -208,7 +236,7 @@ describe('DataLakeAccessModal', () => {
 
   it('degrades to not-reported when the view carries no supersession object at all', () => {
     const { supersessionPressure: _omitted, ...withoutPressure } = fullView;
-    viewState = loaded(withoutPressure as LakeAccessView);
+    mockState.view = loaded(withoutPressure as LakeAccessViewWithAdminBypass);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-supersession-pressure')).toHaveTextContent(
       /not reported for this window/i
@@ -228,7 +256,7 @@ describe('DataLakeAccessModal', () => {
   it('truncates an unresolved API key id in the Reader cell instead of letting it overflow the next column', () => {
     const keyId = '6650f1c2a9b3e4d5f6071829';
     const ownerId = '6650f1c2a9b3e4d5f607182c';
-    viewState = loaded({
+    mockState.view = loaded({
       ...fullView,
       history: [
         {
@@ -258,7 +286,7 @@ describe('DataLakeAccessModal', () => {
   it('truncates unresolved principal and granter ids in the grants table', () => {
     const principalId = '6650f1c2a9b3e4d5f607182a';
     const grantedByUserId = '6650f1c2a9b3e4d5f607182b';
-    viewState = loaded({
+    mockState.view = loaded({
       ...fullView,
       grants: [
         { ...fullView.grants[0]!, principalId, principalName: undefined, grantedByUserId, grantedByName: undefined },
@@ -280,7 +308,7 @@ describe('DataLakeAccessModal', () => {
   });
 
   it('drops the window qualification when the history was not truncated', () => {
-    viewState = loaded({ ...fullView, historyTruncated: false, windowStartsAt: undefined });
+    mockState.view = loaded({ ...fullView, historyTruncated: false, windowStartsAt: undefined });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-cap-pressure')).not.toHaveTextContent(/in this window/i);
   });
@@ -292,7 +320,7 @@ describe('DataLakeAccessModal', () => {
   });
 
   it('omits the composition note when a single channel is a standalone path', () => {
-    viewState = loaded({ ...fullView, channels: [{ kind: 'public' }] });
+    mockState.view = loaded({ ...fullView, channels: [{ kind: 'public' }] });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('datalake-access-channels-compose-note')).not.toBeInTheDocument();
   });
@@ -300,25 +328,25 @@ describe('DataLakeAccessModal', () => {
   it('exports the CSV via the download helper', async () => {
     downloadCsv.mockResolvedValue(undefined);
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-export-btn'));
+    await user.click(screen.getByTestId('datalake-access-export-btn'));
     expect(downloadCsv).toHaveBeenCalledWith('lake1');
   });
 
   it('toasts when the export fails', async () => {
     downloadCsv.mockRejectedValue(new Error('boom'));
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-export-btn'));
+    await user.click(screen.getByTestId('datalake-access-export-btn'));
     expect(toastError).toHaveBeenCalled();
   });
 
   it('shows the manager-only message on a 403', () => {
-    viewState = { isLoading: false, isError: true, error: { response: { status: 403 } } };
+    mockState.view = { isLoading: false, isError: true, error: { response: { status: 403 } } };
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-error')).toHaveTextContent(/manage this data lake/i);
   });
 
   it('renders empty states when there are no grants, channels, or reads', () => {
-    viewState = loaded({ ...fullView, grants: [], channels: [], history: [], historyTruncated: false });
+    mockState.view = loaded({ ...fullView, grants: [], channels: [], history: [], historyTruncated: false });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-grants-empty')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-access-channels-empty')).toBeInTheDocument();
@@ -327,8 +355,8 @@ describe('DataLakeAccessModal', () => {
 
   describe('transfer ownership', () => {
     const withCandidates = () => {
-      viewState = loaded(fullView, true);
-      candidatesState = {
+      mockState.view = loaded(fullView, true);
+      mockState.candidates = {
         isLoading: false,
         data: {
           scope: 'organization',
@@ -350,20 +378,20 @@ describe('DataLakeAccessModal', () => {
       transferMutate.mockResolvedValue({ offer: { id: 'o1' } });
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
       // The button says what it does: nothing has changed hands yet.
       expect(screen.getByTestId('datalake-transfer-confirm-btn')).toHaveTextContent(/send offer/i);
-      await userEvent.click(screen.getByTestId('datalake-transfer-owner-select'));
-      await userEvent.click(screen.getByTestId('datalake-transfer-option-u9'));
-      await userEvent.click(screen.getByTestId('datalake-transfer-confirm-btn'));
+      await user.click(screen.getByTestId('datalake-transfer-owner-select'));
+      await user.click(screen.getByTestId('datalake-transfer-option-u9'));
+      await user.click(screen.getByTestId('datalake-transfer-confirm-btn'));
 
       expect(transferMutate).toHaveBeenCalledWith({ id: 'lake1', newOwnerUserId: 'u9' });
     });
 
     it('shows the pending offer with a cancel, in place of the picker', async () => {
       withCandidates();
-      candidatesState.data = {
-        ...candidatesState.data!,
+      mockState.candidates.data = {
+        ...mockState.candidates.data!,
         pendingOffer: {
           id: 'o1',
           recipientUserId: 'u9',
@@ -374,55 +402,55 @@ describe('DataLakeAccessModal', () => {
       cancelOfferMutate.mockResolvedValue({ offer: { id: 'o1', status: 'cancelled' } });
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
 
       expect(screen.getByTestId('datalake-transfer-pending')).toHaveTextContent(/Carol/);
       // One live offer per lake: the picker and its confirm must not be offered again.
       expect(screen.queryByTestId('datalake-transfer-owner-select')).not.toBeInTheDocument();
       expect(screen.queryByTestId('datalake-transfer-confirm-btn')).not.toBeInTheDocument();
 
-      await userEvent.click(screen.getByTestId('datalake-transfer-cancel-offer-btn'));
+      await user.click(screen.getByTestId('datalake-transfer-cancel-offer-btn'));
       expect(cancelOfferMutate).toHaveBeenCalledWith({ id: 'lake1' });
     });
 
     it('cannot confirm before a new owner is chosen', async () => {
       withCandidates();
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
       expect(screen.getByTestId('datalake-transfer-confirm-btn')).toBeDisabled();
     });
 
     it('says the outgoing owner stays on as a curator, so the demotion is not a surprise', async () => {
       withCandidates();
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
       expect(screen.getByTestId('datalake-transfer-modal')).toHaveTextContent(/curator/i);
     });
 
     it('explains the path for a personal lake instead of showing an empty picker', async () => {
-      viewState = loaded(fullView, true);
-      candidatesState = { data: { scope: 'personal', candidates: [] }, isLoading: false };
+      mockState.view = loaded(fullView, true);
+      mockState.candidates = { data: { scope: 'personal', candidates: [] }, isLoading: false };
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
       // An empty list has two very different causes; a personal lake must not read as "nobody here".
       expect(screen.getByTestId('datalake-transfer-personal')).toHaveTextContent(/organization/i);
       expect(screen.queryByTestId('datalake-transfer-owner-select')).not.toBeInTheDocument();
     });
 
     it('names the organization when it has nobody else eligible', async () => {
-      viewState = loaded(fullView, true);
+      mockState.view = loaded(fullView, true);
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
       expect(screen.getByTestId('datalake-transfer-no-candidates')).toHaveTextContent(/Acme/);
     });
 
     it('says the member list could not be loaded rather than claiming the org has nobody', async () => {
       // The failure mode this guards: "no other member can receive this lake" is a factual claim
       // about the organization, and a request that never arrived cannot support it.
-      viewState = loaded(fullView, true);
-      candidatesState = { data: undefined, isLoading: false, isError: true };
+      mockState.view = loaded(fullView, true);
+      mockState.candidates = { data: undefined, isLoading: false, isError: true };
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
 
       expect(screen.getByTestId('datalake-transfer-error')).toHaveTextContent(/try again/i);
       expect(screen.queryByTestId('datalake-transfer-no-candidates')).not.toBeInTheDocument();
@@ -432,9 +460,9 @@ describe('DataLakeAccessModal', () => {
 
     it("warns that ownership overrides the lake's content gate, naming it", async () => {
       withCandidates();
-      candidatesState.data = { ...candidatesState.data!, gate: { requiredUserTag: 'phi' } };
+      mockState.candidates.data = { ...mockState.candidates.data!, gate: { requiredUserTag: 'phi' } };
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
 
       const warning = screen.getByTestId('datalake-transfer-gate-warning');
       expect(warning).toHaveTextContent(/phi/);
@@ -446,7 +474,7 @@ describe('DataLakeAccessModal', () => {
     it('shows no gate warning for an ungated lake', async () => {
       withCandidates();
       render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
       expect(screen.queryByTestId('datalake-transfer-gate-warning')).not.toBeInTheDocument();
     });
 
@@ -456,10 +484,10 @@ describe('DataLakeAccessModal', () => {
       const onClose = vi.fn();
       render(<DataLakeAccessModal lake={lake} onClose={onClose} />, { wrapper: Wrapper });
 
-      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
-      await userEvent.click(screen.getByTestId('datalake-transfer-owner-select'));
-      await userEvent.click(screen.getByTestId('datalake-transfer-option-u9'));
-      await userEvent.click(screen.getByTestId('datalake-transfer-confirm-btn'));
+      await user.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await user.click(screen.getByTestId('datalake-transfer-owner-select'));
+      await user.click(screen.getByTestId('datalake-transfer-option-u9'));
+      await user.click(screen.getByTestId('datalake-transfer-confirm-btn'));
 
       expect(transferMutate).toHaveBeenCalled();
       expect(screen.getByTestId('datalake-transfer-modal')).toBeInTheDocument();
@@ -474,7 +502,7 @@ describe('DataLakeAccessModal grant writes', () => {
   it('offers Revoke on a curator row and never on an ownership row', async () => {
     // The server refuses to revoke an owner grant (it would silently un-transfer the lake), so the
     // UI must not offer a control whose action the door rejects.
-    viewState = loaded({
+    mockState.view = loaded({
       ...fullView,
       grants: [
         { ...fullView.grants[0]!, principalId: 'owner1', role: 'owner' },
@@ -490,16 +518,19 @@ describe('DataLakeAccessModal grant writes', () => {
   });
 
   it('sends the DELETE only once the revoke is confirmed, and nothing at all on cancel', async () => {
-    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    mockState.view = loaded({
+      ...fullView,
+      grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }],
+    });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
     await openRevokeConfirm('user-cur1');
-    await userEvent.click(screen.getByTestId('datalake-revoke-cancel-btn'));
+    await user.click(screen.getByTestId('datalake-revoke-cancel-btn'));
     expect(revokeMutate).not.toHaveBeenCalled();
     expect(screen.queryByTestId('datalake-revoke-modal')).not.toBeInTheDocument();
 
     await openRevokeConfirm('user-cur1');
-    await userEvent.click(screen.getByTestId('datalake-revoke-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-revoke-confirm-btn'));
     expect(revokeMutate).toHaveBeenCalledWith({ id: 'lake1', principalType: 'user', principalId: 'cur1' });
     // Closed on success, so the second click of a double-click has no confirm left to hit.
     expect(screen.queryByTestId('datalake-revoke-modal')).not.toBeInTheDocument();
@@ -507,27 +538,33 @@ describe('DataLakeAccessModal grant writes', () => {
 
   it('keeps the confirmation open when the door refuses, so the toast can be acted on', async () => {
     revokeMutate.mockRejectedValueOnce(new Error('nope'));
-    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    mockState.view = loaded({
+      ...fullView,
+      grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }],
+    });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
 
     await openRevokeConfirm('user-cur1');
-    await userEvent.click(screen.getByTestId('datalake-revoke-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-revoke-confirm-btn'));
     expect(screen.getByTestId('datalake-revoke-modal')).toBeInTheDocument();
   });
 
   it('locks its own confirm while the DELETE is in flight, so one confirmation cannot send two', async () => {
-    viewState = loaded({ ...fullView, grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }] });
+    mockState.view = loaded({
+      ...fullView,
+      grants: [{ ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' }],
+    });
     const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     await openRevokeConfirm('user-cur1');
 
-    revokePending = true;
-    revokeVariables = { principalType: 'user', principalId: 'cur1' };
+    mockState.revokePending = true;
+    mockState.revokeVariables = { principalType: 'user', principalId: 'cur1' };
     rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
     expect(screen.getByTestId('datalake-revoke-confirm-btn')).toBeDisabled();
   });
 
   it('names what an organization grant and a curator grant take away, and flags an already-lapsed one', async () => {
-    viewState = loaded({
+    mockState.view = loaded({
       ...fullView,
       grants: [
         { ...fullView.grants[0]!, principalType: 'organization', principalId: 'orgA', principalName: 'Acme' },
@@ -542,7 +579,7 @@ describe('DataLakeAccessModal grant writes', () => {
     // The seeded row is expired, so the copy must not promise it is cutting off live access.
     expect(screen.getByTestId('datalake-revoke-expired-note')).toHaveTextContent(/already lapsed/i);
     expect(screen.queryByTestId('datalake-revoke-effect-note')).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId('datalake-revoke-cancel-btn'));
+    await user.click(screen.getByTestId('datalake-revoke-cancel-btn'));
 
     await openRevokeConfirm('user-cur1');
     // Mirror of the grant form's disclosure: the role carried injection trust, so revoking says so.
@@ -553,9 +590,10 @@ describe('DataLakeAccessModal grant writes', () => {
 
   it('grants a reader by email, closing the form on success', async () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
-    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-email-input'));
+    await user.paste('new@example.com');
+    await user.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     expect(grantMutate).toHaveBeenCalledWith({
       id: 'lake1',
@@ -570,9 +608,10 @@ describe('DataLakeAccessModal grant writes', () => {
     // The mutation's own onError surfaces the refusal text; the form's job is only to stay put.
     grantMutate.mockRejectedValueOnce(new Error('nope'));
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
-    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-email-input'));
+    await user.paste('new@example.com');
+    await user.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     expect(screen.getByTestId('datalake-grant-modal')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-grant-email-input')).toHaveValue('new@example.com');
@@ -582,25 +621,25 @@ describe('DataLakeAccessModal grant writes', () => {
     // Membership never crosses organizations, so the only grantable org is the lake's own - and a
     // personal lake has none at all.
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-principal-select'));
     expect(screen.getByTestId('datalake-grant-principal-org')).toHaveTextContent('Acme');
 
     // A lake with no organization channel: the same form offers no organization option at all.
     cleanup();
-    viewState = loaded({ ...fullView, channels: [{ kind: 'tag', value: 'vip' }] });
+    mockState.view = loaded({ ...fullView, channels: [{ kind: 'tag', value: 'vip' }] });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-principal-select'));
     expect(screen.queryByTestId('datalake-grant-principal-org')).not.toBeInTheDocument();
   });
 
   it('submits an org grant against the lake OWN org id, not the label', async () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-org'));
-    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-principal-select'));
+    await user.click(screen.getByTestId('datalake-grant-principal-org'));
+    await user.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     // The channel's `value`, which is what refuseGrantWrite compares against the lake's own org.
     expect(grantMutate).toHaveBeenCalledWith({
@@ -615,15 +654,15 @@ describe('DataLakeAccessModal grant writes', () => {
     // An org curator grant confers management on nobody (its admins already manage the lake), and
     // the server refuses it - so the form must not offer a role the door rejects.
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.click(screen.getByTestId('datalake-grant-role-select'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-role-select'));
     expect(screen.getByRole('option', { name: /curator/i })).toBeInTheDocument();
     // Chosen rather than dismissed with Escape, which Joy's Modal takes as a close of the whole form.
-    await userEvent.click(screen.getByRole('option', { name: /reader/i }));
+    await user.click(screen.getByRole('option', { name: /reader/i }));
 
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-org'));
-    await userEvent.click(screen.getByTestId('datalake-grant-role-select'));
+    await user.click(screen.getByTestId('datalake-grant-principal-select'));
+    await user.click(screen.getByTestId('datalake-grant-principal-org'));
+    await user.click(screen.getByTestId('datalake-grant-role-select'));
     expect(screen.queryByRole('option', { name: /curator/i })).not.toBeInTheDocument();
   });
 
@@ -631,11 +670,11 @@ describe('DataLakeAccessModal grant writes', () => {
     // A curator grant is injection trust as well as access (getAccessibleDataLakePrompts), and the
     // grantee is an arbitrary person the actor names - so the role picker has to say so.
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
     expect(screen.queryByTestId('datalake-grant-curator-help')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByTestId('datalake-grant-role-select'));
-    await userEvent.click(screen.getByRole('option', { name: /curator/i }));
+    await user.click(screen.getByTestId('datalake-grant-role-select'));
+    await user.click(screen.getByRole('option', { name: /curator/i }));
     expect(screen.getByTestId('datalake-grant-curator-help')).toHaveTextContent(/system prompt/i);
   });
 
@@ -643,12 +682,13 @@ describe('DataLakeAccessModal grant writes', () => {
     // A date alone parses as midnight UTC, which the server refuses as already lapsed for a grant
     // dated today.
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-on'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-email-input'));
+    await user.paste('new@example.com');
+    await user.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await user.click(screen.getByTestId('datalake-grant-expiry-on'));
     fireEvent.change(screen.getByTestId('datalake-grant-expiry-input'), { target: { value: '2027-03-04' } });
-    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     expect(grantMutate).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: '2027-03-04T23:59:59.999Z' }));
   });
@@ -657,30 +697,33 @@ describe('DataLakeAccessModal grant writes', () => {
     // The key must be ABSENT, not null: `grantLakeAccess` reads absent as "leave it" and null as
     // "clear it", so sending null here would silently make every routine re-role permanent.
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
-    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-email-input'));
+    await user.paste('new@example.com');
+    await user.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     expect(grantMutate).toHaveBeenCalledWith(expect.not.objectContaining({ expiresAt: expect.anything() }));
   });
 
   it('sends expiresAt: null for "Never expires", which is what CLEARS an existing expiry', async () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-never'));
-    await userEvent.click(screen.getByTestId('datalake-grant-confirm-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-email-input'));
+    await user.paste('new@example.com');
+    await user.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await user.click(screen.getByTestId('datalake-grant-expiry-never'));
+    await user.click(screen.getByTestId('datalake-grant-confirm-btn'));
 
     expect(grantMutate).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: null }));
   });
 
   it('cannot submit a date mode with no date, which would silently act as "keep"', async () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.type(screen.getByTestId('datalake-grant-email-input'), 'new@example.com');
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-on'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-email-input'));
+    await user.paste('new@example.com');
+    await user.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await user.click(screen.getByTestId('datalake-grant-expiry-on'));
 
     expect(screen.getByTestId('datalake-grant-confirm-btn')).toBeDisabled();
     expect(grantMutate).not.toHaveBeenCalled();
@@ -689,7 +732,7 @@ describe('DataLakeAccessModal grant writes', () => {
   it("shows an org grant's current expiry, and seeds the picker from it", async () => {
     // Knowable only for an ORGANIZATION principal: it is addressed by the id the view already
     // carries. A user is addressed by email, and the view never exposes one.
-    viewState = loaded({
+    mockState.view = loaded({
       ...fullView,
       grants: [
         {
@@ -705,13 +748,13 @@ describe('DataLakeAccessModal grant writes', () => {
       ],
     });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-principal-org'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-grant-principal-select'));
+    await user.click(screen.getByTestId('datalake-grant-principal-org'));
 
     expect(screen.getByTestId('datalake-grant-expiry-help')).toHaveTextContent(/current expiry of/i);
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
-    await userEvent.click(screen.getByTestId('datalake-grant-expiry-on'));
+    await user.click(screen.getByTestId('datalake-grant-expiry-mode-select'));
+    await user.click(screen.getByTestId('datalake-grant-expiry-on'));
     expect(screen.getByTestId('datalake-grant-expiry-input')).toHaveValue('2027-03-04');
   });
 
@@ -719,7 +762,7 @@ describe('DataLakeAccessModal grant writes', () => {
     // The two meanings of "no date chosen" are the bug this note exists for: a new grant never
     // expires, a re-grant keeps whatever it has.
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    await userEvent.click(screen.getByTestId('datalake-access-grant-btn'));
+    await user.click(screen.getByTestId('datalake-access-grant-btn'));
 
     expect(screen.getByTestId('datalake-grant-expiry-help')).toHaveTextContent(/A new grant never expires/i);
     expect(screen.getByTestId('datalake-grant-expiry-help')).toHaveTextContent(
@@ -728,9 +771,9 @@ describe('DataLakeAccessModal grant writes', () => {
   });
 
   it('disables Revoke on the row being revoked, so a double click cannot send a second DELETE', () => {
-    revokePending = true;
-    revokeVariables = { principalType: 'user', principalId: 'cur1' };
-    viewState = loaded({
+    mockState.revokePending = true;
+    mockState.revokeVariables = { principalType: 'user', principalId: 'cur1' };
+    mockState.view = loaded({
       ...fullView,
       grants: [
         { ...fullView.grants[0]!, principalId: 'cur1', role: 'curator' },
@@ -745,11 +788,11 @@ describe('DataLakeAccessModal grant writes', () => {
   });
 
   it('discloses that reader grants are recorded but not yet in force, and drops the note once they are', () => {
-    viewState = loaded(fullView, false, false);
+    mockState.view = loaded(fullView, false, false);
     const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-readers-not-enforced')).toHaveTextContent(/not yet in force/i);
 
-    viewState = loaded(fullView, false, true);
+    mockState.view = loaded(fullView, false, true);
     rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
     expect(screen.queryByTestId('datalake-access-readers-not-enforced')).not.toBeInTheDocument();
   });

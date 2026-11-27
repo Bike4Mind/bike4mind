@@ -111,7 +111,7 @@ Point it at any OpenAI-compatible `/chat/completions` endpoint - Ollama, a gatew
 GROUNDED_EVAL_BASE_URL=http://localhost:11434/v1 \
 GROUNDED_EVAL_MODEL=qwen2.5-coder:32b \
 GROUNDED_EVAL_SAMPLES=3 \
-  pnpm --filter @bike4mind/services test run.live
+  pnpm --filter @bike4mind/services-core test run.live
 ```
 
 Set `PROMPT_EVAL_REPORT_PATH` to a file and every report is appended to it as well as written to

@@ -28,7 +28,7 @@ export interface FeedbackDeepLinkSource {
 }
 
 /**
- * Degrades turn -> session -> absent, matching FeedbackRowLinks in the admin console: a
+ * Degrades turn -> session -> absent, matching feedbackLinks.ts in the admin console: a
  * product-level report has no session, and a session-level one has no turn.
  */
 function resolveConversationPath(sessionId?: string | null, questId?: string | null): string | null {
@@ -45,7 +45,7 @@ function resolveConversationPath(sessionId?: string | null, questId?: string | n
  * must lose the links and still get the notification.
  *
  * Paths come from common/utils/deepLinks rather than being composed here, so a link pasted into
- * Slack and one copied from an admin row (FeedbackRowLinks) stay the same URL.
+ * Slack and one copied from an admin row (feedbackLinks.ts) stay the same URL.
  */
 export function buildFeedbackDeepLinks(source: FeedbackDeepLinkSource): FeedbackDeepLinks | null {
   const baseUrl = process.env.APP_URL?.trim();

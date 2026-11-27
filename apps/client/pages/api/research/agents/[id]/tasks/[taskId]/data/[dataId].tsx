@@ -50,6 +50,7 @@ const handler = baseApi({ auth: true }).delete(
             deleteManyInIds: async ids => {
               await fabFileRepository.deleteManyInIds(ids);
             },
+            shareable: fabFileRepository.shareable,
           },
           users: {
             findById: (userId: string) => User.findById(userId),

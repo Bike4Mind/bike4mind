@@ -14,7 +14,7 @@ import DataLakeArticlePanel from './DataLakeArticlePanel';
 import { useUser } from '@client/app/contexts/UserContext';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
-import type { EditableLake } from './DataLakeSettingsModal';
+import type { DataLakeSettingsTab, EditableLake } from './DataLakeSettingsModal';
 import { DataLakeAccessModal } from './DataLakeAccessModal';
 import LakeOwnershipOffersBanner from './LakeOwnershipOffersBanner';
 import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
@@ -79,7 +79,8 @@ export default function DataLakeManagerPanel() {
   const [lakeId, setLakeId] = useState<string | null>(null);
   const [path, setPath] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<DataLakeMemberFile | null>(null);
-  const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ lakeId: string; tab: DataLakeSettingsTab } | null>(null);
+  const editingLakeId = editing?.lakeId ?? null;
   const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
   const [editingFallbackLakeId, setEditingFallbackLakeId] = useState<string | null>(null);
 
@@ -239,6 +240,7 @@ export default function DataLakeManagerPanel() {
           onCreateLake={openWizard}
           onDiscover={openDiscover}
           onReviewTaxonomy={setReviewingBatchId}
+          onReviewProposals={id => setEditing({ lakeId: id, tab: 'proposals' })}
         />
         {activeLake ? (
           selectedFile ? (
@@ -264,7 +266,9 @@ export default function DataLakeManagerPanel() {
               fileCount={lakeCount(activeLake)}
               armCounts={lakeArmCounts(activeLake)}
               taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
-              onOpenSettings={() => setEditingLakeId(activeLake.id)}
+              onOpenSettings={() => setEditing({ lakeId: activeLake.id, tab: 'settings' })}
+              onOpenResearch={() => setEditing({ lakeId: activeLake.id, tab: 'research' })}
+              onReviewProposals={() => setEditing({ lakeId: activeLake.id, tab: 'proposals' })}
               onOpenAccess={() => setAccessLakeId(activeLake.id)}
               onOpenFallbackSettings={() => setEditingFallbackLakeId(activeLake.id)}
               onReviewTaxonomy={setReviewingBatchId}
@@ -290,7 +294,7 @@ export default function DataLakeManagerPanel() {
         )}
       </Box>
 
-      <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+      <DataLakeSettingsModal lake={editingLake} initialTab={editing?.tab} onClose={() => setEditing(null)} />
       <FallbackLakeSettingsModal lake={editingFallbackLake} onClose={() => setEditingFallbackLakeId(null)} />
 
       <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />

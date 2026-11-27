@@ -12,6 +12,7 @@ const { findStaleVoiceHolds, claimVoiceHold, incrementCredits, createTransaction
 );
 
 vi.mock('@bike4mind/database', () => ({
+  warmExchangeAttribution: async () => undefined,
   connectDB,
   withTransaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   sessionRepository: { findStaleVoiceHolds, claimVoiceHold },

@@ -3,6 +3,7 @@ import {
   API_SERVICE_GROUPS,
   CreditHolderType,
   DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
+  DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX,
@@ -60,6 +61,7 @@ describe('resolveSpendLevers', () => {
       perRunBudgetMicroUsd: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT * MICRO_USD_PER_USD,
       perLakeBudgetMicroUsd: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT * MICRO_USD_PER_USD,
       perPeriodBudgetMicroUsd: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT * MICRO_USD_PER_USD,
+      perOwnerPeriodBudgetMicroUsd: DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT * MICRO_USD_PER_USD,
       periodHours: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT,
       maxCallsPerMinute: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
       maxTokensPerMinute: DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT,
@@ -163,6 +165,9 @@ describe('resolveSpendLevers cost tiers', () => {
     const levers = await resolveSpendLevers(db, undefined, CreditHolderType.Organization);
     expect(levers.perRunBudgetMicroUsd).toBe(DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT * 3 * MICRO_USD_PER_USD);
     expect(levers.perLakeBudgetMicroUsd).toBe(DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT * 3 * MICRO_USD_PER_USD);
+    expect(levers.perOwnerPeriodBudgetMicroUsd).toBe(
+      DATA_LAKE_EMBEDDING_BUDGET_PER_OWNER_PERIOD_USD_DEFAULT * 3 * MICRO_USD_PER_USD
+    );
     // One shared window across the whole platform - it has no owner to tier by.
     expect(levers.perPeriodBudgetMicroUsd).toBe(DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT * MICRO_USD_PER_USD);
     expect(levers.maxCallsPerMinute).toBe(DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT);

@@ -36,6 +36,7 @@ export type {
   IChatCompletionDefaults,
   ILLMEvent,
   IEventBus,
+  QuickAskRequestedDetail,
   IMcpEnv,
   EnvVariable,
   IMcpHandler,
@@ -58,6 +59,7 @@ export { CommandHandler } from './CommandHandler';
 export {
   AGENT_REGISTRY,
   buildSystemPrompt,
+  buildUntrustedSlackHistory,
   parseImageModelOverride,
   parseDataLakeCommand,
   isDataLakeCommand,
@@ -84,8 +86,13 @@ export type { PendingActionDeps, PendingActionResult } from './tools/pendingActi
 export { customAgentToPersona } from './custom-agent-adapter';
 
 // ─── Installer / OAuth ───────────────────────────────────────────────────────
-export { createInstallProvider, getDefaultInstallUrlOptions, getInstallUrlOptionsForWorkspace } from './installer';
-export type { InstallationMetadata, StateBinding } from './installer';
+export {
+  createInstallProvider,
+  getDefaultInstallUrlOptions,
+  getInstallUrlOptionsForWorkspace,
+  getWorkspaceIdFromInstallState,
+} from './installer';
+export type { InstallationMetadata, InstallCallbackOptions, StateBinding } from './installer';
 
 // ─── Org Slack Helpers ───────────────────────────────────────────────────────
 export {
@@ -94,6 +101,7 @@ export {
   verifyOrgSlackConnectStateToken,
   buildOrgSlackOAuthUrl,
 } from './org-slack-helpers';
+export type { SystemSlackAppCredentials } from './org-slack-helpers';
 
 // ─── User Link Helpers ───────────────────────────────────────────────────────
 export {
@@ -139,10 +147,12 @@ export { TARGET_SYSTEM_AGENT_MAP } from './constants/routing';
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 export { handleChannelCommand } from './handlers/channel-manager';
+export type { ChannelCommandUser, ChannelCommandResponse } from './handlers/channel-manager';
 export {
   handleGlobalShortcut,
   handleCreateNotebookSubmission,
   handleQuickAskSubmission,
+  processQuickAskInDM,
   SHORTCUT_CALLBACK_IDS,
 } from './handlers/globalShortcutHandlers';
 export type {
@@ -235,7 +245,7 @@ export { JiraResource } from './resources/JiraResource';
 // ─── Services ────────────────────────────────────────────────────────────────
 export { AppHomeDataService } from './services/AppHomeDataService';
 export type { AppHomeNotebook } from './services/AppHomeDataService';
-export { SlackAuditLogger, getClientIp } from './services/SlackAuditLogger';
+export { SlackAuditLogger } from './services/SlackAuditLogger';
 
 // ─── Thread Intelligence ─────────────────────────────────────────────────────
 export {

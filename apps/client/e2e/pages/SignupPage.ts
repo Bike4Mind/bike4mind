@@ -21,6 +21,11 @@ export class SignupPage extends BasePage {
     await this.page.getByTestId('register-email-input').getByRole('textbox').fill(email);
   }
 
+  /** The invite field is always rendered; it is required only while open registration is off. */
+  async fillInviteCode(code: string) {
+    await this.page.getByTestId('register-invite-input').locator('input').fill(code);
+  }
+
   /** Blur the email field to surface its inline validation error (shown on blur, not on submit). */
   async blurEmail() {
     await this.page.getByTestId('register-email-input').getByRole('textbox').blur();

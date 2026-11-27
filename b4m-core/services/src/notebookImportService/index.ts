@@ -11,6 +11,7 @@ import {
   ImportResult,
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
+  CURRENT_EXPORT_VERSION,
 } from '../notebookExportService/types';
 import {
   ArtifactTypeSchema,
@@ -24,6 +25,7 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '../fabFileService/create';
 import { checkStorageLimit, getSettingsMap, getSettingsValue, normalizeId } from '@bike4mind/utils';
 import type { IAdminSettingsRepository, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
+import { readNotebookBundle, type BundleRead } from '../notebookExportService/bundle';
 
 /** A notebook the import can address: found by name, or just created. */
 interface NotebookRef {
@@ -88,7 +90,7 @@ export interface NotebookImportAdapters {
    * where the id comes from the export rather than being minted, so it can already be taken.
    *
    * Deliberately not named `artifactExists`, which is what the same question is called in
-   * apps/client/server/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
+   * packages/server-utils/src/utils/persistAgentArtifacts.ts - there it means "an artifacts row exists"
    * and MUST stay that narrow, because that module tells a real collision apart from a repairable
    * orphan by exactly that difference. Two ports, one name, opposite safety properties.
    */
@@ -154,9 +156,21 @@ export interface NotebookImportAdapters {
    * would silently admit files that door refuses.
    */
   adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+  /**
+   * The subset of `keys` the importing user may reference as message media (findImportableMediaKeys
+   * in server-utils). Required: export, signed-URL and account-erasure paths trust a message's
+   * `images`, so a key from the file is written only once it is proven the user's own.
+   */
+  findOwnedMediaKeys: (keys: string[], userId: string) => Promise<Set<string>>;
   logger: ILogger;
   generateId: () => string;
 }
+
+/** Nothing validates the uploaded file's messages, so `images` may hold anything. */
+const imageKeys = (message: ExportedChatMessage): string[] =>
+  Array.isArray(message.images)
+    ? message.images.filter((key): key is string => typeof key === 'string' && key.length > 0)
+    : [];
 
 /** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
  * know would otherwise fail the write and lose the file. */
@@ -205,7 +219,7 @@ export type NotebookImportAdaptersStayNarrowed = Expect<
 /**
  * Fails typecheck if `adminSettings` is made optional again. Both tsconfigs exclude *.test.ts and
  * every test construction casts its adapters, so without this the required-ness is enforced by the
- * single typechecked construction in apps/client/server/s3/notebookImportComplete.ts - and a caller
+ * single typechecked construction in packages/server-utils/src/s3/notebookImportComplete.ts - and a caller
  * that omits it falls back to MAX_FILE_SIZE_DEFAULT_MB, silently admitting what the upload door
  * refuses.
  */
@@ -217,10 +231,23 @@ export type NotebookImportAdminSettingsStayRequired = Expect<
  * One instance per import. The admission state below is per-import instance state, and
  * `importNotebooks` resets it on entry, so sharing one instance across concurrent imports would let
  * one run zero another run's accumulator. The live caller builds a fresh service per S3 event
- * (apps/client/server/s3/notebookImportComplete.ts).
+ * (packages/server-utils/src/s3/notebookImportComplete.ts).
  */
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
+
+  async importBundle(targetUserId: string, read: BundleRead, options: NotebookImportOptions): Promise<ImportResult> {
+    let data: NotebookExportFormat;
+    try {
+      data = await readNotebookBundle(read);
+    } catch (error) {
+      this.adapters.logger.error('Notebook bundle read failed', { targetUserId, error });
+      const message = error instanceof Error ? error.message : 'Invalid notebook bundle';
+      throw new NotebookImportError(message, 'INVALID_FORMAT', error);
+    }
+    // The bundle is already rebuilt into the v1 shape; v2 is only accepted through this entry point.
+    return this.importNotebooks(targetUserId, { ...data, exportVersion: CURRENT_EXPORT_VERSION }, options);
+  }
 
   /**
    * Import issues surfaced to the caller: per-attachment failures, plus notebook-level notices like
@@ -571,9 +598,17 @@ export class NotebookImportService {
         return null;
 
       case 'overwrite': {
+        // Resolved before the delete: the messages it removes may be what proves the user's keys.
+        const ownedImages = await this.ownedImageKeys(notebook.chatHistory, existingSession.userId);
         // Delete existing chat history and replace
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
+        await this.importChatHistory(
+          notebook.chatHistory,
+          existingSession.id,
+          existingSession.userId,
+          options,
+          ownedImages
+        );
 
         const imported = await this.importAttachments(notebook, existingSession.userId, existingSession.id, options);
 
@@ -640,8 +675,10 @@ export class NotebookImportService {
     chatHistory: ExportedChatMessage[],
     sessionId: string,
     ownerUserId: string,
-    options: NotebookImportOptions
+    options: NotebookImportOptions,
+    ownedImages?: Set<string>
   ): Promise<void> {
+    ownedImages ??= await this.ownedImageKeys(chatHistory, ownerUserId);
     const chatItems: IChatHistoryItem[] = chatHistory.map(message => ({
       // A generated id is not a valid key for the message store; omit the field so it assigns one.
       ...(options.preserveIds && message.id && { id: message.id }),
@@ -652,7 +689,7 @@ export class NotebookImportService {
       reply: message.reply,
       replies: message.replies,
       questMasterReply: message.questMasterReply,
-      images: message.images || [],
+      images: imageKeys(message).filter(key => ownedImages.has(key)),
       fabFileIds: message.attachedFiles || [],
       // The store requires the owning session on promptMeta. The export carries metrics only,
       // and an imported message belongs to the new notebook, so this is rebuilt rather than
@@ -674,6 +711,17 @@ export class NotebookImportService {
     }));
 
     await this.adapters.chatHistoryRepository.bulkCreate(chatItems);
+  }
+
+  private async ownedImageKeys(chatHistory: ExportedChatMessage[], userId: string): Promise<Set<string>> {
+    const requested = [...new Set(chatHistory.flatMap(imageKeys))];
+    if (requested.length === 0) return new Set();
+    const owned = await this.adapters.findOwnedMediaKeys(requested, userId);
+    const dropped = requested.filter(key => !owned.has(key)).length;
+    if (dropped > 0) {
+      this.adapters.logger.warn('Dropped imported message images not owned by the importing user', { dropped });
+    }
+    return owned;
   }
 
   private async importKnowledgeFiles(knowledgeFiles: ExportedKnowledgeFile[], targetUserId: string): Promise<string[]> {
@@ -757,7 +805,7 @@ export class NotebookImportService {
           // must be scanned before serving. The upload-time S3 scan cannot see this row - it is
           // written inside the import transaction and gives up ~7.5s before a real import commits - so
           // the caller re-scans every imported file out of band once this transaction commits, keyed
-          // by the filePath recorded below. See server/s3/moderateImportedKnowledgeFiles.ts.
+          // by the filePath recorded below. See packages/server-utils/src/s3/moderateImportedKnowledgeFiles.ts.
         };
         // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 

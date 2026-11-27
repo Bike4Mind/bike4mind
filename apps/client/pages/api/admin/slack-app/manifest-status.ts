@@ -1,9 +1,12 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { compareManifests, extractBaseUrl } from '@bike4mind/slack';
-import { isSlackUserValidationError } from '@server/integrations/slack/slackExportErrors';
+import {
+  isSlackConfigTokenAuthError,
+  STORED_CONFIG_TOKEN_REJECTED_MESSAGE,
+} from '@server/integrations/slack/slackConfigTokenErrors';
 
 /**
  * GET /api/admin/slack-app/manifest-status?workspaceId=xxx
@@ -11,11 +14,10 @@ import { isSlackUserValidationError } from '@server/integrations/slack/slackExpo
  * Admin-only endpoint.
  */
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { GET: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const workspaceId = req.query.workspaceId as string;
   if (!workspaceId) {
     throw new BadRequestError('workspaceId query parameter is required');
@@ -55,14 +57,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
 
   if (!slackData.ok) {
     const slackError = slackData.error as string;
-    const isUserError = isSlackUserValidationError(slackError || '');
 
-    if (isUserError) {
-      req.logger.warn('Slack manifest export auth error (user validation)', { error: slackError, workspaceId });
-      return res.status(200).json({
-        status: 'missing_token',
-        message: 'Configuration token is invalid or expired. Please reconnect.',
+    if (isSlackConfigTokenAuthError(slackError)) {
+      req.logger.warn('Slack rejected the stored config token (apps.manifest.export)', {
+        error: slackError,
+        workspaceId,
       });
+      return res.status(200).json({ status: 'missing_token', message: STORED_CONFIG_TOKEN_REJECTED_MESSAGE });
     }
 
     req.logger.error('Failed to export manifest from Slack', { error: slackError, workspaceId });

@@ -1,0 +1,402 @@
+import React, { useState } from 'react';
+import { Box, Chip, Stack, Typography } from '@mui/joy';
+import {
+  USER_TIMELINE_CATEGORIES,
+  isExplicitOnlyAdminPermission,
+  isFullAdmin,
+  sortAdminRoleIds,
+  resolveUserStorageLimit,
+  storageLimitToBytes,
+  type AuditEntry,
+  type UserTimelineCategory,
+} from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
+import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
+import { useAdminUserOAuthApps } from '@client/app/hooks/data/adminUserOAuthApps';
+import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
+import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
+import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtcDay } from '../../../shared';
+import { typesOfCategories } from '../activitySearch';
+import { CATEGORY_OPTIONS } from './ActivityTab';
+import type { ProfileAction } from '../actions/profileActions';
+import { RiskEvidenceCard } from '../RiskEvidenceCard';
+import { useAdminRoleList } from '../../useAdminRoleList';
+import { describeProvenance, permissionProvenance } from '../adminAccessModel';
+import { SignupClassificationCard } from '../SignupClassificationCard';
+import { DetectionLinkedAccountsCard } from '../DetectionLinkedAccountsCard';
+import { InterventionHoldsCard } from '../../../InterventionHolds';
+import { UserNotesCard } from './UserNotesCard';
+import { OrganizationsCard } from './OrganizationsCard';
+import { ClientsCard } from './ClientsCard';
+import { OAuthAppsCard } from './OAuthAppsCard';
+import { HeaderAction, RowAction } from './cardActions';
+import { TimelineList, TimelineSkeleton } from './TimelineList';
+import { timelineItems } from './timelineItems';
+import {
+  ADMIN_PERMISSION_LABELS,
+  USER_ROLE_LABELS,
+  adminActionBlockedReason,
+  isManagedTag,
+  userRole,
+  type AdminUserProfile,
+} from '../userProfileModel';
+
+const RECENT_ACTIVITY_COUNT = 6;
+
+const formatBytes = (bytes: number): string => {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+  return `${Math.round(bytes / 1e3)} KB`;
+};
+
+/** As analytics counts it (server-utils analytics/lane.ts): an admin is internal whatever the flag says. */
+const analyticsMark = (user: Pick<AdminUserProfile, 'isAdmin' | 'isInternal' | 'accountSegment'>): string => {
+  if (user.isInternal) return 'Internal account';
+  if (user.accountSegment === 'partner' && !user.isAdmin) return 'Partner account';
+  return user.isAdmin ? 'Internal account (admin)' : 'Customer';
+};
+
+const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileAction) => void }> = ({
+  user,
+  onAction,
+}) => {
+  const { currentUser } = useUser();
+  const storage = resolveUserStorageLimit(user);
+  const network = user.signupMeta;
+  const oauthApps = useAdminUserOAuthApps(user.id);
+  const signupParts = [
+    user.acquisition?.signupMethod,
+    user.createdAt && formatUtcDay(new Date(user.createdAt)),
+    network?.country,
+  ].filter(Boolean);
+
+  return (
+    <SectionCard title="Account" data-testid="user-profile-account-card">
+      <Fact label="Username">{user.username && `@${user.username}`}</Fact>
+      <Fact label="Email" data-testid="user-profile-fact-email">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          <Box component="span" sx={{ overflowWrap: 'anywhere' }}>
+            {user.email}
+          </Box>
+          <StatusChip
+            tone={user.emailVerified ? 'good' : 'warn'}
+            label={user.emailVerified ? 'Verified' : 'Unverified'}
+          />
+          <RowAction onClick={() => onAction('emailVerification')} data-testid="user-profile-email-verification-btn">
+            {user.emailVerified ? 'Mark unverified' : 'Mark verified'}
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
+      <Fact label="Signed up via" data-testid="user-profile-fact-signup-client">
+        {user.signupClientId && !oauthApps.isPending
+          ? (oauthApps.data?.signupClient?.name ?? user.signupClientId)
+          : null}
+      </Fact>
+      <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
+        {user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (
+          <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+            {[user.mfa.totpEnabled && 'Authenticator app', user.mfa.passkeyEnabled && 'Passkey']
+              .filter(Boolean)
+              .join(' + ')}
+            <RowAction onClick={() => onAction('mfaReset')} data-testid="user-profile-mfa-reset-btn">
+              Reset
+            </RowAction>
+          </Stack>
+        ) : (
+          'Not set up'
+        )}
+      </Fact>
+      <Fact label="Personal API keys" data-testid="user-profile-fact-key-trust">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.apiKeyTrustApproved ? 'Trusted' : 'Usual checks'}
+          <RowAction
+            onClick={() => onAction('apiKeyTrust')}
+            disabledReason={adminActionBlockedReason(currentUser, user, 'keys:revoke')}
+            data-testid="user-profile-key-trust-btn"
+          >
+            Change
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="New-account spend cap" data-testid="user-profile-fact-spend-cap">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.newAccountSpendCapLifted ? 'Lifted' : 'Applies while the account is new'}
+          <RowAction onClick={() => onAction('newAccountSpendCap')} data-testid="user-profile-spend-cap-btn">
+            Change
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="File indexing window" data-testid="user-profile-fact-file-embedding-window">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          Limits how much they can index per window
+          <RowAction
+            onClick={() => onAction('fileEmbeddingWindowReset')}
+            disabledReason={adminActionBlockedReason(currentUser, user, 'settings:manage')}
+            data-testid="user-actions-reset-file-embedding-window"
+          >
+            Reset
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="Analytics" data-testid="user-profile-fact-internal">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {analyticsMark(user)}
+          <RowAction onClick={() => onAction('internalAccount')} data-testid="user-profile-internal-btn">
+            Change
+          </RowAction>
+          <RowAction onClick={() => onAction('partnerAccount')} data-testid="user-profile-partner-btn">
+            {user.accountSegment === 'partner' ? 'Unmark partner' : 'Mark partner'}
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="Storage">
+        {`${formatBytes(user.currentStorageSize ?? 0)} of ${formatBytes(storageLimitToBytes(storage.limitMb))}`}
+      </Fact>
+    </SectionCard>
+  );
+};
+
+const AccessCard: React.FC<{ user: AdminUserProfile; onAction: (action: ProfileAction) => void }> = ({
+  user,
+  onAction,
+}) => {
+  const access = useGetUserProductAccess(user.id);
+  const held = access.data?.entitlements.filter(row => row.held) ?? [];
+  const customTags = (user.tags ?? []).filter(tag => !isManagedTag(tag));
+  const { currentUser } = useUser();
+  const roles = useAdminRoleList();
+  const roleIds = sortAdminRoleIds(user.adminRoleIds ?? []);
+  const roleListAvailable = roles.data !== undefined && !roles.isError;
+  const knownRoles = roleListAvailable ? roles.data : [];
+  const heldRoles = knownRoles.filter(role => roleIds.includes(role.id.toLowerCase()));
+  const effective = permissionProvenance(user.adminPermissions ?? [], roleIds, knownRoles);
+  // The endpoint is full-admin only and never edits the viewer's own account; for a Super Admin it
+  // edits only the permissions that role does not imply.
+  const canEditPermissions = isFullAdmin(currentUser) && currentUser?.id !== user.id;
+
+  return (
+    <SectionCard
+      title="Access"
+      action={
+        <HeaderAction onClick={() => onAction('role')} data-testid="user-profile-change-role-btn">
+          Change role
+        </HeaderAction>
+      }
+      data-testid="user-profile-access-card"
+    >
+      <Fact label="Role" data-testid="user-profile-fact-role">
+        {USER_ROLE_LABELS[userRole(user)]}
+      </Fact>
+      {!user.isAdmin && roleIds.length > 0 && (
+        <Fact label="Admin roles" data-testid="user-profile-fact-admin-roles">
+          <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+            {roles.isLoading
+              ? '...'
+              : !roleListAvailable
+                ? // No role list to name them from (a read error); the count is still known.
+                  `${roleIds.length} ${roleIds.length === 1 ? 'role' : 'roles'}`
+                : heldRoles.length === 0
+                  ? 'None'
+                  : heldRoles.map(role => <StatusChip key={role.id} tone="neutral" label={role.name} />)}
+          </Stack>
+        </Fact>
+      )}
+      <Fact label="Admin permissions" data-testid="user-profile-fact-admin-permissions">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {user.isAdmin ? (
+            <>
+              All (Super Admin)
+              {effective
+                .filter(entry => isExplicitOnlyAdminPermission(entry.id))
+                .map(entry => (
+                  <StatusChip
+                    key={entry.id}
+                    tone="neutral"
+                    label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                    data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                  />
+                ))}
+            </>
+          ) : (
+            <>
+              {effective.map(entry => (
+                <StatusChip
+                  key={entry.id}
+                  tone="neutral"
+                  label={`${ADMIN_PERMISSION_LABELS[entry.id].label} (${describeProvenance(entry)})`}
+                  data-testid={`user-profile-admin-permission-${entry.id.replace(':', '-')}`}
+                />
+              ))}
+              {roleIds.length > 0 && !roleListAvailable
+                ? roles.isLoading
+                  ? 'Loading role permissions...'
+                  : 'Role permissions unavailable'
+                : effective.length === 0
+                  ? 'None'
+                  : null}
+            </>
+          )}
+          {canEditPermissions && (
+            <RowAction onClick={() => onAction('permissions')} data-testid="user-profile-admin-permissions-btn">
+              Edit
+            </RowAction>
+          )}
+        </Stack>
+      </Fact>
+      <Fact label="Product access" data-testid="user-profile-fact-products">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {access.isLoading
+            ? '...'
+            : held.length === 0
+              ? 'None'
+              : held.map(row => <StatusChip key={row.key} tone="neutral" label={row.key} />)}
+          <RowAction onClick={() => onAction('productAccess')} data-testid="user-profile-product-access-btn">
+            Manage
+          </RowAction>
+        </Stack>
+      </Fact>
+      <Fact label="Tags" data-testid="user-profile-fact-tags">
+        <Stack direction="row" alignItems="center" gap={0.75} flexWrap="wrap">
+          {customTags.length === 0
+            ? 'None'
+            : customTags.map(tag => (
+                <Chip key={tag} size="sm" variant="outlined">
+                  {tag}
+                </Chip>
+              ))}
+          <RowAction onClick={() => onAction('tags')} data-testid="user-profile-tags-btn">
+            Edit
+          </RowAction>
+        </Stack>
+      </Fact>
+    </SectionCard>
+  );
+};
+
+const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void; onOpenCredits: () => void }> = ({
+  userId,
+  onViewAll,
+  onOpenCredits,
+}) => {
+  const [categories, setCategories] = useState<UserTimelineCategory[]>(
+    USER_TIMELINE_CATEGORIES.filter(category => category !== 'api')
+  );
+  const timeline = useUserTimeline(
+    userId,
+    { types: typesOfCategories(categories) },
+    { pageSize: RECENT_ACTIVITY_COUNT }
+  );
+  const [selected, setSelected] = useState<AuditEntry | null>(null);
+  const items = timelineItems(timeline.data?.pages[0]?.entries ?? [], { onOpenAudit: setSelected, onOpenCredits });
+
+  const body = () => {
+    if (timeline.isLoading) return <TimelineSkeleton rows={3} />;
+    if (timeline.isError) {
+      return (
+        <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
+          Activity could not be loaded.
+        </Typography>
+      );
+    }
+    if (items.length === 0) {
+      return (
+        <Typography level="body-sm" sx={{ p: 2, color: 'admin.inkMuted' }}>
+          Nothing recorded for this account yet.
+        </Typography>
+      );
+    }
+    return (
+      <TimelineList
+        items={items}
+        rowTestId="user-profile-recent-activity-row"
+        data-testid="user-profile-recent-activity"
+      />
+    );
+  };
+
+  return (
+    <>
+      <SectionCard
+        title="Recent activity"
+        body="custom"
+        action={
+          <HeaderAction onClick={onViewAll} data-testid="user-profile-view-activity-btn">
+            View all
+          </HeaderAction>
+        }
+        data-testid="user-profile-activity-card"
+      >
+        <Box sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}>
+          <ToggleChipGroup
+            options={CATEGORY_OPTIONS}
+            value={categories}
+            onChange={setCategories}
+            aria-label="Show recent activity from"
+            data-testid="user-profile-recent-activity-filter"
+          />
+        </Box>
+        {body()}
+      </SectionCard>
+      <AuditEntryDrawer entry={selected} onClose={() => setSelected(null)} />
+    </>
+  );
+};
+
+type OverviewTabProps = {
+  user: AdminUserProfile;
+  onAction: (action: ProfileAction) => void;
+  onViewActivity: () => void;
+  onViewCredits: () => void;
+  /** Opens the Admin log, for the UndoToast's audit link. */
+  onAudit?: () => void;
+};
+
+/**
+ * Two columns of cards that collapse to one below ~700 px (DESIGN_GUIDE.md section 5), under a full-width
+ * card of detection-linked accounts when a cohort detection names the user.
+ */
+export const OverviewTab: React.FC<OverviewTabProps> = ({ user, onAction, onViewActivity, onViewCredits, onAudit }) => (
+  <Stack gap={2}>
+    <DetectionLinkedAccountsCard userId={user.id} />
+    <InterventionHoldsCard userId={user.id} />
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))',
+        gap: 2,
+        alignItems: 'start',
+      }}
+      data-testid="user-profile-overview"
+    >
+      <Stack gap={2}>
+        <AccountCard user={user} onAction={onAction} />
+        <OrganizationsCard user={user} onAudit={onAudit} />
+        <AccessCard user={user} onAction={onAction} />
+        <ClientsCard user={user} />
+        <OAuthAppsCard userId={user.id} />
+        <SignupClassificationCard key={user.id} userId={user.id} />
+        <RiskEvidenceCard userId={user.id} />
+        <SectionCard
+          title="Subscription"
+          body="custom"
+          action={
+            <HeaderAction onClick={() => onAction('subscription')} data-testid="user-profile-grant-subscription-btn">
+              Grant
+            </HeaderAction>
+          }
+          data-testid="user-profile-subscription-card"
+        >
+          <Box sx={{ p: 0.5 }}>
+            <SubscriptionSummaryList userId={user.id} />
+          </Box>
+        </SectionCard>
+      </Stack>
+      <Stack gap={2}>
+        <RecentActivityCard userId={user.id} onViewAll={onViewActivity} onOpenCredits={onViewCredits} />
+        <UserNotesCard user={user} />
+      </Stack>
+    </Box>
+  </Stack>
+);

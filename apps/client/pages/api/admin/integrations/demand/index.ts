@@ -1,8 +1,7 @@
 import { ApiKeyScope, describeRequestedIntegration, type IntegrationDemandResponse } from '@bike4mind/common';
 import { integrationRequestRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 /**
  * GET /api/admin/integrations/demand - roadmap requests per integration, most requested first,
@@ -18,16 +17,14 @@ const ONE_MINUTE_MS = 60 * 1000;
 // One read per tab open plus a refresh now and then; a CLI loop polling it gains nothing faster.
 export const INTEGRATION_DEMAND_RATE_LIMIT = 30;
 
-// requiredScopes gates API-key callers only (server/middlewares/baseApi.ts): an admin's key must
-// also carry admin:*. Browser sessions rely on the isAdmin check below. rateLimit is chained after
-// baseApi so it keys on req.user.id rather than the client IP.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+// requiredScopes gates API-key callers: an admin's key must also carry admin:*. adminApi gates
+// the permission. rateLimit is chained after adminApi so it keys on req.user.id rather than the client IP.
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .use(rateLimit({ limit: INTEGRATION_DEMAND_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-integration-demand' }))
   .get(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const rows = await integrationRequestRepository.demandSummary();
     const body: IntegrationDemandResponse = {
       integrations: rows.map(row => ({

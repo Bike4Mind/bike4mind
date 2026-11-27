@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { buildRecentlyViewedPipeline, type RecentlyViewedArticle } from '@server/help/recentlyViewed';

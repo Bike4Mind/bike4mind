@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ToolContext } from '@bike4mind/services/llm';
+import type { ToolContext } from '@bike4mind/services-core/llm';
 const { getFiles, signedUrl, confirm } = vi.hoisted(() => ({
   getFiles: vi.fn(),
   signedUrl: vi.fn(),

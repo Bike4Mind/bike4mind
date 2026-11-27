@@ -29,6 +29,9 @@ const ADMIN_DEFAULTS: OrchestrationDefaults = {
   defaultThoroughness: 'medium',
   fallbackModels: [],
   dagEnabled: true,
+  confidenceGateThreshold: 0.6,
+  confidenceGateMode: 'both',
+  confidenceGateSelfReport: true,
 };
 
 function makeAgent(overrides: Partial<IAgent> = {}): IAgent {
@@ -661,5 +664,106 @@ describe('mcpSessionDisabledTools', () => {
   it('dedupes and tolerates everything being absent', () => {
     expect(mcpSessionDisabledTools(['a'], ['a'], undefined)).toEqual(['a']);
     expect(mcpSessionDisabledTools(undefined, undefined, undefined)).toEqual([]);
+  });
+});
+
+describe('confidence gate fields resolution', () => {
+  it('resolves gate fields from agent when set', async () => {
+    const agent = makeAgent({
+      confidenceGateThreshold: 0.8,
+      confidenceGateMode: 'iteration',
+      confidenceGateSelfReport: false,
+    });
+    const profile = await resolveTopLevelProfile({
+      agentId: 'agent-1',
+      loadAgent: vi.fn().mockResolvedValue(agent),
+      adminDefaults: ADMIN_DEFAULTS,
+      model: 'claude-opus',
+    });
+    expect(profile.confidenceGateThreshold).toBe(0.8);
+    expect(profile.confidenceGateMode).toBe('iteration');
+    expect(profile.confidenceGateSelfReport).toBe(false);
+  });
+
+  it('falls back to admin defaults when agent omits gate fields', async () => {
+    const defaults = {
+      ...ADMIN_DEFAULTS,
+      confidenceGateThreshold: 0.5,
+      confidenceGateMode: 'answer' as const,
+      confidenceGateSelfReport: false,
+    };
+    const profile = await resolveTopLevelProfile({
+      agentId: 'agent-1',
+      loadAgent: vi.fn().mockResolvedValue(makeAgent()),
+      adminDefaults: defaults,
+      model: 'claude-opus',
+    });
+    expect(profile.confidenceGateThreshold).toBe(0.5);
+    expect(profile.confidenceGateMode).toBe('answer');
+    expect(profile.confidenceGateSelfReport).toBe(false);
+  });
+
+  it('returns undefined gate fields when neither agent nor admin defaults provide them', async () => {
+    const sparseDefaults: OrchestrationDefaults = {
+      ...ADMIN_DEFAULTS,
+      confidenceGateThreshold: undefined as unknown as number,
+      confidenceGateMode: undefined as unknown as 'both',
+      confidenceGateSelfReport: undefined as unknown as boolean,
+    };
+    const profile = await resolveTopLevelProfile({
+      agentId: 'agent-1',
+      loadAgent: vi.fn().mockResolvedValue(makeAgent()),
+      adminDefaults: sparseDefaults,
+      model: 'claude-opus',
+    });
+    expect(profile.confidenceGateThreshold).toBeUndefined();
+    expect(profile.confidenceGateMode).toBeUndefined();
+    expect(profile.confidenceGateSelfReport).toBeUndefined();
+  });
+
+  it('synthetic profile carries gate fields from admin defaults', async () => {
+    const defaults = OrchestrationDefaultsSchema.parse({
+      confidenceGateThreshold: 0.7,
+      confidenceGateMode: 'off',
+      confidenceGateSelfReport: false,
+    });
+    const profile = await resolveTopLevelProfile({
+      agentId: undefined,
+      loadAgent: vi.fn(),
+      adminDefaults: defaults,
+      model: 'claude-sonnet',
+    });
+    expect(profile.isSynthetic).toBe(true);
+    expect(profile.confidenceGateThreshold).toBe(0.7);
+    expect(profile.confidenceGateMode).toBe('off');
+    expect(profile.confidenceGateSelfReport).toBe(false);
+  });
+
+  it('synthetic profile uses schema defaults (0.6 / both / true) when admin defaults are minimal', async () => {
+    const defaults = OrchestrationDefaultsSchema.parse({});
+    const profile = await resolveTopLevelProfile({
+      agentId: undefined,
+      loadAgent: vi.fn(),
+      adminDefaults: defaults,
+      model: 'claude-sonnet',
+    });
+    expect(profile.confidenceGateThreshold).toBe(0.6);
+    expect(profile.confidenceGateMode).toBe('both');
+    expect(profile.confidenceGateSelfReport).toBe(true);
+  });
+
+  it('agent gateMode wins over admin defaults', async () => {
+    const defaults = {
+      ...ADMIN_DEFAULTS,
+      confidenceGateMode: 'both' as const,
+    };
+    const agent = makeAgent({ confidenceGateMode: 'off' });
+    const profile = await resolveTopLevelProfile({
+      agentId: 'agent-1',
+      loadAgent: vi.fn().mockResolvedValue(agent),
+      adminDefaults: defaults,
+      model: 'claude-opus',
+    });
+    expect(profile.confidenceGateMode).toBe('off');
   });
 });

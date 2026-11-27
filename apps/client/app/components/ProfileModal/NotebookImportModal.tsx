@@ -24,7 +24,10 @@ import {
   Link,
   Box,
 } from '@mui/joy';
-import { CloudUpload, Upload, DataObject, History } from '@mui/icons-material';
+import CloudUpload from '@mui/icons-material/CloudUpload';
+import Upload from '@mui/icons-material/Upload';
+import DataObject from '@mui/icons-material/DataObject';
+import History from '@mui/icons-material/History';
 import { toast } from 'sonner';
 import { ContextHelpButton } from '@client/app/components/help';
 import { api } from '@client/app/contexts/ApiContext';

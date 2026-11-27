@@ -12,7 +12,10 @@ import {
   MenuItem,
   Tooltip,
 } from '@mui/joy';
-import { DeleteOutline, MoreVert, Check, VisibilityOutlined } from '@mui/icons-material';
+import DeleteOutline from '@mui/icons-material/DeleteOutline';
+import MoreVert from '@mui/icons-material/MoreVert';
+import Check from '@mui/icons-material/Check';
+import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined';
 import { green, orange } from '../../utils/themes/colors';
 import { FC, useMemo } from 'react';
 import { getAppFileUrl } from '@client/app/utils/s3';

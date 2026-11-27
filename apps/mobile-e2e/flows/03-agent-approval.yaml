@@ -1,0 +1,35 @@
+appId: com.bike4mind.app
+name: Agent approval card (approve)
+tags:
+  - fixture
+  - ios-only
+---
+# iOS only: the Android client does not render agent approvals yet. Remove `ios-only` (and add the Android
+# test tags) when it does; until then scripts/run-flows.sh keeps this flow out of the Android lane.
+# Runs against the app's canned fixture data (B4M_UI_FIXTURES), so it needs no server and no credentials.
+- launchApp:
+    clearState: true
+    stopApp: true
+    arguments:
+      B4M_UI_FIXTURES: "1"
+- runFlow: ../subflows/skip-onboarding.yaml
+- extendedWaitUntil:
+    visible:
+      id: home-menu-btn
+    timeout: 30000
+- runFlow: ../subflows/open-approval-session.yaml
+# Opening a chat for the first time asks for notification permission.
+- tapOn:
+    text: "Don.t Allow"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: message-pending-action
+    timeout: 30000
+# The card's container id is inherited by its children on iOS, so the buttons are addressed by label.
+- assertVisible: "Deny"
+- tapOn: "Approve"
+- extendedWaitUntil:
+    notVisible: "Approve"
+    timeout: 15000
+- assertNotVisible: "Deny"

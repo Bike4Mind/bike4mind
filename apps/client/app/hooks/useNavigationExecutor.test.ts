@@ -4,9 +4,10 @@ import { useNavigationExecutor } from './useNavigationExecutor';
 import { useOptiNavigation } from './useOptiNavigation';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 
-const { mockNavigate, mockSetActiveTab } = vi.hoisted(() => ({
+const { mockNavigate, mockSetActiveTab, mockSetFileBrowserOpen } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockSetActiveTab: vi.fn(),
+  mockSetFileBrowserOpen: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -18,7 +19,7 @@ vi.mock('@client/app/components/admin/useAdminModal', () => ({
 }));
 
 vi.mock('@client/app/components/Files/Browser', () => ({
-  useFileBrowser: (selector: (s: unknown) => unknown) => selector({ setOpen: vi.fn() }),
+  useFileBrowser: (selector: (s: unknown) => unknown) => selector({ setOpen: mockSetFileBrowserOpen }),
 }));
 
 // The executor no-ops on Opti intents unless an /opti route is present, and the
@@ -91,14 +92,55 @@ describe('useNavigationExecutor', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/new' });
   });
 
-  it('selects the admin tab and names its slug in the URL', () => {
+  it('navigates a contributed admin route intent to its literal path', () => {
     const { result } = renderHook(() => useNavigationExecutor());
-    result.current({ navigationType: 'tab', target: String(AdminTab.LLMDashboard) } as Parameters<
+    result.current({ navigationType: 'route', target: '/admin/ext/example' } as Parameters<
       ReturnType<typeof useNavigationExecutor>
     >[0]);
 
-    expect(mockSetActiveTab).toHaveBeenCalledWith(AdminTab.LLMDashboard);
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'llm-dashboard' } });
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin/ext/example' });
+  });
+
+  it('navigates to the admin tab before changing the store', () => {
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current({ navigationType: 'tab', target: String(AdminTab.Models) } as Parameters<
+      ReturnType<typeof useNavigationExecutor>
+    >[0]);
+
+    expect(mockSetActiveTab).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'models' } });
+  });
+
+  it('no-ops an Opti action in a build without the /opti route', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/premium-generated/premiumRoutes.generated', () => ({ premiumRoutes: [] }));
+    const { useNavigationExecutor: openCoreExecutor } = await import('./useNavigationExecutor');
+    const { useOptiNavigation: openCoreOpti } = await import('./useOptiNavigation');
+    const requestFamily = vi.spyOn(openCoreOpti.getState(), 'requestFamily');
+    const { result } = renderHook(() => openCoreExecutor());
+    result.current(optiIntent('scheduling'));
+
+    expect(requestFamily).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    vi.doUnmock('@client/app/premium-generated/premiumRoutes.generated');
+  });
+
+  it('opens the file browser in place for its action', () => {
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current(optiIntent('file_browser'));
+
+    expect(mockSetFileBrowserOpen).toHaveBeenCalledWith(true);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('opens a retired tab in the Invite Center section that replaced it', () => {
+    const { result } = renderHook(() => useNavigationExecutor());
+    result.current({ navigationType: 'tab', target: String(AdminTab.PartnerSignupRules) } as Parameters<
+      ReturnType<typeof useNavigationExecutor>
+    >[0]);
+
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/admin', search: { tab: 'waitlist', inviteSection: 'partners' } });
   });
 
   // A tab intent whose target is not an index still opens the console; it just has no tab to name.

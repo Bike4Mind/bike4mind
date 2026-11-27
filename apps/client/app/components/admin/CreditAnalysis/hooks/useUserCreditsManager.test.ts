@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const mockUseGetUsers = vi.fn();
+const mockApiGet = vi.fn();
+
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: (...args: unknown[]) => mockApiGet(...args) } }));
 
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetUsers: (...args: unknown[]) => mockUseGetUsers(...args),
-}));
-vi.mock('./useUpdateUserCredits', () => ({
-  useUpdateUserCredits: () => ({ mutateAsync: vi.fn() }),
 }));
 
 import { useUserCreditsManager } from './useUserCreditsManager';
@@ -30,9 +30,28 @@ describe('useUserCreditsManager', () => {
     vi.clearAllMocks();
   });
 
+  it('refreshes the current server page', () => {
+    const refresh = vi.fn();
+    const refetch = vi.fn();
+    mockUseGetUsers.mockReturnValue({ data: { users: [], totalUsers: 0, totalPages: 0 }, refetch });
+    const { result } = renderHook(() => useUserCreditsManager(refresh));
+    act(() => result.current.handleRefresh());
+    expect(refetch).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   it('requests server-side sort by currentCredits (default highest first)', () => {
     renderHook(() => useUserCreditsManager());
     expect(lastParams()).toMatchObject({ sortField: 'currentCredits', sortOrder: 'desc' });
+    expect(mockUseGetUsers.mock.calls.at(-1)?.[1]).toMatchObject({ queryFn: expect.any(Function) });
+  });
+
+  it('propagates a list request failure instead of presenting it as an empty page', async () => {
+    mockApiGet.mockRejectedValueOnce(new Error('offline'));
+    renderHook(() => useUserCreditsManager());
+    const queryFn = mockUseGetUsers.mock.calls.at(-1)?.[1]?.queryFn;
+    expect(queryFn).toBeTypeOf('function');
+    await expect(queryFn()).rejects.toThrow('offline');
   });
 
   it('pushes the sort direction to the server and returns to page 1', () => {

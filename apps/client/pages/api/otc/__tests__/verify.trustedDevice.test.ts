@@ -1,4 +1,10 @@
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { createMocks } from 'node-mocks-http';
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -10,8 +16,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
-vi.mock('@server/analytics/signupEvents', () => ({ emitSignupForSourceProducts: vi.fn().mockResolvedValue([]) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
+  emitSignupForSourceProducts: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
   isE2EEnabled: () => false,
@@ -25,11 +33,14 @@ vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
   setRefreshCookie: (...a: unknown[]) => mockSetRefreshCookie(...a),
 }));
 vi.mock('@server/auth/sessionDevice', () => ({ buildSessionDevice: () => ({}) }));
+vi.mock('@server/auth/networkMeta', () => ({ recordSignupNetwork: vi.fn(), recordLoginEvent: vi.fn() }));
 
 const mockLogAuthAudit = vi.fn((..._args: any[]) => Promise.resolve());
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockLogAuthAudit(...a) }));
 
 const mockConsumeTrustedDevice = vi.fn();
+const mockOrgEnrollment = vi.hoisted(() => vi.fn());
+vi.mock('@server/auth/organizationMfa', () => ({ requiresOrganizationMfaEnrollment: mockOrgEnrollment }));
 vi.mock('@server/auth/trustedDevice', () => ({
   consumeTrustedDevice: (...a: any[]) => mockConsumeTrustedDevice(...a),
   trustedDevicesAllowed: () => Promise.resolve(settingsValues.allowTrustedDevices !== false),
@@ -52,7 +63,7 @@ vi.mock('jsonwebtoken', () => ({
   default: { verify: (...a: any[]) => mockJwtVerify(...a), sign: (...a: any[]) => mockJwtSign(...a) },
 }));
 
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerSignupGrantForEmail: vi.fn(() =>
     Promise.resolve({ matched: false, entitlements: new Set(), signupCredits: 0 })
   ),
@@ -67,6 +78,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),
   },
   adminSettingsRepository: { findBySettingName: vi.fn() },
+  User: { findById: () => ({ select: () => ({ lean: async () => null }) }) },
   registrationInviteRepository: {},
   subscriberRepository: {},
   creditTransactionRepository: {},
@@ -124,10 +136,11 @@ describe('/api/otc/verify - trusted device', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(settingsValues)) delete settingsValues[key];
-    mockValidateNonce.mockResolvedValue('hash');
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
     mockFindByEmail.mockResolvedValue({ id: 'user-1', tokenVersion: 3, emailVerified: true });
     mockConsumeTrustedDevice.mockResolvedValue(null);
     mockUserHasMFA.mockReturnValue(true);
+    mockOrgEnrollment.mockResolvedValue(false);
   });
 
   it('challenges for MFA when no trusted device is presented', async () => {
@@ -202,6 +215,16 @@ describe('/api/otc/verify - trusted device', () => {
 
     expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
     expect(res._getJSONData().accessToken).toBe('full-access');
+  });
+
+  it('hands an unenrolled org member to setup without minting a session', async () => {
+    mockUserHasMFA.mockReturnValue(false);
+    mockOrgEnrollment.mockResolvedValue(true);
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(res._getJSONData()).toEqual({ mfaSetupRequired: true, userId: 'user-1', accessToken: 'mfa-pending-token' });
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+    expect(mockConsumeTrustedDevice).not.toHaveBeenCalled();
   });
 
   it('still requires a valid emailed code - a trusted device alone is not a credential', async () => {

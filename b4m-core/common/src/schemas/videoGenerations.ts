@@ -1,8 +1,11 @@
 import { z } from 'zod';
+import { ModelIdSchema } from './modelId';
 import { BillingOrganizationIdSchema } from './billingOrganization';
+import { CompletionRunAttributionSchema } from './cliCompletions';
 import type { ApiErrorCode } from '../apiErrorCodes';
 import { GENERATION_OUTPUT_AVAILABILITIES, type GenerationOutputAvailability } from '../generation/types';
-import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_MODES } from '../video/types';
+import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_INPUT_ROLES, VIDEO_MODES } from '../video/types';
+import { VIDEO_INPUTS_MAX } from '../video/request';
 import { VIDEO_VALIDATION_ERROR_CODES } from '../video/validate';
 import {
   GENERATION_JOB_SOURCES,
@@ -24,6 +27,8 @@ export const VIDEO_GENERATION_API_ERROR_CODES = [
   'input_image_not_found',
   'idempotency_key_reused',
   'invalid_idempotency_key',
+  'run_not_found',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 
 // The classifiers a polled job can carry. Internal-only codes are folded into these by toPublicVideoJobErrorCode.
@@ -42,6 +47,8 @@ export function toPublicVideoJobErrorCode(code: GenerationJobErrorCode): VideoJo
   switch (code) {
     case 'orphaned_submit':
     case 'enqueue_failed':
+    // Compose-only: a video job's inputs are images, refused as input_image_not_found.
+    case 'unsupported_input':
       return 'provider_error';
     case 'content_blocked':
     case 'provider_timeout':
@@ -51,6 +58,9 @@ export function toPublicVideoJobErrorCode(code: GenerationJobErrorCode): VideoJo
     case 'input_image_not_found':
     case 'cancelled':
       return code;
+    // Refused before submit, so the provider never ran and the hold is returned, as for a cancel.
+    case 'account_blocked':
+      return 'cancelled';
     default: {
       const unreachable: never = code;
       throw new Error(`Unmapped generation job error code: ${String(unreachable)}`);
@@ -68,18 +78,59 @@ export const VIDEO_PROMPT_MAX_LENGTH = 4000;
 // Strict so a caller migrating from the removed Sora body (e.g. `callbackUrl`, webhooks no longer exist) gets a 422
 // naming the key instead of a 202 and a webhook that never arrives.
 export const CreateVideoGenerationBodySchema = z.strictObject({
-  model: z.string().min(1).describe('A model id from GET /api/v1/video-models.'),
+  model: ModelIdSchema.describe('A model id from GET /api/v1/video-models.'),
   prompt: z.string().min(1).max(VIDEO_PROMPT_MAX_LENGTH),
   mode: z
     .enum(VIDEO_MODES)
     .optional()
-    .describe('Defaults to image_to_video when input_image_file_id is set, else text_to_video.'),
+    .describe(
+      'Defaults to image_to_video when keyframes, a first_frame input or input_image_file_id is set, else text_to_video.'
+    ),
   duration_seconds: z.number().positive().optional().describe("Defaults to the model's default duration."),
   aspect_ratio: z.enum(ASPECT_RATIOS).optional(),
   resolution: z.enum(RESOLUTION_TIERS).optional(),
-  input_image_file_id: z.string().min(1).optional().describe('An image file you own, for image_to_video.'),
+  inputs: z
+    .array(z.strictObject({ file_id: z.string().min(1), role: z.enum(VIDEO_INPUT_ROLES) }))
+    .max(VIDEO_INPUTS_MAX)
+    .optional()
+    .describe(
+      'Image files you own, each tagged with what it is for. image_to_video needs a first_frame. The roles a model ' +
+        'accepts, and how many of each, are its input_roles in GET /api/v1/video-models.'
+    ),
+  input_image_file_id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Deprecated: send inputs with role first_frame instead. Cannot be combined with inputs.'),
   audio: z.boolean().optional(),
+  keyframes: z
+    .array(
+      z.strictObject({
+        file_id: z.string().min(1),
+        time_seconds: z.number().nonnegative(),
+      })
+    )
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'Owned image files pinned to timestamps, in strictly increasing order starting at 0 and not exceeding duration_seconds. ' +
+        'Cannot be combined with inputs or input_image_file_id. Requires model keyframes support; ' +
+        'its max limits the count (FLUX 3: 10). Keyframe image mode is admitted separately from modes.'
+    ),
+  draft: z
+    .boolean()
+    .optional()
+    .describe(
+      'Generate a lower-cost preview when true; omitted or false requests full quality. Requires model draft support ' +
+        'at the requested resolution. FLUX 3 drafts require 720p and cost $0.06 per second.'
+    ),
   organization_id: BillingOrganizationIdSchema,
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this job is made for. Its whole estimated cost is claimed against that run's budget " +
+      'before the job is queued, and the request is refused with 422 `run_budget_exhausted` when it does not fit. ' +
+      "The job bills the run's account."
+  ),
 });
 export type CreateVideoGenerationBody = z.infer<typeof CreateVideoGenerationBodySchema>;
 
@@ -96,6 +147,10 @@ export const VideoGenerationSchema = z.object({
   duration_seconds: z.number(),
   aspect_ratio: z.enum(ASPECT_RATIOS),
   resolution: z.enum(RESOLUTION_TIERS),
+  draft: z
+    .boolean()
+    .optional()
+    .describe('Whether this job requested draft quality; absent for requests that omitted draft.'),
   source: z.enum(GENERATION_JOB_SOURCES),
   progress: z.number().min(0).max(1).nullable(),
   error: z.object({ code: z.enum(VIDEO_JOB_PUBLIC_ERROR_CODES), message: z.string() }).nullable(),
@@ -132,7 +187,29 @@ export const VideoModelSchema = z.object({
   object: z.literal('video_model'),
   display_name: z.string(),
   provider: z.string(),
+  // Optional so a client still parses a server from before these fields.
+  provider_label: z
+    .string()
+    .optional()
+    .describe(
+      'The provider as shown to people (`Google`, `Black Forest Labs`), where `provider` is the id. Display text. Always sent by current servers.'
+    ),
+  blurb: z
+    .string()
+    .optional()
+    .describe(
+      'How Studio introduces the model on its card: one line on what it is best at. Display text; may change. Always sent by current servers.'
+    ),
   modes: z.array(z.enum(VIDEO_MODES)),
+  // Loose on purpose: clients parse this at runtime, so a role added later (or a server from before input_roles)
+  // must not make an older client drop the whole model. Requests still take only the known roles.
+  input_roles: z
+    .array(z.object({ role: z.string(), max: z.number().int().positive() }))
+    .optional()
+    .describe(
+      `The inputs[] roles this model accepts and the most of each one request may carry. Roles today: ` +
+        `${VIDEO_INPUT_ROLES.join(', ')}; ignore any you do not know.`
+    ),
   duration: z.union([
     z.object({ kind: z.literal('range'), min: z.number(), max: z.number(), step: z.number() }),
     z.object({ kind: z.literal('discrete'), values: z.array(z.number()) }),
@@ -145,6 +222,16 @@ export const VideoModelSchema = z.object({
     resolution: z.enum(RESOLUTION_TIERS),
   }),
   audio: z.enum(['always', 'optional', 'none']),
+  keyframes: z
+    .object({ max: z.number().int().positive() })
+    .nullable()
+    .optional()
+    .describe('Timestamped keyframe limit; null when unsupported.'),
+  draft: z
+    .object({ resolutions: z.array(z.enum(RESOLUTION_TIERS)), credits_per_second: z.number() })
+    .nullable()
+    .optional()
+    .describe('Draft resolutions and price; null when unsupported.'),
   credits_per_second: z
     .record(z.string(), z.number())
     .nullable()

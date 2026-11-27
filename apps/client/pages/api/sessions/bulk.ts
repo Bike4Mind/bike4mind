@@ -1,9 +1,27 @@
-import { SessionEvents } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  BadRequestError,
+  ForbiddenError,
+  MAX_BULK_ITEMS,
+  SessionEvents,
+  redactSessionForClient,
+  type ISessionDocument,
+} from '@bike4mind/common';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
+import { queueSessionTags } from '@server/sessions/queueSessionTags';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
+import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import type { Request } from 'express';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
 import { sessionRepository } from '@bike4mind/database/auth';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { z } from 'zod';
 import {
+  favoriteRepository,
+  sessionRepository as plainSessionRepository,
   projectRepository,
   fabFileRepository,
   sessionAgentConfigRepository,
@@ -11,7 +29,107 @@ import {
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+
+const SessionIdsSchema = z.array(z.string().min(1)).max(MAX_BULK_ITEMS);
+const MAX_TAGS_PER_REQUEST = 20;
+const MAX_TAG_LENGTH = 100;
+
+const FavoriteBodySchema = z.object({ action: z.literal('favorite'), add: SessionIdsSchema, remove: SessionIdsSchema });
+const AddTagsBodySchema = z.object({
+  action: z.literal('addTags'),
+  sessionIds: SessionIdsSchema.min(1, 'Provide at least one session id'),
+  tags: z.array(z.string().trim().min(1, 'Tags cannot be empty').max(MAX_TAG_LENGTH)).min(1).max(MAX_TAGS_PER_REQUEST),
+});
+const GenerateTagsBodySchema = z.object({
+  action: z.literal('generateTags'),
+  sessionIds: SessionIdsSchema.min(1, 'Provide at least one session id'),
+});
+
+const BulkWriteBodySchema = z
+  .discriminatedUnion('action', [FavoriteBodySchema, AddTagsBodySchema, GenerateTagsBodySchema])
+  .superRefine((b, ctx) => {
+    if (b.action !== 'favorite') return;
+    if (b.add.length + b.remove.length === 0)
+      ctx.addIssue({ code: 'custom', message: 'Provide at least one session id' });
+    if (new Set([...b.add, ...b.remove]).size > MAX_BULK_ITEMS) {
+      ctx.addIssue({ code: 'custom', message: `At most ${MAX_BULK_ITEMS} session ids` });
+    }
+    if (b.add.some(id => b.remove.includes(id))) {
+      ctx.addIssue({ code: 'custom', message: 'A session id cannot be both added and removed' });
+    }
+  });
+
+type BulkItemResult = { id: string; ok: boolean; error?: string; session?: unknown };
+type BulkWriteResponse = { results: BulkItemResult[]; okCount: number };
+type BulkWriteRequest = Request<{}, BulkWriteResponse, unknown, unknown, Record<string, unknown>>;
+
+async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string[]): Promise<BulkWriteResponse> {
+  const user = req.user!;
+  const ids = [...new Set(sessionIds)];
+  const newTags = [...new Set(tags.map(t => t.trim()))];
+  const adapters = buildSessionUpdateAdapters(req, user, req.logger);
+  const results: BulkItemResult[] = [];
+
+  for (const id of ids) {
+    if (!isValidObjectId(id)) {
+      results.push({ id, ok: false, error: 'Invalid session id' });
+      continue;
+    }
+    let updated: Awaited<ReturnType<typeof sessionService.updateSession>>;
+    try {
+      // Read and merge inside the retryable transaction so concurrent tag writes are preserved.
+      updated = await withTransaction(async () => {
+        const session = await plainSessionRepository.shareable.findUpdateAccessById(user, id);
+        if (!session) throw new Error('Cannot update session');
+        const existing = session.tags ?? [];
+        const merged = [
+          ...existing,
+          ...newTags.filter(name => !existing.some(tag => tag.name === name)).map(name => ({ name, strength: 1 })),
+        ];
+        return sessionService.updateSession(user, { id, tags: merged }, adapters);
+      });
+    } catch (error) {
+      req.logger.warn('[sessions/bulk] tag update failed', { sessionId: id, error });
+      results.push({ id, ok: false, error: 'Update failed' });
+      continue;
+    }
+    results.push({ id, ok: true, session: redactSessionForClient(updated as ISessionDocument) });
+    // The write already landed; an analytics failure must not report the item as failed.
+    try {
+      await logEvent(
+        {
+          userId: user.id,
+          type: SessionEvents.UPDATE_SESSION,
+          metadata: {
+            sessionId: id,
+            sessionName: updated.name,
+            knowledgeIds: updated.knowledgeIds ?? [],
+            agentIds: updated.agentIds ?? [],
+          },
+        },
+        { ability: req.ability }
+      );
+    } catch (error) {
+      req.logger.warn('[sessions/bulk] tag update event log failed', { sessionId: id, error });
+    }
+  }
+  return { results, okCount: results.filter(r => r.ok).length };
+}
+
+async function generateTags(req: BulkWriteRequest, sessionIds: string[]): Promise<BulkWriteResponse> {
+  // impersonationGate admits POST here for favorite/addTags; AI tagging stays off-limits, as on /[id]/tag.
+  if (req.user?.impersonatedBy) throw new ForbiddenError('Not available while impersonating');
+  const ids = [...new Set(sessionIds)];
+  const { queued, failed } = await queueSessionTags(req, ids);
+  const queuedIds = new Set(queued.map(q => q.sessionId));
+  const failedIds = new Set(failed);
+  const results: BulkItemResult[] = ids.map(id => {
+    if (queuedIds.has(id)) return { id, ok: true };
+    return { id, ok: false, error: failedIds.has(id) ? 'Could not queue tagging' : 'Cannot update session' };
+  });
+  return { results, okCount: queued.length };
+}
 
 const handler = baseApi()
   /**
@@ -20,15 +138,21 @@ const handler = baseApi()
   .delete(
     asyncHandler<{}, { deletedCount: number; newLastNotebookId: string | null }, { sessionIds: string[] }>(
       async (req, res) => {
+        assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
         const userId = req.user?.id;
         const { sessionIds } = req.body;
 
-        if (!sessionIds || !Array.isArray(sessionIds) || sessionIds.length === 0) {
+        if (!Array.isArray(sessionIds) || sessionIds.length === 0) {
           return res.status(400).json({ deletedCount: 0, newLastNotebookId: null });
+        }
+        // The cap keeps the serial deletes plus the media purge inside the request's time budget.
+        if (sessionIds.length > MAX_BULK_ITEMS) {
+          throw new BadRequestError(`At most ${MAX_BULK_ITEMS} sessions can be deleted per request`);
         }
 
         let newLastNotebook: { id: string } | null = null;
         let deletedCount = 0;
+        const deletedIds: string[] = [];
 
         // Delete sessions one by one to get proper newLastNotebook result
         for (const sessionId of sessionIds) {
@@ -39,8 +163,9 @@ const handler = baseApi()
             // the session touched before it tombstones anything, and a ConcurrencyConflictError
             // partway through would otherwise leave some files rewritten and some not with the
             // session still live. Same reason the single-delete route wraps it.
-            const result = await withTransaction(() =>
-              sessionService.deleteSession(
+            const { result, affectedUserIds } = await withTransaction(async () => {
+              const affected = new Set<string>();
+              const result = await sessionService.deleteSession(
                 userId,
                 { id: sessionId },
                 {
@@ -53,15 +178,19 @@ const handler = baseApi()
                     sessionAgentConfigs: sessionAgentConfigRepository,
                   },
                   logger: req.logger,
+                  onAccessRemoved: ids => ids.forEach(id => affected.add(id)),
                 }
-              )
-            );
+              );
+              return { result, affectedUserIds: [...affected] };
+            });
 
             // Keep track of the last valid notebook suggestion
             if (result) {
               newLastNotebook = result;
             }
             deletedCount++;
+            deletedIds.push(sessionId);
+            await rescopeUserSubscriptions(affectedUserIds, req.logger);
 
             await logEvent(
               { userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId } },
@@ -71,9 +200,11 @@ const handler = baseApi()
             // Continue with other sessions even if one fails. `deletedCount` already excludes this
             // one (the increment is past the await), so the response under-reports rather than
             // claiming a delete that rolled back.
-            console.error(`Failed to delete session ${sessionId}:`, error);
+            req.logger.error('Failed to delete session', { sessionId, error });
           }
         }
+
+        await purgeDeletedNotebookMedia(deletedIds, { logger: req.logger });
 
         return res.json({
           deletedCount,
@@ -81,6 +212,51 @@ const handler = baseApi()
         });
       }
     )
+  )
+  .post(
+    asyncHandler<{}, BulkWriteResponse>(async (req, res) => {
+      const parsed = BulkWriteBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
+      }
+      const body = parsed.data;
+      // Same scope PUT /api/sessions/[id] requires; favorites stay scope-less like /[id]/favorite. Kept
+      // inside the .post() link so apiKeyScopeRoutes.ts attributes it to this verb only.
+      if (body.action !== 'favorite') {
+        assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
+      }
+      if (body.action === 'addTags') return res.json(await addTags(req, body.sessionIds, body.tags));
+      if (body.action === 'generateTags') return res.json(await generateTags(req, body.sessionIds));
+      const results: BulkItemResult[] = [];
+      const favoriteAdapters = { db: { sessions: plainSessionRepository, favorites: favoriteRepository } };
+      const add = [...new Set(body.add)];
+      const remove = [...new Set(body.remove)];
+      const operations = [
+        ...add.map(id => ({
+          id,
+          run: () => sessionService.addFavorite(req.user, { sessionId: id }, favoriteAdapters),
+        })),
+        ...remove.map(id => ({
+          id,
+          run: () => sessionService.deleteFavorite(req.user, { sessionId: id }, favoriteAdapters),
+        })),
+      ];
+      for (const { id, run } of operations) {
+        if (!isValidObjectId(id)) {
+          results.push({ id, ok: false, error: 'Invalid session id' });
+          continue;
+        }
+        try {
+          await run();
+          results.push({ id, ok: true });
+        } catch (error) {
+          req.logger.warn('[sessions/bulk] favorite update failed', { sessionId: id, error });
+          results.push({ id, ok: false, error: 'Update failed' });
+        }
+      }
+
+      return res.json({ results, okCount: results.filter(r => r.ok).length });
+    })
   );
 
 export const config = {

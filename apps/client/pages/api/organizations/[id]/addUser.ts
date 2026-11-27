@@ -16,6 +16,12 @@ const handler = baseApi().post(
     const orgId = req.query.id;
     if (!orgId) throw new BadRequestError('Organization ID is required');
 
+    // Platform admins only, checked before any lookup: owners and managers add people through
+    // invitations the person accepts. Same rule as POST /api/organizations/[id]/members.
+    if (!req.user.isAdmin) {
+      throw new ForbiddenError('Members join an organization by accepting an invitation');
+    }
+
     const validatedBody = addUserToOrganizationSchema.parse(req.body);
 
     const organization = await organizationRepository.findById(orgId);

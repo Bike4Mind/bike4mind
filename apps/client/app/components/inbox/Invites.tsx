@@ -4,6 +4,7 @@ import { useAcceptDocument, useGetUserInvites, useRefuseDocument } from '@client
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import GroupIcon from '@mui/icons-material/Group';
+import Diversity3OutlinedIcon from '@mui/icons-material/Diversity3Outlined';
 import HomeIcon from '@mui/icons-material/Home';
 import NoteAltOutlinedIcon from '@mui/icons-material/NoteAltOutlined';
 import PsychologyIcon from '@mui/icons-material/Psychology';
@@ -16,6 +17,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useTheme } from '@mui/joy/styles';
 import { IInviteDocumentWithDetails, InviteType } from '@bike4mind/common';
 import { teal } from '@client/app/utils/themes/colors';
+import { isInboxInvite } from './inboxInvites';
 
 type GroupedInvite = {
   id: string;
@@ -39,6 +41,7 @@ const DOCUMENT_ICONS = {
   Session: <NoteAltOutlinedIcon />,
   Tool: <HandymanOutlinedIcon />,
   Project: <HubIconIcon sx={{ color: teal[600] }} />,
+  Space: <Diversity3OutlinedIcon />,
 };
 
 const Invites: React.FC = () => {
@@ -114,14 +117,7 @@ const Invites: React.FC = () => {
   // Build the flat list of invites
   const invites = useMemo(() => {
     // Only show invites that are relevant to the current user and have remaining uses
-    const realInvites = (invitesQuery?.data ?? []).filter(
-      i =>
-        i.remaining > 0 &&
-        i.recipients?.pending?.includes(userEmail || '') &&
-        [InviteType.Project, InviteType.Session, InviteType.FabFile, InviteType.Organization].includes(
-          i.type as InviteType
-        )
-    );
+    const realInvites = (invitesQuery?.data ?? []).filter(i => isInboxInvite(i, userEmail));
 
     // Show each invitation separately (no grouping)
     const groupedInvites: GroupedInvite[] = realInvites.map(invite => ({
@@ -135,7 +131,7 @@ const Invites: React.FC = () => {
           ? `${invite.username || 'Someone'} invited you to join ${invite.name}`
           : invite.type === InviteType.FabFile
             ? `${invite.username || 'Someone'} shared a file with you`
-            : invite.type === InviteType.Organization
+            : invite.type === InviteType.Organization || invite.type === InviteType.Space
               ? `${invite.username || 'Someone'} invited you to join ${invite.name}`
               : invite.description,
       username: invite.username,
@@ -152,11 +148,13 @@ const Invites: React.FC = () => {
     const notebooks = visibleInvites.filter(i => i.type === InviteType.Session);
     const sharedFiles = visibleInvites.filter(i => i.type === InviteType.FabFile);
     const organizations = visibleInvites.filter(i => i.type === InviteType.Organization);
+    const spaces = visibleInvites.filter(i => i.type === InviteType.Space);
     return {
       projects,
       notebooks,
       sharedFiles,
       organizations,
+      spaces,
       total: visibleInvites.length,
     };
   }, [invites, removed]);
@@ -265,8 +263,9 @@ const Invites: React.FC = () => {
         </Box>
       )}
 
-      {/* Sections: Organizations, Projects, Notebooks, Shared Files */}
+      {/* Sections: Organizations, Spaces, Projects, Notebooks, Shared Files */}
       {renderSection('Organizations', categorized.organizations)}
+      {renderSection('Spaces', categorized.spaces)}
       {renderSection('Projects', categorized.projects)}
       {renderSection('Notebooks', categorized.notebooks)}
       {renderSection('Shared files', categorized.sharedFiles)}

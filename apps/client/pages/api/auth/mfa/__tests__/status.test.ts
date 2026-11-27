@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   readEnforceMfa: vi.fn(),
   getMFAStatus: vi.fn(),
   findByIdWithMfaSecrets: vi.fn(),
+  requiresOrganizationMfaEnrollment: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -19,7 +20,15 @@ vi.mock('@server/auth/signInSecondFactor', () => ({ readEnforceMfa: mocks.readEn
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIdWithMfaSecrets: mocks.findByIdWithMfaSecrets },
 }));
-vi.mock('@bike4mind/services', () => ({ mfaService: { getMFAStatus: mocks.getMFAStatus } }));
+vi.mock('@server/auth/organizationMfa', () => ({
+  requiresOrganizationMfaEnrollment: mocks.requiresOrganizationMfaEnrollment,
+}));
+vi.mock('@bike4mind/services', () => ({
+  mfaService: {
+    getMFAStatus: mocks.getMFAStatus,
+    isMfaEnforcementExempt: (user: { isPersona?: boolean }) => user.isPersona === true,
+  },
+}));
 
 import handler from '../status';
 
@@ -39,7 +48,11 @@ describe('GET /api/auth/mfa/status', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findByIdWithMfaSecrets.mockResolvedValue(freshUser);
-    mocks.getMFAStatus.mockImplementation(({ enforceMFA }: { enforceMFA: boolean }) => ({ enforced: enforceMFA }));
+    mocks.getMFAStatus.mockImplementation(({ enforceMFA }: { enforceMFA: boolean }) => ({
+      enforced: enforceMFA,
+      required: enforceMFA,
+    }));
+    mocks.requiresOrganizationMfaEnrollment.mockResolvedValue(false);
   });
 
   it.each([true, false])('passes enforceMFA=%s from the shared reader into the status computation', async enforced => {
@@ -48,7 +61,34 @@ describe('GET /api/auth/mfa/status', () => {
     const res = await getStatus();
 
     expect(mocks.getMFAStatus).toHaveBeenCalledWith({ user: freshUser, enforceMFA: enforced });
-    expect(res._getJSONData()).toEqual({ enforced });
+    expect(res._getJSONData()).toEqual({ enforced, required: enforced });
+  });
+
+  it('reports required when a team policy past its grace binds the user, leaving the rest to enforceMFA', async () => {
+    mocks.readEnforceMfa.mockResolvedValue(false);
+    mocks.requiresOrganizationMfaEnrollment.mockResolvedValue(true);
+
+    const res = await getStatus();
+
+    expect(mocks.getMFAStatus).toHaveBeenCalledWith({ user: freshUser, enforceMFA: false });
+    expect(res._getJSONData()).toEqual({ enforced: false, required: true });
+  });
+
+  it('does not look up team policies when enforceMFA already requires MFA', async () => {
+    mocks.readEnforceMfa.mockResolvedValue(true);
+    await getStatus();
+    expect(mocks.requiresOrganizationMfaEnrollment).not.toHaveBeenCalled();
+  });
+
+  it('keeps a test persona exempt from a team policy', async () => {
+    mocks.readEnforceMfa.mockResolvedValue(false);
+    mocks.requiresOrganizationMfaEnrollment.mockResolvedValue(true);
+    mocks.findByIdWithMfaSecrets.mockResolvedValue({ id: 'u1', isPersona: true });
+
+    const res = await getStatus();
+
+    expect(res._getJSONData()).toEqual({ enforced: false, required: false });
+    expect(mocks.requiresOrganizationMfaEnrollment).not.toHaveBeenCalled();
   });
 
   it('answers 404 without computing a status when the user no longer exists', async () => {

@@ -7,6 +7,18 @@ import { CreditHolderType } from '@bike4mind/common';
  * ignored for up to the cache TTL (5 min). Here the real settings accessors run against a fake repo,
  * so the read path under test is the production one - no `getSettingsMap`/`getSettingsValue` stub.
  */
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+// Pricing is stubbed flat in this file, so the per-round credit cap cannot be priced here; it is held
+// open, and cliCompletions.creditCap.test.ts covers it on real pricing.
+vi.mock('./completionCreditBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('./completionCreditBudget')>()),
+  affordableRoundBudget: () => ({ affordable: true, outputTokens: Number.MAX_SAFE_INTEGER }),
+}));
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -18,7 +30,14 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([
+    {
+      id: 'test-model',
+      type: 'text',
+      backend: 'anthropic',
+      pricing: { 200_000: { input: 1 / 1_000_000, output: 1 / 1_000_000 } },
+    },
+  ]),
   isAdaptiveThinkingByDefault: vi.fn(() => false),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
@@ -48,6 +67,8 @@ function buildSettingsStore(initial: string) {
   const rows: Record<string, string> = { enforceCredits: initial };
   const toRow = (settingName: string) => ({ settingName, settingValue: rows[settingName] });
   return {
+    // Model configurations are read with findOne; none are stored here.
+    findOne: vi.fn(async () => null),
     findAll: vi.fn(async () => Object.keys(rows).map(toRow)),
     findBySettingNames: vi.fn(async (names: string[]) => names.filter(name => name in rows).map(toRow)),
     adminFlipsTo(value: string) {
@@ -68,6 +89,7 @@ function buildDb(adminSettings: ReturnType<typeof buildSettingsStore>) {
       creditTransactions: {} as never,
       users: users as never,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as never,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: { findById: vi.fn() } as never,
     },
     users,
@@ -87,9 +109,14 @@ describe('executeCompletion - admin settings are read fresh', () => {
     vi.clearAllMocks();
     shutdownSettingsCache();
   });
-  afterEach(() => shutdownSettingsCache());
+  afterEach(() => {
+    shutdownSettingsCache();
+    vi.unstubAllEnvs();
+  });
 
   it('honours an enforceCredits flip on the next completion, with no restart', async () => {
+    // Enforcement can only be switched off on self-host; hosted keeps it on whatever the row says.
+    vi.stubEnv('B4M_SELF_HOST', 'true');
     const adminSettings = buildSettingsStore('true');
     const { db, users } = buildDb(adminSettings);
 
@@ -122,7 +149,7 @@ describe('executeCompletion - admin settings are read fresh', () => {
 
     await executeCompletion({ ...baseParams, db });
 
-    expect(adminSettings.findBySettingNames).toHaveBeenCalledWith(['enforceCredits']);
+    expect(adminSettings.findBySettingNames).toHaveBeenCalledExactlyOnceWith(['enforceCredits']);
     expect(adminSettings.findAll).not.toHaveBeenCalled();
   });
 });

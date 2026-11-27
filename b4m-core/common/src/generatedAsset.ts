@@ -1,6 +1,7 @@
 import z from 'zod';
 
-export const GENERATED_ASSET_GENERATORS = ['music', 'video', 'image', 'speech', 'sound_effect'] as const;
+// `scene`: a video and a music track muxed into one clip by our own worker (a compose generation job).
+export const GENERATED_ASSET_GENERATORS = ['music', 'video', 'image', 'speech', 'sound_effect', 'scene'] as const;
 
 export type GeneratedAssetGenerator = (typeof GENERATED_ASSET_GENERATORS)[number];
 
@@ -20,7 +21,48 @@ export const GENERATED_ASSET_GENERATOR_TAG: Record<GeneratedAssetGenerator, stri
   sound_effect: 'sound-effect',
   video: 'video',
   image: 'image',
+  scene: 'scene',
 };
+
+/**
+ * How an input FabFile fed a generation; the trail view labels each lineage edge with it. Must stay a superset of
+ * VIDEO_INPUT_ROLES (video/types.ts): the video store step copies each input's role through unchanged.
+ */
+export const GENERATED_ASSET_LINEAGE_ROLES = [
+  'first_frame',
+  'last_frame',
+  'reference',
+  'style',
+  'extend_of',
+  'variation_of',
+  'edit_source',
+  'mask',
+  // A Scene's inputs (compose generation jobs): its picture, its soundtrack and its cover art.
+  'scene_video',
+  'scene_audio',
+  'scene_cover',
+  // A media clip a Studio Productions render composited into its output.
+  'timeline_clip',
+] as const;
+
+export type GeneratedAssetLineageRole = (typeof GENERATED_ASSET_LINEAGE_ROLES)[number];
+
+/** One FabFile a generated asset was made from. Lowercase hex only: an uppercase id would slip past string-equality guards. */
+export const GeneratedAssetLineageEntrySchema = z.object({
+  fileId: z.string().regex(/^[0-9a-f]{24}$/),
+  jobId: z.string().min(1).optional(),
+  role: z.enum(GENERATED_ASSET_LINEAGE_ROLES),
+});
+
+export type GeneratedAssetLineageEntry = z.infer<typeof GeneratedAssetLineageEntrySchema>;
+
+export const GENERATED_ASSET_MAX_LINEAGE_ENTRIES = 16;
+
+/**
+ * Cap on the stored generation request, in UTF-8 bytes of its JSON. sourceMetadata rides every metadata-only
+ * file listing (METADATA_ONLY_PROJECTION does not drop it), so this bounds listing payloads.
+ */
+export const GENERATED_ASSET_MAX_STORED_REQUEST_BYTES = 16_384;
 
 /**
  * What produced a generated file, stamped as `sourceMetadata.generation` on its FabFile. The notebook link
@@ -52,6 +94,8 @@ export const GeneratedAssetMetadataSchema = z.object({
   languageCode: z.string().optional(),
   /** Sound effects: how closely the provider followed the prompt, 0-1. */
   promptInfluence: z.number().min(0).max(1).optional(),
+  /** The validated generation request, built server-side. Never secrets or signed URLs. */
+  request: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type GeneratedAssetMetadata = z.infer<typeof GeneratedAssetMetadataSchema>;

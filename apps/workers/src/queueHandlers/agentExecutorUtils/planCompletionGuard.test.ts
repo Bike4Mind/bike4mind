@@ -9,6 +9,7 @@ import {
   buildPlanCompleteMsg,
   type PlanProgressState,
 } from './planCompletionGuard';
+import { planStepProgress } from '@bike4mind/common';
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,
@@ -136,6 +137,25 @@ describe('pure helpers', () => {
     // over-solving one family doesn't mask an unsolved one
     expect(planIsComplete({ steps, solved: { scheduling: 5 }, results: {} })).toBe(false);
     expect(planIsComplete({ steps, solved: { scheduling: 1, routing: 1 }, results: {} })).toBe(true);
+  });
+
+  it('planIsComplete fires exactly when planStepProgress reads completed === total', () => {
+    const steps = [
+      { family: 'scheduling', title: 's' },
+      { family: 'routing', title: 'r' },
+    ];
+    const ledgers: PlanProgressState[] = [
+      emptyState(),
+      { steps, solved: { scheduling: 1 }, results: {} },
+      { steps, solved: { scheduling: 5 }, results: {} },
+      { steps, solved: { other: 3 }, results: {} },
+      { steps, solved: { scheduling: 1, routing: 1 }, results: {} },
+      { steps, solved: { scheduling: 4, routing: 2 }, results: {} },
+    ];
+    for (const state of ledgers) {
+      const progress = planStepProgress(state);
+      expect(planIsComplete(state)).toBe(progress !== null && progress.completed === progress.total);
+    }
   });
 
   it('buildPlanCompleteMsg labels each step by its plan title, in order, with its captured result', () => {

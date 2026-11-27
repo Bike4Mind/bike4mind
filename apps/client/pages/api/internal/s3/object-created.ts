@@ -1,19 +1,20 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
+import { isUnconfiguredSecret } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, User, adminSettingsRepository, withTransaction } from '@bike4mind/database';
-import { decodeS3Key, findWithRetry } from '@server/s3/utils';
-import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
+import { decodeS3Key, findWithRetry } from '@bike4mind/server-utils/s3/utils';
+import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { chargeUploadedObject } from '@bike4mind/server-utils/s3/storageCharge';
-import { recordLandedObject } from '@server/s3/moderationScan';
-import { admitLandedUpload } from '@server/s3/uploadSizeGate';
-import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
-import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
-import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
-import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
-import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
-import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
+import { recordLandedObject } from '@bike4mind/server-utils/s3/moderationScan';
+import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
+import { recordRejectedUploadBatch } from '@bike4mind/server-utils/s3/recordRejectedUploadBatch';
+import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
+import { dispatch as historyUploadComplete } from '@bike4mind/server-utils/s3/historyUploadComplete';
+import { dispatch as notebookImportComplete } from '@bike4mind/server-utils/s3/notebookImportComplete';
+import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
+import { buildKnowledgeModerationDeps } from '@bike4mind/server-utils/s3/knowledgeModerationDeps';
 import { Resource } from 'sst';
 import type { Context, S3Event } from 'aws-lambda';
 import crypto from 'crypto';
@@ -61,7 +62,7 @@ const selfHostLambdaContext = (functionName: string) =>
 
 const secretOk = (authorizationHeader: string | string[] | undefined): boolean => {
   const expected = process.env.INTERNAL_S3_WEBHOOK_SECRET;
-  if (!expected) return false;
+  if (!expected || isUnconfiguredSecret(expected)) return false;
   const raw = Array.isArray(authorizationHeader) ? '' : (authorizationHeader ?? '');
   // MinIO sends the auth_token verbatim as the Authorization value; tolerate a Bearer prefix.
   const provided = raw.startsWith('Bearer ') ? raw.slice(7) : raw;
@@ -173,7 +174,7 @@ const handler = baseApi({ auth: false }).post(
 
       // Reconcile against the current stored version before scanning. A failed HEAD or a competing
       // reconciliation must retry, so an old event cannot reopen a newer terminal verdict.
-      await recordLandedObject(metadata._id, objectKey);
+      await recordLandedObject(metadata._id, objectKey, req.logger);
       req.logger.info(`Marked FabFile complete: ${metadata.id} (${objectKey})`);
 
       // Charged from the stored object's size, never the row's client-claimed fileSize. The

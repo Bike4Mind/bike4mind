@@ -1,3 +1,10 @@
+import {
+  settingsMap,
+  signupActiveSeconds,
+  signupGrantDripOpen,
+  signupGrantDripRemaining,
+  type SignupGrant,
+} from '@bike4mind/common';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
 
 export interface StarterPrompt {
@@ -45,8 +52,70 @@ interface CreditsLineArgs {
   balance: number;
   /** Signed up openly and still owes email verification before the starter grant lands. */
   awaitingVerification: boolean;
-  /** What verification will grant: the user's invite amount, else the defaultFreeCredits setting. */
+  /** An explicit grant or the maximum staged entitlement before risk assessment. */
   pendingGrant: number | null;
+  pendingGrantIsMaximum?: boolean;
+}
+
+/** "5 minutes" style phrase for the active-time minimum, rounded to whole minutes, or tenths of an hour from 60 minutes. */
+export function activeTimeCopy(minActiveSeconds: unknown): string {
+  const minutes = Math.round(signupActiveSeconds(minActiveSeconds) / 60);
+  if (minutes < 60) return `about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `about ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+}
+
+/**
+ * What the next drip would pay: the daily amount, capped by what the live drip cap still leaves after
+ * what this account has already dripped. Mirrors the server drip in stagedSignupGrant.ts; 0 when off.
+ */
+export function advertisedDripCredits({
+  dailyCredits,
+  dripCap,
+  grant,
+}: {
+  dailyCredits: number;
+  dripCap: number;
+  grant:
+    | (Pick<SignupGrant, 'dripCredits'> & Partial<Pick<SignupGrant, 'stage' | 'unlockedBy' | 'unlockForfeited'>>)
+    | undefined;
+}): number {
+  // A verification unlock closes the drip for good; pending_email still advertises what verifying will start.
+  if (
+    grant?.stage === 'unlocked' &&
+    !signupGrantDripOpen({ stage: grant.stage, unlockedBy: grant.unlockedBy, unlockForfeited: grant.unlockForfeited })
+  )
+    return 0;
+  return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
+}
+
+/** Use the server's setting schema so the advertised wait follows the payment hold. */
+export function paymentHoldHours(value: unknown): number {
+  const { schema, defaultValue } = settingsMap.signupUnlockPaymentHoldHours;
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : (defaultValue ?? 72);
+}
+
+/** "3 days" style phrase for the payment hold, in whole hours under a day and whole days (rounded up) from there. */
+export function paymentHoldCopy(hours: number): string {
+  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  const days = Math.ceil(hours / 24);
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/**
+ * The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here.
+ * A subscription or card unlock waits for the payment to settle, which SignupGrantStatus states once it is held.
+ */
+export function unlockPathsCopy(dailyDripCredits: number, minActiveSeconds?: unknown, holdHours?: unknown): string {
+  const drip =
+    dailyDripCredits > 0
+      ? `up to ${formatCreditBalance(dailyDripCredits)} for each day you have Bike4Mind open and in use for ${activeTimeCopy(minActiveSeconds)} (a hidden tab or 5 minutes without input does not count), `
+      : '';
+  const hold = paymentHoldHours(holdHours);
+  if (hold === 0)
+    return `The rest unlocks ${drip}all at once when you subscribe, or all at once when you verify a card.`;
+  return `The rest unlocks ${drip}all at once when you subscribe or verify a card, once that payment settles (usually within ${paymentHoldCopy(hold)}).`;
 }
 
 /**
@@ -59,11 +128,15 @@ export function welcomeCreditsLine({
   balance,
   awaitingVerification,
   pendingGrant,
+  pendingGrantIsMaximum = false,
 }: CreditsLineArgs): string | null {
   if (!enforceCredits) return null;
   if (awaitingVerification) {
     return pendingGrant && pendingGrant > 0
-      ? `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
+      ? pendingGrantIsMaximum
+        ? // The unlock paths come from SignupGrantStatus, which the card renders right below for a staged grant.
+          `Verify your email to unlock up to ${formatCreditBalance(pendingGrant)} now.`
+        : `Verify your email to unlock your ${formatCreditBalance(pendingGrant)}.`
       : 'Verify your email to unlock your free credits.';
   }
   if (balance <= 0) return null;

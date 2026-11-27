@@ -27,11 +27,13 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
-vi.mock('@server/integrations/google/drive/common', () => ({ releaseDriveConnection: h.releaseDriveConnection }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', () => ({
+  releaseDriveConnection: h.releaseDriveConnection,
+}));
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   releaseGitHubLakeConnection: h.releaseGitHubLakeConnection,
 }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 

@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { updateShareableFiles } from '../projectService';
+import { AttachableItem, canAttachToProject } from '../projectService/attachGate';
 import { canonicalId, mergeIds, usableSessionIds } from '../utils/objectIds';
 import {
   ICacheRepository,
@@ -85,6 +86,7 @@ export const updateSession = async (
     propagateToProjects,
     lakeScope,
     includeLibraryFiles,
+    promptCacheTtl,
     knowledgeIdsMode,
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
@@ -173,6 +175,9 @@ export const updateSession = async (
   }
   if (includeLibraryFiles !== undefined) {
     update.includeLibraryFiles = includeLibraryFiles;
+  }
+  if (promptCacheTtl !== undefined) {
+    update.promptCacheTtl = promptCacheTtl;
   }
   // The stored pair is always written together, never one half: `lakeScopeExplicit` is the only
   // thing separating "grounds on no lake" from "never chose", and leaving a stale flag beside a
@@ -268,9 +273,23 @@ const addFilesToProjects = async (
   );
 
   for (const project of projects) {
-    project.fileIds = uniq([...project.fileIds, ...fileIds]);
+    // Attaching shares a file with every member, so a file this caller can only read stays out of
+    // the project (attachGate.ts); it is still added to the session itself.
+    const attachable = files.filter(file =>
+      canAttachToProject(file as unknown as AttachableItem, user, project.fileIds)
+    );
+    if (attachable.length < files.length) {
+      const kept = new Set(attachable.map(file => file.id));
+      const skipped = files.filter(file => !kept.has(file.id)).map(file => file.id);
+      Logger.globalInstance.warn(
+        `addFilesToProjects: not attaching ${skipped.length} file(s) user ${user.id} cannot share to project ` +
+          `${project.id}: ${skipped.join(', ')}`
+      );
+    }
+    if (attachable.length === 0) continue;
+    project.fileIds = uniq([...project.fileIds, ...attachable.map(file => file.id)]);
 
-    await updateShareableFiles(user, { project, files }, adapters);
+    await updateShareableFiles(user, { project, files: attachable }, adapters);
 
     await db.projects.update({ id: project.id, fileIds: project.fileIds });
   }

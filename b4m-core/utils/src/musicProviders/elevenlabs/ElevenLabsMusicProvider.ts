@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { MAX_MUSIC_OUTPUT_BYTES, type ValidatedMusicRequest } from '@bike4mind/common';
 import { mp3DurationSeconds } from '../mp3Duration';
+import { isQuotaExhaustedResponse, QUOTA_EXHAUSTED_REASON_SUFFIX } from '../../providerQuota';
 import {
   ProviderOutputTooLargeError,
   ProviderSubmitError,
@@ -399,6 +400,9 @@ const refusalReason = (data: unknown): string => {
 };
 
 const toFailure = (status: number, raw: unknown): ProviderTerminalResult => {
+  if (isQuotaExhaustedResponse(status, raw)) {
+    return { status: 'failed', retryable: false, message: `${PREFIX}${QUOTA_EXHAUSTED_REASON_SUFFIX}`, raw };
+  }
   const detail = ErrorDetailSchema.safeParse(raw);
   const providerStatus = detail.success ? detail.data.detail.status : undefined;
   if (providerStatus && REFUSAL_STATUSES.has(providerStatus)) {

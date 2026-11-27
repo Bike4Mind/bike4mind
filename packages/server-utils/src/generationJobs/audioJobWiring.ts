@@ -1,0 +1,318 @@
+import { apiKeyService } from '@bike4mind/auth';
+import {
+  ApiKeyType,
+  type AudioJobOutput,
+  type IGenerationJobDocument,
+  type SoundGenerationVendor,
+  type VoiceGenerationVendor,
+} from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  apiKeyRepository,
+  cacheRepository,
+  creditTransactionRepository,
+  generationJobRepository,
+  organizationRepository,
+  spendFreezeRepository,
+  usageEventRepository,
+  userRepository,
+  voiceRepository,
+} from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { runElevenLabsWithCapacity, voiceService } from '@bike4mind/services';
+import { usageKeySourceFields } from './providerKeySource';
+import {
+  createSoundEffectJob,
+  createSpeechJob,
+  type AudioJobDeps,
+  type CreateSoundEffectJobDeps,
+  type CreateSpeechJobDeps,
+  type SoundEffectJobDeps,
+  type SpeechJobDeps,
+} from '@bike4mind/services/audioJobs';
+import { runJobInline, type CancelRequestOutcome, type RunJobInlineOptions } from '@bike4mind/services/generationJobs';
+import type { AudioToolJobs } from '@bike4mind/services/llm/tools';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import {
+  createSoundEffectProvider,
+  createSpeechProvider,
+  testSoundEffectProvider,
+  testSpeechProvider,
+} from '@bike4mind/utils/audioProviders';
+import { assertMediaModelAdmission, isMediaModelAdmitted } from '../billing/assertMediaModelAdmission';
+import { checkFreeTierDailySpendCap, isFreeTierDailyCapError } from '../billing/freeTierDailyCapGate';
+import { newAccountSpendCapAdaptersWithAlert } from '../billing/newAccountSpendCapWithAlert';
+import { recordInsufficientCredits } from '../billing/userLimitEvents';
+import { getFilesStorage, getGeneratedImageStorage } from '../utils/storage/index';
+import { resolveApiKeyOrTest, withTestAudioFallback } from './audioTestFallback';
+import {
+  checkStorageFor,
+  enqueueGenerationJob,
+  getGenerationJobEngine,
+  runBudget,
+  saveToFiles,
+  saveToGeneratedBucket,
+  usableApiKey,
+} from './wiring';
+
+const logger = new Logger({ metadata: { component: 'generationJobs' } });
+
+// The stored key type each audio vendor needs; getEffectiveApiKey resolves the user's own key, then the admin one.
+const AUDIO_VENDOR_KEY_TYPE: Record<VoiceGenerationVendor | SoundGenerationVendor, ApiKeyType> = {
+  openai: ApiKeyType.openai,
+  elevenlabs: ApiKeyType.elevenlabs,
+};
+
+const DEFAULT_OPENAI_VOICE = 'alloy';
+
+const resolveAudioApiKey = async (
+  vendor: VoiceGenerationVendor | SoundGenerationVendor,
+  userId: string
+): Promise<string | null> =>
+  usableApiKey(
+    await apiKeyService.getEffectiveApiKey(
+      userId,
+      { type: AUDIO_VENDOR_KEY_TYPE[vendor], nullIfMissing: true },
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
+    )
+  );
+
+/**
+ * OpenAI: the requested voice, the user's preference, then the admin default. ElevenLabs: the requested voice, then
+ * the user's active voice; undefined lets the service apply its premade default.
+ */
+const resolveSpeechVoice: SpeechJobDeps['resolveVoice'] = async ({
+  vendor,
+  userId,
+  requestedVoice,
+  preferredVoice,
+}) => {
+  if (requestedVoice) return requestedVoice;
+  if (vendor === 'elevenlabs') {
+    return (await voiceService.getVoiceId(userId, { db: { voices: voiceRepository } })) || undefined;
+  }
+  if (preferredVoice) return preferredVoice;
+  const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['voiceSessionAiVoice'] });
+  return getSettingsValue('voiceSessionAiVoice', settings) || DEFAULT_OPENAI_VOICE;
+};
+
+const getAudioSettings: AudioJobDeps['getSettings'] = async () => {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['enforceCredits'], skipCache: true }
+  );
+  return { enforceCredits: Boolean(getSettingsValue('enforceCredits', settings)) };
+};
+
+const latencyMs = (createdAt: Date | undefined) => Date.now() - (createdAt?.getTime() ?? Date.now());
+
+const recordSpeechUsage: SpeechJobDeps['recordUsage'] = async ({
+  job,
+  provider,
+  model,
+  characters,
+  creditsCharged,
+  costUsd,
+}) => {
+  try {
+    await usageEventRepository.record({
+      requestId: job.questId ?? job.id,
+      userId: job.requestedBy,
+      ownerId: job.ownerId,
+      ownerType: job.ownerType,
+      ...(job.payload.sessionId !== undefined && { sessionId: job.payload.sessionId }),
+      feature: 'text_to_speech',
+      provider,
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: characters,
+      costUsd,
+      creditsCharged,
+      status: 'ok',
+      ...(await usageKeySourceFields(provider, job.requestedBy)),
+      latencyMs: latencyMs(job.createdAt),
+    });
+  } catch (error) {
+    // Analytics only, never billing: a lost row must not fail the job.
+    logger.warn('failed to record speech usage event', { jobId: job.id, error });
+  }
+};
+
+const recordSoundEffectUsage: SoundEffectJobDeps['recordUsage'] = async ({
+  job,
+  billedSeconds,
+  creditsCharged,
+  costUsd,
+  status,
+}) => {
+  try {
+    await usageEventRepository.record({
+      requestId: job.questId ?? job.id,
+      userId: job.requestedBy,
+      ownerId: job.ownerId,
+      ownerType: job.ownerType,
+      ...(job.payload.sessionId !== undefined && { sessionId: job.payload.sessionId }),
+      feature: 'sound_effects',
+      provider: job.payload.providerId,
+      model: job.payload.providerId,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      units: billedSeconds,
+      costUsd,
+      creditsCharged,
+      status,
+      ...(job.payload.usageSource && { source: job.payload.usageSource }),
+      ...(await usageKeySourceFields(job.payload.providerId, job.requestedBy)),
+      latencyMs: latencyMs(job.createdAt),
+    });
+  } catch (error) {
+    logger.warn('failed to record sound effect usage event', { jobId: job.id, error });
+  }
+};
+
+// The shared ElevenLabs key's sound-effect slots, as /api/ai/sound-effects held them before it ran as a job.
+const runSoundEffectWithCapacity: SoundEffectJobDeps['runWithCapacity'] = (apiKey, attempt) =>
+  runElevenLabsWithCapacity(
+    {
+      operation: 'sound',
+      apiKey,
+      db: { adminSettings: adminSettingsRepository, caches: cacheRepository },
+      logger,
+    },
+    attempt
+  );
+
+// The free-tier daily cap the credit reservation applied before these routes ran as jobs (reserveRequestCredits).
+const checkDailySpendCap: CreateSpeechJobDeps['checkDailySpendCap'] = async ({ userId, billingOrganizationId }) => {
+  try {
+    await checkFreeTierDailySpendCap({
+      userId,
+      userRepository,
+      billingOrganizationId,
+      usageEventRepository,
+      logger,
+    });
+    return undefined;
+  } catch (error) {
+    if (!isFreeTierDailyCapError(error)) throw error;
+    const retryAfter = error.additionalInfo?.retryAfter;
+    return { message: error.message, retryAfterSeconds: typeof retryAfter === 'number' ? retryAfter : 0 };
+  }
+};
+
+const baseDeps = (): AudioJobDeps => ({
+  repository: generationJobRepository,
+  getSettings: getAudioSettings,
+  saveToFiles,
+  saveToGeneratedBucket,
+  credits: {
+    users: userRepository,
+    organizations: organizationRepository,
+    creditTransactions: creditTransactionRepository,
+    newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+    onInsufficientCredits: recordInsufficientCredits,
+    spendFreezes: spendFreezeRepository,
+  },
+  runBudget,
+  enqueue: enqueueGenerationJob,
+  now: () => new Date(),
+  logger,
+});
+
+// Set only on non-production stages by infra (TEST_GENERATION_PROVIDER_ENVIRONMENT); never registered in production.
+// A stage with no audio key runs the job path on the test providers; one with a key still calls the vendor.
+const testAudioProvidersEnabled = () => process.env.ENABLE_TEST_AUDIO_PROVIDER === 'true';
+
+const SPEECH_VENDORS: readonly VoiceGenerationVendor[] = ['openai', 'elevenlabs'];
+const SOUND_EFFECT_VENDORS: readonly SoundGenerationVendor[] = ['elevenlabs'];
+
+let speechJobDeps: SpeechJobDeps | undefined;
+export const getSpeechJobDeps = (): SpeechJobDeps => {
+  const testFallback = testAudioProvidersEnabled();
+  const speechProvider = (vendor: VoiceGenerationVendor) =>
+    testFallback
+      ? withTestAudioFallback(createSpeechProvider(vendor), testSpeechProvider)
+      : createSpeechProvider(vendor);
+  speechJobDeps ??= {
+    ...baseDeps(),
+    providers: { openai: speechProvider('openai'), elevenlabs: speechProvider('elevenlabs') },
+    resolveApiKey: testFallback ? resolveApiKeyOrTest(SPEECH_VENDORS, resolveAudioApiKey) : resolveAudioApiKey,
+    resolveVoice: resolveSpeechVoice,
+    recordUsage: recordSpeechUsage,
+  };
+  return speechJobDeps;
+};
+
+let soundEffectJobDeps: SoundEffectJobDeps | undefined;
+export const getSoundEffectJobDeps = (): SoundEffectJobDeps => {
+  const testFallback = testAudioProvidersEnabled();
+  const elevenlabs = createSoundEffectProvider('elevenlabs');
+  soundEffectJobDeps ??= {
+    ...baseDeps(),
+    providers: { elevenlabs: testFallback ? withTestAudioFallback(elevenlabs, testSoundEffectProvider) : elevenlabs },
+    resolveApiKey: testFallback ? resolveApiKeyOrTest(SOUND_EFFECT_VENDORS, resolveAudioApiKey) : resolveAudioApiKey,
+    runWithCapacity: runSoundEffectWithCapacity,
+    recordUsage: recordSoundEffectUsage,
+  };
+  return soundEffectJobDeps;
+};
+
+export const getCreateSpeechJobDeps = (): CreateSpeechJobDeps => ({
+  ...getSpeechJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
+  isModelAdmitted: isMediaModelAdmitted,
+  checkDailySpendCap,
+  engine: getGenerationJobEngine(),
+  checkStorageFor,
+});
+
+export const getCreateSoundEffectJobDeps = (): CreateSoundEffectJobDeps => ({
+  ...getSoundEffectJobDeps(),
+  assertModelAdmission: assertMediaModelAdmission,
+  checkDailySpendCap,
+  engine: getGenerationJobEngine(),
+  checkStorageFor,
+});
+
+/**
+ * Steps a just-created speech or sound-effect job in this process and waits for it to end (see runJobInline), for a
+ * caller that answers synchronously. Null when it did not end in time; the worker then finishes, and bills, it.
+ */
+export const runAudioJobInline = (jobId: string, options: RunJobInlineOptions) =>
+  runJobInline(jobId, options, {
+    engine: getGenerationJobEngine(),
+    repository: generationJobRepository,
+    now: () => new Date(),
+  });
+
+/**
+ * Requests cancellation of an audio job (engine.requestCancel). A sync job is cancellable only before its provider
+ * call starts; once started it is `not_cancellable` and runs to its end, billed if it produces the clip.
+ */
+export const requestAudioJobCancel = (job: IGenerationJobDocument): Promise<CancelRequestOutcome> =>
+  getGenerationJobEngine().requestCancel(job);
+
+const cancelAudioJobById = async (jobId: string): Promise<CancelRequestOutcome['status']> => {
+  const job = await generationJobRepository.findById(jobId);
+  return job ? (await requestAudioJobCancel(job)).status : 'unchanged';
+};
+
+/** The stored clip's bytes, from the Files or the generated bucket as the job recorded. */
+export const readAudioJobOutput = (output: AudioJobOutput): Promise<Buffer> =>
+  output.location === 'files'
+    ? getFilesStorage().download(output.s3Key)
+    : getGeneratedImageStorage().download(output.s3Key);
+
+/** The audio_generation tool's job functions (ChatCompletionProcess `audioToolJobs`, agent tool config). */
+export const buildAudioToolJobs = (): AudioToolJobs => ({
+  createSpeechJob: input => createSpeechJob(input, getCreateSpeechJobDeps()),
+  createSoundEffectJob: input => createSoundEffectJob(input, getCreateSoundEffectJobDeps()),
+  runInline: runAudioJobInline,
+  readOutput: readAudioJobOutput,
+  cancel: cancelAudioJobById,
+});

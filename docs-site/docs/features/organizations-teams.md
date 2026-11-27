@@ -1,6 +1,6 @@
 ---
-title: "Teams"
-description: "How Teams work in Bike4Mind: creating a team, what it costs, how many people and credits it includes, who pays for usage, and how to manage members and roles"
+title: 'Teams'
+description: 'How Teams work in Bike4Mind: creating a team, what it costs, how many people and credits it includes, who pays for usage, and how to manage members and roles'
 sidebar_position: 7
 tags: [organizations, teams, collaboration]
 ---
@@ -42,26 +42,90 @@ Usage is charged to whichever account you have selected in the account menu, not
 
 ## Add and manage members
 
-Open a Team with **View Details**. The Team page has an **Overview** tab and a **Members** tab. Other tabs (Groups, Usage, Analysis, Integrations, Settings) appear only for people with the right access. The Usage tab, which shows the Team's credit usage, is for the owner and platform admins; being a Team manager does not grant access. The **Billing** tab is visible to the owner only. A Team manager finds the Team in the Teams list marked with a **Manager** badge.
+Open a Team with **View Details**. The tabs on the left are grouped: **Team** (Overview, Members, Library, Groups), **Insights** (Usage, Analysis), **Integrations**, and **Admin** (Billing, API keys, Audit, Settings). Everyone sees Overview, Members and Library; the other tabs appear only for people with the right access (see [Roles](#roles)). The **Integrations** tab holds the Slack, GitHub, Webhooks and Connectors sections, and each section appears only for people who may manage it. The Usage tab, which shows the Team's credit usage, is for the owner, Team managers, billing managers and platform admins. The **Settings** tab, where the Team name, description and system prompt are edited, is for the owner, Team managers and platform admins; only the owner and platform admins see the billing contact there. The **Billing** tab is visible to the owner and billing managers. A Team manager or billing manager finds the Team in the Teams list marked with a **Manager** or **Billing manager** badge.
 
 On the **Members** tab:
 
-- The heading shows how many seats are in use, for example "Members (3 / 10)". Pending invites hold a seat until they are accepted or cancelled.
+- The header shows how many seats are in use, for example "3 of 10 seats used". Pending invites hold a seat until they are accepted or cancelled.
+- The Team owner, Team managers and platform admins see each member's email address. Other members see names only, and search the list by name.
 - The Team owner, Team managers and platform admins can invite people, cancel pending invites and remove members. Only the owner and platform admins can remove a Team manager. Click **Add Member**, type at least 3 characters, select a person and add them. The search finds people you already share a Team or project with by name, or anyone by their full email address. They receive an invite and show as **Pending** until they accept. New invites give the **Viewer** role.
 - If every seat is taken, the owner sees "You've reached your seat limit" and needs to add seats before inviting more people.
 - Use the three-dot menu on a member to **Revoke Access**, or on a pending invite to **Cancel Invite**. Each option appears only to people who are allowed to use it. Members can choose **Leave Team** for themselves.
+- **Revoke Access** opens a removal step that lists what the member owns in the Team: files and artifacts saved to the Team, plus projects, notebooks and agents shared into the Team's groups. A notebook or agent inside a shared project is listed only if it is shared into a group itself. By default that content stays with the departing member, so nothing moves unless you choose otherwise. Pick **Transfer to another member** and choose a current member to make them the owner of that content instead. If they already have a project with the same name, the transferred one is renamed with a "(transferred)" suffix. Either way, the member's API keys billed to the Team are revoked and their access ends. Embed keys the member created for the Team's agents stay active, so an embedded chat widget keeps working. Those keys are not revoked and stay with the removed member, even when you transfer the agent they are bound to. Team storage usage does not change.
 - The Team owner, Team managers and platform admins can cap monthly credit spending. The **Monthly credit limit per member** card sets a default (**Set limit** or **Change limit**), and **Set monthly limit** in a member's menu sets a limit for one person. With no limit, members can spend from the pool without a monthly cap.
+
+## Custom connector policy
+
+If you are the Team owner, a current Team manager or a platform admin, open **View Details > Integrations > Connectors** to manage custom MCP connectors for the Team's members.
+
+- Turn **Custom connectors** off to block members' custom connector tools. Policy changes can take up to five minutes to reach every server handling requests. Members can still remove their connections.
+- Choose catalog connectors only, allowed hosts only, or any host. Blocked hosts apply in every mode. Enter host patterns one per line; `*.example.com` matches subdomains but does not match `example.com` itself.
+- Choose whether every tool call needs approval, whether tools without a read-only annotation are allowed, whether servers without sign-in are allowed, and the connection limit per member.
+- As soon as you change something, a bar at the bottom of the page shows how many changes are unsaved. Click **Save** (or press Cmd+S / Ctrl+S) to apply them, or **Discard** to drop them. Leaving the tab with unsaved changes asks you first. **Use platform default** removes the Team's override and loads the deployment's default policy.
+
+**Member connections** lists connections created under this Team by its current members, with their status under this Team's policy. Members manage their own connections. Older connections saved without a Team association do not appear here: membership alone cannot establish which Team a personal connection belongs to, so those connections are not automatically assigned or exposed to Team admins. The Team's policy still applies to its members.
+
+### Troubleshooting connectors
+
+If you do not see **Connectors**, ask the Team owner to check your management access. An **Admin** role label alone does not make you a Team manager.
+
+If the deployment has custom connectors turned off, the page shows a notice; saving a Team policy cannot turn them on. If the saved policy is invalid, save a valid replacement or use **Use platform default**. If a policy or member-connections request fails, use **Retry** instead of treating the missing data as an empty list. A member who belongs to several Teams is subject to every Team's connector policy, so another Team's restrictions can also block a connection.
+
+## Models and tools
+
+The Team owner, current Team managers and platform admins can open **View Details > Settings > Models and tools** to restrict the AI providers, models and listed built-in tools used in the Team's context. These restrictions do not grant access to a model that is unavailable under the deployment's settings or your plan. Custom connector tools have their own policy under **Connectors**. Requests outside an organization context and platform-selected system models are exempt from the Team's model policy.
+
+- Turn on **Restrict providers** or **Restrict models** and select at least one entry. When both restrictions are on, a model must satisfy both. A provider restriction also blocks media providers that are not represented in the provider list.
+- A selected retired model ID also allows its configured successor, provided the successor meets the provider restriction. Selected IDs that are no longer in the catalog remain visible. Models outside the selected providers remain visible when selected so you can remove them.
+- Turn on **Restrict built-in tools** to choose from the listed tools. Leaving every tool unchecked blocks those tools; turning the restriction off leaves them unrestricted.
+- Click **Save** to apply the policy, or **Reset to unrestricted** to remove the Team's restrictions. Unrestricted does not override platform or plan limits.
+
+The model picker refreshes when you return to the tab and every few minutes, so it can briefly show a model the policy no longer allows. Server checks enforce the policy regardless, when work starts and when governed tools choose a provider; an already running provider request is not cancelled by a policy edit.
+
+### Troubleshooting model policy
+
+If **Models and tools** is missing, ask the owner to check your Team management access. Being able to edit other Team settings does not necessarily grant policy management access.
+
+Unrecognized saved provider or tool entries are shown so an administrator can remove them before saving. They do not authorize a different provider or tool. If the stored policy is malformed, requests fail closed until an administrator saves a valid replacement or resets it. If no model satisfies the policy and the usual platform and plan checks, widen the policy or choose another permitted model; the system does not bypass the restriction to find a fallback.
+
+## Data retention
+
+Open **Teams > View Details > Overview > Data retention** to see the active periods for **Chat history**, **Uploaded files** and **Generated media**. Each starts at **Keep forever**.
+
+If you own or manage the Team, enter a whole number of days for each category you want cleaned up. Leave a field empty to keep that category forever. Shortening a period first shows **Estimate deletions**. Read the estimated message, uploaded-file and generated-file/object counts, then choose **Confirm shorter retention** to enable automatic cleanup. An estimate expires after ten minutes; changing a field requires a new estimate. Large estimates either finish counting all eligible records or ask you to retry; an unfinished estimate cannot confirm a shorter period.
+
+Cleanup runs hourly in bounded batches, so a backlog can take multiple runs. Chat age is measured per message, independently of the file and generated-media periods. File age starts at creation, not when it joins a Team lake. Only explicitly Team-owned data qualifies. Personal files, older unbound chats and imported notebooks are excluded; membership alone never makes personal content eligible. Notebook creation paths that validate and record Team retention ownership qualify; other creation paths, including legacy chat and voice paths, remain unbound. Shared generated media stays while another live notebook or library file references it. Retention ownership does not change storage billing. Generated media follows a validated notebook retention binding; billing a file to a Team lake alone does not bind its inline object. A legal hold on a copied notebook also protects its generated media.
+
+Deleting a member's personal account removes their personal notebooks and confirmation estimates, while Team-owned files and generated media remain subject to the Team's own policy. Cleanup can still process those Team assets after the original uploader or notebook is gone.
+
+Estimates are counts of eligible records, not guaranteed storage savings. The counts can change before cleanup. Deletion follows the existing soft-delete and storage-version behavior; it does not immediately erase backups. Deletions appear in the Team audit log, and held data is preserved.
 
 ## Roles
 
 Each member shows a role label on the Members tab.
 
-- **Owner:** created the Team and holds the subscription.
+- **Owner:** created the Team and holds the subscription. The owner can do everything below.
+- **Manager:** manages members, groups, member credit limits, connectors, Team API keys, Team data lake sources and the Team audit trail, and sees the Usage tab. Managers do not see the Billing tab or manage the Team's Slack, GitHub and webhook integrations.
+- **Billing manager:** manages the subscription, seats and payment on the Billing tab, and sees the Usage tab.
+- **Member:** uses the Team's shared resources.
+
+### Changing a member's role
+
+Open the **Members** tab and use the **Role** menu on a member's row to choose **Manager**, **Billing manager** or **Member**. The menu shows only the changes you are allowed to make:
+
+- The owner and platform admins can give any member any of the three roles.
+- A Team manager can make a member a Manager. A Team manager cannot change another manager or a billing manager, and cannot give the Billing manager role.
+- Billing managers and members do not see the menu.
+
+Each role change is recorded in the Team's audit trail. Ownership is not a role you can pick here; the owner hands it over with the ownership transfer on the Settings tab.
+
+### Access levels
+
 - **Admin**, **Editor** and **Viewer:** the access level shown on a member. Viewer is the level new invites start with. These labels do not decide who manages the roster: the Team owner, Team managers and platform admins do.
 
-## Billing tab (owner only)
+## Billing tab (owner and billing managers)
 
-The Billing tab shows **Billing & Subscription**:
+The Billing tab shows:
 
 - Plan status: **Team Plan** with Active, Canceled or Payment issue, and the renewal or end date.
 - **Subscribe Now** if the Team has no subscription yet.
@@ -69,7 +133,7 @@ The Billing tab shows **Billing & Subscription**:
 - **Manage Seats** to change the number of seats. The dialog is called **Update Team Seats**; type the number of seats or use the minus and plus buttons, and it shows the price per seat per month and the new total. You cannot go below the number of people already on the Team (the owner counts) or below the minimum Team size (the lowest number the dialog accepts is the larger of the two, and typing a number outside the range shows an error). People you have invited who have not yet accepted also count toward the minimum when you save: the dialog does not include them in its limit, so if you enter fewer seats than your members plus pending invites, the update is rejected with a message naming the minimum, and you can cancel invites or enter a higher number. The changes show up on your next billing cycle. While the Team has a payment issue, Manage Seats is hidden until the payment is fixed.
 - **Billing Portal** to update your payment method, view invoices and manage or cancel the subscription.
 
-If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card.
+If a payment fails, the Team shows **Payment Issue** and the Billing Portal is where you update your card. The Team owner and billing managers also see **Pay now**, which charges the open invoice right away. If the card was declined, update it in the Billing Portal first.
 
 ## Related Features
 

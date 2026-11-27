@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ITurnTiming } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import {
+  bedrockEmptyResponseMessage,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+} from '@bike4mind/llm-adapters';
 
 const send = vi.fn();
 vi.mock('@aws-sdk/client-cloudwatch', () => ({
@@ -23,7 +28,8 @@ import {
   describeTurnRetry,
 } from './turnTiming';
 
-// The exact text the Anthropic backend rejects with on an idle timeout - note "may be overloaded".
+// The text the Anthropic backend rejected with on an idle timeout before the typed errors - note
+// "may be overloaded". Errors still in flight across a deploy can carry it.
 const IDLE_TIMEOUT_ERROR = new Error(
   'Anthropic API stream timeout - no response received within 90 seconds. The model may be overloaded. Try simplifying your request or using fewer tools.'
 );
@@ -34,6 +40,28 @@ const withStatus = (message: string, status: number, extra: Record<string, unkno
 describe('classifyTurnRetryReason', () => {
   it('reads our own idle timeout as a stall, not provider overload', () => {
     expect(classifyTurnRetryReason(IDLE_TIMEOUT_ERROR)).toBe('stream_idle_timeout');
+  });
+
+  it.each([
+    [createAnthropicStreamTimeoutError('stream_idle', 180_000), 'stream_idle_timeout'],
+    [createAnthropicStreamTimeoutError('first_event', 30_000), 'stream_idle_timeout'],
+    [createAnthropicRequestTimeoutError(60_000), 'request_timeout'],
+  ] as const)('classifies the typed timeout %s as %s', (error, reason) => {
+    expect(classifyTurnRetryReason(error)).toBe(reason);
+  });
+
+  it('reads a Bedrock stream that ended without a terminal event as truncated', () => {
+    const truncated = new Error(
+      '[BaseBedrockBackend] stream timeout - model "m" in region r ended after 10 chars without a terminal event, so the response is TRUNCATED.'
+    );
+
+    expect(classifyTurnRetryReason(truncated)).toBe('stream_truncated');
+  });
+
+  it('reads a Bedrock stall before the first token as an idle timeout, not a truncation', () => {
+    const stalled = new Error(bedrockEmptyResponseMessage('m', 'r', true));
+
+    expect(classifyTurnRetryReason(stalled)).toBe('stream_idle_timeout');
   });
 
   it('reads a stream that ended without message_stop as truncated, not stalled', () => {
@@ -146,6 +174,21 @@ describe('TurnTimingRecorder', () => {
     const timing = recorder.snapshot();
     expect(timing.retries.map(retry => retry.reason)).toEqual(['stream_idle_timeout', 'overloaded']);
     expect(timing.fallbackHops).toBe(1);
+  });
+
+  it('stores masked retries but returns and logs the original', () => {
+    const recorder = new TurnTimingRecorder(createdAt, processStartedAt);
+    recorder.maskStoredRetries(retry => ({ ...retry, status: undefined, requestId: undefined, model: 'shown' }));
+
+    const original = recorder.recordRetry(withStatus('Overloaded', 529, { requestID: 'req_1' }), 0, 'served');
+    recorder.sink.onRetry({ error: withStatus('Overloaded', 529), delayMs: 0, model: 'served' });
+
+    expect(original).toMatchObject({ status: 529, model: 'served' });
+    for (const stored of recorder.snapshot().retries) {
+      expect(stored).toMatchObject({ reason: 'overloaded', model: 'shown' });
+      expect(stored.status).toBeUndefined();
+      expect(stored.requestId).toBeUndefined();
+    }
   });
 
   it('caps the persisted retry list', () => {

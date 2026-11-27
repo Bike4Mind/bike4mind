@@ -8,6 +8,7 @@ import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
 import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 import { ChatToolModeSchema } from './schemas/promptMeta';
 
 // Re-export LLM tools for external use
@@ -18,16 +19,10 @@ export const DashboardParamsSchema = z.object({
   dashboardDataSources: z.array(
     z.object({
       sourceName: z.string(),
-      data: z.any(),
+      data: z.unknown(),
     })
   ),
   promptName: z.string().optional(),
-});
-
-export const QuestMasterParamsSchema = z.object({
-  questMasterPlanId: z.string(),
-  questId: z.string(),
-  subQuestId: z.string(),
 });
 
 export const ResearchModeConfigurationSchema = z.object({
@@ -73,19 +68,25 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
-   * Extra gpt-image "style anchor" images, as fabFile ids. They ride alongside the primary
-   * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
-   * OpenAI receives them in this order - which matters, because a mask always applies to the
-   * first image in the array. fabFile ids rather than URLs so the existing access +
-   * moderation gates (findAccessibleInIds, isImageServeable) still apply. gpt-image only: the
-   * public endpoints reject them for any other model (assertReferenceImagesSupported) and the
-   * services drop them as a backstop. Repeated ids collapse to one anchor, and each unique one is
-   * billed as an input image (see MAX_REFERENCE_IMAGES).
+   * Extra reference images, as access- and moderation-checked fabFile ids. GPT-image accepts
+   * up to 15 alongside its primary image; FLUX.2 accepts up to 8 total inputs (4 for Klein) and
+   * FLUX 3 up to 10, including all images attached through fabFileIds. Repeated reference ids collapse to one input.
+   * FLUX.2 and FLUX 3 also collapse images with identical content.
+   * FLUX 3 names the inputs ref_image_1..N in order: fabFileIds first, then these as listed.
+   * Other models reject these on public endpoints and drop them in the service backstop.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
   safety_tolerance: BFLSafetyToleranceSchema,
-  prompt_upsampling: z.boolean().optional(),
+  // prefault rather than optional so the generated spec carries the default; BFL is the only
+  // provider that acts on it (see supportsPromptUpsampling).
+  prompt_upsampling: z
+    .boolean()
+    .prefault(false)
+    .describe(
+      'Let the provider rewrite and expand the prompt before rendering. Applies to Black Forest ' +
+        'Labs (FLUX) models only; other models ignore it. Defaults to false.'
+    ),
   seed: z.number().nullable().optional(),
   output_format: ImageOutputFormatSchema.nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
@@ -107,6 +108,61 @@ export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSc
  * (`resolveBillingOrgInput`) rather than the schema, which a public request schema may not
  * `.transform()`. Same rules as `organizationId`: null bills personal, blank is a 422.
  */
+/** A FLUX 3 edit region, using normalized [y_min, x_min, y_max, x_max] coordinates. */
+const bflCoordinate = (axis: string) =>
+  z.number().min(0, `${axis} must be in [0, 1]`).max(1, `${axis} must be in [0, 1]`);
+
+export const BflEditRegionSchema = z.object({
+  prompt: z.string().min(1),
+  bbox: z
+    .tuple([bflCoordinate('y_min'), bflCoordinate('x_min'), bflCoordinate('y_max'), bflCoordinate('x_max')])
+    .superRefine(([yMin, xMin, yMax, xMax], context) => {
+      if (yMin >= yMax) context.addIssue({ code: 'custom', message: 'y_min must be less than y_max' });
+      else if (Math.round(yMin * 1000) >= Math.round(yMax * 1000))
+        context.addIssue({ code: 'custom', message: 'y_min and y_max must span at least one unit on the 0-1000 grid' });
+      if (xMin >= xMax) context.addIssue({ code: 'custom', message: 'x_min must be less than x_max' });
+      else if (Math.round(xMin * 1000) >= Math.round(xMax * 1000))
+        context.addIssue({ code: 'custom', message: 'x_min and x_max must span at least one unit on the 0-1000 grid' });
+    }),
+});
+export type BflEditRegion = z.infer<typeof BflEditRegionSchema>;
+export const MAX_BFL_EDIT_REGIONS = 8;
+export const BflEditRegionsSchema = z
+  .array(BflEditRegionSchema)
+  .max(MAX_BFL_EDIT_REGIONS, `At most ${MAX_BFL_EDIT_REGIONS} edit_regions are allowed`);
+
+export function validateBflEditRegions(regions: BflEditRegion[]): string[] {
+  const parsed = BflEditRegionsSchema.safeParse(regions);
+  if (parsed.success) return [];
+  return parsed.error.issues.map(issue => {
+    const [index, ...path] = issue.path;
+    const prefix = typeof index === 'number' ? `edit_regions[${index}]` : 'edit_regions';
+    const field = path.filter(part => typeof part === 'string').join('.');
+    return `${prefix}${field ? `.${field}` : ''}: ${issue.message}`;
+  });
+}
+
+/**
+ * FLUX 3's edit-with-boxes example uses prompt-inline entries with `from`, `src_bbox`, and
+ * `tgt_bbox`, rather than the `bbox` entries used for text-to-image layouts. Replacement regions
+ * have no copied source pixels; the source image is the first entry in `images` (`ref_image_0`).
+ * Coordinates use the documented 0-1000 integer grid, vertical axis first.
+ * https://docs.bfl.ai/api-reference/utility/generate-an-image-with-flux-3-klein
+ */
+export function formatBflEditRegionsPrompt(prompt: string, regions: BflEditRegion[]): string {
+  const validated = BflEditRegionsSchema.parse(regions);
+  if (validated.length === 0) return prompt;
+  const layout = validated.map((region, index) => ({
+    id: `region_${index}`,
+    from: null,
+    src_bbox: null,
+    tgt_bbox: region.bbox.map(coordinate => Math.round(coordinate * 1000)),
+    desc: region.prompt,
+  }));
+  const references = validated.map((_, index) => `<region_${index}>`).join(' ');
+  return `In <ref_image_0>, ${prompt} Edit ${references}. Keep everything outside the edited regions unchanged.\n\n${JSON.stringify(layout)}`;
+}
+
 const BillingOrgIdAliasSchema = BillingOrganizationIdSchema.describe(
   'Alias of `organizationId`, for callers used to the snake_case video and music bodies. Sending both ' +
     'with different values is a 422.'
@@ -132,6 +188,12 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
       '`"fresh"`, `promptWasEnhanced` is `false`, and a prior session image is carried forward only ' +
       'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
       'self-contained, for example when an agent or pipeline builds it.'
+  ),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'render is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the render, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
   ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
@@ -184,14 +246,16 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
-   * Extra gpt-image "style anchor" images, as fabFile ids. On this endpoint `fabFileIds` is
-   * the inpainting mask, not an image input, so references need their own field: they are
-   * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
-   * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
-   * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. gpt-image only: the public endpoint rejects them for BFL and Gemini
-   * (assertReferenceImagesSupported). Repeated ids collapse to one anchor, and each unique one
-   * is billed as an input image (see MAX_REFERENCE_IMAGES).
+   * Extra gpt-image or FLUX.2 reference images, as fabFile ids. On this endpoint `fabFileIds`
+   * is the inpainting mask (FLUX.2 takes none), not an image input, so references need their
+   * own field: they are appended after `image` (the edit source). OpenAI applies the mask to
+   * the first entry of that array, i.e. always to `image`, never to a reference. fabFile ids
+   * rather than URLs so the existing access + moderation gates (findAccessibleInIds,
+   * isImageServeable) still apply. gpt-image and FLUX.2 only: the public endpoint rejects
+   * them for Fill and Gemini (assertReferenceImagesSupported); FLUX.2's limit is in
+   * getMaxEditReferenceImages. Repeated ids collapse to one anchor. On gpt-image each unique
+   * one is billed as an input image (see MAX_REFERENCE_IMAGES); FLUX.2 bills a flat
+   * per-image price.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
@@ -199,9 +263,24 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
   // ImageEditBodySchema's own (narrower) field.
   output_format: ImageOutputFormatSchema.nullable().optional(),
-  // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
+  // Same `...rest` strip as output_format. Supporting BFL models honour it; FLUX 3 Image, gpt-image and Gemini ignore it.
   seed: z.number().nullable().optional(),
+  /**
+   * BFL region-edit bounding boxes. Each entry carries a per-region prompt and a
+   * \`[y_min, x_min, y_max, x_max]\` box in normalised [0, 1] coordinates (BFL convention).
+   * Accepted on BFL FLUX 3 models only (others → 400). Schema-validated on ingress (422 on
+   * bad coordinates / degenerate boxes / over-cap count), then converted to BFL's prompt-inline
+   * JSON layout format (0-1000 integer grid) by {@link formatBflEditRegionsPrompt} before the
+   * request reaches the provider.
+   */
+  edit_regions: BflEditRegionsSchema.optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget when the " +
+      'edit is held, and the call is refused with 422 `run_budget_exhausted` when it does not fit: ' +
+      'synchronously when the run cannot cover even the cheapest form of the edit, otherwise on the ' +
+      'polled quest (`type: "error"`, `errorCode: "run_budget_exhausted"`). The run bills its own account.'
+  ),
 });
 
 /**
@@ -239,6 +318,20 @@ export const resolveHistoryFetchLimit = (historyCount: number | null | undefined
 export const normalizeRequestedHistoryCount = (historyCount: number): number =>
   historyCount === CLIENT_UNLIMITED_HISTORY_VALUE ? UNLIMITED_HISTORY_COUNT : historyCount;
 
+/**
+ * Most platform connector ids one request may carry; a bound on what reaches a Mongo `$in`. Generous
+ * because the composer keeps an id across an admin's disable and re-enable and never prunes it.
+ */
+export const MAX_ENABLED_PLATFORM_MCP_CONNECTIONS = 200;
+
+/** Platform MCP connector ids (ObjectId hex) the composer switched on. */
+export const EnabledPlatformMcpConnectionsSchema = z
+  .array(z.string().regex(/^[a-f\d]{24}$/i))
+  .max(MAX_ENABLED_PLATFORM_MCP_CONNECTIONS)
+  .optional();
+
+// Not strict: an older client can still send the retired QuestMaster fields (enableQuestMaster,
+// questMaster). They are stripped on parse and ignored.
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
@@ -294,10 +387,6 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   dashboardParams: DashboardParamsSchema.optional(),
   /** LLM params */
   params: ChatCompletionCreateInputSchema,
-  /** Whether Quest Master is enabled */
-  enableQuestMaster: z.boolean().optional(),
-  /** Whether QuestMaster v5 (node-graph) is enabled */
-  enableQuestMasterV5: z.boolean().optional(),
   /**
    * How much of the system stack to put in front of the model, for callers that need a completion
    * they can compare against the bare provider model. Unset keeps the full stack - what every
@@ -369,14 +458,25 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
   /** Enabled MCP servers */
   mcpServers: z.array(z.string()).optional(),
+  /**
+   * Slugs of custom MCP connectors switched off in the composer; every other enabled connector is
+   * offered. An opt-out list, not part of `mcpServers`: the client fills that list with built-in
+   * server names before any custom connector exists, so reading it as an allowlist for connectors
+   * would switch them all off.
+   */
+  disabledMcpConnections: z.array(z.string()).optional(),
+  /**
+   * Ids of the platform connectors the user switched on in the composer. Opt-in, unlike
+   * `disabledMcpConnections`: a platform connector is offered to no one who has not switched it on,
+   * so a request without this list gets none.
+   */
+  enabledPlatformMcpConnections: EnabledPlatformMcpConnectionsSchema,
   /** Project ID */
   projectId: z.string().optional(),
   /** Organization ID */
   organizationId: z.string().nullable().optional(),
   /** Tool prompt ID to use for the LLM */
   toolPromptId: z.string().optional(),
-  /** Quest Master related params */
-  questMaster: QuestMasterParamsSchema.optional(),
   /** Research Mode related params */
   researchMode: ResearchModeParamsSchema.optional(),
   /** Fallback model ID to try if primary model fails */

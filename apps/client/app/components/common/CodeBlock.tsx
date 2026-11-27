@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Box, IconButton, Tooltip } from '@mui/joy';
-import { ContentCopy, Check } from '@mui/icons-material';
+import ContentCopy from '@mui/icons-material/ContentCopy';
+import Check from '@mui/icons-material/Check';
 
 interface CodeBlockProps extends React.HTMLAttributes<HTMLPreElement> {
   children?: React.ReactNode;

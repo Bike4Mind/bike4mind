@@ -18,6 +18,8 @@ vi.mock('./Browser/Content', () => {
     return (
       <div>
         <span data-testid={`count-${key}`}>{selectedIds.size}</span>
+        <span data-testid={`locked-${key}`}>{JSON.stringify(config.lockedFilters ?? null)}</span>
+        <span data-testid={`star-${key}`}>{String(config.enableStar ?? false)}</span>
         <button data-testid={`select-${key}`} onClick={() => setSelectedIds(new Set([...selectedIds, 'f1']))}>
           select
         </button>
@@ -33,7 +35,7 @@ vi.mock('./Browser/Content', () => {
   return { default: ContentProbe };
 });
 
-import EmbeddedFileBrowser, { type EmbeddedFileBrowserHandle } from './EmbeddedFileBrowser';
+import EmbeddedFileBrowser, { InlineFileBrowser, type EmbeddedFileBrowserHandle } from './EmbeddedFileBrowser';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -71,5 +73,36 @@ describe('EmbeddedFileBrowser', () => {
     fireEvent.click(screen.getByTestId('add-A'));
     expect(onAddA).toHaveBeenCalledWith([expect.objectContaining({ id: 'f1' })]);
     expect(onAddB).not.toHaveBeenCalled();
+  });
+});
+
+describe('InlineFileBrowser', () => {
+  it('renders the browser in place, without a dialog or an open call', () => {
+    render(
+      <TestWrapper>
+        <InlineFileBrowser addButtonLabelKey="I" lockedFilters={{ source: 'generated' }} enableStar />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('inline-file-browser')).toBeTruthy();
+    expect(screen.queryByTestId('embedded-file-browser-dialog')).toBeNull();
+    expect(screen.getByTestId('locked-I').textContent).toBe('{"source":"generated"}');
+    expect(screen.getByTestId('star-I').textContent).toBe('true');
+  });
+
+  it('keeps its own selection apart from a modal picker on the same screen', () => {
+    const ref = createRef<EmbeddedFileBrowserHandle>();
+    render(
+      <TestWrapper>
+        <InlineFileBrowser addButtonLabelKey="I" />
+        <EmbeddedFileBrowser ref={ref} addButtonLabelKey="M" />
+      </TestWrapper>
+    );
+    act(() => ref.current!.handleOpen());
+
+    fireEvent.click(screen.getByTestId('select-I'));
+
+    expect(screen.getByTestId('count-I').textContent).toBe('1');
+    expect(screen.getByTestId('count-M').textContent).toBe('0');
   });
 });

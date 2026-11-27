@@ -1,6 +1,11 @@
 import { IUserDocument } from '@bike4mind/common';
-import { IRegistrationInviteRepository, RegInviteStatusType } from '@bike4mind/common';
-import { ForbiddenError, secureParameters } from '@bike4mind/utils';
+import {
+  IGrantPackageRepository,
+  isGrantPackageExpired,
+  IRegistrationInviteRepository,
+  RegInviteStatusType,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import range from 'lodash/range.js';
 import { z } from 'zod';
@@ -12,6 +17,7 @@ const generateReferralCodesSchema = z.object({
   tags: z.array(z.string().min(1).max(100)).max(20).optional(),
   startingCredits: z.number().int().min(0).max(1_000_000).optional(),
   startingStorage: z.number().int().min(0).max(100_000).optional(),
+  grantPackageId: z.string().min(1).optional(),
 });
 
 type GenerateReferralCodesParameters = z.infer<typeof generateReferralCodesSchema>;
@@ -19,6 +25,7 @@ type GenerateReferralCodesParameters = z.infer<typeof generateReferralCodesSchem
 interface GenerateReferralCodesAdapters {
   db: {
     regInvites: IRegistrationInviteRepository;
+    grantPackages?: IGrantPackageRepository;
   };
 }
 
@@ -36,9 +43,16 @@ export const generateReferralCodes = async (
     unlimitedUse = false,
     expiresAt,
     tags,
-    startingCredits,
-    startingStorage,
+    grantPackageId,
+    ...amounts
   } = secureParameters(parameters, generateReferralCodesSchema);
+
+  let { startingCredits, startingStorage } = amounts;
+  if (grantPackageId) {
+    const grantPackage = await requireActiveGrantPackage(grantPackageId, db.grantPackages);
+    startingCredits = grantPackage.credits;
+    startingStorage = grantPackage.storageMb ?? startingStorage;
+  }
 
   const resolveExpiry = () => {
     if (unlimitedUse) {
@@ -62,6 +76,7 @@ export const generateReferralCodes = async (
       ...(tags && tags.length > 0 ? { tags } : {}),
       ...(startingCredits != null ? { startingCredits } : {}),
       ...(startingStorage != null ? { startingStorage } : {}),
+      ...(grantPackageId ? { grantPackageId } : {}),
       usageHistory: [],
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -72,6 +87,15 @@ export const generateReferralCodes = async (
 
   return regInvites;
 };
+
+/** An invite may only point at a package that exists, is active and has not expired; caps are enforced at redemption. */
+export async function requireActiveGrantPackage(grantPackageId: string, grantPackages?: IGrantPackageRepository) {
+  const grantPackage = grantPackages ? await grantPackages.findById(grantPackageId) : null;
+  if (!grantPackage) throw new BadRequestError('Grant package not found');
+  if (!grantPackage.active) throw new BadRequestError('Grant package is inactive');
+  if (isGrantPackageExpired(grantPackage)) throw new BadRequestError('Grant package has expired');
+  return grantPackage;
+}
 
 function generateCode(): string {
   const randomBytesArray = randomBytes(8);

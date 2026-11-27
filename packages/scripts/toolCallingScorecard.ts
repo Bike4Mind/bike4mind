@@ -16,10 +16,10 @@ import {
   formatToolCallingReport,
   type ToolCallingTurn,
 } from '@bike4mind/services/evals/toolCalling';
-import * as dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import mongoose from 'mongoose';
 
-dotenv.config({ path: '../../.env' });
+if (existsSync('../../.env')) process.loadEnvFile('../../.env');
 
 const DEFAULT_DAYS = 7;
 const DEFAULT_LIMIT = 5000;

@@ -1,7 +1,7 @@
 import { Box, Checkbox } from '@mui/joy';
 import { FC, useCallback, useMemo, useState, useEffect } from 'react';
 import AddIcon from '@mui/icons-material/Add';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
 import { useAddFilesToProject } from '@client/app/hooks/data/projects';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';

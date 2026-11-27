@@ -17,7 +17,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/serve
 import { generateWebhookToken, generateWebhookSecret } from '@server/integrations/github/webhookUtils';
 import { SUPPORTED_GITHUB_EVENTS, isValidGitHubEventType } from '@bike4mind/server-utils/integrations/github/types';
 import { Logger } from '@bike4mind/observability';
-import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 const logger = new Logger({ metadata: { service: 'github-webhook-config' } });
 
@@ -62,7 +62,7 @@ function getWebhookUrl(routingToken: string): string {
   return `${baseUrl}/api/webhooks/github/${routingToken}`;
 }
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   /**
    * POST - Create or update webhook configuration
    *

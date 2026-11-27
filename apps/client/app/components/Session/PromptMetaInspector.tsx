@@ -14,7 +14,15 @@ import {
   TabPanel,
   Tooltip,
 } from '@mui/joy';
-import { ModelTraining, Thermostat, Token, Speed, Close, Timer, Code, Warning, ContentCopy } from '@mui/icons-material';
+import ModelTraining from '@mui/icons-material/ModelTraining';
+import Thermostat from '@mui/icons-material/Thermostat';
+import Token from '@mui/icons-material/Token';
+import Speed from '@mui/icons-material/Speed';
+import Close from '@mui/icons-material/Close';
+import Timer from '@mui/icons-material/Timer';
+import Code from '@mui/icons-material/Code';
+import Warning from '@mui/icons-material/Warning';
+import ContentCopy from '@mui/icons-material/ContentCopy';
 import {
   ANSWER_DIAGNOSIS_TITLE,
   CLIENT_UNLIMITED_HISTORY_VALUE,

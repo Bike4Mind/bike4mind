@@ -1,3 +1,5 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import {
   connectDB,
   questRepository,
@@ -8,12 +10,12 @@ import {
   mongoose,
   adminSettingsRepository,
   userRepository,
-  questMasterPlanRepository,
   Connection,
   fabFileRepository,
   fabFileChunkRepository,
   projectRepository,
   organizationRepository,
+  spendFreezeRepository,
   mcpServerRepository,
   creditTransactionRepository,
   agentRepository,
@@ -33,42 +35,71 @@ import {
   scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
-import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
+import { recordUserLimitEvent } from '@bike4mind/server-utils/billing/userLimitEvents';
+import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { z } from 'zod';
-import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services/llm';
+import { QuestStartBodySchema, ChatCompletionProcess, type ClientFrameSender } from '@bike4mind/services/llm';
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
-import { premiumWorkspaceSessionSettings } from '@server/premium-generated/premiumWorkspaceSessionSettings.generated';
+import { adminAssistantToolDefinitions } from '@server/adminAssistant';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { coreTutorialTurns } from '@bike4mind/server-utils/tutorials/chatTurns';
+import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
+import { signingKey } from '@bike4mind/server-utils/security/signingKeys';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { publishPushNotification, sessionDeepLink } from '@bike4mind/server-utils/utils/pushNotifications';
+import { publishLiveActivityUpdate } from '@bike4mind/server-utils/utils/liveActivityPush';
+import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 import { recordFirstChatValue } from '@server/analytics/funnel';
-import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
-import { getUserEntitlements } from '@server/entitlements';
+import { summarizeSession, contextSummarizeSession } from '@bike4mind/server-utils/managers/sessionManager';
+import { getUserEntitlements } from '@bike4mind/server-utils/entitlements/index';
+import { resolveThinkingVisibility } from '@bike4mind/server-utils/utils/thinkingVisibility';
+import { operationalBillingAdapters } from '@bike4mind/server-utils/billing/operationalBilling';
 import { accessibleBy } from '@casl/mongoose';
-import { IUserDocument, Permission } from '@bike4mind/common';
-import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
-import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
-import { recallMementosV2 } from '@server/memory/recallMementosV2';
-import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
-import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
-import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
-import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
-import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
-import { buildMusicToolConfig } from '@server/musicGenerations/buildMusicToolConfig';
+import { IUserDocument, Permission, SPEND_FROZEN_ERROR_CODE, isSpendFrozenError } from '@bike4mind/common';
+import { LLMEvents, SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
+  getSharedTokenizer,
+  publishModerationEscalation,
+  publishTelemetryAlertCallback,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
+import { recallMementosV2 } from '@bike4mind/server-utils/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@bike4mind/server-utils/memory/lakeMemoryRecall';
+import { loadSystemPromptById } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
+import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
+import { cancelPendingActionOnQuest } from '@bike4mind/server-utils/utils/pendingActionExecutor';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildMusicToolConfig } from '@bike4mind/server-utils/musicGenerations/buildMusicToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import {
+  getCreateImageJobsDeps,
   getCreateMusicJobDeps,
   getCreateVideoJobDeps,
   getMusicJobDeps,
   getVideoJobDeps,
-} from '@server/generationJobs/wiring';
-import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
-import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
+} from '@bike4mind/server-utils/generationJobs/wiring';
+import { createImageJobs } from '@bike4mind/services/imageJobs';
+import { resolveImageJobFiles } from '@bike4mind/server-utils/generations/resolveImageJobFiles';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import { getMcpClientAdapter } from '@bike4mind/server-utils/utils/getMcpClientAdapter';
+import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
+import {
+  checkFreeTierDailySpendCap,
+  isFreeTierDailyCapError,
+} from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { imageModerationIncidents } from '@bike4mind/server-utils/moderation/imageModerationIncidents';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
 // dynamic per-request properties (user, sessionId, logger) are added below. Tokenizer is a
@@ -92,7 +123,6 @@ export const getStaticOptions = () => {
     db: {
       sessions: sessionRepository,
       quests: questRepository,
-      questMasterPlans: questMasterPlanRepository,
       users: userRepository,
       apiKeys: apiKeyRepository,
       adminSettings: adminSettingsRepository,
@@ -105,9 +135,14 @@ export const getStaticOptions = () => {
       mementos: mementoRepository,
       projects: projectRepository,
       organizations: organizationRepository,
+      spendFreezes: spendFreezeRepository,
+      userApiKeys: userApiKeyRepository,
       mcpServers: mcpServerRepository,
+      newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      recordLimitEvent: recordUserLimitEvent,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
+      operationalBilling: operationalBillingAdapters,
       agents: agentRepository,
       skills: skillRepository,
       prompts: promptRepository,
@@ -159,13 +194,16 @@ export const getStaticOptions = () => {
     abilityGetter: defineAbilitiesFor,
     workspaceDeniedTools: premiumWorkspaceDeniedTools,
     workspaceSessionSettings: premiumWorkspaceSessionSettings,
+    coreTutorialTurns,
     getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) =>
       accessibleBy(defineAbilitiesFor(user), permission).ofType(mongoose.models[modelName]),
     // Resolve the caller's entitlement keys so retrieval can reach entitlement-gated lakes
     // (e.g. a tag-less, entitlement-only subscriber). Pure function ref - safe to cache; the
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
+    getThinkingVisibility: resolveThinkingVisibility,
     autoNameSession: autoNameSessionAdapter,
+    notifyModerationEscalation: publishModerationEscalation,
     invokeCreateMemento: async (
       questId: string,
       sessionId: string,
@@ -193,10 +231,12 @@ export const getStaticOptions = () => {
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,
+    customMcp: functionAndConnectorToolHost('chat'),
     logEvent: logEvent,
     cacheRepository: cacheRepository,
     publishTelemetryAlert: publishTelemetryAlertCallback,
-    telemetryHmacSecret: Resource.SECRET_ENCRYPTION_KEY.value,
+    telemetryHmacSecret: signingKey('telemetry-salt'),
+    imageUrlSigningSecret: signingKey('search-image-url'),
   };
 
   return cachedStaticOptions;
@@ -239,6 +279,15 @@ export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId:
     : () => buildMusicToolConfig(userId, { availability: getMusicJobDeps(), createDeps: getCreateMusicJobDeps() });
 
 /**
+ * Session turns start image jobs (one card per image). An API-key turn keeps the in-process render: a job it
+ * started would bypass the image-generations contract's scope check and rate limit, as for video.
+ */
+export const getImageJobsResolver = (apiKeyId: string | undefined) =>
+  apiKeyId
+    ? undefined
+    : async () => (input: Parameters<typeof createImageJobs>[0]) => createImageJobs(input, getCreateImageJobsDeps());
+
+/**
  * Quest Processor - shared processing core.
  *
  * Runs a single chat-completion quest end-to-end (load user/session, assemble
@@ -250,7 +299,16 @@ export const getMusicToolConfigResolver = (apiKeyId: string | undefined, userId:
  * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
-export async function processQuest(params: z.infer<typeof QuestStartBodySchema>, logger: Logger): Promise<void> {
+export type ProcessQuestOptions = {
+  /** Sink for the turn's websocket frames; see IChatCompletionServiceOptions.clientMessageSender. */
+  clientMessageSender?: ClientFrameSender;
+};
+
+export async function processQuest(
+  params: z.infer<typeof QuestStartBodySchema>,
+  logger: Logger,
+  { clientMessageSender }: ProcessQuestOptions = {}
+): Promise<void> {
   const handlerStartTime = Date.now();
   logger.debug('Quest processor start');
 
@@ -266,13 +324,14 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
 
   // Load user and session in parallel for better performance
   const queryStartTime = Date.now();
-  const [user, session] = await Promise.all([
+  const [storedUser, session] = await Promise.all([
     User.findById(params.userId),
     sessionRepository.findById(params.sessionId),
   ]);
   logger.debug('User and session queries completed', { durationMs: Date.now() - queryStartTime });
 
-  if (!user) throw new NotFoundError('User not found');
+  if (!storedUser) throw new NotFoundError('User not found');
+  await resolveRoleAdminPermissions(storedUser);
 
   logger.updateMetadata({
     userId: params.userId,
@@ -292,80 +351,172 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     throw new NotFoundError('Session not found');
   }
 
-  // Prepare the request body with server-side searchers augmentation
-  // Note: searchers are server-side only and not part of the API schema
-  type ServerSideQuestBody = z.infer<typeof QuestStartBodySchema> & {
-    params: z.infer<typeof QuestStartBodySchema>['params'] & {
-      deepResearchConfig?: {
-        maxDepth?: number;
-        duration?: number;
-        searchers?: unknown[];
+  const liveActivity = createChatLiveActivity(
+    { userId: params.userId, questId: params.questId, apiKeyId: params.apiKeyId },
+    {
+      findQuest: questId => questRepository.findById(questId),
+      publishLiveActivity: event => publishLiveActivityUpdate(event, logger),
+    },
+    logger
+  );
+
+  let user: typeof storedUser;
+  try {
+    // Every quest-creating surface (web app, public chat API, Slack, voice proxy) lands here, so this
+    // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
+    // quest with the reason instead of throwing into the route's generic-failure reply and metric.
+    try {
+      // Ahead of the cap and the turn: a frozen subject is refused before any context is assembled.
+      await assertSpendNotFrozen(
+        spendFreezeSubjectForRequest(
+          {
+            user: { id: params.userId },
+            apiKeyInfo: params.apiKeyId ? { keyId: params.apiKeyId } : undefined,
+          },
+          params.organizationId ?? null
+        ),
+        { db: { spendFreezes: spendFreezeRepository } }
+      );
+      await checkFreeTierDailySpendCap({
+        user: storedUser,
+        billingOrganizationId: params.organizationId,
+        usageEventRepository,
+        logger,
+      });
+    } catch (error) {
+      const frozen = isSpendFrozenError(error);
+      if (!frozen && !isFreeTierDailyCapError(error)) throw error;
+      logger.info(`Quest refused by the ${frozen ? 'spend freeze' : 'free-tier daily spend cap'}`, {
+        questId: params.questId,
+      });
+      await questRepository.settleIfUnfinished(params.questId, {
+        status: 'stopped',
+        type: 'error',
+        reply: error.message,
+        replies: [error.message],
+        ...(frozen ? { errorCode: SPEND_FROZEN_ERROR_CODE } : {}),
+      });
+      await liveActivity.end('failed');
+      return;
+    }
+
+    // Withholding mutates the document, so do it after the billing exemption check.
+    user = params.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
+
+    // Prepare the request body with server-side searchers augmentation
+    // Note: searchers are server-side only and not part of the API schema
+    type ServerSideQuestBody = z.infer<typeof QuestStartBodySchema> & {
+      params: z.infer<typeof QuestStartBodySchema>['params'] & {
+        deepResearchConfig?: {
+          maxDepth?: number;
+          duration?: number;
+          searchers?: unknown[];
+        };
       };
     };
-  };
-  const requestBody: ServerSideQuestBody = {
-    ...params,
-    params: {
-      ...params.params,
-    },
-  };
+    const requestBody: ServerSideQuestBody = {
+      ...params,
+      params: {
+        ...params.params,
+      },
+    };
 
-  // Use cached static options + add dynamic properties per request
-  const optionsStartTime = Date.now();
-  const staticOptions = getStaticOptions();
-  const chatCompletion = new ChatCompletionProcess({
-    ...staticOptions,
-    // Override with request-specific dynamic properties
-    logger,
-    tokenizer: getSharedTokenizer(logger),
-    sessionId: params.sessionId,
-    user,
-  });
-  logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
+    // Use cached static options + add dynamic properties per request
+    const optionsStartTime = Date.now();
+    const staticOptions = getStaticOptions();
+    const chatCompletion = new ChatCompletionProcess({
+      ...staticOptions,
+      // Override with request-specific dynamic properties
+      // A tool that re-reads the owner by id must see the same withheld role as `user`.
+      db: params.adminRoleWithheld
+        ? { ...staticOptions.db, users: ownerWithheldUsers(params.userId, staticOptions.db.users) }
+        : staticOptions.db,
+      logger,
+      tokenizer: getSharedTokenizer(logger),
+      sessionId: params.sessionId,
+      user,
+      audioToolJobs: buildAudioToolJobs(),
+      onStatusUpdate: liveActivity.onStatusUpdate,
+      ...(clientMessageSender ? { clientMessageSender } : {}),
+    });
+    logger.debug('ChatCompletionProcess instantiation', { durationMs: Date.now() - optionsStartTime });
 
-  const timeToProcess = Date.now() - handlerStartTime;
-  logger.debug('Calling chatCompletion.process', { durationMs: timeToProcess });
-  // Build external tools: base Slack tools + conditional pending action tools,
-  // plus Lattice definitions when the feature is enabled. These can't be
-  // serialized through EventBridge, so they're supplied to process() directly.
-  let externalTools: Record<string, ToolDefinition> | undefined;
-  if (requestBody.enableSlackTools) {
-    externalTools = { ...slackToolDefinitions };
+    const timeToProcess = Date.now() - handlerStartTime;
+    logger.debug('Calling chatCompletion.process', { durationMs: timeToProcess });
+    // Build external tools: base Slack tools + conditional pending action tools,
+    // plus Lattice definitions when the feature is enabled. These can't be
+    // serialized through EventBridge, so they're supplied to process() directly.
+    let externalTools: Record<string, ToolDefinition> | undefined;
+    if (requestBody.enableSlackTools) {
+      externalTools = { ...slackToolDefinitions };
 
-    // Add the cancel tool only when the tools array includes it
-    if (requestBody.tools?.includes('cancel_pending_action')) {
-      const pendingTools = createPendingActionToolDefs({
-        sessionId: params.sessionId,
-        cancelPendingAction: cancelPendingActionOnQuest,
-        findQuestWithPendingAction: (sessionId: string) =>
-          Quest.findOne({ sessionId, pendingAction: { $exists: true } }).sort({ createdAt: -1 }),
-      });
-      Object.assign(externalTools, pendingTools);
+      // Add the cancel tool only when the tools array includes it
+      if (requestBody.tools?.includes('cancel_pending_action')) {
+        const pendingTools = createPendingActionToolDefs({
+          sessionId: params.sessionId,
+          cancelPendingAction: cancelPendingActionOnQuest,
+          findQuestWithPendingAction: (sessionId: string) =>
+            Quest.findOne({ sessionId, pendingAction: { $exists: true } }).sort({ createdAt: -1 }),
+        });
+        Object.assign(externalTools, pendingTools);
+      }
     }
+
+    // Register Lattice tool definitions as externalTools when the flag is set, so
+    // the names appended inside ChatCompletionProcess actually resolve.
+    externalTools = withLatticeTools(externalTools, requestBody.enableLattice);
+
+    // Premium overlay tool implementations (PremiumOverlayToolName): their names
+    // live in the b4mLLMTools enum but their implementations are not in b4mTools;
+    // without this merge an enabled premium tool silently no-ops. Spread first so
+    // explicit Slack/pending/Lattice tools win on any collision.
+    externalTools = { ...premiumLlmTools, ...externalTools };
+
+    // Admin assistant tools: empty unless the DB-loaded user is an admin. The session-surface gate
+    // in ChatCompletionProcess decides whether they are enabled; spread first so they never shadow
+    // an existing external tool.
+    externalTools = { ...adminAssistantToolDefinitions(user), ...externalTools };
+
+    await chatCompletion.process({
+      body: requestBody,
+      logger,
+      externalTools,
+      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
+      videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
+      musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
+      imageJobsResolver: getImageJobsResolver(params.apiKeyId),
+      imageJobFilesResolver: resolveImageJobFiles,
+      callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
+    });
+  } catch (error) {
+    await liveActivity.end('failed');
+    throw error;
   }
-
-  // Register Lattice tool definitions as externalTools when the flag is set, so
-  // the names appended inside ChatCompletionProcess actually resolve.
-  externalTools = withLatticeTools(externalTools, requestBody.enableLattice);
-
-  // Premium overlay tool implementations (PremiumOverlayToolName): their names
-  // live in the b4mLLMTools enum but their implementations are not in b4mTools;
-  // without this merge an enabled premium tool silently no-ops. Spread first so
-  // explicit Slack/pending/Lattice tools win on any collision.
-  externalTools = { ...premiumLlmTools, ...externalTools };
-
-  await chatCompletion.process({
-    body: requestBody,
-    logger,
-    externalTools,
-    videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
-    musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
-  });
+  await liveActivity.end();
 
   await recordFirstChatValue({
     user,
     loadQuest: () => questRepository.findById(params.questId),
+    visitId: params.visitId,
   });
+
+  await publishChatCompletedPush(
+    {
+      userId: params.userId,
+      sessionId: params.sessionId,
+      questId: params.questId,
+      sessionName: session.name,
+      apiKeyId: params.apiKeyId,
+      enableSlackTools: params.enableSlackTools,
+    },
+    {
+      connections: Connection,
+      findQuest: questId => questRepository.findById(questId),
+      sessionDeepLink,
+      publish: event => publishPushNotification(event, logger),
+    },
+    logger
+  );
 
   return;
 }

@@ -9,6 +9,8 @@ import IconButton from '@mui/joy/IconButton';
 import { useTheme } from '@mui/joy/styles';
 import React, { memo, useEffect, useMemo, useState } from 'react';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { thinkingForSend } from '@client/app/utils/thinkingPayload';
 import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { LLMSettings, handleLLMCommand } from '../commands/LLMCommand';
 import { selectTurnPreferences } from '../commands/turnPreferences';
@@ -16,8 +18,8 @@ import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import { INFINITE_VALUE } from '../FibonacciSlider';
 import { useAdvancedAISettings } from './AdvancedAISettings';
-import { handleImageEditCommand, handleImageGenerationCommand } from '../commands/ImageGenerationCommand';
-import { CommandHandlers, CommandKey, extractCommandAndParams, handleCommand } from '@client/app/utils/commands';
+import { dispatchSend } from './chatImageSend';
+import { CommandHandlers, CommandKey, chatImageSendMode, extractCommandAndParams } from '@client/app/utils/commands';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSearch } from '@tanstack/react-router';
 import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
@@ -90,9 +92,9 @@ const ScrollToBottomButton = memo(
           variant="plain"
           sx={theme => ({
             borderRadius: '50%',
-            '--IconButton-size': '34px',
-            minWidth: '34px',
-            minHeight: '34px',
+            '--IconButton-size': '32px',
+            minWidth: '32px',
+            minHeight: '32px',
             '--Icon-fontSize': '18px',
             color: 'text.primary',
             // Glass: the transcript stays visible through the button, blurred. The solid
@@ -138,8 +140,6 @@ ScrollToBottomButton.displayName = 'ScrollToBottomButton';
 
 const commandHandlers: CommandHandlers = {
   '/llm': handleLLMCommand,
-  '/gen_image': handleImageGenerationCommand,
-  '/edit_image': handleImageEditCommand,
 };
 
 const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, emptySessionSplash }) => {
@@ -174,13 +174,14 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
     prompt_upsampling,
     seed,
     output_format,
-    isQuestMasterEnabled,
     isMementosEnabled,
     isArtifactsEnabled,
     tools,
     organizationId,
     thinking,
     enabledMcpServers,
+    disabledMcpConnections,
+    enabledPlatformMcpConnections,
     imageModel,
   ] = useLLM(
     useShallow(s => [
@@ -196,17 +197,19 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.prompt_upsampling,
       s.seed,
       s.output_format,
-      s.isQuestMasterEnabled,
       s.isMementosEnabled,
       s.isArtifactsEnabled,
       s.tools,
       s.organizationId,
       s.thinking,
       s.enabledMcpServers,
+      s.disabledMcpConnections,
+      s.enabledPlatformMcpConnections,
       s.imageModel,
     ])
   );
   const turnPreferences = useLLM(useShallow(selectTurnPreferences));
+  const { data: modelInfo } = useModelInfo();
 
   // Ensure max_tokens is never undefined
   const safeMaxTokens = max_tokens ?? 2048;
@@ -325,31 +328,25 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       };
 
       const enabledFiles = workBenchFiles.map(file => file.fileName);
-      const [command, params] = extractCommandAndParams(
-        liveAI,
-        model,
-        historyLines,
-        messageData?.prompt,
-        enabledFiles,
-        isImageEdit
-      );
+      const [command, params] = extractCommandAndParams(liveAI, model, historyLines, messageData?.prompt, enabledFiles);
+      const imageSendMode = chatImageSendMode(liveAI, model, messageData.prompt, isImageEdit);
       const userId = currentUser!.id;
 
-      if (commandHandlers[command as CommandKey]) {
+      if (imageSendMode || commandHandlers[command as CommandKey]) {
         if (!currentSession) return;
 
         const promptFileIds = messageData?.fabFileIds || ([] as string[]);
-        handleCommand(commandHandlers, {
+        dispatchSend(commandHandlers, imageSendMode, {
           userId,
           command,
-          params,
+          // An image send takes the prompt as typed, without the /llm history and context prefixes.
+          params: imageSendMode ? messageData.prompt : params,
           currentSession,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           model: model as any,
           workBenchFiles,
           sendJsonMessage,
           promptFileIds,
-          enableQuestMaster: isQuestMasterEnabled,
           enableMementos: isMementosEnabled,
           enableArtifacts: isArtifactsEnabled,
           // A correction is a new turn, never a re-run of the flagged quest: passing its id as
@@ -364,16 +361,22 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           questId: isVariation || correctsQuestId ? undefined : messageData?.id,
           correctsQuestId,
           image: options?.image,
+          imageFileId: options?.imageFileId,
           queryClient,
           tools,
           projectId,
           organizationId,
-          thinking,
+          thinking: thinkingForSend(
+            thinking,
+            modelInfo?.find(m => m.id === model)
+          ),
           ...turnPreferences,
           setChatCompletion,
           ...llmSettings,
           imageConfig: imageConfig,
           mcpServers: enabledMcpServers ?? undefined,
+          disabledMcpConnections,
+          enabledPlatformMcpConnections,
         });
       }
     }

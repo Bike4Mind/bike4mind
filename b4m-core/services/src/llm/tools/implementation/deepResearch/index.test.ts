@@ -24,6 +24,8 @@ vi.mock('../webfetch/plainFetch', () => ({
 
 import { performDeepResearch } from './index';
 import type { ToolContext } from '../../base/types';
+import { meterCompletionBackend } from '../../../../billing/completionMeter';
+import type { ModelInfo } from '@bike4mind/common';
 
 const ANALYSIS_STOP = JSON.stringify({
   analysis: { summary: 'done', gaps: [], nextSteps: [], shouldContinue: false },
@@ -78,6 +80,34 @@ beforeEach(() => {
 });
 
 describe('performDeepResearch discovery precedence', () => {
+  it('reserves and settles analysis through the supplied backend when replacement keys are omitted', async () => {
+    createFirecrawlApp.mockReturnValue(firecrawlApp());
+    resolveWebSearchProviders.mockResolvedValue([null, null]);
+    const context = makeContext();
+    const backend = context.llm;
+    const settle = vi.fn(async () => 1);
+    const reserve = vi.fn(async () => ({ settle, refund: vi.fn(async () => undefined) }));
+    const modelInfo = { id: 'metered-operations-model', backend: 'openai' } as ModelInfo;
+    context.llm = meterCompletionBackend(backend, reserve, modelInfo);
+
+    const result = await performDeepResearch(
+      context,
+      { topic: 'marine biology' },
+      { model: modelInfo.id, maxDepth: 1, duration: 1 }
+    );
+
+    expect(result.success).toBe(true);
+    expect(reserve).toHaveBeenCalled();
+    expect(reserve).toHaveBeenCalledBefore(backend.complete);
+    expect(settle).toHaveBeenCalledTimes(vi.mocked(backend.complete).mock.calls.length);
+    expect(backend.complete).toHaveBeenCalledWith(
+      modelInfo.id,
+      expect.anything(),
+      expect.anything(),
+      expect.any(Function)
+    );
+  });
+
   it('uses Firecrawl for discovery when both Firecrawl and a provider are configured', async () => {
     const app = firecrawlApp();
     const provider = searchProvider();
@@ -161,6 +191,56 @@ describe('performDeepResearch discovery precedence', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  describe('failure log levels (visible at the production minLevel of info)', () => {
+    it('warns when no provider or Firecrawl is configured', async () => {
+      createFirecrawlApp.mockReturnValue(null);
+      resolveWebSearchProviders.mockResolvedValue([null, null]);
+      const warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+      try {
+        await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/no web-search provider/));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('warns with the url and error when content extraction fails', async () => {
+      const app = firecrawlApp();
+      const boom = new Error('scrape timeout');
+      app.scrapeUrl.mockRejectedValue(boom);
+      createFirecrawlApp.mockReturnValue(app);
+      resolveWebSearchProviders.mockResolvedValue([null, null]);
+      const warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+      try {
+        await performDeepResearch(makeContext(), { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
+        expect(warnSpy).toHaveBeenCalledWith('Deep Research: failed to extract content', {
+          url: 'https://fc.example/1',
+          error: boom,
+        });
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('errors with the depth and error when an iteration fails', async () => {
+      createFirecrawlApp.mockReturnValue(null);
+      resolveWebSearchProviders.mockResolvedValue([searchProvider(), null]);
+      const boom = new Error('finish hook failed');
+      const context = makeContext();
+      vi.mocked(context.onFinish as NonNullable<typeof context.onFinish>).mockRejectedValue(boom);
+      const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+      try {
+        await performDeepResearch(context, { topic: 'marine biology' }, { maxDepth: 1, duration: 1 });
+        expect(errorSpy).toHaveBeenCalledWith('Deep Research: iteration failed', {
+          depth: expect.any(Number),
+          error: boom,
+        });
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
   });
 
   it('uses the web-search provider for discovery when Firecrawl is absent', async () => {

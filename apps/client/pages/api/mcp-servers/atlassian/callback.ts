@@ -3,9 +3,10 @@ import { userRepository } from '@bike4mind/database';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import crypto from 'crypto';
-import { readStateNonceHash, clearStateNonce } from '@server/auth/oauthFlowCookie';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { oauthProviderErrorCode } from '@server/utils/auth/oauthProviderErrorCode';
 
 const OAUTH_TIMEOUT = 30000;
 
@@ -39,7 +40,7 @@ interface ResourceResponse {
  * - Duplicate code usage from browser retries
  */
 const handler = baseApi({ auth: false }).get(async (req, res) => {
-  const { code, state } = req.query;
+  const { code, state, error: providerError } = req.query;
 
   // Burn the browser-binding nonce cookie on every exit path.
   clearStateNonce(res);
@@ -54,14 +55,22 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     req
   );
 
+  // warn, not error: a provider error (the user declined consent) or a code-less hit on this public
+  // URL is an expected outcome, and error-level lines raise production alerts.
+  if (providerError) {
+    req.logger.warn('Atlassian authorization not completed', { error: oauthProviderErrorCode(providerError) });
+    auditLogger.failure('oauth_error');
+    return res.redirect('/profile?tab=integrations&atlassian=error');
+  }
+
   if (!code || typeof code !== 'string') {
-    console.error('❌ Missing authorization code');
+    req.logger.warn('Atlassian callback missing authorization code');
     auditLogger.failure('missing_code');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
 
   if (!state || typeof state !== 'string') {
-    console.error('❌ Missing state parameter');
+    req.logger.warn('Atlassian callback missing state parameter');
     auditLogger.failure('missing_state');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -85,7 +94,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       throw new Error('Missing required state parameters');
     }
   } catch (parseError) {
-    console.error('❌ Failed to parse state parameter:', parseError);
+    // warn, not error: a junk state is caller input (scanners, hand-edited URLs), not a server fault,
+    // and error-level lines raise production alerts. The audit row still records it.
+    req.logger.warn('Atlassian callback state parameter could not be parsed', { error: parseError });
     auditLogger.failure('invalid_state');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -95,7 +106,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   // Validate HMAC signature to prevent tampering
   const secret = Config.JWT_SECRET;
   if (!secret) {
-    console.error('❌ JWT_SECRET environment variable is required');
+    req.logger.error('Atlassian callback missing JWT secret');
     auditLogger.failure('missing_jwt_secret');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -104,7 +115,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   const expectedSignature = hmac.digest('hex');
 
   if (signature !== expectedSignature) {
-    console.error('❌ CSRF signature validation failed');
+    req.logger.error('Atlassian callback CSRF signature validation failed', { userId });
     auditLogger.failure('csrf_signature_invalid');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -117,7 +128,6 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   // it only restates a connection the caller's own state names.
   const existingUser = await userRepository.findById(userId);
   if (existingUser?.atlassianConnect?.status === 'connected') {
-    console.log('✅ User already has valid Atlassian connection, skipping token exchange');
     auditLogger.success({ isDuplicate: true });
     return res.redirect('/profile?tab=integrations&atlassian=connected');
   }
@@ -127,7 +137,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   // Fails closed - a missing or mismatched cookie is rejected.
   const presentedNonceHash = readStateNonceHash(req);
   if (!presentedNonceHash || presentedNonceHash !== nonceHash) {
-    console.error('❌ Browser-binding nonce validation failed');
+    req.logger.error('Atlassian callback browser-binding nonce validation failed', { userId });
     auditLogger.failure('session_mismatch');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -135,13 +145,13 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   // Check token age (expire after 10 minutes)
   const tokenAge = Date.now() - timestamp;
   if (tokenAge > 10 * 60 * 1000) {
-    console.error('❌ CSRF token expired (age: ' + Math.round(tokenAge / 1000) + 's)');
+    req.logger.error('Atlassian callback CSRF token expired', { userId, ageSeconds: Math.round(tokenAge / 1000) });
     auditLogger.failure('csrf_token_expired');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
 
   if (tokenAge < 0) {
-    console.error('❌ CSRF token timestamp is in the future');
+    req.logger.error('Atlassian callback CSRF token timestamp is in the future', { userId });
     auditLogger.failure('csrf_token_future');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -149,7 +159,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   const { clientId, clientSecret, redirectUri } = await getAtlassianOAuthConfig();
 
   if (!clientId || !clientSecret || !redirectUri) {
-    console.error('❌ Atlassian OAuth credentials not configured');
+    req.logger.error('Atlassian OAuth credentials not configured');
     auditLogger.failure('oauth_not_configured');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -162,8 +172,6 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     code,
     redirect_uri: redirectUri,
   };
-
-  console.log('🔄 Exchanging authorization code for tokens...');
 
   // Add timeout protection for OAuth token exchange
   const tokenController = new AbortController();
@@ -184,23 +192,15 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   } catch (fetchError) {
     clearTimeout(tokenTimeoutId);
     if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-      console.error('❌ Atlassian token exchange timed out after 30s');
+      req.logger.error('Atlassian token exchange timed out', { userId, timeoutMs: OAUTH_TIMEOUT });
       return res.redirect('/profile?tab=integrations&atlassian=error');
     }
     throw fetchError;
   }
 
-  console.log('📥 Token response status:', tokenResponse.status, tokenResponse.statusText);
-
   if (!tokenResponse.ok) {
-    const error = await tokenResponse.text();
-    console.error('❌ Token exchange error response:', error);
-    console.error('❌ Possible causes:');
-    console.error('   1. Authorization code already used (codes are single-use only)');
-    console.error('   2. Authorization code expired (typically 10 min expiry)');
-    console.error('   3. redirect_uri mismatch between authorize and token exchange');
-    console.error('   4. Client ID/Secret mismatch');
-    console.error('   Current redirect_uri:', redirectUri);
+    // The response body and redirect_uri are deliberately not logged.
+    req.logger.error('Atlassian token exchange failed', { userId, status: tokenResponse.status });
     auditLogger.failure('token_exchange_failed', { statusCode: tokenResponse.status });
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -209,14 +209,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   const refreshToken = tokenData.refresh_token;
 
   if (!refreshToken) {
-    console.error('❌ No refresh token returned from Atlassian');
+    req.logger.error('Atlassian token response had no refresh token', { userId });
     auditLogger.failure('no_refresh_token');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
 
   // Step 2: Get accessible resources
-  console.log('🔄 Fetching accessible Atlassian resources...');
-
   const resourcesController = new AbortController();
   const resourcesTimeoutId = setTimeout(() => resourcesController.abort(), 15000);
 
@@ -233,15 +231,14 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   } catch (fetchError) {
     clearTimeout(resourcesTimeoutId);
     if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-      console.error('❌ Atlassian resources fetch timed out after 15s');
+      req.logger.error('Atlassian accessible-resources fetch timed out', { userId });
       return res.redirect('/profile?tab=integrations&atlassian=error');
     }
     throw fetchError;
   }
 
   if (!resourcesResponse.ok) {
-    const error = await resourcesResponse.text();
-    console.error('❌ Resources fetch failed:', error);
+    req.logger.error('Atlassian accessible-resources fetch failed', { userId, status: resourcesResponse.status });
     auditLogger.failure('resources_fetch_failed', { statusCode: resourcesResponse.status });
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
@@ -249,12 +246,10 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   const resources: ResourceResponse[] = await resourcesResponse.json();
 
   if (!resources.length) {
-    console.error('❌ No accessible Atlassian resources found');
+    req.logger.error('Atlassian returned no accessible resources', { userId });
     auditLogger.failure('no_resources');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }
-
-  console.log(`✅ Found ${resources.length} Atlassian resource(s)`);
 
   const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
 
@@ -288,16 +283,18 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     atlassianConnect,
   });
 
-  console.log(`✅ Tokens stored for user ${userId}, status: pending_site_selection`);
+  req.logger.info('Atlassian tokens stored', {
+    userId,
+    status: 'pending_site_selection',
+    resourceCount: resources.length,
+  });
 
   auditLogger.success({ resourceCount: resources.length, isSingleSite });
 
   // Step 4: Redirect based on resource count
   if (isSingleSite) {
-    console.log('🔀 Single site detected, redirecting to auto-finalize...');
     return res.redirect(`/api/mcp-servers/atlassian/finalize?auto=true`);
   } else {
-    console.log(`🔀 Multiple sites (${resources.length}) detected, redirecting to site selection...`);
     return res.redirect('/integrations/atlassian/select-site');
   }
 });

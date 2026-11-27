@@ -2,7 +2,7 @@ import { hearthRepository } from '@bike4mind/database';
 import { HearthLog } from '@bike4mind/hearth';
 import { ApiKeyScope, NotFoundError, UnauthorizedError } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
@@ -39,6 +39,10 @@ const hearthLog = new HearthLog(hearthRepository.store);
 // asserts write scope in-handler, since advancing a cursor consumes events.
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.HEARTH_READ, ApiKeyScope.HEARTH_WRITE, ApiKeyScope.ADMIN],
+  // A cursor read the CLI sends on its own (POST only to carry the cursor): the key is in use, the
+  // user is not acting.
+  recordsActivity: false,
+  recordsKeyUse: true,
 })
   .use(requireFeatureEnabled('EnableHearth'))
   .use(requireUser)

@@ -201,19 +201,19 @@ function ServerRow({
           <Stack direction="row" spacing={1}>
             <Button
               size="sm"
-              variant="soft"
+              variant="outlined"
               color="neutral"
               onClick={() => void controller.reconnect(server.id)}
               data-testid="mcp-server-reconnect-btn"
             >
               Reconnect
             </Button>
-            <Button size="sm" variant="soft" color="neutral" onClick={onEdit} data-testid="mcp-server-edit-btn">
+            <Button size="sm" variant="outlined" color="neutral" onClick={onEdit} data-testid="mcp-server-edit-btn">
               Edit
             </Button>
             <Button
               size="sm"
-              variant="soft"
+              variant="outlined"
               color="danger"
               onClick={() => void controller.remove(server.id)}
               data-testid="mcp-server-remove-btn"
@@ -330,7 +330,7 @@ function ServerForm({
         <Button size="sm" loading={busy} onClick={onSave} data-testid="mcp-form-save-btn">
           {draft.id ? 'Save' : 'Add server'}
         </Button>
-        <Button size="sm" variant="plain" color="neutral" onClick={onCancel} data-testid="mcp-form-cancel-btn">
+        <Button size="sm" variant="outlined" color="neutral" onClick={onCancel} data-testid="mcp-form-cancel-btn">
           Cancel
         </Button>
       </Stack>
@@ -421,7 +421,8 @@ export function McpServersSettings({ controller }: { controller: McpServersContr
       ) : (
         <Button
           size="sm"
-          variant="soft"
+          variant="outlined"
+          color="neutral"
           startDecorator={<PlusIcon />}
           onClick={() => {
             setError(null);

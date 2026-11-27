@@ -5,6 +5,7 @@ import type {
   IGenerationJobDocument,
   IGenerationJobDocumentOf,
   IGenerationJobRepository,
+  RunBudgetClaim,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -24,15 +25,22 @@ export type StepResult<K extends GenerationJobKind = GenerationJobKind> =
  */
 export type GenerationJobStepContext = { signal: AbortSignal };
 
+/**
+ * `async`: submit creates a provider job that poll follows. A cancel while it runs stops following it, and stops it at
+ * the provider too when the provider has a cancel (one without keeps rendering, and may still bill).
+ * `sync`: submit makes the whole provider call and returns the outcome. The job reports running for the call's
+ * duration, and since the provider bills from the moment it starts, a job is only cancellable before it.
+ */
+export type GenerationJobSubmitMode = 'sync' | 'async';
+
 /** One kind's steps; each method only ever receives a job of that kind (the engine dispatches by `job.kind`). */
 export type GenerationJobHandler<K extends GenerationJobKind = GenerationJobKind> = {
   kind: K;
   /**
-   * `async`: submit creates a provider job that poll follows, and a cancel stops it at the provider.
-   * `sync`: submit makes the whole provider call and returns the outcome. The job reports running for the call's
-   * duration, and since the provider bills from the moment it starts, a job is only cancellable before it.
+   * Fixed for the kind, or chosen per job when a kind's providers differ (images). A per-job choice must depend only
+   * on fields that never change after create, since the engine reads it at submit, cancel and lease recovery.
    */
-  submitMode: 'sync' | 'async';
+  submitMode: GenerationJobSubmitMode | ((job: IGenerationJobDocumentOf<K>) => GenerationJobSubmitMode);
   /**
    * Throwing means the outcome is unknown (the provider may have created a job), so the engine fails it as
    * orphaned_submit. Return `{ next: 'retry' }` for anything that created nothing (a failure before the provider
@@ -57,6 +65,16 @@ export type GenerationJobEngineDeps = {
   now(): Date;
   logger: Logger;
   leaseMs: number;
+  /**
+   * Why the requesting user may no longer spend credits, or null when they may. Read before each submit: a job
+   * outlives the request that admitted it, so an account blocked since then must not reach the provider.
+   */
+  aiAccessDenial?(userId: string): Promise<string | null>;
+  /**
+   * Runs once per job, after its terminal handling (credit settlement) is recorded. Best effort: a throw is logged,
+   * never retried, since settlement already happened and must not be re-run.
+   */
+  onTerminalHandled?(job: IGenerationJobDocument): Promise<void>;
 };
 
 export type StepOutcome = 'skipped' | 'advanced' | 'terminal';
@@ -69,3 +87,16 @@ export type CancelRequestOutcome =
   | { status: 'requested'; job: IGenerationJobDocument }
   | { status: 'not_cancellable'; job: IGenerationJobDocument }
   | { status: 'unchanged'; job: IGenerationJobDocument | null };
+
+/**
+ * A completion run's budget, injected because services cannot reach the run store (it lives in
+ * @bike4mind/server-utils' runBudgetClaim and @bike4mind/database). Wired in server-utils' generationJobs/wiring.
+ */
+export type RunBudgetAdapters = {
+  /** The all-or-nothing claim: undefined for an unbudgeted run; throws a 422 `run_budget_exhausted`. */
+  claim(runId: string, credits: number): Promise<RunBudgetClaim | undefined>;
+  /** Swaps a claim for what its hold charged: 0 on a release, the charge on settlement. */
+  release(claim: RunBudgetClaim, chargedCredits: number): Promise<void>;
+  /** Runs `work` in one database transaction, so a claim never outlives a hold that rolled back. */
+  transact<T>(work: () => Promise<T>): Promise<T>;
+};

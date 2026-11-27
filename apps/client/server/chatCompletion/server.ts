@@ -1,12 +1,21 @@
 import express, { type Request, type Response } from 'express';
-import { connectDB, mongoose } from '@bike4mind/database';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
+import { connectDB, ensureKeyringLoaded, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
-import { Logger } from '@bike4mind/observability';
+import { hasModelCatalogProvider } from '@bike4mind/llm-adapters';
+import { installConsoleRedaction, Logger } from '@bike4mind/observability';
+import { requireConfiguredSecret } from '@bike4mind/common';
+import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
-import { registerWsCompletionRoutes } from './external/wsRoute';
 import { registerEmbedRoutes } from './external/embedRoute';
+import { registerTurnsRoutes } from './external/turnsRoute';
+import { requireOriginVerify } from './originVerify';
+import { ensureSecretsAtRest } from './secretsAtRestBoot';
+import { createTaskProtection } from './taskProtection';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -34,22 +43,35 @@ import { registerEmbedRoutes } from './external/embedRoute';
 // Desktop). The cloud container pins PORT=8080 via the Dockerfile ENV, and the ALB
 // forwards 80->8080, so production is unaffected by this default.
 const PORT = Number(process.env.PORT) || 8788;
+
+// Chat settles org credits here, and this server loads neither baseApi nor queueHandlers/utils.
+registerOrgAlertObserver();
+
 const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
 // How long SIGTERM lets in-flight work finish before the process exits: ~10s under the ECS task
 // `stopTimeout` (infra/chatCompletion.ts) so the drain-expiry error below can log before SIGKILL -
 // a window equal to stopTimeout starts after SIGTERM and can never fire. The margin is pinned by
 // server.test.ts; work still running when the window closes (e.g. a multi-minute deep-research
-// generation) is still cut off. Requires node as PID 1 with tsx loaded in-process (see
-// Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the drain.
+// generation) is still cut off. Scale-in and deploys skip a task while its scale-in protection
+// holds (taskProtection.ts, capped per busy stretch), so this window covers a task busy past that
+// cap, an unhealthy-task replacement, or a failed protection call. Requires node as PID 1 with
+// tsx loaded in-process (see Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the
+// drain.
 export const DRAIN_TIMEOUT_MS = 110_000;
 
 // In-flight processing promises, tracked so SIGTERM can drain before exit. Both route
-// modules register their work here via the shared `track` callback.
+// modules register their work here via the shared `track` callback. The same count drives
+// ECS scale-in protection (taskProtection.ts), so scale-in picks a task with nothing to drain.
 const inFlight = new Set<Promise<void>>();
+const taskProtection = createTaskProtection({ agentUri: process.env.ECS_AGENT_URI, logger: bootLogger });
 const track = (p: Promise<void>) => {
   inFlight.add(p);
-  void p.finally(() => inFlight.delete(p));
+  taskProtection.update(inFlight.size);
+  void p.finally(() => {
+    inFlight.delete(p);
+    taskProtection.update(inFlight.size);
+  });
 };
 
 interface DrainLogger {
@@ -60,7 +82,7 @@ interface DrainLogger {
  * Wait for the tracked in-flight work to settle, bounded by `drainTimeoutMs`. Exported
  * so a test can drive the cut-off branch without booting the service. Returns whether the
  * work drained or the window won; on the cut-off branch it emits an error naming the count
- * so LiveOps triage sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
+ * so LiveOps sees the quests a deploy/scale-in is about to SIGKILL (the WARN/INFO
  * line this replaces was invisible to the ERROR-level log subscription).
  */
 export async function drainInFlight({
@@ -104,29 +126,61 @@ export function createApp() {
   // Internal quest-processing surface (frontend Lambda -> WebSocket streaming).
   registerInternalRoutes(app, track);
 
+  // Everything registered below is gated, so a new route is CloudFront-only by default. /health and
+  // /process are registered above because they are reached directly (ALB health check, frontend
+  // Lambda via NAT); keep any other direct-only route above this line too.
+  app.use(requireOriginVerify);
+
+  // Every user-facing route below (completions, embed chat, session turns) refuses a caller
+  // on an admin's `all` IP block; the internal route above is service-to-service and is not.
+  app.use(checkBlockedIP({ surface: 'app' }));
+
   // External CLI/3rd-party completions endpoint (user-authenticated SSE stream). Registered on
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
   registerExternalRoutes(app, track);
 
-  // CLI HTTP->WebSocket completions (POST payload here, chunks stream over the CLI's
-  // WebSocket). Replaced the CliWsCompletionHandler Lambda; its background completions
-  // join the same drain set.
-  registerWsCompletionRoutes(app, track);
-
   // Public embed chat endpoint (agent-bound, anonymous end-user, org-billed SSE).
   // Same always-on rationale + drain set as the completions route.
   registerEmbedRoutes(app, track);
 
+  // Public session turns endpoint: a turn on an existing session, run in-process and streamed back.
+  registerTurnsRoutes(app, track);
+
   return app;
 }
 
+/**
+ * connectDB wires the model catalog onto the llm-adapters instance its own (ESM) graph loads. A
+ * second instance in this process (see esmWorkspacePackages.mjs) leaves completions without the
+ * catalog and price overlays, so DB-only models fail as unknown. Exported for tests.
+ */
+export function checkModelCatalogWired(logger: Pick<Logger, 'error'>): boolean {
+  if (hasModelCatalogProvider()) return true;
+  logger.error(
+    'Model catalog provider is not wired on the llm-adapters instance completions read; ' +
+      'catalog-only models will fail as unknown and billing falls back to adapter prices'
+  );
+  return false;
+}
+
+/** Throws, naming the secret, when one this service verifies with is still a placeholder. */
+export function assertBootSecretsConfigured(): void {
+  requireConfiguredSecret('CHAT_COMPLETION_INTERNAL_SECRET', Resource.CHAT_COMPLETION_INTERNAL_SECRET.value);
+  requireConfiguredSecret('JWT_SECRET', Config.JWT_SECRET);
+}
+
 async function main() {
+  installConsoleRedaction();
+  assertBootSecretsConfigured();
   // Crash-safety for a long-running process: one request's mid-stream EPIPE / orphaned undici
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
   // along with every other in-flight request. Registers global handlers that log + swallow the
   // network-error class without exiting. Must run before any request is served.
   registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
+
+  await ensureSecretsAtRest(bootLogger, ensureKeyringLoaded);
+  warnIfPlaintextSecretsOptOut(bootLogger);
 
   const app = createApp();
 
@@ -147,6 +201,7 @@ async function main() {
   connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger)
     .then(() => {
       bootLogger.info('MongoDB connected at boot');
+      checkModelCatalogWired(bootLogger);
     })
     .catch(err =>
       bootLogger.error('MongoDB connection failed at boot', {

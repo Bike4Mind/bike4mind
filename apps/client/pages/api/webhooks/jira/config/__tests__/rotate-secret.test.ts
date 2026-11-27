@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
@@ -37,7 +40,7 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: (value: string) => value.replace(/^enc\((.*)\)$/, '$1'),
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'test-key' } }));
-vi.mock('@server/integrations/jira/atlassianTokenManager', () => ({
+vi.mock('@bike4mind/server-utils/integrations/jira/atlassianTokenManager', () => ({
   AtlassianTokenManager: { getValidTokens: h.getValidTokens },
   AtlassianReconnectRequiredError: class extends Error {},
 }));

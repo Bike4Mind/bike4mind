@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildCanceledForNonPaymentEmail, buildPaymentFailedEmail } from './paymentFailedEmail';
+import {
+  buildCanceledForNonPaymentEmail,
+  buildPaymentActionRequiredEmail,
+  buildPaymentFailedEmail,
+  buildUnpaidEmail,
+} from './paymentFailedEmail';
 
 const BILLING_URL = 'https://app.example.com/billing/plans';
 
@@ -26,6 +31,7 @@ describe('buildPaymentFailedEmail', () => {
     const { body } = buildPaymentFailedEmail({ billingUrl: BILLING_URL });
 
     expect(body).toContain('Paid features are paused until the payment goes through');
+    expect(body).toContain('select Pay now on your billing page');
   });
 
   it('escapes the card issuer reason, which comes from Stripe', () => {
@@ -78,5 +84,62 @@ describe('buildCanceledForNonPaymentEmail', () => {
     const { subject } = buildCanceledForNonPaymentEmail({ billingUrl: BILLING_URL, organizationName: 'Team' });
 
     expect(subject).toBe('The Team subscription has been cancelled');
+  });
+});
+
+describe('buildPaymentActionRequiredEmail', () => {
+  const originalBrand = process.env.APP_NAME;
+
+  beforeEach(() => {
+    process.env.APP_NAME = 'Acme';
+  });
+
+  afterEach(() => {
+    process.env.APP_NAME = originalBrand;
+  });
+
+  it('asks the owner to confirm the payment and links Pay now', () => {
+    const { subject, body } = buildPaymentActionRequiredEmail({ billingUrl: BILLING_URL });
+
+    expect(subject).toBe('Action needed: confirm the payment for your Acme subscription');
+    expect(body).toContain(`href="${BILLING_URL}"`);
+    expect(body).toContain('Select Pay now');
+  });
+
+  it('names the organization and escapes it in the body', () => {
+    const { subject, body } = buildPaymentActionRequiredEmail({
+      billingUrl: BILLING_URL,
+      organizationName: '<b>Team</b>\nBcc: x',
+    });
+
+    expect(subject).not.toMatch(/[\r\n]/);
+    expect(body).not.toContain('<b>Team</b>');
+    expect(body).toContain('&lt;b&gt;Team&lt;/b&gt;');
+  });
+});
+
+describe('buildUnpaidEmail', () => {
+  const originalBrand = process.env.APP_NAME;
+
+  beforeEach(() => {
+    process.env.APP_NAME = 'Acme';
+  });
+
+  afterEach(() => {
+    process.env.APP_NAME = originalBrand;
+  });
+
+  it('says the subscription is unpaid and links Pay now', () => {
+    const { subject, body } = buildUnpaidEmail({ billingUrl: BILLING_URL });
+
+    expect(subject).toBe('Your Acme subscription is unpaid');
+    expect(body).toContain(`href="${BILLING_URL}"`);
+    expect(body).toContain('select Pay now on your billing page');
+  });
+
+  it('names the organization for an org subscription', () => {
+    const { subject } = buildUnpaidEmail({ billingUrl: BILLING_URL, organizationName: 'Team' });
+
+    expect(subject).toBe('The Team subscription is unpaid');
   });
 });

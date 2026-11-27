@@ -1,20 +1,38 @@
+import type { AudioToolJobs } from './tools/implementation/audioGeneration';
+import type { ClientFrameSender } from './StatusManager';
 import {
-  ChatCompletionCreateInput,
+  type EmbeddingRuntime,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+} from '@bike4mind/utils/embeddingProviders';
+import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
+import type { ISpendFreezeRepository, IUserApiKeyRepository, UserLimitEventKind } from '@bike4mind/common';
+import type { ModerationEscalationAlert } from '../userService/moderationPolicy';
+
+export type LimitEventRecord = {
+  userId: string;
+  kind: UserLimitEventKind;
+  model?: string;
+  details?: Record<string, string | number | boolean | null>;
+};
+import {
   ChatCompletionCreateInputSchema,
-  ChatModels,
+  isLowSignalNamingPrompt,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IConnection,
   IChatHistoryItemDocument,
+  IFabFileDocument,
   IMessage,
   IOrganizationDocument,
   IProjectDocument,
   ISessionDocument,
   IUserDocument,
+  LLMEventPayload,
   LLMEvents,
   ModelInfo,
   Permission,
-  QuestMasterParamsSchema,
   IAgentRepository,
   ISkillRepository,
   IChatHistoryItemRepository,
@@ -26,15 +44,13 @@ import {
   IAdminSettingsRepository,
   IMcpServerRepository,
   IMcpServerDocument,
-  IQuestMasterPlanRepository,
-  IQuestMasterPlanDocument,
   IPromptDocument,
   ICacheRepository,
   ICreditTransactionRepository,
   IUsageEventRepository,
   IMementoRepository,
   IOrganizationRepository,
-  ILatticeModel,
+  SettingValue,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFallbackLakeSettingsRepository,
@@ -75,9 +91,11 @@ import {
   ModelBackend,
   type WorkspaceDeniedToolsTable,
   type WorkspaceSessionSettingsTable,
+  type CoreTutorialTurnHook,
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
+  type ThinkingVisibility,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -92,6 +110,7 @@ import {
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
+import type { ILatticeModelRepository } from '../latticeService/latticeModelService';
 import type { DecideToolFn } from './tools/base/types';
 import { nonNegativeIntOr, positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import { resolveScopedSettingEntries, scopeForCaller } from '../settings/resolveScopedSetting';
@@ -111,13 +130,18 @@ import {
 } from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
+import { retryOnceOnMongoNetworkError } from '../dataLakeService/retryOnceOnMongoNetworkError';
+import { isMongoNetworkError } from '@bike4mind/db-core';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
 import {
   DeadlineExceededError,
-  rankCandidateFilesByRelevance,
+  selectRelevanceCandidates,
   withDeadline,
   type ForcedRetrievalCandidateSelection,
+  type ForcedRetrievalFallbackReason,
 } from './forcedRetrievalCandidateSelection';
+import type { OperationalBillingAdapters } from '../billing/recordOperationalUsage';
+import { recordForcedRetrievalCutMetrics } from './forcedRetrievalSelectionMetrics';
 import { blendFollowUpQueryVector, forcedRetrievalFollowUpContext } from './forcedRetrievalQuery';
 import {
   buildSupersessionReport,
@@ -150,17 +174,12 @@ import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
   computeCosineSimilarity,
-  computeVerbatimTokenBudget,
-  EmbeddingFactory,
   type FabFileNotice,
-  fetchAndProcessPreviousMessages,
-  getProviderFromModel,
   getSettingsByNames,
   IQueueService,
   ITokenizer,
   normalizeId,
   postMessageToSlack,
-  QuestMaster,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -170,14 +189,13 @@ import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
 import type { ChatCompletionProcess } from './ChatCompletionProcess';
-import { DEFAULT_VERBATIM_WINDOW_FRACTION, SYSTEM_PROMPT_RESERVE_TOKENS } from './historyBudgetConstants';
 import { QuestStartBodySchema } from './questStartBody';
 import { forcedRetrievalNoContextPrompt, type ForcedRetrievalNoContextFinding } from './forcedRetrievalAbstention';
 import { resolveLakeMemoryScope } from './resolveLakeMemoryScope';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
+import type { CustomMcpToolHost } from './tools/customMcpTools';
 import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalSummaryMerge';
-import { isObjectIdShaped } from './tools/base/objectId';
 import { scrubStaleProjectFiles } from '../sessionService/scrubStaleFileReferences';
 
 interface DatabaseAdapters {
@@ -201,7 +219,6 @@ interface DatabaseAdapters {
     | 'pullSystemFilesForUsers'
   >;
   quests: IChatHistoryItemRepository;
-  questMasterPlans: IQuestMasterPlanRepository;
   connections: {
     findByUserId(userId: string): Promise<IConnection[]>;
     deleteByConnectionId(connectionId: string): Promise<void>;
@@ -229,9 +246,26 @@ interface DatabaseAdapters {
   projects: IProjectRepository;
   organizations: IOrganizationRepository;
   mcpServers: IMcpServerRepository;
+  /** Read at the personal credit reservation; see creditService/newAccountSpendCap.ts. */
+  newAccountSpendCap: NewAccountSpendCapAdapters;
+  /** Required so every construction site wires the freeze check; the turn is refused before any reservation. */
+  spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
+  /**
+   * Reads a key's prompt moderation exception. Optional: wired only where an API key can start a
+   * turn, and without it no exception ever applies.
+   */
+  userApiKeys?: Pick<IUserApiKeyRepository, 'findModerationException'>;
+  /**
+   * Records a refusal or a settlement that left the balance negative, for the admin user timeline
+   * (packages/server-utils/src/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
+   * typecheck instead of silently skipping it. Must not throw.
+   */
+  recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;
+  /** Flows to ToolContext.db unchanged; see its doc there. */
+  operationalBilling?: OperationalBillingAdapters;
   agents: IAgentRepository;
   /**
    * Optional skill repository - present when the host wires `/api/skills`
@@ -259,22 +293,18 @@ interface DatabaseAdapters {
   };
   rapidReply?: {
     results: {
-      createResult: (data: any) => Promise<any>;
-      updateResult: (id: string, data: any) => Promise<any>;
-      updateResultByQuestId: (questId: string, data: any) => Promise<any>;
-      findByQuestId: (questId: string) => Promise<any>;
-      findLatestBlankRapidReplyBySessionId: (sessionId: string) => Promise<any>;
+      createResult: (data: Record<string, unknown>) => Promise<unknown>;
+      updateResult: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+      updateResultByQuestId: (questId: string, data: Record<string, unknown>) => Promise<unknown>;
+      findByQuestId: (questId: string) => Promise<RapidReplyResultRecord | null>;
+      findLatestBlankRapidReplyBySessionId: (sessionId: string) => Promise<RapidReplyResultRecord | null>;
     };
-    mappings: any;
+    mappings: unknown;
     settings: {
-      getSettings: () => Promise<any>;
+      getSettings: () => Promise<SettingValue<'RapidReplySettings'> | undefined>;
     };
   };
-  latticeModels?: {
-    create: (data: any) => Promise<ILatticeModel>;
-    findById: (id: string) => Promise<ILatticeModel | null>;
-    update: (data: any) => Promise<ILatticeModel | null>;
-  };
+  latticeModels?: Pick<ILatticeModelRepository, 'create' | 'findById' | 'update'>;
   // 'find' is forwarded to ToolContext.db.dataLakes -> createFabFile (persistGeneratedFileAsFabFile),
   // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
@@ -344,7 +374,6 @@ interface DatabaseAdapters {
 export type featureNames =
   | 'slack'
   | 'mementos'
-  | 'questMaster'
   | 'autoNameSession'
   | 'project'
   | 'summarizeNotebook'
@@ -365,7 +394,6 @@ export type featureNames =
 const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
   slack: true,
   mementos: true,
-  questMaster: true,
   autoNameSession: true,
   project: true,
   summarizeNotebook: true,
@@ -379,10 +407,21 @@ const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
 };
 export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNames[];
 
+/** Fields this service reads from the stored rapid-reply document (packages/database RapidReplyResultModel). */
+export interface RapidReplyResultRecord {
+  id: string;
+  userId: string;
+  status: 'success' | 'failed' | 'timeout' | 'replaced';
+  rapidResponse: { content: string; latency: number; ttfvt?: number };
+  metrics?: Record<string, unknown>;
+}
+
 export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
+  /** The speech / sound-effect job functions the audio_generation tool bills through; unset leaves it unavailable. */
+  audioToolJobs?: AudioToolJobs;
   queue?: IQueueService;
   wsHttpsUrl: string;
   slackWebhookUrl: string;
@@ -400,7 +439,18 @@ export interface IChatCompletionServiceOptions {
    * the same reason as `workspaceDeniedTools`; the open-core value is the generated empty table.
    */
   workspaceSessionSettings: WorkspaceSessionSettingsTable;
+  /**
+   * Answers a turn on a session carrying a core tutorial marker, and only then. Optional: a host without
+   * core tutorials leaves it out and every marked session falls through to the model.
+   */
+  coreTutorialTurns?: CoreTutorialTurnHook;
   autoNameSession: (sessionId: string, logger: Logger) => Promise<string | null>;
+  /**
+   * Delivers a moderation escalation alert to liveops (the app tier publishes it to the event bus).
+   * Called fire-and-forget: a rejection is logged as a warning and never reaches the chat request.
+   * Optional: a host without it still records hits and escalates, it just alerts no one.
+   */
+  notifyModerationEscalation?: (alert: ModerationEscalationAlert) => Promise<void>;
   invokeCreateMemento: (
     questId: string,
     sessionId: string,
@@ -441,6 +491,11 @@ export interface IChatCompletionServiceOptions {
     dataLakeTags: string[];
     retrievalFilter?: RetrievalExclusionOptions;
     /**
+     * Admit only lakes the user created or that belong to one of their orgs. Set when the session
+     * named no lake, so a lake reached only by public or entitlement read access never feeds the card.
+     */
+    trustedLakesOnly: boolean;
+    /**
      * Most beliefs to return, across all of `dataLakeTags`: the `lakeMemoryRecallK` admin setting,
      * resolved per turn by the caller with a coded fallback.
      *
@@ -468,9 +523,19 @@ export interface IChatCompletionServiceOptions {
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
     getTools: () => Promise<MCPClient['tools']>;
-    callTool: (toolName: string, toolArgs: any) => Promise<any>;
+    callTool: (toolName: string, toolArgs: unknown) => Promise<unknown>;
   }>;
-  logEvent: (event: any, options?: { session?: mongoose.ClientSession; ability?: MongoAbility }) => Promise<any>;
+  /**
+   * Custom remote connectors. Injected by the app tier (it owns policy, credentials and the call
+   * path) so b4m-core never imports it. Omitted -> no custom tools are offered.
+   */
+  customMcp?: CustomMcpToolHost;
+  /** When an inline turn must end (epoch ms), passed to each `customMcp` call; unset for queued turns. */
+  customMcpDeadline?: number;
+  logEvent: (
+    event: LLMEventPayload,
+    options?: { session?: mongoose.ClientSession; ability?: MongoAbility }
+  ) => Promise<void>;
   logger: Logger;
   getScopeFilter: (user: IUserDocument, permission: Permission, modelName: string) => Record<string, unknown>;
   /**
@@ -481,6 +546,11 @@ export interface IChatCompletionServiceOptions {
    * entitlement-scoped data lakes in retrieval. Omitted -> no keys -> tag-only matching.
    */
   getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /**
+   * How much model reasoning the caller may see (services/thinkingVisibility.ts), injected by the
+   * app tier like getEntitlements. Omitted -> `raw`; a failed resolution withholds.
+   */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
   /**
    * Perform any cleanup or additional processing after the quest is completed.
    */
@@ -502,6 +572,19 @@ export interface IChatCompletionServiceOptions {
    * reply and must not advance the reply-diff baseline.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /**
+   * Optional observer of the turn's user-visible status lines ("Searching the web...", ...), fired for
+   * every non-silent, non-null status the turn sends. Out-of-band and best effort: a throw is logged
+   * and never reaches the turn. Hosts use it to mirror progress to surfaces other than the websocket.
+   */
+  onStatusUpdate?: (questId: string, status: string) => void;
+  /**
+   * Sink for the turn's websocket frames (streamed reply, research mode). Absent, the service
+   * builds its own ClientMessageSender. A host that also streams the turn elsewhere (the session
+   * turns SSE route) passes a sender that tees into the real one, so websocket clients still get
+   * every frame.
+   */
+  clientMessageSender?: ClientFrameSender;
   /**
    * The `decide` tool's execution seam, forwarded into every ToolBuilder this service builds.
    * The app tier supplies it from the shared decision runner; absent, the tool refuses.
@@ -532,11 +615,16 @@ export interface IChatCompletionServiceOptions {
     requestId?: string; // Quest ID for correlation
   }) => Promise<void>;
   /**
-   * Secret key for deriving daily telemetry salts via HMAC.
-   * Reuses SECRET_ENCRYPTION_KEY - no dedicated secret needed.
+   * Secret key for deriving daily telemetry salts via HMAC. The host supplies it; the apps take it
+   * from `signingKey('telemetry-salt')` in server-utils/src/security/signingKeys.ts.
    * When undefined, falls back to a deterministic placeholder (dev-only).
    */
   telemetryHmacSecret?: string;
+  /**
+   * Key that signs web_search image URLs (`signingKey('search-image-url')` in the apps). When
+   * undefined, `telemetryHmacSecret` signs them, which is what hosts without a separate key rely on.
+   */
+  imageUrlSigningSecret?: string;
   /**
    * Whether the Global Privacy Control (GPC) signal was detected in the request.
    * When true, telemetry capture is skipped for this request regardless of user preference.
@@ -582,11 +670,11 @@ export type ChatCompletionContext = Pick<
   fabFilesToMessages: (
     fabFileIds: string[],
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     attachedFileTokenBudget: number,
     modelInfo: ModelInfo
-  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: any[]; fileNotices: FabFileNotice[] }>;
+  ) => Promise<{ promptMessages: IMessage[]; convertedFabFiles: IFabFileDocument[]; fileNotices: FabFileNotice[] }>;
 };
 
 export interface ChatCompletionFeature {
@@ -594,7 +682,6 @@ export interface ChatCompletionFeature {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
     messages: IMessage[];
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
     model: string;
     historyCount?: number;
     oldestIncludedQuestId?: string | null;
@@ -612,11 +699,12 @@ export interface ChatCompletionFeature {
     historyCount: number;
     fabFileIds: string[];
     questId: string;
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
+    /** The turn's active organization, which owns its billing (null/unset = the user). */
+    organizationId?: string | null;
   }) => Promise<{ shouldContinue: boolean }>;
   getContextMessages: (
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo,
     /** Input-window-derived; deliberately NOT the model's output cap. */
@@ -663,7 +751,7 @@ export class MementoFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    _embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
@@ -709,7 +797,7 @@ export class MementoFeature implements ChatCompletionFeature {
     // that setting moved.
     //
     // MUST STAY IN SYNC with `getFirstIterationMementosPreamble.ts` (agent mode), which also passes
-    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here used to be what made the
+    // neither. Passing `embeddingFactory.defaultModel` here used to be what made the
     // two modes disagree: the factory resolved by CREDENTIAL PRIORITY (an OpenAI key alone returns
     // ada-002) and never read the setting - see `resolveEmbeddingModelFallback` below, which says the
     // same thing about naming a space. That argument did not merely pick a floor, it picked the space
@@ -821,7 +909,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    _embeddingFactory: EmbeddingFactory,
+    _embeddingFactory: EmbeddingRuntime,
     message: string
   ): Promise<IMessage[]> {
     // A personal corpus suppresses this card. The two compose badly otherwise: personalCorpusOnly is
@@ -916,6 +1004,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         query,
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
+        trustedLakesOnly: this.retrievalTags.length === 0,
         k: beliefBudget,
       });
       if (beliefs.length === 0) {
@@ -1076,6 +1165,11 @@ export class AutoNameSessionFeature implements ChatCompletionFeature {
     if (session.isAutoNamed && conversationMessages.length !== 1) {
       return;
     }
+    // Same rule as the turn-start publish (ChatCompletionInvoke.dispatchTurnStartAutoName): a
+    // "Hello" turn, even with its reply, only names the notebook "Greeting". A later turn names it.
+    if (!session.isAutoNamed && isLowSignalNamingPrompt(quest.prompt ?? '', quest.fabFileIds?.length ?? 0)) {
+      return;
+    }
     try {
       // Publish to EventBridge; the event handler performs the actual auto-naming async
       await this.chatCompletion.autoNameSession(session.id, this.logger);
@@ -1116,411 +1210,6 @@ export class AutoNameSessionFeature implements ChatCompletionFeature {
   }
 }
 
-export class QuestMasterFeature implements ChatCompletionFeature {
-  private chatCompletion: ChatCompletionContext;
-  private logger: Logger;
-  private user: IUserDocument;
-
-  constructor(chatCompletion: ChatCompletionContext) {
-    this.chatCompletion = chatCompletion;
-    this.logger = chatCompletion.logger;
-    this.user = chatCompletion.user;
-  }
-
-  async getContextMessages(): Promise<IMessage[]> {
-    // The real QuestMaster system prompt is handled in createQuestPlan
-    return [];
-  }
-
-  async beforeDataGathering({
-    quest,
-    session,
-    startParams,
-    llm,
-    model,
-    modelInfo,
-    message,
-    historyCount,
-    fabFileIds,
-    questId,
-    questMaster,
-  }: {
-    quest: IChatHistoryItemDocument;
-    session: ISessionDocument;
-    startParams: z.infer<typeof ChatCompletionCreateInputSchema>;
-    llm: ICompletionBackend;
-    model: string;
-    modelInfo: ModelInfo;
-    message: string;
-    historyCount: number;
-    fabFileIds: string[];
-    questId: string;
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
-  }): Promise<{ shouldContinue: boolean }> {
-    // If questMaster is provided, that means we are to process a task from a QuestMaster plan
-    if (questMaster) {
-      await this.processQuestMasterTask(quest, questMaster);
-
-      return { shouldContinue: true };
-    }
-
-    // Check if the model is compatible with QuestMaster
-    // Some models may not follow XML/JSON formatting instructions reliably
-    const incompatibleModels = [
-      // O-series reasoning models (don't support tool calling in streaming mode)
-      ChatModels.O1,
-      ChatModels.O1_PREVIEW,
-      ChatModels.O1_MINI,
-      ChatModels.O3_MINI,
-      // GPT-5 models WITHOUT tool support (supportsTools: false)
-      // Other GPT-5 models now use function calling via questMaster.ts
-      ChatModels.GPT5_CHAT_LATEST,
-      ChatModels.GPT5_1_CHAT_LATEST,
-      ChatModels.GPT5_2_CHAT_LATEST,
-    ];
-
-    if (incompatibleModels.includes(model as ChatModels)) {
-      this.logger.log(
-        `QuestMaster: Skipping for model ${model} as it may not be fully compatible with structured JSON output`
-      );
-      return { shouldContinue: true };
-    }
-
-    try {
-      quest.status = 'running';
-      quest.type = 'message';
-      // promptMeta carries the in-memory statusLog ('Spinning up...'); a QuestMaster takeover
-      // returns without the pipeline's saveQuest, so these writes are the only ones that persist it.
-      await this.chatCompletion.db.quests.update({
-        id: quest.id,
-        status: quest.status,
-        type: quest.type,
-        promptMeta: quest.promptMeta,
-      });
-
-      await this.chatCompletion.sendStatusUpdate(quest, 'Generating QuestMaster plan...');
-
-      await this.sendQuestMasterRapidReply(quest, message);
-
-      // Fetch conversation history to provide context for quest plan generation. Passing `model`
-      // is what gates Priority 2 tool replay for Gemini (see fetchAndProcessPreviousMessages's own
-      // doc comment) - this call site went live without it (missed sibling of the one in
-      // ChatCompletionProcess.ts), so the flag is derived from the model id, not opt-in per caller.
-      //
-      // verbatimTokenBudget bounds the history that createQuestPlan later splices in whole
-      // (QuestMaster has no downstream trim of its own), sized against the REAL model's context
-      // window via the same helper ChatCompletionProcess.ts's own call site uses, so the two
-      // cannot drift the way an unknown-model floor would for a model with a small real window.
-      // Two known divergences from that call site's overhead: it does not read the
-      // ContextVerbatimWindowFraction admin override (no admin-settings map is threaded into
-      // QuestMasterFeature) - it always uses the compiled-in default fraction. It also omits
-      // enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS, which does apply on the GPT-5
-      // function-calling quest-plan path (createQuestPlan is passed { history } only, so omitting
-      // contextSummary's reserve is correct, but the tool-schema reserve is not); this makes that
-      // path's budget slightly over-generous rather than unsafe, and QuestMasterFeature has no
-      // enabled-tool count in scope to reserve for without threading more state through.
-      const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, startParams.max_tokens, {
-        verbatimWindowFraction: DEFAULT_VERBATIM_WINDOW_FRACTION,
-        nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE_TOKENS + Math.ceil(message.length / 4),
-      });
-      const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
-        db: this.chatCompletion.db,
-        // modelInfo.id (post-resolveDeprecatedModelId), matching ChatCompletionProcess.ts's own
-        // call site, so a future Gemini id landing in the deprecation map can't desync the two.
-        model: modelInfo.id,
-        verbatimTokenBudget,
-      });
-
-      this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);
-
-      await this.questMasterRequest(quest, llm, model, startParams, quest.sessionId, message, conversationHistory);
-
-      // Refetch to verify the questMasterReply was set
-      const updatedQuest = await this.chatCompletion.db.quests.findById(questId);
-      if (!updatedQuest) throw new Error('Quest not found after processing');
-
-      await this.chatCompletion.sendStatusUpdate(updatedQuest, 'QuestMaster plan generated');
-
-      this.logger.log('QuestMaster processing result:', {
-        questMasterReply: updatedQuest.questMasterReply,
-        reply: updatedQuest.reply,
-      });
-
-      updatedQuest.status = 'done';
-      await this.chatCompletion.db.quests.update({
-        id: updatedQuest.id,
-        status: updatedQuest.status,
-        promptMeta: updatedQuest.promptMeta,
-      });
-
-      await this.chatCompletion.sendStatusUpdate(updatedQuest, null);
-
-      // Return false so normal processing is skipped
-      return { shouldContinue: false };
-    } catch (error) {
-      this.logger.error('Error in QuestMaster processing:', error);
-
-      quest.type = 'error';
-      quest.status = 'done';
-      quest.reply = (error as Error).message;
-      await this.chatCompletion.db.quests.update({
-        id: quest.id,
-        type: quest.type,
-        status: quest.status,
-        reply: quest.reply,
-      });
-
-      // Let normal processing continue
-      return { shouldContinue: true };
-    }
-  }
-
-  /**
-   * Guard mutations of a QuestMaster plan. The plan/quest/sub-quest ids arrive from
-   * client-supplied `questMaster` params, so a bare findById would let one user drive
-   * status changes on another user's plan. Access = plan owner or explicit sharee;
-   * legacy plans without a userId bind to their owning notebook's owner.
-   *
-   * Must stay in sync with apps/client/server/utils/questMasterPlanAccess.ts, which is the same
-   * predicate on the HTTP side (it also guards the notebook lookup on ObjectId shape below).
-   */
-  private async callerCanWritePlan(plan: IQuestMasterPlanDocument): Promise<boolean> {
-    const userId = this.user.id;
-    if (plan.userId) {
-      return plan.userId === userId || (plan.sharedWith?.includes(userId) ?? false);
-    }
-    // notebookId is a schema String: placeholder plans carry `direct-<uuid>` / `clone-<uuid>`, so
-    // guard on ObjectId shape before findById to keep a non-id from casting into a CastError.
-    const session = isObjectIdShaped(plan.notebookId)
-      ? await this.chatCompletion.db.sessions.findById(plan.notebookId)
-      : null;
-    if (session?.userId !== userId) return false;
-    // Backfill like the HTTP side does, so the owner arm of the plan's write filter (writableBy in
-    // QuestMasterPlanModel.ts) matches the write that follows.
-    await this.chatCompletion.db.questMasterPlans.update({ id: plan.id, userId });
-    plan.userId = userId;
-    return true;
-  }
-
-  async onComplete({
-    quest,
-    questMaster,
-  }: {
-    quest: IChatHistoryItemDocument;
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
-  }): Promise<void> {
-    if (!questMaster) return;
-
-    const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
-    if (!questMasterPlan) {
-      this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
-      return;
-    }
-
-    if (!(await this.callerCanWritePlan(questMasterPlan))) {
-      this.logger.warn(
-        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
-      );
-      return;
-    }
-
-    const mainQuest = questMasterPlan.quests.find(t => t.id === questMaster.questId);
-    if (!mainQuest) {
-      this.logger.warn(
-        `Main quest with id ${questMaster.questId} not found in QuestMaster plan with id ${questMaster.questMasterPlanId}`
-      );
-      return;
-    }
-
-    await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
-      questMaster.questMasterPlanId,
-      this.user.id,
-      questMaster.questId,
-      questMaster.subQuestId,
-      'completed'
-    );
-  }
-
-  private readonly processQuestMasterTask = async (
-    quest: IChatHistoryItemDocument,
-    questMaster: z.infer<typeof QuestMasterParamsSchema>
-  ) => {
-    const questMasterPlan = await this.chatCompletion.db.questMasterPlans.findById(questMaster.questMasterPlanId);
-    if (!questMasterPlan) {
-      this.logger.warn(`QuestMaster plan with id ${questMaster.questMasterPlanId} not found`);
-      return;
-    }
-
-    if (!(await this.callerCanWritePlan(questMasterPlan))) {
-      this.logger.warn(
-        `User ${this.user.id} is not authorized to modify QuestMaster plan ${questMaster.questMasterPlanId}`
-      );
-      return;
-    }
-
-    const subQuest = await this.chatCompletion.db.questMasterPlans.getSubQuest(
-      questMaster.questMasterPlanId,
-      questMaster.questId,
-      questMaster.subQuestId
-    );
-    if (!subQuest) {
-      this.logger.warn(
-        `Sub quest with id ${questMaster.subQuestId} not found in QuestMaster plan with id ${questMaster.questMasterPlanId} for main quest with id ${questMaster.questId}`
-      );
-      return;
-    }
-
-    // Only skip if already completed or explicitly skipped - allow other statuses to proceed
-    // This fixes the freeze issue where UI sets in_progress before LLM call, causing silent return
-    if (subQuest.status === 'completed' || subQuest.status === 'skipped') {
-      this.logger.log(
-        `Sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} is ${subQuest.status}. Skipping.`
-      );
-      return;
-    }
-
-    // Log if we're re-processing an in_progress task (e.g., after page refresh)
-    if (subQuest.status === 'in_progress') {
-      this.logger.log(
-        `Sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} is already in_progress. Re-processing.`
-      );
-    }
-
-    // No 'blocked' arm below: SubQuestStatus has no such value, so every status
-    // other than the in_progress case above just falls through to processing.
-
-    this.logger.log(
-      `Started sub quest ${questMaster.subQuestId} for main quest ${questMaster.questId} in QuestMaster plan ${questMaster.questMasterPlanId}`
-    );
-
-    await this.chatCompletion.db.questMasterPlans.updateTaskStatus(
-      questMaster.questMasterPlanId,
-      this.user.id,
-      questMaster.questId,
-      questMaster.subQuestId,
-      'in_progress'
-    );
-  };
-
-  private async questMasterRequest(
-    quest: IChatHistoryItemDocument,
-    llm: ICompletionBackend,
-    model: string,
-    params: ChatCompletionCreateInput,
-    sessionId: string,
-    message: string,
-    conversationHistory: IMessage[] = []
-  ) {
-    try {
-      this.logger.log('QuestMaster Request Debug - Initial params:', {
-        model,
-        parameterNames: Object.keys(params ?? {}),
-        sessionId,
-        messageLength: message.length,
-        historyMessageCount: conversationHistory.length,
-      });
-
-      const questMaster = new QuestMaster(
-        llm,
-        {
-          quests: this.chatCompletion.db.quests,
-          questMasterPlans: this.chatCompletion.db.questMasterPlans,
-        },
-        async (quest, status) => {
-          await this.chatCompletion.sendStatusUpdate(quest, status);
-        },
-        quest,
-        this.logger,
-        this.user.id
-      );
-
-      // History provides context about what the user has already discussed
-      const questPlanResult = await questMaster.createQuestPlan(model, message, {
-        history: conversationHistory,
-      });
-
-      // Return type is `string | void`:
-      // - GPT-5 models with tool support use function calling, which handles processing internally
-      //   and returns void (the quest plan is already saved to DB by processQuestPlan inside createQuestPlan)
-      // - Other models return the HTML string that needs to be processed here
-      if (typeof questPlanResult === 'string') {
-        await questMaster.processQuestPlan(questPlanResult);
-      }
-      // If questPlanResult is void (undefined), GPT-5 function calling path already processed it
-
-      if (this.user?.tags?.includes('debugQuestMaster')) {
-        const debugText = typeof questPlanResult === 'string' ? questPlanResult : '[Processed via function calling]';
-        await postMessageToSlack(
-          this.chatCompletion.slackWebhookUrl,
-          `*${this.user.name}* prompted: ${message}\nQuestMaster Plan:\n${debugText}`
-        );
-      }
-    } catch (error) {
-      this.logger.error('Error in QuestMaster processing:', error);
-      throw error;
-    }
-  }
-
-  /** Send an immediate rapid reply for QuestMaster activation, before the plan is generated. */
-  private async sendQuestMasterRapidReply(quest: IChatHistoryItemDocument, message: string): Promise<void> {
-    try {
-      const rapidReplyContent = this.generateQuestMasterRapidReply(message);
-
-      // Sent as a status message, not a stored reply
-      await this.chatCompletion.sendStatusUpdate(quest, `🚀 ${rapidReplyContent}`, {
-        immediate: true,
-        statusAt: new Date(),
-      });
-
-      this.logger.info(`[QuestMaster] Rapid reply sent (${rapidReplyContent.length} characters)`);
-    } catch (error) {
-      // Don't throw - rapid reply failures shouldn't break QuestMaster
-      this.logger.warn('Failed to send QuestMaster rapid reply:', error);
-    }
-  }
-
-  /** Generate an enthusiastic rapid reply message for QuestMaster activation. */
-  private generateQuestMasterRapidReply(message: string): string {
-    const lowerMessage = message.toLowerCase();
-
-    // Determine the type of quest based on keywords
-    let questType = 'comprehensive plan';
-    if (lowerMessage.includes('learn') || lowerMessage.includes('study') || lowerMessage.includes('understand')) {
-      questType = 'learning journey';
-    } else if (lowerMessage.includes('build') || lowerMessage.includes('create') || lowerMessage.includes('make')) {
-      questType = 'step-by-step build guide';
-    } else if (
-      lowerMessage.includes('improve') ||
-      lowerMessage.includes('optimize') ||
-      lowerMessage.includes('better')
-    ) {
-      questType = 'improvement roadmap';
-    } else if (lowerMessage.includes('solve') || lowerMessage.includes('fix') || lowerMessage.includes('debug')) {
-      questType = 'solution strategy';
-    } else if (
-      lowerMessage.includes('plan') ||
-      lowerMessage.includes('strategy') ||
-      lowerMessage.includes('approach')
-    ) {
-      questType = 'strategic plan';
-    }
-
-    const responses = [
-      `Great idea! 🎯 I'm creating a detailed ${questType} to help you achieve exactly what you're looking for. This Quest will break everything down into clear, actionable steps that you can follow at your own pace!`,
-
-      `Perfect! ✨ Let me craft a comprehensive ${questType} that will guide you through this step-by-step. I'm organizing all the key tasks and sub-tasks to make this as smooth as possible for you!`,
-
-      `Excellent request! 🚀 I'm building a structured ${questType} that will transform your goal into a clear roadmap. Each task will have specific actions you can take to move forward!`,
-
-      `Love this! 💫 Creating a detailed ${questType} right now that will break down everything you need to know and do. This Quest will be your personal guide to success!`,
-
-      `Fantastic! 🌟 I'm putting together a thorough ${questType} that will give you clarity and direction. Each step will build on the last to help you reach your objective efficiently!`,
-    ];
-
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-}
-
 export class ProjectFeature implements ChatCompletionFeature {
   private chatCompletion: ChatCompletionContext;
   private logger: Logger;
@@ -1538,7 +1227,7 @@ export class ProjectFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string,
     modelInfo: ModelInfo,
     attachedFileTokenBudget: number
@@ -1595,7 +1284,7 @@ export class ProjectFeature implements ChatCompletionFeature {
       const closing = questReplies.substring(questReplies.length - 400, questReplies.length);
       await postMessageToSlack(
         this.chatCompletion.slackWebhookUrl,
-        `*${this.chatCompletion.user.name}* prompted: ${quest.prompt} QuestMaster Plan*:\n${opening}...\n...\n...${closing}`
+        `*${this.chatCompletion.user.name}* prompted: ${quest.prompt} Project notebook reply*:\n${opening}...\n...\n...${closing}`
       );
     }
   }
@@ -1828,6 +1517,9 @@ export class SessionPromptFeature implements ChatCompletionFeature {
 // cut is decided by an ANN query over the scope (see selectForcedRetrievalCandidates); otherwise by
 // file name.
 const FORCED_RETRIEVAL_MAX_CANDIDATE_FILES = 100;
+// Cap slots held for files the ANN cannot answer for yet (stamped within the mongot lag), so a
+// file uploaded and asked about at once is scored even when hits alone would fill the cap.
+const FORCED_RETRIEVAL_NOT_INDEXED_RESERVE = 10;
 // Metadata rows listed when the candidates can be chosen by relevance (the ANN query ranks this
 // many files down to the cap above) or the scope spans several lakes (the by-name cut takes from
 // each lake in turn, so it needs more rows than the cap to pick from). Metadata only (no chunks), so it is cheap next to the scan.
@@ -1844,6 +1536,10 @@ type ForcedRetrievalCandidateFile = VectorSearchReadinessFile & {
   tags?: { name: string }[];
   documentDate?: Date | null;
 };
+// The ANN candidate pick's outcome. annPickMs is null when no query was sent.
+type AnnCandidatePick<T> =
+  | { ranked: T[]; notIndexedCut: number; annPickMs: number }
+  | { ranked: null; reason: ForcedRetrievalFallbackReason; annPickMs: number | null };
 // File ids per chunk query, and chunk rows per query - together these bound how many vectors
 // are resident at once instead of loading every candidate file's chunks up front.
 const FORCED_RETRIEVAL_FILE_BATCH_SIZE = 10;
@@ -2038,6 +1734,12 @@ interface ForcedRetrievalCoverage {
    * failure mode this whole feature exists to prevent.
    */
   filesWithheldReindexing: number;
+  /**
+   * Files stamped within VECTOR_SEARCH_READY_LAG_MS (too recent for the ANN) that the relevance pick
+   * still cut past the candidate cap, after the reserved slots. Unlike a by-name cut they return on
+   * their own once indexed.
+   */
+  filesNotYetIndexedCut: number;
   /**
    * Older generations of a document this lake also holds a newer generation of, dropped before the
    * chunk scan (see dataLakeService/supersession.ts). Reported with ids and the matching tier, not
@@ -2274,6 +1976,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * as much an incomplete answer as ALL of them, and gating on "all" made this unreachable in
    * practice: a fully-mismatched library also has zero scored chunks, which returns before either
    * call site below ever runs.
+   *
+   * A supersession collapse alone is NOT partial: dedupe working as designed drops a stale
+   * generation, not part of the library, so it neither raises the reader notice nor adds the
+   * coverage note to a grounded turn. Its ids still land in `promptMeta.warnings`, and in the
+   * reader-facing reasons it is never listed. A turn that retrieved nothing is the exception: the
+   * call site keeps its `no_match_partial` abstention, because "nothing found" after a collapse
+   * that can be wrong on the bare file-name tier would be a confident false negative.
    */
   private reportCoverage(
     quest: IChatHistoryItemDocument,
@@ -2287,10 +1996,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       coverage.stoppedByCursorStall ||
       anyMismatch ||
       coverage.filesWithheldReindexing > 0 ||
-      coverage.filesSupersededCollapsed > 0;
-    if (!partial) return false;
+      coverage.filesNotYetIndexedCut > 0;
+    const supersededOnly = !partial && coverage.filesSupersededCollapsed > 0;
+    if (!partial && !supersededOnly) return false;
 
+    // `reasons` is the diagnostic prose (limits, counts, ids) for the log and `promptMeta.warnings`;
+    // `readerReasons` is the same causes worded for the chat notice, with no ids or internal limits.
     const reasons: string[] = [];
+    const readerReasons: string[] = [];
     if (coverage.moreFilesBeyondCap) {
       // Names the selection RULE, not just the shortfall: candidates come off a fileName-ascending
       // page (see the listing above), so an over-cap library does not lose a random slice - it
@@ -2309,31 +2022,52 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
               `name are considered${coverage.candidateSelection === 'relevance' ? ' (and ranked by relevance)' : ''}, ` +
               'so the rest of the library is never reached'
       );
+      readerReasons.push('More documents matched than one search can cover, so the rest were not checked.');
     }
     if (coverage.stoppedByChunkBudget) {
       reasons.push(`the ${FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS}-chunk per-turn scan budget was reached`);
+      readerReasons.push('The question matched more content than one search can read, so some of it was not checked.');
     }
     if (coverage.stoppedByCursorStall) {
       reasons.push('the passage reader stopped advancing, so part of a document batch was never scanned');
+      readerReasons.push('Part of a document batch could not be read.');
     }
     if (coverage.filesExcludedForeignModel > 0) {
       reasons.push(
         `${coverage.filesExcludedForeignModel} document(s) are embedded with a different model than the ` +
           `${embeddingModel} query and were excluded entirely`
       );
+      readerReasons.push(
+        `${coverage.filesExcludedForeignModel} document(s) were indexed in a way this search cannot read and were left out.`
+      );
     }
     if (coverage.filesWithheldReindexing > 0) {
       // Names TIME as the remedy, matching describeRetrievalUnavailable's wording rule: the reader
-      // must not be sent to re-embed a document that is already re-embedding.
+      // must not be sent to re-embed a document that is already being indexed.
       reasons.push(
-        `${coverage.filesWithheldReindexing} document(s) are being re-indexed right now and were withheld - ` +
-          'their passages are being replaced and the replacements are not searchable yet; they return on their own'
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were withheld - ` +
+          'their passages are not searchable yet; they return on their own'
+      );
+      readerReasons.push(
+        `${coverage.filesWithheldReindexing} document(s) are still being indexed and were skipped. ` +
+          'They return on their own.'
+      );
+    }
+    if (coverage.filesNotYetIndexedCut > 0) {
+      reasons.push(
+        `${coverage.filesNotYetIndexedCut} recently added document(s) are not searchable yet and the candidate ` +
+          'cap left them out; they become candidates on their own once indexed'
+      );
+      readerReasons.push(
+        `${coverage.filesNotYetIndexedCut} recently added document(s) are still being indexed and were not checked. ` +
+          'Try again in a minute.'
       );
     }
     if (coverage.filesSupersededCollapsed > 0) {
       // Names the ids and the tier, and says the suppression is recoverable - the same contract
       // describeSupersession states, for the same reason: this collapse can be wrong on the bare
-      // file-name tier and the reader is the only one who can tell.
+      // file-name tier and whoever reads the warning is the only one who can tell. No reader-facing
+      // entry: this is dedupe working as designed.
       const named = formatSupersededSample(coverage.superseded, coverage.filesSupersededCollapsed);
       reasons.push(
         `${coverage.filesSupersededCollapsed} document(s) were not ranked because this lake holds a version that ` +
@@ -2348,10 +2082,18 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         `${allScannedMismatched ? 'all ' : ''}${coverage.chunksSkippedDimMismatch} chunk(s) across ` +
           `${coverage.filesWithDimMismatch} document(s) are embedded with a different model and cannot be matched`
       );
+      readerReasons.push(
+        `${coverage.chunksSkippedDimMismatch} passage(s) across ${coverage.filesWithDimMismatch} document(s) ` +
+          'were indexed in a way this search cannot read.'
+      );
     }
-    this.logger.warn(
-      `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
-    );
+    if (supersededOnly) {
+      this.logger.log(`🔒 Forced retrieval: ${reasons.join('; ')}`);
+    } else {
+      this.logger.warn(
+        `🔒 Forced retrieval: PARTIAL coverage - ${reasons.join('; ')}. Grounding is based on an incomplete library scan.`
+      );
+    }
 
     quest.promptMeta = materializePromptMetaSession(quest.promptMeta, {
       sessionId: quest.sessionId,
@@ -2359,13 +2101,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     });
     quest.promptMeta.warnings = [
       ...(quest.promptMeta.warnings ?? []),
-      `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
+      supersededOnly
+        ? `Knowledge-base grounding skipped superseded documents for this message (${reasons.join('; ')}).`
+        : `Knowledge-base grounding scanned only part of the library for this message (${reasons.join('; ')}).`,
     ];
+    if (supersededOnly) return false;
     // The same signal, structured, because `warnings` is a shared channel: response truncation and
     // artifact elision append there too, so a reader cannot tell a coverage entry from a sibling's
-    // without matching on prose. The chat banner reads THIS field; the string above stays for the
-    // debug inspector and for anything already grepping the warning text.
-    quest.promptMeta.retrievalCoverage = { partial: true, reasons };
+    // without matching on prose. The chat banner reads THIS field, with ids and internal limits
+    // left out; the diagnostic string above stays for the debug inspector and for anything already
+    // grepping the warning text.
+    quest.promptMeta.retrievalCoverage = { partial: true, reasons: readerReasons };
     return true;
   }
 
@@ -2491,38 +2237,65 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * A relevance pick ranks them with one ANN query (see rankCandidateFilesByRelevance); anything
    * that stops it - index not queryable, no index-ready file, an error, or the deadline - falls
    * back to the prefix of the given order, which reportCoverage then flags as the by-name cut it is.
+   * A scope over the cap also publishes how it was cut (recordForcedRetrievalCutMetrics), and so
+   * does a listing the query already cut at the cap (`listingCutAtCap`): a by-name cut with no
+   * relevance pick to try, so it is recorded as one even though every listed file is kept.
    */
   private async selectForcedRetrievalCandidates<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel,
-    relevanceSelectionAvailable: boolean
-  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection }> {
-    if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) return { files, selection: 'all' };
-    const ranked = relevanceSelectionAvailable
+    relevanceSelectionAvailable: boolean,
+    listingCutAtCap: boolean
+  ): Promise<{ files: T[]; selection: ForcedRetrievalCandidateSelection; notIndexedCut: number }> {
+    if (files.length <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES) {
+      if (listingCutAtCap) {
+        await recordForcedRetrievalCutMetrics(
+          { selection: 'fileName', reason: 'relevance-unavailable', annPickMs: null },
+          this.logger
+        );
+      }
+      return { files, selection: 'all', notIndexedCut: 0 };
+    }
+    const pick: AnnCandidatePick<T> = relevanceSelectionAvailable
       ? await this.rankCandidatesByAnn(files, queryVector, embeddingModel)
-      : null;
-    if (ranked) return { files: ranked.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'relevance' };
-    return { files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES), selection: 'fileName' };
+      : { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
+    if (pick.ranked) {
+      await recordForcedRetrievalCutMetrics({ selection: 'relevance', annPickMs: pick.annPickMs }, this.logger);
+      return { files: pick.ranked, selection: 'relevance', notIndexedCut: pick.notIndexedCut };
+    }
+    await recordForcedRetrievalCutMetrics(
+      { selection: 'fileName', reason: pick.reason, annPickMs: pick.annPickMs },
+      this.logger
+    );
+    return {
+      files: files.slice(0, FORCED_RETRIEVAL_MAX_CANDIDATE_FILES),
+      selection: 'fileName',
+      notIndexedCut: 0,
+    };
   }
 
   /**
    * The ANN half of selectForcedRetrievalCandidates, run through the same atlasVectorSearch seam
-   * as semanticDataLakeSearch. `null` means "fall back"; never throws.
+   * as semanticDataLakeSearch. `ranked: null` means "fall back by name", with the reason; never throws.
    */
   private async rankCandidatesByAnn<T extends ForcedRetrievalCandidateFile>(
     files: T[],
     queryVector: number[],
     embeddingModel: SupportedEmbeddingModel
-  ): Promise<T[] | null> {
+  ): Promise<AnnCandidatePick<T>> {
     const { fabfilechunks } = this.chatCompletion.db;
-    if (!isAtlasVectorSearchAvailable(fabfilechunks)) return null;
+    if (!isAtlasVectorSearchAvailable(fabfilechunks)) {
+      return { ranked: null, reason: 'relevance-unavailable', annPickMs: null };
+    }
     const now = new Date();
     const annReadyIds = files.filter(f => isVectorSearchReady(f, now)).map(f => f.id);
     if (annReadyIds.length === 0) {
       this.logger.warn('🔒 Forced retrieval: no candidate file is vector-index ready yet - picking candidates by name');
-      return null;
+      return { ranked: null, reason: 'no-ready-file', annPickMs: null };
     }
+    const startedAt = Date.now();
+    const elapsedMs = () => Date.now() - startedAt;
     try {
       // One deadline across both calls: the status read is cached but a cold miss is a round trip.
       const ann = await withDeadline(
@@ -2560,7 +2333,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index not queryable - picking candidates by name`
         );
-        return null;
+        // Only the status read ran, so there is no query time to report.
+        return { ranked: null, reason: 'not-queryable', annPickMs: null };
       }
       // An empty answer is not a ranking: ranking on it would return the input (by-name) order
       // while reporting 'relevance', hiding the cut. Seen in the mongot lag window, where the
@@ -2570,22 +2344,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         this.logger.warn(
           `🔒 Forced retrieval: ${embeddingModel} vector index returned no hits - picking candidates by name`
         );
-        return null;
+        return { ranked: null, reason: 'no-hits', annPickMs: elapsedMs() };
       }
-      return rankCandidateFilesByRelevance(
+      const { files: ranked, notIndexedCut } = selectRelevanceCandidates(
         files,
         ann.results.map(r => ({ fabFileId: r.fileId, score: r.score })),
-        now
+        now,
+        { cap: FORCED_RETRIEVAL_MAX_CANDIDATE_FILES, notIndexedReserve: FORCED_RETRIEVAL_NOT_INDEXED_RESERVE }
       );
+      return { ranked, notIndexedCut, annPickMs: elapsedMs() };
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         this.logger.warn(
           `🔒 Forced retrieval: ANN candidate pick ran past ${FORCED_RETRIEVAL_ANN_DEADLINE_MS}ms - picking candidates by name`
         );
-      } else {
-        this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+        return { ranked: null, reason: 'deadline', annPickMs: elapsedMs() };
       }
-      return null;
+      this.logger.warn('🔒 Forced retrieval: ANN candidate pick failed - picking candidates by name', error);
+      return { ranked: null, reason: 'error', annPickMs: elapsedMs() };
     }
   }
 
@@ -2609,8 +2385,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * OPENAI_KEY_MISSING_MESSAGE on any lake whose files had not voted yet (newly created, or still
    * mid-ingest).
    *
-   * Read the BINDING, never `embeddingFactory.getDefaultEmbeddingModel()`. The factory reports
-   * Titan for any empty config, and `resolveEmbeddingConfig` returns an empty config for three
+   * Read the BINDING, never `embeddingFactory.defaultModel`. The factory reports
+   * Titan for any empty config, and `resolveEmbeddingCredentials` returns an empty config for three
    * different states - a genuine keyless substitution, an EXPIRED caller key, and a missing Ollama
    * base URL. Only the first is this deployment saying it holds no key; the other two are states the
    * resolver deliberately declines to substitute for, and `missing` is non-null on both. Deriving
@@ -2630,13 +2406,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * too, so the loud credential error survives instead of being quietly rerouted into a query
    * against a space the corpus was never written in.
    */
-  private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingFactory): Promise<SupportedEmbeddingModel> {
+  private async resolveEmbeddingModelFallback(embeddingFactory: EmbeddingRuntime): Promise<SupportedEmbeddingModel> {
     const binding = this.chatCompletion.embeddingBinding;
     // The binding is the model this turn will actually embed with, so it is also the right thing to
     // fall back TO when the setting is unusable. `getDefaultEmbeddingModel()` only stands in if the
     // seam has not run (no production path reaches here before it; a unit test can).
     const factoryDefault =
-      binding?.model ?? embeddingFactory.getDefaultEmbeddingModel?.() ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+      binding?.model ?? embeddingFactory.defaultModel ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     let configured: unknown;
     // Scoped to the settings READ alone. Widening it to cover the decision below would let a
     // programming error there be swallowed as "could not read the setting" and silently answer
@@ -2674,8 +2450,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         binding !== undefined &&
         binding.missing === null &&
         binding.model !== binding.requested &&
-        getProviderFromModel(binding.model) === ModelBackend.Bedrock;
-      if (substitutedToKeyless && getProviderFromModel(configured) !== ModelBackend.Bedrock) {
+        embeddingBackendForModel(binding.model) === ModelBackend.Bedrock;
+      if (substitutedToKeyless && embeddingBackendForModel(configured) !== ModelBackend.Bedrock) {
         this.logger.warn(
           `🔒 Forced retrieval: no credential resolved for defaultEmbeddingModel "${configured}"; ` +
             `embedding the query with keyless ${factoryDefault}, which is what this stage ingested with`
@@ -2917,7 +2693,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
   async getContextMessages(
     quest: IChatHistoryItemDocument,
-    embeddingFactory: EmbeddingFactory,
+    embeddingFactory: EmbeddingRuntime,
     message: string
   ): Promise<IMessage[]> {
     this.publishedCitableKeys = new Set();
@@ -3220,14 +2996,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         votingFiles.length > 0 ? votingFiles : indexedFiles,
         fallbackModel
       );
-      const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+      const embeddingService = bindEmbeddingModel(embeddingFactory, embeddingModel);
       // A follow-up is scored with the recent user turns blended in, embedded alongside rather than
       // after, so it costs one parallel embedding call and no model call; see forcedRetrievalQuery.
       const followUp = forcedRetrievalFollowUpContext(query, this.chatCompletion.priorUserPrompts);
       const [messageVector, contextVector] = await Promise.all([
-        embeddingService.generateEmbedding(query),
+        embedOne(embeddingService, query),
         followUp
-          ? embeddingService.generateEmbedding(followUp.context).catch(error => {
+          ? embedOne(embeddingService, followUp.context).catch(error => {
               this.logger.warn(
                 '\u{1F512} Forced retrieval: follow-up context embedding failed; using the message alone',
                 error
@@ -3314,11 +3090,19 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         const { ordered } = orderFilesFairlyAcrossLakes(lakeRows, orderScopes, f => f.tags?.map(t => t.name) ?? []);
         return [...ordered, ...libraryRows];
       };
-      const { files: scanCandidates, selection: candidateSelection } = await this.selectForcedRetrievalCandidates(
+      const {
+        files: scanCandidates,
+        selection: candidateSelection,
+        notIndexedCut,
+      } = await this.selectForcedRetrievalCandidates(
         spansSeveralLakes ? fairByName(collapse.servable) : collapse.servable,
         queryVector,
         embeddingModel,
-        relevanceSelectionAvailable
+        relevanceSelectionAvailable,
+        // Only a single lake without relevance lists at the cap; the wider listings record their
+        // cut in the over-cap branch, so no turn is recorded twice. A wider listing that overflowed
+        // with <= cap servable files records nothing (see the forcedRetrievalByNameCut alarm doc).
+        fileResults.hasMore === true && listingLimit <= FORCED_RETRIEVAL_MAX_CANDIDATE_FILES
       );
       const supersession = buildSupersessionReport(collapse.superseded);
       // The audit value, resolved once here and used by every write site below. Deliberately NOT
@@ -3351,6 +3135,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         listingLimit,
         filesExcludedForeignModel: excludedForeignFiles.length,
         filesWithheldReindexing: reindexingFiles.length,
+        filesNotYetIndexedCut: notIndexedCut,
         filesSupersededCollapsed: supersession.count,
         superseded: supersession.sample,
         chunksScanned: 0,
@@ -3385,10 +3170,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           const want = Math.min(FORCED_RETRIEVAL_BATCH_CHUNK_CAP, remaining);
           // One row beyond what we will consume, so "exactly full" is distinguishable from
           // "more remains". Guessing from a full page reports truncation that never happened.
-          const rows = await db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
-            limit: want + 1,
-            afterChunkId: cursor,
-          });
+          // Keyset-paged, so re-reading a page after a dropped socket is exact, not approximate.
+          const rows = await retryOnceOnMongoNetworkError(
+            () =>
+              db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
+                limit: want + 1,
+                afterChunkId: cursor,
+              }),
+            { label: '\u{1F512} Forced retrieval: chunk page read failed', logger: this.logger }
+          );
           if (rows.length === 0) break;
           const moreExist = rows.length > want;
           const usable = moreExist ? rows.slice(0, want) : rows;
@@ -3612,7 +3402,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // Report coverage first: a refusal grounded on a partially-scanned library is the most
         // misleading outcome there is, because it reads as "the library has nothing on this". The
         // return value is what keeps the abstention block from making exactly that claim.
-        const partial = this.reportCoverage(quest, coverage, embeddingModel);
+        const partial = this.reportCoverage(quest, coverage, embeddingModel) || coverage.filesSupersededCollapsed > 0;
         // The legitimate zero: the corpus WAS scanned and compared, nothing was similar enough.
         // 'ok' per RetrievalSummarySchema - this is the case the field exists to distinguish from
         // "never asked". Partial-scan hedging rides on promptMeta.warnings via reportCoverage above.
@@ -3969,7 +3759,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // resolution itself is what threw) - a retrieval that threw must not look identical to one
       // that never ran.
       recordRetrieval('failed', attemptedDataLakeTags);
-      this.logger.error('🔒 Forced retrieval failed:', error);
+      // A Mongo network failure anywhere in this path (the chunk page read has already been retried
+      // once) is infrastructure, and the turn still answers (with the abstention below), so warn with
+      // the name only - the driver message carries the database host. Anything else is a bug in this
+      // path and stays at error with the full error.
+      if (isMongoNetworkError(error)) {
+        this.logger.warn(`\u{1F512} Forced retrieval failed: ${(error as Error).name}`);
+      } else {
+        this.logger.error('🔒 Forced retrieval failed:', error);
+      }
       return this.noContextMessages('unavailable');
     }
   }
@@ -4002,7 +3800,6 @@ export class ContextSummarizationFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument;
     session: ISessionDocument;
     messages: IMessage[];
-    questMaster: z.infer<typeof QuestMasterParamsSchema> | undefined;
     model: string;
     historyCount?: number;
     oldestIncludedQuestId?: string | null;

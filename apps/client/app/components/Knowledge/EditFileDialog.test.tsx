@@ -69,4 +69,30 @@ describe('EditFileDialog', () => {
 
     expect(await screen.findByText(message)).toBeTruthy();
   });
+
+  it("shows the server's insufficient-credits message instead of the generic axios text", async () => {
+    const message = 'You do not have enough credits to edit this file.';
+    const onSubmit = vi.fn(async () => {
+      throw new AxiosError('Request failed with status code 422', 'ERR_BAD_REQUEST', undefined, undefined, {
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        data: { errorCode: 'insufficient_credits', error: message },
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+      });
+    });
+
+    render(
+      <TestWrapper>
+        <EditFileDialog open file={testFile} onClose={vi.fn()} onSubmit={onSubmit} />
+      </TestWrapper>
+    );
+
+    const user = userEvent.setup({ delay: null });
+    await user.type(screen.getByTestId('edit-file-dialog-instruction-input'), 'Make it longer');
+    await user.click(screen.getByTestId('edit-file-dialog-submit-btn'));
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByText('Request failed with status code 422')).toBeNull();
+  });
 });

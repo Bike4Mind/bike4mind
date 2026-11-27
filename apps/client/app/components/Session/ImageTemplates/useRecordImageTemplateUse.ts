@@ -9,7 +9,7 @@ import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsS
 /**
  * Whether a sent prompt should count a template use: only normal generation
  * sends, not user-typed slash commands. Check the ORIGINAL prompt here - the
- * send path later derives a `/gen_image` "command" from it, so gating on that
+ * send path derives a command (`/llm`) from every prompt, so gating on that
  * derived command would (wrongly) suppress every real generation.
  */
 export function isTemplateUseEligiblePrompt(prompt: string): boolean {

@@ -1,6 +1,19 @@
+/// <reference types="@testing-library/jest-dom" />
 import { vi } from 'vitest';
-import '@testing-library/jest-dom';
 import { webcrypto } from 'node:crypto';
+
+// DOM matchers only where there is a DOM. This file serves both projects, and loading jest-dom
+// cost every node-project file ~80ms for matchers it cannot use. Keyed on `window` rather than on
+// the project because a file can switch environment with a `@vitest-environment` docblock. The
+// reference above keeps the matcher types global, as the static import used to.
+if (typeof window !== 'undefined') {
+  await import('@testing-library/jest-dom/vitest');
+}
+
+// Workers share process.env across files, so a NODE_ENV left as 'development' by an earlier
+// file flips every dev-only gate (CSP unsafe-eval, pretty logs, relaxed rate limits) in the
+// next one. Reset it per file; a test that needs another value stubs it itself.
+Object.assign(process.env, { NODE_ENV: 'test' });
 
 // Stripe price IDs are account-tied and sourced from NEXT_PUBLIC_* env vars with no
 // brand fallback (issue #9306). Seed real-format dummy ids here so the staged
@@ -30,6 +43,9 @@ process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES ??= 'milliononmars.com:Millio
 
 // Mock window.matchMedia for MUI Joy UI components (only in browser/jsdom environments)
 if (typeof window !== 'undefined') {
+  // jsdom's own scrollTo only reports "Not implemented", straight to stderr and past `silent`.
+  window.scrollTo = () => {};
+
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation(query => ({
@@ -45,9 +61,27 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// Joy's Textarea re-measures itself through getComputedStyle on every render. jsdom has no layout,
+// so the answer is always a height of 0, but computing it walks every injected style rule: up to a
+// fifth of the run time of a form-heavy suite. Reporting zero width takes the component's own
+// "not visible, skip the sync" exit. Matched on the caller so every other style read stays real.
+if (typeof window !== 'undefined') {
+  // Kept on the window: with reused workers this file runs again on the same one, and wrapping
+  // the wrapper would add a call per test file to every style read.
+  const REAL = Symbol.for('b4m.test.realGetComputedStyle');
+  const scope = window as unknown as Record<symbol, typeof window.getComputedStyle | undefined>;
+  const realGetComputedStyle = (scope[REAL] ??= window.getComputedStyle.bind(window));
+  const unmeasured = { width: '0px' } as CSSStyleDeclaration;
+  window.getComputedStyle = (element: Element, pseudoElement?: string | null) => {
+    if (element.tagName === 'TEXTAREA' && new Error().stack?.includes('TextareaAutosize')) return unmeasured;
+    return realGetComputedStyle(element, pseudoElement);
+  };
+}
+
 // Mock SST Resources to avoid deployment state dependency
 vi.mock('sst', () => ({
   Resource: {
+    historyImportBucket: { name: 'test-historyImportBucket' },
     MONGODB_URI: { value: 'mongodb://localhost:27017/test' },
     SESSION_SECRET: { value: 'test-session-secret' },
     JWT_SECRET: { value: 'test-jwt-secret' },
@@ -55,6 +89,10 @@ vi.mock('sst', () => ({
     SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.slack.com/test-error' },
     GOOGLE_CLIENT_ID: { value: 'test-google-client-id' },
     GOOGLE_CLIENT_SECRET: { value: 'test-google-client-secret' },
+    APPLE_CLIENT_ID: { value: 'not-configured' },
+    APPLE_TEAM_ID: { value: 'not-configured' },
+    APPLE_KEY_ID: { value: 'not-configured' },
+    APPLE_PRIVATE_KEY: { value: 'not-configured' },
     GITHUB_CLIENT_ID: { value: 'test-github-client-id' },
     GITHUB_CLIENT_SECRET: { value: 'test-github-client-secret' },
     GITHUB_LAKE_APP_CLIENT_ID: { value: 'test-github-lake-app-client-id' },
@@ -63,8 +101,15 @@ vi.mock('sst', () => ({
     GITHUB_LAKE_APP_PRIVATE_KEY: { value: 'test-github-lake-app-private-key' },
     GITHUB_LAKE_APP_SLUG: { value: 'test-lake-app' },
     GITHUB_LAKE_APP_WEBHOOK_SECRET: { value: 'test-github-lake-app-webhook-secret' },
+    // Push stays off unless a suite opts in (APNS_* env, or a mocked pushDelivery module).
+    APNS_KEY_ID: { value: 'not-configured' },
+    APNS_TEAM_ID: { value: 'not-configured' },
+    APNS_KEY: { value: 'not-configured' },
+    APNS_TOPIC: { value: 'not-configured' },
+    FCM_SERVICE_ACCOUNT: { value: 'not-configured' },
     githubLakeIngestQueue: { url: 'https://sqs.test/githubLakeIngestQueue' },
     githubLakeRevokeQueue: { url: 'https://sqs.test/githubLakeRevokeQueue' },
+    generatedMediaPurgeQueue: { url: 'https://sqs.test/generatedMediaPurgeQueue' },
     GITHUB_MCP_CLIENT_ID: { value: 'test-github-mcp-client-id' },
     GITHUB_MCP_CLIENT_SECRET: { value: 'test-github-mcp-client-secret' },
     STRIPE_WEBHOOK_SECRET: { value: 'test-stripe-webhook-secret' },
@@ -126,4 +171,58 @@ vi.mock('@/app/contexts/WebsocketContext', () => ({
     send: vi.fn(),
     isConnected: false,
   }),
+}));
+
+// The default per-user write limit (defaultWriteRateLimit.ts) reads admin settings and a Mongo
+// counter on every signed-in write that baseApi serves, so route suites that stub the database
+// would hang on it. Pass through by default; its own suite unmocks it.
+vi.mock('@server/middlewares/defaultWriteRateLimit', () => ({
+  defaultWriteRateLimit: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+// The per-user upload allowance (fileUploadBudget.ts) resolves the caller's tier and a Mongo counter on
+// every upload door, so route suites that stub the database would hang on it. Pass through by default;
+// its own suite unmocks it.
+vi.mock('@server/files/fileUploadBudget', () => ({
+  consumeFileUploadBudget: async () => undefined,
+}));
+
+// Same for the pending-upload cap (pendingUploads.ts), which reads the tier and aggregates FabFile:
+// admits everything with nothing in flight by default; its own suites unmock it.
+vi.mock('@server/files/pendingUploads', () => ({
+  PENDING_UPLOAD_WINDOW_MS: 30 * 60 * 1000,
+  PENDING_UPLOAD_LIMITED: 'pending_upload_limit',
+  admitPendingUploads: async () => ({ count: 0, bytesFor: () => 0 }),
+}));
+
+// The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write
+// by baseApi) reads the active `all` blocks from Mongo. Suites that drive the real baseApi chain
+// with connectDB stubbed would wait out Mongoose's 10s command buffer on each write, so that
+// surface passes through by default. The `login` surface stays real for the sign-in suites.
+// Suites that exercise the app surface mock the module themselves or `vi.unmock` it.
+vi.mock('@server/middlewares/checkBlockedIP', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/middlewares/checkBlockedIP')>();
+  const passThrough: ReturnType<typeof actual.checkBlockedIP> = (_req, _res, next) => next();
+  return {
+    ...actual,
+    checkBlockedIP: (options: Parameters<typeof actual.checkBlockedIP>[0] = {}) =>
+      options.surface === 'app' ? passThrough : actual.checkBlockedIP(options),
+    ipBlockRefusal: async (...args: Parameters<typeof actual.ipBlockRefusal>) =>
+      args[1] === 'app' ? null : actual.ipBlockRefusal(...args),
+  };
+});
+
+// The paid-only API key switch (apiKeyAccessGate.ts) reads admin settings and subscriptions, and
+// defaults to paid on hosted, so every test that authenticates a key or CLI session would need a
+// seeded subscription. Allow by default; suites that exercise the gate mock or unmock it per file.
+// The real module is not spread in: it imports the Subscription model, which suites that stub
+// @bike4mind/database cannot load.
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', () => ({
+  API_KEY_ACCESS_DENIED_MESSAGE: 'API keys require an active paid subscription',
+  CLI_ACCESS_DENIED_MESSAGE: 'The CLI and desktop app require an active paid subscription',
+  SUBSCRIPTION_REQUIRED_ERROR: 'subscription_required',
+  isApiKeyAccessAllowed: async () => true,
+  describeApiKeyAccess: async () => ({ mode: 'all', allowed: true, basis: 'open_to_all' }),
+  assertApiKeyAccessAllowed: async () => undefined,
+  assertCliSessionAllowed: async () => undefined,
 }));

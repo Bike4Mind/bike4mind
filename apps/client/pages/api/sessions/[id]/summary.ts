@@ -2,12 +2,13 @@ import { Permission } from '@bike4mind/common';
 import { Session } from '@bike4mind/database/auth';
 import { NotFoundError } from '@bike4mind/utils';
 import { accessibleBy } from '@casl/mongoose';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { assertSessionOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
-import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+import { assertSessionOperationalCredits } from '@bike4mind/server-utils/utils/sessionOperationalCreditPreflight';
+import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@bike4mind/server-utils/utils/sessionOperationCounts';
 
 const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
   const sessionId = req.query.id;
@@ -19,6 +20,8 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
       })
     : null;
   if (!session) throw new NotFoundError('Cannot update session');
+
+  assertAiAccessAllowed(req.user);
 
   // Queueing the summary IS the spend, so a refusal is the answer to this request (#1852).
   // Billed to whoever asked (payerId below), never the owner on a sharee's behalf.

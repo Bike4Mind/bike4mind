@@ -18,11 +18,25 @@ No Node.js, pnpm, or source checkout is required.
    and drag Bike4Mind into Applications.
 2. On Linux x64, download the `.AppImage`, mark it executable (`chmod +x <file>.AppImage`),
    and launch it. Some distributions require FUSE support to run AppImages.
+3. On Windows, download `setup.exe` and run it. The one installer covers x64 and ARM64
+   Windows and installs the build native to the PC. It is not code signed yet,
+   so SmartScreen shows a warning on first run. In-app updates work on Windows. Shell commands
+   run in Git Bash, so Code projects need [Git for Windows](https://git-scm.com/download/win).
+   A project opened from `\\wsl.localhost\<distro>\...` (or `\\wsl$\<distro>\...`) runs git,
+   shell commands, search and the terminal inside that WSL distro instead, with the distro's own
+   git and toolchain and the PATH of the user's login shell there; such a project does not need
+   Git for Windows, but the distro needs bash and GNU coreutils (a path check uses `realpath -z`),
+   so a minimal distro such as Alpine denies every path. File search lists the folder with
+   `find -printf`, which needs GNU findutils; with busybox `find` it walks the share from
+   Windows instead, which is slower. `gh` still runs on Windows, so finding a project's open
+   pull request by branch needs `gh` installed and signed in on the Windows side;
+   it is pointed at the repository gh would pick from the distro's remotes (the one
+   `gh repo set-default` marked, else `upstream`, else `origin`), so it needs no git on Windows.
+   The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed
 feed-enabled build manually. `SHA256SUMS.txt` accompanies each release for checksum verification.
-Windows packaging exists locally but is not yet part of the release pipeline.
 
 ## Running it
 
@@ -33,15 +47,53 @@ pnpm --filter @bike4mind/desktop dev
 Starts the Vite dev server for the renderer, builds main and preload, and launches
 Electron against it with HMR.
 
+On macOS, closing the last window leaves Desktop running. Use Cmd+Q to quit the app,
+including its background processes. If agents, approvals, background commands, terminal sessions,
+model downloads, or Desktop-managed model servers are active, Desktop asks before quitting and
+shows their counts. **Keep Running** is the default; **Quit Anyway** interrupts that work and
+shuts down the app. With nothing active, it quits without a prompt. Shutdown cleanup runs before
+the app exits; one quit request is enough. If Desktop remains in Cmd+Tab after cleanup, report the
+Desktop version and whether it was an installed build or a development run.
+
 | Command               | What it does                                       |
 | --------------------- | -------------------------------------------------- |
 | `pnpm dev`            | Dev server + Electron, with HMR                    |
 | `pnpm build`          | Bundles main, preload and renderer into `out/`     |
 | `pnpm start`          | Launches Electron against an existing `out/` build |
-| `pnpm typecheck`      | `tsc` over both tsconfig projects                  |
-| `pnpm typecheck:fast` | `tsgo`, falling back to `tsc`                      |
+| `pnpm typecheck`      | `tsgo` over both tsconfig projects                 |
+| `pnpm typecheck:tsc`  | `tsc` over both tsconfig projects                  |
 | `pnpm test`           | vitest                                             |
 | `pnpm package`        | Installers for the host platform, into `release/`  |
+
+## Private and gated Hugging Face models
+
+In Models > Explore, choose Add token and enter a Hugging Face read token from
+[huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Desktop checks it
+before saving. Replace changes the token; Remove deletes it. The token is sent only to
+Hugging Face, and stays in the main process after you submit it.
+
+Desktop encrypts the saved token with the OS secret store. Without secure storage, including
+Linux's `basic_text` backend, it keeps the token only until you quit. The token row says
+whether it is saved for this run or across restarts.
+
+Ollama downloads the files itself using its own SSH key. For private or gated repos, grant
+your Hugging Face account access and register Ollama's public key (usually
+`~/.ollama/id_ed25519.pub`) at
+[huggingface.co/settings/keys](https://huggingface.co/settings/keys). The token checks Hub
+access; it does not give Ollama access. Desktop, CLI and MCP use `huggingface.co/...` for
+these pulls and recognize installed models under either Hugging Face hostname.
+
+Show abliterated models is off by default and is remembered on this computer across restarts.
+
+### Troubleshooting Hugging Face access
+
+- Token rejected: check that the token is complete, has not been revoked, and can read the repo.
+- Token cannot read the file: request gated access on the repo page, or grant the token access
+  to the private repo, then check again.
+- Ollama download refused: register Ollama's public key on the account with repo access.
+- Saved token could not be read: check access to Desktop's user-data folder, then select Retry.
+- Save or Remove failed: the previous token remains active. Resolve the storage error and retry.
+- Token missing after restart: check whether the token row said it was kept only until quit.
 
 ## Images in conversations
 
@@ -60,6 +112,20 @@ the image format, use **Save image...** instead. A failed attachment appears as 
 the composer, where it can be dismissed.
 
 ## Chat costs
+
+The footer ring shows your personal credit balance as a percentage of your monthly personal
+plan allowance. Organization credit pools are separate. A balance above the allowance, for
+example after rollover or a top-up, fills the ring while the tooltip keeps the actual percentage.
+Accounts without a monthly personal allowance show the balance without a percentage.
+If the balance or allowance is unavailable, check that you are signed in and can reach the
+backend; older backends may not report an allowance. The separate Context panel shows context usage.
+
+A second ring, left of the credits ring, shows how full the conversation's context is. Its
+tooltip adds how long the last reply's prompt cache stays warm, for models Desktop caches. For an
+Ollama model on this computer or a saved Ollama server, it says whether the model is loaded and
+when keep-alive unloads it, checked every 20 seconds while the conversation is idle. If the
+server cannot be reached, checks pause until you hover the ring or return to the window. A
+loaded model can still have lost its prompt cache. OpenAI-compatible servers show no cache state.
 
 Chat shows the credits reported by the server while a reply streams, after it finishes, and
 in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
@@ -89,6 +155,84 @@ the switch off or changing models clears the current hint and discards late answ
 previous choice. Ollama completion requests time out after 30 seconds; hosted requests after
 five. Loading the model list can add time before generation starts.
 
+## Troubleshooting saved SSH model servers
+
+A saved SSH server with an invalid port or destination stays visible under Settings > Model
+servers as **Refused**, with a message naming the problem. Desktop does not connect to it.
+Remove that server and add it again with a destination such as `user@gpu.example.com` and
+its model server's port from 1 to 65535. A missing saved port uses Ollama's 11434.
+
+## Starting local model servers
+
+Settings > Model servers offers Start, Stop, Restart and Launch settings for This computer
+and saved loopback addresses. Desktop runs `ollama serve` for Ollama, or a llama-server
+router for an OpenAI-compatible address. For the router, enter an absolute models folder
+and, if it is not on PATH, the full llama-server program path.
+
+Launch settings apply when Desktop next starts the server. Save changes and choose Restart
+when the row says Restart to apply. A server started outside Desktop has its launch settings
+locked; stop it first, check again, and start it from Desktop to use those settings.
+Fit badges use the running server's cache type and flash attention when Desktop knows them.
+When Desktop cannot read an unmanaged local Ollama's settings, it uses the saved launch
+settings as an assumption.
+
+### Troubleshooting local server startup
+
+- Port in use: stop the program holding the address, then choose Check now.
+- Ollama not found: install Ollama and check again. A llama-server without router support
+  needs a newer build that accepts `--models-dir`.
+- Desktop closed unexpectedly: Linux and macOS can recover a recorded server whose process
+  still matches. Windows requires ending ollama.exe or llama-server.exe in Task Manager.
+  A router can be recovered only when the OS keychain could store its key securely.
+- Stop failed: retry Stop before removing the server. Desktop retains the saved row when
+  stopping fails. On quit it logs a shutdown failure and continues after the shutdown deadline.
+
+## Local history and offline models
+
+Turn on **Local history** for a conversation to index its messages and visited browser pages
+on this device. The switch is in the browser pane's **...** menu (open the pane with the globe
+button in the conversation header); an icon in the header shows while it is on. Use **Search conversations** in the sidebar to search opted-in history while
+offline. Turning the switch off removes that conversation from the index. Settings -> General ->
+Local history -> **Clear local history** clears the current account's index; it does not delete
+the original conversations or disable future capture in opted-in sessions.
+
+Run Ollama locally on `127.0.0.1:11434` with a downloaded chat model, then choose that model
+in the model picker. From the signed-out screen, choose **Use local models**. These models
+send inference requests to the local daemon; cloud-backed Ollama models are excluded.
+Local context follows the choice in Settings. Auto estimates a size from this computer's
+memory, starting at 16K tokens when it cannot measure the model, capped at the model's trained
+length. Without a GPU, Auto starts at no more than 32K; conversations can grow when needed.
+Local Code sessions can still use network tools when permitted, so offline inference does not
+make tool execution offline.
+
+If a model is missing, check that Ollama is running at that address and the installed model
+supports chat, then refresh the model list. If history is missing, check the conversation's
+switch and the selected account. A clear or search error is shown in the interface; retry after
+resolving the reported problem. The search index is separate from the saved conversations.
+
+### Per-model load settings
+
+Open Models > Installed > Settings on a chat model to set its Context, Draft tokens and
+Keep loaded where its server supports them, then Save. These choices apply to every request
+for that model, including titles, suggestions and summaries. Clear all restores the defaults.
+
+For Ollama, Context can follow Settings, use Auto where Desktop measures the model, or use a
+fixed size. Auto can also have a cap below the trained length. The Runs at note shows the
+resulting size; a memory warning means the model may fail to load. A changed context or draft
+count can reload the model on the next request. Draft tokens appears only for models with
+a draft layer or embedded MTP head: blank uses the model default, 0 disables drafting, and
+whole numbers up to 16 set the count. Keep loaded controls how long Ollama keeps the model
+after its last request; Until Ollama stops keeps it loaded indefinitely.
+
+On a saved Ollama server, Desktop cannot measure that computer's memory, so context choices
+have no memory ratings. On an OpenAI-compatible server that reports its context, Context
+offers smaller client budgets that make chats summarise sooner; it does not reload the server.
+
+If load controls are missing, check that the server is reachable and reopen the dialog.
+Unsupported options stay hidden. A failed settings read disables Save; a failed save keeps
+the dialog open with an error. Resolve the reported problem and retry. If a model will not
+load, lower Context or Draft tokens, or close other applications before trying again.
+
 ## Import from Claude
 
 Open Settings -> Import to enable Claude Code sync or select a claude.ai data export.
@@ -116,7 +260,7 @@ gitignored.
 | -------------------- | ---------------------------------------------------------- |
 | `pnpm package`       | everything the host platform can build                     |
 | `pnpm package:mac`   | `dmg` and `zip`, both for arm64 and x64                    |
-| `pnpm package:win`   | `nsis` installer, x64                                      |
+| `pnpm package:win`   | one `nsis` installer holding both x64 and arm64            |
 | `pnpm package:linux` | `AppImage`, x64                                            |
 | `pnpm package:dir`   | an unpacked `.app`/directory, no installer - the fast loop |
 
@@ -147,22 +291,24 @@ commit since the last desktop release, including pending shared dependency chang
 
 Pull requests targeting `main` run the same builds and artifact validation without
 publishing a release. In the workflow run's Artifacts section, download
-`desktop-mac-arm64` and `desktop-linux-x64` for installers,
+`desktop-mac-arm64`, `desktop-linux-x64` and `desktop-win-x64` for installers,
 plus `installer-checksums` for `SHA256SUMS.txt`. PR jobs have only
 read access to repository contents; the publication job runs only for pushes or manual
 dispatches on `main`. PR runs are isolated from the main release concurrency group.
 
 The workflow installs from the frozen lockfile, builds shared packages, runs desktop
-typechecks and tests on macOS and Linux, then packages Apple Silicon and Linux x64.
-The two platform jobs run in parallel; Turbo also builds independent shared packages
+typechecks on macOS, Linux and Windows, runs the desktop unit tests on macOS and Linux (the
+suite assumes a POSIX shell), then packages Apple Silicon, Linux x64 and Windows (one
+installer for x64 and arm64, built on an x64 runner).
+The three platform jobs run in parallel; Turbo also builds independent shared packages
 in parallel while respecting dependency order. Intel macOS release builds are temporarily
-paused; local x64 packaging remains available. Publication waits for both build jobs and
-validates the arm64 DMG, arm64 ZIP, and Linux AppImage.
+paused; local x64 packaging remains available. Publication waits for all build jobs and
+validates the arm64 DMG, arm64 ZIP, Linux AppImage, and Windows installer.
 Failed uploads leave a draft release, not a partially published download page.
 
 macOS jobs read the repository or organization Actions variable `OSX_RUNNER_LABEL`,
 defaulting to `macos-26-runner` when unset or empty. The selected runner must be
-Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`.
+Apple Silicon and available to this repository. Linux stays on `ubuntu-24.04`. Windows runs on `windows-2025`.
 Paid runner usage is billed by GitHub.
 
 Publication uses the existing release App only to reserve protected source version tags.
@@ -197,6 +343,11 @@ to avoid system prompts or accessing a real login keychain. It does not verify s
 credential persistence. This does
 not verify Gatekeeper approval on a fresh machine.
 
+The Windows job checks that the installer embeds both the x64 and arm64 app archives, runs it
+silently into a temporary directory and runs the same startup checks against the installed app.
+The runner is x64, so only the x64 half is launched. `win-x64-smoke-results` contains the
+screenshot and logs. It does not verify SmartScreen behaviour or a real user profile.
+
 Installer versions follow SemVer, selected automatically by
 `scripts/desktop_release_version.py`. The first release uses the package version
 (`0.1.0`). After that, desktop release tags are the version source of truth; there is
@@ -211,6 +362,17 @@ never publish. CI continues to select its own version and call the builder direc
 Local macOS packaging explicitly uses ad-hoc signing, not Developer ID or
 notarization. Set `DESKTOP_MAC_IDENTITY` to an explicit Developer ID identity when
 needed. A valid ad-hoc signature does not guarantee fresh-download Gatekeeper acceptance.
+
+An unpackaged run (`pnpm dev`) reports a version derived the same way, not the `package.json`
+baseline: `<newest local desktop tag>-dev.g<commit>`, with `.dirty` appended when tracked files
+have uncommitted changes (for example `0.203.0-dev.g083d26f9ca44.dirty`). It is read from the local
+checkout when the build starts, with no network, and is shown in app information and update
+settings along with a "Version basis" line naming the tag it came from. It is the newest tag
+this checkout has, not necessarily the latest release: run `git fetch origin --tags` if it
+looks old. With no usable desktop tags it is `0.0.0-dev.untagged.g<commit>`, and where git or the
+commit is unavailable it is `0.0.0-dev.unknown`. Unreadable local tags or working-tree status also
+report `0.0.0-dev.unknown`, with a basis naming the unavailable metadata, rather than claiming an
+untagged or clean checkout. Packaged builds are unaffected.
 
 - `feat: ...` bumps minor; `fix: ...`, dependency updates, builds, refactors, and
   other relevant changes bump patch.
@@ -235,14 +397,30 @@ Desktop updates use only the dedicated repository's Latest release. Production r
 automation is unchanged. Keep source desktop release tags intact;
 changing the package version does not override existing release history.
 
-Set the repository variable `B4M_DEFAULT_API_URL` to bake in the hosted backend.
-Without it, users must select their own backend. `DESKTOP_RELEASE_REPOSITORY` supplies the
+The hosted backend defaults to `https://app.bike4mind.com`; the repository variable
+`B4M_DEFAULT_API_URL` overrides it. `DESKTOP_RELEASE_REPOSITORY` supplies the
 dedicated public `owner/repo`; CI derives and bakes `B4M_UPDATE_FEED_URL` as its
 `https://github.com/<owner>/<repo>/releases/latest/download/` URL. Unset or source-repo
 destinations fail closed. PR builds have no signing credentials and are not published.
 
-The validation job generates `latest-mac.yml` and `latest-linux.yml` from the actual
-installer bytes, with SHA-512 and size. ZIP blockmaps are mandatory; AppImage blockmaps
+For signed online Curated lists, set both source Actions variables
+`B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` to the same HTTPS `latest.json`
+URL. The first is baked into Desktop; the second is the release gate's expected URL.
+Leave both unset to keep the bundled list. A baked URL without the matching expected
+URL fails the release. Setting only `CURATED_PUBLIC_URL` leaves online updates off;
+the gate permits an empty baked URL. Production trusted keys must also be shipped
+before Desktop will fetch online lists.
+
+Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the runtime
+`B4M_CURATED_DEV_URL` override for a signed test list, including HTTP on loopback.
+The override is ignored in packaged apps and builds without test keys. Test-key
+builds use a separate cache directory and are rejected by `curated:check-build`;
+never enable the dev flag for a release.
+The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
+A dev build that cached a list under the old signature format drops it on next start, and a republish at a lower sequence is refused until the `curated-test-keys/` directory is deleted.
+
+The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual
+installer bytes, with SHA-512 and size. ZIP and setup.exe blockmaps are mandatory; AppImage blockmaps
 are embedded by electron-builder, and any external blockmaps are retained. Payload URLs
 are pinned to the version tag, so a later Latest switch cannot break an already offered
 update. All assets are uploaded to a draft and downloaded for byte comparison before
@@ -266,12 +444,17 @@ partial manifest. Published assets are not overwritten on retry.
    and omits `latest-mac.yml`. Linux metadata and updates remain enabled. Ad-hoc
    signing provides bundle integrity, not publisher identity or notarization.
    Fresh-download Gatekeeper acceptance remains untested; Open Anyway may be needed.
-5. Merge through review, then inspect the first trusted run's signatures, notarization,
+   `DESKTOP_MAC_SELFSIGNED_BETA=true` is a third 0.x path with in-app updates; see
+   Self-signed macOS beta below.
+5. When enabling online Curated lists, set `B4M_CURATED_MANIFEST_URL` and
+   `CURATED_PUBLIC_URL` together as described above; otherwise leave both unset. They also
+   enable online lists in every npm CLI release and feature-branch snapshot.
+6. Merge through review, then inspect the first trusted run's signatures, notarization,
    packaged startup evidence, and destination release asset set. Confirm anonymous
-   `latest-linux.yml` downloads redirect successfully (also `latest-mac.yml` for
-   the Developer ID path only). CI logs record
+   `latest-linux.yml` and `latest.yml` downloads redirect successfully (also `latest-mac.yml` for
+   the Developer ID and self-signed paths). CI logs record
    publication and tag operations; organization audit-log retention is managed separately.
-6. Test two signed versions using a temporary installation and profile. Check, download,
+7. Test two signed versions using a temporary installation and profile. Check, download,
    and explicitly restart into the newer version. Never use a user's existing profile.
    Contract tests and local feed checks do not prove Squirrel.Mac signature acceptance.
 
@@ -282,6 +465,66 @@ ad-hoc. Do not overwrite published assets or reuse a reserved version. Recover w
 a new higher 0.x version. Users of ad-hoc builds must install that recovery manually.
 Distribution App setup is still required independently of Apple. These opt-ins do
 not enable Sparkle or prove macOS auto-update compatibility.
+
+#### Self-signed macOS beta
+
+`DESKTOP_MAC_SELFSIGNED_BETA=true` selects a third macOS path for 0.x versions: every build is
+signed with one stable self-signed certificate (hardened runtime and the usual entitlements, no
+notarization), the update feed is baked in, and the zip, its blockmap and `latest-mac.yml` are
+published as on the Developer ID path, so in-app updates work. Squirrel.Mac installs an update only
+if it satisfies the running app's designated requirement. An ad-hoc signature pins that to one
+build's own hash; a stable certificate makes it
+`identifier "com.bike4mind.desktop" and certificate leaf = H"<certificate SHA-1>"` for every build.
+macOS does not trust the certificate, so installing stays the install command's job (or Open
+Anyway). `DESKTOP_MAC_SIGNING=true` takes precedence over it, and it over `DESKTOP_MAC_ADHOC_BETA`;
+on a 1.x version it fails. Pull requests still package ad-hoc with updates off.
+
+Setup, in this order:
+
+1. On a trusted machine, outside any repository, generate the certificate and its PKCS#12. The
+   3DES/SHA-1 PKCS#12 profile is the one `security import` reads on every supported macOS:
+
+   ```bash
+   cat > selfsigned.cnf <<'EOF'
+   [req]
+   distinguished_name = dn
+   x509_extensions = ext
+   prompt = no
+   [dn]
+   CN = Bike4Mind Desktop
+   [ext]
+   basicConstraints = critical,CA:FALSE
+   keyUsage = critical,digitalSignature
+   extendedKeyUsage = critical,codeSigning
+   EOF
+   openssl req -x509 -newkey rsa:3072 -sha256 -days 3650 -nodes -config selfsigned.cnf \
+     -keyout selfsigned.key -out selfsigned.pem
+   openssl pkcs12 -export -inkey selfsigned.key -in selfsigned.pem -out selfsigned.p12 \
+     -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1
+   openssl x509 -in selfsigned.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d : | tr A-F a-f
+   ```
+
+2. Secret `DESKTOP_MAC_SELFSIGNED_P12`: the output of `base64 -i selfsigned.p12`.
+3. Secret `DESKTOP_MAC_SELFSIGNED_P12_PASSWORD`: the export password from step 1.
+4. Variable `DESKTOP_MAC_SELFSIGNED_CERT_SHA1`: the fingerprint printed in step 1. The release
+   fails unless the built app's designated requirement names exactly this certificate and every
+   Mach-O inside is signed by it.
+5. Variable `DESKTOP_MAC_SELFSIGNED_BETA=true`.
+6. Keep `selfsigned.key` and `selfsigned.p12` in offline storage and delete the working copies.
+   Never add the certificate to a keychain or mark it trusted.
+
+Only trusted main runs receive the secret. The packaging step imports it into a temporary keychain
+that is on the user's keychain search list only while the job runs: the job ends by restoring the
+list and deleting the keychain.
+
+The certificate is the app's identity. A new or renewed certificate changes the designated
+requirement: installed builds refuse the next build as an update, and every user reruns the
+install command once. macOS ties the app's keychain item to the exact build unless the certificate
+is issued by Apple, so in this mode, as with ad-hoc builds, the first launch after every update asks
+for keychain access once. `node apps/desktop/scripts/smoke-mac-update.mjs` (run from the repository root,
+also on every macOS CI run) checks the whole path with throwaway certificates and a test app
+identity: two packaged builds, a loopback feed, check, download, restart into the newer build,
+and a newer build from another certificate that is refused.
 
 #### GitHub App setup (independent of Apple)
 
@@ -331,18 +574,14 @@ GitHub Releases, then rerun the workflow on corrected `main` to publish a new ve
 
 ### Baking the backend URL
 
-`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is what makes
-**Production** selectable in the environment picker - `hostedAvailable()` in
-`src/main/auth/environment.ts` is false whenever it is empty, and the picker then reads
-"Production (not set in this build)". A packaged app inherits no shell environment, so
-there is nothing to read at runtime.
+`B4M_DEFAULT_API_URL` is substituted into the main bundle at build time and is the
+**Production** entry in the environment picker. A packaged app inherits no shell
+environment, so there is nothing to read at runtime.
 
-**There is deliberately no fallback URL in source.** This repo is public and open-core;
-committing a hostname here would put it in every fork's bundle. The CLI has the same rule
-and the same shape (`packages/cli/tsdown.config.ts`, injected in `release.yaml` from a repo
-variable), so the two clients are branded the same way.
-
-Supply it per build, highest precedence first:
+When nothing supplies it, the build uses `https://app.bike4mind.com` (`PRODUCTION_API_URL` in
+`electron.vite.config.ts`), so every build signs in to production with nothing to type. The
+exception is `pnpm dev`, which bakes nothing and so starts on Local Dev (`http://localhost:3000`). A
+fork that runs its own backend overrides it, highest precedence first:
 
 ```bash
 B4M_DEFAULT_API_URL=https://your-backend.example pnpm package:mac
@@ -355,8 +594,7 @@ covers, at the root, for `.env` and `.env*.local` alike:
 B4M_DEFAULT_API_URL=https://your-backend.example
 ```
 
-Build with neither and the app ships with no hosted option at all, which is the correct
-state for an unbranded fork: Local Dev and a self-hosted URL still work.
+Local Dev and a self-hosted URL stay available from "Change server" on the sign-in card.
 
 ### Signing
 
@@ -478,35 +716,87 @@ codebase are not consent to read them alongside another.
 
 ### The workspace toggle is a git worktree
 
-Off, the session runs in the project directory. On, it runs in a git worktree for the chosen
-branch, following the layout in `~/.config/b4m/worktree.zsh`: worktrees live inside the
-project's own container directory (the parent of the shared git dir), one folder per branch,
-with `/` in the branch name written as `+`.
+Off, the session runs in the project directory. On, it runs in a git worktree of its own. The
+worktree lives in the app's own `.b4m` folder inside the project's container directory (the
+parent of the shared git dir), with `/` in the branch name written as `+`:
 
 ```
-<container>/.bare              the bare repo
-<container>/main               the main worktree
-<container>/fix+some-branch    one folder per branch
+<container>/.b4m/.gitignore         ignores everything in .b4m, so worktrees stay out of git status
+<container>/.b4m/worktrees/<branch> one folder per session branch, e.g. b4m+fix-login-3fa9c1
+<container>/.b4m/spare              a ready checkout that makes the next one fast (see below)
 ```
 
-That layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
-to, because a packaged app cannot assume a personal shell function exists. Nothing ever writes
-to a `../` path, which would scatter folders that read as separate projects.
+The layout is reimplemented in `src/main/chat/project/workspace.ts` rather than shelled out
+to the user's `worktree` shell function (`~/.config/b4m/worktree.zsh`, still the source of the
+`+` folder convention and the default base), because a packaged app cannot assume a personal
+shell function exists. Nothing ever writes to a `../` path, which would scatter folders that
+read as separate projects, and the repository's own `.gitignore` is never touched. Keeping
+everything under `.b4m` also means a worktree can never collide with a folder the user made
+themselves, such as `<container>/main`.
 
-Three cases it handles rather than failing:
+**The chosen branch is a base, not a target.** The session gets a branch of its own, named
+`b4m/<slug>-<hex>` (the slug comes from the session title, the random suffix keeps two sessions
+from the same base apart), cut from the branch the user picked. A name that is not an existing
+branch names the session's own branch instead, cut from the default base. Either way the
+session is alone on its branch, so picking `main` never hands back the user's own checkout and
+the app never claims an isolation it did not get. The resolved path is shown under the session
+title whenever it differs from the project directory.
 
-- **The worktree already exists** - adopted, not recreated. A worktree registered for that
-  branch at some _other_ path is adopted too, because git allows a branch in exactly one
-  worktree and `worktree add` would otherwise fail against it.
-- **The branch does not exist** - created from `origin/main` (then `origin/master`, then
-  `HEAD`), `--no-track`, matching the shell helper's default.
-- **The branch is the one the main checkout is on** - resolves _to_ the main checkout, since
-  git permits nothing else. The resolved path is shown under the session title whenever it
-  differs from the project directory, so the app never claims an isolation it did not get.
+Cases it handles rather than failing:
 
-**Deleting a session never deletes its worktree.** A worktree can hold uncommitted work, and
-deleting a conversation must not be a way to lose code. Removing one stays a git operation the
-user performs themselves (`rmworktree <branch>`).
+- **The session already has its worktree** - reused, not recreated. Reuse is keyed only on the
+  session's _own_ branch, which is saved on the session and handed back on every later
+  resolution. A worktree some other tool registered for the base branch is never adopted.
+- **The branch does not exist yet** - for a `main` base (`main`, `origin/main`, or no base
+  picked while the checkout is on `main`) it is created from `origin/main` right after a
+  successful fetch, so local-only or diverged `main` commits never seed it; if that fetch fails
+  the session fails to prepare instead of starting from stale history. Local `main` is never
+  touched. Any other base is created from its remote-tracking ref once that is proven to
+  contain the local base, otherwise from the base itself. With no base picked it is the branch
+  `origin/HEAD` points at, then `origin/main`, then `origin/master`, then `HEAD`. Always
+  `--no-track`, so a later `git push` does not aim at the base. A repository without an
+  `origin` remote uses its local `main`.
+
+**An occupied path is refused, never adopted or cleared.** If the target folder is already a
+git worktree holding something else, or exists but is not a worktree, the session fails to
+prepare with a message naming the path. Move it with `git worktree move` (a plain `mv` leaves
+git pointing at a path that no longer exists), or pick a different branch.
+
+**A spare checkout makes starting fast.** After a worktree is cut in a repository, the app
+prepares one detached checkout in `.b4m/spare` shortly afterwards, so it does not compete with
+the new session's first moments. The next session moves it into place and switches it to the
+new branch, which rewrites only the files that differ - about 0.2s instead of the 1.3s a full
+checkout takes on this monorepo. It is bounded on every side: a repository gets one only after
+a worktree was cut in it during the current run, at most two repositories keep one (the least
+recently used goes first), an unused spare is removed after 30 minutes, and all of them are
+removed on quit. A spare left behind by a crash is recognized by its git metadata and original
+`HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
+made.
+
+**Deleting a session removes its worktree by default.** The delete confirmation offers this
+only for an app-created checkout under `.b4m/worktrees` on a `b4m/` branch, and the option starts
+ticked whenever the checkout is removable. A clean checkout whose commits are preserved in its
+upstream or base branch goes with its branch, through `git worktree remove` and `git branch -d`.
+A checkout with uncommitted, untracked or ignored files (an ignored `node_modules` aside) is
+force-removed and its branch kept, and one whose commits are not proven pushed or merged keeps
+its branch too, so no commit is lost; the dialog names what is discarded or kept before you
+confirm. A checkout another conversation uses (including archived ones), one containing another
+worktree, a running conversation and a workspace being prepared all keep it, with the reason
+shown. Cleanup stops background processes, waits for terminal shells to exit and closes the
+browser, then rechecks everything. A shell that cannot be stopped keeps its checkout. New
+workspace bindings wait until cleanup finishes. Git refusals are shown in the dialog; the
+conversation is kept so you can retry or delete it without cleanup. Only the Electron dialog may
+discard files: the host protocol's `session/delete` still removes a safe checkout alone.
+Archiving, imported-session deletion and the agent's `session_delete` tool keep their worktrees.
+
+**A session with nested sessions can be deleted with them.** Its confirmation offers "Delete this
+session", after which the nested sessions move to the top level, or "Delete N sessions", which
+deletes them deepest first and the parent last. The dialog checks each nested session's own
+worktree and lists what it discards or keeps; only those it listed as removable go. A checkout a
+nested session shares with the parent counts as removable once they are deleted together; one shared between two nested sessions, rather
+than with the parent, is kept. A
+delete that fails part way stops there and shows the error; the sessions already deleted stay
+deleted.
 
 ### Starting a session in a worktree
 
@@ -548,7 +838,7 @@ every pre-existing conversation is. A file claiming `code` with an unusable proj
 downgraded to Chat rather than trusted, because a Code session with no working directory would
 send its tools to whatever the first global grant happens to be.
 
-`SessionStore.modes.test.ts` runs against a session file captured from the pre-change code,
+`SessionStore.test.ts` runs against a session file captured from the pre-change code,
 not a hand-written approximation.
 
 ### Sidebar
@@ -570,6 +860,79 @@ cannot load, its error offers **Try again**; sign in again if your session has e
 **Customize** maps onto the folder grants this app already had, which moved out of the account
 panel into the collapsible **More**.
 
+### Session panel
+
+In Code conversations, how the session panel opens depends on the width of the conversation pane
+(not the window, so the sidebar and the browser pane count):
+
+- **Wide** (pane at least 1320px): the panel floats in the free margin beside the centered reading
+  column, and nothing moves when you toggle it.
+- **Medium** (1064px to 1319px): the panel reserves space, and the header, messages and composer
+  slide left together to make room.
+- **Narrow** (below 1064px): the panel opens from its header button as an overlay with a light
+  scrim. Escape, a click outside or its close button shuts it, and Tab stays inside it while open.
+
+In the orchestrator view there is no free margin beside the stage, so a wide pane reserves space
+instead. Layout transitions respect the system's reduced-motion preference.
+
+## Orchestration worker models and task evidence
+
+Settings -> General -> Orchestration worker models configures implementation, exploration,
+and review roles for the current account and connected environment. Each role can inherit its
+parent model or use an available tool-capable catalog model. The conversation model picker
+still selects the planner. Nothing changes until you save defaults and enable Orchestrate for
+a future run. Existing users and legacy free-text spawns keep parent-model inheritance.
+
+The premium-planner/economical-worker preset is a draft you apply and save: choose an available
+Opus model in the conversation picker, then apply current Sonnet workers for implementation and
+exploration with inherited review in settings. It resolves the latest available catalog release
+by family rather than pinning a model generation. If the catalog has no capable Sonnet model,
+choose role models manually. You can change every role before saving; no preset is applied silently.
+
+Enabling Orchestrate snapshots the policy for that run. The summary above the composer names
+the planner and worker roles. Direct and nested role requests use this snapshot; changing
+settings or turning Orchestrate off does not reconfigure already-started children. Turning it
+off removes delegation guidance, role controls, and automatic parent wakes from later ordinary
+turns. Normal Chat/Code sends, suggestions, approvals, and model selection need no task form,
+role policy, planner step, or extra model request.
+
+Structured spawns carry a version-1 task contract: outcome/rationale, role, relevant paths and
+context references, owned changes and coordination constraints, non-goals, acceptance criteria,
+verification, assumptions and escalation conditions. Explicit empty lists are valid where a
+section does not apply; a contract needs at least one acceptance criterion, bounded entries,
+and a maximum serialized size of 24 KB. Workers receive this brief instead of the parent
+transcript. Declared ownership coordinates work; filesystem permissions remain authoritative.
+
+Workers use `task_report` to submit completion evidence, a blocked result, or an escalation
+request supported by evidence. A stopped turn is not accepted completion. Agent details show
+the effective catalog model, selection source, task state, attempt history, failed checks and
+unmet criteria. The parent uses `task_assess`, or you use agent details, to accept reviewed
+passing evidence, clarify and continue the same task, deny an upgrade, or cancel. Acceptance
+requires passing evidence for every declared criterion and no failed check or unmet criterion.
+A further worker turn invalidates previous acceptance and requires fresh evidence.
+
+Task upgrades ask first and affect only that worker. Configure allowed upgrade roles/models
+before starting the run; an approved decision resumes the same conversation and preserves its
+changes and attempt history. A denied or repeated decision starts no new attempt. The worker's
+normal model picker also supports an explicit user choice while it is idle. A skill or model
+message cannot authorize a permission, model, or spending increase.
+
+Automatic upgrades are unavailable until shared root-budget admission is connected. This
+release does not enforce a root spending cap or reconcile total orchestration cost. Contract,
+selection, pending decision, evidence and attempt lineage survive restart; as before,
+Orchestrate itself requires re-enabling after relaunch.
+
+If a configured model disappears, becomes unavailable or lacks required capabilities, explicit
+role-routed work blocks before starting; no more expensive or hosted replacement is selected.
+Choose an available replacement in settings, save, then turn Orchestrate off and on for a new
+run snapshot; existing children keep their previous policy. Alternatively, use the idle worker's
+model picker for that task. In a connected app, explicitly picking a hosted model there authorizes
+moving that worker's future turns off its local model; approving a task escalation alone does not.
+For a conversation with history, the picker first asks "Send this conversation to Bike4Mind?".
+A local parent cannot start a hosted worker until you explicitly pick a hosted model for the parent
+conversation. A device-local app permits only local models until you sign in to use hosted models.
+Settings read/save failures and blocked task evidence remain visible; retry after repairing access.
+
 ## Authentication
 
 The whole RFC 8628 device flow lives in `src/main/auth`, on top of the shared
@@ -578,16 +941,28 @@ derived state - signed out, awaiting approval (with the user code to display), s
 one of the two blocked states below - and there is deliberately no IPC channel that returns a
 token.
 
-- **Client id.** This app registers as `b4m-desktop`. One `DeviceFlowClient` is constructed
+- **Client id.** This app registers as `b4m-desktop` (the headless host signs in as `b4m-host`). One `DeviceFlowClient` is constructed
   with it and serves both `/api/oauth/device/initiate` and `/api/oauth/device/token`, because
   the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
   `client_id` (RFC 8628 s3.4).
-- **Storage.** Tokens go to the OS keychain via Electron `safeStorage`, keyed per normalized
+- **Storage.** Tokens are encrypted with a key held in the OS keychain, keyed per normalized
   API URL, in `<userData>/auth-vault.json`. Deliberately not the CLI's plaintext
-  `~/.bike4mind/config.json`. `safeStorage` is only usable after the app `ready` event, so
-  `registerAuth()` must be called from inside `whenReady()`. Where
-  `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
-  memory-only and the UI says so - it never falls back to writing plaintext.
+  `~/.bike4mind/config.json`. The cipher (`src/main/secrets/`) is only usable after the app
+  `ready` event, so `registerAuth()` must be called from inside `whenReady()`. Where encryption
+  is unavailable (Linux with no keyring) the vault degrades to memory-only and the UI says so -
+  it never falls back to writing plaintext.
+- **Secret key per build type.** Windows, Linux, unpackaged runs and macOS builds signed with a
+  Developer ID use Electron `safeStorage`. A packaged macOS build whose signature has no team
+  identifier (ad-hoc or self-signed) instead encrypts with AES-256-GCM under its own key, kept in
+  the login keychain item `<app name> Secret Key` and written through `/usr/bin/security`, so an
+  update does not ask for the keychain password again. Its first launch re-saves every secret
+  `safeStorage` stored (auth, MCP, model servers, Hugging Face), and either build type still
+  reads the other's format.
+  The trade-off: the item trusts `/usr/bin/security` rather than the app, so any process running
+  as the same user can read the key without a prompt. Developer ID builds keep `safeStorage`,
+  whose item only the app itself reads silently. A build from before this change cannot read the
+  new format: moving back to one signs the user out and leaves stored MCP and model-server
+  secrets unreadable until they are entered again.
 - **Dev identity.** Unpackaged runs (`pnpm dev`, `pnpm start`, `electron-vite preview`) take
   the name `Bike4Mind Dev`, so they get their own userData folder and keychain item instead of
   sharing the installed app's (`src/main/appIdentity.ts`). The first such run after upgrading
@@ -607,8 +982,8 @@ token.
   HTTP client debug-logs request bodies.
 
 `B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
-`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown. Empty for an unbranded
-fork, which then has no Production option and must pick Local Dev or a custom URL.
+`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown, and falls back to
+`https://app.bike4mind.com` when no build supplies it (except in `pnpm dev`, which starts on Local Dev).
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves
@@ -642,13 +1017,54 @@ are killed before the app is handed to the installer, not left to the quit handl
 A failed check is never surfaced. No network, a dead feed and a malformed manifest all land as
 one quiet state that keeps showing the current version, and none of them can retract an update
 that is already downloaded and waiting. The state machine is in `src/shared/update.ts` and is
-unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned
-app**, so until code-signing certificates exist the full download-and-install cycle cannot be
-exercised on macOS at all. Do not "fix" that by relaxing the signature check - an updater that
-accepts unsigned payloads is a remote code execution path.
+unit-tested there, which matters more than usual: **macOS will not auto-update an unsigned or
+ad-hoc signed app**. The full download-and-install cycle on macOS needs a stable signing
+certificate; `scripts/smoke-mac-update.mjs` exercises it with throwaway ones (see Self-signed
+macOS beta above). Do not "fix" that by relaxing the signature check - an updater that accepts
+unsigned payloads is a remote code execution path.
 
 Packaging (the macOS `zip` target the updater consumes) is a separate concern; see the
 packaging config once it lands.
+
+### Signed update manifests
+
+`B4M_UPDATE_PUBLIC_KEYS` is baked in exactly like `B4M_UPDATE_FEED_URL`: a comma-separated list
+of base64 Ed25519 public keys (SPKI DER). Unset, the app reads the feed's manifests as before.
+Set, it fetches `<manifest>.sig` beside `latest.yml`, `latest-mac.yml` or `latest-linux.yml` and
+offers an update only if that signature verifies under one of the listed keys; a missing or bad
+signature is a failed check, logged and not shown. A downloaded payload must also match the
+signed manifest's SHA-512 before Restart is offered. If any listed key does not parse, the build
+switches updates off and logs why. The logic is in `src/main/update/manifestSignature.ts` and
+`signedFeed.ts`.
+
+A `.sig` file is the standard base64 of a 64-byte Ed25519 signature plus a newline. The signed
+message is `b4m-desktop-update-manifest-v1\n`, then the manifest's file name and `\n`, then the
+manifest bytes exactly as published. `scripts/sign-update-manifests.mjs` produces and checks
+them; run it with no arguments for usage.
+
+In CI, the `sign` job in `desktop-release.yml` signs the manifests `validate` produced, in the
+`desktop-update-signing` environment, and `publish` refuses to release without those signatures
+while keys are configured. Every build bakes the source repository variable
+`DESKTOP_UPDATE_PUBLIC_KEYS` and fails if it did not reach the main bundle. To enable it:
+
+1. Generate a key pair with Node 24 and keep the private key out of the repository:
+
+   ```bash
+   (umask 077 && node -e "process.stdout.write(require('node:crypto').generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }))" > desktop-update-signing.pem)
+   node -e "console.log(require('node:crypto').createPublicKey(require('node:fs').readFileSync('desktop-update-signing.pem')).export({ type: 'spki', format: 'der' }).toString('base64'))"
+   ```
+
+2. Create the `desktop-update-signing` environment, limited to the `main` branch, and add the
+   PEM file's contents as its secret `DESKTOP_UPDATE_SIGNING_KEY`.
+3. Only then set the repository variable `DESKTOP_UPDATE_PUBLIC_KEYS` to the printed public
+   key. Define it once at repository level, not on the environment, so builds and the signer
+   read the same value.
+
+Installed builds trust only the keys they were built with. To rotate, append the new public
+key to the list and release; once installs have taken that release, switch the secret to the
+new private key and release again, then drop the old key from the list. An install that never
+took the transition release, or any keyed install after the variable is unset, cannot verify
+later releases and needs a manual install.
 
 ## App icon
 
@@ -772,6 +1188,34 @@ renderer drop both workarounds above and cut roughly a megabyte.
 
 ## Standing permission rules
 
+"Approve for me" and "Full access" ask before a shell command Desktop cannot parse or fully follow.
+Known-safe Git forms retain their proved ref-change exception. Readable outbound calls and commands
+that follow web, MCP, browser or skill content run: Approve for me only stops for the specific reasons listed above
+(writes outside the shared folders, protected settings, `.env` reads, repeated calls). Explicit user
+permission rules retain precedence. Commands run as the user without an OS sandbox, so these checks
+are not filesystem confinement.
+
+Credit-spending tools follow the selected mode rather than a separate confirmation gate; spawn depth and concurrency
+limits remain. Protected paths and irreversible actions keep their own checks. Imported-cookie page content needs consent
+for its actual origin, including arrivals by redirect or tab switch; standing origin consent covers later reads and actions.
+
+Settings -> Permissions also shows the local capability ledger: active grants for files,
+tools, browser origins, imported identity, project trust and credit-spending actions,
+followed by their 200 most recent audit events. Tool execution does not
+append audit events. The ledger uses an append-only local log; existing ledger files are
+migrated automatically. Conversation grants are visible only in the account that created
+them. Revoke removes the corresponding stored permission or
+conversation allowance immediately. A separate overlapping allow can still authorize a
+call; inspect the remaining grants and permission rules if a prompt does not reappear.
+Standing tool approvals end when the desktop restarts. Durable grants are migrated into
+the ledger, including folders shared with saved conversations when Settings loads.
+Imported browser identity remains separate from anonymous access.
+
+If the ledger cannot be loaded or a revoke fails, Settings displays the error. Check that
+the desktop's user-data directory is writable, then retry. A failed revoke must not be
+treated as confirmation that access ended. Invalid logs are quarantined for inspection;
+audit synchronization failures are logged and do not undo completed permission changes.
+
 Open Settings -> Permissions to add allow, ask, or deny rules for every project or one
 project. Rules use Claude Code syntax, for example `Bash(git status:*)`,
 `Read(~/notes/**)`, and `WebFetch(domain:docs.example.com)`. Deny takes precedence over
@@ -781,8 +1225,8 @@ a deny refuses the call, while an allow still requires the tool's interactive re
 
 The approval card's "Allow in this chat" remembers consent for this conversation.
 "Always allow" saves the displayed allow rules in Settings -> Permissions, and also
-answers waiting cards those rules cover. For web fetches, both buttons cover every site,
-including after a reply has read web content; the saved rule is `WebFetch`.
+answers waiting cards those rules cover. For web fetches, both buttons cover every site;
+the saved rule is `WebFetch`.
 Use a `WebFetch(domain:...)` rule in Settings for a narrower persistent allow.
 Irreversible calls cannot save a standing allow. Browser cards cannot save a rule.
 Settings also shows imported Claude Code sources read-only. Turn off "Use them here"

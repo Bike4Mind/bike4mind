@@ -3,6 +3,7 @@
  *
  * This endpoint accepts the routing token in the URL path instead of a header,
  * which is required because GitHub webhooks don't support custom headers.
+ * The token segment is redacted from request logs (server/middlewares/requestLogUrl.ts).
  *
  * URL format: POST /api/webhooks/github/{routingToken}
  *
@@ -39,8 +40,8 @@ import {
   verifyGitHubPayloadTimestamp,
 } from '@server/integrations/github/webhookUtils';
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { randomUUID } from 'crypto';

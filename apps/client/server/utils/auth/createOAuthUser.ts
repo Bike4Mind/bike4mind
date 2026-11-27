@@ -1,6 +1,10 @@
-import { PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
-import { User } from '@bike4mind/database';
+import { newSignupGrant, PENDING_FREE_CREDITS_TAG, sanitizeUsername, USERNAME_MAX_LENGTH } from '@bike4mind/common';
+import type { ISignupMeta } from '@bike4mind/common';
+import { adminSettingsRepository, User } from '@bike4mind/database';
 import { randomUUID } from 'crypto';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'createOAuthUser' } });
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
 // six total create attempts (base + 5 retries) is already generous for a
@@ -74,6 +78,15 @@ export async function createUniqueOAuthUser(params: {
    * backfillPendingFreeCredits script rescues.
    */
   pendingFreeCredits?: boolean;
+  signupMeta?: ISignupMeta;
+  /**
+   * A refer-flow invite the caller already resolved for this email. Marks the account invited and
+   * credits the inviter; the invitee takes the default signup grant, as registerUser does for a
+   * referral. The caller redeems the invite once the create succeeds.
+   */
+  referralInvite?: { inviteId: string; inviterId: string | null };
+  /** The active OAuth client this signup's authorize flow named (resolveSignupClientId). */
+  signupClientId?: string | null;
 }) {
   const { name, baseUsername, email, oauthCredentials, pendingFreeCredits = false } = params;
   // `name` is a required field. Providers that send neither a displayName/name
@@ -82,6 +95,8 @@ export async function createUniqueOAuthUser(params: {
   // retried and fails the whole sign-in - the same class of opaque OAuth-create
   // lockout this helper exists to prevent. baseUsername is guaranteed non-empty.
   const safeName = name || baseUsername;
+  const { referralInvite } = params;
+  const signupGrant = pendingFreeCredits ? await newSignupGrant(adminSettingsRepository) : undefined;
   const buildDoc = (username: string) => ({
     name: safeName,
     username,
@@ -93,6 +108,15 @@ export async function createUniqueOAuthUser(params: {
     // Both callers pass a non-null email only when the provider asserted it verified.
     ...(email ? { email, emailVerified: true, emailVerifiedAt: new Date() } : {}),
     ...(pendingFreeCredits ? { tags: [PENDING_FREE_CREDITS_TAG] } : {}),
+    ...(signupGrant ? { signupGrant } : {}),
+    ...(params.signupMeta ? { signupMeta: params.signupMeta } : {}),
+    ...(params.signupClientId ? { signupClientId: params.signupClientId } : {}),
+    ...(referralInvite
+      ? {
+          referredByUserId: referralInvite.inviterId,
+          signupInvite: { source: 'referral' as const, inviteId: referralInvite.inviteId, at: new Date() },
+        }
+      : {}),
   });
 
   let candidate = baseUsername;
@@ -101,12 +125,14 @@ export async function createUniqueOAuthUser(params: {
       const user = await User.create(buildDoc(candidate));
       if (retry > 0) {
         // Strip control chars before logging: baseUsername/candidate derive from
-        // the provider displayName (attacker-controllable) and this is raw console
-        // output, so a CRLF/ANSI-laden display name could forge adjacent log lines.
+        // the provider displayName (attacker-controllable); the strip keeps the pretty
+        // local log format, which prints values raw, from forging adjacent lines.
         const safe = (s: string) => s.replace(/[\r\n\t]/g, ' ');
-        console.info(
-          `[oauth create] username "${safe(baseUsername)}" was taken - created "${safe(candidate)}" (retry ${retry})`
-        );
+        logger.info('[oauth create] requested username was taken; created a suffixed one', {
+          requestedUsername: safe(baseUsername),
+          createdUsername: safe(candidate),
+          retry,
+        });
       }
       return user;
     } catch (err) {

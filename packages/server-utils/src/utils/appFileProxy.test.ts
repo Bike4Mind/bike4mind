@@ -1,12 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProxyTarget } from './appFileProxy';
+import { generatedKeyFromProxyPath, resolveProxyTarget } from './appFileProxy';
 
 describe('resolveProxyTarget', () => {
-  it('routes generated images to the generated bucket and strips the prefix', () => {
-    expect(resolveProxyTarget('generated/abc-123.png')).toEqual({
-      bucket: 'generated',
-      key: 'abc-123.png',
-    });
+  it('does not route generated media: it has no CDN route', () => {
+    expect(resolveProxyTarget('generated/abc-123.png')).toBeNull();
   });
 
   it('maps org-files back to the organizations key prefix in appFiles', () => {
@@ -44,5 +41,17 @@ describe('resolveProxyTarget', () => {
     '',
   ])('returns null for blocked prefix: %s', input => {
     expect(resolveProxyTarget(input)).toBeNull();
+  });
+});
+
+describe('generatedKeyFromProxyPath', () => {
+  it('returns the key after generated/', () => {
+    expect(generatedKeyFromProxyPath('generated/abc-123.png')).toBe('abc-123.png');
+  });
+
+  it('returns null for other prefixes and an empty key', () => {
+    expect(generatedKeyFromProxyPath('org-files/a.png')).toBeNull();
+    expect(generatedKeyFromProxyPath('generated/')).toBeNull();
+    expect(generatedKeyFromProxyPath('generated')).toBeNull();
   });
 });

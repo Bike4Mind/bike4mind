@@ -44,7 +44,7 @@ class MailparserAdapter implements IEmailParserAdapter {
     // Log diagnostic information after parsing
     Logger.info('Email parsed', {
       messageId: parsed.messageId,
-      subject: parsed.subject,
+      subjectLength: parsed.subject?.length ?? 0,
       textLength: parsed.text?.length || 0,
       htmlLength: parsed.html ? String(parsed.html).length : 0,
       attachmentCount: parsed.attachments?.length || 0,
@@ -56,7 +56,6 @@ class MailparserAdapter implements IEmailParserAdapter {
 
     if (isForwarded && !parsed.text && !parsed.html) {
       Logger.warn('Forwarded email with empty body detected', {
-        subject: parsed.subject,
         messageId: parsed.messageId,
       });
     }
@@ -196,7 +195,10 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
 
       // Validate it's an S3 event with Records
       if (!body.Records || !Array.isArray(body.Records)) {
-        Logger.warn('Invalid S3 event format (no Records array), skipping...', body);
+        Logger.warn('Invalid S3 event format (no Records array), skipping...', {
+          sqsMessageId: record.messageId,
+          bodyKeys: Object.keys(body ?? {}),
+        });
         continue;
       }
 

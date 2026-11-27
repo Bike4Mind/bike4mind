@@ -4,7 +4,7 @@ import { assertTargetUrlIsSafe, probeFetch } from './probeUtils';
 
 const PROBE_NAME = 'e2eExposure';
 
-const E2E_PATHS = ['/api/test/create-user', '/api/test/cleanup', '/api/test/seed'];
+const E2E_PATHS = ['/api/test/create-user', '/api/test/cleanup', '/api/test/seed', '/api/test/preview-sleep'];
 
 // Statuses that mean the endpoint is either absent or properly auth-gated - both are
 // acceptable secure postures on production-like stages. 404 = doesn't exist. 401/403 =

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { ToolBlockedError, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import {
   PermissionDeniedError,
   getQuestErrorCode,
@@ -36,6 +36,7 @@ describe('createToolFailureGuard', () => {
     expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER);
 
     await expect(math.toolFn({ expression: 'd' })).rejects.toThrow(/Not run: "math_evaluate" has failed 4 times/);
+    await expect(math.toolFn({ expression: 'e' })).rejects.toBeInstanceOf(ToolBlockedError);
     expect(impl).toHaveBeenCalledTimes(TOOL_FAILURE_BLOCK_AFTER);
   });
 

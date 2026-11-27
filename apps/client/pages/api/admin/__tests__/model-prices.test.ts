@@ -1,5 +1,9 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import type { IAdminAuditLogRepository } from '@bike4mind/common';
+import type { RecordAdminActionFromRequestInput } from '@bike4mind/server-utils/utils/adminAudit';
+import { adminAuditService } from '@bike4mind/services';
 
 // Middleware stripped so the handler body runs directly (same pattern as
 // pages/api/email/__tests__/verify.test.ts). The chain object doubles as the
@@ -7,8 +11,15 @@ import { createMocks } from 'node-mocks-http';
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
-    const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
-    chain.use = () => chain;
+    const middlewares: Array<(req: unknown, res: unknown, next: () => void) => unknown> = [];
+    const chain = async (req: { method: string }, res: unknown) => {
+      for (const middleware of middlewares) await middleware(req, res, () => undefined);
+      return handlers[req.method](req, res);
+    };
+    chain.use = (fn: (typeof middlewares)[number]) => {
+      middlewares.push(fn);
+      return chain;
+    };
     chain.get = (fn: (typeof handlers)[string]) => {
       handlers.GET = fn;
       return chain;
@@ -25,7 +36,9 @@ const mockRowsInForce = vi.fn();
 const mockHistoryForModel = vi.fn();
 const mockAppend = vi.fn();
 const mockGenerateSeed = vi.fn();
+const mockCatalogRowsInForce = vi.fn(async (): Promise<unknown[]> => []);
 vi.mock('@bike4mind/database', () => ({
+  modelCatalogRepository: { rowsInForce: () => mockCatalogRowsInForce() },
   modelPriceRepository: {
     rowsInForce: (...a: unknown[]) => mockRowsInForce(...a),
     historyForModel: (...a: unknown[]) => mockHistoryForModel(...a),
@@ -33,6 +46,13 @@ vi.mock('@bike4mind/database', () => ({
   },
   generateModelPriceSeed: (...a: unknown[]) => mockGenerateSeed(...a),
   SEED_NOTE: 'adapter-seed',
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+const mockAudit = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
+const mockBumpModelListRevision = vi.hoisted(() => vi.fn(async () => 'rev-1'));
+vi.mock('@bike4mind/server-utils/modelDiscovery/modelListRevision', () => ({
+  bumpModelListRevision: mockBumpModelListRevision,
 }));
 
 import handler, {
@@ -42,6 +62,7 @@ import handler, {
 } from '../model-prices';
 
 const TIER = { input: 4e-6, output: 16e-6 };
+const VOICE_TIER = { ...TIER, audio_input: 32e-6, audio_output: 64e-6 };
 
 /** The in-force row the magnitude band compares a submitted reprice against. */
 const inForceRow = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
@@ -69,11 +90,18 @@ interface GuardrailError {
   additionalInfo?: { code?: string; confirmToken?: string };
 }
 
-function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean; query?: object; body?: object }) {
+function call(options: {
+  method: 'GET' | 'POST';
+  isAdmin?: boolean;
+  adminPermissions?: string[];
+  query?: object;
+  body?: object;
+}) {
   const { req, res } = createMocks({ method: options.method, query: options.query ?? {}, body: options.body });
-  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+  (req as unknown as { user: { isAdmin: boolean; id: string; adminPermissions?: string[] } }).user = {
     isAdmin: options.isAdmin ?? true,
     id: 'admin-1',
+    ...(options.adminPermissions ? { adminPermissions: options.adminPermissions } : {}),
   };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
@@ -95,11 +123,14 @@ async function expectGuardrail(body: object): Promise<GuardrailError> {
 }
 
 describe('GET /api/admin/model-prices', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGenerateSeed.mockResolvedValue([]);
+  });
 
   it('rejects non-admin users', async () => {
     const { run } = call({ method: 'GET', isAdmin: false });
-    await expect(run()).rejects.toThrow(/[Aa]dmin/);
+    await expect(run()).rejects.toThrow(/missing permission/i);
     expect(mockRowsInForce).not.toHaveBeenCalled();
   });
 
@@ -110,12 +141,190 @@ describe('GET /api/admin/model-prices', () => {
     expect(res._getJSONData().rows).toHaveLength(1);
   });
 
+  it('names the model and unit pairs a revert to seed has rates for, without their rates', async () => {
+    mockRowsInForce.mockResolvedValue([]);
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    const { res, run } = call({ method: 'GET' });
+    await run();
+
+    expect(res._getJSONData().seeded).toEqual([{ modelId: 'gpt-x', unit: 'per_token' }]);
+  });
+
+  it('still returns the rows in force, with nothing seeded, when the seed read fails', async () => {
+    mockRowsInForce.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockGenerateSeed.mockRejectedValueOnce(new Error('adapter tables unreadable'));
+    const { req, res, run } = call({ method: 'GET' });
+    const warn = vi.fn();
+    (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
+    await run();
+
+    expect(res._getJSONData()).toMatchObject({ rows: [{ modelId: 'gpt-x' }], seeded: [] });
+    expect(warn).toHaveBeenCalledWith('[model-prices] seed read failed; no row offers Revert', {
+      error: 'adapter tables unreadable',
+    });
+  });
+
+  it('fails the read when the rows in force cannot be read', async () => {
+    mockRowsInForce.mockRejectedValueOnce(new Error('database down'));
+    const { run } = call({ method: 'GET' });
+
+    await expect(run()).rejects.toThrow('database down');
+  });
+
   it('returns per-model history when requested', async () => {
     mockHistoryForModel.mockResolvedValue([{ modelId: 'gpt-x', note: 'manual reprice' }]);
     const { res, run } = call({ method: 'GET', query: { history: 'gpt-x' } });
     await run();
     expect(mockHistoryForModel).toHaveBeenCalledWith('gpt-x');
     expect(res._getJSONData().history).toHaveLength(1);
+  });
+});
+
+/** A discovery row for a catalog-only model, as resolveCatalogRecords reads it. */
+const discoveredRow = (modelId: string, type: string) => ({
+  modelId,
+  schemaVersion: 2,
+  source: 'discovery',
+  ownedGroups: ['identity', 'limits', 'lifecycle', 'availability'],
+  patch: {
+    id: modelId,
+    vendor: 'openai',
+    backend: 'openai',
+    type,
+    name: modelId,
+    contextWindow: 200_000,
+    lifecycle: { status: 'discovered' },
+    autoDisabled: true,
+    autoDisabledReason: 'discovered, awaiting price',
+  },
+  effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+});
+
+describe('POST /api/admin/model-prices first price', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([]);
+    mockRowsInForce.mockResolvedValue([]);
+    mockCatalogRowsInForce.mockResolvedValue([]);
+  });
+
+  it('accepts a first per-token price for a discovered text model and bumps the model list revision', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-new', unit: 'per_token', pricing: { '0': TIER }, note: 'provider price page' },
+    });
+    await run();
+
+    expect(mockAppend).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.calls[0][0]).toMatchObject({
+      modelId: 'gpt-new',
+      unit: 'per_token',
+      pricing: { '0': TIER },
+    });
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+    expect(res._getJSONData()).toEqual({ row: { id: 'row1' } });
+  });
+
+  it('checks a first price against the per-token ceiling, since it has no baseline', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
+    const err = await expectGuardrail({
+      modelId: 'gpt-new',
+      unit: 'per_token',
+      pricing: { '0': { input: MANUAL_REPRICE_MAX_PER_TOKEN_USD * 2, output: 16e-6 } },
+      note: 'typed per 1M into per token',
+    });
+    expect(err.message).toContain('has no rate in force and none in the seed');
+  });
+
+  it('refuses a first price for an image model with 422, from an adapter literal or a catalog row', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('flux-new', 'image')]);
+    for (const modelId of ['gpt-image-2', 'flux-new']) {
+      const err = (await post({
+        modelId,
+        unit: 'per_token',
+        pricing: { '0': TIER },
+        note: 'image price',
+      })) as GuardrailError;
+      expect(err.statusCode).toBe(422);
+      expect(err.message).toBe("Prices for non-text models come from this build's model tables");
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('refuses a reprice of a non-text model with 422 too, though rows for it are already in force', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('flux-new', 'image')]);
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-image-2', unit: 'per_image', pricing: { '0': { input: 0.04, output: 0 } }, note: 'old' },
+      { modelId: 'flux-new', unit: 'per_token', pricing: { '0': TIER }, note: 'old' },
+    ]);
+    for (const [modelId, unit] of [
+      ['gpt-image-2', 'per_image'],
+      ['flux-new', 'per_token'],
+    ]) {
+      const err = await post({ modelId, unit, pricing: { '0': { input: 0.05, output: 0 } }, note: 'reprice' });
+      expect(err.statusCode).toBe(422);
+      expect(err.message).toBe("Prices for non-text models come from this build's model tables");
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('still reprices a realtime voice model, whose per-token rows voice settlement bills', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-realtime-new', 'realtime-voice')]);
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': VOICE_TIER }, note: 'invoice V' },
+    ]);
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': VOICE_TIER }, note: 'invoice W' },
+    });
+    await run();
+
+    expect(mockAppend).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.calls[0][0]).toMatchObject({ modelId: 'gpt-realtime-new', unit: 'per_token' });
+  });
+
+  it('refuses a realtime voice price without audio rates, which voice settlement would skip', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-realtime-new', 'realtime-voice')]);
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-realtime-new', unit: 'per_token', pricing: { '0': VOICE_TIER }, note: 'invoice V' },
+    ]);
+    mockGenerateSeed.mockResolvedValue([
+      { modelId: 'gpt-realtime-1.5', unit: 'per_token', pricing: { '0': VOICE_TIER } },
+    ]);
+    for (const modelId of ['gpt-realtime-new', 'gpt-realtime-1.5']) {
+      const err = await post({ modelId, unit: 'per_token', pricing: { '0': TIER }, note: 'text rates only' });
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toMatch(
+        /realtime voice model: its lowest tier needs input, output, audio_input and audio_output/
+      );
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('refuses a first price for a text model in any unit but per_token', async () => {
+    mockCatalogRowsInForce.mockResolvedValue([discoveredRow('gpt-new', 'text')]);
+    const err = await post({ modelId: 'gpt-new', unit: 'per_image', pricing: { '0': TIER }, note: 'wrong unit' });
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toMatch(/must be per_token/);
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('refuses every write to a delegate holding settings:manage, and still lets it read', async () => {
+    const delegate = { isAdmin: false, adminPermissions: ['settings:manage', 'support:read'] };
+    for (const body of [
+      { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'reprice' },
+      { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    ]) {
+      const { run } = call({ method: 'POST', ...delegate, body });
+      await expect(run()).rejects.toMatchObject({ statusCode: 403 });
+    }
+    expect(mockAppend).not.toHaveBeenCalled();
+
+    const { res, run } = call({ method: 'GET', ...delegate });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
   });
 });
 
@@ -551,5 +760,179 @@ describe('POST /api/admin/model-prices', () => {
     });
     await expect(run()).rejects.toThrow(/not seed-managed/);
     expect(mockAppend).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/model-prices admin audit', () => {
+  const REPRICE_BODY = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockRowsInForce.mockResolvedValue([]);
+  });
+
+  it('records a strict reprice with before/after pricing after the append', async () => {
+    const newPricing = { '0': { input: 5e-6, output: 20e-6 } };
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    const { req, run } = call({ method: 'POST', body: { ...REPRICE_BODY, pricing: newPricing } });
+    await run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][0]).toBe(req);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_price.repriced',
+      target: { kind: 'settings', id: 'gpt-x:per_token' },
+      changes: [{ field: 'pricing', before: inForceRow.pricing, after: newPricing }],
+    });
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
+  });
+
+  it('records a revert-to-seed as a reprice', async () => {
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'settings.model_price.repriced',
+      target: { kind: 'settings', id: 'gpt-x:per_token' },
+      changes: [{ before: inForceRow.pricing, after: { '0': TIER } }],
+      details: { revertToSeed: true },
+    });
+  });
+
+  it('does not append or audit a revert-to-seed when the row in force already is the seed', async () => {
+    const seedRow = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'adapter-seed' };
+    mockRowsInForce.mockResolvedValue([seedRow]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    });
+    await run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+    expect(res._getJSONData().row).toMatchObject(seedRow);
+  });
+
+  it.each(
+    (['per_token', 'per_image', 'per_minute'] as const).flatMap(unit =>
+      (['reprice', 'revert-to-seed'] as const).flatMap(action =>
+        ['gpt-x', 'vendor/secret-model'].map(modelId => ({ unit, action, modelId }))
+      )
+    )
+  )(
+    'preserves stored pricing through audit redaction for $modelId $unit $action',
+    async ({ unit, action, modelId }) => {
+      const before = { '0': TIER };
+      const after = { '0': { input: 5e-6, output: 20e-6 } };
+      const appendAudit = vi.fn<IAdminAuditLogRepository['append']>();
+      mockRowsInForce.mockResolvedValue([{ modelId, unit, pricing: before, note: 'invoice A' }]);
+      mockGenerateSeed.mockResolvedValue([{ modelId, unit, pricing: after }]);
+      mockAudit.mockImplementationOnce(async (_request: unknown, input: RecordAdminActionFromRequestInput) => {
+        await adminAuditService.recordAdminAction(
+          {
+            ...input,
+            actor: { kind: 'user', scope: 'platform', userId: 'admin-1', name: 'Admin', wasAdmin: true },
+            context: { source: 'admin_ui' },
+          },
+          { db: { adminAuditLog: { append: appendAudit } } }
+        );
+        return null;
+      });
+
+      await call({
+        method: 'POST',
+        body:
+          action === 'reprice' ? { modelId, unit, pricing: after, note: 'updated price' } : { modelId, unit, action },
+      }).run();
+
+      expect(appendAudit).toHaveBeenCalledOnce();
+      expect(appendAudit.mock.calls[0][0]).toMatchObject({
+        action: 'settings.model_price.repriced',
+        target: { kind: 'settings', id: `${modelId}:${unit}` },
+        changes: [{ field: 'pricing', before, after }],
+        details: { modelId, unit, revertToSeed: action === 'revert-to-seed' },
+      });
+    }
+  );
+
+  it('does not audit an idempotent resubmit that appended nothing', async () => {
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+    await call({ method: 'POST', body: { ...REPRICE_BODY, note: 'invoice A' } }).run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('does not report success when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const { res, run } = call({ method: 'POST', body: REPRICE_BODY });
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+  });
+
+  it('does not report a revert-to-seed as done when the audit write rejects', async () => {
+    mockAudit.mockRejectedValue(new Error('audit down'));
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' },
+    });
+
+    await expect(run()).rejects.toThrow('audit down');
+    expect(res._isEndCalled()).toBe(false);
+  });
+});
+
+describe('POST /api/admin/model-prices model-list refresh', () => {
+  const REPRICE_BODY = { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice A' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAudit.mockResolvedValue(null);
+    mockAppend.mockResolvedValue({ id: 'row1' });
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockRowsInForce.mockResolvedValue([inForceRow]);
+  });
+
+  it('refreshes model lists once after a reprice lands', async () => {
+    await call({ method: 'POST', body: { ...REPRICE_BODY, pricing: { '0': { input: 5e-6, output: 20e-6 } } } }).run();
+
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+    expect(mockAppend.mock.invocationCallOrder[0]).toBeLessThan(mockBumpModelListRevision.mock.invocationCallOrder[0]);
+  });
+
+  it('refreshes model lists after a revert-to-seed that appended', async () => {
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockBumpModelListRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves model lists alone when nothing was appended', async () => {
+    await call({ method: 'POST', body: REPRICE_BODY }).run();
+    mockRowsInForce.mockResolvedValue([
+      { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'adapter-seed' },
+    ]);
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(mockBumpModelListRevision).not.toHaveBeenCalled();
+  });
+
+  it('still returns the saved row when the refresh fails', async () => {
+    mockBumpModelListRevision.mockRejectedValueOnce(new Error('cache unreachable'));
+    const { req, res, run } = call({
+      method: 'POST',
+      body: { ...REPRICE_BODY, pricing: { '0': { input: 5e-6, output: 20e-6 } } },
+    });
+    const warn = vi.fn();
+    (req as unknown as { logger: { warn: typeof warn } }).logger = { warn };
+    await run();
+
+    expect(res._getJSONData().row).toEqual({ id: 'row1' });
+    expect(warn).toHaveBeenCalledWith('[model-prices] model-list refresh failed', { error: 'cache unreachable' });
   });
 });

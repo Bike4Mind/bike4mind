@@ -11,11 +11,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('next/navigation', () => ({ notFound: mocks.notFound }));
 
-vi.mock('@client/app/components/TanStackRouterProvider', () => ({
-  TanStackRouterProvider: () => null,
+vi.mock('./SpaShell', () => ({
+  SpaShell: () => null,
 }));
 
-import { TanStackRouterProvider } from '@client/app/components/TanStackRouterProvider';
+import { SpaShell } from './SpaShell';
 import Page from './page';
 
 const render = (slug?: string[]) => Page({ params: Promise.resolve({ slug }) });
@@ -36,6 +36,6 @@ describe('SPA catch-all page', () => {
   it('renders the SPA router for a client route', async () => {
     const element = (await render(['some', 'client', 'route'])) as ReactElement;
     expect(mocks.notFound).not.toHaveBeenCalled();
-    expect(element.type).toBe(TanStackRouterProvider);
+    expect(element.type).toBe(SpaShell);
   });
 });

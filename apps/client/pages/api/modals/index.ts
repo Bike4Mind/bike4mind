@@ -3,7 +3,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { FilterQuery } from 'mongoose';
-import { IModalDocument } from '@bike4mind/common';
+import { IModalDocument, hasAdminPermission } from '@bike4mind/common';
+import { withSignedModalImage } from '@client/server/tools/modalImageUrls';
 import { extractVariantForViewer, viewerClassifier } from '@bike4mind/services';
 
 const WHATS_NEW_TAG = 'whats-new';
@@ -12,6 +13,8 @@ const handler = baseApi().get(
   asyncHandler(async (req, res) => {
     if (!req.ability) throw new ForbiddenError('Ability not found');
     if (!req.ability.can('read', ModalModel)) throw new ForbiddenError('Permission denied');
+
+    const canManageModals = hasAdminPermission(req.user, 'settings:manage');
 
     const query = req.query as { tags?: string; excludeWhatsNew?: string };
     const { tags, excludeWhatsNew } = query;
@@ -25,21 +28,20 @@ const handler = baseApi().get(
 
     // Exclude What's New modals from general modals list (default behavior for admin)
     // Unless specifically requesting What's New modals via tags query or excludeWhatsNew=false
-    if (excludeWhatsNew === 'true' || (!tags && req.user?.isAdmin && excludeWhatsNew !== 'false')) {
+    if (excludeWhatsNew === 'true' || (!tags && canManageModals && excludeWhatsNew !== 'false')) {
       filter.tags = { $ne: WHATS_NEW_TAG };
     }
 
     // Publication state was only ever enforced in the browser, so a direct GET served Draft
-    // (enabled:false), not-yet-live and expired modals to any authenticated user. Admins keep
-    // the unfiltered list -- the admin tab lists drafts by design.
+    // (enabled:false), not-yet-live and expired modals to any authenticated user. Admins
+    // (and settings:manage delegates) keep the unfiltered list -- the admin tab lists drafts by design.
     // startDate/endDate are usually date-only strings (`YYYY-MM-DD`, from the admin form's
-    // `type="date"` inputs), but the daily What's New generator and its edit form
-    // (whatsNewGeneration.ts, whatsNewModals.ts) write a full ISO timestamp into the same
-    // field. A bare `$lte: today` treats that longer string as greater than the bare date and
+    // `type="date"` inputs), but the admin form (hooks/data/whatsNewModals.ts) writes a
+    // full ISO timestamp into the same field. A bare `$lte: today` treats that longer string as greater than the bare date and
     // hides the modal on its own start day, so the upper bound is padded with the
     // highest-sorting UTF-8 char to stay tolerant of any same-day suffix. endDate's `$gte`
     // side needs no padding: a same-day timestamp already sorts above the bare date.
-    if (!req.user?.isAdmin) {
+    if (!canManageModals) {
       const today = new Date().toISOString().slice(0, 10);
       filter.enabled = true;
       filter.$and = [
@@ -56,7 +58,7 @@ const handler = baseApi().get(
     let audienceKey: string;
     try {
       audienceKey = await viewerClassifier.classify({
-        isAdmin: req.user?.isAdmin ?? false,
+        isAdmin: canManageModals,
       } as never);
     } catch (error) {
       audienceKey = viewerClassifier.safeDefaultKey;
@@ -65,7 +67,7 @@ const handler = baseApi().get(
       // customer). Surface it so a sustained rate is detectable. The classifier
       // is a synchronous in-memory tag check, so this should effectively never
       // fire; wire a counter/alert here if it ever becomes I/O-bound.
-      console.warn('[modals] viewer classification failed; fell back to safe default', {
+      req.logger.warn('Viewer classification failed; fell back to safe default', {
         safeDefaultKey: audienceKey,
         userId: req.user?.id,
         error: error instanceof Error ? error.message : String(error),
@@ -76,9 +78,10 @@ const handler = baseApi().get(
     // generationMetadata, flattens the viewer's variant fields to top level,
     // and drops documents with no content for this audience key.
     // Applied to every viewer including admins - never bypassed.
-    const served = modals
+    const visible = modals
       .map(doc => extractVariantForViewer(doc.toObject(), audienceKey))
       .filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+    const served = await Promise.all(visible.map(withSignedModalImage));
 
     // Prevent caching to ensure users always get fresh modal data
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

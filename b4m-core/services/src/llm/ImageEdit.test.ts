@@ -2,20 +2,34 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { z } from 'zod';
 import {
   CREDITS_PER_USD_COST,
+  CreditHolderType,
   EditImageRequestBodySchema,
   ImageModels,
+  BadRequestError,
   IMAGES_PER_EDIT_REQUEST,
+  insufficientCreditsError,
   ModelBackend,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  UnprocessableEntityError,
+  type CompletionRunAttribution,
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
 import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import {
+  aiImageService,
+  downloadImageAsBuffer,
+  getSettingsMap,
+  getSettingsValue,
+  OpenaiModerationsService,
+} from '@bike4mind/utils';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { estimateImageCredits } from '../imageCost';
-import { deductCreditsWithOrgSupport } from '../creditService';
-import { ImageEditService, type ImageEditBody } from './ImageEdit';
+import { ImageEditBodySchema, ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
+
+const notFrozen = { findActiveForSubject: async () => null };
 
 // The real stochastic rounding, with its draw pinned so the final debit is assertable.
 const { settlementDraw } = vi.hoisted(() => ({ settlementDraw: vi.fn(() => 0.5) }));
@@ -65,14 +79,12 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
-vi.mock('../creditService', async importOriginal => {
-  const actual = await importOriginal<typeof import('../creditService')>();
-  return { ...actual, deductCreditsWithOrgSupport: vi.fn(async () => undefined) };
-});
-
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
-vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
+vi.mock('./questHeartbeat', async importOriginal => ({
+  ...(await importOriginal<typeof import('./questHeartbeat')>()),
+  startQuestHeartbeat: vi.fn(async () => () => {}),
+}));
 
 const makeModelInfo = (id: string): ModelInfo =>
   ({
@@ -91,16 +103,30 @@ const gptImage = makeModelInfo(ImageModels.GPT_IMAGE_1_5);
 
 const richUser = { id: 'user1', currentCredits: 1_000_000 } as unknown as IUserDocument;
 
+// A fake ImageCreditHolds port: hold reserves the estimate, settle keeps the draw, release is a no-op.
+const makeCreditHolds = () => ({
+  hold: vi.fn(async (params: { userId: string; organizationId: string | null; requiredCredits: number }) => ({
+    ownerId: params.organizationId ?? params.userId,
+    ownerType: params.organizationId ? CreditHolderType.Organization : CreditHolderType.User,
+    userId: params.userId,
+    organizationId: params.organizationId,
+    reservedCredits: params.requiredCredits,
+    balanceAfterHold: 0,
+  })),
+  settle: vi.fn(async (_hold: unknown, chargedCredits: number) => chargedCredits),
+  release: vi.fn(async () => undefined),
+});
+
 const validate = (
   model: string,
   imageParams: { size?: string; quality?: 'low' | 'medium' | 'high' } = {}
 ): Promise<{ requiredCredits: number; usdCost: number }> => {
   const service = new ImageEditService({ db: {} } as never);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (service as any).validateUserCredits(richUser, model, imageParams, silentLogger, null);
+  return (service as any).estimateCredits(richUser.id, model, imageParams);
 };
 
-describe('ImageEditService.validateUserCredits', () => {
+describe('ImageEditService.estimateCredits', () => {
   beforeEach(() => {
     vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel, gptImage]);
   });
@@ -144,7 +170,9 @@ describe('ImageEditService.process model dispatch', () => {
   const makeService = (
     dbExtra: Record<string, unknown> = {},
     // In production this enqueues; pass one that calls process() to drive invoke() end to end.
-    startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn()
+    startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn(),
+    settledCredits?: number,
+    assertModelAdmission: ConstructorParameters<typeof ImageEditService>[0]['assertModelAdmission'] = async () => {}
   ) => {
     const quest = {
       id: 'quest1',
@@ -155,13 +183,17 @@ describe('ImageEditService.process model dispatch', () => {
       replies: [],
       images: [],
     };
+    const creditHolds = makeCreditHolds();
+    if (settledCredits !== undefined) creditHolds.settle.mockResolvedValueOnce(settledCredits);
     const service = new ImageEditService({
+      assertModelAdmission,
+      creditHolds,
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
         organizations: { findById: vi.fn(async () => null) },
-        ...dbExtra,
         fabFiles: {
           findAccessibleInIds: vi.fn(async () => [
             {
@@ -173,6 +205,7 @@ describe('ImageEditService.process model dispatch', () => {
             },
           ]),
         },
+        ...dbExtra,
       },
       startImageEditProcess,
       deleteFabFile: vi.fn(),
@@ -186,12 +219,20 @@ describe('ImageEditService.process model dispatch', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
-    return { service, quest };
+    return { service, quest, creditHolds };
   };
 
-  const run = async (model: string, bodyOverride: Record<string, unknown> = {}, dbExtra?: Record<string, unknown>) => {
-    const { service, quest } = makeService(dbExtra);
+  const run = async (
+    model: string,
+    bodyOverride: Record<string, unknown> = {},
+    dbExtra?: Record<string, unknown>,
+    settledCredits?: number
+  ) => {
+    const { service, quest, creditHolds } = makeService(dbExtra, undefined, settledCredits);
     await service.process({
       body: {
         sessionId: 'session1',
@@ -205,7 +246,7 @@ describe('ImageEditService.process model dispatch', () => {
       } as never,
       logger: silentLogger,
     });
-    return quest;
+    return Object.assign(quest, { creditHolds });
   };
 
   beforeEach(() => {
@@ -239,10 +280,67 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.FLUX_PRO_FILL });
   });
 
+  it('refuses a queued paid-only edit before holding credits or calling the provider', async () => {
+    const assertAdmission = vi.fn(async () => {
+      throw new Error('paid plan required');
+    });
+    const { service, creditHolds } = makeService({}, undefined, undefined, assertAdmission);
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'edit',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/image.png',
+        fabFileIds: ['mask1'],
+      } as never,
+      logger: silentLogger,
+    });
+    expect(assertAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user1' }),
+      ImageModels.GPT_IMAGE_1_5,
+      undefined,
+      undefined
+    );
+    expect(creditHolds.hold).not.toHaveBeenCalled();
+    expect(editSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a paid-only edit before enqueueing and gates the selected model', async () => {
+    const refusal = new Error('paid plan required');
+    const assertAdmission = vi.fn(async () => {
+      throw refusal;
+    });
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue, undefined, assertAdmission);
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model: ImageModels.GPT_IMAGE_2,
+          image: 'https://example.invalid/image.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toBe(refusal);
+    expect(assertAdmission).toHaveBeenCalledWith('user1', ImageModels.GPT_IMAGE_2, undefined, undefined);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('carries a client-sent seed through invoke() to the BFL edit call', async () => {
     // Goes through invoke() because its EditImageRequestBodySchema parse is what used to strip seed.
     const serviceRef: { current?: ImageEditService } = {};
-    const { service } = makeService({}, body => serviceRef.current!.process({ body, logger: silentLogger }));
+    const assertAdmission = vi.fn(async () => {});
+    const { service } = makeService(
+      {},
+      body => serviceRef.current!.process({ body, logger: silentLogger }),
+      undefined,
+      assertAdmission
+    );
     serviceRef.current = service;
 
     const body: z.infer<typeof EditImageRequestBodySchema> = {
@@ -254,9 +352,102 @@ describe('ImageEditService.process model dispatch', () => {
       fabFileIds: ['mask1'],
       seed: 12345,
     };
-    await service.invoke({ body, userId: 'user1' });
+    await service.invoke({ body, userId: 'user1', adminRoleWithheld: true });
+    expect(assertAdmission).toHaveBeenNthCalledWith(1, 'user1', ImageModels.FLUX_PRO_FILL, true, undefined);
+    expect(assertAdmission).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ id: 'user1' }),
+      ImageModels.FLUX_PRO_FILL,
+      true,
+      undefined
+    );
 
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
+  });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'queues %s regions without a mask and retains them through queue parsing',
+    async model => {
+      const enqueue = vi.fn();
+      const { service } = makeService({}, enqueue);
+      const regions = [{ prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] as [number, number, number, number] }];
+      await service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: [],
+          edit_regions: regions,
+        },
+      });
+      expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ model, fabFileIds: [], edit_regions: regions }));
+    }
+  );
+
+  it('rejects a mask on a FLUX.2 edit and queues nothing', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          prompt: 'make it blue',
+          model: ImageModels.FLUX_2_PRO,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toThrow('FLUX.2 edits take no mask');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('queues a FLUX.2 edit that sends no fabFileIds', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+
+    await service.invoke({
+      userId: 'user1',
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: ImageModels.FLUX_2_PRO,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: [],
+      },
+    });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ model: ImageModels.FLUX_2_PRO, fabFileIds: [], questId: 'quest1' })
+    );
+  });
+
+  it('carries the authenticating API key from invoke() onto the queued job body', async () => {
+    const enqueued: unknown[] = [];
+    const { service } = makeService({}, async body => {
+      enqueued.push(body);
+    });
+
+    await service.invoke({
+      userId: 'user1',
+      apiKeyId: 'key-1',
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: ['mask1'],
+      },
+    });
+
+    expect(enqueued).toEqual([expect.objectContaining({ apiKeyId: 'key-1' })]);
   });
 
   it('sends the selected OpenAI model instead of defaulting to gpt-image-1', async () => {
@@ -289,13 +480,30 @@ describe('ImageEditService.process model dispatch', () => {
     });
   });
 
-  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
-    await run(ImageModels.GPT_IMAGE_2, { background: 'transparent', output_format: 'png' });
+  it('refuses a transparent background on a model that cannot render one with a 400 instead of stepping down', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'edit',
+          model: ImageModels.GPT_IMAGE_2,
+          background: 'transparent',
+          image: 'https://example.invalid/image.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toBeInstanceOf(BadRequestError);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
 
-    expect(editSpy.mock.calls[0][2]).toMatchObject({
-      model: ImageModels.GPT_IMAGE_1_5,
-      background: 'transparent',
-    });
+  it('leaves a request without a transparent background untouched on gpt-image-2', async () => {
+    await run(ImageModels.GPT_IMAGE_2, { output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GPT_IMAGE_2 });
   });
 
   it('rejects a model that cannot edit instead of silently substituting one', async () => {
@@ -356,19 +564,267 @@ describe('ImageEditService.process model dispatch', () => {
       expect(withRefs.creditsUsed).toBeGreaterThan(plain.creditsUsed as number);
     });
 
+    it('holds against the personal account without an organization, the organization otherwise', async () => {
+      const personal = await runBilled({});
+      expect(personal.creditHolds.hold).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user1', organizationId: null, featureLabel: 'image editing' })
+      );
+
+      const organizational = await run(
+        ImageModels.GPT_IMAGE_1_5,
+        { organizationId: 'org1' },
+        {
+          creditTransactions: { create: vi.fn() },
+          organizations: { findById: vi.fn(async (id: string) => ({ id })) },
+        }
+      );
+      expect(organizational.creditHolds.hold).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'user1', organizationId: 'org1' })
+      );
+    });
+
+    it('ends the quest with insufficient_credits and never calls the provider when the hold is refused', async () => {
+      const { service, quest, creditHolds } = makeService({ creditTransactions: { create: vi.fn() } });
+      creditHolds.hold.mockRejectedValueOnce(insufficientCreditsError('Not enough credits.'));
+
+      await service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_1_5,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: ['mask1'],
+        } as never,
+        logger: silentLogger,
+      });
+
+      expect(quest.status).toBe('done');
+      expect(vi.mocked(service['db'].quests.update)).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'done', errorCode: 'insufficient_credits' })
+      );
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(creditHolds.release).not.toHaveBeenCalled();
+      expect(creditHolds.settle).not.toHaveBeenCalled();
+    });
+
+    it('holds and settles a FLUX.2 edit with references at the flat single-image rate', async () => {
+      const flux2 = makeModelInfo(ImageModels.FLUX_2_PRO);
+      vi.mocked(getAvailableModels).mockResolvedValue([flux2]);
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+      const clean = (id: string) => ({
+        id,
+        fileName: `${id}.png`,
+        mimeType: 'image/png',
+        filePath: `fab/${id}.png`,
+        moderationStatus: 'clean',
+      });
+      const fabFiles = { findAccessibleInIds: vi.fn(async (ids: string[]) => ids.map(clean)) };
+
+      const quest = await run(
+        ImageModels.FLUX_2_PRO,
+        { fabFileIds: [], referenceImageFabFileIds: ['a', 'b'] },
+        { creditTransactions: { create: vi.fn() }, fabFiles }
+      );
+
+      const generation = estimateImageCredits(flux2, 1, { model: flux2.id });
+      const withRefs = estimateImageCredits(flux2, IMAGES_PER_EDIT_REQUEST, { model: flux2.id, inputImageCount: 3 });
+      expect(withRefs).toEqual(generation);
+      expect(quest.creditHolds.hold).toHaveBeenCalledWith(
+        expect.objectContaining({ requiredCredits: generation.requiredCredits })
+      );
+      expect(quest.status).toBe('done');
+      expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+        expect.anything(),
+        settledAtHalf(generation.usdCost),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('releases the hold and never settles when the provider call rejects after the hold', async () => {
+      const quest = await runBilled({});
+
+      expect(quest.creditHolds.hold).toHaveBeenCalledTimes(1);
+      const hold = await quest.creditHolds.hold.mock.results[0]?.value;
+      expect(quest.creditHolds.release).toHaveBeenCalledTimes(1);
+      expect(quest.creditHolds.release).toHaveBeenCalledWith(
+        hold,
+        expect.objectContaining({ featureLabel: 'image editing' })
+      );
+      expect(quest.creditHolds.settle).not.toHaveBeenCalled();
+    });
+
+    describe('on a redelivered message', () => {
+      const deliver = (service: ImageEditService) =>
+        service.process({
+          body: {
+            sessionId: 'session1',
+            questId: 'quest1',
+            userId: 'user1',
+            prompt: 'make it blue',
+            model: ImageModels.GPT_IMAGE_1_5,
+            image: 'https://example.invalid/source.png',
+            fabFileIds: ['mask1'],
+          } as never,
+          logger: silentLogger,
+        });
+      const makeBilledService = (reused: boolean) => {
+        const built = makeService({ creditTransactions: { create: vi.fn() } });
+        if (reused) {
+          const firstDeliveryHold = built.creditHolds.hold.getMockImplementation()!;
+          built.creditHolds.hold.mockImplementationOnce(async params => ({
+            ...(await firstDeliveryHold(params)),
+            reused: true as const,
+          }));
+        }
+        return built;
+      };
+
+      it('keys the hold on the quest id', async () => {
+        const { service, creditHolds } = makeBilledService(false);
+
+        await deliver(service);
+
+        expect(creditHolds.hold).toHaveBeenCalledWith(expect.objectContaining({ holdKey: 'image_edit:quest1' }));
+      });
+
+      it('leaves a reused hold for its first delivery when the render fails', async () => {
+        const { service, creditHolds } = makeBilledService(true);
+        editSpy.mockRejectedValueOnce(new Error('provider down'));
+
+        await deliver(service);
+
+        expect(creditHolds.release).not.toHaveBeenCalled();
+      });
+
+      it('still settles a reused hold when the render succeeds', async () => {
+        const { service, creditHolds } = makeBilledService(true);
+        editSpy.mockResolvedValueOnce({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+
+        await deliver(service);
+
+        expect(creditHolds.settle).toHaveBeenCalledOnce();
+      });
+    });
+
     it('does not offer the provider an image count it would render and we would discard', async () => {
       await runBilled({ n: 5 });
 
       expect(editSpy.mock.calls[0][2]).not.toHaveProperty('n');
     });
+
+    describe('with a completion run', () => {
+      const completionRun: CompletionRunAttribution = {
+        runId: '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b',
+        role: 'worker',
+        purpose: 'tool',
+      };
+      const editBody = {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: ['mask1'],
+      };
+      const plainEditCredits = () =>
+        estimateImageCredits(gptImage, IMAGES_PER_EDIT_REQUEST, { model: gptImage.id, inputImageCount: 1 })
+          .requiredCredits;
+
+      it('claims the run with the hold and tags the settled ledger entry with it', async () => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+        const quest = await runBilled({ run: completionRun });
+
+        expect(quest.creditHolds.hold).toHaveBeenCalledWith(expect.objectContaining({ run: completionRun }));
+        expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.any(Number),
+          expect.objectContaining({ type: 'image_edit_usage', run: completionRun }),
+          expect.anything()
+        );
+      });
+
+      it('releases the run-claiming hold when the provider call rejects', async () => {
+        const quest = await runBilled({ run: completionRun });
+
+        const hold = await quest.creditHolds.hold.mock.results[0]?.value;
+        expect(quest.creditHolds.release).toHaveBeenCalledWith(hold, expect.anything());
+        expect(quest.creditHolds.settle).not.toHaveBeenCalled();
+      });
+
+      it('fails the quest with run_budget_exhausted when the run cannot fit the hold', async () => {
+        const { service, creditHolds } = makeService({ creditTransactions: { create: vi.fn() } });
+        creditHolds.hold.mockRejectedValueOnce(
+          new UnprocessableEntityError("This run's credit budget is used up", {
+            errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+          })
+        );
+
+        await service.process({
+          body: { ...editBody, userId: 'user1', run: completionRun } as never,
+          logger: silentLogger,
+        });
+
+        expect(vi.mocked(service['db'].quests.update)).toHaveBeenCalledWith(
+          expect.objectContaining({ status: 'done', errorCode: 'run_budget_exhausted' })
+        );
+        expect(editSpy).not.toHaveBeenCalled();
+      });
+
+      it('sends no run to the hold or the ledger without one', async () => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+        const quest = await runBilled({});
+
+        expect(quest.creditHolds.hold.mock.calls[0][0]).not.toHaveProperty('run');
+        expect(quest.creditHolds.settle.mock.calls[0][2]).not.toHaveProperty('run');
+      });
+
+      it('checks the run has room for the edit before queueing it with the run', async () => {
+        const assertHeadroom = vi.fn(async () => undefined);
+        const enqueued: unknown[] = [];
+        const { service } = makeService({}, async body => {
+          enqueued.push(body);
+        });
+
+        await service.invoke({ userId: 'user1', body: editBody, run: { attribution: completionRun, assertHeadroom } });
+
+        expect(assertHeadroom).toHaveBeenCalledWith(plainEditCredits());
+        expect(enqueued).toEqual([expect.objectContaining({ run: completionRun })]);
+      });
+
+      it('refuses before queueing when the run has no room', async () => {
+        const refusal = new UnprocessableEntityError('used up', { errorCode: RUN_BUDGET_EXHAUSTED_ERROR_CODE });
+        const startImageEditProcess = vi.fn();
+        const { service } = makeService({}, startImageEditProcess);
+
+        await expect(
+          service.invoke({
+            userId: 'user1',
+            body: editBody,
+            run: { attribution: completionRun, assertHeadroom: async () => Promise.reject(refusal) },
+          })
+        ).rejects.toBe(refusal);
+        expect(startImageEditProcess).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('usage event on a charged edit', () => {
-    const runCharged = (record: ReturnType<typeof vi.fn>) =>
-      run(ImageModels.GPT_IMAGE_1_5, {}, { creditTransactions: { create: vi.fn() }, usageEvents: { record } });
+    const runCharged = (
+      record: ReturnType<typeof vi.fn>,
+      settledCredits?: number,
+      bodyOverride: Record<string, unknown> = {}
+    ) =>
+      run(
+        ImageModels.GPT_IMAGE_1_5,
+        bodyOverride,
+        { creditTransactions: { create: vi.fn() }, usageEvents: { record } },
+        settledCredits
+      );
 
     beforeEach(() => {
-      vi.mocked(deductCreditsWithOrgSupport).mockClear();
       vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
       vi.mocked(getSettingsValue).mockImplementation(name => name === 'enforceCredits' || undefined);
       vi.mocked(silentLogger.warn).mockClear();
@@ -395,7 +851,7 @@ describe('ImageEditService.process model dispatch', () => {
       const quest = await runCharged(record);
 
       expect(quest.status).toBe('done');
-      expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
+      expect(quest.creditHolds.settle).toHaveBeenCalledTimes(1);
       expect(record).toHaveBeenCalledWith(
         expect.objectContaining({
           requestId: 'quest1',
@@ -409,12 +865,47 @@ describe('ImageEditService.process model dispatch', () => {
       expect(landed).toBe(true);
     });
 
+    it('records the confirmed charge, not the draw, when settle confirms less (the sweep already refunded)', async () => {
+      const record = vi.fn(async () => undefined);
+
+      const quest = await runCharged(record, 0);
+
+      expect(quest.status).toBe('done');
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+      expect(quest.creditHolds.release).not.toHaveBeenCalled();
+    });
+
+    it('moderates the prompt with the shared admin key, not the user own OpenAI key', async () => {
+      vi.mocked(getEffectiveLLMApiKeys).mockResolvedValueOnce({ openai: 'user-key' } as never);
+      vi.mocked(getSettingsValue).mockImplementation((name => {
+        if (name === 'enforceCredits' || name === 'ModerationEnabled') return true;
+        if (name === 'openaiDemoKey') return 'shared-key';
+        return undefined;
+      }) as typeof getSettingsValue);
+      const usedKeys: string[] = [];
+      const checkPrompt = vi
+        .spyOn(OpenaiModerationsService.prototype, 'checkPrompt')
+        .mockImplementation(async function (this: { openai: { apiKey: string } }) {
+          usedKeys.push(this.openai.apiKey);
+        });
+
+      try {
+        const quest = await runCharged(vi.fn(async () => undefined));
+
+        expect(quest.status).toBe('done');
+        expect(checkPrompt).toHaveBeenCalledTimes(1);
+        expect(usedKeys).toEqual(['shared-key']);
+      } finally {
+        checkPrompt.mockRestore();
+      }
+    });
+
     describe('final debit rounding', () => {
       const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
         vi
           .spyOn(
-            ImageEditService.prototype as unknown as { validateUserCredits: () => Promise<unknown> },
-            'validateUserCredits'
+            ImageEditService.prototype as unknown as { estimateCredits: () => Promise<unknown> },
+            'estimateCredits'
           )
           .mockResolvedValue(cost);
 
@@ -433,14 +924,32 @@ describe('ImageEditService.process model dispatch', () => {
         const quest = await runCharged(record);
 
         expect(quest.creditsUsed).toBe(expected);
-        expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
-          expect.objectContaining({ type: 'image_edit_usage', credits: expected }),
+        expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+          expect.anything(),
+          expected,
+          expect.objectContaining({ type: 'image_edit_usage', sessionId: 'session1', questId: 'quest1' }),
           expect.anything()
         );
         expect(record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: expected }));
       });
 
-      it('debits 0 for a tiny cost: no ledger row, but the usage event still records the edit', async () => {
+      it('records the authenticating API key carried on the job body', async () => {
+        withValidatedCost({ requiredCredits: 41, usdCost: 40.5 / CREDITS_PER_USD_COST });
+        const quest = await runCharged(
+          vi.fn(async () => undefined),
+          undefined,
+          { apiKeyId: 'key-1' }
+        );
+
+        expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.any(Number),
+          expect.objectContaining({ type: 'image_edit_usage', apiKeyId: 'key-1' }),
+          expect.anything()
+        );
+      });
+
+      it('settles 0 for a tiny cost (the whole hold is refunded), and the usage event still records the edit', async () => {
         withValidatedCost({ requiredCredits: 1, usdCost: 0.00001 });
         settlementDraw.mockReturnValue(0.5);
         const record = vi.fn(async () => undefined);
@@ -449,7 +958,13 @@ describe('ImageEditService.process model dispatch', () => {
 
         expect(quest.status).toBe('done');
         expect(quest.creditsUsed).toBe(0);
-        expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+        expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+          expect.anything(),
+          0,
+          expect.objectContaining({ type: 'image_edit_usage' }),
+          expect.anything()
+        );
+        expect(quest.creditHolds.release).not.toHaveBeenCalled();
         expect(record).toHaveBeenCalledWith(
           expect.objectContaining({ feature: 'image_edit', creditsCharged: 0, costUsd: 0.00001 })
         );
@@ -505,7 +1020,9 @@ describe('ImageEditService.process reference images (#2744)', () => {
       images: [],
     };
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -525,6 +1042,9 @@ describe('ImageEditService.process reference images (#2744)', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     await service.process({
       body: {
@@ -548,7 +1068,14 @@ describe('ImageEditService.process reference images (#2744)', () => {
     vi.mocked(aiImageService).mockClear();
     vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
     vi.mocked(getAvailableModels).mockResolvedValue([]);
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (url: string) => Buffer.from(url));
   });
+
+  afterEach(() => {
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async () => Buffer.from('image-bytes'));
+  });
+
+  const b64 = (url: string) => Buffer.from(url).toString('base64');
 
   it('forwards signed anchor URLs in the caller-supplied order', async () => {
     await run({ referenceImageFabFileIds: ['b', 'a'] });
@@ -581,6 +1108,110 @@ describe('ImageEditService.process reference images (#2744)', () => {
 
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('gemini');
     expect(editSpy.mock.calls[0][2]).not.toHaveProperty('referenceImages');
+  });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'dispatches %s through native editing with or without regions',
+    async model => {
+      const regions = [{ prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] }];
+      await run({ edit_regions: regions, referenceImageFabFileIds: ['b'] }, { model });
+      expect(editSpy).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          model,
+          edit_regions: regions,
+          referenceImages: [b64('https://example.invalid/fab/b.png')],
+        })
+      );
+      editSpy.mockClear();
+      await run({}, { model });
+      expect(editSpy).toHaveBeenCalledTimes(1);
+      expect(editSpy.mock.calls[0][2].model).toBe(model);
+      expect(editSpy.mock.calls[0][2]).not.toHaveProperty('mask');
+    }
+  );
+
+  it('edits with FLUX.2 from the prompt alone, sending each reference inline as base64 and no mask', async () => {
+    await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
+
+    expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('bfl');
+    const [source, , options] = editSpy.mock.calls[0];
+    expect(source).toBe(b64('https://example.invalid/source.png'));
+    expect(options.referenceImages).toEqual([
+      b64('https://example.invalid/fab/b.png'),
+      b64('https://example.invalid/fab/a.png'),
+    ]);
+    expect(options.model).toBe(ImageModels.FLUX_2_PRO);
+    expect(options).not.toHaveProperty('mask');
+  });
+
+  it.each([
+    [ImageModels.FLUX_2_PRO, 8, 'At most 7'],
+    [ImageModels.FLUX_2_PRO, 7, undefined],
+    [ImageModels.FLUX_2_KLEIN_4B, 3, undefined],
+  ])('%s with %s unique references: %s', async (model, count, rejection) => {
+    const ids = Array.from({ length: count }, (_, index) => `r${index}`);
+    const accessible = Object.fromEntries(ids.map(id => [id, cleanImage(id)]));
+
+    const { quest } = await run({ referenceImageFabFileIds: ids }, { model, accessible });
+
+    if (rejection) {
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.reply).toContain(rejection);
+    } else {
+      expect(editSpy.mock.calls[0][2].referenceImages).toHaveLength(count);
+    }
+  });
+
+  it('keeps Fill on its mask and sends it no references', async () => {
+    const accessible = { mask1: cleanImage('mask1'), a: cleanImage('a'), b: cleanImage('b') };
+
+    await run(
+      { fabFileIds: ['mask1'], referenceImageFabFileIds: ['a', 'b'] },
+      { model: ImageModels.FLUX_PRO_FILL, accessible }
+    );
+
+    const [source, , options] = editSpy.mock.calls[0];
+    expect(source).toBe(b64('https://example.invalid/source.png'));
+    expect(options.mask).toBe(b64('https://example.invalid/fab/mask1.png'));
+    expect(options).not.toHaveProperty('referenceImages');
+  });
+
+  it('fails the quest and never calls BFL when a FLUX.2 reference cannot be downloaded', async () => {
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (url: string) => {
+      if (url.endsWith('/a.png')) throw new Error('download failed');
+      return Buffer.from(url);
+    });
+
+    const { quest } = await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+  });
+
+  it('fails the quest when a FLUX.2 reference downloads empty', async () => {
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (url: string) =>
+      Buffer.from(url.endsWith('/a.png') ? '' : url)
+    );
+
+    const { quest } = await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('Reference image not found');
+  });
+
+  it('refuses more unique references than Klein accepts, naming the limit', async () => {
+    const accessible = Object.fromEntries(['a', 'b', 'c', 'd'].map(id => [id, cleanImage(id)]));
+    const { quest } = await run(
+      { referenceImageFabFileIds: ['a', 'b', 'c', 'd'] },
+      { model: ImageModels.FLUX_2_KLEIN_4B, accessible }
+    );
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('At most 3');
   });
 
   it('sends an empty anchor list when none are requested', async () => {
@@ -654,7 +1285,9 @@ describe('ImageEditService.process mask access (#3069)', () => {
       images: [],
     };
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
@@ -674,6 +1307,9 @@ describe('ImageEditService.process mask access (#3069)', () => {
     (service as any).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
     await service.process({
       body: {
@@ -1022,46 +1658,14 @@ describe('ImageEditService.process mask access (#3069)', () => {
   });
 });
 
-describe('ImageEditService.validateUserCredits (per-member cap)', () => {
-  beforeEach(() => {
-    vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel]);
-  });
-
-  const validateWithOrg = (organization: unknown) => {
-    const service = new ImageEditService({ db: {} } as never);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (service as any).validateUserCredits(richUser, ImageModels.FLUX_KONTEXT_PRO, {}, silentLogger, organization);
-  };
-
-  it('throws when the member is over the org per-member cap even though the pool is funded', async () => {
-    await expect(
-      validateWithOrg({
-        id: 'org1',
-        currentCredits: 1_000_000,
-        maxCreditsPerMember: 5,
-        userDetails: [{ id: 'user1', usedCredits: 1000 }],
-      })
-    ).rejects.toThrow(/member credit limit/i);
-  });
-
-  it('allows a member who is still under the cap', async () => {
-    await expect(
-      validateWithOrg({
-        id: 'org1',
-        currentCredits: 1_000_000,
-        maxCreditsPerMember: 1_000_000,
-        userDetails: [{ id: 'user1', usedCredits: 0 }],
-      })
-    ).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
-  });
-});
-
 describe('ImageEditService.invoke (retry quest bound to its session)', () => {
   const makeInvokeService = (questSessionId: string) => {
     const update = vi.fn(async () => undefined);
     const startImageEditProcess = vi.fn(async () => undefined);
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: {
           findById: vi.fn(async () => ({
@@ -1140,8 +1744,12 @@ describe('ImageEditService quest partial writes', () => {
     };
     const update = vi.fn(async () => quest);
     const startImageEditProcess = vi.fn(async () => undefined);
+    const creditHolds = makeCreditHolds();
     const service = new ImageEditService({
+      assertModelAdmission: async () => {},
+      creditHolds,
       db: {
+        spendFreezes: notFrozen,
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
         quests: { findById: vi.fn(async () => quest), update },
         users: { findById: vi.fn(async () => richUser) },
@@ -1161,8 +1769,11 @@ describe('ImageEditService quest partial writes', () => {
     (service as unknown as { tokenizer: unknown }).tokenizer = {
       encodeTokens: vi.fn(async () => [1, 2, 3]),
       decodeTokens: vi.fn(async () => 'make it blue'),
+      withLogger() {
+        return this;
+      },
     };
-    return { service, quest, update, startImageEditProcess };
+    return { service, quest, update, startImageEditProcess, creditHolds };
   };
 
   const process = (service: ImageEditService, generationId?: string) =>
@@ -1209,7 +1820,8 @@ describe('ImageEditService quest partial writes', () => {
     replies: [],
     type: 'message',
     promptMeta: {
-      model: { name: 'gpt-image-1', parameters: {} },
+      // invoke() sends the retired 'gpt-image-1'; the request schema remaps it to its successor.
+      model: { name: ImageModels.GPT_IMAGE_2, parameters: {} },
       session: { id: 'session1', userId: 'user1' },
     },
   };
@@ -1257,10 +1869,7 @@ describe('ImageEditService quest partial writes', () => {
   describe('settled credits persistence', () => {
     const withValidatedCost = (cost: { requiredCredits: number; usdCost: number }) =>
       vi
-        .spyOn(
-          ImageEditService.prototype as unknown as { validateUserCredits: () => Promise<unknown> },
-          'validateUserCredits'
-        )
+        .spyOn(ImageEditService.prototype as unknown as { estimateCredits: () => Promise<unknown> }, 'estimateCredits')
         .mockResolvedValue(cost);
 
     const arrangeBilled = () => {
@@ -1288,18 +1897,61 @@ describe('ImageEditService quest partial writes', () => {
     });
 
     it('draws and debits nothing when credit enforcement is off', async () => {
-      const { service, update, quest } = arrangeBilled();
+      const { service, update, quest, creditHolds } = arrangeBilled();
       // A quest that already carries a pre-flight figure: without the enforcement term the
       // settlement would draw and debit it even though billing is off.
       quest.creditsUsed = 7;
       settlementDraw.mockClear();
-      vi.mocked(deductCreditsWithOrgSupport).mockClear();
 
       await process(service);
 
       expect(settlementDraw).not.toHaveBeenCalled();
-      expect(deductCreditsWithOrgSupport).not.toHaveBeenCalled();
+      expect(creditHolds.hold).not.toHaveBeenCalled();
+      expect(creditHolds.settle).not.toHaveBeenCalled();
       expect(doneWrite(update)?.creditsUsed).toBe(7);
+    });
+
+    describe('spend freeze with credit enforcement off', () => {
+      const arrangeFreeze = (freeze: { scopeType: 'User'; frozenAt: Date } | null) => {
+        editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+        const findActiveForSubject = vi.fn(async () => freeze);
+        return {
+          findActiveForSubject,
+          ...makeService('session1', undefined, { spendFreezes: { findActiveForSubject } }),
+        };
+      };
+
+      it('refuses a frozen subject with spend_frozen before the provider call', async () => {
+        const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze({
+          scopeType: 'User',
+          frozenAt: new Date('2026-11-16T10:00:00.000Z'),
+        });
+
+        await process(service);
+
+        expect(findActiveForSubject).toHaveBeenCalledWith({
+          userId: 'user1',
+          organizationId: null,
+          apiKeyId: undefined,
+        });
+        expect(editSpy).not.toHaveBeenCalled();
+        expect(creditHolds.hold).not.toHaveBeenCalled();
+        const errorWrite = update.mock.calls
+          .map(c => c[0] as Record<string, unknown>)
+          .find(arg => arg.type === 'error');
+        expect(errorWrite?.errorCode).toBe('spend_frozen');
+      });
+
+      it('edits an unfrozen subject', async () => {
+        const { service, update, creditHolds, findActiveForSubject } = arrangeFreeze(null);
+
+        await process(service);
+
+        expect(findActiveForSubject).toHaveBeenCalledTimes(1);
+        expect(editSpy).toHaveBeenCalledTimes(1);
+        expect(creditHolds.hold).not.toHaveBeenCalled();
+        expect(doneWrite(update)?.status).toBe('done');
+      });
     });
   });
 
@@ -1339,13 +1991,49 @@ describe('ImageEditService quest partial writes', () => {
       });
     });
 
+    it('records reference lineage and the request, never the mask', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const image = (id: string, fileName: string) => ({
+        id,
+        fileName,
+        mimeType: 'image/png',
+        filePath: `fab/${id}.png`,
+        moderationStatus: 'clean',
+      });
+      const files: Record<string, unknown> = { mask1: image('mask1', 'image_mask_1.png'), r1: image('r1', 'ref.png') };
+      const { service } = arrange(save, {
+        fabFiles: { findAccessibleInIds: vi.fn(async (ids: string[]) => ids.map(id => files[id]).filter(Boolean)) },
+      });
+      await service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          generationId: 'gen-1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_1_5,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: ['mask1'],
+          referenceImageFabFileIds: ['r1'],
+        } as never,
+        logger: silentLogger,
+      });
+
+      const saved = save.mock.calls[0][0];
+      expect(saved.derivedFrom).toEqual([{ fileId: 'r1', role: 'reference' }]);
+      expect(saved.generatedOutputKey).toBe('stored/out.png');
+      expect(saved.generation.request).toMatchObject({ model: ImageModels.GPT_IMAGE_1_5, prompt: 'make it blue' });
+      expect(JSON.stringify(saved.generation.request)).not.toMatch(/source\.png|mask1/);
+    });
+
     it('saves nothing when billing fails', async () => {
       const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
-      const { service, update } = arrangeBilled(save);
-      vi.mocked(deductCreditsWithOrgSupport).mockRejectedValueOnce(new Error('billing down'));
+      const { service, update, creditHolds } = arrangeBilled(save);
+      creditHolds.settle.mockRejectedValueOnce(new Error('billing down'));
       await process(service, 'gen-1');
 
       expect(save).not.toHaveBeenCalled();
+      expect(creditHolds.release).toHaveBeenCalledTimes(1);
       expect(
         update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error')
       ).toMatchObject({ reply: 'billing down' });
@@ -1410,5 +2098,91 @@ describe('ImageEditService quest partial writes', () => {
       // itself would pass even if process() started mutating it before the write.
       promptMeta: { marker: 'meta' },
     });
+  });
+});
+
+describe('ImageEditService.process (settled quest and early failure)', () => {
+  const makeService = (questStatus: string | undefined, usersFindById: ReturnType<typeof vi.fn>) => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: questStatus } as Record<string, unknown>;
+    const update = vi.fn(async () => undefined);
+    const service = new ImageEditService({
+      assertModelAdmission: async () => {},
+      db: {
+        spendFreezes: notFrozen,
+        quests: { findById: vi.fn(async () => quest), update },
+        users: { findById: usersFindById },
+        organizations: { findById: vi.fn(async () => null) },
+      },
+      startImageEditProcess: vi.fn(),
+      deleteFabFile: vi.fn(),
+      wsHttpsUrl: 'wss://example.invalid',
+      abilityGetter: vi.fn(),
+      logEvent: vi.fn(),
+      storage: {} as never,
+      fabFileStorage: {} as never,
+    } as never);
+    const run = () =>
+      service.process({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          userId: 'user1',
+          prompt: 'make it blue',
+          model: ImageModels.GPT_IMAGE_1_5,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: [],
+        } as never,
+        logger: silentLogger,
+      });
+    return { run, quest, update };
+  };
+
+  it('settles the quest with an error when the user lookup rejects', async () => {
+    const { run, quest, update } = makeService(undefined, vi.fn().mockRejectedValue(new Error('db down')));
+
+    await run();
+
+    expect(quest).toMatchObject({ type: 'error', status: 'done' });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest1', type: 'error', status: 'done' }));
+  });
+
+  it.each(['done', 'stopped'])('does nothing when the quest is already %s', async status => {
+    const users = vi.fn();
+    const { run, update } = makeService(status, users);
+
+    await run();
+
+    expect(users).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ImageEditBodySchema region ingress', () => {
+  const body = {
+    sessionId: 's',
+    questId: 'q',
+    userId: 'u',
+    prompt: 'edit',
+    image: 'https://example.invalid/source.png',
+    model: ImageModels.FLUX_3_IMAGE,
+  };
+  const region = { prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] };
+  it('refuses regions for another provider before processing', () => {
+    expect(
+      ImageEditBodySchema.safeParse({ ...body, model: ImageModels.GPT_IMAGE_1_5, edit_regions: [region] }).success
+    ).toBe(false);
+  });
+  it('refuses a mask on FLUX 3 before processing', () => {
+    expect(ImageEditBodySchema.safeParse({ ...body, fabFileIds: ['mask'], edit_regions: [region] }).success).toBe(
+      false
+    );
+  });
+  it('shares the public bounds and region-count limit', () => {
+    expect(ImageEditBodySchema.safeParse({ ...body, edit_regions: [{ ...region, bbox: [-1, 0, 1, 1] }] }).success).toBe(
+      false
+    );
+    expect(
+      ImageEditBodySchema.safeParse({ ...body, edit_regions: Array.from({ length: 9 }, () => region) }).success
+    ).toBe(false);
   });
 });

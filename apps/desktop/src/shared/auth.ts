@@ -25,8 +25,10 @@ export interface ResolvedEnvironment {
  * Whether tokens can be written to the OS keychain. `unavailable` is the Linux-without-a-keyring
  * case: the app still works, but nothing is persisted, so the user re-authenticates next launch.
  * Reported rather than papered over, because the alternative is writing tokens in plaintext.
+ * `file-permissions` is a headless host's storage: persisted unencrypted in a file only the
+ * owning OS account can read, as SSH keys are.
  */
-export type TokenStorageStatus = 'available' | 'unavailable';
+export type TokenStorageStatus = 'available' | 'unavailable' | 'file-permissions';
 
 export type AuthStatus =
   /** Reading stored tokens; nothing decided yet. */
@@ -47,6 +49,7 @@ export interface PendingApproval {
   /** Shown in-app so the user can type it if the browser did not open. */
   userCode: string;
   verificationUri: string;
+  /** The page the browser opens: the code-filled link, or verificationUri when the server sent none. */
   verificationUriComplete: string;
   expiresAt: string;
   /** False when shell.openExternal failed; the in-app code and URI are then the only route. */
@@ -90,6 +93,12 @@ export interface AuthState {
   pending?: PendingApproval;
   user?: DesktopUser;
   error?: AuthError;
+  /**
+   * The session ended on its own while the user was working (expired, refused after a refresh,
+   * signed out by another instance). The window stays on the conversation with one notice to
+   * sign in again, so drafts and the failed turn survive; cleared once a session is back.
+   */
+  reauthRequired?: boolean;
 }
 
 /** External pages the renderer may ask main to open; main owns the base URL. */

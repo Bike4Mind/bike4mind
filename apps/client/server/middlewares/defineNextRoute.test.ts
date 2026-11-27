@@ -11,24 +11,38 @@
  * branches (`jwtOnly`, `public`, empty `scopes`) have no reachable input anywhere in
  * the repo. These local fixture contracts exercise them.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import type { IncomingMessage, ServerResponse } from 'http';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
 
-const { mockValidate, mockFindById, mockApiKeyRateLimit } = vi.hoisted(() => ({
+const { mockValidate, mockFindById, mockApiKeyRateLimit, mockCheckClientVersion } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockApiKeyRateLimit: vi.fn(),
+  mockCheckClientVersion: vi.fn(),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+// The gate's own logic is covered in server-utils; here only its place in the prelude matters.
+vi.mock('@bike4mind/server-utils/middlewares/clientVersionGate', () => ({
+  checkClientVersion: mockCheckClientVersion,
+}));
+
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // extractApiKeyFromHeaders stays real - apiKeyAuth's header parsing is under test.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockApiKeyRateLimit(...a),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+// Trust is not under test here; pass the key's own rate limit through.
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -65,10 +79,9 @@ const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', isBanned: false, disputePend
 vi.mock('@server/auth/auth', async orig => {
   const actual = await orig<Record<string, unknown>>();
   const nc = (await import('next-connect')).default;
-  // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
-  const authRouter = nc<any, any>().use((req: any, _res: any, next: any) => {
+  const authRouter = nc<IncomingMessage & { user?: unknown }, ServerResponse>().use((req, _res, next) => {
     if (req.user) return next(); // already authenticated upstream (api key)
-    const header = req.headers.authorization as string | undefined;
+    const header = req.headers.authorization;
     if (header?.startsWith('Bearer ') && !header.includes('b4m_')) {
       req.user = JWT_USER;
       return next();
@@ -78,10 +91,19 @@ vi.mock('@server/auth/auth', async orig => {
   return { ...actual, auth: authRouter };
 });
 
-import { ApiKeyScope, ScopeForbiddenErrorSchema, defineEndpoint, sessionCloneContract } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ScopeForbiddenErrorSchema,
+  UpgradeRequiredError,
+  defineEndpoint,
+  sessionCloneContract,
+} from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi, methodNotAllowedHandler } from './baseApi';
 import { nextRouteForContract } from './defineNextRoute';
+
+type RouteArgs = Parameters<ReturnType<typeof nextRouteForContract>>;
+type RateLimitHandler = NonNullable<NonNullable<Parameters<typeof nextRouteForContract>[1]>['rateLimit']>;
 
 const BodySchema = z.object({ message: z.string(), count: z.number().positive().default(1) });
 const OkSchema = z.object({ ok: z.boolean() });
@@ -105,6 +127,7 @@ function fire({
   jwt = false,
   body = { message: 'hi' } as unknown,
   query = {} as Record<string, string>,
+  headers = {} as Record<string, string>,
 }) {
   const payload = JSON.stringify(body);
   const { req, res } = createMocks(
@@ -117,14 +140,14 @@ function fire({
         'content-length': String(Buffer.byteLength(payload)),
         ...(apiKey ? { 'x-api-key': apiKey } : {}),
         ...(jwt ? { authorization: 'Bearer header.payload.sig' } : {}),
+        ...headers,
       },
       body,
     },
     { eventEmitter: EventEmitter }
   );
-  // any: node-mocks-http mocks aren't structurally the Express types the
-  // next-connect handler is typed against; the sibling tests cast the same way.
-  return { req: req as any, res: res as any };
+  // node-mocks-http mocks aren't structurally the Express types the handler is typed against.
+  return { req: req as unknown as RouteArgs[0] & typeof req, res: res as unknown as RouteArgs[1] & typeof res };
 }
 
 const validKey = (scopes: ApiKeyScope[]) =>
@@ -141,6 +164,7 @@ describe('nextRouteForContract', () => {
     vi.clearAllMocks();
     mockFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockApiKeyRateLimit.mockResolvedValue({ allowed: true, headers: {} });
+    mockCheckClientVersion.mockResolvedValue(undefined);
   });
 
   describe('auth: jwtOnly', () => {
@@ -273,8 +297,7 @@ describe('nextRouteForContract', () => {
       const limiter = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
       const handlerFn = vi.fn();
       const route = nextRouteForContract(makeContract())
-        // any: the fixture middleware isn't typed as the adapter's ValidatedReq handler.
-        .use(limiter as any)
+        .use(limiter as unknown as RateLimitHandler)
         .post(handlerFn);
 
       validKey([ApiKeyScope.AI_CHAT]);
@@ -292,8 +315,9 @@ describe('nextRouteForContract', () => {
       // bodies still meters instead of 422ing for free ahead of the limiter.
       const limiter = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
       const handlerFn = vi.fn();
-      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
-      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handlerFn);
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as unknown as RateLimitHandler }).post(
+        handlerFn
+      );
 
       validKey([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 'hi', count: -1 } });
@@ -414,8 +438,9 @@ describe('nextRouteForContract', () => {
       validKey([ApiKeyScope.AI_CHAT]);
       const limiter = (_req: unknown, res: { status: (code: number) => { json: (body: unknown) => void } }) =>
         res.status(429).json({ error: 'slow down' });
-      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
-      const route = nextRouteForContract(makeContract({ deprecated }), { rateLimit: limiter as any }).post(vi.fn());
+      const route = nextRouteForContract(makeContract({ deprecated }), {
+        rateLimit: limiter as unknown as RateLimitHandler,
+      }).post(vi.fn());
       const { req, res } = fire({ apiKey: 'b4m_live_x' });
       await route(req, res);
       expect(res._getStatusCode()).toBe(429);
@@ -429,6 +454,142 @@ describe('nextRouteForContract', () => {
       await route(req, res);
       expect(res.getHeader('Deprecation')).toBeUndefined();
     });
+  });
+
+  describe('client-version gate', () => {
+    const clientHeaders = { 'x-client-name': 'b4m-sdk-ts', 'x-client-version': '2.0.0' };
+
+    it('answers 426 with the envelope before the rate limit option or validation runs', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      mockCheckClientVersion.mockResolvedValue(new UpgradeRequiredError('b4m-sdk-ts', '2.0.0', '2.1.0'));
+      const limiter = vi.fn();
+      const handler = vi.fn();
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as unknown as RateLimitHandler }).post(
+        handler
+      );
+      const { req, res } = fire({ apiKey: 'b4m_live_x', body: { message: 1 }, headers: clientHeaders });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(426);
+      expect(res._getJSONData()).toMatchObject({
+        error: 'b4m-sdk-ts 2.0.0 is no longer supported. Upgrade to 2.1.0 or later.',
+        errorCode: 'upgrade_required',
+        client_name: 'b4m-sdk-ts',
+        minimum_version: '2.1.0',
+      });
+      expect(mockCheckClientVersion).toHaveBeenCalledWith(expect.objectContaining(clientHeaders), expect.anything());
+      expect(limiter).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('lets the request through when the gate does not object', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(makeContract()).post((_req, res) => res.json({ ok: true }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x', headers: clientHeaders });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
+  describe('response schema', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('strips an undeclared field outside production, naming it in a warning', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+      validKey([ApiKeyScope.AI_CHAT]);
+      let warn: ReturnType<typeof vi.spyOn> | undefined;
+      const route = nextRouteForContract(makeContract()).post((req, res) => {
+        warn = vi.spyOn(req.logger, 'warn');
+        res.json({ ok: true, passwordHash: 'secret' });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ ok: true });
+      expect(warn).toHaveBeenCalledWith('[contract] fixtureOp response 200 sends undeclared fields: passwordHash');
+    });
+
+    it('logs undeclared nested and array fields in production but sends the body unchanged', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      validKey([ApiKeyScope.AI_CHAT]);
+      const NestedSchema = z.object({ ok: z.boolean(), items: z.array(z.object({ id: z.string() })) });
+      let warn: ReturnType<typeof vi.spyOn> | undefined;
+      const route = nextRouteForContract(
+        makeContract({ responses: { 200: { description: 'ok', schema: NestedSchema } } })
+      ).post((req, res) => {
+        warn = vi.spyOn(req.logger, 'warn');
+        res.json({
+          ok: true,
+          items: [
+            { id: 'a', secret: 1 },
+            { id: 'b', secret: 2 },
+          ],
+          debug: 'x',
+          unset: undefined,
+        });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({
+        ok: true,
+        items: [
+          { id: 'a', secret: 1 },
+          { id: 'b', secret: 2 },
+        ],
+        debug: 'x',
+      });
+      expect(warn).toHaveBeenCalledWith(
+        '[contract] fixtureOp response 200 sends undeclared fields: items[].secret, debug'
+      );
+    });
+
+    it('leaves undeclared fields on an error body, which errorHandler assembles from additionalInfo', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+      validKey([ApiKeyScope.AI_CHAT]);
+      const route = nextRouteForContract(
+        makeContract({ responses: { 429: { description: 'limited', schema: z.object({ error: z.string() }) } } })
+      ).post((_req, res) => res.status(429).json({ error: 'slow down', errorCode: 'token_rate_limit_exceeded' }));
+      const { req, res } = fire({ apiKey: 'b4m_live_x' });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(429);
+      expect(res._getJSONData()).toEqual({ error: 'slow down', errorCode: 'token_rate_limit_exceeded' });
+    });
+
+    it.each(['test', 'production'])(
+      'sends the body unchanged and warns when it does not match the schema (NODE_ENV=%s)',
+      async env => {
+        vi.stubEnv('NODE_ENV', env);
+        validKey([ApiKeyScope.AI_CHAT]);
+        let warn: ReturnType<typeof vi.spyOn> | undefined;
+        const route = nextRouteForContract(makeContract()).post((req, res) => {
+          warn = vi.spyOn(req.logger, 'warn');
+          res.json({ ok: 'yes', extra: 1 });
+        });
+        const { req, res } = fire({ apiKey: 'b4m_live_x' });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getJSONData()).toEqual({ ok: 'yes', extra: 1 });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('fixtureOp response 200 violates schema'));
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^[^\n]*"ok"[^\n]*$/));
+      }
+    );
+
+    it.each(['test', 'production'])(
+      'leaves a status with no declared schema (raw body) untouched (NODE_ENV=%s)',
+      async env => {
+        vi.stubEnv('NODE_ENV', env);
+        validKey([ApiKeyScope.AI_CHAT]);
+        const route = nextRouteForContract(
+          makeContract({ responses: { 200: { description: 'ok', schema: OkSchema }, 202: { description: 'raw' } } })
+        ).post((_req, res) => res.status(202).json({ anything: 'goes' }));
+        const { req, res } = fire({ apiKey: 'b4m_live_x' });
+        await route(req, res);
+        expect(res._getStatusCode()).toBe(202);
+        expect(res._getJSONData()).toEqual({ anything: 'goes' });
+      }
+    );
   });
 
   describe('verb binding (P3-1)', () => {

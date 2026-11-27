@@ -42,7 +42,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   },
 }));
 vi.mock('sst', () => ({ Resource: { appFilesBucket: { name: 'test-bucket' } } }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: mockGetOperationsModel },
   getEffectiveApiKeyByBackend: mockGetApiKey,
 }));

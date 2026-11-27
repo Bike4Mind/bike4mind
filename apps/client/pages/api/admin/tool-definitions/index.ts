@@ -1,7 +1,6 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
-import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA, SETTINGS_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 
 // Tool definition interface for API response
@@ -109,12 +108,11 @@ function getCodeTools(): IToolDefinition[] {
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
+const handler = adminApi({
+  adminPermissions: { GET: SETTINGS_PAGE_READ },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   try {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { category, enabled, search, source, page: pageParam, limit: limitParam } = req.query;
 
     // Parse pagination params
@@ -235,10 +233,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
       },
     });
   } catch (error) {
-    console.error('Error fetching tool definitions:', error);
-    if (error instanceof ForbiddenError) {
-      return res.status(403).json({ error: error.message });
-    }
+    req.logger.error('Error fetching tool definitions', { error });
     return res.status(500).json({ error: 'Failed to fetch tool definitions' });
   }
 });

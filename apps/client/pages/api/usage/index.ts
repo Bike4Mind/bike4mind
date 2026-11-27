@@ -1,13 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, creditTransactionRepository, userApiKeyRepository } from '@bike4mind/database';
 import {
+  ApiKeyScope,
   CreditHolderType,
+  hasAdminPermission,
+  orgMemberHasPermission,
   type IUsageDashboardResponse,
   type NamedApiKeyUsage,
   type UsageOwnerType,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -32,12 +35,15 @@ const QuerySchema = z.object({
  * Owner-scoped to (ownerId, ownerType), i.e. spend billed to that owner's credit
  * pool. Personal keys billed to an org land under the org (ownerType=Organization)
  * and surface in the org's own dashboard, not here - the User view intentionally
- * shows only user-billed spend. Reads UsageEventModel (not the ledger) for the
- * member/model/feature cuts because it is the only source carrying frozen COGS +
- * per-member attribution.
+ * shows only user-billed spend. Reads UsageEventModel for the member/model/feature
+ * cuts because it is the only source carrying frozen COGS + per-member attribution;
+ * `ledger` adds the ledger's spend for the same window, since charges written without
+ * a usage event appear only there.
  *
- * Access: platform admins see any owner. Otherwise an Organization owner is gated
- * by verifyOrgOwner (owner or platform admin; org managers are refused); a User owner may read only their own id.
+ * Access: platform admins see any owner. A delegate holding support:read (API keys
+ * need ApiKeyScope.ADMIN) gets the same read-only view minus key names/prefixes.
+ * Otherwise an Organization reader needs `viewUsage` (verifyOrgPermission: owner, manager or
+ * billing manager); a User owner may read only their own id.
  */
 const handler = baseApi().get(async (req, res) => {
   if (!req.user) {
@@ -46,11 +52,24 @@ const handler = baseApi().get(async (req, res) => {
 
   const { ownerType, ownerId, days = 30 } = QuerySchema.parse(req.query);
 
+  const canReadSupport =
+    hasAdminPermission(req.user, 'support:read') &&
+    (!req.apiKeyInfo || req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN));
+
+  let viaDelegate = false;
   if (ownerType === CreditHolderType.Organization) {
-    await verifyOrgOwner(req.user, ownerId);
-  } else if (!req.user.isAdmin && req.user.id !== ownerId) {
-    throw new ForbiddenError('You can only view your own usage');
+    // A support:read delegate is checked as platform admin: read-only access to any org, minus key names.
+    const org = await verifyOrgPermission(
+      { id: req.user.id, isAdmin: req.user.isAdmin || canReadSupport },
+      ownerId,
+      'viewUsage'
+    );
+    viaDelegate = !req.user.isAdmin && !orgMemberHasPermission(org, req.user.id, 'viewUsage');
+  } else if (req.user.id !== ownerId && !req.user.isAdmin) {
+    if (!canReadSupport) throw new ForbiddenError('You can only view your own usage');
+    viaDelegate = true;
   }
+  const showKeyIdentifiers = !viaDelegate;
 
   // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
   // by-API-key and by-source come from the ledger, the only source carrying
@@ -61,10 +80,11 @@ const handler = baseApi().get(async (req, res) => {
   // keys, which findByOrganizationId guarantees through its own billingOwnerType
   // conjunct - not through the create-time invariant alone, which a script or direct
   // DB write can bypass (see UserApiKeyModel.ts and its embed test).
-  const [summary, apiKeyUsage, sourceUsage, ownerKeys] = await Promise.all([
+  const [summary, apiKeyUsage, sourceUsage, ledger, ownerKeys] = await Promise.all([
     usageEventRepository.ownerUsageSummary(ownerId, ownerType, days),
     creditTransactionRepository.apiKeyUsageForOwner(ownerId, ownerType, days),
     creditTransactionRepository.sourceUsageForOwner(ownerId, ownerType, days),
+    creditTransactionRepository.usageTotalForOwner(ownerId, ownerType, days),
     ownerType === CreditHolderType.Organization
       ? userApiKeyRepository.findByOrganizationId(ownerId)
       : userApiKeyRepository.findByUserId(ownerId),
@@ -79,7 +99,9 @@ const handler = baseApi().get(async (req, res) => {
       ? await resolveUserNames(summary.byMember.map(m => m.userId))
       : new Map<string, string>();
 
-  const keyById = new Map(ownerKeys.map(k => [String(k.id), { keyName: k.name, keyPrefix: k.keyPrefix }]));
+  const keyById = new Map(
+    (showKeyIdentifiers ? ownerKeys : []).map(k => [String(k.id), { keyName: k.name, keyPrefix: k.keyPrefix }])
+  );
   const byApiKey: NamedApiKeyUsage[] = apiKeyUsage.map(u => ({ ...u, ...keyById.get(u.apiKeyId) }));
 
   const response: IUsageDashboardResponse = {
@@ -90,6 +112,7 @@ const handler = baseApi().get(async (req, res) => {
     byMember: summary.byMember.map(m => ({ ...m, userName: nameById.get(m.userId) })),
     byApiKey,
     bySource: sourceUsage,
+    ledger,
   };
 
   return res.json(response);

@@ -1,6 +1,7 @@
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import path from 'path';
 import { Resource } from 'sst';
+import { wafBypassHeaders } from './helpers/waf-bypass';
 
 // Age cutoff for the orphan sweep, in minutes. 6h is far above the longest CI run
 // (ai-latency cells allow 90 min) so a concurrent suite is never in range.
@@ -11,8 +12,9 @@ const STALE_SWEEP_MINUTES = 360;
  * so `-e2e@test.com` users don't accumulate over time.
  */
 export default async function globalSetup() {
-  // Load .env.e2e explicitly - globalSetup may run before config's dotenv applies
-  dotenv.config({ path: path.resolve(__dirname, '../.env.e2e') });
+  // Load .env.e2e explicitly - globalSetup may run before the config has loaded it
+  const envFile = path.resolve(__dirname, '../.env.e2e');
+  if (existsSync(envFile)) process.loadEnvFile(envFile);
 
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const secret = process.env.E2E_CLEANUP_SECRET || Resource.E2E_CLEANUP_SECRET?.value;
@@ -39,7 +41,8 @@ export default async function globalSetup() {
 
   const response = await fetch(cleanupUrl, {
     method: 'DELETE',
-    headers: { 'x-e2e-cleanup-secret': secret },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+    redirect: 'manual',
   });
 
   if (response.ok) {

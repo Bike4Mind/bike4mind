@@ -3,7 +3,7 @@ import type { QaRunStatus } from '@bike4mind/common';
 /** Spec "Slack alarm" table. Pure: evaluateAlarm.ts gathers the inputs and posts. */
 export interface AlarmInput {
   key: { suite: string; env: string; tenant?: string };
-  /** Link to /status/runs/<id>. */
+  /** Link to /admin/qa/runs/<id>. */
   runUrl: string;
   /** Latest earlier CI run on main for the same state key; null for the first. */
   previous: { status: QaRunStatus; failing: string[] } | null;

@@ -20,7 +20,7 @@ vi.mock('../di/registry', () => ({
   }),
 }));
 
-vi.mock('@bike4mind/services', () => ({ projectService: { addSessions: vi.fn() } }));
+vi.mock('@bike4mind/services-core', () => ({ projectService: { addSessions: vi.fn() } }));
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },

@@ -35,8 +35,8 @@ Want to continue a thought in Claude, ChatGPT, or Gemini? In the Share dialog, c
 
 Great for: one-page reports, landing snippets, dashboards built in pure HTML/CSS, diagrams, generated SVG art.
 
-:::tip Static today
-Artifacts publish as **static** pages. HTML/CSS and SVG render fully. Artifacts that depend on inline JavaScript (interactive React/Recharts widgets) currently publish as a **source view** — the code shows, but scripts don't run on the app origin (a security measure). For interactive output now, prefer self-contained HTML/CSS/SVG.
+:::tip Interactive React apps
+React artifacts also publish as interactive pages on an isolated origin. For an app split across React files, emit the entry and all imported siblings in the same reply, then open **Share** on the entry card or its side panel. The files publish together as one page. Use static imports, supported packages and inline CSS; see [multi-file React publishing](./publish-and-share.md#publish-a-multi-file-react-app).
 :::
 
 ### 4. Share a file
@@ -47,12 +47,12 @@ In any file list, open a file's `⋮` menu → **Publish to public link** → yo
 
 When publishing, pick the visibility that fits:
 
-| You want… | Use |
-|---|---|
-| A link for the open internet / social | **public** |
-| Something only your company sees | **organization** |
-| Something only a project team sees | **project** |
-| A private draft only you can open | **private** (the default for your space) |
+| You want…                             | Use                                      |
+| ------------------------------------- | ---------------------------------------- |
+| A link for the open internet / social | **public**                               |
+| Something only your company sees      | **organization**                         |
+| Something only a project team sees    | **project**                              |
+| A private draft only you can open     | **private** (the default for your space) |
 
 Change your mind later from your published list — bump a private draft to public when it's ready, or pull a public page back to private.
 
@@ -82,9 +82,9 @@ Re-running with the same `{sessionId, messageId}` is idempotent — you get the 
 This is exactly what the gallery **Share** button does under the hood. Host any folder of static files (one `index.html` at the root, plus assets):
 
 ```bash
-KEY=$YOUR_API_KEY
+KEY=$YOUR_API_KEY              # add the artifacts:publish scope to this key
 BASE=https://app.bike4mind.com
-UID=<your-user-id>            # GET /api/identify
+UID=<your-user-id>            # GET /api/v1/me (the key needs the me:read scope)
 SLUG=my-dashboard
 
 # Step 1 — request a presigned upload for each file
@@ -107,6 +107,8 @@ curl -s -H "x-api-key: $KEY" -H "Content-Type: application/json" \
 # → { "url": "/p/u/<UID>/my-dashboard", ... }
 ```
 
+Each file's `size` must equal the number of bytes you upload, and the `PUT` must use the same `Content-Type` as that file's `mimeType`. Upload URLs expire after 10 minutes. To publish a stored artifact by id instead, see recipe 11.
+
 Multi-file bundles: list every file in `files[]` (≤ 50 files, ≤ 10 MB each, ≤ 50 MB total), then `PUT` each returned `uploadUrls[i].url`. Reference assets with **relative** paths in your HTML (`assets/app.css`, `logo.png`) — the serve layer rewrites them to absolute gated URLs automatically.
 
 ### 9. Understand validation failures
@@ -114,11 +116,13 @@ Multi-file bundles: list every file in `files[]` (≤ 50 files, ≤ 10 MB each, 
 `finalize` returns `422` with a structured `violations[]` if the bundle is unsafe:
 
 ```json
-{ "error": "Validation failed",
+{
+  "error": "Validation failed",
   "violations": [
     { "type": "forbidden_iframe", "message": "Iframes are not permitted", "file": "index.html" },
-    { "type": "csp_violation",    "message": "Disallowed script source: https://cdn.evil/x.js" }
-  ] }
+    { "type": "csp_violation", "message": "Disallowed script source: https://cdn.evil/x.js" }
+  ]
+}
 ```
 
 Common causes: an `iframe`, a non-allowlisted external `script`/`stylesheet` host, `eval`/`new Function`/`document.write` in an inline script, a missing root `index.html`, or a relative asset not present in the bundle.
@@ -136,6 +140,46 @@ curl -s -H "x-api-key: $KEY" -H "Content-Type: application/json" \
 # Unpublish (soft-delete)
 curl -s -H "x-api-key: $KEY" -X DELETE "$BASE/api/publish/artifacts/<publicId>"
 ```
+
+### 11. Publish a stored artifact with the v1 API
+
+Publish an artifact by its id, with a passphrase, in one request. The API key needs the `artifacts:publish` scope. Nothing is uploaded: the server reads the stored content.
+
+```bash
+KEY=$YOUR_API_KEY
+BASE=https://app.bike4mind.com
+ID=<artifactId>
+
+curl -s -H "x-api-key: $KEY" -H "Content-Type: application/json" \
+  -X POST "$BASE/api/v1/artifacts/$ID/publish" \
+  -d '{"slug":"signup-flow","visibility":"public","access_gate":{"kind":"passphrase","passphrase":"<passphrase>"}}'
+# -> { "public_id": "...", "url": "https://app.bike4mind.com/p/u/<userId>/signup-flow",
+#      "visibility": "public", "access_gate": { "kind": "passphrase" }, ... }
+```
+
+Send the returned `url` to your viewers and the passphrase through a separate channel. Leave the body empty (`-d '{}'`) to publish publicly under a generated slug with no gate. A gate needs `"visibility":"public"`.
+
+### 12. Refresh or take down a v1 page
+
+```bash
+# The artifact changed: refresh the page. Address, visibility and gate stay as they are.
+curl -s -H "x-api-key: $KEY" -X POST "$BASE/api/v1/artifacts/$ID/republish"
+
+# Take the page down (204, no body). The artifact stays and can be published again.
+curl -s -o /dev/null -w "%{http_code}\n" -H "x-api-key: $KEY" -X DELETE "$BASE/api/v1/artifacts/$ID/publish"
+```
+
+Handle these answers in a script:
+
+| Status | What to do                                                                                                                  |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `403`  | Add `artifacts:publish` to the key. Keys created before this scope existed do not have it, including older Full-access keys: add the scope or create a new key. The same status is returned when your organization does not allow public links. |
+| `404`  | The artifact is not yours, or it has no page to refresh. Check the id.                                                      |
+| `409`  | On publish, the artifact already has a page or the slug is taken: republish, or pick another slug. On republish, reload and retry. |
+| `422`  | Read `violations` for what the page failed on, or fix the body (for example a gate without `visibility: "public"`).         |
+| `429`  | Wait for `Retry-After`. The daily publish allowance is 200 actions in a rolling 24 hours, or 20 in an account's first 7 days. |
+
+After you unpublish, a page with a passphrase or domain gate returns `404` right away. A public page with no gate can serve the old content for a few seconds because of edge caching.
 
 ---
 

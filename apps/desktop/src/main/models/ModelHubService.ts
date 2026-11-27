@@ -1,0 +1,2164 @@
+import {
+  HubAccessError,
+  HubRateLimitError,
+  LocalRuntimeError,
+  ModelNotFoundError,
+  PullIdleTimeoutError,
+  RuntimeConnectionError,
+  RuntimeHttpError,
+  checkApproval,
+  checkInstalledDigest,
+  checkReviewedLayers,
+  checkRuntime,
+  curatedLibrary as libraryOf,
+  curatedLicensesMatch,
+  curatedListing,
+  curatedOllamaBlocked as ollamaBlocked,
+  curatedParamsLabel as paramsLabel,
+  curatedPicks,
+  curatedPins as pinsOf,
+  curatedRunner,
+  curatedSource,
+  hubBuildId,
+  isAbliteratedModel,
+  isCuratedListable as listable,
+  isCuratedPullable as pullable,
+  isHubRepoId,
+  isPermissiveEntry as permissive,
+  type HardwareProfile,
+  ollamaPullRef,
+  ollamaRefAliases,
+  planSplitImport,
+  removeSplitStaging,
+  pullBlock,
+  runSplitImport,
+  sameRepo,
+  siblingLayers,
+  splitImportBlock,
+  splitImportName,
+  splitImportSpace,
+  stagedPartBytes,
+  type ApprovalFailure,
+  type DownloadOptions,
+  type DownloadResult,
+  type HubGgufFile,
+  type ImportSpace,
+  type ModelImportRuntime,
+  type SiblingLayers,
+  type SplitImportPlan,
+  type HubGgufBuild,
+  type HubModelDetail,
+  type HubModelSummary,
+  type HubSearchOptions,
+  type HubSearchPage,
+  type InspectOptions,
+  type InstalledModel,
+  type LoadedModel,
+  type ModelArch,
+  type ModelInspection,
+  type LayersCheck,
+  type LayerSources,
+  type OllamaRegistryLayers,
+  type PullApproval,
+  type PullBlock,
+  type PullOptions,
+  type PullProgress,
+  type RuntimeCheck,
+  type RuntimeHealth,
+} from '@bike4mind/local-models';
+import {
+  activeParamsFraction,
+  fitMarginBytes,
+  hubLicenseLabel,
+  memoryBudgets,
+  ollamaBuildBytes,
+  ollamaBuildDraftMax,
+  type HubBuild,
+  type HubEntry,
+  type HubManifest,
+} from '@bike4mind/common';
+import {
+  formatBytes,
+  licenseKind,
+  pullKey,
+  type CuratedBuildView,
+  type CuratedCheckResult,
+  type CuratedEntryView,
+  type CuratedList,
+  type CuratedPickView,
+  type CuratedPullResult,
+  type HfTokenResult,
+  type HfTokenStatus,
+  type HubAccess,
+  type HubBuildView,
+  type HubDetailResult,
+  type HubModelCard,
+  type HubModelView,
+  type HubSearchRequest,
+  type HubSearchResult,
+  type GpuMemoryCap,
+  type InstalledModelsResult,
+  type LoadedModelState,
+  type ModelFit,
+  type ModelHubError,
+  type ModelHubErrorKind,
+  type ModelPull,
+  type ModelPullRequest,
+  type ModelPullResult,
+  type ModelRemoveResult,
+  type ModelRuntimeStatus,
+  type ModelServerManagement,
+  type ModelStoreLocation,
+} from '@shared/models';
+import { localModelId } from '@shared/chat';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting, type ModelContextSetting } from '@shared/localContextSetting';
+import type { ModelLoadSettings } from '@shared/modelSettings';
+import {
+  LOCAL_SERVER_ID,
+  LOCAL_SERVER_NAME,
+  OLLAMA_NOT_RUNNING,
+  serverRuntimeId,
+  specsRate,
+  type FlashAttention,
+  type ModelServerSpecs,
+  type QuantizedKvCacheType,
+} from '@shared/modelServers';
+import { draftTokensOf } from '../chat/loadOptions';
+import { chatContextTokens, type LocalModelFootprint } from '../chat/localContext';
+import { configuredNumCtx } from '../chat/localChatContext';
+import { OLLAMA_RUNTIME_ID } from '../chat/OllamaLocal';
+import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/errors';
+import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
+import { serverHardware, withEnteredSpecs } from './enteredHardware';
+import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
+import { loadedStateOf, loadedStateTarget } from './loadedState';
+import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
+import { catalogSampling } from './catalogSampling';
+import type { OllamaBuild } from './ollamaWslPatch';
+import { clearsCap, isLinuxStoreDir, partialLoad, releaseCapsWslGpu, wslGpuCapWarning } from './wslGpuCap';
+import type { CatalogSampling } from '@shared/generation';
+
+/** The import methods are what a split build needs; without them it is refused. */
+export interface ModelRuntimePort extends Partial<ModelImportRuntime> {
+  readonly baseUrl: string;
+  health(): Promise<RuntimeHealth>;
+  list(): Promise<InstalledModel[]>;
+  inspect(model: string, options?: InspectOptions): Promise<ModelInspection>;
+  loaded(): Promise<LoadedModel[]>;
+  pull(ref: string, opts?: PullOptions): Promise<void>;
+  remove(model: string): Promise<void>;
+}
+
+export interface ModelHubPort {
+  readonly endpoint: string;
+  search(options: HubSearchOptions): Promise<HubSearchPage>;
+  getModel(repo: string, options?: { signal?: AbortSignal; refresh?: boolean }): Promise<HubModelDetail>;
+  verifyOllamaRef(
+    detail: Pick<HubModelDetail, 'id' | 'builds' | 'ollamaNeedsSshKey'>,
+    build: HubGgufBuild,
+    options?: { signal?: AbortSignal }
+  ): Promise<string | null>;
+  ollamaLayers(repo: string, tag: string, options?: { signal?: AbortSignal }): Promise<OllamaRegistryLayers | null>;
+  checkToken(options?: { signal?: AbortSignal }): Promise<boolean>;
+  /** Needed to import a split build. */
+  download?(file: HubGgufFile, destination: string, options?: DownloadOptions): Promise<DownloadResult>;
+  ollamaRegistryJson?(repo: string, digest: string, options?: { signal?: AbortSignal }): Promise<unknown>;
+}
+
+export interface HubTokenPort {
+  persisted(): boolean;
+  get(): Promise<string | null>;
+  set(token: string): Promise<void>;
+  clear(): Promise<void>;
+}
+
+/**
+ * A saved model server, read fresh for every call so a changed access setting applies at once. Its runtime
+ * reports a dropped connection as ServerUnreachableError, a 401 as ServerCredentialsError and a 403 as
+ * ServerForbiddenError.
+ */
+export interface ModelHubServer {
+  name: string;
+  management: ModelServerManagement;
+  runtime: ModelRuntimePort;
+}
+
+export interface StartedPull {
+  key: string;
+  serverId: string;
+  serverName: string;
+  /** The name Ollama pulls. */
+  ref: string;
+  label: string | null;
+  sizeBytes: number;
+}
+
+export interface ModelHubServiceDeps {
+  /** This computer's Ollama. */
+  runtime: ModelRuntimePort;
+  /** A saved model server by id; null when none is saved under it. */
+  server?: (id: string) => ModelHubServer | null;
+  /** A Hub client sending `token`, if any; it must only ever be pointed at Hugging Face itself. */
+  createHub: (token: string | null) => ModelHubPort;
+  tokens: HubTokenPort;
+  /** The layers the Ollama library serves for a `name:tag` ref; null when it has no such tag. */
+  libraryLayers: (ref: string, options?: { signal?: AbortSignal }) => Promise<OllamaRegistryLayers | null>;
+  /** This computer's probe, before entered specs; probed once, on first use. */
+  hardware: () => Promise<HardwareProfile>;
+  /** Hardware entered in Settings by server id, `local` for this computer; read fresh for every call. */
+  specs?: (serverId: string) => ModelServerSpecs | null;
+  /** The OLLAMA_KV_CACHE_TYPE a server's Ollama runs with, `local` for this computer; undefined is f16. */
+  kvCacheType?: (serverId: string) => QuantizedKvCacheType | undefined;
+  /** The OLLAMA_FLASH_ATTENTION a server's Ollama runs with when known, `local` for this computer; undefined is auto. */
+  flashAttention?: (serverId: string) => FlashAttention | undefined;
+  /** The Settings choice local chat sizes its context with; fit badges plan for that same context. */
+  localContext: () => Promise<LocalContextSetting>;
+  /** A model's load settings by chat model id; its own context and draft count replace the above in its badge. */
+  modelSettings?: (modelId: string) => Promise<ModelLoadSettings>;
+  /**
+   * The Curated tab's current list, which can change while the app runs. Each call here reads it once and uses
+   * that snapshot throughout, so a list update during a download never changes the pins it is checked against.
+   */
+  curated: () => HubManifest;
+  onPullsChanged: (pulls: ModelPull[]) => void;
+  onInstalledChanged: (serverId: string) => void;
+  /** A server's badges changed outside any listing, so the open installed and curated lists are read again. */
+  onRatingsChanged?: (serverId: string) => void;
+  /** A reviewed pull passed every check and its download starts; not called again on resume. */
+  onPullStarted?: (pull: StartedPull) => void;
+  /** Free bytes on the disk holding `path` on this computer; null when it cannot be read. */
+  freeSpace?: (path: string) => Promise<number | null>;
+  /** Ollama's model folder on this computer when no installed model shows where it is. */
+  defaultStoreDir?: () => string | null;
+  /** Whether `path` is a folder on this computer's disk; assumed true when absent. */
+  pathExists?: (path: string) => Promise<boolean>;
+  /** Where split builds are staged on this computer while they import; without it they are refused. */
+  importDir?: () => string;
+  /** Whether two paths on this computer are on one disk; null when that cannot be read. */
+  sameDisk?: (a: string, b: string) => Promise<boolean | null>;
+  /** True while a download to a saved server runs: that server's Ollama stops it if this computer sleeps. */
+  keepAwake?: (on: boolean) => void;
+  /** Desktop runs on Windows or inside WSL, so Ollama at this computer's address may run in WSL. */
+  wslHost?: boolean;
+  /** Whether this computer's NVIDIA GPU uses the CPU's memory; null when nvidia-smi cannot say. */
+  integratedGpu?: () => Promise<boolean | null>;
+  /** The Ollama at `url` on this computer and whether it carries the WSL shared GPU memory change; null if unknown. */
+  ollamaWslPatch?: (url: string) => Promise<OllamaBuild | null>;
+  /** The main log. */
+  warn: (message: string) => void;
+  /** Minimum gap between progress pushes (ms). */
+  progressIntervalMs?: number;
+  /** Pauses between reads of a just-pulled model (ms); one more read than pauses. */
+  checkBackoffMs?: readonly number[];
+}
+
+const DEFAULT_PROGRESS_INTERVAL_MS = 250;
+interface ServerIdentity {
+  version: string | null;
+  server: string | null;
+}
+/** True only when a part both reads know disagrees; a failed read never makes another server. */
+const otherServer = (seen: ServerIdentity, now: ServerIdentity) =>
+  (seen.version !== null && now.version !== null && seen.version !== now.version) ||
+  (seen.server !== null && now.server !== null && seen.server !== now.server);
+// Ollama 0.40 holds /api/show on a just-pulled model for about 15 s on a busy host, then answers in milliseconds.
+const CHECK_TIMEOUT_MS = 30_000;
+const DEFAULT_CHECK_BACKOFF_MS = [1_000, 3_000];
+const SEARCH_LIMIT = 30;
+const OLLAMA_LIBRARY_URL = 'https://ollama.com/library';
+
+const EXPLORE_HINT = ' You can still review the repo in Explore.';
+const LAYERS_CHANGED =
+  "This model's weights, chat template, settings or license changed at its source since Bike4Mind reviewed it, " +
+  'so Curated does not offer it.';
+const LICENSE_CHANGED =
+  'The license this model or its base model declares on Hugging Face changed since Bike4Mind reviewed it, so ' +
+  'Curated does not offer it.' +
+  EXPLORE_HINT;
+const NOW_ABLITERATED = 'Hugging Face now marks this repo as abliterated, so Curated does not offer it.';
+
+/** Waits `ms`; false when `signal` aborts first. */
+function pause(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise(resolve => {
+    if (signal.aborted) return resolve(false);
+    const stop = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', stop);
+      resolve(true);
+    }, ms);
+    signal.addEventListener('abort', stop, { once: true });
+  });
+}
+
+/** Cold-cache /api/show reads in flight at once, so a long installed list does not swamp a busy daemon. */
+const INSPECT_CONCURRENCY = 4;
+/** Installed models read for a blob path before the model folder counts as unknown; cloud models have none. */
+const STORE_PROBES = 3;
+/** How long a revoke waits for its download to stop before it reports the grant still active, in ms. */
+const STOP_WAIT_MS = 15_000;
+
+async function mapLimited<T, R>(items: readonly T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await map(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** `listed` keeps the failure in the pull list, as a failed download rather than a refused one. */
+type Refusal = { ok: false; error: ModelHubError; listed: boolean };
+type SplitApproval = NonNullable<Extract<Awaited<ReturnType<typeof checkApproval>>, { ok: true }>['split']>;
+type Prepared = { ok: true; ref: string; split?: SplitApproval } | Refusal;
+const refused = (kind: ModelHubErrorKind, message: string, listed = false): Refusal => ({
+  ok: false,
+  error: hubError(kind, message),
+  listed,
+});
+
+/** Refuses a download unless the target's Ollama is running and, for a curated build, new enough for it. */
+function runtimeRefusal(health: RuntimeHealth, build: HubBuild | null, target: Target): Refusal | null {
+  const checked = checkRuntime(health, build);
+  return checked.ok ? null : runtimeCheckRefusal(checked, target);
+}
+
+function runtimeCheckRefusal(failure: Exclude<RuntimeCheck, { ok: true }>, target: Target): Refusal {
+  if (failure.reason === 'runtime-unreachable')
+    return refused(
+      'runtime-unavailable',
+      target.local
+        ? `${OLLAMA_NOT_RUNNING}. Start it, then retry.`
+        : (failure.error ?? `Could not reach ${target.name}. Check it, then retry.`),
+      true
+    );
+  const where = target.local ? 'Ollama' : `Ollama on ${target.name}`;
+  return refused('cannot-pull', `${failure.blocked}. Update ${where}, then download it.`);
+}
+
+function layersError(failure: Exclude<LayersCheck, { ok: true }>, reviewed: HubBuild): ModelHubError {
+  const library = libraryOf(reviewed);
+  const hint = library ? '' : EXPLORE_HINT;
+  if (failure.reason === 'layers-no-source')
+    return hubError('cannot-pull', 'Bike4Mind has no reviewed source for this build, so it cannot be checked.');
+  if (failure.reason === 'layers-not-served')
+    return hubError(
+      'upstream-changed',
+      library
+        ? `The Ollama library no longer serves ${library.ref}, so Curated cannot offer it.`
+        : `Hugging Face no longer serves the ${reviewed.quant.label} build of this repo to Ollama, so Curated ` +
+            `cannot offer it.${hint}`
+    );
+  return hubError('upstream-changed', LAYERS_CHANGED + hint);
+}
+
+/** Words a refused approval for the pull dialog; `listed` keeps it in the pull list as a failed download. */
+function approvalRefusal(
+  failure: ApprovalFailure,
+  approval: PullApproval,
+  tokenSent: boolean,
+  target: Target
+): Refusal {
+  switch (failure.reason) {
+    case 'not-listed':
+      return refused('not-found', 'That model is not on the list.');
+    case 'cancelled':
+      return refused('cancelled', 'Download cancelled.');
+    case 'build-missing':
+      return refused('not-found', 'That build is no longer in this repo.');
+    case 'changed':
+      return approval.source === 'library'
+        ? refused('changed', 'The curated list changed since you reviewed this model. Click Download again.')
+        : refused(
+            'changed',
+            'This repo changed since you reviewed it. Click Download again to review it as it is now.'
+          );
+    case 'abliterated':
+      return refused('upstream-changed', NOW_ABLITERATED);
+    case 'license-changed':
+      return refused('upstream-changed', LICENSE_CHANGED);
+    case 'blocked':
+      return refused('cannot-pull', blockMessage(failure.block, tokenSent));
+    case 'license-required':
+      return refused('license-required', 'Accept the license before downloading.');
+    case 'access-required':
+      return refused('access-required', 'Confirm the Hugging Face access steps before downloading.');
+    case 'unverified':
+      return refused(
+        'unverified',
+        'Hugging Face could not confirm Ollama would get this exact file, so it was not downloaded.',
+        true
+      );
+    case 'runtime-unreachable':
+    case 'runtime-too-old':
+      return runtimeCheckRefusal(failure, target);
+    case 'layers-no-source':
+    case 'layers-not-served':
+    case 'layers-changed':
+      // Only a curated approval checks layers.
+      if (!approval.curated) return refused('not-found', 'That model is not on the list.');
+      return { ok: false, error: layersError(failure, approval.curated.build), listed: false };
+  }
+}
+
+interface Target extends ModelHubServer {
+  id: string;
+  local: boolean;
+}
+
+// Printable ASCII with no spaces: anything else cannot be sent as a header and is not a Hub token.
+const TOKEN_RE = /^[\x21-\x7e]{8,256}$/;
+
+interface PullEntry {
+  view: ModelPull;
+  controller: AbortController;
+  /** The verified name Ollama pulls; a resume asks for the same one. */
+  ref: string | null;
+  /** Why the pull was stopped when its server was removed or set to no longer allow it. */
+  stopped?: ModelHubError;
+  /** The reviewed build a Curated pull is checked against once it lands, and whether its tag was there before. */
+  curated: { entry: HubEntry; build: HubBuild; hadTag: boolean | null } | null;
+  /** Set for a split build Desktop downloads itself and creates in Ollama. */
+  import?: SplitImportPlan;
+  /** Shown with a successful import that went ahead without something it could not read. */
+  importNotice?: string;
+}
+
+const NO_REGISTRY_PARAMS =
+  'The registry settings for this model (stop words, temperature and similar) could not be read, so it was ' +
+  'created without them.';
+
+/** `local-only`: a saved server, which has no way to take the uploaded parts. */
+type SplitSupport = 'import' | 'local-only' | 'none';
+
+const SPLIT_LOCAL_ONLY = 'Split into several files, which Desktop can add only to Ollama on this computer.';
+
+type ImportHub = ModelHubPort & Required<Pick<ModelHubPort, 'download'>>;
+const hubImports = (hub: ModelHubPort): hub is ImportHub => typeof hub.download === 'function';
+const runtimeImports = (runtime: ModelRuntimePort): runtime is ModelRuntimePort & ModelImportRuntime =>
+  !!runtime.hasBlob && !!runtime.uploadBlob && !!runtime.create;
+
+/** Per server: two servers can each hold the same tag. */
+const tagKey = (target: Target, ref: string) => `${target.id}\0${ref.toLowerCase()}`;
+
+/** A re-pulled tag changes its modified time or size, so it is read again. */
+const archKey = (target: Target, model: InstalledModel) =>
+  `${target.id}\0${model.name}\0${model.modifiedAt ?? ''}\0${model.sizeBytes}`;
+
+const SERVER_GONE = 'That model server is no longer saved. Pick another under Models.';
+
+interface HubSession {
+  hub: ModelHubPort;
+  token: boolean;
+}
+
+function hubError(kind: ModelHubErrorKind, message: string, retryAfterMs?: number | null): ModelHubError {
+  return retryAfterMs === undefined ? { kind, message } : { kind, message, retryAfterMs };
+}
+
+/**
+ * Maps local-models errors, which never carry the Hugging Face token, onto what the screen explains. `tokenSent`:
+ * the request carried the saved token, so a refusal is about that token.
+ */
+export function toModelHubError(error: unknown, tokenSent = false): ModelHubError {
+  if (error instanceof ServerCredentialsError) return hubError('credentials', error.message);
+  if (error instanceof ServerUnreachableError) return hubError('runtime-unavailable', error.message);
+  if (error instanceof ServerTransportError || error instanceof ServerRedirectError)
+    return hubError('failed', error.message);
+  if (error instanceof PullIdleTimeoutError)
+    return hubError(
+      'runtime-unavailable',
+      'Ollama stopped sending download progress, so the download was stopped. Download again to continue it.'
+    );
+  const fromHub = error instanceof LocalRuntimeError && error.runtimeId.startsWith('huggingface');
+  const fromRegistry = error instanceof LocalRuntimeError && error.runtimeId === 'ollama-registry';
+  if (error instanceof HubRateLimitError)
+    return hubError('rate-limited', 'Hugging Face is rate limiting this computer.', error.retryAfterMs);
+  if (error instanceof HubAccessError)
+    return tokenSent
+      ? hubError(
+          'token-rejected',
+          'Hugging Face refused your token for this repo: it is invalid or lacks access. Request access on the repo ' +
+            'page, or replace the token.'
+        )
+      : hubError('gated', 'Hugging Face refused access to this repo. Request access on its page first.');
+  if (error instanceof ModelNotFoundError)
+    return !fromHub
+      ? hubError('not-found', `Ollama has no model named ${error.model}.`)
+      : tokenSent
+        ? hubError(
+            'not-found',
+            `Hugging Face has no repo named ${error.model} that your token can read. The repo may not exist, or the ` +
+              'token is invalid or lacks access to it.'
+          )
+        : hubError('not-found', `Hugging Face has no public repo named ${error.model}.`);
+  if (error instanceof RuntimeConnectionError)
+    return fromHub
+      ? hubError('hub-unreachable', 'Could not reach Hugging Face. Check your connection and try again.')
+      : hubError('runtime-unavailable', fromRegistry ? 'Could not reach ollama.com.' : 'Could not reach Ollama.');
+  if (error instanceof RuntimeHttpError && fromHub && error.status >= 500)
+    return hubError('hub-unreachable', `Hugging Face answered with an error (HTTP ${error.status}). Try again later.`);
+  if (error instanceof Error) return hubError('failed', error.message);
+  return hubError('failed', String(error));
+}
+
+/**
+ * Maps Ollama's EOF pull errors. A bare `EOF` comes from its resume reading a chunk file a stopped pull left
+ * truncated; `Get "...": EOF` and `Head "...": EOF` are the registry connection closing.
+ */
+function pullEofError(error: unknown, ref: string): ModelHubError | null {
+  if (!(error instanceof LocalRuntimeError) || error.runtimeId.startsWith('huggingface')) return null;
+  if (error.message.endsWith(` could not pull ${ref}: EOF`))
+    return hubError(
+      'interrupted',
+      'An earlier download of this model was interrupted and Ollama cannot resume it; restarting Ollama does not ' +
+        "clear it. While nothing else is downloading, delete the files with -partial in their names from Ollama's " +
+        'blobs folder (usually ~/.ollama/models/blobs), then download again.'
+    );
+  if (/: EOF$/.test(error.message))
+    return hubError(
+      'hub-unreachable',
+      'Ollama lost its connection to Hugging Face. Check your connection, then download again.'
+    );
+  return null;
+}
+
+function diskFullError(error: unknown, target: Target): ModelHubError | null {
+  if (!(error instanceof Error) || !/no space left on device/i.test(error.message)) return null;
+  return hubError('failed', `${target.name} ran out of disk space for this download. Free some space, then retry.`);
+}
+
+function manageRefusal(target: Target): ModelHubError | null {
+  if (target.management === 'chat-only')
+    return hubError(
+      'not-allowed',
+      `${target.name} is set to Chat only, so Desktop does not download to it or remove its models. ` +
+        'Change that under Settings, Model servers.'
+    );
+  if (target.management === 'unsupported')
+    return hubError(
+      'not-allowed',
+      `${target.name} is not an Ollama server, so Desktop cannot download to it or remove its models.`
+    );
+  return null;
+}
+
+/** Ollama answers a gated or private pull its own key cannot sign with the registry's 401 or 403. */
+function pullAuthError(error: unknown, target: Target): ModelHubError | null {
+  if (!(error instanceof LocalRuntimeError) || error.runtimeId.startsWith('huggingface')) return null;
+  if (!/: pull model manifest: 40[13]\b/.test(error.message)) return null;
+  const key = target.local
+    ? "add Ollama's public key (usually ~/.ollama/id_ed25519.pub)"
+    : `add the public key of Ollama on ${target.name}, not this computer's,`;
+  return hubError(
+    'gated',
+    `Hugging Face refused Ollama's download. Ollama signs in with its own key, not your token: ${key} at ` +
+      'huggingface.co/settings/keys on the account that has access, then download again.'
+  );
+}
+
+function toCard(model: HubModelSummary): HubModelCard {
+  return {
+    id: model.id,
+    author: model.author,
+    downloads: model.downloads,
+    likes: model.likes,
+    updatedAt: model.updatedAt,
+    licenses: model.licenses,
+    gated: model.gated,
+    private: model.private,
+    abliterated: isAbliteratedModel(model),
+  };
+}
+
+function blockedReason(
+  detail: HubModelDetail,
+  build: HubGgufBuild,
+  tokenSent: boolean,
+  split: SplitSupport = 'none'
+): string | null {
+  if (build.split && split === 'import') {
+    const block = splitImportBlock(detail, build);
+    return block && blockMessage(block, tokenSent);
+  }
+  if (build.split && build.complete && split === 'local-only') return SPLIT_LOCAL_ONLY;
+  const block = pullBlock(detail, build);
+  return block && blockMessage(block, tokenSent);
+}
+
+function blockMessage(block: PullBlock, tokenSent: boolean): string {
+  switch (block) {
+    case 'split':
+      return 'Split into several files, which Ollama cannot pull from Hugging Face.';
+    case 'incomplete':
+      return 'Some of its files are missing from the repo.';
+    case 'no-quant-label':
+      return 'Its file name has no quant label Ollama can pull by.';
+    case 'unsupported-name':
+      return "Its repo or file name breaks Ollama's naming rules.";
+    case 'unsupported-quant':
+      return 'Ollama cannot pull this quant from Hugging Face yet.';
+    case 'no-checksum':
+      return 'Hugging Face lists no checksum for this file, so the download cannot be verified.';
+    case 'needs-access':
+      return tokenSent
+        ? 'Needs access: your Hugging Face token cannot read this file yet. Request access on the repo page.'
+        : 'Needs access: add a Hugging Face token from an account that has been granted access.';
+  }
+}
+
+function hubAccess(detail: HubModelDetail, tokenSent: boolean): HubAccess {
+  if (!tokenSent) return 'no-token';
+  if (detail.canDownload === null) return 'unknown';
+  return detail.canDownload ? 'granted' : 'denied';
+}
+
+/** An unparseable card link falls back to the repo page. */
+function licenseUrl(endpoint: string, detail: HubModelDetail): string {
+  const link = detail.licenseLink?.trim();
+  const candidate =
+    link && /^https:\/\//i.test(link)
+      ? link
+      : link && !/^[a-z][a-z0-9+.-]*:/i.test(link) && !link.startsWith('//')
+        ? `${endpoint}/${detail.id}/blob/main/${link.replace(/^\.?\//, '')}`
+        : null;
+  return candidate && URL.canParse(candidate) ? candidate : `${endpoint}/${detail.id}`;
+}
+
+function projectorBytes(detail: HubModelDetail): number | null {
+  return detail.projectors.length ? Math.max(...detail.projectors.map(entry => entry.sizeBytes)) : null;
+}
+
+function toView(
+  endpoint: string,
+  detail: HubModelDetail,
+  tokenSent: boolean,
+  fit: (build: HubGgufBuild) => ModelFit | null,
+  split: SplitSupport = 'none'
+): HubModelView {
+  const builds: HubBuildView[] = detail.builds.map(build => {
+    const imported = build.split && split === 'import' ? splitImportName(detail.id, build) : null;
+    const ref = imported ?? build.ollamaRef;
+    return {
+      id: build.id,
+      label: build.label,
+      sizeBytes: build.sizeBytes,
+      ollamaRef: imported ?? (build.ollamaRef && ollamaPullRef(build.ollamaRef, detail.ollamaNeedsSshKey)),
+      installedNames: ref ? ollamaRefAliases(ref) : [],
+      blockedReason: blockedReason(detail, build, tokenSent, split),
+      importParts: imported ? build.files.length : null,
+      importLargestBytes: imported ? Math.max(...build.files.map(file => file.sizeBytes)) : null,
+      fit: fit(build),
+    };
+  });
+  const url = licenseUrl(endpoint, detail);
+  return {
+    ...toCard(detail),
+    url: `${endpoint}/${detail.id}`,
+    revision: detail.revision,
+    licenseNames: detail.licenses.map(id => (id === 'other' && detail.licenseName) || id),
+    licenseUrl: url,
+    licenseHost: new URL(url).host,
+    licenseKind: licenseKind(detail.licenses),
+    baseModels: detail.baseModels,
+    builds,
+    projectorBytes: projectorBytes(detail),
+    needsAccess: detail.ollamaNeedsSshKey,
+    hubAccess: hubAccess(detail, tokenSent),
+  };
+}
+
+/** The pull dialog's view of a library build, which has no Hugging Face repo behind it. */
+function libraryView(
+  entry: HubEntry,
+  build: HubBuild,
+  fit: ModelFit | null
+): { model: HubModelView; build: HubBuildView } {
+  const library = libraryOf(build);
+  if (!library) throw new Error(`${entry.id}/${build.id} is not an Ollama library build`);
+  const view: HubBuildView = {
+    id: build.id,
+    label: build.quant.label,
+    sizeBytes: library.sizeBytes,
+    ollamaRef: library.ref,
+    installedNames: ollamaRefAliases(library.ref),
+    blockedReason: null,
+    importParts: null,
+    importLargestBytes: null,
+    fit,
+  };
+  return {
+    model: {
+      id: library.ref,
+      author: null,
+      downloads: null,
+      likes: null,
+      updatedAt: null,
+      licenses: [entry.license.id],
+      gated: false,
+      private: false,
+      abliterated: false,
+      url: `${OLLAMA_LIBRARY_URL}/${library.ref}`,
+      revision: library.digest,
+      licenseNames: [entry.license.id],
+      licenseUrl: entry.license.source,
+      licenseHost: new URL(entry.license.source).host,
+      licenseKind: permissive(entry) ? 'permissive' : 'restricted',
+      baseModels: [entry.lineage.base],
+      builds: [view],
+      // The library's size already includes the projector.
+      projectorBytes: null,
+      needsAccess: false,
+      hubAccess: 'no-token',
+    },
+    build: view,
+  };
+}
+
+function phaseOf(status: string): ModelPull['phase'] {
+  return status.startsWith('verifying') || status.startsWith('writing') || status === 'success'
+    ? 'finishing'
+    : 'downloading';
+}
+
+interface Sizing {
+  hardware: HardwareProfile;
+  setting: ModelContextSetting;
+  /** What chat sizes num_ctx from: this computer's hardware, or null on a saved server, which chat never measures. */
+  chatHardware: HardwareProfile | null;
+  rating: 'probe' | 'entered';
+  /** Whose memory `hardware` is, for the verdict's wording. */
+  where: FitWhere;
+  /** The OLLAMA_KV_CACHE_TYPE the server runs with, when Desktop knows it; absent is f16. */
+  kvCacheType?: QuantizedKvCacheType;
+  /** The OLLAMA_FLASH_ATTENTION the server runs with, when Desktop knows it; absent is auto. */
+  flashAttention?: FlashAttention;
+  /** Flagged on badges the GPU rates: a limit this server puts on GPU memory that the verdict does not count. */
+  fitWarning?: string;
+}
+
+/** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
+function chatContext(
+  { chatHardware, setting, kvCacheType, flashAttention }: Sizing,
+  arch: LocalModelFootprint['arch'],
+  weightsBytes: number,
+  bounds: { modelLimit?: number; configured?: number; projectorBytes?: number; draftMax?: number }
+): number {
+  const { projectorBytes, draftMax, ...limits } = bounds;
+  return chatContextTokens({
+    setting,
+    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware, draftMax, kvCacheType, flashAttention },
+    ...limits,
+  });
+}
+
+/** A reviewed build's fit from its layer shapes, pinned projector and num_ctx; its row and its pull dialog share it. */
+function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit {
+  const { weightsBytes, mmprojBytes } = ollamaBuildBytes(build);
+  const draftMax = ollamaBuildDraftMax(entry, build);
+  const context = chatContext(sizing, entry.arch, weightsBytes + mmprojBytes, {
+    configured: pinsOf(build)?.numCtx ?? undefined,
+    projectorBytes: mmprojBytes,
+    draftMax,
+  });
+  return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
+    mmprojBytes,
+    draftMax,
+    kvCacheType: sizing.kvCacheType,
+    flashAttention: sizing.flashAttention,
+    where: sizing.where,
+    warning: sizing.fitWarning,
+    expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
+    activeParamsFraction: activeParamsFraction(entry.params),
+  });
+}
+
+/**
+ * Installed models, Hugging Face search and pulls for the Ollama daemon Desktop chats with, and for each saved
+ * model server set to "Chat and manage". Every call names its server; omitted means this computer.
+ */
+export class ModelHubService {
+  readonly #deps: ModelHubServiceDeps;
+  readonly #pulls = new Map<string, PullEntry>();
+  readonly #progressIntervalMs: number;
+  readonly #checkBackoffMs: readonly number[];
+  /** Curated pulls Ollama could not describe, by tagKey, with whether the tag was there before. */
+  readonly #unverified = new Map<string, boolean | null>();
+  /** In-flight Check again runs by tagKey; one build can show in two rows, and two checks race to remove. */
+  readonly #checks = new Map<string, Promise<CuratedCheckResult>>();
+  /** The hf.co ref each curated Hugging Face build was last pulled under, by entry and build id. */
+  readonly #pulledRefs = new Map<string, string>();
+  /** Installed models' layer shapes by archKey. */
+  readonly #archs = new Map<
+    string,
+    Promise<{
+      arch: ModelArch | null;
+      parameters: string | null;
+      contextLength: number | null;
+      projectorBytes: number;
+      expertBytesPerLayer: number | undefined;
+      draftLayer: boolean;
+    } | null>
+  >();
+  /** Model folders read from a runtime, by server id; a guessed default is never kept. */
+  readonly #stores = new Map<string, string>();
+  readonly #pullWaiters = new Set<() => void>();
+  #hardware: Promise<HardwareProfile> | null = null;
+  #gpuCap: GpuMemoryCap | null = null;
+  /** A load that looks capped, held while nvidia-smi or the model folder is checked. */
+  #capCandidate: GpuMemoryCap | null = null;
+  #gpuCapReads: Promise<void> = Promise.resolve();
+  /** nvidia-smi's answer for the session, null included; undefined until it settles. */
+  #integrated: boolean | null | undefined = undefined;
+  #integratedAsked = false;
+  /** The server `#gpuCap` was seen on; the limit is not shown once another one answers. */
+  #gpuCapServer: ServerIdentity | null = null;
+  #buildUnreadLogged = false;
+  #publishedFitWarning: string | null = null;
+  #warnedChecks = new Set<string>();
+  #lastPush = 0;
+  #pushTimer: ReturnType<typeof setTimeout> | null = null;
+  #awake = false;
+  #disposed = false;
+  #session: Promise<HubSession> | null = null;
+  #tokenMutation: Promise<unknown> = Promise.resolve();
+
+  constructor(deps: ModelHubServiceDeps) {
+    this.#deps = deps;
+    this.#progressIntervalMs = deps.progressIntervalMs ?? DEFAULT_PROGRESS_INTERVAL_MS;
+    this.#checkBackoffMs = deps.checkBackoffMs ?? DEFAULT_CHECK_BACKOFF_MS;
+  }
+
+  #machine(): Promise<HardwareProfile> {
+    this.#hardware ??= this.#deps.hardware();
+    return this.#hardware;
+  }
+
+  /** This computer, with any hardware entered for it in Settings in place of the probe. */
+  async #localSizing(): Promise<Sizing> {
+    const [probed, setting] = await Promise.all([this.#machine(), this.#deps.localContext()]);
+    const specs = this.#deps.specs?.(LOCAL_SERVER_ID) ?? null;
+    const hardware = withEnteredSpecs(probed, specs);
+    return {
+      hardware,
+      setting,
+      chatHardware: hardware,
+      rating: specsRate(specs) ? 'entered' : 'probe',
+      where: 'local',
+      kvCacheType: this.#deps.kvCacheType?.(LOCAL_SERVER_ID),
+      flashAttention: this.#deps.flashAttention?.(LOCAL_SERVER_ID),
+    };
+  }
+
+  /** Applies `/api/ps` reads of this computer's Ollama to the WSL GPU memory warning one at a time, in call order. */
+  #watchGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
+    if (!target.local || !this.#deps.wslHost) return Promise.resolve();
+    return this.#queueGpuCap(() => this.#checkGpuCap(target, loaded));
+  }
+
+  #queueGpuCap(step: () => Promise<void>): Promise<void> {
+    this.#gpuCapReads = this.#gpuCapReads.then(step).catch(error => {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.#deps.warn(`MODELS: could not check for a WSL GPU memory limit: ${reason}`);
+    });
+    return this.#gpuCapReads;
+  }
+
+  async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
+    if (this.#gpuCap && this.#gpuCapServer) {
+      const seen = this.#gpuCapServer;
+      const now = await this.#serverIdentity(target);
+      if (otherServer(seen, now)) this.#gpuCap = null;
+      // A part unread when the limit was confirmed is learned from the first read that has it.
+      else this.#gpuCapServer = { version: seen.version ?? now.version, server: seen.server ?? now.server };
+    }
+    const { hardware } = await this.#localSizing();
+    const budgets = memoryBudgets(hardware);
+    const found = budgets.cpuOnly ? null : partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
+    if (!found) {
+      if (this.#gpuCap && clearsCap(loaded, this.#gpuCap)) this.#gpuCap = null;
+      if (this.#capCandidate && clearsCap(loaded, this.#capCandidate)) this.#capCandidate = null;
+      return;
+    }
+    if (this.#gpuCap) {
+      this.#gpuCap = found;
+      return;
+    }
+    this.#capCandidate = found;
+    await this.#confirmGpuCap(target);
+  }
+
+  /**
+   * nvidia-smi's answer for the session, asked once in the background; undefined until it settles. Its answer is
+   * applied to the latest held-back load, and open lists are rated again if their badges now carry the WSL flag.
+   */
+  #integratedGpu(target: Target): boolean | null | undefined {
+    if (this.#integrated === undefined && !this.#integratedAsked) {
+      this.#integratedAsked = true;
+      void Promise.resolve()
+        .then(() => this.#deps.integratedGpu?.())
+        .catch(() => null)
+        .then(answer => {
+          this.#integrated = answer ?? null;
+          return this.#queueGpuCap(async () => {
+            if (await this.#confirmGpuCap(target)) return;
+            if (this.#integrated === true) this.#publishFitWarning(target, await this.#wslFitWarning(target));
+          });
+        });
+    }
+    return this.#integrated;
+  }
+
+  /** True when it confirmed the held-back load as the WSL limit, which rates open lists again. */
+  async #confirmGpuCap(target: Target): Promise<boolean> {
+    if (!this.#capCandidate) return false;
+    const integrated = this.#integratedGpu(target);
+    if (integrated === undefined) return false;
+    const confirmed = integrated === true && (await this.#ollamaInLinux(target));
+    if (confirmed) {
+      const server = await this.#serverIdentity(target);
+      this.#gpuCap = this.#capCandidate;
+      this.#gpuCapServer = server;
+      this.#ratingsChanged(target.id);
+    }
+    this.#capCandidate = null;
+    return confirmed;
+  }
+
+  /**
+   * Ollama runs under Linux (in WSL, on a WSL host): the probe found its `ollama serve` in this Linux, or, without a
+   * probe answer, Ollama reported a Linux model folder.
+   */
+  async #ollamaInLinux(target: Target, build?: OllamaBuild | null): Promise<boolean> {
+    if ((build === undefined ? await this.#build(target) : build) !== null) return true;
+    const store = await this.storeLocation(target.id);
+    return store.source !== 'default' && isLinuxStoreDir(store.path);
+  }
+
+  /**
+   * The flag this computer's badges carry while its Ollama runs in WSL on an integrated GPU and holds it to the VM's
+   * memory: a release known to, whose running binary lacks the fix, or one seen holding a load back. Null until
+   * nvidia-smi answers, which is not awaited.
+   */
+  async #wslFitWarning(target: Target): Promise<string | null> {
+    if (!target.local || !this.#deps.wslHost) return null;
+    // Without the probe only a load seen held back flags, so nvidia-smi and the folder lookup wait for one.
+    if (!this.#deps.ollamaWslPatch && !this.#gpuCap) return null;
+    try {
+      const health = await target.runtime.health();
+      const version = health.ok ? health.version : null;
+      const release = releaseCapsWslGpu(version) ? version : null;
+      if (!release && !this.#gpuCap) return null;
+      if (this.#integratedGpu(target) !== true) return null;
+      const build = await this.#build(target);
+      if (!(await this.#ollamaInLinux(target, build))) return null;
+      if (release && build?.patched === false) return wslGpuCapWarning(release);
+      const capped =
+        this.#gpuCap !== null &&
+        this.#gpuCapServer !== null &&
+        !otherServer(this.#gpuCapServer, { version, server: build?.server ?? null });
+      return capped ? wslGpuCapWarning(null) : null;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const message = `MODELS: could not check whether Ollama in WSL limits GPU memory, so badges are not flagged: ${reason}`;
+      if (!this.#warnedChecks.has(message)) {
+        this.#warnedChecks.add(message);
+        this.#deps.warn(message);
+      }
+      return null;
+    }
+  }
+
+  /** The running Ollama as the probe reads it; null without a probe or when it fails. One unread build is logged. */
+  async #build(target: Target): Promise<OllamaBuild | null> {
+    const probe = this.#deps.ollamaWslPatch;
+    if (!probe) return null;
+    let build: OllamaBuild | null = null;
+    let reason = '';
+    try {
+      build = await probe(target.runtime.baseUrl);
+    } catch (error) {
+      reason = `: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if ((build?.patched ?? null) === null && !this.#buildUnreadLogged) {
+      this.#buildUnreadLogged = true;
+      this.#deps.warn(
+        `MODELS: could not read whether this computer's Ollama carries the WSL GPU memory fix, so badges are not flagged before a load${reason}`
+      );
+    }
+    return build;
+  }
+
+  /** Which Ollama answers for this computer: its version and, where the probe reads it, its process and binary. */
+  async #serverIdentity(target: Target): Promise<ServerIdentity> {
+    const [health, build] = await Promise.all([target.runtime.health().catch(() => null), this.#build(target)]);
+    return { version: health?.ok ? health.version : null, server: build?.server ?? null };
+  }
+
+  /** Keep all visible ratings current when a later probe adds or clears the advisory. */
+  #publishFitWarning(target: Target, warning: string | null): void {
+    if (warning === this.#publishedFitWarning) return;
+    this.#publishedFitWarning = warning;
+    this.#ratingsChanged(target.id);
+  }
+
+  #ratingsChanged(serverId: string): void {
+    if (this.#disposed) return;
+    (this.#deps.onRatingsChanged ?? this.#deps.onInstalledChanged)(serverId);
+  }
+
+  /** Null for a saved server without entered hardware: its models are not rated. */
+  async #sizing(target: Target): Promise<Sizing | null> {
+    if (target.local) {
+      const [sizing, fitWarning] = await Promise.all([this.#localSizing(), this.#wslFitWarning(target)]);
+      this.#publishFitWarning(target, fitWarning);
+      return fitWarning ? { ...sizing, fitWarning } : sizing;
+    }
+    const specs = this.#deps.specs?.(target.id) ?? null;
+    const hardware = serverHardware(specs);
+    // Chat sends a saved server the Auto floor whatever the Settings choice, having no measure of it.
+    return hardware
+      ? {
+          hardware,
+          setting: AUTO_LOCAL_CONTEXT,
+          chatHardware: null,
+          rating: 'entered',
+          where: 'server',
+          kvCacheType: this.#deps.kvCacheType?.(target.id),
+          flashAttention: this.#deps.flashAttention?.(target.id),
+        }
+      : null;
+  }
+
+  /** The load settings chat keeps for this installed model; none when they cannot be read. */
+  async #modelSettings(target: Target, name: string): Promise<ModelLoadSettings> {
+    const runtimeId = target.local ? OLLAMA_RUNTIME_ID : serverRuntimeId(target.id);
+    return (await this.#deps.modelSettings?.(localModelId(runtimeId, name)).catch(() => ({}))) ?? {};
+  }
+
+  async #installedFit(
+    target: Target,
+    model: InstalledModel,
+    sizing: Sizing,
+    keep: Set<string>
+  ): Promise<ModelFit | null> {
+    const { hardware } = sizing;
+    if (!model.sizeBytes) return null;
+    const key = archKey(target, model);
+    keep.add(key);
+    let shown = this.#archs.get(key);
+    if (!shown) {
+      // The installed list was just read, so skip inspect's own re-read of it.
+      shown = target.runtime
+        .inspect(model.name, { tags: false })
+        .then(async inspection => ({
+          arch: inspection.arch,
+          parameters: inspection.parameters ?? null,
+          contextLength: inspection.contextLength ?? null,
+          // Chat reads this computer's blobs the same way (main/chat/localContextSizing.ts).
+          projectorBytes: await installedProjectorBytes(inspection.contents, {
+            pinned: this.pinnedProjectors(),
+            onThisComputer: target.local,
+          }),
+          expertBytesPerLayer: inspection.tensorStats?.expertBytesPerLayer,
+          draftLayer: (inspection.contents?.draftBlobs?.length ?? 0) > 0,
+        }))
+        .catch(() => {
+          // A busy daemon can time out once; read it again next time instead of rating by size for the session.
+          this.#archs.delete(key);
+          return null;
+        });
+      this.#archs.set(key, shown);
+    }
+    const [inspection, load] = await Promise.all([shown, this.#modelSettings(target, model.name)]);
+    const arch = inspection?.arch ?? null;
+    const limit = arch?.contextMax ?? inspection?.contextLength ?? undefined;
+    // Ollama's tag size already includes any projector, as it does for chat's own sizing.
+    const projector = inspection && inspection.projectorBytes < model.sizeBytes ? inspection.projectorBytes : 0;
+    // As OllamaLocal sizes it: the draft count the model runs at, under its own context setting if it has one.
+    const draftMax = draftTokensOf(load, {
+      mtpLayers: arch?.mtpLayers ?? 0,
+      draftLayer: inspection?.draftLayer ?? false,
+      parameters: inspection?.parameters,
+    });
+    const context = chatContext({ ...sizing, setting: load.context ?? sizing.setting }, arch, model.sizeBytes, {
+      modelLimit: inspection?.contextLength ?? undefined,
+      configured: configuredNumCtx(inspection?.parameters),
+      projectorBytes: projector,
+      draftMax,
+    });
+    const { where, fitWarning: warning } = sizing;
+    return arch
+      ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, {
+          mmprojBytes: projector,
+          expertBytesPerLayer: inspection?.expertBytesPerLayer,
+          draftMax,
+          kvCacheType: sizing.kvCacheType,
+          flashAttention: sizing.flashAttention,
+          where,
+          warning,
+        })
+      : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where, warning });
+  }
+
+  /** A reviewed curated file is rated as its Curated row is; any other file falls back to its size. */
+  #buildFit(
+    detail: HubModelDetail,
+    sizing: Sizing | null,
+    manifest: HubManifest
+  ): (build: HubGgufBuild) => ModelFit | null {
+    const projector = projectorBytes(detail) ?? 0;
+    return build => {
+      if (!sizing || build.sizeBytes <= 0) return null;
+      const file = build.files.length === 1 ? build.files[0] : null;
+      for (const entry of manifest.entries)
+        for (const reviewed of entry.builds) {
+          const weights = reviewed.weights[0];
+          if (
+            reviewed.hf &&
+            sameRepo(reviewed.hf.repo, detail.id) &&
+            weights?.path.toLowerCase() === file?.path.toLowerCase() &&
+            weights.sha256 === file?.sha256 &&
+            weights.sizeBytes === file?.sizeBytes
+          )
+            return reviewedFit(entry, reviewed, sizing);
+        }
+      const limit = detail.gguf?.contextLength ?? undefined;
+      const context = chatContext(sizing, null, build.sizeBytes + projector, { modelLimit: limit });
+      return fitFromSize(build.sizeBytes + projector, sizing.hardware, context, {
+        limitKnown: limit !== undefined,
+        where: sizing.where,
+        warning: sizing.fitWarning,
+      });
+    };
+  }
+
+  #reviewed(manifest: HubManifest, entryId: string, buildId: string): { entry: HubEntry; build: HubBuild } | null {
+    const entry = manifest.entries.find(candidate => candidate.id === entryId && listable(candidate, manifest));
+    const build = entry?.builds.find(candidate => candidate.id === buildId && pullable(candidate));
+    return entry && build ? { entry, build } : null;
+  }
+
+  /** Refuses unless the registry serves the reviewed weights and pinned layers; `tag` is the hf.co tag. */
+  async #checkLayers(reviewed: HubBuild, tag: string | null, signal?: AbortSignal): Promise<ModelHubError | null> {
+    const checked = await checkReviewedLayers(reviewed, tag, this.#layerSources(), signal);
+    return checked.ok ? null : layersError(checked, reviewed);
+  }
+
+  #layerSources(): LayerSources {
+    return {
+      libraryLayers: (ref, options) => this.#deps.libraryLayers(ref, options),
+      hfLayers: async (repo, tag, options) => (await this.#hub()).hub.ollamaLayers(repo, tag, options),
+    };
+  }
+
+  /** Refuses unless the repo's card and its base model's card declare the reviewed licenses, no more, no fewer. */
+  async #checkLicenses(entry: HubEntry, detail: HubModelDetail, signal?: AbortSignal): Promise<ModelHubError | null> {
+    const matches = await curatedLicensesMatch(entry, detail, async () => (await this.#hub()).hub, signal);
+    return matches ? null : hubError('upstream-changed', LICENSE_CHANGED);
+  }
+
+  /**
+   * After a curated pull: removes the model only when Ollama definitely installed something other than the reviewed
+   * build, since the registry can change between the check and Ollama's own read, and never a tag it already had.
+   */
+  async #checkInstalled(
+    target: Target,
+    reviewed: HubBuild,
+    ref: string,
+    hadTag: boolean | null,
+    signal: AbortSignal
+  ): Promise<ModelHubError | null> {
+    const key = tagKey(target, ref);
+    const found = await this.#inspectPulled(target, ref, signal);
+    // A 404 clears the warning only when the list agrees the model is gone; otherwise it stays unverified.
+    if (found === 'missing' && (await this.#hasTag(target, ref)) === false) {
+      this.#unverified.delete(key);
+      return null;
+    }
+    const inspection = found === 'missing' ? null : found;
+    if (!inspection) {
+      this.#unverified.set(key, hadTag);
+      const why = signal.aborted
+        ? `Download cancelled while Bike4Mind was checking ${ref}, so it was not compared with the reviewed build.`
+        : `Ollama could not describe ${ref} after downloading it, so Bike4Mind could not check it against the ` +
+          'reviewed build.';
+      return hubError('unverified', `${why} It is still installed; remove it from Installed unless you trust it.`);
+    }
+    this.#unverified.delete(key);
+    const checked = await checkInstalledDigest(inspection, reviewed, {
+      hadTag,
+      remove: () => target.runtime.remove(ref),
+    });
+    if (checked.ok) return null;
+    const changed = (outcome: string) =>
+      hubError('upstream-changed', `${LAYERS_CHANGED} ${outcome}${libraryOf(reviewed) ? '' : EXPLORE_HINT}`);
+    if (checked.outcome === 'left-in-place')
+      return changed(
+        checked.hadTag
+          ? `${ref} was installed before this download, so Bike4Mind left it in place.`
+          : `Bike4Mind could not tell whether ${ref} was installed before this download, so it left it in place.`
+      );
+    if (checked.outcome === 'remove-failed')
+      return changed(
+        `Bike4Mind could not remove it, so the unreviewed model ${ref} is still installed. Remove it from Installed.`
+      );
+    return changed('Bike4Mind removed what Ollama downloaded.');
+  }
+
+  /**
+   * Reads a just-pulled model, retrying a failed or slow read; null once the reads run out or `signal` aborts, and
+   * 'missing' at once when Ollama no longer has it (removed in Installed while the check was pending).
+   */
+  async #inspectPulled(target: Target, ref: string, signal: AbortSignal): Promise<ModelInspection | 'missing' | null> {
+    const pauses = this.#checkBackoffMs;
+    for (let attempt = 0; ; attempt++) {
+      const started = Date.now();
+      try {
+        return await target.runtime.inspect(ref, { tags: false, signal, timeoutMs: CHECK_TIMEOUT_MS });
+      } catch (error) {
+        if (error instanceof ModelNotFoundError) return 'missing';
+        const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        this.#deps.warn(
+          `MODELS: could not describe ${ref}${target.local ? '' : ` on ${target.id}`} after its download ` +
+            `(read ${attempt + 1} of ${pauses.length + 1}, ` +
+            `${Date.now() - started}ms): ${reason}`
+        );
+      }
+      if (attempt >= pauses.length || !(await pause(pauses[attempt], signal))) return null;
+    }
+  }
+
+  /** Re-runs the post-download check on an installed curated build that Ollama could not describe. */
+  async checkCurated(entryId: string, buildId: string, serverId?: string): Promise<CuratedCheckResult> {
+    const target = this.#target(serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
+    // The check can remove what it finds, so it needs the same access a removal does.
+    const refusal = manageRefusal(target);
+    if (refusal) return { ok: false, error: refusal };
+    const picked = this.#reviewed(this.#deps.curated(), entryId, buildId);
+    if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
+    const { build } = picked;
+    const ref = libraryOf(build)?.ref ?? this.#hfRef(entryId, build);
+    const key = tagKey(target, ref);
+    const running = this.#checks.get(key);
+    if (running) return running;
+    const check = this.#recheck(target, build, ref).finally(() => this.#checks.delete(key));
+    this.#checks.set(key, check);
+    return check;
+  }
+
+  async #recheck(target: Target, build: HubBuild, ref: string): Promise<CuratedCheckResult> {
+    const hadTag = this.#unverified.get(tagKey(target, ref)) ?? null;
+    const error = await this.#checkInstalled(target, build, ref, hadTag, new AbortController().signal);
+    for (const [key, entry] of this.#pulls) {
+      if (entry.view.phase !== 'failed' || entry.view.serverId !== target.id) continue;
+      if (entry.view.ref?.toLowerCase() !== ref.toLowerCase()) continue;
+      if (error) this.#fail(key, entry, error);
+      else this.#drop(key, entry);
+    }
+    this.#deps.onInstalledChanged(target.id);
+    return error ? { ok: false, error } : { ok: true };
+  }
+
+  /** Whether `ref` was installed before this pull; after an unverified pull the list shows the tag Bike4Mind added. */
+  async #hadTagBefore(target: Target, ref: string): Promise<boolean | null> {
+    const key = tagKey(target, ref);
+    return this.#unverified.has(key) ? (this.#unverified.get(key) ?? null) : this.#hasTag(target, ref);
+  }
+
+  /** Whether the target's Ollama lists `ref`; null when the list cannot be read. */
+  async #hasTag(target: Target, ref: string): Promise<boolean | null> {
+    const models = await target.runtime.list().catch(() => null);
+    return models && models.some(model => model.name.toLowerCase() === ref.toLowerCase());
+  }
+
+  /** verifyOllamaRef's tag when this build was pulled this session, else the tag its quant label implies. */
+  #hfRef(entryId: string, build: HubBuild): string {
+    return this.#pulledRefs.get(`${entryId}\0${build.id}`) ?? `hf.co/${build.hf?.repo ?? ''}:${build.quant.label}`;
+  }
+
+  #curatedBuild(entry: HubEntry, build: HubBuild, sizing: Sizing, version: string | null): CuratedBuildView {
+    const { repo, pullBuildId, sizeBytes, ollamaRef } = curatedSource(build);
+    return {
+      id: build.id,
+      repo,
+      pullBuildId,
+      quant: build.quant.label,
+      sizeBytes,
+      ollamaRef: libraryOf(build) ? ollamaRef : this.#hfRef(entry.id, build),
+      fit: reviewedFit(entry, build, sizing),
+      blockedReason: ollamaBlocked(build, version),
+    };
+  }
+
+  /** Recommended goes to the first pick, best first, that fits and can be downloaded here. */
+  #picks(manifest: HubManifest, entries: readonly CuratedEntryView[], hardware: HardwareProfile): CuratedPickView[] {
+    const shown = curatedPicks(manifest, hardware).picks.flatMap(({ pick }) => {
+      const build = entries.find(entry => entry.id === pick.entry)?.builds.find(view => view.id === pick.build);
+      return build ? [{ pick, build }] : [];
+    });
+    const recommended = shown.findIndex(({ build }) => build.fit.level !== 'too-large' && !build.blockedReason);
+    return shown.map(({ pick }, index) => ({
+      slot: pick.slot,
+      entryId: pick.entry,
+      buildId: pick.build,
+      recommended: index === recommended,
+    }));
+  }
+
+  /** Projector sizes the curated list pins, by blob digest; chat sizes installed models from the same map. */
+  pinnedProjectors(): ReadonlyMap<string, number> {
+    return pinnedProjectorSizes(this.#deps.curated());
+  }
+
+  /** The curated family sampling for a local model on any local server; chat sends it as a seed. */
+  catalogSampling(
+    name: string,
+    modelBlob?: string,
+    parameters?: string,
+    hasAdapter?: boolean
+  ): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), name, modelBlob, parameters, hasAdapter);
+  }
+
+  /**
+   * The list's source status is the caller's to add; this service only sees the manifest. Fit and picks rate the
+   * server's entered hardware, or this computer when it has none; `serverId` also sets which Ollama version decides
+   * what can be downloaded.
+   */
+  async curated(serverId?: string): Promise<Omit<CuratedList, 'source'>> {
+    const manifest = this.#deps.curated();
+    const target = this.#target(serverId);
+    const [rated, health, { hub }] = await Promise.all([
+      target ? this.#sizing(target) : null,
+      target
+        ? target.runtime.health()
+        : Promise.resolve<RuntimeHealth>({ ok: false, version: null, error: SERVER_GONE }),
+      this.#hub(),
+    ]);
+    const sizing = rated ?? (await this.#localSizing());
+    const { hardware } = sizing;
+    const version = health.ok ? health.version : null;
+    const entries = curatedListing(manifest).map(({ entry, builds }): CuratedEntryView => {
+      const library = entry.builds.map(libraryOf).find(source => source !== null);
+      const repo = entry.builds.find(build => build.hf)?.hf?.repo;
+      return {
+        id: entry.id,
+        name: entry.name,
+        why: entry.why,
+        params: paramsLabel(entry),
+        // Desktop reads the v2 list, which has no labels, so this maps the id; v3 labels are not used here.
+        licenseName: hubLicenseLabel(entry.license),
+        licenseUrl: entry.license.source,
+        licenseKind: permissive(entry) ? 'permissive' : 'restricted',
+        thinking: entry.capabilities.thinking,
+        vision: entry.capabilities.vision,
+        code: entry.roles.includes('code'),
+        tools: entry.capabilities.tools,
+        toolUse: { rating: entry.toolUse.rating, note: entry.toolUse.note ?? null },
+        sourceUrl: library
+          ? `${OLLAMA_LIBRARY_URL}/${library.ref.slice(0, library.ref.indexOf(':'))}`
+          : `${hub.endpoint}/${repo ?? ''}`,
+        sourceName: library ? 'Ollama' : 'Hugging Face',
+        builds: builds.map(build => this.#curatedBuild(entry, build, sizing, version)),
+      };
+    });
+    return {
+      updatedAt: manifest.updatedAt,
+      rating: rated?.rating ?? null,
+      machine: machineView(hardware),
+      picks: this.#picks(manifest, entries, hardware),
+      entries,
+    };
+  }
+
+  /**
+   * The pull dialog's view of a curated build, only while its source would still serve what was reviewed; `pull`
+   * checks again when the request carries the curated identity.
+   */
+  async curatedPull(entryId: string, buildId: string, serverId?: string): Promise<CuratedPullResult> {
+    const target = this.#target(serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
+    const refusal = manageRefusal(target);
+    if (refusal) return { ok: false, error: refusal };
+    const manifest = this.#deps.curated();
+    const picked = this.#reviewed(manifest, entryId, buildId);
+    if (!picked) return { ok: false, error: hubError('not-found', 'That model is not on the list.') };
+    const { entry, build: reviewed } = picked;
+    let token = false;
+    try {
+      const [sizing, health, session] = await Promise.all([this.#sizing(target), target.runtime.health(), this.#hub()]);
+      token = session.token;
+      const { hub } = session;
+      const runtime = runtimeRefusal(health, reviewed, target);
+      if (runtime) return { ok: false, error: runtime.error };
+      if (libraryOf(reviewed)) {
+        const layers = await this.#checkLayers(reviewed, null);
+        if (layers) return { ok: false, error: layers };
+        return { ok: true, ...libraryView(entry, reviewed, sizing && reviewedFit(entry, reviewed, sizing)) };
+      }
+      const repo = reviewed.hf?.repo ?? '';
+      const detail = await hub.getModel(repo);
+      if (isAbliteratedModel(detail)) return { ok: false, error: hubError('upstream-changed', NOW_ABLITERATED) };
+      const file = reviewed.weights[0];
+      const live = detail.builds.find(candidate => candidate.id === hubBuildId(file.path));
+      const liveFile = live?.files.length === 1 ? live.files[0] : undefined;
+      if (!live || !liveFile || liveFile.sha256 !== file.sha256 || liveFile.sizeBytes !== file.sizeBytes)
+        return {
+          ok: false,
+          error: hubError(
+            'upstream-changed',
+            `This file changed on Hugging Face since Bike4Mind reviewed it, so Curated does not offer it.${EXPLORE_HINT}`
+          ),
+        };
+      const blocked = blockedReason(detail, live, token);
+      if (blocked) return { ok: false, error: hubError('cannot-pull', blocked) };
+      const licenses = await this.#checkLicenses(entry, detail);
+      if (licenses) return { ok: false, error: licenses };
+      const ref = await hub.verifyOllamaRef(detail, live);
+      if (!ref)
+        return {
+          ok: false,
+          error: hubError('unverified', 'Hugging Face could not confirm Ollama would get this exact file.'),
+        };
+      const refusal = await this.#checkLayers(reviewed, ref.slice(ref.lastIndexOf(':') + 1));
+      if (refusal) return { ok: false, error: refusal };
+      const model = toView(hub.endpoint, detail, token, this.#buildFit(detail, sizing, manifest));
+      const build = model.builds.find(candidate => candidate.id === live.id);
+      if (!build) return { ok: false, error: hubError('not-found', 'That build is no longer in this repo.') };
+      const kind = permissive(entry) && model.licenseKind === 'permissive' ? 'permissive' : 'restricted';
+      const projector = pinsOf(reviewed)?.projectorBytes ?? null;
+      return { ok: true, model: { ...model, licenseKind: kind, projectorBytes: projector }, build };
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error, token) };
+    }
+  }
+
+  #target(serverId: string | undefined): Target | null {
+    if (serverId === undefined || serverId === LOCAL_SERVER_ID)
+      return {
+        id: LOCAL_SERVER_ID,
+        name: LOCAL_SERVER_NAME,
+        local: true,
+        management: 'allowed',
+        runtime: this.#deps.runtime,
+      };
+    const server = this.#deps.server?.(serverId);
+    return server ? { ...server, id: serverId, local: false } : null;
+  }
+
+  #splitSupport(target: Target | null, hub: ModelHubPort): SplitSupport {
+    if (!target) return 'none';
+    if (!target.local) return 'local-only';
+    return this.#deps.importDir && runtimeImports(target.runtime) && hubImports(hub) ? 'import' : 'none';
+  }
+
+  #hub(): Promise<HubSession> {
+    if (!this.#session) {
+      const session = this.#deps.tokens
+        .get()
+        .then(token => ({ hub: this.#deps.createHub(token), token: token !== null }));
+      this.#session = session;
+      void session.catch(() => {
+        if (this.#session === session) this.#session = null;
+      });
+    }
+    return this.#session;
+  }
+
+  #mutateToken(operation: () => Promise<HfTokenResult>): Promise<HfTokenResult> {
+    const result = this.#tokenMutation.then(operation);
+    this.#tokenMutation = result.catch(() => undefined);
+    return result;
+  }
+
+  async tokenStatus(): Promise<HfTokenStatus> {
+    return { set: (await this.#hub()).token, persisted: this.#deps.tokens.persisted() };
+  }
+
+  /** Keeps `raw` only once Hugging Face has accepted it; searches and reads after that send it. */
+  setToken(raw: string): Promise<HfTokenResult> {
+    return this.#mutateToken(() => this.#setToken(raw));
+  }
+
+  async #setToken(raw: string): Promise<HfTokenResult> {
+    const token = raw.trim();
+    const malformed = hubError(
+      'token-rejected',
+      'That is not a Hugging Face token. Copy it again from huggingface.co/settings/tokens.'
+    );
+    if (!TOKEN_RE.test(token)) return { ok: false, error: malformed };
+    let hub: ModelHubPort;
+    try {
+      hub = this.#deps.createHub(token);
+    } catch {
+      return { ok: false, error: malformed };
+    }
+    try {
+      if (!(await hub.checkToken()))
+        return {
+          ok: false,
+          error: hubError(
+            'token-rejected',
+            'Hugging Face did not accept this token. Check that you copied all of it and that it has not been revoked.'
+          ),
+        };
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error) };
+    }
+    try {
+      await this.#deps.tokens.set(token);
+    } catch {
+      return { ok: false, error: hubError('failed', 'Could not save the token. Try again.') };
+    }
+    this.#session = Promise.resolve({ hub, token: true });
+    return { ok: true, status: await this.tokenStatus() };
+  }
+
+  /** The session only forgets the token once the stored one is gone, so a failed removal still shows it as set. */
+  clearToken(): Promise<HfTokenResult> {
+    return this.#mutateToken(() => this.#clearToken());
+  }
+
+  async #clearToken(): Promise<HfTokenResult> {
+    try {
+      await this.#deps.tokens.clear();
+    } catch {
+      return { ok: false, error: hubError('failed', 'Could not remove the token. Try again.') };
+    }
+    this.#session = Promise.resolve({ hub: this.#deps.createHub(null), token: false });
+    return { ok: true, status: await this.tokenStatus() };
+  }
+
+  async status(serverId?: string): Promise<ModelRuntimeStatus> {
+    const target = this.#target(serverId);
+    if (!target)
+      return {
+        reachable: false,
+        version: null,
+        url: '',
+        error: SERVER_GONE,
+        serverId: serverId ?? LOCAL_SERVER_ID,
+        serverName: 'Model server',
+        management: 'unsupported',
+      };
+    const health = await target.runtime.health();
+    // A runtime that went away may come back with another model folder, so it is read again then.
+    if (!health.ok) this.#stores.delete(target.id);
+    return {
+      reachable: health.ok,
+      version: health.version,
+      url: target.runtime.baseUrl,
+      error: health.error,
+      serverId: target.id,
+      serverName: target.name,
+      management: target.management,
+    };
+  }
+
+  /**
+   * Where a pull to `serverId` lands. Ollama has no API for its model folder, so it is read from an installed
+   * model's blob path; with none installed, this computer falls back to Ollama's default folder, marked a guess.
+   */
+  async storeLocation(serverId?: string): Promise<ModelStoreLocation> {
+    const target = this.#target(serverId);
+    if (!target) return { path: null, source: null, freeBytes: null };
+    const exists = (path: string) => this.#deps.pathExists?.(path).catch(() => false) ?? Promise.resolve(true);
+    const cached = this.#stores.get(target.id) ?? null;
+    // A remembered folder that is gone from this disk was moved, so the runtime is asked again.
+    const stale = cached !== null && target.local && !(await exists(cached));
+    let reported = stale ? null : cached;
+    if (!reported) {
+      const models = await target.runtime.list().catch(() => []);
+      for (const model of models.slice(0, STORE_PROBES)) {
+        const inspection = await target.runtime.inspect(model.name, { tags: false }).catch(() => null);
+        reported = inspection?.contents?.storeDir ?? null;
+        if (reported) break;
+      }
+      if (reported) this.#stores.set(target.id, reported);
+      else this.#stores.delete(target.id);
+    }
+    if (!target.local) return { path: reported, source: reported ? 'runtime' : null, freeBytes: null };
+    const free = (path: string) => this.#deps.freeSpace?.(path).catch(() => null) ?? Promise.resolve(null);
+    if (reported) {
+      const here = reported === cached && !stale ? true : await exists(reported);
+      return here
+        ? { path: reported, source: 'runtime', freeBytes: await free(reported) }
+        : { path: reported, source: 'elsewhere', freeBytes: null };
+    }
+    const fallback = this.#deps.defaultStoreDir?.() ?? null;
+    return { path: fallback, source: fallback ? 'default' : null, freeBytes: fallback ? await free(fallback) : null };
+  }
+
+  async installed(serverId?: string): Promise<InstalledModelsResult> {
+    const target = this.#target(serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
+    try {
+      const [models, loaded] = await Promise.all([target.runtime.list(), target.runtime.loaded().catch(() => null)]);
+      const loadedNames = new Set((loaded ?? []).map(entry => entry.name));
+      let fits: (ModelFit | null)[] = models.map(() => null);
+      const sizing = await this.#sizing(target);
+      if (sizing) {
+        const keep = new Set<string>();
+        fits = await mapLimited(models, INSPECT_CONCURRENCY, model => this.#installedFit(target, model, sizing, keep));
+        const prefix = `${target.id}\0`;
+        for (const key of this.#archs.keys()) if (key.startsWith(prefix) && !keep.has(key)) this.#archs.delete(key);
+      }
+      if (loaded) await this.#watchGpuCap(target, loaded);
+      const cap = target.local ? this.#gpuCap : null;
+      return {
+        ok: true,
+        models: models
+          .map((model, index) => ({ ...model, loaded: loadedNames.has(model.name), fit: fits[index] }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        ...(cap ? { gpuMemoryCap: cap } : {}),
+      };
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error) };
+    }
+  }
+
+  /** Polled by the composer while idle on a local model, so any failure is `unknown` rather than an error. */
+  async loadedState(modelId: string): Promise<LoadedModelState> {
+    const where = loadedStateTarget(modelId);
+    const target = where ? this.#target(where.serverId) : null;
+    if (!where || !target || target.management === 'unsupported') return { kind: 'unsupported' };
+    try {
+      const loaded = await target.runtime.loaded();
+      void this.#watchGpuCap(target, loaded);
+      return loadedStateOf(loaded, where.model);
+    } catch {
+      return { kind: 'unknown' };
+    }
+  }
+
+  async search(request: HubSearchRequest): Promise<HubSearchResult> {
+    let token = false;
+    try {
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
+      const page = await hub.search({
+        query: request.query,
+        cursor: request.cursor ?? undefined,
+        sort: 'downloads',
+        limit: SEARCH_LIMIT,
+      });
+      return { ok: true, models: page.models.map(toCard), nextCursor: page.nextCursor };
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error, token) };
+    }
+  }
+
+  /** Fits rate `serverId`'s hardware, and are null for a saved server without entered hardware. */
+  async detail(repo: string, serverId?: string): Promise<HubDetailResult> {
+    let token = false;
+    try {
+      const session = await this.#hub();
+      token = session.token;
+      const { hub } = session;
+      const target = this.#target(serverId);
+      const [found, sizing] = await Promise.all([hub.getModel(repo), target ? this.#sizing(target) : null]);
+      // A cached denial would outlive an access grant by up to the cache TTL; re-ask before saying "cannot read".
+      const detail =
+        token && hubAccess(found, token) === 'denied' ? await hub.getModel(repo, { refresh: true }) : found;
+      return {
+        ok: true,
+        model: toView(
+          hub.endpoint,
+          detail,
+          token,
+          this.#buildFit(detail, sizing, this.#deps.curated()),
+          this.#splitSupport(target, hub)
+        ),
+      };
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error, token) };
+    }
+  }
+
+  pulls(): ModelPull[] {
+    return [...this.#pulls.values()].map(entry => ({ ...entry.view }));
+  }
+
+  runningCount(): number {
+    return [...this.#pulls.keys()].filter(key => this.#running(key)).length;
+  }
+
+  /**
+   * Resolves when the pull finishes, fails, pauses or is cancelled; progress arrives through `onPullsChanged`.
+   * Refused for a server the user did not set to "Chat and manage".
+   */
+  async pull(request: ModelPullRequest): Promise<ModelPullResult> {
+    // One snapshot for every check below; a list update mid-pull applies to the next pull.
+    const manifest = this.#deps.curated();
+    const curated = request.curated ? this.#reviewed(manifest, request.curated.entryId, request.curated.buildId) : null;
+    const offList = {
+      ok: false,
+      error: hubError('not-found', 'That model is not on the list.'),
+      listed: false,
+    } as const;
+    if (request.curated && !curated) return offList;
+    // A library build is named by its Ollama ref; anything else must be a repo id, so no key can pose as another's.
+    if (!(curated && libraryOf(curated.build)?.ref === request.repo) && !isHubRepoId(request.repo))
+      return curated ? offList : { ok: false, error: hubError('invalid', 'Invalid request.'), listed: false };
+    const target = this.#target(request.serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE), listed: false };
+    const refusal = manageRefusal(target);
+    if (refusal) return { ok: false, error: refusal, listed: false };
+    const key = pullKey(request.repo, request.buildId, target.id);
+    const existing = this.#pulls.get(key);
+    if (existing && existing.view.phase !== 'failed' && existing.view.phase !== 'paused')
+      return { ok: false, error: hubError('already-pulling', 'This model is already downloading.'), listed: true };
+
+    const controller = new AbortController();
+    const entry: PullEntry = {
+      controller,
+      ref: null,
+      curated: null,
+      // Owns a failed import's staging until replanned, so a refused retry's #drop still clears it.
+      import: existing?.import,
+      view: {
+        key,
+        serverId: target.id,
+        serverName: target.name,
+        repo: request.repo,
+        buildId: request.buildId,
+        label: null,
+        ref: null,
+        phase: 'verifying',
+        completedBytes: 0,
+        totalBytes: null,
+        expectedBytes: 0,
+        error: null,
+      },
+    };
+    this.#pulls.set(key, entry);
+    this.#push(true);
+
+    const refuse = (error: ModelHubError): ModelPullResult => {
+      this.#drop(key, entry);
+      return { ok: false, error: entry.stopped ?? error, listed: false };
+    };
+
+    let token = false;
+    let prepared: Prepared;
+    try {
+      token = (await this.#hub()).token;
+      prepared = await this.#prepare(request, curated, entry, target, token, controller.signal);
+    } catch (error) {
+      if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+      return this.#fail(key, entry, toModelHubError(error, token));
+    }
+    if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+    if (!prepared.ok) return prepared.listed ? this.#fail(key, entry, prepared.error) : refuse(prepared.error);
+    const { ref } = prepared;
+
+    if (prepared.split) {
+      let planned: { ok: true; plan: SplitImportPlan; notice?: string } | Refusal;
+      try {
+        planned = await this.#planImport(prepared.split, target, controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+        return this.#fail(key, entry, toModelHubError(error, token));
+      }
+      if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+      if (!planned.ok) return planned.listed ? this.#fail(key, entry, planned.error) : refuse(planned.error);
+      entry.import = planned.plan;
+      entry.importNotice = planned.notice;
+    } else entry.import = undefined;
+
+    const hadTag = curated ? await this.#hadTagBefore(target, ref) : null;
+    if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
+    entry.ref = ref;
+    entry.curated = curated && { ...curated, hadTag };
+    this.#deps.onPullStarted?.({
+      key,
+      serverId: target.id,
+      serverName: target.name,
+      ref,
+      label: entry.view.label,
+      sizeBytes: request.sizeBytes,
+    });
+    return this.#download(key, entry, target);
+  }
+
+  /** Continues a paused pull of the same verified name; Ollama picks up its partial file. */
+  async resume(key: string): Promise<ModelPullResult> {
+    const entry = this.#pulls.get(key);
+    if (!entry || entry.view.phase !== 'paused' || !entry.ref)
+      return { ok: false, error: hubError('invalid', 'That download is not paused.'), listed: false };
+    const target = this.#target(entry.view.serverId);
+    if (!target) return this.#fail(key, entry, hubError('not-found', SERVER_GONE));
+    const refusal = manageRefusal(target);
+    if (refusal) return this.#fail(key, entry, refusal);
+    entry.controller = new AbortController();
+    return this.#download(key, entry, target);
+  }
+
+  async #download(key: string, entry: PullEntry, target: Target): Promise<ModelPullResult> {
+    if (entry.import) return this.#import(key, entry, target, entry.import);
+    const ref = entry.ref as string;
+    const { curated } = entry;
+    const { signal } = entry.controller;
+    entry.view = { ...entry.view, ref, phase: 'downloading', error: null };
+    this.#push(true);
+    try {
+      await target.runtime.pull(ref, {
+        runner: curated ? curatedRunner(curated.build) : undefined,
+        signal,
+        onProgress: (progress: PullProgress) => {
+          const phase = phaseOf(progress.status);
+          const changed = phase !== entry.view.phase;
+          entry.view = {
+            ...entry.view,
+            phase,
+            completedBytes: progress.completedBytes,
+            totalBytes: progress.totalBytes,
+          };
+          this.#push(changed);
+        },
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        this.#drop(key, entry);
+        return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
+      }
+      if (!target.local && error instanceof ServerUnreachableError) return this.#pause(key, entry, target);
+      return this.#fail(
+        key,
+        entry,
+        pullEofError(error, ref) ??
+          pullAuthError(error, target) ??
+          diskFullError(error, target) ??
+          toModelHubError(error)
+      );
+    }
+    if (curated && !libraryOf(curated.build)) this.#pulledRefs.set(`${curated.entry.id}\0${curated.build.id}`, ref);
+    const installed = curated ? await this.#checkInstalled(target, curated.build, ref, curated.hadTag, signal) : null;
+    this.#deps.onInstalledChanged(target.id);
+    if (installed) return this.#fail(key, entry, installed);
+    this.#drop(key, entry);
+    return { ok: true, ref };
+  }
+
+  /** The parts, projector and params of an approved split build, refused when this computer lacks the room. */
+  async #planImport(
+    split: SplitApproval,
+    target: Target,
+    signal: AbortSignal
+  ): Promise<{ ok: true; plan: SplitImportPlan; notice?: string } | Refusal> {
+    const { hub } = await this.#hub();
+    let sibling: SiblingLayers = { projectorSha256: null, parameters: null };
+    let notice: string | undefined;
+    const readJson = hub.ollamaRegistryJson?.bind(hub);
+    if (readJson) {
+      try {
+        sibling = await siblingLayers(
+          split.detail,
+          split.build,
+          { ollamaLayers: (repo, tag, options) => hub.ollamaLayers(repo, tag, options), ollamaRegistryJson: readJson },
+          signal
+        );
+      } catch (error) {
+        if (signal.aborted) throw error;
+        notice = NO_REGISTRY_PARAMS;
+        // Without them the model still imports; Ollama reads its template from the GGUF.
+        this.#deps.warn(`MODELS: no projector or params from a sibling build of ${split.detail.id}: ${String(error)}`);
+      }
+    }
+    const plan = planSplitImport(split.detail, split.build, sibling);
+    const runtime = target.runtime;
+    if (!runtimeImports(runtime)) return refused('cannot-pull', SPLIT_LOCAL_ONLY);
+    const present = new Set<string>();
+    for (const part of plan.parts) if (await runtime.hasBlob(part.digest, { signal })) present.add(part.digest);
+    const root = this.#deps.importDir?.();
+    const staged = root ? await stagedPartBytes(root, plan, present) : undefined;
+    const space = await this.#importSpace(plan, present, staged);
+    if (space.ok) return { ok: true, plan, notice };
+    const where = space.where === 'store' ? "on the disk with Ollama's models" : 'on the disk Desktop downloads to';
+    return refused(
+      'cannot-pull',
+      `Adding this split build needs ${formatBytes(space.neededBytes)} free ${where}, and ` +
+        `${formatBytes(space.freeBytes)} is free. Free some space, then download again.`
+    );
+  }
+
+  async #importSpace(
+    plan: SplitImportPlan,
+    present: ReadonlySet<string>,
+    staged?: ReadonlyMap<string, number>
+  ): Promise<ImportSpace> {
+    const staging = this.#deps.importDir?.() ?? null;
+    const store = await this.storeLocation(LOCAL_SERVER_ID);
+    const free = (path: string) => this.#deps.freeSpace?.(path).catch(() => null) ?? Promise.resolve(null);
+    // An 'elsewhere' store is not on this computer's disks, so its device cannot be compared: unknown.
+    const sameDisk =
+      store.source !== 'elsewhere' && staging && store.path
+        ? ((await this.#deps.sameDisk?.(staging, store.path).catch(() => null)) ?? null)
+        : null;
+    return splitImportSpace(
+      plan,
+      present,
+      {
+        stagingFreeBytes: staging ? await free(staging) : null,
+        storeFreeBytes: store.freeBytes,
+        sameDisk,
+      },
+      staged
+    );
+  }
+
+  /** Downloads each part Ollama lacks, hands it over, then creates the model; a failed run keeps its staging so a retry resumes. */
+  async #import(key: string, entry: PullEntry, target: Target, plan: SplitImportPlan): Promise<ModelPullResult> {
+    const { signal } = entry.controller;
+    const root = this.#deps.importDir?.();
+    const { hub, token } = await this.#hub();
+    const runtime = target.runtime;
+    if (!root || !runtimeImports(runtime) || !hubImports(hub))
+      return this.#fail(key, entry, hubError('cannot-pull', SPLIT_LOCAL_ONLY));
+    entry.view = {
+      ...entry.view,
+      ref: plan.model,
+      phase: 'downloading',
+      completedBytes: 0,
+      totalBytes: plan.totalBytes,
+      error: null,
+    };
+    this.#push(true);
+    try {
+      await runSplitImport(plan, {
+        hub,
+        runtime,
+        dir: root,
+        signal,
+        keep: () => this.#partsOfOthers(entry),
+        onProgress: progress => {
+          const phase = progress.status === 'creating' ? 'finishing' : 'downloading';
+          const changed = phase !== entry.view.phase;
+          entry.view = {
+            ...entry.view,
+            phase,
+            completedBytes: progress.completedBytes,
+            totalBytes: progress.totalBytes,
+          };
+          this.#push(changed);
+        },
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        // Quitting aborts every pull; its parts stay so the next import resumes them. A removed server's pull was
+        // already dropped, which cleared them.
+        if (!this.#disposed && this.#pulls.get(key) === entry)
+          await removeSplitStaging(root, plan, this.#partsOfOthers(entry));
+        this.#drop(key, entry, false);
+        return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
+      }
+      return this.#fail(key, entry, diskFullError(error, target) ?? toModelHubError(error, token));
+    }
+    this.#deps.onInstalledChanged(target.id);
+    // runSplitImport removed the staging on success.
+    this.#drop(key, entry, false);
+    return { ok: true, ref: plan.model, ...(entry.importNotice ? { notice: entry.importNotice } : {}) };
+  }
+
+  /**
+   * Re-checks the dialog's request through the shared approval and words any refusal for the pull dialog. A library
+   * build has no Hugging Face repo: the reviewed manifest digest is sent as its revision.
+   */
+  async #prepare(
+    request: ModelPullRequest,
+    curated: { entry: HubEntry; build: HubBuild } | null,
+    entry: PullEntry,
+    target: Target,
+    tokenSent: boolean,
+    signal: AbortSignal
+  ): Promise<Prepared> {
+    const approval: PullApproval =
+      curated && libraryOf(curated.build)
+        ? {
+            source: 'library',
+            ref: request.repo,
+            buildId: request.buildId,
+            manifestDigest: request.revision,
+            sizeBytes: request.sizeBytes,
+            licenseAccepted: request.acceptLicense,
+            curated,
+          }
+        : {
+            source: 'hf',
+            repo: request.repo,
+            buildId: request.buildId,
+            revision: request.revision,
+            sizeBytes: request.sizeBytes,
+            licenseAccepted: request.acceptLicense,
+            accessConfirmed: request.confirmAccess,
+            curated,
+          };
+    const checked = await checkApproval(approval, {
+      hub: async () => (await this.#hub()).hub,
+      libraryLayers: (ref, options) => this.#deps.libraryLayers(ref, options),
+      health: () => target.runtime.health(),
+      signal,
+      importSplit: this.#splitSupport(target, (await this.#hub()).hub) === 'import',
+      onReviewed: ({ label, sizeBytes }) => {
+        entry.view = { ...entry.view, label, expectedBytes: sizeBytes };
+      },
+    });
+    return checked.ok ? checked : approvalRefusal(checked, approval, tokenSent, target);
+  }
+
+  /** Cancels a running pull; a paused one has nothing running, so it is cleared. */
+  cancel(key: string): void {
+    const entry = this.#pulls.get(key);
+    if (entry?.view.phase === 'paused') this.#drop(key, entry);
+    else entry?.controller.abort();
+  }
+
+  /**
+   * Cancels `key` and resolves true once it no longer runs, false if it still does after `timeoutMs`. A Curated
+   * pull stopped during its post-download check ends failed: the model stays installed, marked unverified.
+   */
+  stop(key: string, timeoutMs = STOP_WAIT_MS): Promise<boolean> {
+    this.cancel(key);
+    if (!this.#running(key)) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const finish = (stopped: boolean) => {
+        clearTimeout(timer);
+        this.#pullWaiters.delete(check);
+        resolve(stopped);
+      };
+      const check = () => !this.#running(key) && finish(true);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this.#pullWaiters.add(check);
+    });
+  }
+
+  #running(key: string): boolean {
+    const phase = this.#pulls.get(key)?.view.phase;
+    return phase !== undefined && phase !== 'failed' && phase !== 'paused';
+  }
+
+  /** Clears a failed or paused pull from the list; active pulls are cancelled instead. */
+  dismiss(key: string): void {
+    const entry = this.#pulls.get(key);
+    if (entry?.view.phase === 'failed' || entry?.view.phase === 'paused') this.#drop(key, entry);
+  }
+
+  /** Called when a saved server changes or is removed: stops and clears its pulls once it no longer allows them. */
+  serverChanged(serverId: string): void {
+    this.#stores.delete(serverId);
+    const target = this.#target(serverId);
+    const reason = target ? manageRefusal(target) : hubError('not-found', SERVER_GONE);
+    if (!reason) return;
+    for (const [key, entry] of this.#pulls) {
+      if (entry.view.serverId !== serverId) continue;
+      entry.stopped = reason;
+      entry.controller.abort();
+      this.#drop(key, entry);
+    }
+  }
+
+  /** Refused for a server the user did not set to "Chat and manage". */
+  async remove(name: string, serverId?: string): Promise<ModelRemoveResult> {
+    const target = this.#target(serverId);
+    if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
+    const refusal = manageRefusal(target);
+    if (refusal) return { ok: false, error: refusal };
+    try {
+      await target.runtime.remove(name);
+    } catch (error) {
+      return { ok: false, error: toModelHubError(error) };
+    }
+    this.#unverified.delete(tagKey(target, name));
+    for (const [key, entry] of this.#pulls) {
+      if (entry.view.phase !== 'failed' || entry.view.serverId !== target.id) continue;
+      if (entry.view.ref?.toLowerCase() === name.toLowerCase()) this.#drop(key, entry);
+    }
+    this.#deps.onInstalledChanged(target.id);
+    return { ok: true };
+  }
+
+  dispose(): void {
+    // Set first: each aborted pull settles after this and must not wake the computer or push again.
+    this.#disposed = true;
+    for (const entry of this.#pulls.values()) entry.controller.abort();
+    if (this.#pushTimer) clearTimeout(this.#pushTimer);
+    this.#pushTimer = null;
+    if (this.#awake) this.#deps.keepAwake?.(false);
+    this.#awake = false;
+  }
+
+  #pause(key: string, entry: PullEntry, target: Target): ModelPullResult {
+    if (entry.stopped) return { ok: false, error: entry.stopped, listed: false };
+    const error = hubError(
+      'connection-lost',
+      `Paused: lost the connection to ${target.name}. Resume continues from the part it already downloaded. ` +
+        `If Ollama on ${target.name} restarts after more than an hour paused, the download starts over.`
+    );
+    if (this.#pulls.get(key) === entry) {
+      entry.view = { ...entry.view, phase: 'paused', error };
+      this.#push(true);
+    }
+    return { ok: false, error, listed: true };
+  }
+
+  #fail(key: string, entry: PullEntry, error: ModelHubError): ModelPullResult {
+    if (entry.stopped) return { ok: false, error: entry.stopped, listed: false };
+    if (this.#pulls.get(key) === entry) {
+      entry.view = { ...entry.view, phase: 'failed', error };
+      this.#push(true);
+    }
+    return { ok: false, error, listed: true };
+  }
+
+  /** `clearStaging` false when the caller already removed an import's staged parts. */
+  #drop(key: string, entry: PullEntry, clearStaging = true): void {
+    if (this.#pulls.get(key) !== entry) return;
+    this.#pulls.delete(key);
+    const root = this.#deps.importDir?.();
+    if (clearStaging && entry.import && root && !this.#disposed)
+      void removeSplitStaging(root, entry.import, this.#partsOfOthers(entry));
+    this.#push(true);
+  }
+
+  /** Digests of the staged parts other imports still hold or may resume; two builds of one repo can share a projector. */
+  #partsOfOthers(entry: PullEntry): Set<string> {
+    const digests = new Set<string>();
+    for (const other of this.#pulls.values())
+      if (other !== entry) for (const part of other.import?.parts ?? []) digests.add(part.digest);
+    return digests;
+  }
+
+  #push(now: boolean): void {
+    for (const check of [...this.#pullWaiters]) check();
+    if (this.#disposed) return;
+    const awake = [...this.#pulls.values()].some(
+      ({ view }) => view.serverId !== LOCAL_SERVER_ID && view.phase !== 'paused' && view.phase !== 'failed'
+    );
+    if (awake !== this.#awake) {
+      this.#awake = awake;
+      this.#deps.keepAwake?.(awake);
+    }
+    const elapsed = Date.now() - this.#lastPush;
+    if (now || elapsed >= this.#progressIntervalMs) {
+      if (this.#pushTimer) clearTimeout(this.#pushTimer);
+      this.#pushTimer = null;
+      this.#lastPush = Date.now();
+      this.#deps.onPullsChanged(this.pulls());
+      return;
+    }
+    this.#pushTimer ??= setTimeout(() => {
+      this.#pushTimer = null;
+      this.#lastPush = Date.now();
+      this.#deps.onPullsChanged(this.pulls());
+    }, this.#progressIntervalMs - elapsed);
+  }
+}

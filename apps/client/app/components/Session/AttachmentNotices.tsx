@@ -1,6 +1,7 @@
 import { FC } from 'react';
 import { Box, List, ListItem, Typography } from '@mui/joy';
-import { WarningAmberRounded as WarningIcon, InfoOutlined as InfoIcon } from '@mui/icons-material';
+import WarningIcon from '@mui/icons-material/WarningAmberRounded';
+import InfoIcon from '@mui/icons-material/InfoOutlined';
 import type { IAttachmentDelivery } from '@bike4mind/common';
 
 interface AttachmentNoticesProps {

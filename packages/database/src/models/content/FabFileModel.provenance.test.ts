@@ -39,6 +39,11 @@ describe('FabFile provenance fields persist', () => {
     expect(stored?.sourceMetadata).toEqual({ channel: 'C0123', messageTs: '1700000000.0001' });
   });
 
+  it('accepts every FabFileSourceType value, so a new member never needs a hand-edited schema list', () => {
+    const sourceTypePath = FabFile.schema.path('sourceType') as unknown as { enumValues: string[] };
+    expect(sourceTypePath.enumValues).toEqual(Object.values(FabFileSourceType));
+  });
+
   it('rejects a sourceType outside the enum', async () => {
     await expect(
       FabFile.create({
@@ -65,5 +70,38 @@ describe('FabFile provenance fields persist', () => {
 
     expect(stored).not.toHaveProperty('sourceType');
     expect(stored).not.toHaveProperty('sourceMetadata');
+  });
+  describe('derivedFrom lineage', () => {
+    const base = {
+      userId: 'u-provenance',
+      fileName: 'gen.png',
+      mimeType: 'image/png',
+      type: KnowledgeType.FILE,
+      filePath: 'gen.png',
+      sourceType: FabFileSourceType.TOOL_GENERATED,
+    };
+    const entry = { fileId: 'a'.repeat(24), jobId: 'job-1', role: 'first_frame' as const };
+
+    it('round-trips to the stored document', async () => {
+      const created = await FabFile.create({ ...base, derivedFrom: [entry] });
+      const stored = await FabFile.collection.findOne({ _id: created._id });
+      expect(stored?.derivedFrom).toEqual([entry]);
+    });
+
+    it('stores nothing when absent', async () => {
+      const created = await FabFile.create(base);
+      const stored = await FabFile.collection.findOne({ _id: created._id });
+      expect(stored).not.toHaveProperty('derivedFrom');
+    });
+
+    it('rejects a role outside the enum', async () => {
+      await expect(FabFile.create({ ...base, derivedFrom: [{ ...entry, role: 'bogus' }] } as never)).rejects.toThrow();
+    });
+
+    it('declares the partial reverse-lineage index', () => {
+      const found = FabFile.schema.indexes().find(([fields]) => 'derivedFrom.fileId' in fields);
+      expect(found?.[0]).toEqual({ 'derivedFrom.fileId': 1, deletedAt: 1 });
+      expect(found?.[1].partialFilterExpression).toEqual({ sourceType: FabFileSourceType.TOOL_GENERATED });
+    });
   });
 });

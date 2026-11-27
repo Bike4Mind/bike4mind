@@ -5,7 +5,7 @@ import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { z } from 'zod';
 
 /**
@@ -21,7 +21,7 @@ const handler = baseApi().post(
     const groupId = req.query.groupId;
     if (!organizationId || !groupId) throw new BadRequestError('Organization id and group id are required');
 
-    // ZodError propagates to the central errorHandler (422 via fromZodError). No hand-rolled 400.
+    // ZodError propagates to the central errorHandler (422 via formatZodError). No hand-rolled 400.
     const { userId } = bodySchema.parse(req.body);
 
     await organizationService.assignUserToGroup(

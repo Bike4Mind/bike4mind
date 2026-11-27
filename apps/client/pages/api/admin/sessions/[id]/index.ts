@@ -1,4 +1,4 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { fabFileRepository } from '@bike4mind/database';
 import {
   AdminSupportAccessAction,
@@ -17,7 +17,7 @@ import { authorizeSupportRead, recordSupportRead } from '@server/utils/adminSupp
  * "what was this notebook configured with, and what files were attached?" - which
  * is how you spot e.g. a document attached to a model with `supportsVision: false`.
  *
- * Access: platform admin only, `supportCase` required, every read audited. See
+ * Access: `support:read`, `supportCase` required, every read audited. See
  * `@server/utils/adminSupportAccess` for the shared gate.
  *
  * Two disclosure rules, both enforced by whitelisting rather than stripping:
@@ -115,32 +115,34 @@ const toSupportSession = (session: ISessionDocument): IAdminSupportSession => ({
   curatedAt: session.curatedAt,
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  const ctx = await authorizeSupportRead(req);
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: 'support:read' } }).get(
+  async (req, res) => {
+    const ctx = await authorizeSupportRead(req);
 
-  const knowledgeIds = ctx.session.knowledgeIds ?? [];
-  const [knowledge, sessionFiles] = await Promise.all([
-    fabFileRepository.findMetadataByIds(knowledgeIds),
-    fabFileRepository.findMetadataBySessionId(ctx.session.id),
-  ]);
+    const knowledgeIds = ctx.session.knowledgeIds ?? [];
+    const [knowledge, sessionFiles] = await Promise.all([
+      fabFileRepository.findMetadataByIds(knowledgeIds),
+      fabFileRepository.findMetadataBySessionId(ctx.session.id),
+    ]);
 
-  // Awaited before responding: an unauditable support read is not served.
-  await recordSupportRead(ctx, AdminSupportAccessAction.SessionRead, {
-    knowledgeIdCount: knowledgeIds.length,
-    knowledgeFound: knowledge.data.length,
-    knowledgeTruncated: knowledge.hasMore,
-    sessionFileCount: sessionFiles.data.length,
-    sessionFilesTruncated: sessionFiles.hasMore,
-  });
+    // Awaited before responding: an unauditable support read is not served.
+    await recordSupportRead(ctx, AdminSupportAccessAction.SessionRead, {
+      knowledgeIdCount: knowledgeIds.length,
+      knowledgeFound: knowledge.data.length,
+      knowledgeTruncated: knowledge.hasMore,
+      sessionFileCount: sessionFiles.data.length,
+      sessionFilesTruncated: sessionFiles.hasMore,
+    });
 
-  const response: IAdminSupportSessionResponse = {
-    session: toSupportSession(ctx.session),
-    knowledge: knowledge.data.map(toFileSummary),
-    knowledgeTruncated: knowledge.hasMore,
-    sessionFiles: sessionFiles.data.map(toFileSummary),
-    sessionFilesTruncated: sessionFiles.hasMore,
-  };
-  return res.json(response);
-});
+    const response: IAdminSupportSessionResponse = {
+      session: toSupportSession(ctx.session),
+      knowledge: knowledge.data.map(toFileSummary),
+      knowledgeTruncated: knowledge.hasMore,
+      sessionFiles: sessionFiles.data.map(toFileSummary),
+      sessionFilesTruncated: sessionFiles.hasMore,
+    };
+    return res.json(response);
+  }
+);
 
 export default handler;

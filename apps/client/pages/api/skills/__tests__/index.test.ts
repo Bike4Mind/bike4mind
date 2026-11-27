@@ -29,13 +29,13 @@ vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: { findIdsAdministeredBy: (...a: unknown[]) => mockFindIdsAdministeredBy(...a) },
 }));
 
-const mockVerifyOrgAccess = vi.fn();
-vi.mock('@server/utils/orgAccess', () => ({
-  verifyOrgAccess: (...a: unknown[]) => mockVerifyOrgAccess(...a),
+const mockVerifyOrgPermission = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({
+  verifyOrgPermission: (...a: unknown[]) => mockVerifyOrgPermission(...a),
 }));
 
 import handler from '@pages/api/skills/index';
-import { ForbiddenError } from '@bike4mind/utils';
+import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 
 const USER = 'user-1';
 const ORG = '6650000000000000000000aa';
@@ -52,7 +52,7 @@ describe('/api/skills POST — scope creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ id: 'new', ...doc }));
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: USER });
+    mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: USER });
   });
 
   it('defaults to user-scoped when no scope is supplied', async () => {
@@ -68,21 +68,21 @@ describe('/api/skills POST — scope creation', () => {
   it('creates an org-scoped skill when the caller passes org access', async () => {
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
     await handler(req, res);
-    expect(mockVerifyOrgAccess).toHaveBeenCalledWith({ id: USER, isAdmin: false }, ORG);
+    expect(mockVerifyOrgPermission).toHaveBeenCalledWith({ id: USER, isAdmin: false }, ORG, 'manageContent');
     const doc = mockCreate.mock.calls[0][0];
     expect(doc.organizationId).toBe(ORG);
     expect(doc.userId).toBeUndefined();
   });
 
-  it('rejects org-scoped creation when verifyOrgAccess throws', async () => {
-    mockVerifyOrgAccess.mockRejectedValue(new ForbiddenError('no access'));
+  it('rejects org-scoped creation when verifyOrgPermission throws', async () => {
+    mockVerifyOrgPermission.mockRejectedValue(new ForbiddenError('no access'));
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } });
     await expect(handler(req, res)).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('allows a platform admin who has no org role', async () => {
-    mockVerifyOrgAccess.mockResolvedValue({ id: ORG, userId: 'owner-1' });
+    mockVerifyOrgPermission.mockResolvedValue({ id: ORG, userId: 'owner-1' });
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG } }, true);
     await handler(req, res);
     expect(mockCreate.mock.calls[0][0].organizationId).toBe(ORG);
@@ -102,8 +102,42 @@ describe('/api/skills POST — scope creation', () => {
     expect(doc.userId).toBeUndefined();
   });
 
+  it('stores valid supporting files and rejects a path outside scripts/ or references/', async () => {
+    const files = [{ path: 'scripts/run.py', content: '' }];
+    const ok = makeReqRes({ ...baseBody, files });
+    await handler(ok.req, ok.res);
+    expect(mockCreate.mock.calls[0][0].files).toEqual(files);
+
+    const bad = makeReqRes({ ...baseBody, files: [{ path: '../evil.sh', content: 'x' }] });
+    await expect(handler(bad.req, bad.res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a scope that is both org and system', async () => {
     const { req, res } = makeReqRes({ ...baseBody, scope: { organizationId: ORG, isSystem: true } }, true);
+    await expect(handler(req, res)).rejects.toBeTruthy();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('persists Claude Code allowed-tools, one tool per entry', async () => {
+    const { req, res } = makeReqRes({ ...baseBody, claudeCodeAllowedTools: ['Bash(git:*)', 'Read, Grep'] });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreate.mock.calls[0][0].claudeCodeAllowedTools).toEqual(['Bash(git:*)', 'Read', 'Grep']);
+  });
+
+  it('persists a trimmed Claude Code model and rejects an unusable one', async () => {
+    const ok = makeReqRes({ ...baseBody, claudeCodeModel: ' haiku ' });
+    await handler(ok.req, ok.res);
+    expect(mockCreate.mock.calls[0][0].claudeCodeModel).toBe('haiku');
+    mockCreate.mockClear();
+    const bad = makeReqRes({ ...baseBody, claudeCodeModel: 'two words' });
+    await expect(handler(bad.req, bad.res)).rejects.toBeTruthy();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects Claude Code allowed-tools that are not a string list', async () => {
+    const { req, res } = makeReqRes({ ...baseBody, claudeCodeAllowedTools: 'Bash' });
     await expect(handler(req, res)).rejects.toBeTruthy();
     expect(mockCreate).not.toHaveBeenCalled();
   });
@@ -128,6 +162,17 @@ describe('/api/skills GET — scope visibility', () => {
     expect(mockFindIdsAdministeredBy).toHaveBeenCalledWith(USER);
     const scope = mockSearchAccessible.mock.calls[0][5];
     expect(scope).toEqual({ isAdmin: true, adminOrganizationIds: [ORG] });
+  });
+
+  it('leaves supporting files out of list rows', async () => {
+    mockSearchAccessible.mockResolvedValue({
+      data: [{ id: 'mine', name: 'mine', userId: USER, files: [{ path: 'scripts/run.py', content: 'x' }] }],
+      hasMore: false,
+      total: 1,
+    });
+    const { req, res } = makeGetReqRes(false);
+    await handler(req, res);
+    expect(res._getJSONData().data[0]).not.toHaveProperty('files');
   });
 
   it('passes isAdmin=false for a non-admin caller', async () => {

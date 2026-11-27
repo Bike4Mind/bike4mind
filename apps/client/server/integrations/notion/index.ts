@@ -6,4 +6,4 @@ export {
   NOTION_VERSION,
 } from './notionConfig';
 
-export { NotionTokenManager, NotionReconnectRequiredError } from './notionTokenManager';
+export { NotionTokenManager, NotionReconnectRequiredError, NotionNotConnectedError } from './notionTokenManager';

@@ -19,8 +19,9 @@ import {
   IApiKeyRepository,
   IOrganizationRepository,
   assertAuthOriginMatchesApiKey,
+  limitConcurrency,
 } from '@bike4mind/common';
-import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
+import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import {
@@ -35,13 +36,11 @@ import * as tagService from '../tagService';
 import * as taskSchedulerService from '../taskSchedulerService';
 import { htmlToMarkdown } from '../lib/turndown';
 import { getLinksFromHtml } from '../lib/cheerio';
-import pLimit from 'p-limit';
 import { FunctionQueueRunner } from '@bike4mind/utils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 import { CreateFabFileAdapters } from '../fabFileService';
 import type { ToolContext } from '../llm/tools/base/types';
-import { getEffectiveLLMApiKeys } from '../apiKeyService';
 
 type ResearchTaskProcessParameters = { id: string };
 
@@ -420,6 +419,7 @@ const processScrape = async (
           storage: adapters.storage,
         };
         mainFile = await fabFilesService.createFabFile(user.id, mainFileData, createFileAdapters);
+        if (result) await db.researchDatas.update({ id: result.researchData.id, fabFileId: mainFile.id });
       }
 
       files.push(mainFile);
@@ -496,7 +496,7 @@ const processScrape = async (
     logger?.info(`🎉 [RESEARCH_COMPLETE] Task ${researchTask.id} completed successfully with ${files.length} files`);
   };
 
-  const sequential = pLimit(1);
+  const sequential = limitConcurrency(1);
 
   await Promise.all(urls.map((url, index) => sequential(async () => scrapeUrl(url, index + 1))));
 
@@ -555,8 +555,6 @@ const processDeepResearch = async (
       progress: 0,
     });
 
-    const apiKeys = await getEffectiveLLMApiKeys(user.id, { db: adapters.db, getSettingsByNames });
-
     const toolContext: ToolContext = {
       userId: user.id,
       user: user,
@@ -604,8 +602,8 @@ const processDeepResearch = async (
       {
         maxDepth: researchTask.maxDepth || 7,
         duration: researchTask.duration || 4.5,
+        // Keep the worker's metered backend: passing keys here would replace it with raw OpenAI.
         model: llm.currentModel,
-        apiKeys,
       }
     );
 

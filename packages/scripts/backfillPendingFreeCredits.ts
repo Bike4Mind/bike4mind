@@ -1,9 +1,23 @@
-#!/usr/bin/env npx ts-node -r tsconfig-paths/register
+#!/usr/bin/env tsx
+import { signupProtectionRepository } from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
 
-import { adminSettingsRepository, connectDB, creditTransactionRepository, userRepository } from '@bike4mind/database';
-import { CreditHolderType, IUserDocument, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  connectDB,
+  creditLotRepository,
+  creditTransactionRepository,
+  userRepository,
+} from '@bike4mind/database';
+import {
+  CreditHolderType,
+  IUserDocument,
+  PENDING_FREE_CREDITS_TAG,
+  resolveSignupGrantSchedule,
+} from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
 import { Resource } from 'sst';
+import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 
 type BackfillOptions = {
   dbUri: string;
@@ -23,11 +37,12 @@ type BackfillOptions = {
  *
  * What this does:
  *   Finds every user with `emailVerified=true` AND `pending-free-credits` in tags,
- *   grants them their invite-resolved `pendingCreditGrant` when set - else
- *   `defaultFreeCredits` (read from admin settings at script run time) - clears both
+ *   grants them their invite-resolved `pendingCreditGrant` when set - else the signup
+ *   schedule's initial credits (read from admin settings at script run time) - clears both
  *   the tag and the pending amount. Idempotent - re-runs are safe because `addCredits` is keyed
  *   on a stable `transactionId='verify-grant:${user.id}'` (matches the runtime grant
  *   path in apps/client/pages/api/email/verify.ts).
+ *   Staged accounts resume their pending signup tranche through the shared grant service.
  *
  * Usage (must run inside an SST shell so Resource.MONGODB_URI resolves):
  *   Dry run on PR preview:   npx sst shell --stage pr8958 pnpm --filter @bike4mind/scripts backfill:pending-free-credits
@@ -64,15 +79,12 @@ class BackfillPendingFreeCredits {
     console.log('✅ Database connected');
     console.log('');
 
-    // Resolve defaultFreeCredits through the canonical Zod-parsed read so we accept
-    // both the boolean/numeric-stored form and any legacy string-stored value.
-    const setting = await adminSettingsRepository.findBySettingName('defaultFreeCredits');
-    const parsed = settingsMap.defaultFreeCredits.schema.safeParse(setting?.settingValue);
-    const amount = parsed.success ? parsed.data : 0;
-    console.log(`📐 defaultFreeCredits (admin setting): ${amount}`);
+    // Same fallback as userService.releasePendingFreeCredits for an account with no invite amount.
+    const amount = (await resolveSignupGrantSchedule(adminSettingsRepository)).initialCredits;
+    console.log(`signupGrantInitialCredits (signup schedule): ${amount}`);
     if (amount <= 0) {
       console.warn(
-        '⚠️  defaultFreeCredits is 0 — no credits will be granted. The tag will still be cleared on --execute.'
+        'signupGrantInitialCredits is 0: no credits will be granted. The tag will still be cleared on --execute.'
       );
     }
     console.log('');
@@ -117,7 +129,39 @@ class BackfillPendingFreeCredits {
     let errors = 0;
 
     for (const user of stranded) {
+      if (
+        await userService.protectSignupCredits(user.id, {
+          users: userRepository,
+          adminSettings: adminSettingsRepository,
+          signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
+        })
+      ) {
+        console.log(`Skipping held signup domain for user ${user.id}`);
+        continue;
+      }
       try {
+        if (user.signupGrant) {
+          const release = await userService.releasePendingFreeCredits(user, {
+            db: {
+              users: userRepository,
+              adminSettings: adminSettingsRepository,
+              creditTransactions: creditTransactionRepository,
+              creditLots: creditLotRepository,
+              signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
+            },
+            reason: 'backfill: pending staged signup tranche',
+            logger: console,
+            collectRiskSignals: createSignupGrantRiskCollector(),
+            emitRiskBand: async band => {
+              console.info(JSON.stringify({ message: `signup-grant-assessed-${band}` }));
+            },
+          });
+          if (!release.released) continue;
+          await userRepository.clearPendingFreeCreditGrant(user.id);
+          if (release.creditsGranted > 0) granted++;
+          tagCleared++;
+          continue;
+        }
         // An invite-resolved amount stored on the user wins over the setting;
         // mirrors the runtime grant paths (registerViaOTC / email verify).
         const userAmount = user.pendingCreditGrant ?? amount;
@@ -133,6 +177,7 @@ class BackfillPendingFreeCredits {
               // this short-circuits to a net-zero increment instead of double-crediting.
               transactionId: `verify-grant:${user.id}`,
               reason: 'backfill: stranded by pre-c2c1b5e6 verify atomicity bug',
+              description: 'Signup credits (backfill)',
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );

@@ -11,6 +11,7 @@ export default defineConfig({
     'src/models/content/index.ts',
     'src/models/social/index.ts',
     'src/models/billing/index.ts',
+    'src/utils/zeroCreditOperationalUsage.ts',
     'src/models/ai/index.ts',
     'src/models/infra/index.ts',
     'src/models/hearth/index.ts',

@@ -63,7 +63,9 @@ describe('deleted lake slug reservation (real mongod)', () => {
       adapters,
       ORG
     );
-    expect(lake.slug).toBe('opti-knowledge');
+    // New lakes never take a registry slug; this seeds one that predates that reservation.
+    expect(lake.slug).toBe('opti-knowledge-1');
+    await dataLakeRepository.update({ id: lake.id, slug: 'opti-knowledge' });
     // The DB lake admits its creator; the registry lake admits the `Opti` tag.
     const ctx = { userId: USER, isAdmin: false, userTags: ['Opti'], organizationIds: [ORG] };
 
@@ -90,5 +92,26 @@ describe('moved lake tag reservation (real mongod)', () => {
     );
     const second = await create('vc2:');
     expect(second).toMatchObject({ slug: 'vendor-contracts-1', datalakeTag: 'datalake:vendor-contracts-1' });
+  });
+});
+
+describe('legacy global slug index (real mongod, #5701)', () => {
+  it('a slug the scoped pre-check clears but the legacy slug_1 index rejects answers 409, not a raw E11000', async () => {
+    // Recreate the index the 20260529000000 migration drops, as an environment that never ran it has.
+    await DataLakeModel.collection.createIndex({ slug: 1 }, { unique: true, name: 'slug_1' });
+    const inOrg = (organizationId: string, fileTagPrefix: string) =>
+      dataLakeService.createDataLake(
+        USER,
+        { name: 'Vendor Contracts', slug: 'vendor-contracts', fileTagPrefix },
+        adapters,
+        organizationId
+      );
+
+    await expect(inOrg('5f9d88b8c1d2a30017a1c001', 'vc:')).resolves.toMatchObject({ slug: 'vendor-contracts' });
+    await expect(inOrg('5f9d88b8c1d2a30017a1c002', 'vc2:')).rejects.toMatchObject({
+      name: 'ConflictError',
+      statusCode: 409,
+      additionalInfo: { code: dataLakeService.DATA_LAKE_SLUG_UNAVAILABLE_CODE },
+    });
   });
 });

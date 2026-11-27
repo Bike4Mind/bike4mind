@@ -7,8 +7,10 @@ import { MessageThread } from './MessageThread';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
+import { setReplyStatShown } from './replyStatsPrefs';
 import { STALL_AFTER_MS, describeActivity, writingProse } from './statusLine';
 import { useConversation } from './useChat';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -48,6 +50,17 @@ function PhaseProbe() {
   return <output data-testid="chat-phase-probe">{phase ? JSON.stringify(phase) : 'none'}</output>;
 }
 
+function TurnProbe() {
+  const { turn, messages } = useConversation(SESSION, () => undefined);
+  const { messageId, continued, requestAt, firstTokenAt, thinkingMs, thinkingSince } = turn ?? {};
+  const stats = messages.at(-1)?.stats ?? null;
+  return (
+    <output data-testid="chat-turn-probe">
+      {JSON.stringify({ messageId, continued, requestAt, firstTokenAt, thinkingMs, thinkingSince, stats })}
+    </output>
+  );
+}
+
 describe('the live thread, driven by stream events', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -69,6 +82,7 @@ describe('the live thread, driven by stream events', () => {
     vi.stubGlobal('cancelAnimationFrame', () => undefined);
     Element.prototype.scrollIntoView = () => undefined;
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         getSession: async () => ({ id: SESSION, messages: [] }),
         getQueuedMessages: async () => [],
@@ -118,6 +132,72 @@ describe('the live thread, driven by stream events', () => {
     phase({ kind: 'thinking' });
     emit({ type: 'done', sessionId: SESSION, messageId: MESSAGE, content: '' });
     expect(shown()).toBe('none');
+  });
+
+  it('runs the stats rail clock off the phases, and settles to the stats main sends', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(1000);
+      await act(async () => root.render(<TurnProbe />));
+      await act(async () => undefined);
+      const probe = () => JSON.parse(container.querySelector('[data-testid="chat-turn-probe"]')?.textContent ?? '{}');
+      const phaseAt = (at: number, kind: 'waiting' | 'thinking' | 'responding') => {
+        vi.setSystemTime(at);
+        emit({ type: 'phase', sessionId: SESSION, messageId: MESSAGE, phase: { kind } });
+      };
+
+      emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
+      phaseAt(1500, 'waiting');
+      phaseAt(2000, 'thinking');
+      expect(probe()).toMatchObject({ requestAt: 1500, firstTokenAt: 2000, thinkingSince: 2000 });
+      phaseAt(5000, 'responding');
+      expect(probe()).toEqual({
+        messageId: MESSAGE,
+        requestAt: 1500,
+        firstTokenAt: 2000,
+        thinkingMs: 3000,
+        stats: null,
+      });
+
+      // A call that arrives mid-think ends the think: the tool's time is not the model's.
+      phaseAt(6000, 'thinking');
+      vi.setSystemTime(6500);
+      emit({ type: 'tool-start', sessionId: SESSION, messageId: MESSAGE, call: call('a') });
+      expect(probe().thinkingMs).toBe(3500);
+
+      const stats = { totalMs: 8000, modelMs: 7000, toolMs: 1000, firstTokenMs: 500 };
+      emit({ type: 'done', sessionId: SESSION, messageId: MESSAGE, content: 'Done.', stats });
+      expect(probe().stats).toEqual(stats);
+
+      const failed = { ...stats, totalMs: 3000 };
+      emit({ type: 'start', sessionId: SESSION, messageId: 'm2' });
+      emit({ type: 'error', sessionId: SESSION, messageId: 'm2', message: 'The server went away', stats: failed });
+      expect(probe().stats).toEqual(failed);
+
+      emit({ type: 'start', sessionId: SESSION, messageId: 'm2', baseUsage: { outputTokens: 40 } });
+      expect(probe()).toMatchObject({ messageId: 'm2', continued: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the reply a window opened mid-stream is writing, with no first token it did not see', async () => {
+    const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
+    chat.getSession = async () => ({
+      id: SESSION,
+      messages: [
+        { id: 'u1', role: 'user', content: 'go', createdAt: '2026-10-01T00:00:00.000Z' },
+        { id: MESSAGE, role: 'assistant', content: 'Partway', createdAt: '2026-10-01T00:00:01.000Z' },
+      ],
+      replyInFlight: { messageId: MESSAGE, startedAt: 500 },
+    });
+    await act(async () => root.render(<TurnProbe />));
+    await act(async () => undefined);
+    const probe = () => JSON.parse(container.querySelector('[data-testid="chat-turn-probe"]')?.textContent ?? '{}');
+
+    expect(probe()).toMatchObject({ messageId: MESSAGE, requestAt: null });
+    emit({ type: 'phase', sessionId: SESSION, messageId: MESSAGE, phase: { kind: 'waiting' } });
+    expect(probe().requestAt).toBeNull();
   });
 
   const text = (delta: string): ChatStreamEvent => ({
@@ -215,6 +295,62 @@ describe('the live thread, driven by stream events', () => {
     // to click for a sentence about why a stream is empty.
     expect(container.querySelector('[data-testid="chat-turn-status-toggle"]')).toBeNull();
     expect(container.querySelector('[data-testid="chat-turn-status-detail"]')).toBeNull();
+  });
+
+  it('stops the clock while the turn waits on the user and resumes it without the wait', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      const startedAt = Date.now();
+      const turn = { startedAt, tokens: null, lastEventAt: startedAt };
+      await act(async () => root.render(<TurnStatus turn={turn} activity={describeActivity([], false)} />));
+      await act(async () => vi.advanceTimersByTime(65_000));
+      expect(statusText()).toContain('1m 5s');
+
+      const waiting = describeActivity([call('q1', 'ask_user', 'awaiting-approval')], false);
+      await act(async () => root.render(<TurnStatus turn={turn} activity={waiting} />));
+      await act(async () => vi.advanceTimersByTime(40 * 60_000));
+      expect(statusText()).toBe('Waiting for your answer');
+      expect(container.querySelector('[data-waiting="true"]')).not.toBeNull();
+
+      await act(async () => root.render(<TurnStatus turn={turn} activity={describeActivity([], false)} />));
+      expect(statusText()).toContain('1m 5s');
+      await act(async () => vi.advanceTimersByTime(5_000));
+      expect(statusText()).toContain('1m 10s');
+      expect(container.querySelector('[data-waiting="true"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows a self-hosted turn's rate on the line, with its detail in the title", async () => {
+    const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
+    await act(async () =>
+      root.render(
+        <TurnStatus turn={{ startedAt: Date.now(), tokens: 148, usage }} activity={describeActivity([], true)} />
+      )
+    );
+
+    const line = container.querySelector('[data-testid="chat-turn-status-text"]');
+    expect(statusText()).toContain('24.0 tok/s');
+    expect(line?.getAttribute('title')).toBe('100 new input, 48 output\nGeneration: 24.0 tok/s (48 tokens in 2.0s)');
+  });
+
+  it('leaves the rate off the line and its title when the setting is off', async () => {
+    const usage = { inputTokens: 100, outputTokens: 48, rate: { evalTokens: 48, evalMs: 2000 } };
+    act(() => setReplyStatShown('speed', false));
+    try {
+      await act(async () =>
+        root.render(
+          <TurnStatus turn={{ startedAt: Date.now(), tokens: 148, usage }} activity={describeActivity([], true)} />
+        )
+      );
+
+      const line = container.querySelector('[data-testid="chat-turn-status-text"]');
+      expect(statusText()).not.toContain('tok/s');
+      expect(line?.getAttribute('title') ?? '').not.toContain('tok/s');
+    } finally {
+      act(() => setReplyStatShown('speed', true));
+    }
   });
 
   it('moves the reasoning from the line into the transcript when the turn ends', async () => {

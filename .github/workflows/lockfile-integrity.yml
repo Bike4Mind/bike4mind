@@ -21,11 +21,21 @@ name: Lockfile Integrity
 on:
   pull_request:
     branches: [main]
-  # Also run on the merge queue so the check reports there if it later
-  # becomes a required branch-protection check (see semantic-pr-title.yml
-  # for why a required check must run on merge_group).
-  merge_group:
-    branches: [main]
+    paths:
+      - 'package.json'
+      - '**/package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'patches/**'
+      - 'scripts/check-no-overlay-lockfile.sh'
+      - 'scripts/check-pnpm-overrides.mjs'
+      - 'scripts/lib-pnpm-workspace.mjs'
+      - 'scripts/__tests__/check-pnpm-overrides*'
+      - '.github/scripts/repair-lockfile-integrity*'
+      - 'vitest.config.ts'
+      - 'vitest.shared.ts'
+      - '.github/workflows/lockfile-integrity.yml'
 
 env:
   NODE_VERSION: '24'
@@ -55,6 +65,11 @@ jobs:
       - name: Check for premium overlay paths in pnpm-lock.yaml
         run: bash scripts/check-no-overlay-lockfile.sh
 
+      # `sst install` with an overlay mounted writes the secrets it contributes into the
+      # tracked sst-env.d.ts files, the same leak as the lockfile one above.
+      - name: Check sst-env.d.ts declares only core secrets
+        run: node scripts/check-sst-env-core-secrets.mjs
+
       - name: Run lockfile repair script tests
         run: bash .github/scripts/repair-lockfile-integrity.test.sh
 
@@ -69,7 +84,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           run_install: false
 

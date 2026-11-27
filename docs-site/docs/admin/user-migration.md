@@ -50,7 +50,7 @@ Click the **Parse User List** button to validate the entered data. The parser:
 
 - Splits the text by newlines
 - Validates each line against the `name, email` pattern using a regex
-- If all lines are valid, displays the parsed users in a scrollable card list showing name and email
+- If all lines are valid, displays the parsed users in a **Parsed users** table showing name and email, 25 rows per page by default
 - If any line is invalid, displays an error message: "The data entered does not match the given format"
 
 ### Step 4: Select Organization (Optional)
@@ -72,7 +72,7 @@ Click the **Migrate Users** button to execute the migration. This button is disa
 
 ### Step 6: Review Results
 
-After successful migration, a modal displays the results:
+After successful migration, a **Created users** dialog lists every migrated user:
 
 | Column | Description |
 |--------|-------------|

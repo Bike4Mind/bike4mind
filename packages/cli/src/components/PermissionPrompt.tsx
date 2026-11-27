@@ -1,32 +1,10 @@
 import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { PermissionPromptKind } from '../tools/gateway/gatewayTypes.js';
+import { escapeTerminalControlChars } from '../utils/sanitizeTerminalText.js';
+import wrapAnsi from 'wrap-ansi';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
-
-/**
- * Escape characters that let untrusted text render differently from what
- * actually runs, into a visible escape form. Shared by every prompt that shows
- * untrusted text for the user to decide on: tool previews/arguments here,
- * repo-authored MCP definitions (McpApprovalPrompt), the folder-trust path
- * (FolderTrustPrompt), and model-authored ReviewGatePrompt / UserQuestionPrompt text. Display only - never escape the
- * value that is acted on or sent back.
- * These ranges are covered, deliberately and no wider:
- *   - C0 controls (minus tab/newline), DEL and C1 controls -> `\xHH`: a raw
- *     `\r`, ESC or 8-bit CSI (U+009B) could rewrite the line being approved.
- *   - Unicode bidi overrides U+202A..U+202E and isolates U+2066..U+2069
- *     -> `\uXXXX`: these reorder displayed glyphs without changing the
- *     underlying code points, spoofing the same way.
- * Tab and newline are left intact (newline is already the line delimiter).
- * Widen the scope here, so both call sites gain it at once.
- */
-export function escapeTerminalControlChars(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, ch => {
-    const code = ch.charCodeAt(0);
-    return code > 0xff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\x${code.toString(16).padStart(2, '0')}`;
-  });
-}
 
 /** Render a diff/preview string, color-coding each line by its prefix (see per-branch comments below). */
 function renderDiffPreview(preview: string): React.ReactNode {
@@ -88,11 +66,14 @@ function renderDiffPreview(preview: string): React.ReactNode {
 }
 
 export interface PermissionPromptProps {
+  viewport?: { rows: number; columns: number };
   toolName: string;
   toolDescription?: string;
   args: unknown;
   preview?: string;
   canBeTrusted: boolean; // Whether this tool can be trusted (not prompt_always)
+  /** What allow-session remembers for a shell command (PermissionPromptOptions.sessionScope). */
+  sessionScope?: string[] | null;
   /** 'sandbox-escalation' offers a retry outside the sandbox with no trust options. */
   kind?: PermissionPromptKind;
   onResponse: (response: PermissionResponse) => void;
@@ -103,6 +84,15 @@ export interface PermissionPromptProps {
 // form to approve against.
 const TOOLS_WITH_HIDDEN_ARGS = new Set(['edit_local_file', 'bash_execute']);
 
+type PromptItem = { label: string; value: PermissionResponse };
+
+/** Name what the session option remembers, or drop it when nothing would be remembered. */
+function withSessionScope(items: PromptItem[], scope: string[] | null): PromptItem[] {
+  if (scope === null) return items.filter(item => item.value !== 'allow-session');
+  const label = `\u2713 Allow ${scope.map(entry => `\`${entry}\``).join(', ')} commands for the session`;
+  return items.map(item => (item.value === 'allow-session' ? { ...item, label } : item));
+}
+
 /**
  * Permission prompt component
  *
@@ -110,18 +100,20 @@ const TOOLS_WITH_HIDDEN_ARGS = new Set(['edit_local_file', 'bash_execute']);
  * Waits indefinitely for user response (like Claude Code).
  */
 export function PermissionPrompt({
+  viewport,
   toolName,
   toolDescription,
   args,
   preview,
   canBeTrusted,
+  sessionScope,
   kind,
   onResponse,
 }: PermissionPromptProps) {
   const isSandboxEscalation = kind === 'sandbox-escalation';
   const hideArgs = TOOLS_WITH_HIDDEN_ARGS.has(toolName);
   // Build menu items based on whether tool can be trusted
-  const items: Array<{ label: string; value: PermissionResponse }> = isSandboxEscalation
+  const baseItems: PromptItem[] = isSandboxEscalation
     ? [
         { label: '\u2713 Retry once without sandbox', value: 'allow-once' },
         { label: '\u2713 Allow this command unsandboxed for the session', value: 'allow-session' },
@@ -139,9 +131,30 @@ export function PermissionPrompt({
           { label: '✓ Allow for this session', value: 'allow-session' },
           { label: '✗ Deny', value: 'deny' },
         ];
+  const items =
+    isSandboxEscalation || sessionScope === undefined ? baseItems : withSessionScope(baseItems, sessionScope);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [responded, setResponded] = useState(false);
+  const [previewOffset, setPreviewOffset] = useState(0);
+  const details = viewport
+    ? wrapAnsi(
+        escapeTerminalControlChars(
+          [
+            `Tool: ${toolName}`,
+            toolDescription,
+            `Arguments: ${typeof args === 'string' ? args : JSON.stringify(args, null, 2)}`,
+            preview ? `Preview:\n${preview}` : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
+        ),
+        Math.max(1, viewport.columns),
+        { hard: true }
+      ).split('\n')
+    : [];
+  const detailRows = Math.max(1, (viewport?.rows ?? 24) - items.length - 4);
+  const detailStart = Math.min(previewOffset, Math.max(0, details.length - detailRows));
 
   const handleSelect = useCallback(() => {
     if (responded) return;
@@ -163,6 +176,12 @@ export function PermissionPrompt({
   useInput(
     (input, key) => {
       if (responded) return;
+      if (viewport && (key.pageUp || key.pageDown)) {
+        setPreviewOffset(
+          Math.max(0, Math.min(details.length - detailRows, detailStart + (key.pageUp ? -detailRows : detailRows)))
+        );
+        return;
+      }
 
       // Number key shortcuts (1-based)
       const num = parseInt(input, 10);
@@ -204,6 +223,32 @@ export function PermissionPrompt({
   const borderColor = isSandboxBlock ? 'red' : 'yellow';
   const headerColor = isSandboxBlock ? 'red' : 'yellow';
   const headerText = isSandboxBlock ? '🛑 Sandbox Blocked' : '⚠️ Permission Required';
+
+  if (viewport) {
+    return (
+      <Box flexDirection="column">
+        <Text bold color={headerColor} wrap="truncate">
+          Permission Required: {escapeTerminalControlChars(toolName)}
+        </Text>
+        <Text dimColor wrap="truncate">
+          PgUp/PgDn: details {detailStart + 1}-{Math.min(details.length, detailStart + detailRows)}/{details.length}
+        </Text>
+        {details.slice(detailStart, detailStart + detailRows).map((line, index) => (
+          <Text key={index} wrap="truncate">
+            {line || ' '}
+          </Text>
+        ))}
+        {items.map((item, index) => (
+          <Text key={item.value} wrap="truncate" color={index === selectedIndex ? 'cyan' : undefined}>
+            {index + 1}. {item.label}
+          </Text>
+        ))}
+        <Text dimColor wrap="truncate">
+          1-{items.length}, y/n, or Up/Down + Enter: decide
+        </Text>
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" borderStyle="bold" borderColor={borderColor} padding={1} marginY={1}>

@@ -1,5 +1,143 @@
 # @bike4mind/infra
 
+## 7.4.0
+
+### Minor Changes
+
+- [#8537](https://github.com/Bike4Mind/bike4mind/pull/8537) [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213) Thanks [@maconard](https://github.com/maconard)! - pin data files to a saved function
+
+## 7.3.0
+
+### Minor Changes
+
+- [#8377](https://github.com/Bike4Mind/bike4mind/pull/8377) [`518a275`](https://github.com/Bike4Mind/bike4mind/commit/518a275d35ab144d8d06d5aa34eeb1217f33ff0d) Thanks [@onoya](https://github.com/onoya)! - notebook image-model sends and in-chat edits create image jobs
+
+## 7.2.0
+
+### Minor Changes
+
+- [#7849](https://github.com/Bike4Mind/bike4mind/pull/7849) [`11494a0`](https://github.com/Bike4Mind/bike4mind/commit/11494a0c114a597c536351a746ae08549aa935a3) Thanks [@onoya](https://github.com/onoya)! - export Productions to MP4 with an ffmpeg render worker and multi-size export pack
+
+- [#7995](https://github.com/Bike4Mind/bike4mind/pull/7995) [`96e21d5`](https://github.com/Bike4Mind/bike4mind/commit/96e21d52a7b7b6d751c4abd477378ad56b8aac4c) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - add v1 artifact publish, republish and unpublish endpoints
+
+- [#8306](https://github.com/Bike4Mind/bike4mind/pull/8306) [`1c3eb43`](https://github.com/Bike4Mind/bike4mind/commit/1c3eb436197e86ead54cb4e57f0a0a2c5e2e72e4) Thanks [@poysama](https://github.com/poysama)! - widen the queue pair spec and the context handed to package infra
+
+### Patch Changes
+
+- [#8125](https://github.com/Bike4Mind/bike4mind/pull/8125) [`fe5d1fe`](https://github.com/Bike4Mind/bike4mind/commit/fe5d1fe58371b75ebb5ee97ea17a6a82ada0b38c) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - offload oversized mail bodies so large emails are sent
+
+## 7.1.0
+
+### Minor Changes
+
+- [#7683](https://github.com/Bike4Mind/bike4mind/pull/7683) [`1b65299`](https://github.com/Bike4Mind/bike4mind/commit/1b65299a311a4ce5d8ee3e6036046c53b54502fb) Thanks [@onoya](https://github.com/onoya)! - speech and sound effects as generation job kinds
+
+- [#7802](https://github.com/Bike4Mind/bike4mind/pull/7802) [`39ed23f`](https://github.com/Bike4Mind/bike4mind/commit/39ed23fcce2a7e2491aa72c2d211137ef4e54c91) Thanks [@cgtorniado](https://github.com/cgtorniado)! - alarm on unpriced usage-poller tokens and price them from a model price snapshot
+
+## 7.0.0
+
+### Major Changes
+
+- [#7512](https://github.com/Bike4Mind/bike4mind/pull/7512) [`38ce78b`](https://github.com/Bike4Mind/bike4mind/commit/38ce78ba44113c99af0042d40af4513a5f29b9e2) Thanks [@onoya](https://github.com/onoya)! - remove the in-app secret rotation tracker
+
+### Minor Changes
+
+- [#7447](https://github.com/Bike4Mind/bike4mind/pull/7447) [`d5a4742`](https://github.com/Bike4Mind/bike4mind/commit/d5a4742ccd9dc073e19cb1eba719cef79185f81e) Thanks [@vinchi777](https://github.com/vinchi777)! - export owner metadata and CSV bundle
+
+## 6.3.0
+
+### Minor Changes
+
+- [#6683](https://github.com/Bike4Mind/bike4mind/pull/6683) [`1e5c57b`](https://github.com/Bike4Mind/bike4mind/commit/1e5c57ba46d64d45b273682123511c7b9b4b6381) Thanks [@onoya](https://github.com/onoya)! - data subject export from the admin user profile
+
+- [#7493](https://github.com/Bike4Mind/bike4mind/pull/7493) [`26b8b3c`](https://github.com/Bike4Mind/bike4mind/commit/26b8b3c644315d0928ee7e085fc171c62c9c4fd6) Thanks [@vinchi777](https://github.com/vinchi777)! - pull-based notebook mirror feed and b4m mirror command
+
+- [#7563](https://github.com/Bike4Mind/bike4mind/pull/7563) [`a75cbd5`](https://github.com/Bike4Mind/bike4mind/commit/a75cbd5c119f287ef50b3d3096f8ce26df8dbf64) Thanks [@onoya](https://github.com/onoya)! - publish agent credit transfer and create-from-context as v1 contracts
+
+### Patch Changes
+
+- [#7360](https://github.com/Bike4Mind/bike4mind/pull/7360) [`0a0c5ba`](https://github.com/Bike4Mind/bike4mind/commit/0a0c5baeca37c2d82ba24ffc0d472a6172c1b7de) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining shared server files and tutorials into the package
+
+- [#7442](https://github.com/Bike4Mind/bike4mind/pull/7442) [`ead9bc0`](https://github.com/Bike4Mind/bike4mind/commit/ead9bc0af9c2b5062b227dfabf6f8941fca1e445) Thanks [@aflordelis](https://github.com/aflordelis)! - run NotebookImportCompleteFunction from apps/workers
+
+## 6.2.0
+
+### Minor Changes
+
+- [#7227](https://github.com/Bike4Mind/bike4mind/pull/7227) [`870288d`](https://github.com/Bike4Mind/bike4mind/commit/870288d28138c6235d56c1928ef1d114ed408de7) Thanks [@vinchi777](https://github.com/vinchi777)! - Add an inspection-capable DLQ descriptor and registry factory while preserving the existing non-null descriptor and factory contracts.
+
+- [#6696](https://github.com/Bike4Mind/bike4mind/pull/6696) [`a885484`](https://github.com/Bike4Mind/bike4mind/commit/a8854848f821b2ecc9935bcc75b6be9874e98e5d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish session files, search and messages as v1 contracts
+
+- [#6992](https://github.com/Bike4Mind/bike4mind/pull/6992) [`20d8989`](https://github.com/Bike4Mind/bike4mind/commit/20d89896618bfd48839b26a018dd4b5d4095f237) Thanks [@ken-b4m](https://github.com/ken-b4m)! - core tutorial server library and routes
+
+### Patch Changes
+
+- [#6887](https://github.com/Bike4Mind/bike4mind/pull/6887) [`41902db`](https://github.com/Bike4Mind/bike4mind/commit/41902db235bba17f57d842ea9672695a917a1006) Thanks [@aflordelis](https://github.com/aflordelis)! - move the middle shared layer into the package
+
+- [#6934](https://github.com/Bike4Mind/bike4mind/pull/6934) [`73c54c5`](https://github.com/Bike4Mind/bike4mind/commit/73c54c59112aea7e81b1b2fab2e163a7e19673d7) Thanks [@cgtorniado](https://github.com/cgtorniado)! - sign FabFile download URLs per read instead of storing them
+
+- [#7110](https://github.com/Bike4Mind/bike4mind/pull/7110) [`0f43249`](https://github.com/Bike4Mind/bike4mind/commit/0f4324994de33e19047cdc53163a55c4f0c05492) Thanks [@cgtorniado](https://github.com/cgtorniado)! - link emailed and Slack files through an app route
+
+- [#7227](https://github.com/Bike4Mind/bike4mind/pull/7227) [`870288d`](https://github.com/Bike4Mind/bike4mind/commit/870288d28138c6235d56c1928ef1d114ed408de7) Thanks [@vinchi777](https://github.com/vinchi777)! - align alarmed dead-letter queues with registry
+
+## 6.1.1
+
+### Patch Changes
+
+- [#6627](https://github.com/Bike4Mind/bike4mind/pull/6627) [`9830975`](https://github.com/Bike4Mind/bike4mind/commit/9830975903ef41719f4f02e0dfb3711fe9075e7f) Thanks [@aflordelis](https://github.com/aflordelis)! - move the remaining lower shared layer into the package
+
+## 6.1.0
+
+### Minor Changes
+
+- [#6370](https://github.com/Bike4Mind/bike4mind/pull/6370) [`f2f54a1`](https://github.com/Bike4Mind/bike4mind/commit/f2f54a120ec107d87e9e21e1f7026e7235b0547a) Thanks [@poysama](https://github.com/poysama)! - rebuild the security dashboard around an incident view
+
+- [#6422](https://github.com/Bike4Mind/bike4mind/pull/6422) [`f21f3e9`](https://github.com/Bike4Mind/bike4mind/commit/f21f3e9eb90774500f9311e6912ea940ef40cb2f) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish four file routes as v1 contracts
+
+- [#6447](https://github.com/Bike4Mind/bike4mind/pull/6447) [`9062016`](https://github.com/Bike4Mind/bike4mind/commit/9062016db6efbd76191cf5066c71825ac240df38) Thanks [@cgtorniado](https://github.com/cgtorniado)! - self-serve account deletion with step-up, lockdown and 14-day grace
+
+- [#6448](https://github.com/Bike4Mind/bike4mind/pull/6448) [`47f2ade`](https://github.com/Bike4Mind/bike4mind/commit/47f2ade4b0ef3b516ae0885628c459b55421b2f8) Thanks [@poysama](https://github.com/poysama)! - re-alert unalerted image incidents on a schedule
+
+- [#6450](https://github.com/Bike4Mind/bike4mind/pull/6450) [`5932bfc`](https://github.com/Bike4Mind/bike4mind/commit/5932bfcf53585c5816ec70c251c962439bcb0fa3) Thanks [@poysama](https://github.com/poysama)! - add an admin review page for image incidents
+
+- [#6487](https://github.com/Bike4Mind/bike4mind/pull/6487) [`0eaab83`](https://github.com/Bike4Mind/bike4mind/commit/0eaab83c12a8e017e93dd1cf5eb89451d8b95c34) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - mint and redeem verified hops
+
+## 6.0.0
+
+### Major Changes
+
+- [#5640](https://github.com/Bike4Mind/bike4mind/pull/5640) [`b8146f3`](https://github.com/Bike4Mind/bike4mind/commit/b8146f33b24b69ee9e3762ab454e9a1b65cad880) Thanks [@jjmarfa](https://github.com/jjmarfa)! - remove the legacy What's New generation pipeline
+
+- [#5645](https://github.com/Bike4Mind/bike4mind/pull/5645) [`70d7e0c`](https://github.com/Bike4Mind/bike4mind/commit/70d7e0c127a04a8cdb1cf28338b8970dd94cd5be) Thanks [@jjmarfa](https://github.com/jjmarfa)! - hold DLQ alarm state across SQS metric gaps
+
+### Minor Changes
+
+- [#5673](https://github.com/Bike4Mind/bike4mind/pull/5673) [`906bf96`](https://github.com/Bike4Mind/bike4mind/commit/906bf96005592c4a384f777729dae4737d08db1f) Thanks [@erikbethke](https://github.com/erikbethke)! - render owner-only thumbnails for live artifacts
+
+- [#5974](https://github.com/Bike4Mind/bike4mind/pull/5974) [`79bace3`](https://github.com/Bike4Mind/bike4mind/commit/79bace3daa0069f297a11dbc178c8091bbdb2739) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish the agent authoring assistants as v1 contracts
+
+### Patch Changes
+
+- [#5253](https://github.com/Bike4Mind/bike4mind/pull/5253) [`5741560`](https://github.com/Bike4Mind/bike4mind/commit/5741560256580385e2c577ae0df83db47cb538a2) Thanks [@aflordelis](https://github.com/aflordelis)! - move the next shared server layer into the package
+
+- [#5503](https://github.com/Bike4Mind/bike4mind/pull/5503) [`8e73c9e`](https://github.com/Bike4Mind/bike4mind/commit/8e73c9e56f30e0942266ab667b0c3ad1ffb6469f) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - let workspace packages declare SST secrets, rotation entries and queue/DLQ pairs
+
+- [#5955](https://github.com/Bike4Mind/bike4mind/pull/5955) [`a295054`](https://github.com/Bike4Mind/bike4mind/commit/a2950546d13fbf978e70ee33156e6094db9aabcd) Thanks [@ken-b4m](https://github.com/ken-b4m)! - clear open Dependabot alerts with in-major overrides and bumps
+
+## 5.0.0
+
+### Major Changes
+
+- [#5257](https://github.com/Bike4Mind/bike4mind/pull/5257) [`068b941`](https://github.com/Bike4Mind/bike4mind/commit/068b941bead19a117b6902b57d9f9a121ed4ad90) Thanks [@onoya](https://github.com/onoya)! - protect stored credentials and private data
+
+### Minor Changes
+
+- [#5241](https://github.com/Bike4Mind/bike4mind/pull/5241) [`bba40de`](https://github.com/Bike4Mind/bike4mind/commit/bba40de6be35c3a4742a8063f14bc837e931255d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - deliver generated videos to the requesting Slack thread
+
+### Patch Changes
+
+- [#5252](https://github.com/Bike4Mind/bike4mind/pull/5252) [`af1c441`](https://github.com/Bike4Mind/bike4mind/commit/af1c441eff24c1648160f2515881dfb851b07baa) Thanks [@aflordelis](https://github.com/aflordelis)! - move the next-layer integration, data-lake and service files
+
 ## 4.2.0
 
 ### Minor Changes

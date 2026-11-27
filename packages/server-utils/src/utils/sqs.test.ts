@@ -46,6 +46,14 @@ describe('sqs utilities', () => {
   });
 
   describe('receiveFromQueue', () => {
+    it('requests message attributes only when the caller names them', async () => {
+      mockSend.mockResolvedValue({ Messages: [] });
+      await receiveFromQueue(TEST_QUEUE_URL, 5);
+      await receiveFromQueue(TEST_QUEUE_URL, 5, 0, 0, ['All']);
+      expect(mockSend.mock.calls[0][0].input).not.toHaveProperty('MessageAttributeNames');
+      expect(mockSend.mock.calls[1][0].input.MessageAttributeNames).toEqual(['All']);
+    });
+
     it('returns messages from the queue', async () => {
       const messages = [{ MessageId: 'msg-1', Body: '{}' }];
       mockSend.mockResolvedValueOnce({ Messages: messages });
@@ -141,6 +149,20 @@ describe('sqs utilities', () => {
         approximateMessageCount: 42,
         approximateNotVisibleCount: 3,
       });
+    });
+
+    it('returns the queue retention in seconds when present', async () => {
+      mockSend.mockResolvedValueOnce({
+        Attributes: {
+          ApproximateNumberOfMessages: '1',
+          ApproximateNumberOfMessagesNotVisible: '0',
+          MessageRetentionPeriod: '1209600',
+        },
+      });
+
+      const result = await getQueueAttributes(TEST_QUEUE_URL);
+
+      expect(result.messageRetentionSeconds).toBe(1209600);
     });
 
     it('defaults to 0 when attributes are missing', async () => {

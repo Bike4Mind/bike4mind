@@ -2,6 +2,7 @@ import * as z from 'zod';
 import type { IUserDocument } from '../types/entities/UserTypes';
 import type { USER_SECRET_FIELDS } from '../serializers/toSafeUser';
 import { passthroughField, passthroughShape } from './responseShape';
+import { PAYMENT_UNLOCK_REASONS, SIGNUP_GRANT_UNLOCK_REASONS } from '../signupGrant';
 
 export const VALID_USER_TAGS = [
   '',
@@ -46,6 +47,11 @@ export function hasDeveloperUserTag(tags: readonly string[] | null | undefined):
   return (tags ?? []).some(tag => developerTags.includes(tag));
 }
 
+/** Admins and developer-tagged users are never held to the free-tier gates (model allowlist, paid-only Studio surfaces). */
+export function isFreeTierExempt(user: { isAdmin?: boolean | null; tags?: readonly string[] | null }): boolean {
+  return Boolean(user.isAdmin) || hasDeveloperUserTag(user.tags);
+}
+
 /**
  * True if any of the user's tags grants Tavern access. Matched case-insensitively
  * against 'tavern' to mirror the sidebar nav gate (`SidenavNav`) exactly.
@@ -55,8 +61,8 @@ export function hasTavernUserTag(tags: readonly string[] | null | undefined): bo
 }
 
 /**
- * True if the user may access the Tavern HUD surface: admins, or holders of the
- * 'tavern' tag. The single source of truth for "can this user reach the Tavern",
+ * True if the user may access the Tavern HUD surface: admins, developers, or
+ * holders of the 'tavern' tag. The single source of truth for "can this user reach the Tavern",
  * consumed by BOTH the client route/tab guard AND the server-side API guards
  * (`ensureTavernAccess`), so the UI grant and the API grant can never drift -
  * the same fail-open class that motivated `hasDeveloperUserTag`.
@@ -65,13 +71,14 @@ export function canAccessTavern(
   user: { isAdmin?: boolean | null; tags?: readonly string[] | null } | null | undefined
 ): boolean {
   if (!user) return false;
-  return !!user.isAdmin || hasTavernUserTag(user.tags);
+  return !!user.isAdmin || hasDeveloperUserTag(user.tags) || hasTavernUserTag(user.tags);
 }
 
 export enum AuthStrategy {
   Google = 'google',
   Facebook = 'facebook',
   Github = 'github',
+  Apple = 'apple',
   Okta = 'okta',
   SAML = 'saml',
 }
@@ -113,20 +120,20 @@ export type SafeUser = z.infer<typeof safeUserResponseSchema>;
 export const safeUsersResponseSchema = z.array(safeUserResponseSchema);
 
 /**
- * Mirrors `toPublicProfile()` (pages/api/users/[id]/index.ts): the fields safe to
- * expose to any authenticated user about ANOTHER user. Deliberately excludes
- * email, isAdmin, financial data, tokens, security questions, and admin notes.
+ * Mirrors `toPublicProfile()` (pages/api/users/[id]/index.ts): identity is visible
+ * to authenticated users; workspace colleagues also see profile and presence details.
+ * Deliberately excludes email, isAdmin, financial data, tokens, security questions, and admin notes.
  */
 export const publicUserProfileResponseSchema = z.object({
   id: z.string(),
   username: z.string(),
   name: z.string(),
   photoUrl: z.string().nullable(),
-  level: z.string(),
-  role: z.string().nullable(),
-  team: z.string().nullable(),
+  level: z.string().optional(),
+  role: z.string().nullable().optional(),
+  team: z.string().nullable().optional(),
   lastActiveAt: z.date().optional(),
-  isOnline: z.boolean(),
+  isOnline: z.boolean().optional(),
 });
 export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
 
@@ -149,7 +156,8 @@ export type PublicUserProfile = z.infer<typeof publicUserProfileResponseSchema>;
  */
 type SelfViewPassthroughField = Exclude<keyof IUserDocument, (typeof USER_SECRET_FIELDS)[number]>;
 
-const SELF_VIEW_PASSTHROUGH_FIELDS = {
+/** The fields a self-view copies as-is. `redactUserSecretsForSelf` builds its output from this list too. */
+export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   id: true,
   createdAt: true,
   updatedAt: true,
@@ -159,16 +167,26 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   hasUsablePassword: true,
   groups: true,
   isAdmin: true,
+  adminPermissions: true,
+  adminRoleIds: true,
+  roleAdminPermissions: true,
   storageLimit: true,
+  storageLimitOverride: true,
+  planStorageLimit: true,
   currentStorageSize: true,
   tags: true,
   pendingCreditGrant: true,
+  signupGrant: true,
+  signupGrantHeldReason: true,
+  signupGrantHeldAt: true,
   level: true,
   isBanned: true,
   isModerated: true,
   moderation: true,
   disputePending: true,
   isSystem: true,
+  serviceAccountOrganizationId: true,
+  serviceAccountRetiredAt: true,
   subscribedUntil: true,
   photoUrl: true,
   systemFiles: true,
@@ -186,6 +204,8 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   aupAcceptedVersion: true,
   aupAcceptedAt: true,
   ageAttestedAdult: true,
+  checkoutTermsAcceptedVersion: true,
+  checkoutTermsAcceptedAt: true,
   emailVerified: true,
   emailVerifiedAt: true,
   emailVerificationUsed: true,
@@ -193,13 +213,20 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   pendingEmailUsed: true,
   numReferralsAvailable: true,
   regInvites: true,
+  referredByUserId: true,
+  referredViaLinkAt: true,
+  referralCode: true,
+  signupInvite: true,
+  signupClientId: true,
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
+  clientUsage: true,
   mementos: true,
   showCreditsUsed: true,
   platformEmailAddress: true,
   authorizedEmailAddresses: true,
+  releasedPlatformEmailAddresses: true,
   preferredVoice: true,
   voiceOverrideId: true,
   voiceSystemPromptOverride: true,
@@ -209,9 +236,26 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   lastCreditGrantAt: true,
   acquisition: true,
   isSynthetic: true,
+  isInternal: true,
+  accountSegment: true,
+  isPersona: true,
+  personaExpiresAt: true,
+  mfaEnforcement: true,
+  personaName: true,
+  personaOwnerId: true,
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,
+  apiKeyTrustApproved: true,
+  newAccountSpendCapLifted: true,
+  deletion: true,
+  nextBriefAt: true,
+  lastBriefStartedAt: true,
+  busyBlocks: true,
+  busyBlocksSyncedAt: true,
+  nextBlockBriefAt: true,
+  lastBlockBriefEnd: true,
+  suspensionReasonCategory: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */
@@ -226,9 +270,44 @@ function redactedSubdocument<K extends string>(fields: readonly K[]) {
 // redactUserSecretsForSelf (b4m-core/common/src/serializers/toSafeUser.ts).
 export const selfUserResponseSchema = z.object({
   ...passthroughShape(SELF_VIEW_PASSTHROUGH_FIELDS),
+  signupGrant: z
+    .object({
+      stage: z.enum(['pending_email', 'signup', 'unlocked']),
+      signupCredits: z.number().int().nonnegative(),
+      unlockCredits: z.number().int().nonnegative(),
+      creditsReleased: z.number().int().nonnegative(),
+      nextCondition: z.enum(['email_verification', 'verification']).nullable(),
+      unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
+      unlockedOrgId: z.string().optional(),
+      dripCredits: z.number().int().nonnegative().optional(),
+      inviteBonusPaid: z.number().int().nonnegative().optional(),
+      lastDripPeriod: z
+        .string()
+        .regex(/^preview:\d{1,4}:\d+$/)
+        .optional(),
+      lastDripDay: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      activity: z
+        .object({
+          day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+          ms: z.number().nonnegative(),
+          lastAt: z.coerce.date(),
+          period: z
+            .string()
+            .regex(/^preview:\d{1,4}:\d+$/)
+            .optional(),
+        })
+        .optional(),
+      heldUnlock: z
+        .object({ reason: z.enum(PAYMENT_UNLOCK_REASONS), heldAt: z.coerce.date(), releaseAt: z.coerce.date() })
+        .optional(),
+    })
+    .optional(),
   // Not on IUserDocument, but toJSON() emits it and admin tables key rows by it.
   _id: passthroughField,
-  mfa: redactedSubdocument(['totpEnabled', 'setupAt', 'lastUsedAt']),
+  mfa: redactedSubdocument(['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt']),
   googleDrive: redactedSubdocument(['expiresAt']),
   atlassianConnect: redactedSubdocument([
     'siteName',
@@ -274,8 +353,8 @@ export type SelfUser = z.infer<typeof selfUserResponseSchema>;
 /**
  * The self-view plus the opt-in fields of the profile endpoints (users/[id] and its
  * update), which return question text with blank answers and, for an admin viewer,
- * `keepAdminOnly: ['userNotes']`. The redactor still owns the viewer gate; this only
- * stops every OTHER self-view endpoint from being able to emit these at all.
+ * `keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals']`. The redactor still owns
+ * the viewer gate; this only stops every OTHER self-view endpoint from being able to emit these at all.
  */
 export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
   securityQuestions: z
@@ -283,4 +362,8 @@ export const selfUserProfileResponseSchema = selfUserResponseSchema.extend({
     .nullable()
     .optional(),
   userNotes: passthroughField,
+  signupMeta: passthroughField,
+  signupGrantAssessment: passthroughField,
+  throttle: passthroughField,
+  riskSignals: passthroughField,
 });

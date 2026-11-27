@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { cleanup, render } from 'ink-testing-library';
-import jwt from 'jsonwebtoken';
 import open from 'open';
 import { isBrowserOpenableUrl, isOnApiOrigin, LoginFlow } from './LoginFlow';
 import type { ConfigStore } from '../storage/ConfigStore';
 
 const oauth = vi.hoisted(() => ({ initiateDeviceFlow: vi.fn(), waitForAuthorization: vi.fn() }));
 const identify = vi.hoisted(() => vi.fn());
+const copy = vi.hoisted(() => vi.fn());
 
 vi.mock('open', () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../utils/copyToClipboard', () => ({ copyToClipboard: copy }));
 vi.mock('../auth/OAuthClient', () => ({
   OAuthClient: class {
     initiateDeviceFlow = oauth.initiateDeviceFlow;
@@ -64,7 +65,10 @@ describe('isOnApiOrigin', () => {
 
 describe('LoginFlow', () => {
   const tokens = {
-    access_token: jwt.sign({ id: 'u1' }, 'k'),
+    access_token: ['{"alg":"HS256","typ":"JWT"}', '{"id":"u1"}']
+      .map(part => Buffer.from(part).toString('base64url'))
+      .concat('sig')
+      .join('.'),
     refresh_token: 'r',
     expires_in: 3600,
   };
@@ -76,9 +80,34 @@ describe('LoginFlow', () => {
     expires_in: 600,
     interval: 5,
   });
-  const configStore = { setAuthTokens: vi.fn().mockResolvedValue(undefined) } as unknown as ConfigStore;
+  let lockHeld = false;
+  const savedUnderLock: boolean[] = [];
+  const configStore = {
+    setAuthTokens: vi.fn(async () => {
+      savedUnderLock.push(lockHeld);
+    }),
+    withRefreshLock: vi.fn(async (work: () => Promise<unknown>) => {
+      lockHeld = true;
+      try {
+        return await work();
+      } finally {
+        lockHeld = false;
+      }
+    }),
+  } as unknown as ConfigStore;
 
   afterEach(cleanup);
+
+  it('saves the sign-in while holding the refresh lock', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    identify.mockResolvedValue({});
+    savedUnderLock.length = 0;
+    render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(savedUnderLock).toEqual([true]));
+  });
 
   beforeEach(() => {
     vi.mocked(open).mockClear();
@@ -134,6 +163,83 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it('falls back to URL and code for a foreign origin, without showing or copying the link', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://evil.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('The server asked you to visit:');
+    expect(frame).toContain('https://evil.example.com/activate');
+    expect(frame).not.toContain('activate?code=');
+    expect(frame).not.toContain('Press c');
+    stdin.write('c');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(copy).not.toHaveBeenCalled();
+  });
+
+  it('drops a foreign-origin link when only verification_uri is trusted, and copies the code', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue({
+      ...deviceFlowFor('https://app.example.com'),
+      verification_uri_complete: 'https://evil.example.com/activate?code=ABCD-1234',
+    });
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockResolvedValue('clipboard');
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the code'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('verification URL origin https://evil.example.com does not match');
+    expect(frame).toContain('Please visit:');
+    expect(frame).toContain('https://app.example.com/activate');
+    expect(frame).not.toContain('activate?code=');
+    stdin.write('c');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Code copied to clipboard'));
+    expect(copy).toHaveBeenCalledWith('ABCD-1234');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('ignores Ctrl+C and Alt+C', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockResolvedValue('clipboard');
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('\x03');
+    stdin.write('\x1bc');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(copy).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('Press c to copy the link');
+  });
+
+  it('ignores c while a copy is still running', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    let finish!: (r: 'clipboard') => void;
+    copy.mockReturnValueOnce(new Promise(resolve => (finish = resolve))).mockResolvedValue('clipboard');
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('c');
+    stdin.write('c');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(copy).toHaveBeenCalledTimes(1);
+    finish('clipboard');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Link copied to clipboard'));
+    stdin.write('c');
+    await vi.waitFor(() => expect(copy).toHaveBeenCalledTimes(2));
+  });
+
   it('names the scheme, not an origin mismatch, for a same-origin plain-http URL', async () => {
     oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('http://b4m.internal'));
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
@@ -149,8 +255,30 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('does not open when the server omits verification_uri_complete', async () => {
+  it('opens the plain URL and offers the code, without building a link, when verification_uri_complete is omitted', async () => {
     const { verification_uri_complete: _omitted, ...partial } = deviceFlowFor('https://app.example.com');
+    oauth.initiateDeviceFlow.mockResolvedValue(partial);
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain("If it doesn't open, please visit:");
+    expect(frame).toContain('https://app.example.com/activate');
+    expect(frame).not.toContain('activate?code=');
+    expect(frame).not.toContain('Not opening browser');
+    expect(frame).toContain('Press c to copy the code');
+    copy.mockResolvedValue('clipboard');
+    stdin.write('c');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Code copied to clipboard'));
+    expect(copy).toHaveBeenCalledWith('ABCD-1234');
+    expect(open).toHaveBeenCalledWith('https://app.example.com/activate');
+  });
+
+  it('names a link without a verification_uri accurately and does not open it', async () => {
+    const { verification_uri: _omitted, ...partial } = deviceFlowFor('https://app.example.com');
     oauth.initiateDeviceFlow.mockResolvedValue(partial);
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
     const { lastFrame } = render(
@@ -158,9 +286,82 @@ describe('LoginFlow', () => {
     );
 
     await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
-    expect((lastFrame() ?? '').replace(/\s+/g, ' ')).toContain('the server did not return a verification URL');
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('the server sent a sign-in link but no verification URL');
+    expect(frame).not.toContain('did not return a verification URL');
+    expect(frame).toContain('https://app.example.com/activate?code=ABCD-1234');
+    expect(frame).not.toContain('Or open');
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('warns when the server returns neither URI', async () => {
+    const {
+      verification_uri: _uri,
+      verification_uri_complete: _link,
+      ...partial
+    } = deviceFlowFor('https://app.example.com');
+    oauth.initiateDeviceFlow.mockResolvedValue(partial);
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(frame).toContain('the server did not return a verification URL');
+    expect(frame).not.toContain('Press c');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('shows the one-click link first and the URL plus code as the fallback', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    const frame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    const linkAt = frame.indexOf('https://app.example.com/activate?code=ABCD-1234');
+    const fallbackAt = frame.indexOf('Or open https://app.example.com/activate and enter this code:');
+    expect(linkAt).toBeGreaterThan(-1);
+    expect(fallbackAt).toBeGreaterThan(linkAt);
+    expect(frame.indexOf('ABCD-1234', fallbackAt)).toBeGreaterThan(fallbackAt);
+  });
+
+  it.each([
+    ['clipboard', 'Link copied to clipboard'],
+    ['terminal', 'Sent the link to your terminal clipboard'],
+    ['failed', 'Copy failed, select the link above'],
+  ] as const)('copies the full link on c and reports %s', async (result, message) => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockResolvedValue(result);
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('x');
+    stdin.write('c');
+    await vi.waitFor(() => expect((lastFrame() ?? '').replace(/\s+/g, ' ')).toContain(message));
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(copy).toHaveBeenCalledWith('https://app.example.com/activate?code=ABCD-1234');
+  });
+
+  it('reports a copy failure when the clipboard helper throws', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    copy.mockRejectedValue(new Error('boom'));
+    const { lastFrame, stdin } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press c to copy the link'));
+    stdin.write('c');
+    await vi.waitFor(() => expect(lastFrame()).toContain('Copy failed, select the link above'));
   });
 
   it('strips terminal control characters from server-supplied display strings', async () => {
@@ -192,6 +393,98 @@ describe('LoginFlow', () => {
     await vi.waitFor(() => expect(lastFrame()).toContain('boom'));
     expect(lastFrame()).not.toContain('\u001b]0;pwned');
     expect(onError.mock.calls[0][0].message).toBe(']0;pwnedboom');
+  });
+
+  it('cancels on Esc while waiting, stops polling, and stores nothing', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockImplementation(
+      (_code: string, _interval: number, _onStatus: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)))
+    );
+    const onCancel = vi.fn();
+    const onError = vi.fn();
+    const store = { setAuthTokens: vi.fn() } as unknown as ConfigStore;
+    const { lastFrame, stdin } = render(
+      <LoginFlow
+        apiUrl="https://app.example.com"
+        configStore={store}
+        onSuccess={vi.fn()}
+        onError={onError}
+        onCancel={onCancel}
+      />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press Esc to cancel'));
+    stdin.write('\x1b');
+
+    await vi.waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    const signal = oauth.waitForAuthorization.mock.calls[0][3] as AbortSignal;
+    expect(signal.aborted).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(store.setAuthTokens).not.toHaveBeenCalled();
+  });
+
+  it('finishes signing in when Esc arrives after the token, while it is being saved', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    identify.mockResolvedValue({});
+    let saved!: () => void;
+    const store = {
+      setAuthTokens: vi.fn(() => new Promise<void>(resolve => (saved = resolve))),
+      withRefreshLock: (work: () => Promise<unknown>) => work(),
+    } as unknown as ConfigStore;
+    const onSuccess = vi.fn();
+    const onCancel = vi.fn();
+    const { stdin } = render(
+      <LoginFlow
+        apiUrl="https://app.example.com"
+        configStore={store}
+        onSuccess={onSuccess}
+        onError={vi.fn()}
+        onCancel={onCancel}
+      />
+    );
+    await vi.waitFor(() => expect(store.setAuthTokens).toHaveBeenCalledOnce());
+
+    stdin.write('\x1b');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    saved();
+
+    await vi.waitFor(() => expect(onSuccess).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it('aborts the poll when unmounted', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame, unmount } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+
+    unmount();
+
+    expect((oauth.waitForAuthorization.mock.calls[0][3] as AbortSignal).aborted).toBe(true);
+  });
+
+  it('keeps one device flow across re-renders with new callbacks', async () => {
+    oauth.initiateDeviceFlow.mockReset().mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    let authorize!: (t: typeof tokens) => void;
+    oauth.waitForAuthorization.mockReturnValue(new Promise(resolve => (authorize = resolve)));
+    const first = vi.fn();
+    const latest = vi.fn();
+    const { lastFrame, rerender } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={first} onError={vi.fn()} />
+    );
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+
+    rerender(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={latest} onError={vi.fn()} />
+    );
+    authorize(tokens);
+
+    await vi.waitFor(() => expect(latest).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(first).not.toHaveBeenCalled();
+    expect(oauth.initiateDeviceFlow).toHaveBeenCalledOnce();
   });
 
   it('opens a localhost dev URL on the matching origin', async () => {

@@ -17,8 +17,10 @@ const target = 'https://example.com/read?name=hello%20world&next=%2Fhome';
 const issuedHtml = `<a href="https://app.example.com/api/email/track/click/${token}?url=${encodeURIComponent(target)}">Read</a>`;
 const run = async (url: unknown = target, trackingToken: unknown = token) => {
   const { req, res } = createMocks({ method: 'GET', query: { token: trackingToken, url } });
+  const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
+  (req as unknown as Record<string, unknown>).logger = logger;
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res);
-  return res;
+  return Object.assign(res, { logger });
 };
 
 beforeEach(() => {
@@ -52,16 +54,11 @@ describe('issued email click redirect', () => {
     expect(repository.recordClick).not.toHaveBeenCalled();
   });
   it('keeps a verified link usable when aggregate analytics fail', async () => {
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      counts.mockRejectedValue(new Error('Analytics unavailable'));
-      const res = await run();
-      expect(res._getStatusCode()).toBe(302);
-      expect(res._getRedirectUrl()).toBe(target);
-      expect(log).toHaveBeenCalledWith('Failed to count verified email click:', expect.any(Error));
-    } finally {
-      log.mockRestore();
-    }
+    counts.mockRejectedValue(new Error('Analytics unavailable'));
+    const res = await run();
+    expect(res._getStatusCode()).toBe(302);
+    expect(res._getRedirectUrl()).toBe(target);
+    expect(res.logger.error).toHaveBeenCalledWith('Failed to count verified email click', { error: expect.any(Error) });
   });
   it('rejects array query values', async () => {
     await expect(run([target, 'https://attacker.example'])).rejects.toThrow('Invalid tracking link');

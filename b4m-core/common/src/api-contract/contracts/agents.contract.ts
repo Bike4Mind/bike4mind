@@ -3,18 +3,33 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   AgentIdParamSchema,
   AgentResourceSchema,
+  CreateAgentFromContextRequestSchema,
   CreateAgentRequestSchema,
+  EnhanceAgentFieldRequestSchema,
+  EnhanceAgentFieldResponseSchema,
+  GenerateAgentAvatarRequestSchema,
+  GenerateAgentAvatarResponseSchema,
+  GenerateAgentDescriptionResponseSchema,
+  GenerateAgentSystemPromptResponseSchema,
   ListAgentsResponseSchema,
+  TransferAgentCreditsRequestSchema,
+  TransferAgentCreditsResponseSchema,
   UpdateAgentRequestSchema,
 } from '../../schemas/agentPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  ScopeForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the agent API. Each route is a `/api/v1` twin of an SPA route
- * under `/api/agents/*` and reuses its logic (server/agents/createAgent.ts, deleteAgent.ts); the SPA
- * routes are unchanged. The authoring assistants (generate-*, enhance-field), credit transfers and
- * create-from-context are deliberately not published.
+ * under `/api/agents/*` and reuses its logic (server/agents/createAgent.ts, deleteAgent.ts and the
+ * server/agents/authoring assistants, transferCreditsToAgent and createAgentFromContext); the SPA
+ * routes are unchanged.
  */
 
 // agents:write is accepted for reads so a key that creates agents can read back what it wrote
@@ -169,4 +184,253 @@ export const deleteAgentContract = defineEndpoint({
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: { authToken: 'b4m_live_<key>', streaming: false },
+});
+
+const AUTHORING_SCOPE_NOTE =
+  'Requires `agents:write`: the assistants run models on the deployment, which is management of the agent.';
+
+const AUTHORING_FORBIDDEN =
+  `${WRITE_FORBIDDEN} The same status also answers a caller whose account has AI access revoked; that body ` +
+  `carries only \`error\`, with no \`required_scopes\`. ${SPEND_FROZEN_FORBIDDEN_NOTE}`;
+
+const AUTHORING_400 = 'The assistant cannot run: the feature is disabled or not configured on this deployment.';
+
+const BILLING_400 =
+  'The billing user or organization could not be resolved, or the API key bills an organization ' +
+  'its owner is no longer a member of.';
+
+const AUTHORING_QUOTA_429 =
+  'the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: ' +
+  '"token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`).';
+
+const AUTHORING_429 = `Per-user rate limit exceeded, or ${AUTHORING_QUOTA_429}`;
+
+const AUTHORING_CREDITS_422 =
+  'The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, ' +
+  'or the org member credit cap is exhausted). Nothing is written.';
+
+const AUTHORING_502 = 'The model or image provider failed to produce a result. Nothing is written; retry later.';
+
+export const generateAgentAvatarContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/{id}/generate-avatar',
+  operationId: 'generateAgentAvatar',
+  summary: 'Generate an agent avatar',
+  description:
+    'Generates a portrait for an agent you own from its name, description and personality, stores it, and ' +
+    'saves it as the agent portrait. ' +
+    AUTHORING_SCOPE_NOTE,
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  pathParams: AgentIdParamSchema,
+  request: GenerateAgentAvatarRequestSchema,
+  requestExample: {},
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The stored portrait.', schema: GenerateAgentAvatarResponseSchema },
+    400: {
+      description:
+        '`image_model` is not an available image model (`errorCode: unknown_model`), no image model is ' +
+        'configured, or the generated image would exceed the caller storage quota ' +
+        '(`errorCode: storage_limit_exceeded`). ' +
+        `${BILLING_400} Nothing is written.`,
+      schema: ApiErrorSchema,
+    },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    502: {
+      description:
+        'The image provider failed, refused the prompt, or the generated image was flagged by content ' +
+        'moderation. Nothing is written; retry later.',
+      schema: ApiErrorSchema,
+    },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+export const generateAgentDescriptionContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/{id}/generate-description',
+  operationId: 'generateAgentDescription',
+  summary: 'Generate an agent description',
+  description:
+    'Writes a description for an agent you own from its personality, identity and capabilities. The ' +
+    'description is returned and not saved: send it back with `updateAgent` to keep it. ' +
+    AUTHORING_SCOPE_NOTE,
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  pathParams: AgentIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The generated description.', schema: GenerateAgentDescriptionResponseSchema },
+    400: { description: BILLING_400, schema: ApiErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    502: { description: AUTHORING_502, schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false },
+});
+
+export const generateAgentSystemPromptContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/{id}/generate-system-prompt',
+  operationId: 'generateAgentSystemPrompt',
+  summary: 'Generate an agent system prompt',
+  description:
+    'Writes a system prompt for an agent you own from its metadata and saves it as the agent system prompt, ' +
+    'replacing the current one. Generations for one agent are rate limited by an admin-set interval. ' +
+    AUTHORING_SCOPE_NOTE,
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  pathParams: AgentIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The saved system prompt.', schema: GenerateAgentSystemPromptResponseSchema },
+    400: { description: `${AUTHORING_400} ${BILLING_400} Nothing is written.`, schema: ApiErrorSchema },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
+    429: {
+      description:
+        'Per-user rate limit exceeded, this agent system prompt was generated more recently than the ' +
+        'admin-set interval allows, or ' +
+        AUTHORING_QUOTA_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    502: { description: AUTHORING_502, schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false },
+});
+
+const ENHANCE_FIELD_EXAMPLE = { field_name: 'quirk', current_value: 'Hums while thinking' };
+
+export const enhanceAgentFieldContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/{id}/enhance-field',
+  operationId: 'enhanceAgentField',
+  summary: 'Enhance an agent personality field',
+  description:
+    'Rewrites one personality field of an agent you own into a richer version that keeps the original idea. ' +
+    'The result is returned and not saved: send it back with `updateAgent` to keep it. Unknown body fields ' +
+    'are rejected. ' +
+    AUTHORING_SCOPE_NOTE,
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  pathParams: AgentIdParamSchema,
+  request: EnhanceAgentFieldRequestSchema,
+  requestExample: ENHANCE_FIELD_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The enhanced text.', schema: EnhanceAgentFieldResponseSchema },
+    400: {
+      description: `No model is available to run the enhancement on this deployment. ${BILLING_400}`,
+      schema: ApiErrorSchema,
+    },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    502: { description: AUTHORING_502, schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: ENHANCE_FIELD_EXAMPLE },
+});
+
+const TRANSFER_EXAMPLE = { amount: 500 };
+
+export const transferAgentCreditsContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/{id}/transfer-credits',
+  operationId: 'transferAgentCredits',
+  summary: 'Transfer credits to an agent',
+  description:
+    'Moves credits from your balance to an agent you own, for agents that spend their own credits. The ' +
+    'transfer is atomic: either both balances change or neither does. Credits held by an agent come back to ' +
+    'you when you delete it (`deleteAgent`). Unknown body fields are rejected.',
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  pathParams: AgentIdParamSchema,
+  request: TransferAgentCreditsRequestSchema,
+  requestExample: TRANSFER_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The transfer was made.', schema: TransferAgentCreditsResponseSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: {
+      description:
+        `${BODY_422} Also answers a balance below \`amount\`, tagged \`errorCode: "insufficient_credits"\`. ` +
+        'Nothing is moved.',
+      schema: InsufficientCreditsErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: TRANSFER_EXAMPLE },
+});
+
+const FROM_CONTEXT_EXAMPLE = { agent_name: 'Launch planner', session_id: '<notebook-id>' };
+
+export const createAgentFromContextContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/agents/from-context',
+  operationId: 'createAgentFromContext',
+  summary: 'Create an agent from a notebook',
+  description:
+    'Creates an agent owned by the caller whose description, personality and system prompt a model writes ' +
+    'from the messages and attached files of one of your notebooks, and gives it a dedicated project. The ' +
+    'number of agents a user may own depends on their plan. ' +
+    'Requires `agents:write`: the call runs a model on the deployment and bills the caller for it. Unknown ' +
+    'body fields are rejected.',
+  tags: ['Agents'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.WRITE_AGENTS],
+  request: CreateAgentFromContextRequestSchema,
+  requestExample: FROM_CONTEXT_EXAMPLE,
+  emitsRateLimitHeaders: true,
+  responses: {
+    201: { description: 'The created agent.', schema: AgentResourceSchema },
+    400: {
+      description:
+        'The caller already owns as many agents as their plan allows (`errorCode: agent_limit_reached`), ' +
+        'agent generation is disabled on this deployment, no model is available to run it, or the body is not ' +
+        `valid JSON. ${BILLING_400} Nothing is created.`,
+      schema: ApiErrorSchema,
+    },
+    403: { description: AUTHORING_FORBIDDEN, schema: MeteredForbiddenErrorSchema },
+    404: {
+      description:
+        'No notebook with that id is available to the caller: it does not exist, the id is malformed, or you ' +
+        'hold neither ownership nor create access to it. The cases are not told apart.',
+      schema: ApiErrorSchema,
+    },
+    422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
+    429: {
+      description: AUTHORING_429,
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
+    502: { description: AUTHORING_502, schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: FROM_CONTEXT_EXAMPLE },
 });

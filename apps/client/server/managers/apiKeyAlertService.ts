@@ -59,7 +59,11 @@ export class ApiKeyAlertService {
       }
 
       const baseline = apiKey.metadata?.baseline;
-      if (!baseline) {
+      if (
+        !baseline ||
+        !(baseline.lastCalculatedAt instanceof Date) ||
+        !Number.isFinite(baseline.lastCalculatedAt.getTime())
+      ) {
         // No baseline yet - skip detection (not enough historical data)
         logger?.debug('No baseline available for anomaly detection', { userId, keyId });
         return;

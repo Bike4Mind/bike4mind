@@ -4,7 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { inviteRepository, cacheRepository } from '@bike4mind/database';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService, cacheService } from '@bike4mind/services';
-import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
+import { filterInviteRecipientsToSelf, withoutDisabledSpaceInvites } from '@server/managers/inviteManager';
 import { z } from 'zod';
 import { CacheKeys } from '@server/utils/cacheKeys';
 
@@ -49,8 +49,9 @@ const handler = baseApi().get(async (req, res) => {
 
   // The cache stores the raw invites; strip co-recipients' emails per-response,
   // keeping only the caller's own entry so the inbox pending self-check still works.
+  const visible = await withoutDisabledSpaceInvites(result.data);
   return res.json({
-    data: result.data.map(invite => filterInviteRecipientsToSelf(invite, currentUser.email)),
+    data: visible.map(invite => filterInviteRecipientsToSelf(invite, currentUser.email)),
     pagination: {
       total: result.total,
       page,

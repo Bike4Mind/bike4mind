@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ResearchTaskStatus } from '@bike4mind/common';
+import { ForbiddenError, insufficientCreditsError, ResearchTaskStatus, TooManyRequestsError } from '@bike4mind/common';
+import { ACCOUNT_BANNED_MESSAGE } from '@bike4mind/services/userService/accountState';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -10,10 +11,26 @@ const h = vi.hoisted(() => ({
   taskFindById: vi.fn(),
   taskUpdate: vi.fn(),
   getOperationsTextModel: vi.fn(),
+  process: vi.fn(),
+  processDiscoveredLinks: vi.fn(),
   downloadRelevantLinks: vi.fn(),
+  meter: vi.fn(),
+  afford: vi.fn(),
+  complete: vi.fn(),
+  questFindById: vi.fn(),
+  questUpdateIfUnfinished: vi.fn(),
+  questSettle: vi.fn(),
+  questRepositoryMock: {} as Record<string, unknown>,
+  deepResearchIntoQuest: vi.fn(),
   userRepository: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
   fabFileRepository: { commitContentRewrite: vi.fn(), findChargeState: vi.fn() },
 }));
+
+Object.assign(h.questRepositoryMock, {
+  findById: h.questFindById,
+  updateIfUnfinished: h.questUpdateIfUnfinished,
+  settleIfUnfinished: h.questSettle,
+});
 
 // Every export the module reads at import time, declared because this mock replaces the whole module.
 vi.mock('@bike4mind/database', () => ({
@@ -31,16 +48,29 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: h.fabFileRepository,
   taskScheduleRepository: {},
   fileTagRepository: {},
+  questRepository: h.questRepositoryMock,
 }));
-vi.mock('@bike4mind/services', () => ({
-  researchTaskService: { process: vi.fn(), downloadRelevantLinks: h.downloadRelevantLinks },
+vi.mock('@bike4mind/services', async () => ({
+  meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
+    .meterCompletionBackend,
+  researchTaskService: {
+    process: h.process,
+    processDiscoveredLinks: h.processDiscoveredLinks,
+    downloadRelevantLinks: h.downloadRelevantLinks,
+    deepResearchIntoQuest: h.deepResearchIntoQuest,
+    DEEP_RESEARCH_FAILED_REPLY: 'research failed',
+  },
+}));
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createCompletionMeter: () => h.meter,
+  assertOwnerCanAfford: h.afford,
 }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
-vi.mock('@server/jobs/researchTasks', () => ({ researchTaskJobs: {} }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/utils/researchTasks', () => ({ researchTaskJobs: {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: h.getOperationsTextModel },
 }));
 
@@ -89,6 +119,94 @@ describe('researchEngineQueue process - failure reset', () => {
   });
 });
 
+describe('researchEngineQueue metering', () => {
+  const runLlm = async (_a: unknown, _b: unknown, deps: { llm: { complete: (...a: unknown[]) => unknown } }) => {
+    await deps.llm.complete('m', [{ role: 'user', content: 'q' }], {}, async () => {});
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getOperationsTextModel.mockResolvedValue({ modelId: 'm', llm: { complete: h.complete }, modelInfo: { id: 'm' } });
+    h.userFindById.mockResolvedValue({ id: 'u1' });
+    h.taskFindById.mockResolvedValue({ id: 'rt1', status: ResearchTaskStatus.PROCESSING });
+    h.complete.mockImplementation(async (_m, _msgs, _o, cb) => cb(['ok'], { inputTokens: 10, outputTokens: 5 }));
+    h.process.mockImplementation(runLlm);
+    h.processDiscoveredLinks.mockImplementation((a: unknown, deps: Parameters<typeof runLlm>[2]) => runLlm(a, a, deps));
+  });
+
+  it('settles each research LLM call against the task owner', async () => {
+    const settle = vi.fn().mockResolvedValue(1);
+    h.meter.mockResolvedValue({ settle, refund: vi.fn() });
+
+    await dispatch(makeEvent('process'), {} as never, logger as never);
+
+    expect(h.complete).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledWith({ inputTokens: 10, outputTokens: 5 });
+  });
+
+  it('fails a task for an owner out of credits before the service scrapes anything', async () => {
+    h.afford.mockRejectedValueOnce(insufficientCreditsError('Not enough credits'));
+
+    await dispatch(makeEvent('process'), {} as never, logger as never);
+
+    expect(h.process).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(expect.objectContaining({ status: ResearchTaskStatus.FAILED }));
+  });
+
+  it('fails a discovered-links run for an owner out of credits without calling the provider or rethrowing', async () => {
+    h.meter.mockRejectedValue(insufficientCreditsError('Not enough credits'));
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'rt1',
+        status: ResearchTaskStatus.FAILED,
+        statusFailedMessage: 'Not enough credits',
+      })
+    );
+  });
+
+  it('fails a discovered-links run on the free-tier daily cap without rethrowing', async () => {
+    const message = 'Daily free limit reached';
+    h.meter.mockRejectedValue(
+      new TooManyRequestsError(message, { errorCode: 'daily_free_limit_reached', retryAfter: 3600 })
+    );
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'rt1', status: ResearchTaskStatus.FAILED, statusFailedMessage: message })
+    );
+  });
+
+  it('fails a discovered-links run for a suspended owner without rethrowing', async () => {
+    h.meter.mockRejectedValue(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).resolves.toBeUndefined();
+
+    expect(h.complete).not.toHaveBeenCalled();
+    expect(h.taskUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'rt1',
+        status: ResearchTaskStatus.FAILED,
+        statusFailedMessage: ACCOUNT_BANNED_MESSAGE,
+      })
+    );
+  });
+
+  it('still rethrows an unrelated forbidden error from a discovered-links run', async () => {
+    h.meter.mockRejectedValue(new ForbiddenError('Unauthorized. Admin access required.'));
+
+    await expect(dispatch(makeEvent('processDiscoveredLinks'), {} as never, logger as never)).rejects.toThrow(
+      'Unauthorized. Admin access required.'
+    );
+    expect(h.taskUpdate).not.toHaveBeenCalled();
+  });
+});
+
 describe('researchEngineQueue downloadRelevantLinks - storage adapters', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -108,5 +226,113 @@ describe('researchEngineQueue downloadRelevantLinks - storage adapters', () => {
 
     expect(h.downloadRelevantLinks).toHaveBeenCalledTimes(1);
     expect(h.userRepository.incrementCurrentStorage).toHaveBeenCalledWith('u1', 150);
+  });
+});
+
+const researchEvent = (payload: Record<string, unknown>, receiveCount = '1') =>
+  ({
+    Records: [
+      {
+        body: JSON.stringify({ action: 'deepResearchIntoQuest', payload }),
+        attributes: { ApproximateReceiveCount: receiveCount },
+      },
+    ],
+  }) as never;
+const job = { questId: 'q1', sessionId: 's1', userId: 'u1', topic: 'Solar panel recycling' };
+
+describe('deepResearchIntoQuest action', () => {
+  const refusal = () =>
+    Object.assign(new Error('Not enough credits'), { additionalInfo: { errorCode: 'insufficient_credits' } });
+  const patch = { status: 'done', type: 'error', reply: 'Not enough credits', replies: ['Not enough credits'] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: 'u1' });
+    h.getOperationsTextModel.mockResolvedValue({ modelId: 'ops', llm: { complete: h.complete }, modelInfo: {} });
+  });
+
+  it('runs research for the quest on the metered operations model', async () => {
+    await dispatch(researchEvent(job), {} as never, logger as never);
+    expect(h.afford).toHaveBeenCalled();
+    expect(h.deepResearchIntoQuest).toHaveBeenCalledTimes(1);
+    const [params, adapters] = h.deepResearchIntoQuest.mock.calls[0];
+    expect(params).toStrictEqual({ questId: 'q1', topic: 'Solar panel recycling' });
+    expect(adapters.quests).toBe(h.questRepositoryMock);
+    expect(adapters.toolContext).toMatchObject({
+      userId: 'u1',
+      sessionId: 's1',
+      questId: 'q1',
+      authOrigin: 'internal',
+    });
+    expect(adapters.llm.complete).toEqual(expect.any(Function));
+    expect(adapters.llm.complete).not.toBe(h.complete);
+  });
+
+  it('gives the service no status push adapter', async () => {
+    await dispatch(researchEvent(job), {} as never, logger as never);
+    expect(h.deepResearchIntoQuest.mock.calls[0][1]).not.toHaveProperty('push');
+  });
+
+  it('settles the refusal when the owner cannot pay, without rethrowing', async () => {
+    h.questSettle.mockResolvedValue(true);
+    h.afford.mockRejectedValueOnce(refusal());
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).resolves.toBeUndefined();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', patch);
+  });
+
+  it('does not rethrow the refusal when the quest was already settled', async () => {
+    h.questSettle.mockResolvedValue(false);
+    h.afford.mockRejectedValueOnce(refusal());
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).resolves.toBeUndefined();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', patch);
+  });
+
+  it('settles the refusal when the owner account is suspended, without rethrowing', async () => {
+    h.questSettle.mockResolvedValue(true);
+    h.afford.mockRejectedValueOnce(new ForbiddenError(ACCOUNT_BANNED_MESSAGE));
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).resolves.toBeUndefined();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: ACCOUNT_BANNED_MESSAGE,
+      replies: [ACCOUNT_BANNED_MESSAGE],
+    });
+  });
+
+  it('rethrows an unrelated forbidden error so the message is redelivered', async () => {
+    h.afford.mockRejectedValueOnce(new ForbiddenError('Unauthorized. Admin access required.'));
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).rejects.toThrow('Unauthorized');
+    expect(h.questSettle).not.toHaveBeenCalled();
+  });
+
+  it('settles a redelivered message as failed without loading the model or researching', async () => {
+    h.questSettle.mockResolvedValue(true);
+    await expect(dispatch(researchEvent(job, '2'), {} as never, logger as never)).resolves.toBeUndefined();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: 'research failed',
+      replies: ['research failed'],
+    });
+    expect(h.afford).not.toHaveBeenCalled();
+    expect(h.getOperationsTextModel).not.toHaveBeenCalled();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a non-refusal billing error so the message is redelivered', async () => {
+    h.afford.mockRejectedValueOnce(new Error('db down'));
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).rejects.toThrow('db down');
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).not.toHaveBeenCalled();
+  });
+
+  it('rejects a topic that is empty or longer than 2000 characters', async () => {
+    await expect(dispatch(researchEvent({ ...job, topic: '' }), {} as never, logger as never)).rejects.toThrow();
+    await expect(
+      dispatch(researchEvent({ ...job, topic: 'x'.repeat(2001) }), {} as never, logger as never)
+    ).rejects.toThrow();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/joy';
-import { CallEnd, GraphicEq } from '@mui/icons-material';
+import CallEnd from '@mui/icons-material/CallEnd';
+import GraphicEq from '@mui/icons-material/GraphicEq';
 import React, { useEffect, useId, useRef, useState } from 'react';
 import type { Mode } from '@elevenlabs/client';
 import { useNavigate } from '@tanstack/react-router';

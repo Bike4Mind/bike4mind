@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Readable } from 'node:stream';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import type { AuthTokens } from '@bike4mind/client-auth';
 
 vi.mock('../utils/Logger', () => ({ logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
@@ -195,20 +196,30 @@ describe('ApiClient no-credential 401', () => {
   it('still reports "Authentication expired" when a stored token fails to refresh', async () => {
     // Guards the path we must not change: a stored, expired token whose refresh is
     // rejected stays a SessionRevokedError with the original wording.
-    mockGetAuthTokens.mockResolvedValue({
+    let stored: AuthTokens | null = {
       accessToken: 'stale',
       refreshToken: 'refresh',
       expiresAt: new Date(Date.now() - 60_000).toISOString(),
       userId: 'user-1',
+    };
+    mockGetAuthTokens.mockImplementation(async () => stored);
+    mockClearAuthTokens.mockImplementation(async () => {
+      stored = null;
     });
     client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
       Promise.reject(make401(config))) as AxiosAdapter;
     mockRefreshToken.mockRejectedValue(refreshHttpError(400));
 
-    const err = await rejection(client.get('/api/sessions'));
-
-    expect(err).toBeInstanceOf(SessionRevokedError);
-    expect(err.message).toContain('Authentication expired');
+    try {
+      const err = await rejection(client.get('/api/sessions'));
+      expect(err).toBeInstanceOf(SessionRevokedError);
+      expect(err.message).toContain('Authentication expired');
+      expect(mockClearAuthTokens).toHaveBeenCalledWith('refresh');
+      expect(stored).toBeNull();
+    } finally {
+      mockGetAuthTokens.mockReset();
+      mockClearAuthTokens.mockReset();
+    }
   });
 
   it('is not treated as a revocation when there are no tokens (checkSessionValid unchanged)', async () => {

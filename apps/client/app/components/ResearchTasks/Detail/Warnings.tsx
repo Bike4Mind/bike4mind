@@ -1,6 +1,6 @@
 import { FC } from 'react';
 import { Alert, Stack } from '@mui/joy';
-import { WarningAmberRounded } from '@mui/icons-material';
+import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 
 /** Non-fatal notices from the task's latest run; renders nothing when there are none. */
 const ResearchTaskDetailWarnings: FC<{ warnings?: string[] }> = ({ warnings }) => {

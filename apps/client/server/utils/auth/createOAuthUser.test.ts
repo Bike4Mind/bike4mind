@@ -1,10 +1,13 @@
+import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
+import { isReservedUsername, PENDING_FREE_CREDITS_TAG, usernameSchema, USERNAME_MAX_LENGTH } from '@bike4mind/common';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 
 const mockCreate = vi.fn();
+const mockFindSetting = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: { create: (...args: unknown[]) => mockCreate(...args) },
+  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
 }));
 
 const oauthCredentials = { strategy: 'google', id: 'sub-1' };
@@ -12,6 +15,7 @@ const oauthCredentials = { strategy: 'google', id: 'sub-1' };
 describe('createUniqueOAuthUser', () => {
   beforeEach(() => {
     mockCreate.mockReset();
+    mockFindSetting.mockReset().mockResolvedValue(null);
     mockCreate.mockImplementation(async (doc: Record<string, unknown>) => ({ _id: 'new-id', ...doc }));
   });
 
@@ -32,6 +36,77 @@ describe('createUniqueOAuthUser', () => {
     expect(doc).not.toHaveProperty('emailVerifiedAt');
   });
 
+  it('snapshots staging only for a newly created credit-eligible account', async () => {
+    mockFindSetting.mockImplementation(async (name: string) => ({
+      settingValue: {
+        signupGrantInitialCredits: '12',
+        signupGrantDripCap: '28',
+      }[name],
+    }));
+    await createUniqueOAuthUser({
+      name: 'Pat',
+      baseUsername: 'pat',
+      email: 'pat@example.test',
+      oauthCredentials,
+      pendingFreeCredits: true,
+    });
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({
+      stage: 'pending_email',
+      signupCredits: 12,
+      unlockCredits: 28,
+    });
+    await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: null, oauthCredentials });
+    expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
+  });
+
+  it('enrolls the schedule grant with nothing locked under a drip cap of 0', async () => {
+    mockFindSetting.mockImplementation(async (name: string) => ({
+      settingValue: {
+        signupGrantInitialCredits: '40',
+        signupGrantDripCap: '0',
+      }[name],
+    }));
+    await createUniqueOAuthUser({
+      name: 'Pat',
+      baseUsername: 'pat',
+      email: 'pat@example.test',
+      oauthCredentials,
+      pendingFreeCredits: true,
+    });
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({ signupCredits: 40, unlockCredits: 0 });
+  });
+
+  describe('referral invite', () => {
+    const referralInvite = { inviteId: 'invite-1', inviterId: 'inviter-1' };
+    beforeEach(() => {
+      mockFindSetting.mockImplementation(async (name: string) => ({
+        settingValue: { signupGrantInitialCredits: '12', signupGrantDripCap: '28' }[name],
+      }));
+    });
+
+    it('marks the account invited, names the inviter and enrolls the default grant', async () => {
+      await createUniqueOAuthUser({
+        name: 'Pat',
+        baseUsername: 'pat',
+        email: 'pat@example.test',
+        oauthCredentials,
+        pendingFreeCredits: true,
+        referralInvite,
+      });
+      const doc = mockCreate.mock.calls[0][0];
+      expect(doc.referredByUserId).toBe('inviter-1');
+      expect(doc.signupInvite).toEqual({ source: 'referral', inviteId: 'invite-1', at: expect.any(Date) });
+      expect(doc.signupGrant).toMatchObject({ signupCredits: 12, unlockCredits: 28 });
+    });
+
+    it('sets neither field without a referral invite', async () => {
+      await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: 'pat@example.test', oauthCredentials });
+      const doc = mockCreate.mock.calls[0][0];
+      expect(doc).not.toHaveProperty('signupInvite');
+      expect(doc).not.toHaveProperty('referredByUserId');
+    });
+  });
+
   it('tags the account pending-free-credits only when asked', async () => {
     await createUniqueOAuthUser({
       name: 'Pat',
@@ -46,9 +121,36 @@ describe('createUniqueOAuthUser', () => {
     expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('tags');
   });
 
+  it('records the signup client only when one is passed', async () => {
+    const base = { name: 'Pat', baseUsername: 'pat', email: 'pat@example.com', oauthCredentials };
+    await createUniqueOAuthUser({ ...base, signupClientId: 'b4m_acme_0a1b2c3d' });
+    await createUniqueOAuthUser({ ...base, signupClientId: null });
+    await createUniqueOAuthUser(base);
+
+    expect(mockCreate.mock.calls[0][0]).toEqual(expect.objectContaining({ signupClientId: 'b4m_acme_0a1b2c3d' }));
+    expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupClientId');
+    expect(mockCreate.mock.calls[2][0]).not.toHaveProperty('signupClientId');
+  });
+
+  it('falls back to the username for an empty name and carries the signup network', async () => {
+    const signupMeta = { ip: '203.0.113.7', capturedAt: new Date() };
+    await createUniqueOAuthUser({ name: '', baseUsername: 'pat', email: null, oauthCredentials, signupMeta });
+
+    expect(mockCreate.mock.calls[0][0]).toEqual(expect.objectContaining({ name: 'pat', signupMeta }));
+  });
+
+  it('rethrows a non-object create failure without retrying', async () => {
+    mockCreate.mockRejectedValueOnce('boom');
+
+    await expect(
+      createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: 'pat@example.com', oauthCredentials })
+    ).rejects.toBe('boom');
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
   it('retries with a disambiguated username on a username collision and keeps the verified stamp', async () => {
     mockCreate.mockRejectedValueOnce({ code: 11000, keyPattern: { username: 1 } });
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'info').mockImplementation(() => undefined);
 
     await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: 'pat@example.com', oauthCredentials });
 
@@ -77,6 +179,23 @@ describe('deriveOAuthUsername', () => {
     expect(deriveOAuthUsername(null, '***', null)).toMatch(/^user-[0-9a-f]{8}$/);
   });
 
+  it('never yields the reserved test-persona prefix, from any source', () => {
+    expect(deriveOAuthUsername('persona-bot', 'Pat Doe', null)).toBe('bot');
+    expect(deriveOAuthUsername(null, 'Persona-Pat', null)).toBe('Pat');
+    expect(deriveOAuthUsername(null, '', 'persona-pat@example.com')).toBe('pat');
+    expect(deriveOAuthUsername('persona-', 'PERSONA-', 'persona-@example.com')).toMatch(/^user-[0-9a-f]{8}$/);
+    for (const name of ['persona-x', '  persona-y', 'PERSONA-persona-z']) {
+      expect(isReservedUsername(deriveOAuthUsername(null, name, null))).toBe(false);
+    }
+  });
+
+  it('keeps the retry suffixes off a stripped base unreserved', () => {
+    const base = deriveOAuthUsername(null, 'persona-pat', null);
+    for (const candidate of [base, `${base} 2`, `${base}-abcdef`]) {
+      expect(isReservedUsername(candidate)).toBe(false);
+    }
+  });
+
   it('leaves room for the longest retry suffix within the length cap', () => {
     const base = deriveOAuthUsername(null, 'a'.repeat(200), null);
 
@@ -90,7 +209,7 @@ describe('deriveOAuthUsername', () => {
 describe('createUniqueOAuthUser retry suffixes', () => {
   beforeEach(() => {
     mockCreate.mockReset();
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'info').mockImplementation(() => undefined);
   });
 
   it('only ever tries usernames that satisfy the username rules', async () => {

@@ -6,6 +6,7 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
@@ -32,6 +33,7 @@ vi.mock('@bike4mind/common', () => ({
   TagType: { FILE: 'file' },
   ApiKeyScope: { READ_FILES: 'files:read', WRITE_FILES: 'files:write' },
   CONFINED_API_KEY_SCOPES: [],
+  isBuiltInApiKeyScope: (value: unknown) => value === 'files:read' || value === 'files:write',
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   ForbiddenError: class extends Error {},

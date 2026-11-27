@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 // Integration guard for the React branch of finalize (issue #21): a React draft uploads RAW JSX as
@@ -37,6 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  artifactRepository: { findOne: vi.fn(async () => null) },
   PublishedArtifact: {
     findOne: () => ({ select: () => ({ lean: () => Promise.resolve(mockFindOne()) }) }),
     findOneAndUpdate: (...a: unknown[]) => Promise.resolve(mockFindOneAndUpdate(...a)),
@@ -45,12 +50,16 @@ vi.mock('@bike4mind/database', () => ({
 
 // Keep the REAL buildReactArtifactBundle + validateBundle (that's what we're exercising); stub the
 // rest of the heavy publish-service surface so the handler reaches the transpile + upsert.
+// finalize reaches the quota check through planVersionedPublish, which imports it from this module.
+vi.mock('@server/services/publish/checkPublishQuota', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, checkPublishQuota: () => Promise.resolve({ ok: true }) };
+});
 vi.mock('@server/services/publish', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     checkScopePermission: () => Promise.resolve({ ok: true }),
-    checkPublishQuota: () => Promise.resolve({ ok: true }),
     resolveVisibility: (_tier: string, visibility: string) => ({ ok: true, visibility }),
     buildPublishS3KeyPrefix: () => 'user/owner1/counter/',
     buildPublishUrlPath: () => '/p/u/owner1/counter',
@@ -182,5 +191,56 @@ describe('finalize - React artifact transpile branch', () => {
     const body = res._getJSONData() as { violations?: Array<{ message: string }> };
     expect(body.violations?.[0]?.message ?? '').toMatch(/default export/i);
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled(); // no upsert - nothing published
+  });
+});
+
+describe('finalize - multi-file React upload', () => {
+  const APP = `import Stopwatch from './Stopwatch';
+export default function App() { return <Stopwatch />; }`;
+  const STOPWATCH = `export default function Stopwatch() { return <span>0</span>; }`;
+  const multiManifest = (raw: string, reactSiblings: string[]) => ({
+    ...reactManifest(raw),
+    source: { kind: 'bundle', artifactId: 'a1', artifactType: 'react', reactSiblings },
+  });
+
+  it('bundles the entry with its siblings and keeps the sibling identifiers on the record', async () => {
+    const raw = JSON.stringify({ entry: APP, files: { Stopwatch: STOPWATCH } });
+    setDraft(multiManifest(raw, ['Stopwatch']), raw);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const indexUpload = mockUpload.mock.calls.find(c => String(c[1]).endsWith('index.html'));
+    const promotedHtml = (indexUpload![0] as Buffer).toString('utf-8');
+    expect(promotedHtml).toContain('["Stopwatch", function (module, exports, require)');
+    expect(promotedHtml).not.toContain('"entry"');
+    expect(savedSet().source).toEqual(expect.objectContaining({ reactSiblings: ['Stopwatch'] }));
+  });
+
+  it('rejects an entry importing a sibling the upload does not carry (clean 422)', async () => {
+    const raw = JSON.stringify({ entry: APP, files: { Clock: STOPWATCH } });
+    setDraft(multiManifest(raw, ['Clock']), raw);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    const body = res._getJSONData() as { violations?: Array<{ type: string; message: string }> };
+    expect(body.violations?.[0]).toEqual(
+      expect.objectContaining({
+        type: 'forbidden_pattern',
+        message: 'Cannot resolve "./Stopwatch": no artifact file is named "stopwatch". Available files: Clock.',
+      })
+    );
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects an upload whose files differ from the declared siblings (clean 422)', async () => {
+    const raw = JSON.stringify({ entry: APP, files: { Stopwatch: STOPWATCH } });
+    setDraft(multiManifest(raw, ['Stopwatch', 'Extra']), raw);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 });

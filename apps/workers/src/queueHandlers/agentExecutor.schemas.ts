@@ -68,8 +68,11 @@ export const ContinuationSchema = z.object({
   executionId: z.string(),
   connectionId: z.string(),
   // Optional for backward compat with in-flight messages that pre-date the depth guard.
-  // Defaults to 0 at the call site when absent. See MAX_CHECKPOINT_DEPTH in agentExecutor.ts.
+  // Defaults to 0 at the call site when absent. See MAX_CHECKPOINT_DEPTH in agentExecutor.checkpointDepth.ts.
   checkpointDepth: z.number().int().min(0).optional(),
+  // Set by the permission and gate responses: a resume the user clicked, which does not spend the runaway
+  // MAX_LAMBDA_HANDOFFS budget (a directed run needs four tool approvals on its own). Self-dispatches omit it.
+  resumedBy: z.literal('user').optional(),
 });
 
 /**

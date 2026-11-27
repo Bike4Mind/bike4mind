@@ -1,4 +1,12 @@
-import { IOrganizationRepository, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  hasOrgPermission,
+  IOrganizationRepository,
+  IUserDocument,
+  MAX_STORAGE_LIMIT_MB,
+  OrganizationSharingPolicySchema,
+  isOrgMember,
+} from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -9,8 +17,10 @@ const updateSchema = z.object({
   description: z.string().optional(),
   billingContact: z.string().optional(),
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
+  redactPushContent: z.boolean().optional(),
+  sharingPolicy: OrganizationSharingPolicySchema.optional(),
   maxCreditsPerMember: z.number().int().positive().nullable().optional(),
-  /** Decimal MB; null clears the override back to DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB. */
+  /** Decimal MB; null clears the override back to the plan or default. */
   storageLimit: z.number().min(0).max(MAX_STORAGE_LIMIT_MB).nullable().optional(),
 });
 
@@ -25,26 +35,21 @@ interface UpdateAdapters {
 export const update = async (user: IUserDocument, params: UpdateParameters, adapters: UpdateAdapters) => {
   const { id, ...rest } = secureParameters(params, updateSchema);
 
-  let organization = await adapters.db.organizations.shareable.findUpdateAccessById(user, id);
-  if (user.isAdmin) {
-    organization = await adapters.db.organizations.findById(id);
-  }
-
+  const organization = await adapters.db.organizations.findById(id);
   if (!organization) throw new NotFoundError('Organization not found');
 
-  // Normalize a possibly-hydrated Mongoose doc to a plain object before spreading.
-  // findUpdateAccessById returns a hydrated doc (unlike findAccessibleById, which
-  // returns toJSON()); spreading it copies `_doc`/`$__` and nests the real fields,
-  // which corrupts the response shape AND defeats the response-boundary field strip
-  // in toSafeOrganization (top-level stripeCustomerId/userId would be undefined).
+  // Spreading a hydrated doc nests the real fields under `_doc`, which defeats toSafeOrganization's strip.
   const plain = (
     typeof (organization as { toJSON?: unknown }).toJSON === 'function'
       ? (organization as unknown as { toJSON: () => NonNullable<typeof organization> }).toJSON()
       : organization
   ) as NonNullable<typeof organization>;
 
-  const isManager = (plain.adminUserIds ?? []).includes(user.id);
-  const isOwner = plain.userId === user.id;
+  // Every field here is org-wide, so the gate is the team role, never a sharing-ACL row.
+  if (!hasOrgPermission(user, plain, 'managePolicies')) {
+    if (!isOrgMember(user, plain)) throw new NotFoundError('Organization not found');
+    throw new ForbiddenError('Only organization owners and managers can change organization settings.');
+  }
 
   // Persist ONLY the caller-editable fields this request changed, never a spread of
   // the read snapshot. A whole-document write reverted concurrent credit, seat and
@@ -52,17 +57,15 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   const update: Partial<typeof plain> & { id: string } = { id };
   if (rest.name !== undefined) update.name = rest.name;
   if (rest.description !== undefined) update.description = rest.description;
-  // Only allow billing contact changes for owners and admins, not managers.
-  if (rest.billingContact !== undefined && !(isManager && !isOwner && !user.isAdmin)) {
+  if (rest.billingContact !== undefined && hasOrgPermission(user, plain, 'manageBilling')) {
     update.billingContact = rest.billingContact;
   }
-  // Managers can update systemPrompt intentionally - they customize org-wide AI
-  // behavior. Authorization is already checked via findUpdateAccessById.
   if (rest.systemPrompt !== undefined) update.systemPrompt = rest.systemPrompt;
+  if (rest.redactPushContent !== undefined) update.redactPushContent = rest.redactPushContent;
+  if (rest.sharingPolicy !== undefined) update.sharingPolicy = rest.sharingPolicy;
 
-  // Platform-admin path only. Owners and appointed org admins set the default through
-  // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget),
-  // which this generic update cannot serve: appointed admins fail findUpdateAccessById above.
+  // Platform-admin path only. Owners and managers set the default through
+  // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget).
   // Coalesce a cleared cap to null, NOT undefined:
   // $set persists null (read as "no cap" by isMemberCreditCapExceeded), and BSON drops
   // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).
@@ -70,14 +73,15 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
     update.maxCreditsPerMember = rest.maxCreditsPerMember ?? null;
   }
 
-  // Platform-admin only: a manager must not raise their own org's quota. Same null-not-undefined
-  // rule as maxCreditsPerMember, so a cleared limit falls back to the default. Lowering it below
-  // current usage deletes nothing; checkStorageLimit just refuses new uploads.
-  if (user.isAdmin && rest.storageLimit !== undefined) {
-    update.storageLimit = rest.storageLimit ?? null;
-  }
-
   const updated = await adapters.db.organizations.update(update);
+
+  // Platform admin only, so a manager cannot raise their own org's quota. Lowering below usage deletes
+  // nothing; uploads are just refused.
+  if (user.isAdmin && rest.storageLimit !== undefined) {
+    const limited = await adapters.db.organizations.setStorageLimitOverride(id, rest.storageLimit);
+    if (!limited) throw new NotFoundError('Organization not found');
+    return limited;
+  }
 
   return updated ?? ({ ...plain, ...update } as typeof plain);
 };

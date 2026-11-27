@@ -16,6 +16,8 @@ interface Props {
   onLoadMore: () => void;
 }
 
+const col = (width: number) => ({ width: { xs: 'auto', sm: width }, flexShrink: 0 });
+
 const RunRow: FC<{ run: QaRunSummary } & Pick<Props, 'onOpenRun' | 'renderExpanded'>> = ({
   run,
   onOpenRun,
@@ -26,9 +28,19 @@ const RunRow: FC<{ run: QaRunSummary } & Pick<Props, 'onOpenRun' | 'renderExpand
   const failing = isFailingRun(run);
   return (
     <Box>
-      <Stack data-testid="qa-run-row" direction="row" spacing={1.5} alignItems="center" sx={{ py: 0.5 }}>
+      {/* Fixed columns from sm up; on a phone they size to content and the row wraps instead of overlapping. */}
+      <Stack
+        data-testid="qa-run-row"
+        direction="row"
+        flexWrap="wrap"
+        useFlexGap
+        columnGap={1.5}
+        rowGap={0.25}
+        alignItems="center"
+        sx={{ py: 0.5 }}
+      >
         {/* Fixed slot so columns line up between failing and passing rows. */}
-        <Box sx={{ width: 20, display: 'flex' }}>
+        <Box sx={{ width: 20, flexShrink: 0, display: 'flex' }}>
           {failing && (
             <ErrorRoundedIcon sx={{ color: 'danger.plainColor' }} fontSize="small" data-testid="qa-run-failed-icon" />
           )}
@@ -41,13 +53,13 @@ const RunRow: FC<{ run: QaRunSummary } & Pick<Props, 'onOpenRun' | 'renderExpand
         >
           {open ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
         </IconButton>
-        <Typography level="body-sm" sx={{ width: 110, fontVariantNumeric: 'tabular-nums' }}>
+        <Typography level="body-sm" sx={{ ...col(110), fontVariantNumeric: 'tabular-nums' }}>
           {formatTime(run.startedAt)}
         </Typography>
-        <Typography level="body-sm" sx={{ width: 120 }}>
+        <Typography level="body-sm" sx={col(120)}>
           {run.suite}
         </Typography>
-        <Typography level="body-sm" sx={{ width: 110 }}>
+        <Typography level="body-sm" sx={col(110)}>
           {run.env}
           {run.tenant ? ` (${run.tenant})` : ''}
         </Typography>
@@ -55,7 +67,7 @@ const RunRow: FC<{ run: QaRunSummary } & Pick<Props, 'onOpenRun' | 'renderExpand
           level="body-sm"
           color={failing ? 'danger' : undefined}
           data-testid="qa-run-counts"
-          sx={{ width: 70, fontVariantNumeric: 'tabular-nums' }}
+          sx={{ ...col(70), fontVariantNumeric: 'tabular-nums' }}
         >
           {counts.passed}/{counts.ran}
         </Typography>
@@ -82,7 +94,7 @@ const RunRow: FC<{ run: QaRunSummary } & Pick<Props, 'onOpenRun' | 'renderExpand
         </Button>
       </Stack>
       {open && (
-        <Box data-testid="qa-run-expanded" sx={{ pl: 9, pb: 1.5 }}>
+        <Box data-testid="qa-run-expanded" sx={{ pl: { xs: 1, sm: 9 }, pb: 1.5 }}>
           {renderExpanded(run)}
         </Box>
       )}

@@ -35,9 +35,12 @@ async function session() {
   await Session.collection.insertOne({ _id, userId: 'owner', name: 'local transcript' });
   return String(_id);
 }
-function request(ids: string[]) {
-  const { req, res } = createMocks({ method: 'POST', body: { sessionIds: ids, curationType: 'transcript' } });
-  Object.assign(req, { user: { id: 'owner' }, logger });
+function request(
+  ids: string[],
+  { body, user = { id: 'owner' } }: { body?: object; user?: { id: string } | null } = {}
+) {
+  const { req, res } = createMocks({ method: 'POST', body: body ?? { sessionIds: ids, curationType: 'transcript' } });
+  Object.assign(req, { user: user ?? undefined, logger });
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 }
 beforeAll(async () => {
@@ -136,6 +139,38 @@ describe('notebook submission acceptance', () => {
     const failed = request([await session()]);
     await failed.promise;
     expect(failed.res._getStatusCode()).toBe(500);
+    expect(send).not.toHaveBeenCalled();
+    expect(await NotebookCurationJob.countDocuments({})).toBe(0);
+  });
+});
+describe('notebook submission route contract', () => {
+  it('answers 401 without a user and sends nothing', async () => {
+    const denied = request([await session()], { user: null });
+    await denied.promise;
+    expect(denied.res._getStatusCode()).toBe(401);
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('answers 400 naming the field for a non-hex session id', async () => {
+    const invalid = request(['not-a-session-id']);
+    await invalid.promise;
+    expect(invalid.res._getStatusCode()).toBe(400);
+    expect(invalid.res._getJSONData().errors).toEqual([expect.objectContaining({ field: 'sessionIds.0' })]);
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('fills the schema defaults for curation type and export format', async () => {
+    const id = await session();
+    const defaulted = request([id], { body: { sessionIds: [id] } });
+    await defaulted.promise;
+    expect(defaulted.res._getStatusCode()).toBe(202);
+    expect(send.mock.calls[0]![1].detail).toMatchObject({ curationType: 'transcript', exportFormat: 'markdown' });
+  });
+  it('answers 404 for an absent session and 403 for a session another user owns', async () => {
+    const absent = request([String(new mongoose.Types.ObjectId())]);
+    await absent.promise;
+    expect(absent.res._getStatusCode()).toBe(404);
+    const foreign = request([await session()], { user: { id: 'someone-else' } });
+    await foreign.promise;
+    expect(foreign.res._getStatusCode()).toBe(403);
     expect(send).not.toHaveBeenCalled();
     expect(await NotebookCurationJob.countDocuments({})).toBe(0);
   });

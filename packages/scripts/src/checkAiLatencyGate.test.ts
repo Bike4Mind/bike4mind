@@ -66,7 +66,7 @@ describe('abandoned-prompt selector (executed, not matched)', () => {
   });
 
   it('ignores an abandoned image/artifact prompt', () => {
-    // Deliverable prompts are out of the gated average, so they must not trip the gate either.
+    // Deliverable prompts are out of the gated median, so they must not trip the gate either.
     expect(
       runSelector({ results: [{ id: 'storybook', responseTimeSec: 466, incomplete: true, measuresDeliverable: true }] })
     ).toBe('0');
@@ -82,6 +82,27 @@ describe('abandoned-prompt selector (executed, not matched)', () => {
     expect(runSelector({})).toBe('0');
   });
 
+  it('ignores an abandoned attempt that a retry superseded', () => {
+    // Retried attempts stay in the results for the median (mergeResults); only the latest attempt
+    // of a prompt can make it "never finished".
+    expect(
+      runSelector({
+        results: [
+          { id: 'reuters', attempt: 0, incomplete: true, retried: true },
+          { id: 'reuters', attempt: 1, responseTimeSec: 9 },
+        ],
+      })
+    ).toBe('0');
+    expect(
+      runSelector({
+        results: [
+          { id: 'reuters', attempt: 0, incomplete: true, retried: true },
+          { id: 'reuters', attempt: 1, incomplete: true },
+        ],
+      })
+    ).toBe('1');
+  });
+
   it('counts each abandoned prompt separately', () => {
     expect(
       runSelector({
@@ -94,7 +115,7 @@ describe('abandoned-prompt selector (executed, not matched)', () => {
 describe('gate wiring', () => {
   it('turns an abandoned prompt into a breach, not just a log line', () => {
     // The `|| ABANDONED -gt 0` arm is what makes a timed-out prompt a breach even when the
-    // surviving prompts average under threshold - the 2026-09-18 shape.
+    // surviving prompts' median is under threshold - the 2026-09-18 shape.
     expect(yaml).toContain('elif [ "$IS_OVER" = "1" ] || [ "${ABANDONED:-0}" -gt 0 ]; then');
     expect(yaml).toContain('EXCEEDED=true');
     expect(yaml).toContain('prompt(s) never finished');
@@ -127,8 +148,8 @@ describe('gate wiring', () => {
   });
 
   it('names both breach causes in the error it prints', () => {
-    // latency_breach also fires on the abandoned arm with the average under threshold, so an
-    // "average exceeded" message alone would send triage after the wrong number.
+    // latency_breach also fires on the abandoned arm with the median under threshold, so a
+    // "median exceeded" message alone would send triage after the wrong number.
     const message = yaml.slice(yaml.indexOf(GATE_STEP)).match(/echo "::error::([^"]+)"/)?.[1] ?? '';
     expect(message).toMatch(/threshold/i);
     expect(message).toMatch(/abandon|never finished|streaming cap/i);

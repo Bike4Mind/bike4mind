@@ -32,12 +32,18 @@ function looksLikeFilePath(input: string): boolean {
   return false;
 }
 
+export type SubmitOptions = {
+  /** Run as a new turn after the current one instead of steering it (Tab while a turn runs). */
+  followUp?: boolean;
+};
+
 interface InputPromptProps {
-  onSubmit: (input: string) => void;
+  onSubmit: (input: string, options?: SubmitOptions) => void;
   onBashCommand?: (command: string) => void; // Execute bash command directly
   onImageDetected?: (imageData: Buffer) => Promise<string>; // Returns placeholder
   disabled?: boolean;
   history?: string[];
+  onHistoryEntry?: (entry: string) => void; // Called with each submitted input exactly as typed
   commands?: CommandDefinition[]; // Merged built-in + custom commands
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
   onPrefillConsumed?: () => void; // Called after prefill is applied
@@ -80,6 +86,7 @@ export function InputPrompt({
   onImageDetected,
   disabled = false,
   history = [],
+  onHistoryEntry,
   commands = [],
   prefillInput,
   onPrefillConsumed,
@@ -92,6 +99,7 @@ export function InputPrompt({
   const pastedLineCount = useCliStore(state => state.pastedLineCount);
   const setPastedContent = useCliStore(state => state.setPastedContent);
   const clearPaste = useCliStore(state => state.clearPaste);
+  const turnBusy = useCliStore(state => state.isThinking || state.turnInFlight);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1); // -1 means not in history
   const [tempInput, setTempInput] = useState(''); // Store current input when navigating history
@@ -117,11 +125,12 @@ export function InputPrompt({
     onBashModeChange?.(isBashMode);
   }, [isBashMode, onBashModeChange]);
 
-  // Check if command autocomplete should be shown (input starts with / but is not a file path)
-  // Also hide if there's a space after / (e.g., "/ a" means user is typing freely, not a command)
+  // Show command autocomplete for "/cmd" input, but not for file paths, "/ a" (free typing after a space),
+  // or a recalled history entry (so Up/Down keep walking history).
   const commandQuery = value.startsWith('/') ? value.slice(1) : '';
   const shouldShowCommandAutocomplete =
     value.startsWith('/') &&
+    historyIndex === -1 &&
     !disabled &&
     !fileAutocomplete?.active &&
     !looksLikeFilePath(value) &&
@@ -214,6 +223,25 @@ export function InputPrompt({
         }
       }
 
+      // Tab while a turn runs queues the input as a follow-up turn; Enter would steer the running turn.
+      if (
+        key.tab &&
+        !key.shift &&
+        turnBusy &&
+        !isBashMode &&
+        !shouldShowCommandAutocomplete &&
+        !fileAutocomplete?.active
+      ) {
+        const content = pastedContent ?? value;
+        if (!content.trim()) return;
+        if (pastedContent) clearPaste();
+        onHistoryEntry?.(content);
+        onSubmit(content, { followUp: true });
+        setValue('');
+        setHistoryIndex(-1);
+        return;
+      }
+
       // History navigation (when NOT in any autocomplete mode)
       if (!shouldShowCommandAutocomplete && !fileAutocomplete?.active && history.length > 0) {
         if (key.upArrow) {
@@ -282,7 +310,9 @@ export function InputPrompt({
     if (pastedContent) {
       const fullContent = pastedContent;
       clearPaste();
+      onHistoryEntry?.(fullContent);
       onSubmit(fullContent);
+      setHistoryIndex(-1);
       return;
     }
 
@@ -312,6 +342,7 @@ export function InputPrompt({
       // Otherwise, autocomplete AND auto-submit (for commands without args)
       setValue(''); // Clear input
       setHistoryIndex(-1); // Reset history navigation
+      onHistoryEntry?.(commandText);
       onSubmit(commandText); // Submit the autocompleted command immediately
       return;
     }
@@ -320,6 +351,7 @@ export function InputPrompt({
     if (isBashMode && onBashCommand) {
       const command = input.slice(1).trim(); // Remove the leading !
       if (command) {
+        onHistoryEntry?.(input);
         onBashCommand(command);
         setValue('');
         setHistoryIndex(-1);
@@ -329,6 +361,7 @@ export function InputPrompt({
     }
 
     // Otherwise submit normally
+    onHistoryEntry?.(input);
     onSubmit(input);
     setValue('');
     setHistoryIndex(-1); // Reset history navigation

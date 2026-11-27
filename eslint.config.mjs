@@ -7,6 +7,11 @@ import reactHooksPlugin from 'eslint-plugin-react-hooks';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
+import noRawAdminJoy from './eslint-rules/no-raw-admin-joy.mjs';
+import noContentInLogMessage from './eslint-rules/no-content-in-log-message.mjs';
+import noWorkersServerBridge from './eslint-rules/no-workers-server-bridge.mjs';
+import noDirectDecryptSecret from './eslint-rules/no-direct-decrypt-secret.mjs';
+import requireUpdateValidators from './eslint-rules/require-update-validators.mjs';
 
 /**
  * ESLint Flat Config for Bike4Mind Monorepo
@@ -17,6 +22,25 @@ import noRawEntityResponse from './eslint-rules/no-raw-entity-response.mjs';
  * - b4m-core packages (with import restrictions)
  * - packages/*
  */
+// Core server packages under the no-console rule (see the block that uses these). Append as packages convert.
+const CORE_NO_CONSOLE_SRC = [
+  'b4m-core/db-core',
+  'b4m-core/agents',
+  'b4m-core/utils',
+  'b4m-core/llm-adapters',
+  'packages/database',
+  'b4m-core/services',
+  'b4m-core/common',
+].map(pkg => `${pkg}/src/**/*.{ts,tsx,mts,cts}`);
+const CORE_NO_CONSOLE_EXEMPT_SCRIPTS = [
+  'b4m-core/llm-adapters/src/syncModelDescriptions.ts',
+  'packages/database/src/seeds/regenerateModelPriceSeed.ts',
+  'packages/database/src/seeds/regenerateModelCatalogSeed.ts',
+  'packages/database/src/utils/testModelStats.ts',
+  'b4m-core/common/src/openapi/generate.ts',
+  'b4m-core/common/src/openapi/generateDeployment.ts',
+];
+
 // B4Mv3 Track 1 — deprecated facade import restrictions.
 // Extracted as consts so they can be spread into blocks that also carry other rules.
 // flat-config last-rule-wins means only the last matching no-restricted-imports rule
@@ -43,18 +67,10 @@ const b4mv3RestrictedPaths = [
       'validateUrlForFetch',
       'isPrivateIP',
       'isPrivateOrInternalHostname',
-      'EmbeddingFactory',
-      'EmbeddingConfig',
-      'EmbeddingService',
       'EmbeddingModelProvider',
       'EmbeddingModelInfo',
-      'getProviderFromModel',
-      'BedrockEmbeddingService',
-      'BedrockCredentials',
       'BEDROCK_EMBEDDING_MODEL_MAP',
-      'OpenAIEmbeddingService',
       'OPENAI_EMBEDDING_MODEL_MAP',
-      'VoyageAIEmbeddingProvider',
       'VOYAGEAI_EMBEDDING_MODEL_MAP',
       'BaseStorage',
       'S3Storage',
@@ -266,6 +282,17 @@ const noDeadPaletteTokens = [
   },
 ];
 
+const RANDOM_UUID_MESSAGE =
+  "crypto.randomUUID is undefined outside secure contexts (plain-http LAN). Use randomUuid from '@bike4mind/common'.";
+const noRandomUUIDAccess = [
+  { selector: "MemberExpression[property.name='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "MemberExpression[property.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "ObjectPattern > Property[key.name='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "ObjectPattern > Property[key.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+  { selector: "BinaryExpression[operator='in'][left.value='randomUUID']", message: RANDOM_UUID_MESSAGE },
+];
+const spaRestrictedSyntax = [...noWindowOpenInClientUi, ...noDeadPaletteTokens];
+
 // A regex can only recognise a token shape. It cannot know that `primary.25` or `warning.550` name
 // a shade this palette does not have, or that `neutral.outlinedHoverBorder` was a Joy key that a
 // version bump removed - those are just as dead, and only the built theme can tell. That half is
@@ -307,11 +334,29 @@ const noWorkersImportInClient = [
   },
 ];
 
+// Root-barrel imports that vitest pays for on every test file that reaches them. Next's
+// optimizePackageImports rewrites these for the app bundle, but vitest loads the barrel as-is:
+// `@mui/icons-material` alone requires ~10k icon modules (a third of the client shard's import
+// time), and `lodash` loads the whole library for one function. Spread into every apps/client
+// block that owns no-restricted-imports, for the last-rule-wins reason above, and into the
+// packages/server-utils block, since the shared server code moved there from apps/client.
+const noHeavyBarrelImportsInClient = [
+  {
+    name: '@mui/icons-material',
+    allowImportNames: ['SvgIconComponent'],
+    message: "Import each icon from its own module: `import Close from '@mui/icons-material/Close'`.",
+  },
+  {
+    name: 'lodash',
+    message: "Import each function from its own module: `import debounce from 'lodash/debounce'`.",
+  },
+];
+
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
 // anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
-// legitimately imports non-UI apps/client code (e.g. @client/lib/entitlements/registry) through the
-// same bridge described above.
+// legitimately imports non-UI apps/client code (e.g. @client/lib/userSubscriptions/constants) through
+// the same bridge described above.
 const WORKERS_NO_UI_MESSAGE =
   'apps/workers must never import UI code (React, Next.js, MUI). Workers are backend job/event ' +
   'runners; shared logic belongs in apps/client/server (imported via @server/*) or a shared package.';
@@ -369,7 +414,14 @@ const SERVER_UTILS_BOUNDARY = {
 
 // Local rules, served as one plugin. `--cache` keys results on the plugin's name@version, not on
 // the rule source, so the version is a hash of that source - editing a rule invalidates the cache.
-const localRuleSources = ['./eslint-rules/no-raw-entity-response.mjs'];
+const localRuleSources = [
+  './eslint-rules/no-raw-entity-response.mjs',
+  './eslint-rules/no-raw-admin-joy.mjs',
+  './eslint-rules/no-content-in-log-message.mjs',
+  './eslint-rules/no-workers-server-bridge.mjs',
+  './eslint-rules/no-direct-decrypt-secret.mjs',
+  './eslint-rules/require-update-validators.mjs',
+];
 const localRulesPlugin = {
   meta: {
     name: 'b4m-local-rules',
@@ -378,7 +430,14 @@ const localRulesPlugin = {
       .digest('hex')
       .slice(0, 12),
   },
-  rules: { 'no-raw-entity-response': noRawEntityResponse },
+  rules: {
+    'no-raw-entity-response': noRawEntityResponse,
+    'no-raw-admin-joy': noRawAdminJoy,
+    'no-content-in-log-message': noContentInLogMessage,
+    'no-workers-server-bridge': noWorkersServerBridge,
+    'no-direct-decrypt-secret': noDirectDecryptSecret,
+    'require-update-validators': requireUpdateValidators,
+  },
 };
 
 export default defineConfig([
@@ -429,7 +488,7 @@ export default defineConfig([
 
   // CommonJS files (legacy configs, scripts, etc.)
   {
-    files: ['**/*.cjs', 'packages/eslint-config/**/*.js'],
+    files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'commonjs',
       globals: {
@@ -440,6 +499,9 @@ export default defineConfig([
         __filename: 'readonly',
         process: 'readonly',
         console: 'readonly',
+        fetch: 'readonly',
+        setTimeout: 'readonly',
+        AbortSignal: 'readonly',
       },
     },
   },
@@ -480,6 +542,12 @@ export default defineConfig([
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
   })),
 
+  {
+    files: ['apps/client/app/components/admin/**/*.{ts,tsx,js,jsx,mts,cts,mjs,cjs}'],
+    ignores: ['apps/client/app/components/admin/shared/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-raw-admin-joy': 'error' },
+  },
   // TypeScript custom rules
   {
     files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
@@ -495,7 +563,6 @@ export default defineConfig([
           caughtErrors: 'none',
         },
       ],
-      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/triple-slash-reference': [
         'error',
         {
@@ -561,6 +628,7 @@ export default defineConfig([
         {
           paths: [
             ...b4mv3RestrictedPaths,
+            ...noHeavyBarrelImportsInClient,
             {
               name: 'next/router',
               message:
@@ -641,7 +709,7 @@ export default defineConfig([
       'no-restricted-imports': [
         'error',
         {
-          paths: [...b4mv3RestrictedPaths],
+          paths: [...b4mv3RestrictedPaths, ...noHeavyBarrelImportsInClient],
           patterns: [
             {
               group: ['**/overwatch/services/*', '**/overwatch/types'],
@@ -752,6 +820,45 @@ export default defineConfig([
     },
   },
 
+  // apps/desktop/src/host - the agent runtime that a headless remote host also runs, where there is
+  // no Electron to load. It may import apps/desktop/src/main/chat, so this catches a direct import
+  // only; HostRuntime.electronFree.test.ts catches one that arrives through a dependency. Repeats
+  // the B4Mv3 facade guards from the apps/** block above (no-restricted-imports is last-rule-wins).
+  {
+    files: ['apps/desktop/src/host/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...b4mv3RestrictedPaths,
+            {
+              name: 'electron',
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+          patterns: [
+            ...b4mv3RestrictedPatterns,
+            {
+              group: ['electron/*'],
+              message:
+                'src/host runs headless on remote machines. Take the capability through a port in src/host/ports.ts instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // Freezes the interim @server/* bridge into apps/client: existing uses are baselined in
+  // eslint-suppressions.json, so only new ones fail. Tests are included because vi.mock needs the alias too.
+  {
+    files: ['apps/workers/**/*.ts', 'apps/workers/src/**/*.{mts,cts}'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-workers-server-bridge': 'error' },
+  },
+
   // packages/server-utils - the server code apps/client and apps/workers share. Both apps depend on
   // it, so it must never reach back into either app (by path or through their tsconfig aliases) or
   // pull in UI code. Comes after the generic b4m-core/packages block above and so replaces it
@@ -762,11 +869,68 @@ export default defineConfig([
       'no-restricted-imports': [
         'error',
         {
-          paths: [...b4mv3RestrictedPaths, ...SERVER_UTILS_BOUNDARY.paths],
+          paths: [...b4mv3RestrictedPaths, ...noHeavyBarrelImportsInClient, ...SERVER_UTILS_BOUNDARY.paths],
           patterns: [...b4mv3RestrictedPatterns, ...SERVER_UTILS_BOUNDARY.patterns],
         },
       ],
     },
+  },
+
+  // Server code logs through the structured Logger (redaction + metadata), never console.* directly;
+  // see b4m-core/observability. Its own rule id, so the no-restricted-imports blocks above are untouched.
+  // server-utils/src/bootstrap patches console by design, so it is exempt.
+  {
+    files: ['packages/server-utils/src/**/*.{ts,tsx,mts,cts}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'packages/server-utils/src/bootstrap/**',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
+  {
+    files: ['apps/workers/src/**/*.{ts,mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // API routes log through req.logger (or a module Logger), same rationale as the server-utils block above.
+  {
+    files: ['apps/client/pages/api/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // The stdio MCP servers use stdout as the JSON-RPC channel, so log through shared/stderrLog instead.
+  {
+    files: ['b4m-core/mcp/src/**/*.{ts,mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', '**/__fixtures__/**'],
+    rules: { 'no-console': 'error' },
+  },
+
+  // apps/client/server is covered too. server/scripts and the tutorials apply CLI print for a person at a
+  // terminal by design, and *.integration.ts files are run by hand, so those stay on console.
+  {
+    files: ['apps/client/server/**/*.{ts,tsx}'],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'apps/client/server/scripts/**',
+      'apps/client/server/tutorials/apply/cli.ts',
+      '**/*.integration.ts',
+    ],
+    rules: { 'no-console': 'error' },
+  },
+
+  // Core server packages log through the Logger too (same rationale as the server-utils block above).
+  // CORE_NO_CONSOLE_EXEMPT_SCRIPTS are CLI scripts run with tsx whose stdout is their output.
+  {
+    files: CORE_NO_CONSOLE_SRC,
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**', ...CORE_NO_CONSOLE_EXEMPT_SCRIPTS],
+    rules: { 'no-console': 'error' },
   },
 
   // #9627 — ban filesystem tree-walking in test files anywhere under apps/client/pages/**. Uses
@@ -780,19 +944,33 @@ export default defineConfig([
     },
   },
 
-  // Ban window.open and dead Material UI palette tokens in the SPA's UI code - see
-  // noWindowOpenInClientUi and noDeadPaletteTokens above for the rationale behind each. Both sets
-  // must be spread into this one rule: flat-config last-rule-wins means a second block declaring
-  // no-restricted-syntax for these files would replace them, not add to them. The glob is disjoint
-  // from the pages-tests block above, so that rule is left intact.
+  // Ban window.open, dead Material UI palette tokens and crypto.randomUUID in the SPA's UI code - see
+  // noWindowOpenInClientUi, noDeadPaletteTokens and noRandomUUIDAccess above. Flat-config last-rule-wins
+  // means a second block declaring no-restricted-syntax for these files would replace this one, so new
+  // SPA selectors go into spaRestrictedSyntax. The glob is disjoint from the pages-tests block above.
   {
     files: ['apps/client/app/**/*.{ts,tsx}'],
     rules: {
-      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi, ...noDeadPaletteTokens],
+      'no-restricted-syntax': ['error', ...spaRestrictedSyntax, ...noRandomUUIDAccess],
       // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
       // so a local/parameter named `open` is untouched.
       'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
     },
+  },
+  // Tests may stub crypto.randomUUID; the serwist route runs in Node at build time.
+  {
+    files: ['apps/client/app/**/*.{test,spec}.{ts,tsx}', 'apps/client/app/**/__tests__/**', 'apps/client/app/serwist/**'],
+    rules: { 'no-restricted-syntax': ['error', ...spaRestrictedSyntax] },
+  },
+  {
+    files: ['apps/client/lib/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**'],
+    rules: { 'no-restricted-syntax': ['error', ...noRandomUUIDAccess] },
+  },
+  {
+    files: ['b4m-core/common/src/**/*.{ts,tsx}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', 'b4m-core/common/src/utils/randomUuid.ts'],
+    rules: { 'no-restricted-syntax': ['error', ...noRandomUUIDAccess] },
   },
 
   // RFC #483 Phase 2 - an API route must not send a raw entity document; see
@@ -819,5 +997,54 @@ export default defineConfig([
     rules: {
       'b4m/no-raw-entity-response': 'error',
     },
+  },
+
+  // Syntax-only: these database method names also cover native-driver writes, which need a
+  // reasoned opt-out. Existing production calls are frozen by per-file bulk suppressions.
+  {
+    files: ['**/*.{ts,tsx,js,jsx,mjs,cjs}', 'apps/client/**/*.{mts,cts}', 'packages/server-utils/**/*.{mts,cts}'],
+    ignores: ['**/*.{test,spec}.{ts,tsx,js,mjs}', '**/__tests__/**', '**/__test__/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/require-update-validators': 'error' },
+  },
+
+  // Stored secrets are read through the helpers that try the current key and then the previous one;
+  // see eslint-rules/no-direct-decrypt-secret.mjs. Exempt: those helpers, and the re-encrypt commands,
+  // which must address each key on its own.
+  {
+    // The .mts/.cts globs match the ones other blocks already lint; a wider glob would pull
+    // otherwise unlinted config and declaration files into the run.
+    files: [
+      '{apps,b4m-core,packages}/**/*.{ts,tsx}',
+      'apps/client/**/*.{mts,cts}',
+      'apps/workers/src/**/*.{mts,cts}',
+      'packages/server-utils/**/*.{mts,cts}',
+    ],
+    ignores: [
+      '**/*.{test,spec}.{ts,tsx}',
+      '**/__tests__/**',
+      '**/__test__/**',
+      'b4m-core/utils/src/security/secretsAtRest.ts',
+      'packages/server-utils/src/security/tokenEncryption.ts',
+      'packages/server-utils/src/security/secretEncryption.ts',
+      'packages/scripts/migrate/encrypt-admin-settings-and-apikeys.ts',
+      'packages/scripts/migrate/encrypt-tokens-at-rest.ts',
+    ],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-direct-decrypt-secret': 'error' },
+  },
+
+  // Server log lines stay free of prompts, queries and model output; see eslint-rules/no-content-in-log-message.mjs.
+  {
+    files: [
+      'apps/client/pages/api/**/*.{ts,tsx}',
+      'apps/client/server/**/*.ts',
+      'apps/workers/src/**/*.ts',
+      'b4m-core/*/src/**/*.ts',
+      'packages/server-utils/src/**/*.ts',
+    ],
+    ignores: ['**/*.{test,spec}.{ts,tsx}', '**/__tests__/**', '**/__test__/**'],
+    plugins: { b4m: localRulesPlugin },
+    rules: { 'b4m/no-content-in-log-message': 'error' },
   },
 ]);

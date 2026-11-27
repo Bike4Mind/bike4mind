@@ -14,7 +14,7 @@ import path from 'node:path';
  * Static because the two `agentExecutor.ts` sites live inside `processExecution` /
  * `dispatchSubagent`, which have no test harness; the filter's behavior is covered by
  * apps/workers/src/queueHandlers/agentExecutor.toolAvailability.test.ts and
- * apps/client/server/deepAgent/toolMaterializer.test.ts.
+ * packages/server-utils/src/deepAgent/toolMaterializer.test.ts.
  *
  * Scoped to the open-source tree on purpose: `packages/premium/*` is a set of hydrated private
  * overlays that exist only on a developer box, so including them would make this pass in CI and
@@ -25,7 +25,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 // The whole tree, so a call site added in a package nobody thought of is still caught - that is the
 // entire point of this guard. `premium` is excluded because those overlays are hydrated private
 // checkouts that exist only on a developer box: including them makes the check pass in CI and fail
-// locally (the precedent `checkNoRawS3Client.test.ts` greps `packages` unscoped and does exactly
+// locally (the precedent `checkNoRawS3Client.repo.test.ts` greps `packages` unscoped and does exactly
 // that today).
 const SEARCH_DIRS = 'apps b4m-core packages';
 const EXCLUDES = '--exclude-dir=premium --exclude-dir=node_modules --exclude-dir=dist';

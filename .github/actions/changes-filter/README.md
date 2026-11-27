@@ -20,10 +20,19 @@ docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
 | `docs-changed`      | `'true'` when the changeset touches `docs-site/` or the help tooling in `packages/scripts/help/`. Fails **open** (`true`) on an unresolved range. Gates the `help-docs` job. |
 | `published-changed` | `'true'` when the changeset touches b4m-core, the lockfile or the check and its fixture. Fails **open** (`true`) on an unresolved range. Gates the `published-dts` job.      |
 
-`deployable` and `docs-changed` are orthogonal: a docs-only PR is
+`deployable` and `docs-changed` are orthogonal: a docs-site-only PR is
 `deployable=false, docs-changed=true`; a code+docs PR is `true, true`; a
-`.changeset` or root-`README` change is `false, false`. `published-changed` is a
-third, independent signal.
+`.changeset`, `docs/` or any other markdown-only change is `false, false`.
+`published-changed` is a third, independent signal.
+
+"Docs-only" for `deployable` means: every changed file is a `.md`/`.mdx` file
+anywhere in the tree, or under `docs/`, `docs-site/`, `agents/`, `.changeset/`,
+or one of the config/editor files in the default exclude list, and none of them
+is under `content-paths` (markdown the build or the tests read: the client's
+`content/` tree, the CLI's built-in agent definitions, the model-discovery
+fixtures and the lake RAG eval corpus). Those last stay deployable even though
+`**/*.md` is excluded. `packages/scripts/src/changesFilterDeployable.test.ts`
+pins both sides of that line.
 
 ## Why this and not `paths-ignore` / a marketplace action
 
@@ -36,13 +45,8 @@ third, independent signal.
   whole PR vs `git merge-base(base, head)` — the three-dot "Files changed"
   semantics — not the per-push `before..after` range. Without this, a synchronize
   that also merges/rebases `main` in would carry all of main's deployable files and
-  force a spurious deploy of a docs-only PR. `push` to main/prod keeps the per-push
-  range (no PR to scope to), and `merge_group` uses the queue entry's own
-  `base_sha..head_sha`, which is that entry's own change rather than the whole batch:
-  `base_sha` is the commit the entry was built on (the target-branch tip, or the
-  previous entry's speculative head in a stacked group), so each queue entry is gated on
-  exactly the diff its own PR CI evaluated. That also makes `base_sha` an ancestor of
-  `head_sha`, so two-dot already equals three-dot there and no `merge-base` call is needed.
+  force a spurious deploy of a docs-only PR. `push` to main keeps the per-push
+  range (no PR to scope to).
 - **No third-party trust surface.** ~40 lines of `git diff`; nothing to SHA-pin or
   audit (cf. the 2025 `tj-actions/changed-files` supply-chain incident).
 
@@ -108,7 +112,8 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 
 | Input             | Default                                                                                                                                                                 | Notes                                                                                                                                                                  |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exclude-paths`   | curated docs/config list                                                                                                                                                | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored.                                      |
+| `exclude-paths`   | all markdown + curated docs/config list                                                                                                                                 | Newline-separated **git pathspecs**. If every changed file matches one, `deployable=false`. Blank lines and `#` comments ignored.                                      |
+| `content-paths`   | `apps/client/content/**`, `packages/cli/src/agents/defaults/**`, `b4m-core/services/src/llm/evals/**`, `**/__fixtures__/**`                                             | INCLUDE-form pathspecs of markdown the build or tests read. A change here is deployable regardless of `exclude-paths`.                                                 |
 | `docs-paths`      | `docs-site/**`, `packages/scripts/help/**`                                                                                                                              | INCLUDE-form pathspecs defining the docs site for `docs-changed`. Includes the help tooling, so a change to those scripts runs the `help-docs` guard that covers them. |
 | `published-paths` | `b4m-core/**`, `pnpm-lock.yaml`, `scripts/check-published-dts.mjs`, `scripts/fixtures/dangling-dts/**`, `.github/workflows/ci.yml`, `.github/actions/changes-filter/**` | INCLUDE-form pathspecs the published declaration check covers, for `published-changed`.                                                                                |
 
@@ -116,9 +121,9 @@ is what turns that into a local build instead of a red leg. That pairing is enfo
 
 - Use `:(glob)` magic so `**` means "any depth" and `*` stops at `/`. Default
   pathspec magic does **not** exclude a root `README.md` via `:(exclude)**/*.md`.
-- Do **not** blanket-exclude `**/*.md`. Some markdown is a runtime build input
-  (`@next/mdx`, `app/prompts/*.md`, `app/content/*.md`); the default only excludes
-  markdown in docs locations (READMEs, `docs-site/`, `agents/`, repo root).
+- `**/*.md` and `**/*.mdx` are excluded everywhere, so markdown that is a build or
+  test input must be listed in `content-paths` or a change to it skips CI. Register a
+  directory, not the files in it, so a new file there is covered without an edit here.
 - `.github/actions/changes-filter/**` is **intentionally not** excluded — a PR that
   edits only this action still runs the full pipeline, so the change is exercised
   end-to-end before it ships.
@@ -134,11 +139,10 @@ unnecessary deploy for never silently dropping one.
 
 That posture only holds for a _one-off_ unresolved range. An event with no arm in the
 action's `case "$EVENT_NAME"` block fails open on **every** run of that trigger, and
-the run looks entirely normal - nothing errors, some extra jobs just run. That is what
-`merge_group` did before it was handled: the merge queue evaluated
-`deployable=true, docs-changed=true` unconditionally and so gated on a different signal
-than the PR's own CI, which lets a queue run fail a leg the PR legitimately skipped.
-`packages/scripts/src/checkChangesFilterEvents.test.ts` therefore cross-checks `ci.yml`'s
+the run looks entirely normal - nothing errors, some extra jobs just run. Such a run
+evaluates `deployable=true, docs-changed=true` unconditionally and so gates on a different
+signal than the PR's own CI, which lets it fail a leg the PR legitimately skipped.
+`packages/scripts/src/checkChangesFilterEvents.repo.test.ts` therefore cross-checks `ci.yml`'s
 trigger list against the arms, and checks that each arm's SHAs are declared in the
 step's `env:` block, bound to that event's own payload, and bound to the end of the range
 their names claim (an arm alone reads unset vars and fails open identically; a base bound

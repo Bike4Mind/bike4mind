@@ -1,7 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { getErrorMessage } from '@client/app/utils/error';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import Stripe from 'stripe';

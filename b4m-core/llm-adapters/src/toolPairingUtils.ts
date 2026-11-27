@@ -23,19 +23,69 @@ export const stripToolDependentMessages = (messages: IMessage[]): IMessage[] =>
   messages.filter(message => !message.requiresTool);
 
 /**
+ * Keeps only the first tool_use per id across the history, and the first tool_result per tool_use_id
+ * within each message. The API rejects a repeated tool_use id ("`tool_use` ids must be unique"), and a
+ * caller-supplied history can carry the same tool call twice. A tool_result left without its tool_use
+ * in the preceding message is removed by the adjacency pass in ensureToolPairingIntegrity. Results are
+ * only deduplicated per message so a stray earlier result can never claim the id from the paired one.
+ */
+const dropDuplicateToolIds = (messages: IMessage[], logger?: { warn: (msg: string) => void }): IMessage[] => {
+  const seenToolUseIds = new Set<string>();
+  let removed = 0;
+
+  const deduped = messages.map(message => {
+    if (!Array.isArray(message.content)) return message;
+    const content = message.content as MessageContentObject[];
+    const seenToolResultIds = new Set<string>();
+
+    const kept = content.filter(block => {
+      if (message.role === 'assistant' && block.type === 'tool_use' && 'id' in block) {
+        const id = (block as MessageContentToolUse).id;
+        if (seenToolUseIds.has(id)) return false;
+        seenToolUseIds.add(id);
+      } else if (message.role === 'user' && block.type === 'tool_result' && 'tool_use_id' in block) {
+        const id = (block as { tool_use_id: string }).tool_use_id;
+        if (seenToolResultIds.has(id)) return false;
+        seenToolResultIds.add(id);
+      }
+      return true;
+    });
+
+    if (kept.length === content.length) return message;
+    removed += content.length - kept.length;
+    if (kept.length > 0) return { ...message, content: kept };
+    // Only an assistant message can empty out (a user message keeps its first result per id). The
+    // placeholder keeps the user/assistant alternation intact, as the adjacency passes do.
+    return {
+      ...message,
+      content: [{ type: 'text', text: '[Tool calls removed during message repair]' } as MessageContentText],
+    };
+  });
+
+  if (removed === 0) return messages;
+  logger?.warn(`[Tool Pairing Duplicates] Removed ${removed} tool block(s) repeating an earlier tool_use id`);
+  return deduped;
+};
+
+/**
  * Ensures that tool_use and tool_result blocks are properly paired in messages.
  * This function handles both cases by:
  * - Removing orphaned tool_result blocks that reference tool_use_ids that no longer exist
  * - Removing orphaned tool_use blocks that don't have corresponding tool_result blocks
+ * - Dropping a tool_use or tool_result that repeats an earlier id (see dropDuplicateToolIds)
+ * - Enforcing adjacency in both directions: a tool_use needs its tool_result in the next message, and a
+ *   tool_result needs its tool_use in the previous one
  */
 export const ensureToolPairingIntegrity = (
-  messages: IMessage[],
+  inputMessages: IMessage[],
   logger?: { log: (msg: string) => void; warn: (msg: string) => void }
 ): IMessage[] => {
   // Early exit if no messages
-  if (messages.length === 0) {
-    return messages;
+  if (inputMessages.length === 0) {
+    return inputMessages;
   }
+
+  const messages = dropDuplicateToolIds(inputMessages, logger);
 
   // First pass: collect all tool_use IDs and tool_result IDs
   const toolUseIds = new Set<string>();
@@ -285,6 +335,53 @@ export const ensureToolPairingIntegrity = (
         // Message only contained orphaned tool_result blocks - preserve structure with a placeholder
         result[j] = { ...laterMsg, content: '[Tool results removed during adjacency repair]' };
       }
+    }
+  }
+
+  // Fourth pass: the reverse direction. The passes above only match IDs across the whole history, so a
+  // tool_result whose tool_use sits anywhere earlier survives - including one at messages[0] with no
+  // assistant turn before it, which the API rejects. Keep a tool_result only when its tool_use is in
+  // the message immediately before it. Runs after the third pass, which already guarantees every
+  // surviving tool_use has its result next to it, so nothing here can orphan a tool_use.
+  for (let i = 0; i < result.length; i++) {
+    const msg = result[i];
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+
+    const content = msg.content as MessageContentObject[];
+    if (!content.some(b => b.type === 'tool_result')) continue;
+
+    const prevMsg = result[i - 1];
+    const precedingToolUseIds = new Set<string>();
+    if (prevMsg?.role === 'assistant' && Array.isArray(prevMsg.content)) {
+      for (const b of prevMsg.content as MessageContentObject[]) {
+        if (b.type === 'tool_use' && 'id' in b) {
+          precedingToolUseIds.add((b as MessageContentToolUse).id);
+        }
+      }
+    }
+
+    const kept = content.filter(
+      b =>
+        !(
+          b.type === 'tool_result' &&
+          'tool_use_id' in b &&
+          !precedingToolUseIds.has((b as { tool_use_id: string }).tool_use_id)
+        )
+    );
+    if (kept.length === content.length) continue;
+
+    const removed = content.length - kept.length;
+    // A placeholder rather than a dropped message keeps a leading user turn in place and avoids
+    // leaving two assistant messages adjacent.
+    result[i] =
+      kept.length > 0
+        ? { ...msg, content: kept }
+        : { ...msg, content: '[Tool results removed during adjacency repair]' };
+
+    if (logger) {
+      logger.warn(
+        `[Tool Pairing Adjacency] Stripped ${removed} tool_result block(s) from message ${i} with no matching tool_use in the preceding message`
+      );
     }
   }
 

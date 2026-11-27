@@ -1,9 +1,27 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
-import { generateModelPriceSeed, modelPriceRepository, SEED_NOTE } from '@bike4mind/database';
-import { ApiKeyScope, DISCOVERY_PRICE_NOTE_PREFIX, MODEL_PRICE_UNITS, ModelPriceTier } from '@bike4mind/common';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import {
+  generateModelPriceSeed,
+  modelCatalogRepository,
+  modelPriceRepository,
+  SEED_NOTE,
+  withTransaction,
+} from '@bike4mind/database';
+import {
+  ApiKeyScope,
+  DISCOVERY_PRICE_NOTE_PREFIX,
+  MODEL_PRICE_UNITS,
+  ModelPriceTier,
+  PRICE_ROW_BILLED_MODEL_TYPES,
+  billableRealtimeVoiceTier,
+  type ModelPriceUnit,
+} from '@bike4mind/common';
+import { REALTIME_VOICE_PRICING, resolveCatalogRecords, staticAdapterModels } from '@bike4mind/llm-adapters';
+import { BadRequestError, UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
+import { bumpModelListRevision } from '@bike4mind/server-utils/modelDiscovery/modelListRevision';
+import { requireFullAdmin } from '@server/admin/models/requireFullAdmin';
 
 /**
  * Admin surface over the versioned model price catalog. Prices here are
@@ -11,9 +29,11 @@ import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/e
  * the published uniform markup, so this endpoint manages COGS data, never
  * markup. Append-only throughout: a reprice or revert is a NEW row.
  *
- * GET                       -> { rows } in force
+ * GET                       -> { rows } in force, and { seeded }: the
+ *   (modelId, unit) pairs revert-to-seed has rates for
  * GET ?history=<modelId>    -> { history } (audit trail, newest first)
- * POST { modelId, unit, pricing, note, confirm? } -> operator reprice
+ * POST { modelId, unit, pricing, note, confirm? } -> operator reprice, or a
+ *   first price for a known text model (per_token only; 422 for other types)
  *   (confirm is the token from a prior guardrail rejection; see confirmTokenFor)
  * POST { modelId, unit, action: 'revert-to-seed' } -> hand the model back to
  *   seed management: appends the adapter literal's CURRENT rates (computed
@@ -148,25 +168,95 @@ function confirmTokenFor(
 
 const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
 
+type PricingMap = Record<string, TierRates>;
+
+/** Strict: runs inside the caller's transaction so a failed audit write rolls the new price row back. */
+const recordReprice = (
+  req: Parameters<typeof recordAdminActionFromRequest>[0],
+  {
+    modelId,
+    unit,
+    before,
+    after,
+    note,
+    revertToSeed,
+  }: {
+    modelId: string;
+    unit: string;
+    before: PricingMap | null;
+    after: PricingMap;
+    note: string;
+    revertToSeed: boolean;
+  }
+) =>
+  recordAdminActionFromRequest(req, {
+    action: 'settings.model_price.repriced',
+    target: { kind: 'settings', id: `${modelId}:${unit}`, displayName: `${modelId} price (${unit})` },
+    summary: `${revertToSeed ? 'reverted to seed price for' : 'repriced'} model ${modelId}`,
+    // Model IDs and units are metadata; secret-like path segments would redact the prices.
+    changes: [{ field: 'pricing', before, after }],
+    details: { modelId, unit, note, revertToSeed },
+  });
+
 const RevertBody = z.object({
   modelId: z.string().min(1),
   unit: z.enum(MODEL_PRICE_UNITS).default('per_token'),
   action: z.literal('revert-to-seed'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
-  .get(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
+/** Prices ride on GET /api/models. The row is already in force, so a failed bump must not fail the reprice. */
+async function refreshModelLists(logger: { warn(...args: unknown[]): void }): Promise<void> {
+  await bumpModelListRevision().catch((error: unknown) =>
+    logger.warn('[model-prices] model-list refresh failed', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  );
+}
 
+/** The type an adapter literal or catalog row gives the model, or undefined when neither knows it. */
+async function knownModelType(modelId: string): Promise<string | undefined> {
+  const adapterModel = (await staticAdapterModels()).find(model => String(model.id) === modelId);
+  if (adapterModel) return adapterModel.type;
+  const record = resolveCatalogRecords(await modelCatalogRepository.rowsInForce()).get(modelId)?.record;
+  if (!record) return undefined;
+  return typeof record.type === 'string' ? record.type : 'unknown';
+}
+
+const NON_TEXT_PRICE_MESSAGE = "Prices for non-text models come from this build's model tables";
+
+/** A first price is per token, for a text model an adapter literal or catalog row knows. */
+function assertFirstPriceAllowed(modelId: string, unit: ModelPriceUnit, type: string | undefined): void {
+  if (type === undefined) {
+    throw new BadRequestError(`unknown model ${modelId} (${unit}): reprice targets an existing catalog model`);
+  }
+  if (type !== 'text') throw new UnprocessableEntityError(NON_TEXT_PRICE_MESSAGE);
+  if (unit !== 'per_token') {
+    throw new BadRequestError(`a first price for ${modelId} must be per_token: price rows bill text models per token`);
+  }
+}
+
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
+  .get(async (req, res) => {
     const history = req.query.history;
     if (typeof history === 'string' && history.length > 0) {
       return res.json({ history: await modelPriceRepository.historyForModel(history) });
     }
-    return res.json({ rows: await modelPriceRepository.rowsInForce() });
+    // The seed only decides where Revert is offered, so a failed seed read must not hide the prices in force.
+    const [rows, seed] = await Promise.allSettled([modelPriceRepository.rowsInForce(), generateModelPriceSeed()]);
+    if (rows.status === 'rejected') throw rows.reason;
+    if (seed.status === 'rejected') {
+      req.logger.warn('[model-prices] seed read failed; no row offers Revert', {
+        error: seed.reason instanceof Error ? seed.reason.message : String(seed.reason),
+      });
+    }
+    const seeded = seed.status === 'fulfilled' ? seed.value.map(({ modelId, unit }) => ({ modelId, unit })) : [];
+    return res.json({ rows: rows.value, seeded });
   })
   .post(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
-
+    requireFullAdmin(req);
     // Deliberately ahead of, and exempt from, the reprice guardrails below:
     // the rates written here are the adapter literals computed server-side, so
     // a client cannot smuggle a magnitude slip through this branch, and a
@@ -180,14 +270,39 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       if (!entry) {
         throw new BadRequestError(`${modelId} (${unit}) is not seed-managed; nothing to revert to`);
       }
-      const row = await modelPriceRepository.append({
-        modelId,
-        unit,
-        pricing: entry.pricing,
-        effectiveFrom: new Date(),
-        note: SEED_NOTE,
-        repricedBy: req.user.id,
+      let appendedRow = false;
+      const row = await withTransaction(async () => {
+        const inForce = (await modelPriceRepository.rowsInForce(FAR_FUTURE)).find(
+          r => r.modelId === modelId && r.unit === unit
+        );
+        // Already seed-managed at the seed's rates: same no-op as an identical reprice resubmit.
+        if (
+          inForce &&
+          inForce.note === SEED_NOTE &&
+          normalizePricing(inForce.pricing) === normalizePricing(entry.pricing)
+        ) {
+          return inForce;
+        }
+        const appended = await modelPriceRepository.append({
+          modelId,
+          unit,
+          pricing: entry.pricing,
+          effectiveFrom: new Date(),
+          note: SEED_NOTE,
+          repricedBy: req.user.id,
+        });
+        appendedRow = true;
+        await recordReprice(req, {
+          modelId,
+          unit,
+          before: inForce?.pricing ?? null,
+          after: entry.pricing,
+          note: SEED_NOTE,
+          revertToSeed: true,
+        });
+        return appended;
       });
+      if (appendedRow) await refreshModelLists(req.logger);
       return res.json({ row });
     }
 
@@ -225,16 +340,27 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       );
     }
 
-    // Only models the catalog already knows (seeded or previously priced) can
-    // be repriced: a typoed modelId must not mint a phantom in-force row.
+    // A typoed modelId must not mint a phantom in-force row: a reprice needs a seed entry or a row
+    // for the same id and unit, and a first price needs a text model the build or the catalog knows.
     const [seedEntries, newestRows] = await Promise.all([
       generateModelPriceSeed(),
       modelPriceRepository.rowsInForce(FAR_FUTURE),
     ]);
     const seedEntry = seedEntries.find(e => e.modelId === modelId && e.unit === unit);
     const knownModel = seedEntry !== undefined || newestRows.some(r => r.modelId === modelId && r.unit === unit);
-    if (!knownModel) {
-      throw new BadRequestError(`unknown model ${modelId} (${unit}): reprice targets an existing catalog model`);
+    const type = await knownModelType(modelId);
+    // Reprices too: a row never bills a type outside PRICE_ROW_BILLED_MODEL_TYPES, whatever rows it already has.
+    if (type !== undefined && !PRICE_ROW_BILLED_MODEL_TYPES.has(type)) {
+      throw new UnprocessableEntityError(NON_TEXT_PRICE_MESSAGE);
+    }
+    if (!knownModel) assertFirstPriceAllowed(modelId, unit, type);
+    // Voice settlement skips a row whose lowest tier lacks audio rates (pickRealtimeVoiceTier), so refuse writing one.
+    const realtimeVoice = type === 'realtime-voice' || Object.hasOwn(REALTIME_VOICE_PRICING, modelId);
+    if (realtimeVoice && !billableRealtimeVoiceTier(pricing)) {
+      throw new BadRequestError(
+        `${modelId} is a realtime voice model: its lowest tier needs input, output, audio_input and audio_output ` +
+          'rates above zero, or voice settlement ignores the row'
+      );
     }
 
     // Idempotency: a resubmit of the identical reprice (double-click, network
@@ -341,14 +467,26 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       }
     }
 
-    const row = await modelPriceRepository.append({
-      modelId,
-      unit,
-      pricing,
-      effectiveFrom: new Date(),
-      note,
-      repricedBy: req.user.id,
+    const row = await withTransaction(async () => {
+      const appended = await modelPriceRepository.append({
+        modelId,
+        unit,
+        pricing,
+        effectiveFrom: new Date(),
+        note,
+        repricedBy: req.user.id,
+      });
+      await recordReprice(req, {
+        modelId,
+        unit,
+        before: newest?.pricing ?? null,
+        after: pricing,
+        note,
+        revertToSeed: false,
+      });
+      return appended;
     });
+    await refreshModelLists(req.logger);
     return res.json({ row });
   });
 

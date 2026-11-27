@@ -1,9 +1,12 @@
 import { ipcMain } from 'electron';
+import type { ChatSessionSummary } from '@shared/chat';
 import type { PrBarState, PrOption } from '@shared/pullRequest';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ChatService } from '../chat/ChatService';
 import type { SessionStore } from '../chat/SessionStore';
 import { currentBranch } from '../chat/project/git';
+import { AutoFixAttemptsPreference } from './AutoFixAttemptsPreference';
+import { registerAutoFixAttemptsIpc } from './autoFixAttemptsIpc';
 import { runGh } from './gh';
 import { PrGithub } from './github';
 import { PrBindingStore } from './PrBindingStore';
@@ -13,18 +16,24 @@ const OPTIONS: readonly PrOption[] = ['autoFix', 'autoMerge', 'autoArchive'];
 
 export interface RegisterPullRequestsOptions {
   path: string;
+  /** Where the Settings auto-fix attempt budget is kept. */
+  autoFixAttemptsPath: string;
   /** Lazy, because the service is built after this and is only needed once a session acts. */
   chat: () => ChatService;
   store: SessionStore;
   logger: PrMonitorLogger;
   send(channel: string, payload: unknown): void;
+  /** Tells every client of a session summary changed outside a request, through the host protocol. */
+  sessionSummary(summary: ChatSessionSummary): void;
 }
 
 /** Build the PR monitor and expose it to the renderer. */
 export function registerPullRequests(options: RegisterPullRequestsOptions): PrMonitor {
-  const { store, logger, send, chat } = options;
+  const { store, logger, send, chat, sessionSummary } = options;
   const watchedSenders = new Set<number>();
+  const autoFixAttempts = new AutoFixAttemptsPreference(options.autoFixAttemptsPath);
   const monitor = new PrMonitor({
+    autoFixAttempts: () => autoFixAttempts.read(),
     store: new PrBindingStore(options.path),
     github: new PrGithub(runGh),
     logger,
@@ -32,17 +41,22 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     emitSummary: event => send(IPC_CHANNELS.prSummaryChanged, event),
     chat: {
       isCode: async sessionId => (await store.get(sessionId))?.mode === 'code',
-      project: async sessionId => {
+      project: async (sessionId, options) => {
         const session = await store.get(sessionId);
         const project = session?.mode === 'code' ? session.project : undefined;
         if (!project) return null;
-        const branch = project.workspaceBranch ?? (await currentBranch(project.workingDirectory).catch(() => null));
+        const checkedOut = () => currentBranch(project.workingDirectory).catch(() => null);
+        // The recorded branch first otherwise: before a pending worktree exists, workingDirectory
+        // is the repository folder, whose checkout is not this session's branch.
+        const branch = options?.live
+          ? ((await checkedOut()) ?? project.workspaceBranch ?? null)
+          : (project.workspaceBranch ?? (await checkedOut()));
         return { workingDirectory: project.workingDirectory, branch };
       },
       archive: async sessionId => {
         const summary = await chat().setSessionArchived(sessionId, true);
         // The sidebar learns of a change it did not ask for through the summary push.
-        if (summary) send(IPC_CHANNELS.chatSessionSummary, summary);
+        if (summary) sessionSummary(summary);
       },
       isBusy: sessionId => chat().isSessionBusy(sessionId),
       startAutoFix: (sessionId, prompt, origin) => chat().startAutomaticTurn(sessionId, prompt, origin),
@@ -66,6 +80,9 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
     return monitor.watch(senderId, typeof sessionId === 'string' ? sessionId : null);
   });
   ipcMain.handle(IPC_CHANNELS.prGetSummaries, () => monitor.summaries());
+  ipcMain.handle(IPC_CHANNELS.prGetState, (_event, sessionId: unknown) =>
+    typeof sessionId === 'string' ? monitor.getState(sessionId) : null
+  );
   ipcMain.handle(IPC_CHANNELS.prBind, (_event, sessionId: unknown, url: unknown) =>
     typeof sessionId === 'string' && typeof url === 'string'
       ? monitor.bindManual(sessionId, url)
@@ -84,5 +101,9 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
       ? monitor.setOption(sessionId, option as PrOption, enabled === true)
       : { ok: false, error: 'Unknown option.' }
   );
+  registerAutoFixAttemptsIpc(ipcMain, {
+    preference: autoFixAttempts,
+    apply: attempts => monitor.setAutoFixAttempts(attempts),
+  });
   return monitor;
 }

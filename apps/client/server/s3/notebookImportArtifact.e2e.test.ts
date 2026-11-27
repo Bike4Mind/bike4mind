@@ -10,7 +10,11 @@ import {
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Artifact, ArtifactContent, ArtifactVersion, Session, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
-import { createArtifactWrites, createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import {
+  createArtifactWrites,
+  createChatHistoryWrites,
+  createSessionWrites,
+} from '@bike4mind/server-utils/s3/notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -21,7 +25,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * artifact schema is what made every import fail while reporting success - and both sibling e2e
  * files stub `createArtifact` out and never set `importArtifacts`, so neither can see it.
  *
- * Run `pnpm --filter @bike4mind/services build` first: the service comes from the built dist, so a
+ * Run `pnpm --filter @bike4mind/services-core build` first: the service comes from the built dist, so a
  * stale build reports green against whatever was last compiled.
  *
  * Runs on a replica set (createMongoReplSet) because the last describe drives the ref guard inside
@@ -100,6 +104,7 @@ function makeService() {
     ...createArtifactWrites(),
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },
+    findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
     userRepository: { findById: async () => ({ id: USER }) },
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {

@@ -1,5 +1,10 @@
-import { useAcceptDocument, useRefuseDocument } from '@client/app/hooks/data/invites';
+import { useAcceptDocument, useRefuseDocument, useRespondToInvites } from '@client/app/hooks/data/invites';
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
+import {
+  describeAcceptFailure,
+  acceptOutcomeScreen,
+  type ShareAcceptScreen,
+} from '@client/app/utils/shareAcceptErrors';
 import CheckIcon from '@mui/icons-material/Check';
 import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import DoDisturbIcon from '@mui/icons-material/DoDisturb';
@@ -37,6 +42,7 @@ const DOCUMENT_ICONS = {
   Session: <NoteAltOutlinedIcon />,
   Tool: <HandymanOutlinedIcon />,
   Project: <HubIconIcon />,
+  Space: <GroupIcon />,
 };
 
 const StatusModal = ({
@@ -72,6 +78,9 @@ const StatusModal = ({
 
 const SharePage = () => {
   const [loading, setLoading] = React.useState<boolean>(false);
+  const [acceptScreen, setAcceptScreen] = React.useState<
+    (ShareAcceptScreen & { documentId?: string; inviteType?: string }) | null
+  >(null);
   const navigate = useNavigate();
   const { id } = useParams({ strict: false });
   const { currentUser } = useUser();
@@ -84,46 +93,56 @@ const SharePage = () => {
       .split(',')
       .map(i => i.trim())
       .filter(Boolean);
-    return ids;
+    return [...new Set(ids)];
   }, [id]);
 
   // Fetch multiple invites
   const query = useQuery({
-    queryKey: ['invites', 'multiple', inviteIds.sort()],
+    queryKey: ['invites', 'multiple', [...inviteIds].sort()],
     queryFn: async () => {
       const results = await Promise.allSettled(inviteIds.map(inviteId => fetchInvite(inviteId)));
       const isPastExpiry = (inv: { expiresAt?: Date | string | null }) =>
         !!inv.expiresAt && new Date(inv.expiresAt).getTime() <= Date.now();
       const items = results.flatMap((r, i) =>
-        r.status === 'fulfilled' && r.value && r.value !== 'expired' && !isPastExpiry(r.value)
+        r.status === 'fulfilled' && r.value && r.value !== 'expired' && r.value !== 'revoked' && !isPastExpiry(r.value)
           ? [{ id: inviteIds[i], invite: r.value }]
           : []
       );
       const expired = results.some(
-        r => r.status === 'fulfilled' && r.value && (r.value === 'expired' || isPastExpiry(r.value))
+        r =>
+          r.status === 'fulfilled' &&
+          r.value &&
+          r.value !== 'revoked' &&
+          (r.value === 'expired' || isPastExpiry(r.value))
       );
+      const revoked = results.some(r => r.status === 'fulfilled' && r.value === 'revoked');
       const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (!items.length && !expired && failed) {
+      if (!items.length && !expired && !revoked && failed) {
         console.error('Failed to load invite', failed.reason);
         throw failed.reason;
       }
-      return { items, expired };
+      return { items, expired, revoked };
     },
     enabled: inviteIds.length > 0,
   });
 
   const invites = query.data?.items ?? [];
   const isMultiple = invites.length > 1;
+  const isSpaceInvite = invites.length > 0 && invites.every(item => item.invite?.type === 'Space');
 
-  // Check if any invite is user's own
-  const hasOwnInvite = invites.some(item => item.invite?.username === currentUser?.username);
+  const isOrgShareLink = (item: (typeof invites)[number]) =>
+    (item.invite?.type === 'Organization' || item.invite?.type === 'Space') && item.invite?.isLinkOnly === true;
+  // An org or Space share link's username is its minter, who following it is usually already a member;
+  // the accept route reports that, so it is not treated as "your own invite".
+  const hasOwnInvite = invites.some(item => !isOrgShareLink(item) && item.invite?.username === currentUser?.username);
+  // An Organization or Space share link names nobody, so there is no pending entry for Refuse to clear.
+  const allShareLinks = invites.every(isOrgShareLink);
 
+  // No navigate on success: handleBulkAction decides between going home and the already-member screen.
   const acceptInvite = useAcceptDocument({
-    onSuccess: () => {
-      navigate({ to: '/' });
-    },
     onSettled: () => setLoading(false),
     isPublic: true,
+    toastsError: error => !describeAcceptFailure(error),
   });
 
   const refuseInvite = useRefuseDocument({
@@ -134,19 +153,42 @@ const SharePage = () => {
     isPublic: true,
   });
 
+  const respondToInvites = useRespondToInvites();
+
   const handleBulkAction = async (action: 'accept' | 'refuse') => {
     setLoading(true);
 
     const validInvites = invites.filter(item =>
-      action === 'accept' ? item.invite?.username !== currentUser?.username : true
+      action === 'accept' ? isOrgShareLink(item) || item.invite?.username !== currentUser?.username : true
     );
 
     try {
-      await Promise.allSettled(
-        validInvites.map(item =>
-          action === 'accept' ? acceptInvite.mutateAsync(item.id) : refuseInvite.mutateAsync(item.id)
-        )
-      );
+      // A single accept's mapped failure or already-member outcome gets a screen (and no toast); anything
+      // else is toasted by the hooks and the page goes home.
+      const respond = async () => {
+        if (validInvites.length > 1) {
+          return respondToInvites.mutateAsync({ action, ids: validInvites.map(item => item.id) });
+        }
+        if (validInvites.length === 1) {
+          const { id } = validInvites[0];
+          return action === 'accept' ? acceptInvite.mutateAsync(id) : refuseInvite.mutateAsync(id);
+        }
+      };
+      const [outcome] = await Promise.allSettled([respond()]);
+      const single = action === 'accept' && validInvites.length === 1;
+      const screen = !single
+        ? null
+        : outcome.status === 'rejected'
+          ? describeAcceptFailure(outcome.reason)
+          : acceptOutcomeScreen(outcome.value, validInvites[0].invite?.type);
+      if (screen) {
+        setAcceptScreen({
+          ...screen,
+          documentId: validInvites[0].invite?.documentId,
+          inviteType: validInvites[0].invite?.type,
+        });
+        return;
+      }
       goHome();
     } finally {
       setLoading(false);
@@ -154,6 +196,29 @@ const SharePage = () => {
   };
 
   if (query.isLoading) return null;
+  if (acceptScreen) {
+    const { kind, title, body, documentId, inviteType } = acceptScreen;
+    const isSpace = inviteType === 'Space';
+    const openDocument = (kind === 'member' || kind === 'already-member') && documentId;
+    return (
+      <StatusModal
+        testId={`share-accept-${kind}-modal`}
+        title={title}
+        body={body}
+        actionTestId={`share-accept-${kind}-btn`}
+        actionLabel={openDocument ? (isSpace ? 'Open space' : 'Open organization') : 'Go home'}
+        onAction={
+          openDocument
+            ? () =>
+                isSpace
+                  ? navigate({ to: '/spaces/$id', params: { id: documentId } })
+                  : navigate({ to: '/organizations/$id', params: { id: documentId } })
+            : goHome
+        }
+        onClose={goHome}
+      />
+    );
+  }
   if (query.isError) {
     return (
       <StatusModal
@@ -169,13 +234,20 @@ const SharePage = () => {
   }
   if (invites.length === 0) {
     const expired = query.data?.expired;
-    const kind = expired ? 'expired' : 'unavailable';
+    const revoked = !expired && query.data?.revoked;
+    const kind = expired ? 'expired' : revoked ? 'revoked' : 'unavailable';
     return (
       <StatusModal
         testId={`share-${kind}-modal`}
-        title={expired ? 'This invite has expired' : 'This invite is no longer available'}
-        body={
+        title={
           expired
+            ? 'This invite has expired'
+            : revoked
+              ? 'This invite was revoked'
+              : 'This invite is no longer available'
+        }
+        body={
+          expired || revoked
             ? 'Ask the person who shared it to send you a new one.'
             : 'It may have expired, been revoked, or already been used.'
         }
@@ -195,7 +267,11 @@ const SharePage = () => {
         ) : (
           <Box display={'flex'} flexDirection={'column'}>
             <Typography level={'h3'}>
-              {isMultiple ? `${invites.length} Document Share Requests` : 'Document Share Request'}
+              {isSpaceInvite
+                ? 'Space Invitation'
+                : isMultiple
+                  ? `${invites.length} Document Share Requests`
+                  : 'Document Share Request'}
             </Typography>
             <Divider sx={{ my: '20px' }} />
 
@@ -246,17 +322,19 @@ const SharePage = () => {
                     <InfoOutlinedIcon sx={{ width: '20px', mr: '10px' }} />
                   </Tooltip>
                 )}
-                <Tooltip title={'Refuse'}>
-                  <IconButton
-                    sx={{ mr: '15px' }}
-                    variant={'outlined'}
-                    disabled={loading}
-                    color={'danger'}
-                    onClick={() => handleBulkAction('refuse')}
-                  >
-                    <DoDisturbIcon />
-                  </IconButton>
-                </Tooltip>
+                {!allShareLinks && (
+                  <Tooltip title={'Refuse'}>
+                    <IconButton
+                      sx={{ mr: '15px' }}
+                      variant={'outlined'}
+                      disabled={loading}
+                      color={'danger'}
+                      onClick={() => handleBulkAction('refuse')}
+                    >
+                      <DoDisturbIcon />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title={hasOwnInvite ? "You can't accept your own invite" : 'Accept'}>
                   <IconButton
                     variant={'outlined'}
@@ -274,7 +352,9 @@ const SharePage = () => {
               <Typography level={'body-xs'}>
                 {hasOwnInvite
                   ? 'Some invites are your own. You cannot accept invites you created.'
-                  : `${invites[0]?.invite?.username || 'Someone'} has invited you to share ${isMultiple ? 'documents' : 'a document'}!`}
+                  : isSpaceInvite
+                    ? `${invites[0]?.invite?.username || 'Someone'} has invited you to join a space!`
+                    : `${invites[0]?.invite?.username || 'Someone'} has invited you to share ${isMultiple ? 'documents' : 'a document'}!`}
               </Typography>
             </Box>
           </Box>

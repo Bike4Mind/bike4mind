@@ -7,6 +7,9 @@
 import { octokit } from '../client.js';
 import type { RepositoryInfo } from '../types.js';
 import { GET_REPOSITORY_FROM_ISSUE_NODE_ID_QUERY, GET_REPOSITORY_FROM_PROJECT_ITEM_ID_QUERY } from './queries.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+
+const log = createStderrLogger('github');
 
 /**
  * Get repository info from an issue node ID using GraphQL
@@ -33,7 +36,7 @@ export async function getRepositoryFromIssueNodeId(issueNodeId: string): Promise
     }
     return null;
   } catch (error) {
-    console.error('[getRepositoryFromIssueNodeId] Error:', error);
+    log.error('getRepositoryFromIssueNodeId failed', { error });
     return null;
   }
 }
@@ -65,7 +68,7 @@ export async function getRepositoryFromProjectItemId(itemId: string): Promise<Re
     }
     return null;
   } catch (error) {
-    console.error('[getRepositoryFromProjectItemId] Error:', error);
+    log.error('getRepositoryFromProjectItemId failed', { error });
     return null;
   }
 }

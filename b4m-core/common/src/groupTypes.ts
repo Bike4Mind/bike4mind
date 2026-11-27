@@ -21,6 +21,7 @@ export interface GroupTypeDefinition {
   description: string;
   /** Scalar-conflict resolution for multi-group users. Lower wins. */
   priority: number;
+  selfServe?: boolean;
   /**
    * Capability keys this type confers (e.g. `crm:read`). Unioned across a user's groups.
    * Optional/reserved: no consumer reads it yet (see the note above), so it is not part of the
@@ -37,6 +38,13 @@ export interface GroupTypeDefinition {
 // the `readonly GroupTypeDefinition[]` annotation is compile-time only and `as const` would widen
 // away under it anyway (see the note above on why `key` stays `string`).
 export const GROUP_TYPE_CATALOG: readonly GroupTypeDefinition[] = Object.freeze([
+  {
+    key: 'team',
+    label: 'Team',
+    description: 'Standard team members.',
+    priority: 100,
+    selfServe: true,
+  },
   {
     key: 'sales',
     label: 'Sales',

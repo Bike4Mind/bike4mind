@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { TelemetryEvents } from '@server/utils/eventBus';
+import { TelemetryEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   AnomalyAlertService,
   type ISlackMessageSender,
@@ -7,15 +7,15 @@ import {
   type CheckAndAlertOptions,
 } from '@bike4mind/services';
 import {
-  Quest,
   slackDevWorkspaceRepository,
   cacheRepository,
   telemetryDryRunResultRepository,
   adminSettingsRepository,
 } from '@bike4mind/database';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { SlackClient } from '@bike4mind/slack';
-import { GitHubService } from '@server/services/githubService';
+import { GitHubService } from '@bike4mind/server-utils/services/githubService';
+import { cacheTelemetryAnalysisOnQuest } from '@bike4mind/server-utils/utils/telemetryAnalysisCache';
 import {
   ALERT_THRESHOLDS,
   ContextTelemetryAlerts,
@@ -28,7 +28,7 @@ import {
   generateSemanticTelemetryFingerprint,
   getSeverityEmoji,
   formatPrimaryAnomaly,
-} from '@server/services/telemetryFingerprint';
+} from '@bike4mind/server-utils/services/telemetryFingerprint';
 import { checkFingerprintDedup, type IssueForDedup } from '@bike4mind/server-utils/services/issueDedup';
 import {
   computeHistoricalBaselines,
@@ -38,13 +38,13 @@ import {
   type LLMAnalysis,
   type SloConfig,
   type AnalysisSource,
-} from '@server/utils/telemetryAnalysis';
+} from '@bike4mind/server-utils/utils/telemetryAnalysis';
 import {
   getFallbackPriority,
   fetchExistingTelemetryIssues,
   fetchRecentlyClosedIssues,
   createTelemetryIssue,
-} from '@server/utils/telemetryIssueCreator';
+} from '@bike4mind/server-utils/utils/telemetryIssueCreator';
 
 // Cache key prefixes
 const CACHE_PREFIX_DUP_ALERT = 'telemetry-dup-alert:';
@@ -52,7 +52,7 @@ const CACHE_PREFIX_ISSUE_CLAIM = 'telemetry-issue-claim:';
 const CACHE_PREFIX_RATE_LIMIT = 'telemetry-rate-limit:';
 
 // getFallbackPriority, fetchExistingTelemetryIssues, fetchRecentlyClosedIssues are shared
-// with the manual create-issue endpoint via @server/utils/telemetryIssueCreator.
+// with the manual create-issue endpoint via @bike4mind/server-utils/utils/telemetryIssueCreator.
 // createGitHubIssue and ensureLabelsExist were consolidated into createTelemetryIssue there too.
 
 /**
@@ -108,7 +108,7 @@ async function decrementRateLimitCounter(logger: Logger): Promise<void> {
  * This handler runs in a dedicated Lambda, ensuring alerts complete
  * even after the main request Lambda terminates.
  *
- * Features (aligned with LiveOps Triage):
+ * Features:
  * - Fingerprinting for deterministic deduplication
  * - GitHub issue deduplication (fingerprint matching against open issues)
  * - Regression detection (fingerprint matching against closed issues)
@@ -289,19 +289,12 @@ export const handler = withEventContext(async (event, logger) => {
           // acceptable since the manual analyze API uses ?force=true to bypass cache.
           if (analysisResult && requestId) {
             try {
-              await Quest.updateOne(
-                { requestId },
-                {
-                  $set: {
-                    'promptMeta.contextTelemetry.cachedAnalysis': {
-                      analysis: analysisResult,
-                      analysisSource: analysisSourceTag,
-                      historicalBaselines: baselines,
-                      cachedAt: new Date().toISOString(),
-                    },
-                  },
-                }
-              );
+              await cacheTelemetryAnalysisOnQuest(requestId, {
+                analysis: analysisResult,
+                analysisSource: analysisSourceTag,
+                historicalBaselines: baselines,
+                cachedAt: new Date().toISOString(),
+              });
             } catch (cacheErr) {
               logger.warn('Failed to cache analysis on Quest', {
                 error: cacheErr instanceof Error ? cacheErr.message : cacheErr,
@@ -390,7 +383,7 @@ export const handler = withEventContext(async (event, logger) => {
                 precomputedAnalysis: analysisResult
                   ? { analysis: analysisResult, source: analysisSourceTag!, baselines }
                   : undefined,
-                requestId,
+                questId: requestId,
                 logger,
               });
 
@@ -438,7 +431,7 @@ export const handler = withEventContext(async (event, logger) => {
                 precomputedAnalysis: analysisResult
                   ? { analysis: analysisResult, source: analysisSourceTag!, baselines }
                   : undefined,
-                requestId,
+                questId: requestId,
                 logger,
               });
 

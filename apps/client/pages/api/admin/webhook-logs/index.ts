@@ -1,7 +1,7 @@
 import { webhookAuditLogRepository } from '@bike4mind/database';
 import { ApiKeyScope, IWebhookAuditFilters, WebhookAuditStatus, WebhookSourceType } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 
@@ -43,15 +43,10 @@ const QuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
-const ensureAdmin = (isAdmin?: boolean | null) => {
-  if (!isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-};
-
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
-
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).get(async (req, res) => {
   const result = QuerySchema.safeParse(req.query);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid query parameters');

@@ -1,33 +1,49 @@
 import {
   assertAuthOriginMatchesApiKey,
   type AuthOrigin,
+  type ApiKeyBillingOwnerType,
   canUpdateShareable,
   ChatCompletionInvokeParamsSchema,
+  hasAutoNamePlaceholderName,
+  isLowSignalNamingPrompt,
   isPromptMetaModelType,
   isSupportedEmbeddingModel,
+  IOrganizationDocument,
+  ISessionDocument,
   IUserDocument,
   LLMModelConfig,
   ModelInfo,
+  ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+  formatZodError,
+  getQuestErrorCode,
   PromptMeta,
   PromptMetaZodSchema,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   BadRequestError,
   ForbiddenError,
   InternalServerError,
   NotFoundError,
-  isModelAccessible,
   isZodError,
   getSettingsByNames,
 } from '@bike4mind/utils';
 import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { fromZodError } from 'zod-validation-error';
+import { admitsPrivateFileInputs } from './questStartBody';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
+import {
+  createModelAdmission,
+  isModelRequiresSubscriptionError,
+  isOrgModelNotAllowedError,
+  loadFreeTierAllowedModels,
+  loadModelConfigurations,
+} from './modelAdmission';
 import { buildPromptMetaModel } from './buildPromptMetaModel';
 import { classifyQueryComplexity } from './queryComplexityClassifier';
+import { orgDisallowedTools } from './orgToolPolicy';
 import { filterBuiltInTools } from './tools/toolManager';
 
 export class ChatCompletionInvoke {
@@ -38,12 +54,18 @@ export class ChatCompletionInvoke {
   private modelInfoCache: ModelInfo[] | null = null;
   private modelConfigurationsCache: LLMModelConfig[] | null = null;
   private questStartParams: z.infer<typeof QuestStartBodySchema> | null = null;
+  private turnStartAutoNameDispatched = false;
   private invokeLambda?: (params: z.infer<typeof QuestStartBodySchema>) => Promise<void>;
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
+  private autoNameSession: IChatCompletionServiceOptions['autoNameSession'];
   /** Session fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
-  public prefetchedSession: any | null = null;
+  public prefetchedSession: ISessionDocument | null = null;
   /** Organization fetched during invoke; exposed for the wait=true path to avoid a re-fetch in process. */
-  public prefetchedOrganization: any | null = null;
+  public prefetchedOrganization: IOrganizationDocument | null = null;
+
+  public get autoNameDispatched(): boolean {
+    return this.turnStartAutoNameDispatched;
+  }
 
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
@@ -51,6 +73,7 @@ export class ChatCompletionInvoke {
     this.user = options.user;
     this.invokeLambda = options.invokeLambda;
     this.getEntitlements = options.getEntitlements;
+    this.autoNameSession = options.autoNameSession;
   }
 
   /**
@@ -83,6 +106,12 @@ export class ChatCompletionInvoke {
     userId,
     authOrigin,
     apiKeyId,
+    apiKeyBillingOwnerType,
+    oauthClientId,
+    adminRoleWithheld,
+    fileInputsAllowed,
+    visitId,
+    contributedToolNames,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -90,6 +119,18 @@ export class ChatCompletionInvoke {
     authOrigin: AuthOrigin;
     /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
     apiKeyId?: string;
+    /** Server-derived from `req.apiKeyInfo`; see QuestStartBodySchema.apiKeyBillingOwnerType. */
+    apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+    /** Connected app of a federated exchange key; stamped on the quest beside `apiKeyId`. */
+    oauthClientId?: string;
+    /** See QuestStartBodySchema.adminRoleWithheld. */
+    adminRoleWithheld?: boolean;
+    /** Trusted private-file admission from the authenticated door, never the public body. */
+    fileInputsAllowed?: boolean;
+    /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
+    visitId?: string;
+    /** Premium tool map keys, governed by the org tool policy beyond the built-in enum. */
+    contributedToolNames: ReadonlySet<string>;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -99,12 +140,11 @@ export class ChatCompletionInvoke {
       params,
       sessionId,
       message,
-      messageFileIds,
+      messageFileIds: requestedMessageFileIds,
       historyCount,
-      fabFileIds,
+      fabFileIds: requestedFabFileIds,
       dashboardParams,
       questId,
-      enableQuestMaster,
       enableMementos,
       enableArtifacts,
       enableAgents,
@@ -118,7 +158,6 @@ export class ChatCompletionInvoke {
       tools,
       projectId,
       organizationId,
-      questMaster,
       toolPromptId,
       researchMode,
       fallbackModel,
@@ -127,6 +166,8 @@ export class ChatCompletionInvoke {
       imageConfig,
       audioConfig,
       mcpServers,
+      disabledMcpConnections,
+      enabledPlatformMcpConnections,
       extraContextMessages,
       correctsQuestId,
       allowedAgents,
@@ -134,6 +175,10 @@ export class ChatCompletionInvoke {
       toolMode,
       timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
+
+    const admittedFileInputs = admitsPrivateFileInputs({ authOrigin, apiKeyId, fileInputsAllowed });
+    const messageFileIds = admittedFileInputs ? requestedMessageFileIds : [];
+    const fabFileIds = admittedFileInputs ? requestedFabFileIds : [];
 
     // Parallelize independent operations: API keys, session, organization, and the correction
     // target. The correction lookup rides this batch rather than the quest batch below because its
@@ -157,12 +202,12 @@ export class ChatCompletionInvoke {
     this.prefetchedSession = session;
     this.prefetchedOrganization = organization;
 
-    // Check session early to fail fast if not found
+    // sessionId is caller-supplied, so a deleted notebook or stale id is a client condition: warn,
+    // and throw so every caller answers 404 rather than guessing what an undefined return means.
+    // Nothing has been created or admitted yet, so there is no quest or credit state to unwind.
     if (!session) {
-      this.logger.error(
-        `Session for sessionId: ${sessionId} not found. The session may have been deleted before the quest was started.`
-      );
-      return;
+      this.logger.warn('Chat completion refused: session not found (it may have been deleted before the turn started)');
+      throw new NotFoundError('Session not found');
     }
 
     // sessionId is caller-supplied (the public POST /api/chat contract accepts any string), and
@@ -179,6 +224,21 @@ export class ChatCompletionInvoke {
     const actorGroups = this.user?.id === userId ? (this.user.groups ?? []) : [];
     if (!canUpdateShareable(session, userId, actorGroups)) {
       throw new ForbiddenError('You do not have access to this session');
+    }
+
+    // An API-key caller chose these tools, so it is told which ones the org disallows. Session and
+    // platform (internal) turns have them dropped silently when ChatCompletionProcess assembles the list.
+    if (authOrigin === 'apiKey') {
+      const disallowedTools = orgDisallowedTools(
+        tools ?? [],
+        readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames
+      );
+      if (disallowedTools.length > 0) {
+        throw new ForbiddenError(`Tools not allowed by your organization: ${disallowedTools.join(', ')}`, {
+          errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE,
+        });
+      }
     }
 
     // Get model info (depends on apiKeyTable, so must be sequential)
@@ -239,12 +299,22 @@ export class ChatCompletionInvoke {
       throw new BadRequestError(`Model "${model.id}" is a ${model.type} model and cannot run a chat completion`);
     }
 
-    // Start sessions.update early (will await later in parallel with admin settings)
-    const sessionUpdatePromise = this.db.sessions.update({
-      id: sessionId,
-      lastUpdated: now,
-      updatedAt: now,
-    });
+    // An API-key caller gets the org model refusal as a real 403 before any quest exists; other admission
+    // refusals, and session turns, still surface through the quest below.
+    if (authOrigin === 'apiKey') {
+      const orgAdmission = createModelAdmission({
+        user: this.user,
+        configs: [],
+        models: modelInfo,
+        enforceCredits: false,
+        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
+      });
+      for (const gatedModelId of [model.id, ...researchModelIds]) {
+        await orgAdmission.assert(gatedModelId).catch(err => {
+          if (isOrgModelNotAllowedError(err)) throw err;
+        });
+      }
+    }
 
     // Initialize promptMeta for this completion attempt.
     const promptMeta: Partial<PromptMeta> = {
@@ -337,7 +407,14 @@ export class ChatCompletionInvoke {
     }
 
     // Parallelize independent operations: quest ops + admin settings + session update
-    const [quest, defaultEmbeddingModel, modelConfigurations] = await Promise.all([
+    const [
+      quest,
+      defaultEmbeddingModel,
+      modelConfigurations,
+      enforceCredits,
+      freeTierAllowedModels,
+      autoNameNotebookSetting,
+    ] = await Promise.all([
       // Quest creation/update
       questId
         ? this.db.quests.findById(questId).then(async q => {
@@ -359,6 +436,9 @@ export class ChatCompletionInvoke {
               throw new NotFoundError('Quest not found');
             }
             // Retry path: clear prior replies and images.
+            // An edited prompt is a new request, so it gets a fresh data lake save budget. A plain retry
+            // keeps the count: the files its earlier attempt saved still exist.
+            const promptEdited = q.prompt !== message;
             q.type = 'message';
             q.reply = null;
             q.replies = [];
@@ -379,6 +459,9 @@ export class ChatCompletionInvoke {
             // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
             q.turnTiming = undefined;
+            // A turn written by the retired in-chat plan feature keeps its plan id, and the client
+            // shows a legacy-plan note in place of any reply that has one. A retry is an ordinary turn.
+            q.questMasterPlanId = undefined;
             await this.db.quests.update(
               {
                 id: q.id,
@@ -395,8 +478,13 @@ export class ChatCompletionInvoke {
                 promptMeta: q.promptMeta,
                 agentIds: q.agentIds,
               },
-              { unset: ['errorCode', 'turnTiming'] }
+              {
+                unset: promptEdited
+                  ? ['errorCode', 'turnTiming', 'questMasterPlanId', 'lakeSaveCount']
+                  : ['errorCode', 'turnTiming', 'questMasterPlanId'],
+              }
             );
+            if (promptEdited) q.lakeSaveCount = undefined;
             return q;
           })
         : this.db.quests.create({
@@ -412,53 +500,60 @@ export class ChatCompletionInvoke {
             // Session-bound by the guard above, so the chain a correction claims to extend is
             // always one the caller can actually see.
             correctsQuestId,
+            ...(apiKeyId && oauthClientId ? { apiKeyId, oauthClientId } : {}),
           }),
 
       // Admin settings fetches
       this.db.adminSettings.getSettingsValue('defaultEmbeddingModel'),
       this.modelConfigurationsCache || this.getModelConfigurations(),
+      this.db.adminSettings.getSettingsValue('enforceCredits'),
+      loadFreeTierAllowedModels(this.db.adminSettings),
+      this.db.adminSettings.getSettingsValue('AutoNameNotebook'),
 
-      // Session update (fire-and-forget but ensure completion)
-      sessionUpdatePromise,
+      this.db.sessions.update({ id: sessionId, lastUpdated: now, updatedAt: now }),
     ]);
 
     if (!this.modelConfigurationsCache && modelConfigurations) {
       this.modelConfigurationsCache = modelConfigurations;
     }
 
-    if (!quest) return;
+    if (!quest) {
+      return;
+    }
 
     try {
       if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
         throw new InternalServerError('Default embedding model not found or not supported');
       }
       const originalModel = model.id;
-
-      // Check if primary model is accessible
       const modelToUse = originalModel;
 
-      if (modelConfigurations.length > 0) {
-        // Entitlement-aware admission: a tag-less subscriber can reach an
-        // entitlement-gated model via their resolved keys. Fail-safe to [].
-        // Only resolve when keys can change the outcome - skip the DB lookup
-        // for admins (always allowed) and for models with no allowedEntitlements
-        // (tag-only), keeping the entitlement branch inert. Research-mode
-        // configuration models are admitted by the same rule as the primary.
-        const isAdmin = this.user.isAdmin || false;
-        let entitlementKeys: string[] | undefined;
-        for (const gatedModelId of [originalModel, ...researchModelIds]) {
-          const gatedConfig = modelConfigurations.find(config => config.id === gatedModelId);
-          if (!gatedConfig) continue;
-          if (!isAdmin && (gatedConfig.allowedEntitlements?.length ?? 0) > 0) {
-            entitlementKeys ??= await this.resolveEntitlementKeys();
-          }
-          const hasUserAccess = isModelAccessible(gatedConfig, this.user.tags || [], isAdmin, entitlementKeys ?? []);
-
-          if (!gatedConfig.enabled || !hasUserAccess) {
-            this.logger.error(`Model ${gatedModelId} is not accessible and no fallback available`);
-            throw new ForbiddenError(`Model "${gatedModelId}" is not accessible and no fallback available`);
-          }
-        }
+      // Same admission rule as every other model-selection path (see ./modelAdmission). Research-mode
+      // configuration models are admitted by the same rule as the primary.
+      const admission = createModelAdmission({
+        user: this.user,
+        configs: modelConfigurations,
+        // Not resolveEntitlementKeys(): admission must see a failed read to answer the free-tier gate
+        // with a retryable 503 rather than the upgrade prompt; it degrades to [] for other gates itself.
+        getEntitlements: async () => (await this.getEntitlements?.(this.user)) ?? [],
+        models: modelInfo,
+        enforceCredits: enforceCredits === true,
+        freeTierAllowedModels,
+        orgModelPolicy: readOrgModelPolicy(organization?.modelPolicy),
+      });
+      for (const gatedModelId of [originalModel, ...researchModelIds]) {
+        await admission.assert(gatedModelId).catch(async err => {
+          // A free-tier caller picking a paid model is their plan, not a fault: warn, still refuse.
+          const message = `Model ${gatedModelId} is not admitted: ${(err as Error).message}`;
+          if (isModelRequiresSubscriptionError(err)) {
+            this.logger.warn(message);
+            // Best-effort: a failed record must never replace the refusal rethrown below.
+            await this.db
+              .recordLimitEvent({ userId: this.user.id, kind: 'model_requires_paid_plan', model: gatedModelId })
+              .catch(recordError => this.logger.warn('[USER_LIMIT_EVENT] failed to record', recordError));
+          } else this.logger.error(message);
+          throw err;
+        });
       }
 
       let currentEmbeddingModel = embeddingModel;
@@ -477,6 +572,15 @@ export class ChatCompletionInvoke {
 
       this.logger.info(`🚀🚀🚀🚀🚀🚀🚀 [RapidReply] Query complexity: ${queryComplexity}`);
 
+      // After admission, so a refused turn never names the notebook.
+      const autoNameDispatched = await this.dispatchTurnStartAutoName({
+        session,
+        message,
+        messageFileIds,
+        enabled: Boolean(autoNameNotebookSetting),
+      });
+      this.turnStartAutoNameDispatched = autoNameDispatched;
+
       this.questStartParams = QuestStartBodySchema.parse({
         userId,
         questId: quest.id,
@@ -486,7 +590,6 @@ export class ChatCompletionInvoke {
         fabFileIds,
         params,
         dashboardParams,
-        enableQuestMaster,
         enableMementos,
         enableArtifacts,
         enableAgents,
@@ -501,14 +604,19 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        fileInputsAllowed,
+        ...(apiKeyBillingOwnerType ? { apiKeyBillingOwnerType } : {}),
+        ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
+        ...(visitId ? { visitId } : {}),
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
         tools,
         mcpServers,
+        disabledMcpConnections,
+        enabledPlatformMcpConnections,
         projectId,
         organizationId,
-        questMaster,
         toolPromptId,
         researchMode,
         fallbackModel,
@@ -522,6 +630,7 @@ export class ChatCompletionInvoke {
         allowedAgents,
         enableSlackTools,
         timezone,
+        ...(autoNameDispatched ? { autoNameDispatched } : {}),
       });
 
       if (this.invokeLambda && this.questStartParams) {
@@ -539,7 +648,7 @@ export class ChatCompletionInvoke {
     } catch (error) {
       let errorMessage = `Something went wrong. Please try again.`;
       if (isZodError(error)) {
-        errorMessage = fromZodError(error).message;
+        errorMessage = formatZodError(error);
       } else if (error instanceof Error) {
         errorMessage = error.message;
       }
@@ -558,24 +667,43 @@ export class ChatCompletionInvoke {
         type: quest.type,
         status: quest.status,
         reply: quest.reply,
+        errorCode: getQuestErrorCode(error),
       });
     }
     return quest;
   }
 
-  private getModelConfigurations = async (): Promise<LLMModelConfig[]> => {
+  /**
+   * Names a new notebook from its prompt as the turn starts, instead of after the reply. Awaited:
+   * a fire-and-forget publish from a Lambda only leaves when the frozen container is next reused.
+   * Returns whether the AutoName event went out; when it did not, the after-reply
+   * AutoNameSessionFeature stays the fallback. Mirrors the worker's guards (sessionAutoNaming.ts):
+   * a notebook that is already named, or that no longer carries a placeholder name, is left alone.
+   * A low-signal prompt ("Hello") is skipped so it does not become a "Greeting" title; the next
+   * turn with substance names it.
+   */
+  private async dispatchTurnStartAutoName({
+    session,
+    message,
+    messageFileIds,
+    enabled,
+  }: {
+    session: ISessionDocument;
+    message: string;
+    messageFileIds: string[];
+    enabled: boolean;
+  }): Promise<boolean> {
+    if (!enabled || session.isAutoNamed || !hasAutoNamePlaceholderName(session)) return false;
+    if (isLowSignalNamingPrompt(message, messageFileIds.length)) return false;
     try {
-      const setting = await this.db.adminSettings.findOne({ settingName: 'llmModelConfigurations' });
-      const configs = setting?.settingValue;
-
-      if (Array.isArray(configs)) {
-        return configs as LLMModelConfig[];
-      }
-
-      return [];
+      await this.autoNameSession(session.id, this.logger);
+      return true;
     } catch (error) {
-      console.error('Failed to fetch model configurations:', error);
-      return [];
+      // Naming is not worth failing the turn over; the after-reply fallback still runs.
+      this.logger.warn(`Turn-start auto-naming publish failed for session ${session.id}`, error);
+      return false;
     }
-  };
+  }
+
+  private getModelConfigurations = (): Promise<LLMModelConfig[]> => loadModelConfigurations(this.db.adminSettings);
 }

@@ -3,7 +3,9 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   FormControl,
+  FormHelperText,
   FormLabel,
   Option,
   Select,
@@ -15,13 +17,37 @@ import {
   Typography,
 } from '@mui/joy';
 import { formatCredits } from '@client/app/utils/formatUsd';
-import type { CapabilityControl, CapabilityField, CapabilityOption, TextField } from './capabilityFields';
+import {
+  hasInvalidField,
+  type AspectField,
+  type CapabilityControl,
+  type CapabilityField,
+  type CapabilityOption,
+  type ChipsField,
+  type ReferencesField,
+  type TextField,
+} from './capabilityFields';
+import ImageFieldPreview from './ImageFieldPreview';
 import { insertSnippet } from './insertSnippet';
+import ReferenceChip from './ReferenceChip';
+import {
+  StudioCapabilityLayout,
+  StudioFieldGroup,
+  StudioInvalidReason,
+  StudioJoyField,
+  studioControlFor,
+} from './StudioCapabilityControls';
+import StudioModelPicker from './StudioModelPicker';
+import type { StudioModelCard } from './studioModelCard';
 
-type CapabilityFormProps = {
+// The model picker: a dropdown of names, or (Create v2) a compact row with a panel of ranked model cards.
+type ModelPickerProps =
+  | { models: readonly CapabilityOption[]; modelCards?: never }
+  | { modelCards: readonly StudioModelCard[]; models?: never };
+
+type CapabilityFormProps = ModelPickerProps & {
   // Every data-testid in the form starts with this, e.g. `video-form-<field id>-select`.
   testIdPrefix: string;
-  models: readonly CapabilityOption[];
   modelId: string;
   onModelChange: (modelId: string) => void;
   // What the form moved when the model changed; shown so a switch never silently alters a value.
@@ -95,13 +121,188 @@ const TextControl = ({ field, testId }: { field: TextField; testId: string }) =>
   );
 };
 
+// Longest side of an aspect tile's shape, in px.
+const ASPECT_TILE_SIZE = 28;
+
+const aspectShape = (value: string): { width: number; height: number } => {
+  const [width, height] = value.split(':').map(Number);
+  if (!width || !height) return { width: ASPECT_TILE_SIZE, height: ASPECT_TILE_SIZE };
+  const scale = ASPECT_TILE_SIZE / Math.max(width, height);
+  return { width: Math.round(width * scale), height: Math.round(height * scale) };
+};
+
+const AspectControl = ({ field, testId }: { field: AspectField; testId: string }) => (
+  <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
+    <FormLabel>{field.label}</FormLabel>
+    <ToggleButtonGroup
+      size="sm"
+      value={field.value}
+      disabled={field.disabled}
+      onChange={(_event, value) => {
+        if (isOption(field.options, value)) field.onChange(value);
+      }}
+      data-testid={`${testId}-toggle`}
+      sx={{ flexWrap: 'wrap' }}
+    >
+      {field.options.map(option => {
+        const shape = aspectShape(option.value);
+        return (
+          <Button
+            key={option.value}
+            value={option.value}
+            color={option.invalid ? 'danger' : 'neutral'}
+            data-testid={`${testId}-${option.value}-btn`}
+            data-invalid={option.invalid === true}
+            sx={{ flexDirection: 'column', gap: 0.5, minWidth: 56, py: 1 }}
+          >
+            <Box
+              aria-hidden
+              sx={{
+                width: shape.width,
+                height: shape.height,
+                border: '2px solid',
+                borderColor: 'currentColor',
+                borderRadius: '3px',
+              }}
+            />
+            <Typography level="body-xs" textColor="inherit">
+              {option.label}
+            </Typography>
+          </Button>
+        );
+      })}
+    </ToggleButtonGroup>
+  </FormControl>
+);
+
+// A labelled group, not a FormControl: Joy wires a FormControl's label and error state into every input inside it,
+// so a chip's Remove background switch would take the label's click and the field's danger color.
+const ReferencesControl = ({ field, testId }: { field: ReferencesField; testId: string }) => (
+  <Stack role="group" aria-labelledby={`${testId}-label`} gap={0.75}>
+    <Typography
+      id={`${testId}-label`}
+      level="title-sm"
+      color={field.invalidReason !== undefined ? 'danger' : undefined}
+      sx={{ opacity: field.disabled ? 0.6 : 1 }}
+    >
+      {field.label} ({field.files.length}/{field.max})
+    </Typography>
+    <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+      {field.files.map(file => (
+        <ReferenceChip
+          key={file.fileId}
+          file={file}
+          disabled={field.disabled}
+          testId={testId}
+          onRemove={field.onRemove}
+          onToggleCutout={field.onToggleCutout}
+        />
+      ))}
+      {field.files.length < field.max && (
+        <Button
+          size="sm"
+          variant="outlined"
+          disabled={field.disabled}
+          onClick={field.onAdd}
+          data-testid={`${testId}-add-btn`}
+        >
+          Add image
+        </Button>
+      )}
+    </Stack>
+  </Stack>
+);
+
+// Diameter of a chip's swatch dot, in px.
+const CHIP_SWATCH_SIZE = 14;
+
+const ChipsControl = ({ field, testId }: { field: ChipsField; testId: string }) => (
+  <FormControl disabled={field.disabled}>
+    <FormLabel>{field.label}</FormLabel>
+    <Stack direction="row" gap={1} flexWrap="wrap" data-testid={`${testId}-chips`}>
+      {field.options.map(option => {
+        const selected = option.value === field.value;
+        return (
+          <Chip
+            key={option.value}
+            size="md"
+            variant={selected ? 'solid' : 'outlined'}
+            color={selected ? 'primary' : 'neutral'}
+            disabled={field.disabled || option.disabled}
+            onClick={() => field.onChange(selected ? null : option.value)}
+            startDecorator={
+              option.swatch && (
+                <Box
+                  aria-hidden
+                  sx={{
+                    width: CHIP_SWATCH_SIZE,
+                    height: CHIP_SWATCH_SIZE,
+                    borderRadius: '50%',
+                    border: '1px solid',
+                    borderColor: 'neutral.outlinedBorder',
+                    background: `linear-gradient(135deg, ${option.swatch.from}, ${option.swatch.to})`,
+                  }}
+                />
+              )
+            }
+            slotProps={{
+              action: {
+                'data-testid': `${testId}-${option.value}-chip`,
+                'aria-label': option.label,
+                'aria-pressed': selected,
+              },
+            }}
+          >
+            {option.label}
+          </Chip>
+        );
+      })}
+    </Stack>
+  </FormControl>
+);
+
+/** The reason a kept value does not fit the model, with its one-click fix. */
+const InvalidReason = ({ field, testId }: { field: CapabilityControl; testId: string }) => {
+  if (field.invalidReason === undefined) return null;
+  return (
+    <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" sx={{ mt: 0.5 }}>
+      <Typography level="body-xs" color="danger" data-testid={`${testId}-invalid`}>
+        {field.invalidReason}
+      </Typography>
+      {field.fix && (
+        <Button size="sm" variant="plain" color="danger" onClick={field.fix.apply} data-testid={`${testId}-fix-btn`}>
+          {field.fix.label}
+        </Button>
+      )}
+    </Stack>
+  );
+};
+
+// `studio`: Create v2, which draws the prompt, choice and chip fields with the Studio primitives.
+const FieldControl = ({ field, testId, studio }: { field: CapabilityControl; testId: string; studio: boolean }) => {
+  const studioControl = studio ? studioControlFor(field, testId) : null;
+  return (
+    <Box>
+      {studioControl ??
+        (studio ? (
+          <StudioJoyField>
+            <Control field={field} testId={testId} />
+          </StudioJoyField>
+        ) : (
+          <Control field={field} testId={testId} />
+        ))}
+      {studio ? <StudioInvalidReason field={field} testId={testId} /> : <InvalidReason field={field} testId={testId} />}
+    </Box>
+  );
+};
+
 const Control = ({ field, testId }: { field: CapabilityControl; testId: string }) => {
   switch (field.kind) {
     case 'text':
       return <TextControl field={field} testId={testId} />;
     case 'segmented':
       return (
-        <FormControl disabled={field.disabled}>
+        <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
           <FormLabel>{field.label}</FormLabel>
           <ToggleButtonGroup
             size="sm"
@@ -113,7 +314,13 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
             data-testid={`${testId}-toggle`}
           >
             {field.options.map(option => (
-              <Button key={option.value} value={option.value} data-testid={`${testId}-${option.value}-btn`}>
+              <Button
+                key={option.value}
+                value={option.value}
+                color={option.invalid ? 'danger' : 'neutral'}
+                data-testid={`${testId}-${option.value}-btn`}
+                data-invalid={option.invalid === true}
+              >
                 {option.label}
               </Button>
             ))}
@@ -122,7 +329,7 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
       );
     case 'select':
       return (
-        <FormControl disabled={field.disabled}>
+        <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
           <FormLabel>{field.label}</FormLabel>
           <Select
             value={field.value}
@@ -132,16 +339,22 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
             slotProps={{ button: { 'data-testid': `${testId}-select` } }}
           >
             {field.options.map(option => (
-              <Option key={option.value} value={option.value}>
+              <Option key={option.value} value={option.value} color={option.invalid ? 'danger' : 'neutral'}>
                 {option.label}
               </Option>
             ))}
           </Select>
         </FormControl>
       );
+    case 'aspect':
+      return <AspectControl field={field} testId={testId} />;
+    case 'references':
+      return <ReferencesControl field={field} testId={testId} />;
+    case 'chips':
+      return <ChipsControl field={field} testId={testId} />;
     case 'range':
       return (
-        <FormControl disabled={field.disabled}>
+        <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
           <FormLabel>{field.label}</FormLabel>
           <Slider
             min={field.min}
@@ -175,9 +388,12 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
       );
     case 'image':
       return (
-        <FormControl disabled={field.disabled}>
+        <FormControl disabled={field.disabled} error={field.invalidReason !== undefined}>
           <FormLabel>{field.label}</FormLabel>
-          <Stack direction="row" gap={1} alignItems="center">
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            {field.previewFileId !== undefined && (
+              <ImageFieldPreview fileId={field.previewFileId} alt={field.fileName ?? field.label} testId={testId} />
+            )}
             <Button
               size="sm"
               variant="outlined"
@@ -185,14 +401,27 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
               onClick={field.onPick}
               data-testid={`${testId}-pick-btn`}
             >
-              {field.fileName !== null ? 'Change image' : 'Choose image'}
+              {field.pickLabel ?? (field.fileName !== null ? 'Change image' : 'Choose image')}
             </Button>
             {field.fileName !== null && (
               <Typography level="body-sm" data-testid={`${testId}-name`}>
                 {field.fileName}
               </Typography>
             )}
+            {field.fileName !== null && field.onClear && (
+              <Button
+                size="sm"
+                variant="plain"
+                color="neutral"
+                disabled={field.disabled}
+                onClick={field.onClear}
+                data-testid={`${testId}-clear-btn`}
+              >
+                Remove
+              </Button>
+            )}
           </Stack>
+          {field.hint && <FormHelperText data-testid={`${testId}-hint`}>{field.hint}</FormHelperText>}
         </FormControl>
       );
     default: {
@@ -208,14 +437,18 @@ const Control = ({ field, testId }: { field: CapabilityControl; testId: string }
 /**
  * The Studio form for any modality: a model picker, the fields the selected model's capabilities produce, the credit
  * estimate and the submit button. Field test ids are `<prefix>-<id>` plus a per-kind suffix: `-input` (text),
- * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn` and
- * `-name` (image).
+ * `-toggle` and `-<value>-btn` (segmented), `-select`, `-slider` (range), `-switch`, `-note`, `-pick-btn`, `-name`,
+ * `-preview`, `-clear-btn` and `-hint` (image), `-<value>-btn` (aspect), `-add-btn`, `-file-<id>` and
+ * `-remove-<id>-btn` (references), `-chips` and `-<value>-chip` (chips). A field holding a value the model does not
+ * take adds `-invalid` and, with a fix, `-fix-btn`, and holds submit. With `modelCards` (Create v2) the form takes the
+ * Studio layout from StudioCapabilityControls; the legacy Studio tabs keep the Joy layout below.
  */
 const CapabilityForm = ({
   testIdPrefix,
   models,
   modelId,
   onModelChange,
+  modelCards,
   changes,
   fields,
   estimateCredits,
@@ -226,6 +459,54 @@ const CapabilityForm = ({
   children,
 }: CapabilityFormProps) => {
   const testIdOf = (id: string) => `${testIdPrefix}-${id}`;
+  const studio = modelCards !== undefined;
+  const submitDisabled = !canSubmit || hasInvalidField(fields);
+  const fieldControls = fields.map(field =>
+    field.kind === 'group' ? (
+      studio ? (
+        <StudioFieldGroup key={field.id}>
+          {field.fields.map(member => (
+            <FieldControl key={member.id} field={member} testId={testIdOf(member.id)} studio />
+          ))}
+        </StudioFieldGroup>
+      ) : (
+        <Stack key={field.id} direction={{ xs: 'column', sm: 'row' }} gap={2}>
+          {field.fields.map(member => (
+            <Box key={member.id} sx={{ flex: 1 }}>
+              <FieldControl field={member} testId={testIdOf(member.id)} studio={false} />
+            </Box>
+          ))}
+        </Stack>
+      )
+    ) : (
+      <FieldControl key={field.id} field={field} testId={testIdOf(field.id)} studio={studio} />
+    )
+  );
+
+  if (modelCards) {
+    return (
+      <StudioCapabilityLayout
+        testIdPrefix={testIdPrefix}
+        modelPicker={
+          <StudioModelPicker
+            testIdPrefix={testIdPrefix}
+            cards={modelCards}
+            selectedId={modelId}
+            onSelect={onModelChange}
+          />
+        }
+        changes={changes}
+        fieldControls={fieldControls}
+        estimateCredits={estimateCredits}
+        submitLabel={submitLabel}
+        submitDisabled={submitDisabled}
+        isSubmitting={isSubmitting}
+        onSubmit={onSubmit}
+      >
+        {children}
+      </StudioCapabilityLayout>
+    );
+  }
 
   return (
     <Stack gap={2} data-testid={testIdPrefix}>
@@ -234,11 +515,11 @@ const CapabilityForm = ({
         <Select
           value={modelId}
           onChange={(_event, value) => {
-            if (isOption(models, value)) onModelChange(value);
+            if (models && isOption(models, value)) onModelChange(value);
           }}
           slotProps={{ button: { 'data-testid': testIdOf('model-select') } }}
         >
-          {models.map(model => (
+          {models?.map(model => (
             <Option key={model.value} value={model.value}>
               {model.label}
             </Option>
@@ -258,19 +539,7 @@ const CapabilityForm = ({
         </Alert>
       )}
 
-      {fields.map(field =>
-        field.kind === 'group' ? (
-          <Stack key={field.id} direction={{ xs: 'column', sm: 'row' }} gap={2}>
-            {field.fields.map(member => (
-              <Box key={member.id} sx={{ flex: 1 }}>
-                <Control field={member} testId={testIdOf(member.id)} />
-              </Box>
-            ))}
-          </Stack>
-        ) : (
-          <Control key={field.id} field={field} testId={testIdOf(field.id)} />
-        )
-      )}
+      {fieldControls}
 
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={2}>
         <Typography level="body-sm" data-testid={testIdOf('estimate')}>
@@ -278,7 +547,12 @@ const CapabilityForm = ({
             ? 'Cost estimate unavailable'
             : `Estimated cost: ${formatCredits(estimateCredits)} credits`}
         </Typography>
-        <Button loading={isSubmitting} disabled={!canSubmit} onClick={onSubmit} data-testid={testIdOf('submit-btn')}>
+        <Button
+          loading={isSubmitting}
+          disabled={submitDisabled}
+          onClick={onSubmit}
+          data-testid={testIdOf('submit-btn')}
+        >
           {submitLabel}
         </Button>
       </Stack>

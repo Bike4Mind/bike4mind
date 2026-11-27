@@ -10,7 +10,7 @@ import Stripe from 'stripe';
  * or Stripe-side fault keeps its 5xx so it still alarms.
  *
  * Imports the `stripe` package for the error class only, never the configured
- * client, so a route test's mock of `@server/integrations/stripe/stripe` need
+ * client, so a route test's mock of `@bike4mind/server-utils/integrations/stripe/stripe` need
  * not reach the real thing to exercise this.
  */
 export function rethrowStripeRejection(error: unknown, message: string): never {

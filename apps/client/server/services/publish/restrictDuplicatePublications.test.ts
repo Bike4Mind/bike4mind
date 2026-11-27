@@ -16,8 +16,8 @@ vi.mock('@bike4mind/database', () => ({
     updateMany: updateManyMock,
   },
 }));
-vi.mock('./invalidatePublishCdn', async importOriginal => ({
-  ...(await importOriginal<typeof import('./invalidatePublishCdn')>()),
+vi.mock('@bike4mind/server-utils/services/publish/invalidatePublishCdn', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/services/publish/invalidatePublishCdn')>()),
   invalidatePublishCdn: invalidateMock,
 }));
 

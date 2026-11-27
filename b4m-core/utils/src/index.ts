@@ -17,25 +17,11 @@ export {
   isPrivateIP,
   isPrivateOrInternalHostname,
   // embeddings
-  EmbeddingFactory,
-  type EmbeddingConfig,
-  EmbeddingService,
   EmbeddingModelProvider,
   type EmbeddingModelInfo,
-  getProviderFromModel,
-  resolveEmbeddingConfig,
-  resolveEmbeddingWithKeylessFallback,
-  type EmbeddingKeyTable,
-  type EmbeddingCredential,
-  type ResolvedEmbeddingConfig,
-  BedrockEmbeddingService,
-  type BedrockCredentials,
   BEDROCK_EMBEDDING_MODEL_MAP,
-  OpenAIEmbeddingService,
   OPENAI_EMBEDDING_MODEL_MAP,
-  VoyageAIEmbeddingProvider,
   VOYAGEAI_EMBEDDING_MODEL_MAP,
-  OllamaEmbeddingService,
   OLLAMA_EMBEDDING_MODEL_MAP,
   // storage
   BaseStorage,
@@ -52,6 +38,9 @@ export * from './registrableDomain';
 // Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './escapeRegex';
+// Also available via the lightweight `@bike4mind/utils/escapeHtml` subpath -
+// prefer that everywhere; the barrel is too heavy for the HTML/email builders.
+export * from './escapeHtml';
 // Also available via the lightweight `@bike4mind/utils/safeObjectKey` subpath.
 export * from './safeObjectKey';
 // Also available via the lightweight `@bike4mind/utils/globMatches` subpath.
@@ -63,6 +52,7 @@ export * from './toolEchoMatcher';
 export * from './retrievalExclusion';
 export * from './validation';
 export * from './slack';
+export * from './errorLogSlackMessage';
 export * from './cacheKeys';
 export * from './pagination';
 export * from './settings';
@@ -77,18 +67,22 @@ export * from './promptModeration';
 // subpath instead so those server-only deps stay out of bundles that don't moderate
 // images (e.g. the CLI). See issue #660.
 export * from './file';
-export * from './questMaster';
-export * from './questMasterToolSchema';
 export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
 export * from './soundGeneration';
 export * from './musicGeneration';
+export * from './providerRateLimitError';
+export * from './providerQuota';
 export * from './analytics';
 export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './emailToken';
+export * from './signedUrlExpiry';
+export * from './signedUrlWindow';
+export * from './fileContentToken';
 export * from './office/officeEdit';
 export * from './artifactParser';
 // NOT barrel-exported on purpose: `artifactElision` is reached only via the
@@ -116,3 +110,5 @@ export * from './lambdaErrorHandler';
 // `@bike4mind/utils/security` subpath, so importing it never drags the utils barrel
 // (artifactParser et al.) into a caller's graph or its test mocks. Same pattern as
 // artifactElision above.
+
+export * from './embeddingProviders/runtime';

@@ -6,7 +6,9 @@
  */
 
 import { Box, Button, CircularProgress, Typography } from '@mui/joy';
-import { CheckCircleOutline, ErrorOutline, PlayArrow } from '@mui/icons-material';
+import CheckCircleOutline from '@mui/icons-material/CheckCircleOutline';
+import ErrorOutline from '@mui/icons-material/ErrorOutline';
+import PlayArrow from '@mui/icons-material/PlayArrow';
 import { FC, useState, useEffect } from 'react';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';

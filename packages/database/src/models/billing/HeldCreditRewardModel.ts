@@ -1,0 +1,177 @@
+import mongoose, { Schema } from 'mongoose';
+
+export type CreditRewardSource =
+  'gear' | 'referral_first_answer' | 'preference_arena' | 'referral_subscription' | 'referral_milestone';
+/** `paused` is a blocked account's reward: out of the queue, its heldAt kept so unblock restores its place. */
+export type HeldCreditRewardStatus = 'held' | 'paid' | 'void' | 'paused';
+
+export type HeldCreditReward = {
+  id: string;
+  transactionId: string;
+  userId: string;
+  credits: number;
+  source: CreditRewardSource;
+  reason: string;
+  description: string;
+  metadata?: Record<string, unknown>;
+  lotRef?: string;
+  /** After this the reward is voided instead of paid. */
+  expiresAt?: Date;
+  heldAt: Date;
+  status: HeldCreditRewardStatus;
+  paidAt?: Date | null;
+};
+
+type HeldCreditRewardDoc = Omit<HeldCreditReward, 'id'>;
+
+const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
+  {
+    // The ledger transactionId the reward pays under once released.
+    transactionId: { type: String, required: true, unique: true },
+    userId: { type: String, required: true },
+    credits: { type: Number, required: true, min: 1 },
+    source: {
+      type: String,
+      enum: ['gear', 'referral_first_answer', 'preference_arena', 'referral_subscription', 'referral_milestone'],
+      required: true,
+    },
+    reason: { type: String, required: true },
+    description: { type: String, required: true },
+    metadata: { type: Schema.Types.Mixed },
+    // Stamped as the paid lot's stripeRef so a refund take-back finds the lot.
+    lotRef: { type: String },
+    expiresAt: { type: Date },
+    heldAt: { type: Date, required: true },
+    status: { type: String, enum: ['held', 'paid', 'void', 'paused'], required: true, default: 'held' },
+    paidAt: { type: Date, default: null },
+  },
+  { versionKey: false, timestamps: true }
+);
+
+heldCreditRewardSchema.index({ status: 1, heldAt: 1, _id: 1 });
+// pauseForUser / resumeForUser filter on one user's rows by status.
+heldCreditRewardSchema.index({ userId: 1, status: 1 });
+
+export const HeldCreditRewardModel: mongoose.Model<HeldCreditRewardDoc> =
+  (mongoose.models.HeldCreditReward as mongoose.Model<HeldCreditRewardDoc>) ??
+  mongoose.model('HeldCreditReward', heldCreditRewardSchema);
+
+const toReward = (row: HeldCreditRewardDoc & { _id: unknown }): HeldCreditReward => {
+  const { _id, ...rest } = row;
+  return { ...rest, id: String(_id) };
+};
+
+/** Structural match for creditService.HeldCreditRewardRepository (b4m-core/services). */
+export const heldCreditRewardRepository = {
+  async hold(reward: Omit<HeldCreditReward, 'id' | 'heldAt' | 'status' | 'paidAt'>, heldAt: Date = new Date()) {
+    // A repeat hold keeps the first row and its place in the queue.
+    await HeldCreditRewardModel.updateOne(
+      { transactionId: reward.transactionId },
+      { $setOnInsert: { ...reward, heldAt, status: 'held' } },
+      { upsert: true }
+    );
+  },
+  async findByTransactionIds(transactionIds: string[]): Promise<HeldCreditReward[]> {
+    if (transactionIds.length === 0) return [];
+    const rows = await HeldCreditRewardModel.find({ transactionId: { $in: transactionIds } }).lean();
+    return rows.map(toReward);
+  },
+  async oldestHeldCredits(maxCredits?: number): Promise<number | null> {
+    const row = await HeldCreditRewardModel.findOne({
+      status: 'held',
+      ...(maxCredits !== undefined ? { credits: { $lte: maxCredits } } : {}),
+    })
+      .sort({ heldAt: 1, _id: 1 })
+      .select('credits')
+      .lean();
+    return row?.credits ?? null;
+  },
+  async listHeld(limit: number, maxCredits?: number): Promise<HeldCreditReward[]> {
+    const rows = await HeldCreditRewardModel.find({
+      status: 'held',
+      ...(maxCredits !== undefined ? { credits: { $lte: maxCredits } } : {}),
+    })
+      .sort({ heldAt: 1, _id: 1 })
+      .limit(limit)
+      .lean();
+    return rows.map(toReward);
+  },
+  /** Takes a user's queued rewards out of the queue; every queue query reads `held` only, so none pays or blocks the head. */
+  async pauseForUser(userId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateMany(
+      { userId, status: 'held' },
+      { $set: { status: 'paused' } }
+    );
+    return modifiedCount;
+  },
+  /** Takes one queued reward out of the queue, leaving the user's other rows as they are. */
+  async pauseOne(transactionId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: 'held' },
+      { $set: { status: 'paused' } }
+    );
+    return modifiedCount;
+  },
+  /** Puts a user's paused rewards back in the queue at their original place. */
+  async resumeForUser(userId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateMany(
+      { userId, status: 'paused' },
+      { $set: { status: 'held' } }
+    );
+    return modifiedCount;
+  },
+  /** Count and credit total of one user's queued (`held`) and blocked-out (`paused`) rewards. */
+  async totalsForUser(userId: string): Promise<Record<'held' | 'paused', { count: number; credits: number }>> {
+    const rows = await HeldCreditRewardModel.aggregate<{ _id: 'held' | 'paused'; count: number; credits: number }>([
+      { $match: { userId, status: { $in: ['held', 'paused'] } } },
+      { $group: { _id: '$status', count: { $sum: 1 }, credits: { $sum: '$credits' } } },
+    ]);
+    const totals = { held: { count: 0, credits: 0 }, paused: { count: 0, credits: 0 } };
+    for (const row of rows) totals[row._id] = { count: row.count, credits: row.credits };
+    return totals;
+  },
+  /** totalsForUser for many users in one query; every requested id gets an entry, zeros when it has no rows. */
+  async totalsForUsers(
+    userIds: string[]
+  ): Promise<Map<string, Record<'held' | 'paused', { count: number; credits: number }>>> {
+    const totals = new Map<string, Record<'held' | 'paused', { count: number; credits: number }>>();
+    for (const id of userIds) totals.set(id, { held: { count: 0, credits: 0 }, paused: { count: 0, credits: 0 } });
+    if (!userIds.length) return totals;
+    const rows = await HeldCreditRewardModel.aggregate<{
+      _id: { userId: string; status: 'held' | 'paused' };
+      count: number;
+      credits: number;
+    }>([
+      { $match: { userId: { $in: userIds }, status: { $in: ['held', 'paused'] } } },
+      { $group: { _id: { userId: '$userId', status: '$status' }, count: { $sum: 1 }, credits: { $sum: '$credits' } } },
+    ]);
+    for (const row of rows) {
+      const entry = totals.get(row._id.userId);
+      if (entry) entry[row._id.status] = { count: row.count, credits: row.credits };
+    }
+    return totals;
+  },
+  /** With `credits`, settles only while the row still holds that amount (a refund may have reduced it). */
+  async settle(
+    transactionId: string,
+    status: 'paid' | 'void',
+    { credits, at = new Date() }: { credits?: number; at?: Date } = {}
+  ): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: 'held', ...(credits !== undefined ? { credits } : {}) },
+      { $set: { status, ...(status === 'paid' ? { paidAt: at } : {}) } }
+    );
+    return modifiedCount;
+  },
+  /**
+   * Lowers an unpaid (`held` or `paused`) reward from `fromCredits` to `toCredits`, voiding it at 0. Conditional on
+   * the current amount, so a concurrent change makes it a no-op; returns how many rows moved.
+   */
+  async reduceHeld(transactionId: string, fromCredits: number, toCredits: number): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: { $in: ['held', 'paused'] }, credits: fromCredits },
+      { $set: toCredits > 0 ? { credits: toCredits } : { status: 'void' } }
+    );
+    return modifiedCount;
+  },
+};

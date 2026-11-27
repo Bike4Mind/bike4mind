@@ -1,11 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, adminSettingsRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { dataLakeListResponseSchema } from '@bike4mind/common';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { respond } from '@server/utils/respond';
 
 // GET /api/data-lakes/deleted - soft-deleted lakes accessible to the user (restore / purge view)

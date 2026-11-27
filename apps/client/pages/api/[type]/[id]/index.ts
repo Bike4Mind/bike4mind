@@ -39,6 +39,9 @@ const inviteHandler = baseApi().get(
     if (access === 'expired') {
       return res.status(410).json({ message: 'Invite has expired' });
     }
+    if (access === 'revoked') {
+      return res.status(410).json({ message: 'Invite has been revoked', revoked: true });
+    }
     if (access !== 'allowed') {
       return res.status(404).json({ message: 'Invite Not Found' });
     }

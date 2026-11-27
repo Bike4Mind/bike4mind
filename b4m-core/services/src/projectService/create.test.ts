@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { createProject } from './create';
 import { createMockProjectRepository } from '../__tests__/utils/testUtils';
 import { createShareableFake } from '../__tests__/utils/shareableFake';
-import { IProjectDocument, IProjectRepository } from '@bike4mind/common';
+import { IProjectDocument, IProjectRepository, attachOrgApiKeyReach, orgApiKeyReachOf } from '@bike4mind/common';
 
 describe('projectService - create', () => {
   const userId = 'test-user-123';
@@ -135,5 +135,25 @@ describe('projectService - create', () => {
     };
 
     await expect(createProject({ id: userId }, invalidParams, adapters)).rejects.toThrow();
+  });
+
+  it('checks file and session readability without the caller org key reach', async () => {
+    adapters.db.fabFiles = { shareable: createShareableFake([{ id: 'file-1', userId, users: [], groups: [] }]) };
+    adapters.db.sessions = { shareable: createShareableFake([{ id: 'session-1', userId, users: [], groups: [] }]) };
+    const fileSpy = vi.spyOn(adapters.db.fabFiles.shareable, 'findAllAccessibleByIds');
+    const sessionSpy = vi.spyOn(adapters.db.sessions.shareable, 'findAllAccessibleByIds');
+    const keyUser = attachOrgApiKeyReach(
+      { id: userId, groups: ['group-1'] },
+      { organizationId: 'org-1', readGroupIds: ['group-2'], dataLakeOrgIds: [] }
+    );
+
+    await createProject(keyUser, { name: 'P', fileIds: ['file-1'], sessionIds: ['session-1'] }, adapters);
+
+    for (const spy of [fileSpy, sessionSpy]) {
+      expect(spy).toHaveBeenCalledTimes(1);
+      const [accessor] = spy.mock.calls[0]!;
+      expect(orgApiKeyReachOf(accessor)).toBeUndefined();
+      expect(accessor).toMatchObject({ id: userId, groups: ['group-1'] });
+    }
   });
 });

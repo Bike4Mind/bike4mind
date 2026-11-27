@@ -5,6 +5,7 @@ import { userRepository } from '@bike4mind/database';
 import { redactUserSecretsForSelf, selfUserResponseSchema } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { completeMfaLogin } from '@server/auth/completeMfaLogin';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { sendFailedMfaAttempt, sendIfLockedOut } from '@server/auth/mfaLockout';
 import {
   asPasskeyError,
@@ -61,6 +62,8 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       return sendFailedMfaAttempt(res, freshUser.id, { error: passkeyError.message, code: passkeyError.code });
     }
 
+    // Before the session is minted, so a role lookup failure leaves nothing to undo.
+    await resolveRoleAdminPermissions(result.user);
     const { accessToken, deviceRemembered } = await completeMfaLogin(req, res, result.user, { rememberDevice });
     return respond(res, passkeyAuthenticateResponseSchema, {
       verified: true,

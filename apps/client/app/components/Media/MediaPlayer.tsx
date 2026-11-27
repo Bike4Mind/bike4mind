@@ -39,7 +39,7 @@ const isScanInFlight = (status: MediaPlayerFile['moderationStatus']): boolean =>
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * GET /api/files/:id re-signs the URL only once the stored one has expired (or fails), so asking any earlier
+ * GET /api/files/:id hands out the same URL for every read inside one signing window, so asking before it expires
  * returns the same URL. That answer means the URL is still valid: the caller reloads it rather than giving up.
  *
  * Every file read withholds the URL until the S3 upload event's moderation scan clears the file (isImageServeable),

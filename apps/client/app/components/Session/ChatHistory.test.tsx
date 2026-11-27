@@ -83,7 +83,8 @@ type ScrollSpy = { scrollToIndex: ReturnType<typeof vi.fn> };
 const historyElement = (
   history: IChatHistoryItem[],
   activeStreamingQuestId: string | null,
-  virtuosoRef: { current: ScrollSpy | null } = { current: null }
+  virtuosoRef: { current: ScrollSpy | null } = { current: null },
+  firstItemIndex = 0
 ) => (
   <ChatHistory
     filteredChatHistory={history}
@@ -98,7 +99,7 @@ const historyElement = (
     model="gpt-4o"
     canUseAdminTools={false}
     virtuosoRef={virtuosoRef as never}
-    firstItemIndex={0}
+    firstItemIndex={firstItemIndex}
     onStartReached={vi.fn()}
     onAtBottomStateChange={vi.fn()}
     scrollbarWidth={0}
@@ -197,6 +198,17 @@ describe('ChatHistory - questId deep link', () => {
       behavior: 'auto',
     });
     expect(mocks.flashMessageHighlight).toHaveBeenCalledWith('b');
+  });
+
+  // The list is mounted with a large first index so older pages can be prepended; a scroll
+  // target past the item count would land on the newest message instead.
+  it('scrolls by position in the loaded history, whatever the first item index is', () => {
+    mocks.search = { questId: 'b' };
+    const virtuosoRef = { current: { scrollToIndex: vi.fn() } };
+
+    render(historyElement([quest('c'), quest('b'), quest('a')], null, virtuosoRef, 100000));
+
+    expect(virtuosoRef.current.scrollToIndex).toHaveBeenCalledWith(expect.objectContaining({ index: 1 }));
   });
 
   it('does nothing when the URL names no turn', () => {

@@ -7,6 +7,14 @@ import {
 } from './session';
 
 describe('SessionUpdateRequestSchema', () => {
+  it('drops a tutorial marker, so no client can set or clear it', () => {
+    const parsed = SessionUpdateRequestSchema.parse({ name: 'x', tutorial: { owner: 'core', moduleId: 'm' } });
+    expect(parsed).toEqual({ name: 'x' });
+    expect(
+      CreateSessionRequestSchema.parse({ name: 'x', tutorial: { owner: 'core', moduleId: 'm' } })
+    ).not.toHaveProperty('tutorial');
+  });
+
   it('accepts an empty body (every field optional - a caller can update just one thing)', () => {
     expect(SessionUpdateRequestSchema.safeParse({}).success).toBe(true);
   });

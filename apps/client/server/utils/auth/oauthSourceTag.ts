@@ -1,5 +1,8 @@
 import { oauthClientRepository, User } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'oauthSourceTag' } });
 
 /**
  * Tags a brand-new SSO account with the `source:<slug>` of the OAuth client its signup came
@@ -13,6 +16,6 @@ export async function stampOAuthSourceTag(userId: string, clientId: unknown): Pr
     if (!tag) return;
     await User.updateOne({ _id: userId }, { $addToSet: { tags: tag } });
   } catch (err) {
-    console.warn('[oauthSourceTag] Failed to stamp source tag for OAuth client', clientId, err);
+    logger.warn('Failed to stamp source tag for OAuth client', { clientId, error: err });
   }
 }

@@ -1,0 +1,1112 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  ADMIN_LINKS,
+  ALARM_CATALOG,
+  ALARM_CATEGORIES,
+  alarmCatalogEntry,
+  alarmCategory,
+  alarmSuffix,
+  dlqCatalogEntry,
+  appUrlFromEnv,
+  composeAlarmMessage,
+  describeFields,
+  describeReason,
+  formatAlarmNumber,
+  formatAlarmSlackMessage,
+  formatDuration,
+  lookupCatalog,
+  normalizeMentionToken,
+  parseMentionSetting,
+  postAlarmToSlack,
+  resolveAlarmWebhookUrl,
+  type SlackAlarmMessage,
+} from './alarmSlackMessage';
+import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
+
+const sample: CloudWatchAlarmPayload = {
+  AlarmName: 'bike4mind-production-signup-code-send-rate',
+  AlarmDescription: 'Sign-in code email dispatches per hour at or above the configured ceiling',
+  NewStateValue: 'ALARM',
+  OldStateValue: 'OK',
+  NewStateReason:
+    'Threshold Crossed: 1 datapoint [10.0 (27/10/26 04:00:00)] was greater than or equal to the threshold (10.0).',
+  StateChangeTime: '2026-10-27T05:00:58.488+0000',
+  Region: 'us-east-2',
+  Trigger: { Period: 3600, EvaluationPeriods: 1, Threshold: 10 },
+};
+
+const burst: CloudWatchAlarmPayload = {
+  ...sample,
+  AlarmName: 'bike4mind-production-signup-code-send-burst',
+  NewStateReason:
+    'Threshold Crossed: 1 datapoint [18.0 (27/10/26 12:34:00)] was greater than or equal to the threshold (15.0).',
+  StateChangeTime: '2026-10-27T12:39:58.488+0000',
+  Trigger: { Period: 300, EvaluationPeriods: 1, Threshold: 15 },
+};
+
+type Block = {
+  type: string;
+  text?: { type: string; text: string };
+  fields?: { text: string }[];
+  elements?: { text?: string | { text: string }; url?: string }[];
+};
+const topBlocks = (m: SlackAlarmMessage | null) => (m as SlackAlarmMessage).blocks as Block[];
+const attachment = (m: SlackAlarmMessage | null) =>
+  (m as SlackAlarmMessage).attachments?.[0] as {
+    color: string;
+    blocks: Block[];
+  };
+const bodyOf = (m: SlackAlarmMessage | null) => attachment(m).blocks;
+const header = (m: SlackAlarmMessage | null) => topBlocks(m).find(b => b.type === 'header')?.text?.text;
+const sectionText = (m: SlackAlarmMessage | null, label: string) =>
+  bodyOf(m)
+    .filter(b => b.type === 'section' && b.text)
+    .map(b => b.text!.text)
+    .find(t => t.startsWith(`*${label}*`));
+const fieldsOf = (m: SlackAlarmMessage | null) =>
+  bodyOf(m)
+    .find(b => b.fields)
+    ?.fields?.map(f => f.text) ?? [];
+const buttons = (m: SlackAlarmMessage | null) =>
+  bodyOf(m)
+    .find(b => b.type === 'actions')
+    ?.elements?.map(e => ({ label: (e.text as { text: string }).text, url: e.url })) ?? [];
+const contextOf = (m: SlackAlarmMessage | null) =>
+  (bodyOf(m).find(b => b.type === 'context')?.elements?.[0].text as string) ?? '';
+
+describe('account deletion deadline alarm routing', () => {
+  const alarm = { ...sample, AlarmName: 'bike4mind-production-account-deletion-deadline' };
+
+  it('pages production with the actual jobs catalog and sweep runbook', () => {
+    const message = formatAlarmSlackMessage(alarm, 'production', { mention: 'here' });
+    expect(message).not.toBeNull();
+    expect(message?.text).toContain('<!here>');
+    expect(header(message)).toBe(':rotating_light: PRODUCTION ALARM: Account deletion needs attention');
+    expect(contextOf(message)).toContain('level page  |  category jobs');
+    expect(sectionText(message, 'Why it matters')).toContain('sweep has not reported');
+    expect(sectionText(message, 'What to do')).toContain('infra/account-deletion-deadline-alarm.md');
+    expect(sectionText(message, 'What to do')).toContain('dead-letter queue');
+  });
+
+  it('keeps a development deadline page visible without a production mention', () => {
+    const message = formatAlarmSlackMessage({ ...alarm, AlarmName: 'bike4mind-dev-account-deletion-deadline' }, 'dev', {
+      mention: 'here',
+    });
+    expect(message).not.toBeNull();
+    expect(contextOf(message)).toContain('level page  |  category jobs');
+    expect(message?.text).not.toContain('<!here>');
+    expect(header(message)).toContain('Account deletion needs attention');
+  });
+
+  it('renders a real recovery but keeps initial insufficient-data settlement quiet', () => {
+    const recovered = formatAlarmSlackMessage({ ...alarm, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(recovered).not.toBeNull();
+    expect(bodyOf(recovered)[0].text?.text).toContain('back to normal');
+    expect(
+      formatAlarmSlackMessage({ ...alarm, NewStateValue: 'OK', OldStateValue: 'INSUFFICIENT_DATA' }, 'production')
+    ).toBeNull();
+  });
+});
+
+describe('formatAlarmSlackMessage on production', () => {
+  it('renders a page-level alarm with a siren header, red bar, numbers and buttons', () => {
+    const message = formatAlarmSlackMessage(burst, 'production', { appUrl: 'https://app.example.com/' });
+    expect(header(message)).toBe(':rotating_light: PRODUCTION ALARM: Sign-in code emails spiking');
+    expect(attachment(message).color).toBe('#E01E5A');
+    expect(fieldsOf(message)).toEqual([
+      '*Measured*\n18 sign-in code emails',
+      '*Fires at*\n15 or more',
+      '*Window*\n5 minutes ending 12:39 UTC',
+      '*Breaching since*\n12:34 UTC (6 min)',
+    ]);
+    expect(sectionText(message, 'What happened')).toBe(
+      '*What happened*\n18 sign-in code emails in the 5 minutes ending 12:39 UTC; the alarm fires at 15 or more.'
+    );
+    expect(sectionText(message, 'Why it matters')).toContain('Automated signups are the usual cause.');
+    expect(sectionText(message, 'What to do')).toContain('Check the admin signup activity');
+    expect(buttons(message)).toEqual([
+      {
+        label: 'Open in CloudWatch',
+        url: 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-signup-code-send-burst',
+      },
+      { label: 'Signup activity', url: 'https://app.example.com/admin?tab=users&signedUp=hour' },
+      { label: 'WAF block list', url: 'https://app.example.com/admin?tab=security-dashboard' },
+    ]);
+    expect(contextOf(message)).toBe(
+      'production  |  level page  |  category abuse  |  bike4mind-production-signup-code-send-burst  |  12:39 UTC, 27 Oct'
+    );
+    expect(message?.text).toBe(
+      ':rotating_light: PRODUCTION ALARM: Sign-in code emails spiking: 18 sign-in code emails in the 5 minutes ending 12:39 UTC; the alarm fires at 15 or more.'
+    );
+  });
+
+  it('renders a warn-level alarm with an amber bar and no mention', () => {
+    const message = formatAlarmSlackMessage(sample, 'production', { mention: 'channel' });
+    expect(header(message)).toBe(':warning: Production warning: Sign-in code emails above the hourly ceiling');
+    expect(attachment(message).color).toBe('#ECB22E');
+    expect(topBlocks(message)).toHaveLength(1);
+    expect(message?.text).not.toContain('<!channel>');
+    expect(contextOf(message)).toContain('level warn');
+  });
+
+  it('renders an info-level alarm with a blue bar', () => {
+    const message = composeAlarmMessage({
+      stage: 'production',
+      level: 'info',
+      title: 'Something to know',
+      sections: ['*What happened*\nA thing.'],
+      context: ['production'],
+      summary: 'A thing.',
+    });
+    expect(header(message)).toBe(':information_source: Production notice: Something to know');
+    expect(attachment(message).color).toBe('#36C5F0');
+  });
+
+  it('renders a title with markup characters literally in the header and escaped in the fallback text', () => {
+    const message = composeAlarmMessage({
+      stage: 'production',
+      level: 'info',
+      title: 'Queue <a&b> stuck',
+      sections: [],
+      context: ['production'],
+      summary: 'x',
+    });
+    expect(header(message)).toBe(':information_source: Production notice: Queue <a&b> stuck');
+    expect(message.text).toContain('Queue &lt;a&amp;b&gt; stuck');
+  });
+
+  it('prepends the mention to page-level alarms only when a token is configured', () => {
+    const off = formatAlarmSlackMessage(burst, 'production');
+    expect(topBlocks(off)[0].type).toBe('header');
+    expect(off?.text.startsWith(':rotating_light:')).toBe(true);
+
+    const on = formatAlarmSlackMessage(burst, 'production', { mention: '<!subteam^S0123ABC>' });
+    expect(topBlocks(on)[0]).toEqual({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '<!subteam^S0123ABC> production is paging' },
+    });
+    expect(on?.text.startsWith('<!subteam^S0123ABC> :rotating_light: PRODUCTION ALARM')).toBe(true);
+  });
+
+  it('extends the mention to warn-level alarms only when the setting says warn', () => {
+    const pageOnly = formatAlarmSlackMessage(sample, 'production', { mention: 'here' });
+    expect(topBlocks(pageOnly)[0].type).toBe('header');
+    expect(pageOnly?.text).not.toContain('<!here>');
+
+    const withWarn = formatAlarmSlackMessage(sample, 'production', { mention: 'here warn' });
+    expect(topBlocks(withWarn)[0]).toEqual({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '<!here> production needs attention' },
+    });
+    expect(withWarn?.text.startsWith('<!here> :warning: Production warning')).toBe(true);
+
+    const page = formatAlarmSlackMessage(burst, 'production', { mention: 'here warn' });
+    expect(topBlocks(page)[0]).toEqual({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '<!here> production is paging' },
+    });
+  });
+
+  it('never mentions on info-level alarms, whatever the setting', () => {
+    const message = composeAlarmMessage({
+      stage: 'production',
+      level: 'info',
+      title: 'Something to know',
+      mention: 'channel warn',
+      sections: ['*What happened*\nA thing.'],
+      context: ['production'],
+      summary: 'A thing.',
+    });
+    expect(topBlocks(message)[0].type).toBe('header');
+    expect(message.text).not.toContain('<!channel>');
+  });
+
+  it('places detail sections between why it matters and what to do', () => {
+    const message = formatAlarmSlackMessage(sample, 'production', {
+      details: ['*Top accounts in the window*\n1. `u1` 1.52 USD'],
+    });
+    const labels = bodyOf(message)
+      .filter(b => b.type === 'section' && b.text)
+      .map(b => b.text!.text.split('\n')[0]);
+    expect(labels).toEqual([
+      '*What happened*',
+      '*Whose it is*',
+      '*Why it matters*',
+      '*Top accounts in the window*',
+      '*What to do*',
+    ]);
+  });
+
+  it('omits admin buttons without an app url and the CloudWatch button without a Region', () => {
+    const message = formatAlarmSlackMessage({ ...burst, Region: undefined }, 'production');
+    expect(bodyOf(message).find(b => b.type === 'actions')).toBeUndefined();
+  });
+
+  it('explains missing data and shows how long it has been missing', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason: 'Insufficient Data: 2 datapoints were missing',
+      StateChangeTime: '2026-10-27T05:30:00.000+0000',
+      Trigger: { Period: 300, EvaluationPeriods: 6 },
+    };
+    expect(describeReason(alarm)).toBe('No data arrived for 30 minutes, which counts as a failure for this alarm.');
+    expect(describeFields(alarm, undefined, new Date('2026-10-27T05:30:00Z'))).toEqual([
+      '*Missing data for*\n30 min',
+      '*Breaching since*\n05:00 UTC (30 min)',
+    ]);
+    expect(describeReason({ ...alarm, Trigger: undefined })).toBe('No data arrived for a while.');
+  });
+
+  it('says floor for less-than alarms and uses a minutes period', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 2 datapoints [0.0 (27/10/26 04:00:00), 0.0 (27/10/26 04:05:00)] were less than the threshold (1.0).',
+      Trigger: { Period: 300, EvaluationPeriods: 2 },
+    };
+    expect(describeReason(alarm, 'runs')).toBe('0 runs in the 5 minutes ending 04:10 UTC; the floor is 1.');
+    const fields = describeFields(alarm, 'runs', new Date('2026-10-27T04:11:00Z'));
+    expect(fields).toContain('*Floor*\n1');
+    expect(fields).toContain('*Breaching since*\n04:00 UTC (11 min)');
+  });
+
+  it('rounds a USD measurement and ceiling to cents in both the sentence and the fields', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [2.4855329999999998 (27/10/26 23:00:00)] was greater than or equal to the threshold (2.0).',
+      Trigger: { Period: 3600, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm, 'USD')).toBe(
+      '2.49 USD in the hour ending 00:00 UTC; the alarm fires at 2.00 or more.'
+    );
+    const fields = describeFields(alarm, 'USD');
+    expect(fields).toContain('*Measured*\n2.49 USD');
+    expect(fields).toContain('*Fires at*\n2.00 or more');
+  });
+
+  it('words a value equal to an inclusive threshold as reaching it, not as passing a ceiling', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [1.0 (26/11/26 04:13:00)] was greater than or equal to the threshold (1.0).',
+      Trigger: { Period: 300, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm)).toBe(
+      'The value was 1 in the 5 minutes ending 04:18 UTC; the alarm fires at 1 or more.'
+    );
+    const fields = describeFields(alarm);
+    expect(fields).toContain('*Fires at*\n1 or more');
+    expect(fields.some(f => f.startsWith('*Ceiling*'))).toBe(false);
+  });
+
+  it('words an inclusive less-than alarm as firing at the threshold or less', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [0.0 (27/10/26 04:00:00)] was less than or equal to the threshold (0.0).',
+      Trigger: { Period: 300, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm, 'runs')).toBe(
+      '0 runs in the 5 minutes ending 04:05 UTC; the alarm fires at 0 or less.'
+    );
+    expect(describeFields(alarm, 'runs')).toContain('*Fires at*\n0 or less');
+  });
+
+  it('rolls the bucket end over midnight', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason: 'Threshold Crossed: 1 datapoint [3.0 (27/10/26 23:00:00)] was greater than the threshold (2.0).',
+      Trigger: { Period: 3600, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm, 'errors')).toBe('3 errors in the hour ending 00:00 UTC; the ceiling is 2.');
+  });
+
+  it('reports the newest datapoint whatever order the reason lists them in', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 2 datapoints [7.0 (27/10/26 04:05:00), 5.0 (27/10/26 04:00:00)] were greater than the threshold (3.0).',
+      Trigger: { Period: 300, EvaluationPeriods: 2 },
+    };
+    expect(describeReason(alarm, 'errors')).toBe('7 errors in the 5 minutes ending 04:10 UTC; the ceiling is 3.');
+  });
+
+  it('prefers a real datapoint over the missing-data wording when a reason has both', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 out of the last 3 datapoints [5.0 (27/10/26 04:00:00)] was greater than the threshold (3.0) and 2 missing datapoints were treated as [Breaching].',
+      Trigger: { Period: 300, EvaluationPeriods: 3 },
+    };
+    expect(describeReason(alarm, 'errors')).toBe('5 errors in the 5 minutes ending 04:05 UTC; the ceiling is 3.');
+  });
+
+  it('escapes Slack control characters in alarm-supplied text', () => {
+    const message = formatAlarmSlackMessage(
+      {
+        ...sample,
+        AlarmName: 'bike4mind-production-brand-new-thing',
+        AlarmDescription: 'Errors <5% & latency > 2s',
+        NewStateReason: 'Something <odd>',
+      },
+      'production'
+    );
+    expect(sectionText(message, 'What happened')).toContain('Something &lt;odd&gt;');
+    expect(sectionText(message, 'Why it matters')).toContain('Errors &lt;5% &amp; latency &gt; 2s');
+    expect(buttons(message)[0].label).toBe('Open in CloudWatch');
+  });
+
+  it('returns the raw reason for anything else and skips the numbers block', () => {
+    const alarm = { ...sample, NewStateReason: 'Something odd' };
+    expect(describeReason(alarm)).toBe('Something odd');
+    expect(describeFields(alarm)).toEqual([]);
+  });
+
+  it('falls back to a suffix title, warn level and the alarm description for unknown alarms', () => {
+    const message = formatAlarmSlackMessage(
+      { ...sample, AlarmName: 'bike4mind-production-brand-new-thing', AlarmDescription: 'A brand new thing broke' },
+      'production'
+    );
+    expect(header(message)).toBe(':warning: Production warning: Brand new thing');
+    expect(sectionText(message, 'Why it matters')).toBe('*Why it matters*\nA brand new thing broke');
+    expect(sectionText(message, 'What to do')).toBeUndefined();
+    expect(contextOf(message)).toContain('level warn');
+  });
+
+  it('escapes markup characters in the resolved fallback text', () => {
+    const message = formatAlarmSlackMessage(
+      { ...sample, AlarmName: 'x-a<b&c-alarm', NewStateValue: 'OK', OldStateValue: 'ALARM' },
+      'production'
+    );
+    expect(message?.text).toContain('a&lt;b&amp;c');
+  });
+
+  it('renders OK as a quiet green resolved message with no header', () => {
+    const message = formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(message?.text).toBe(':white_check_mark: Resolved: Sign-in code emails above the hourly ceiling');
+    expect(topBlocks(message)).toEqual([]);
+    expect(attachment(message).color).toBe('#2EB67D');
+    expect(bodyOf(message)[0].text?.text).toBe(
+      ':white_check_mark: *Resolved: Sign-in code emails above the hourly ceiling*\nproduction  |  back to normal at 05:00 UTC'
+    );
+    expect(contextOf(message)).toContain('bike4mind-production-signup-code-send-rate  |  <https://us-east-2.console');
+  });
+
+  it('returns null for INSUFFICIENT_DATA', () => {
+    expect(formatAlarmSlackMessage({ ...sample, NewStateValue: 'INSUFFICIENT_DATA' }, 'production')).toBeNull();
+  });
+
+  it('posts no resolved line for an OK that does not follow an ALARM', () => {
+    // A new alarm settles INSUFFICIENT_DATA -> OK as soon as it has data; a deploy that creates
+    // many alarms would otherwise flood the channel with resolutions of nothing.
+    expect(
+      formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'INSUFFICIENT_DATA' }, 'production')
+    ).toBeNull();
+    expect(formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'OK' }, 'production')).toBeNull();
+    expect(
+      formatAlarmSlackMessage({ ...sample, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production')
+    ).not.toBeNull();
+  });
+
+  it('names the category in the footer of alarms and resolutions', () => {
+    expect(contextOf(formatAlarmSlackMessage(sample, 'production'))).toBe(
+      'production  |  level warn  |  category abuse  |  bike4mind-production-signup-code-send-rate  |  05:00 UTC, 27 Oct'
+    );
+    const spend = { ...sample, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-anthropic' };
+    expect(contextOf(formatAlarmSlackMessage(spend, 'production'))).toContain('level page  |  category cost  |  ');
+    expect(
+      contextOf(formatAlarmSlackMessage({ ...spend, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production'))
+    ).toBe(
+      'category cost  |  bike4mind-production-provider-reported-spend-hourly-anthropic  |  <https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-provider-reported-spend-hourly-anthropic|Open in CloudWatch>'
+    );
+    const unknown = { ...sample, AlarmName: 'bike4mind-production-something-new' };
+    expect(contextOf(formatAlarmSlackMessage(unknown, 'production'))).toContain('category infra');
+  });
+});
+
+describe('formatAlarmSlackMessage on other stages', () => {
+  const devBurst = { ...burst, AlarmName: 'bike4mind-dev-signup-code-send-burst' };
+
+  it('labels stage dev as staging and keeps it secondary: grey bar, no siren, no mention even at page level', () => {
+    const message = formatAlarmSlackMessage(devBurst, 'dev', { mention: 'channel' });
+    expect(header(message)).toBe(':small_blue_diamond: staging alarm: Sign-in code emails spiking');
+    expect(attachment(message).color).toBe('#9AA5B1');
+    expect(topBlocks(message)).toHaveLength(1);
+    expect(message?.text).not.toContain('<!channel>');
+    expect(contextOf(message)).toBe(
+      'staging  |  level page  |  category abuse  |  bike4mind-dev-signup-code-send-burst  |  12:39 UTC, 27 Oct'
+    );
+  });
+
+  it('treats staging and preview stages the same way', () => {
+    const staging = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-staging-signup-code-send-burst' },
+      'staging'
+    );
+    expect(header(staging)).toBe(':small_blue_diamond: staging alarm: Sign-in code emails spiking');
+    const preview = formatAlarmSlackMessage({ ...burst, AlarmName: 'bike4mind-pr-12-signup-code-send-burst' }, 'pr-12');
+    expect(header(preview)).toBe(':small_blue_diamond: pr-12 alarm: Sign-in code emails spiking');
+    expect(attachment(preview).color).toBe('#9AA5B1');
+  });
+
+  it('resolves on dev in the same quiet green shape', () => {
+    const message = formatAlarmSlackMessage({ ...devBurst, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'dev');
+    expect(attachment(message).color).toBe('#2EB67D');
+    expect(bodyOf(message)[0].text?.text).toContain('staging  |  back to normal at 12:39 UTC');
+  });
+
+  it('drops warn-level alarms and their resolutions on stages other than production', () => {
+    const devWarn = { ...sample, AlarmName: 'bike4mind-dev-signup-code-send-rate' };
+    expect(formatAlarmSlackMessage(devWarn, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'dev')).toBeNull();
+    expect(formatAlarmSlackMessage({ ...devWarn, AlarmName: 'bike4mind-pr-123-unknown' }, 'pr-123')).toBeNull();
+    expect(formatAlarmSlackMessage(sample, 'production')).not.toBeNull();
+  });
+});
+
+describe('formatAlarmNumber', () => {
+  it.each([
+    [2.4855329999999998, 'USD', '2.49'],
+    [5, 'USD', '5.00'],
+    [0, 'USD', '0.00'],
+    [0.01, 'USD', '0.01'],
+    [0.00123456, 'USD', '0.0012'],
+    [0.00000123456789, 'USD', '0.00000123457'],
+    [-0.000001, 'USD', '-0.000001'],
+    [1e-9, 'USD', '1e-9'],
+    [-2.4855329999999998, 'USD', '-2.49'],
+    [0.0099999, 'USD', '0.0100'],
+    [0.0100001, 'USD', '0.01'],
+    [7, 'errors', '7'],
+    [1234567, undefined, '1234567'],
+    [0.30000000000000004, 'runs', '0.3'],
+    [123.456789123, undefined, '123.457'],
+  ] as const)('formats %s %s as %s', (value, unit, expected) => {
+    expect(formatAlarmNumber(value, unit)).toBe(expected);
+  });
+});
+
+describe('ALARM_CATALOG', () => {
+  it('asks for the account list on the young-account alarms and the breakdown on the ledger provider alarms', () => {
+    const withDetail = Object.fromEntries(
+      Object.entries(ALARM_CATALOG)
+        .filter(([, entry]) => entry.detail !== undefined)
+        .map(([key, entry]) => [key, entry.detail])
+    );
+    expect(withDetail).toEqual({
+      'llm-spend-young-accounts': 'young-account-spend',
+      'young-account-spend-rate': 'young-account-spend',
+      'young-account-spend-rate-warn': 'young-account-spend',
+      'llm-spend-rate': 'provider-spend',
+      'llm-spend-hourly': 'provider-spend',
+      'llm-spend-hourly-warn': 'provider-spend',
+      'refused-request-burst': 'refused-request-burst',
+    });
+    expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
+    expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
+      'young-account-spend'
+    );
+    expect(alarmCatalogEntry(sample, 'production')?.detail).toBeUndefined();
+  });
+
+  it('describes the image moderation review alarms by their CloudWatch names', () => {
+    for (const suffix of [
+      'image-moderation-incident-unalerted',
+      'image-moderation-incident-unreviewed',
+      'image-moderation-no-reviewers',
+    ]) {
+      const entry = alarmCatalogEntry({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production');
+      expect(entry?.level).toBe('page');
+      expect(entry?.category).toBe('security');
+    }
+  });
+
+  it('links the moderation alarms to the page that fixes them', () => {
+    const buttonsFor = (suffix: string) =>
+      buttons(
+        formatAlarmSlackMessage({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production', {
+          appUrl: 'https://app.example.com',
+        })
+      );
+    for (const suffix of ['image-moderation-incident-unalerted', 'image-moderation-incident-unreviewed']) {
+      expect(buttonsFor(suffix)).toContainEqual({
+        label: 'Moderation review',
+        url: 'https://app.example.com/admin?tab=moderation-incidents',
+      });
+    }
+    for (const suffix of ['image-moderation-incident-unalerted', 'image-moderation-no-reviewers']) {
+      expect(buttonsFor(suffix)).toContainEqual({
+        label: 'Moderation settings',
+        url: 'https://app.example.com/admin?tab=admin-settings&section=security',
+      });
+    }
+    expect(buttonsFor('image-moderation-incident-unreviewed').map(b => b.label)).toContain('Open in CloudWatch');
+  });
+
+  it('only names admin links that exist', () => {
+    for (const entry of Object.values(ALARM_CATALOG)) {
+      for (const key of entry.links ?? []) expect(ADMIN_LINKS[key]).toBeDefined();
+    }
+  });
+
+  it('gives every entry a category from the closed set', () => {
+    for (const entry of Object.values(ALARM_CATALOG)) expect(ALARM_CATEGORIES).toContain(entry.category);
+    expect(dlqCatalogEntry('dlq-email-send-messages')?.category).toBe('jobs');
+    expect(dlqCatalogEntry('dlq-email-send-age')?.category).toBe('jobs');
+  });
+
+  it('files only provider-reported spend, unpriced tokens, reconciliation drift and ungranted purchases under cost', () => {
+    const cost = Object.entries(ALARM_CATALOG)
+      .filter(([, entry]) => entry.category === 'cost')
+      .map(([key]) => key)
+      .sort();
+    expect(cost).toEqual([
+      'provider-reported-spend-hourly',
+      'provider-unpriced-tokens-hourly',
+      'spend-reconciliation-drift',
+      'ungranted-credit-purchases',
+    ]);
+    // Ledger spend alarms catch credit farms, so they stay with the abuse signals.
+    for (const key of [
+      'llm-spend-hourly',
+      'llm-spend-hourly-warn',
+      'llm-spend-rate',
+      'llm-spend-young-accounts',
+      'young-account-spend-rate',
+      'young-account-spend-rate-warn',
+      'completion-credit-overdraft',
+    ]) {
+      expect(ALARM_CATALOG[key].category).toBe('abuse');
+    }
+  });
+
+  it('resolves a category per alarm name, infra when unknown', () => {
+    expect(
+      alarmCategory({ ...sample, AlarmName: 'bike4mind-production-llm-spend-hourly-anthropic' }, 'production')
+    ).toBe('abuse');
+    expect(
+      alarmCategory(
+        { ...sample, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-openai' },
+        'production'
+      )
+    ).toBe('cost');
+    expect(
+      alarmCategory({ ...sample, AlarmName: 'bike4mind-production-ungranted-credit-purchases' }, 'production')
+    ).toBe('cost');
+    expect(alarmCategory({ ...sample, AlarmName: 'bike4mind-dev-dlq-email-send-messages' }, 'dev')).toBe('jobs');
+    expect(alarmCategory({ ...sample, AlarmName: 'waf-runtime-blocker-prod-no-successful-run' }, 'production')).toBe(
+      'security'
+    );
+    expect(alarmCategory({ ...sample, AlarmName: 'bike4mind-production-something-new' }, 'production')).toBe('infra');
+  });
+
+  it('pages for the alarms that need a human now', () => {
+    expect(ALARM_CATALOG['signup-code-send-burst'].level).toBe('page');
+    expect(ALARM_CATALOG['ungranted-credit-purchases'].level).toBe('page');
+    expect(ALARM_CATALOG['signup-code-send-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
+    expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
+    expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['young-account-spend-rate-warn'].level).toBe('warn');
+    expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['llm-spend-hourly-warn'].level).toBe('warn');
+    expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
+    expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
+    expect(ALARM_CATALOG['provider-usage-poll-errors'].level).toBe('warn');
+    expect(ALARM_CATALOG['llm-spend-young-accounts'].level).toBe('page');
+    expect(ALARM_CATALOG['completion-credit-overdraft'].level).toBe('warn');
+  });
+
+  it('warns, as a cost alarm, on unpriced tokens and names the provider', () => {
+    const alarm = { ...sample, AlarmName: 'test-app-production-provider-unpriced-tokens-hourly-openai' };
+    expect(alarmCatalogEntry(alarm, 'production')).toMatchObject({ level: 'warn', category: 'cost' });
+    const text = JSON.stringify(formatAlarmSlackMessage(alarm, 'production'));
+    expect(text).toContain('AI spend at OpenAI is partly unpriced');
+    expect(text).not.toContain('{provider}');
+  });
+
+  it('pages on reconciliation drift and warns, as a job, on a run that reconciled nothing', () => {
+    const entryFor = (suffix: string) =>
+      alarmCatalogEntry({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production');
+    expect(entryFor('spend-reconciliation-drift')).toMatchObject({ level: 'page', category: 'cost' });
+    expect(entryFor('spend-reconciliation-nothing-reconciled')).toMatchObject({ level: 'warn', category: 'jobs' });
+    expect(entryFor('spend-reconciliation-errors')).toMatchObject({ level: 'warn', category: 'jobs' });
+  });
+});
+
+describe('provider spend alarms', () => {
+  const hourlyOpenAi: CloudWatchAlarmPayload = {
+    ...sample,
+    AlarmName: 'bike4mind-production-llm-spend-hourly-openai',
+    NewStateReason:
+      'Threshold Crossed: 1 datapoint [21.34 (27/10/26 18:08:00)] was greater than or equal to the threshold (20.0).',
+    StateChangeTime: '2026-10-27T19:09:12.000+0000',
+    Trigger: { Period: 3600, EvaluationPeriods: 1, Threshold: 20, Dimensions: [{ name: 'Provider', value: 'openai' }] },
+  };
+
+  it('names the provider in the header, the meaning and the resolved line', () => {
+    const message = formatAlarmSlackMessage(hourlyOpenAi, 'production');
+    expect(header(message)).toBe(':rotating_light: PRODUCTION ALARM: AI spend at OpenAI is running hot');
+    expect(sectionText(message, 'Why it matters')).toContain('Estimated spend at OpenAI over one hour');
+    const resolved = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, NewStateValue: 'OK', OldStateValue: 'ALARM' },
+      'production'
+    );
+    expect(resolved?.text).toBe(':white_check_mark: Resolved: AI spend at OpenAI is running hot');
+  });
+
+  it('reads the provider from the alarm name when the trigger carries no dimension', () => {
+    const message = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, AlarmName: 'bike4mind-production-llm-spend-hourly-warn-anthropic', Trigger: { Period: 3600 } },
+      'production'
+    );
+    expect(header(message)).toBe(':warning: Production warning: AI spend at Anthropic is higher than usual');
+  });
+
+  it('falls back to a generic provider and keeps a sentence-opening placeholder capitalised', () => {
+    const message = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, AlarmName: 'bike4mind-production-provider-reported-spend-hourly', Trigger: { Period: 3600 } },
+      'production'
+    );
+    expect(header(message)).toContain('Unusual AI spend reported by an AI provider');
+    expect(sectionText(message, 'Why it matters')).toContain("*Why it matters*\nAn AI provider's own usage report");
+  });
+
+  it('tells devops whose alarm it is and gives a decision rule instead of a to-do list', () => {
+    const message = formatAlarmSlackMessage(hourlyOpenAi, 'production');
+    expect(sectionText(message, 'Whose it is')).toContain('abuse/LiveOps owner');
+    expect(sectionText(message, 'Whose it is')).toContain('Devops: no infrastructure action is needed');
+    const action = sectionText(message, 'What to do') ?? '';
+    expect(action).toContain('acknowledge in this thread and move on');
+    expect(action).toContain('stays red for 2 hours or more');
+    expect(action).toContain('a third or more');
+  });
+
+  it('gives provider-reported spend its own owner line and the ledger comparison', () => {
+    const message = formatAlarmSlackMessage(
+      { ...hourlyOpenAi, AlarmName: 'bike4mind-production-provider-reported-spend-hourly-openai' },
+      'production'
+    );
+    expect(sectionText(message, 'Whose it is')).toContain('key rotation');
+    expect(sectionText(message, 'What to do')).toContain('Compare with the ledger alarms for OpenAI');
+  });
+
+  it('adds no owner line where the entry has its own handoff or the category has no owner', () => {
+    const census = formatAlarmSlackMessage({ ...sample, AlarmName: 'NewAccountApiKeys' }, 'production');
+    expect(sectionText(census, 'Whose it is')).toBeUndefined();
+    const jobs = formatAlarmSlackMessage(
+      { ...sample, AlarmName: 'bike4mind-production-provider-usage-poll-errors' },
+      'production'
+    );
+    expect(sectionText(jobs, 'Whose it is')).toBeUndefined();
+  });
+
+  it('does not read an hourly sum as an hour-long breach', () => {
+    const fields = fieldsOf(formatAlarmSlackMessage(hourlyOpenAi, 'production'));
+    expect(fields).toContain('*Window*\nhour ending 19:08 UTC');
+    expect(fields).toContain('*Breaching for*\njust crossed (an hour-long sum, so no exact start time)');
+    expect(fields.some(f => f.startsWith('*Breaching since*'))).toBe(false);
+  });
+
+  it('counts consecutive breaching hours when the reason lists several', () => {
+    const fields = describeFields(
+      {
+        ...hourlyOpenAi,
+        NewStateReason:
+          'Threshold Crossed: 2 datapoints [25.0 (27/10/26 19:08:00), 22.0 (27/10/26 18:08:00)] were greater than or equal to the threshold (20.0).',
+        Trigger: { Period: 3600, EvaluationPeriods: 2 },
+      },
+      'USD',
+      new Date('2026-10-27T20:09:00.000Z')
+    );
+    expect(fields).toContain('*Breaching for*\n2 consecutive hours');
+  });
+
+  it('keeps the breaching-since time on short periods', () => {
+    const fields = describeFields(burst, 'sign-in code emails', new Date('2026-10-27T12:39:58.488Z'));
+    expect(fields).toContain('*Breaching since*\n12:34 UTC (6 min)');
+  });
+});
+
+describe('normalizeMentionToken', () => {
+  it.each([undefined, '', '  ', 'off', 'none', 'false', '0', 'not-configured', 'junk', '<script>'])(
+    'is off for %s',
+    raw => {
+      expect(normalizeMentionToken(raw)).toBeUndefined();
+    }
+  );
+
+  it.each([
+    ['channel', '<!channel>'],
+    ['@channel', '<!channel>'],
+    ['here', '<!here>'],
+    ['everyone', '<!everyone>'],
+    ['<!channel>', '<!channel>'],
+    ['<!subteam^S0123ABC>', '<!subteam^S0123ABC>'],
+    ['<@U0123ABC>', '<@U0123ABC>'],
+    ['U0123ABC', '<@U0123ABC>'],
+    ['W0123ABC', '<@W0123ABC>'],
+    ['S0123ABC', '<!subteam^S0123ABC>'],
+  ])('turns %s into %s', (raw, token) => {
+    expect(normalizeMentionToken(raw)).toBe(token);
+  });
+});
+
+describe('parseMentionSetting', () => {
+  it.each([undefined, '', 'off', 'junk', 'off warn', 'warn'])('is off for %s', raw => {
+    expect(parseMentionSetting(raw)).toBeUndefined();
+  });
+
+  it.each([
+    ['here', { token: '<!here>', level: 'page' }],
+    ['here warn', { token: '<!here>', level: 'warn' }],
+    ['  channel   WARN ', { token: '<!channel>', level: 'warn' }],
+    ['S0123ABC warn', { token: '<!subteam^S0123ABC>', level: 'warn' }],
+    ['<!subteam^S0123ABC> page', { token: '<!subteam^S0123ABC>', level: 'page' }],
+    ['here info', { token: '<!here>', level: 'page' }],
+    ['here junk', { token: '<!here>', level: 'page' }],
+  ])('reads %s as %o', (raw, expected) => {
+    expect(parseMentionSetting(raw)).toEqual(expected);
+  });
+});
+
+describe('formatDuration', () => {
+  it('rounds to minutes and never reads as zero', () => {
+    expect(formatDuration(5_000)).toBe('1 min');
+    expect(formatDuration(6 * 60_000)).toBe('6 min');
+    expect(formatDuration(60 * 60_000)).toBe('1 h');
+    expect(formatDuration(70 * 60_000)).toBe('1 h 10 min');
+  });
+});
+
+describe('appUrlFromEnv', () => {
+  it('derives app.<apex> from SERVER_DOMAIN and is unset without it', () => {
+    expect(appUrlFromEnv({ SERVER_DOMAIN: 'example.com' } as NodeJS.ProcessEnv)).toBe('https://app.example.com');
+    expect(appUrlFromEnv({ SERVER_DOMAIN: '' } as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(appUrlFromEnv({} as NodeJS.ProcessEnv)).toBeUndefined();
+  });
+});
+
+describe('alarmSuffix', () => {
+  it('strips app and stage', () => {
+    expect(alarmSuffix('bike4mind-production-signup-code-send-rate', 'production')).toBe('signup-code-send-rate');
+    expect(alarmSuffix('bike4mind-pr-12-ecs-task-failed-to-start', 'pr-12')).toBe('ecs-task-failed-to-start');
+  });
+
+  it('handles external WAF blocker names', () => {
+    expect(alarmSuffix('waf-runtime-blocker-prod-no-successful-run', 'production')).toBe('no-successful-run');
+    expect(alarmSuffix('waf-runtime-blocker-production-set-size', 'production')).toBe('set-size');
+  });
+
+  it('falls back to the whole name', () => {
+    expect(alarmSuffix('something', 'production')).toBe('something');
+  });
+});
+
+describe('lookupCatalog', () => {
+  it('prefers an exact match', () => {
+    expect(lookupCatalog('no-successful-run')).toBe(ALARM_CATALOG['no-successful-run']);
+  });
+
+  it('matches by suffix and prefers the longest key', () => {
+    expect(lookupCatalog('slow-no-successful-run')).toBe(ALARM_CATALOG['slow-no-successful-run']);
+    expect(lookupCatalog('model-discovery-no-successful-run')).toBe(ALARM_CATALOG['model-discovery-no-successful-run']);
+    expect(lookupCatalog('x-cap-exceeded')).toBe(ALARM_CATALOG['cap-exceeded']);
+  });
+
+  it('matches by prefix', () => {
+    expect(lookupCatalog('set-size-extra')).toBe(ALARM_CATALOG['set-size']);
+  });
+
+  it('returns undefined for unknown suffixes', () => {
+    expect(lookupCatalog('nothing-like-it')).toBeUndefined();
+  });
+
+  it('generates dead-letter queue entries that name the queue', () => {
+    const messages = lookupCatalog('dlq-billing-events-messages');
+    expect(messages?.title).toBe('Background job failed: billing events');
+    expect(messages?.links).toEqual(['dlq-replay']);
+    const age = lookupCatalog('dlq-fab-file-chunk-age');
+    expect(age?.title).toBe('Unhandled failure for over an hour: fab file chunk');
+    expect(lookupCatalog('dlq-alarm-handler-dlq-messages')).toBe(ALARM_CATALOG['dlq-alarm-handler-dlq-messages']);
+    expect(lookupCatalog('dlq-')).toBeUndefined();
+  });
+
+  it('covers the signup, spend and census alarms by exact name or provider prefix', () => {
+    expect(lookupCatalog('SuccessfulSignups')).toBe(ALARM_CATALOG.SuccessfulSignups);
+    expect(lookupCatalog('NewAccountApiKeys')).toBe(ALARM_CATALOG.NewAccountApiKeys);
+    expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
+    expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
+    expect(lookupCatalog('llm-spend-hourly-warn-openai')).toBe(ALARM_CATALOG['llm-spend-hourly-warn']);
+    expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('young-account-spend-rate-warn')).toBe(ALARM_CATALOG['young-account-spend-rate-warn']);
+    expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
+    expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);
+    expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
+  });
+
+  it('covers the provider-reported spend alarms by provider prefix and the poller alarm by name', () => {
+    for (const provider of ['anthropic', 'openai']) {
+      expect(lookupCatalog(`provider-reported-spend-hourly-${provider}`)).toBe(
+        ALARM_CATALOG['provider-reported-spend-hourly']
+      );
+    }
+    expect(lookupCatalog('provider-usage-poll-errors')).toBe(ALARM_CATALOG['provider-usage-poll-errors']);
+    expect(alarmSuffix('bike4mind-production-provider-reported-spend-hourly-anthropic', 'production')).toBe(
+      'provider-reported-spend-hourly-anthropic'
+    );
+  });
+
+  it('covers the model price snapshot alarms by name, as warn-level jobs', () => {
+    for (const key of ['model-price-snapshot-age', 'model-price-snapshot-missing']) {
+      expect(lookupCatalog(key)).toBe(ALARM_CATALOG[key]);
+      expect(ALARM_CATALOG[key]).toMatchObject({ level: 'warn', category: 'jobs' });
+      expect(ALARM_CATALOG[key].action).toContain('model discovery');
+    }
+    expect(ALARM_CATALOG['model-price-snapshot-missing'].action).toContain('read the snapshot');
+  });
+
+  it('renders a dead-letter queue alarm with the queue name and the replay button', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-dlq-release-notes-messages' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(header(message)).toBe(':warning: Production warning: Background job failed: release notes');
+    expect(buttons(message)).toContainEqual({
+      label: 'DLQ replay',
+      url: 'https://app.example.com/admin?tab=dlq-replay&dlqQueue=release-notes',
+    });
+  });
+
+  it('links an age alarm to its own queue too', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-dlq-fab-file-chunk-age' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(buttons(message)).toContainEqual({
+      label: 'DLQ replay',
+      url: 'https://app.example.com/admin?tab=dlq-replay&dlqQueue=fab-file-chunk',
+    });
+  });
+
+  it('keeps the unfiltered replay link on catalog entries without a queue', () => {
+    const message = formatAlarmSlackMessage(
+      { ...burst, AlarmName: 'bike4mind-production-account-creation-metrics-failed' },
+      'production',
+      { appUrl: 'https://app.example.com' }
+    );
+    expect(buttons(message)).toContainEqual({
+      label: 'DLQ replay',
+      url: 'https://app.example.com/admin?tab=dlq-replay',
+    });
+  });
+
+  it('handles hand-shaped cap-exceeded messages with no Trigger', () => {
+    const message = formatAlarmSlackMessage(
+      {
+        AlarmName: 'waf-runtime-blocker-prod-cap-exceeded',
+        NewStateValue: 'ALARM',
+        OldStateValue: 'OK',
+        NewStateReason: 'Run found 80 new IPs',
+        StateChangeTime: '2026-10-27T05:00:58.488+0000',
+      },
+      'production'
+    );
+    expect(header(message)).toBe(
+      ':warning: Production warning: The WAF auto-blocker found more abusers than it is allowed to block'
+    );
+    expect(sectionText(message, 'What happened')).toBe('*What happened*\nRun found 80 new IPs');
+  });
+});
+
+describe('resolveAlarmWebhookUrl', () => {
+  const errors = { value: 'https://hooks.slack.example/errors' };
+
+  it('uses the alarms url when set', () => {
+    expect(
+      resolveAlarmWebhookUrl({
+        SLACK_ALARMS_WEBHOOK_URL: { value: 'https://hooks.slack.example/alarms' },
+        SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
+      })
+    ).toBe('https://hooks.slack.example/alarms');
+  });
+
+  it('falls back when unset, empty or the placeholder', () => {
+    const fallback = 'https://hooks.slack.example/errors';
+    expect(resolveAlarmWebhookUrl({ SLACK_ERROR_REPORTING_WEBHOOK_URL: errors })).toBe(fallback);
+    expect(
+      resolveAlarmWebhookUrl({ SLACK_ALARMS_WEBHOOK_URL: { value: '' }, SLACK_ERROR_REPORTING_WEBHOOK_URL: errors })
+    ).toBe(fallback);
+    expect(
+      resolveAlarmWebhookUrl({
+        SLACK_ALARMS_WEBHOOK_URL: { value: 'not-configured' },
+        SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
+      })
+    ).toBe(fallback);
+  });
+
+  const alarms = { value: 'https://hooks.slack.example/alarms' };
+  const cost = { value: 'https://hooks.slack.example/cost' };
+
+  it('sends cost alarms to the cost channel only when that secret is set', () => {
+    const all = {
+      SLACK_ALARMS_WEBHOOK_URL: alarms,
+      SLACK_COST_ALARMS_WEBHOOK_URL: cost,
+      SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
+    };
+    expect(resolveAlarmWebhookUrl(all, 'cost')).toBe(cost.value);
+    expect(resolveAlarmWebhookUrl({ ...all, SLACK_COST_ALARMS_WEBHOOK_URL: undefined }, 'cost')).toBe(alarms.value);
+    expect(resolveAlarmWebhookUrl({ ...all, SLACK_COST_ALARMS_WEBHOOK_URL: { value: 'not-configured' } }, 'cost')).toBe(
+      alarms.value
+    );
+    expect(
+      resolveAlarmWebhookUrl(
+        { SLACK_COST_ALARMS_WEBHOOK_URL: { value: '' }, SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+        'cost'
+      )
+    ).toBe(errors.value);
+  });
+
+  it('keeps every other category off the cost channel', () => {
+    const all = {
+      SLACK_ALARMS_WEBHOOK_URL: alarms,
+      SLACK_COST_ALARMS_WEBHOOK_URL: cost,
+      SLACK_ERROR_REPORTING_WEBHOOK_URL: errors,
+    };
+    for (const category of ['abuse', 'jobs', 'infra', 'security'] as const) {
+      expect(resolveAlarmWebhookUrl(all, category)).toBe(alarms.value);
+    }
+    expect(resolveAlarmWebhookUrl(all)).toBe(alarms.value);
+  });
+
+  it('treats a secret the function never linked as unset', () => {
+    // sst's Resource throws on an unlinked name; relays outside this repo need not link the new secret.
+    const linked = new Proxy(
+      { SLACK_ALARMS_WEBHOOK_URL: alarms, SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop as keyof typeof target];
+          throw new Error(`"${String(prop)}" is not linked in your sst.config.ts`);
+        },
+      }
+    );
+    expect(resolveAlarmWebhookUrl(linked, 'cost')).toBe(alarms.value);
+  });
+
+  it('falls back to the error-reporting channel when only that secret is linked', () => {
+    // The shape of an outside subscriber to alarmToSlack.handler that links neither alarms secret.
+    const errorsOnly = new Proxy(
+      { SLACK_ERROR_REPORTING_WEBHOOK_URL: errors },
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop as keyof typeof target];
+          throw new Error(`"${String(prop)}" is not linked in your sst.config.ts`);
+        },
+      }
+    );
+    expect(resolveAlarmWebhookUrl(errorsOnly, 'cost')).toBe(errors.value);
+    expect(resolveAlarmWebhookUrl(errorsOnly, 'infra')).toBe(errors.value);
+  });
+});
+
+describe('postAlarmToSlack', () => {
+  it('posts text, blocks and attachments, omits empty blocks, and throws on failure', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
+    vi.stubGlobal('fetch', fetchMock);
+    await postAlarmToSlack('https://hooks.slack.example/x', {
+      text: 't',
+      blocks: [{ type: 'divider' }],
+      attachments: [{ color: '#000000', blocks: [] }],
+    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      text: 't',
+      blocks: [{ type: 'divider' }],
+      attachments: [{ color: '#000000', blocks: [] }],
+    });
+
+    await postAlarmToSlack('https://hooks.slack.example/x', { text: 'quiet', blocks: [] });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ text: 'quiet' });
+
+    fetchMock.mockResolvedValue({ ok: false, status: 500, statusText: 'Boom' });
+    await expect(postAlarmToSlack('https://hooks.slack.example/x', { text: 't', blocks: [] })).rejects.toThrow(
+      'Slack webhook failed: 500 Boom'
+    );
+  });
+});
+
+describe('fallback text', () => {
+  it('escapes alarm-supplied text so a reason cannot smuggle a mention', () => {
+    const message = formatAlarmSlackMessage({ ...sample, NewStateReason: '<!channel> & <odd>' }, 'production');
+    expect(message?.text).toContain('&lt;!channel&gt; &amp; &lt;odd&gt;');
+  });
+});
+
+describe('new-account API key triage', () => {
+  const census: CloudWatchAlarmPayload = {
+    ...sample,
+    AlarmName: 'bike4mind-production-NewAccountApiKeys',
+    NewStateReason:
+      'Threshold Crossed: 2 datapoints [9.0 (02/01/26 00:05:00), 8.0 (01/01/26 23:05:00)] were greater than or equal to the threshold (8.0).',
+    StateChangeTime: '2026-01-02T01:06:00Z',
+  };
+
+  it('takes an operator to the live advisory, campaign evidence and broad key discovery', () => {
+    const message = formatAlarmSlackMessage(census, 'production', {
+      appUrl: 'https://app.example.com/',
+      mention: 'S012345',
+    });
+    expect(buttons(message)).toEqual([
+      expect.objectContaining({ label: 'Open in CloudWatch' }),
+      { label: 'AI-flagged accounts', url: 'https://app.example.com/admin?tab=users&aiVerdict=abuse' },
+      { label: 'Campaign evidence', url: 'https://app.example.com/admin?tab=shadow-detections' },
+      { label: 'Accounts with API keys', url: 'https://app.example.com/admin?tab=users&keys=yes' },
+    ]);
+    expect(JSON.stringify(message)).not.toContain('signedUp=hour');
+    expect(topBlocks(message)[0].text?.text).toContain('<!subteam^S012345>');
+    expect(contextOf(message)).toContain('level page  |  category abuse');
+  });
+
+  it('reports supplied evaluation timestamps across midnight without claiming continuous breach duration', () => {
+    const message = formatAlarmSlackMessage(census, 'production');
+    expect(fieldsOf(message)).toEqual([
+      '*Measured*\n9 API keys',
+      '*Threshold*\n8',
+      '*CloudWatch evaluation window*\n2026-01-02T00:05:00.000Z to 2026-01-02T01:05:00.000Z (end exclusive)',
+      '*Earliest breaching datapoint shown*\n2026-01-01T23:05:00.000Z',
+    ]);
+    expect(sectionText(message, 'What happened')).toContain('9 API keys in the latest breaching CloudWatch datapoint');
+    expect(sectionText(message, 'Scope and freshness')).toContain('not the census creation interval');
+    expect(JSON.stringify(message)).not.toContain('Breaching since');
+  });
+
+  it('distinguishes advisory scope, coordination, harmful activity and human ownership', () => {
+    const message = formatAlarmSlackMessage(census, 'production');
+    expect(sectionText(message, 'Why it matters')).toContain('not confirmed harmful use');
+    expect(sectionText(message, 'Scope and freshness')).toContain('not matched to this metric');
+    expect(sectionText(message, 'Scope and freshness')).toContain('last 24h');
+    expect(sectionText(message, 'Scope and freshness')).toContain('uncalibrated');
+    expect(sectionText(message, 'What to do')).toContain('available request outcomes, credits and ledger');
+    expect(sectionText(message, 'Ownership and escalation')).toContain('owner and next review time');
+    expect(sectionText(message, 'Ownership and escalation')).toContain('does not close the investigation');
+    expect(buttons(message).map(button => button.label)).toEqual(['Open in CloudWatch']);
+  });
+
+  it('keeps raw and missing metric reasons usable without inventing a census window', () => {
+    for (const reason of ['No datapoints were received', 'Unrecognized provider reason']) {
+      const message = formatAlarmSlackMessage({ ...census, NewStateReason: reason }, 'production');
+      expect(message).not.toBeNull();
+      expect(fieldsOf(message).join(' ')).not.toContain('CloudWatch evaluation window');
+      expect(sectionText(message, 'Scope and freshness')).toContain('live queue');
+    }
+  });
+
+  it('does not repeat investigation instructions or mentions on metric recovery', () => {
+    const message = formatAlarmSlackMessage({ ...census, NewStateValue: 'OK', OldStateValue: 'ALARM' }, 'production');
+    expect(message?.text).toContain('Resolved:');
+    expect(buttons(message)).toEqual([]);
+    expect(sectionText(message, 'Ownership and escalation')).toBeUndefined();
+  });
+});

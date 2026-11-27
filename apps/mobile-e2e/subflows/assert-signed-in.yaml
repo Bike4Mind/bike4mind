@@ -1,0 +1,19 @@
+appId: com.bike4mind.app
+---
+# The signed-in landing differs per platform; each one has a stable id.
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: home-profile-btn
+          timeout: 60000
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - extendedWaitUntil:
+          visible:
+            id: sessions-new-conversation-btn
+          timeout: 60000

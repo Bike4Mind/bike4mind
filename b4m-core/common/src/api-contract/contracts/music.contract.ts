@@ -3,7 +3,12 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
 import { musicRequestSchema } from '../../musicGeneration';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  MeteredForbiddenErrorSchema,
+  SPEND_FROZEN_FORBIDDEN_NOTE,
+} from '../../schemas/chat';
 import { generatedAudioResponseSchema, generatedAudioTooLargeSchema } from '../../generatedAudio';
 import { GENERATED_AUDIO_CONTENT_TYPES, GENERATED_AUDIO_DESCRIPTION, generatedAudioResponses } from './audioResponses';
 
@@ -44,6 +49,12 @@ export const generateMusicContract = defineEndpoint({
       tooLargeSchema: generatedAudioTooLargeSchema,
     }),
     400: { description: 'The billing user or organization could not be resolved.', schema: ApiErrorSchema },
+    403: {
+      description:
+        'The API key lacks the `ai:generate` scope (`required_scopes` names it), or the account is suspended ' +
+        `(\`errorCode: account_suspended\`). ${SPEND_FROZEN_FORBIDDEN_NOTE}`,
+      schema: MeteredForbiddenErrorSchema,
+    },
     422: {
       description:
         'Request body failed validation (including a `format` whose codec the provider cannot produce), or ' +
@@ -51,11 +62,23 @@ export const generateMusicContract = defineEndpoint({
         '`errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted).',
       schema: InsufficientCreditsErrorSchema,
     },
+    429: {
+      description:
+        'The API key exceeded its rate limit, or the provider stayed at its concurrency limit for longer than ' +
+        'the request could wait. `Retry-After` says when to try again; reserved credits are refunded.',
+      schema: ApiErrorSchema,
+      headers: { 'Retry-After': 'Seconds to wait before retrying.' },
+    },
     502: {
       description: 'The provider failed to generate the track; reserved credits are refunded.',
       schema: ApiErrorSchema,
     },
-    503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
+    503: {
+      description:
+        'The provider is unavailable: no API key is configured for this deployment, or the provider account is out ' +
+        'of quota. Reserved credits are refunded.',
+      schema: ApiErrorSchema,
+    },
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
   emitsRateLimitHeaders: true,

@@ -76,6 +76,16 @@ describe('appendStreamedChunk', () => {
     expect(Object.values(replies).map(visibleReplyText).filter(Boolean).join('')).toBe('PARTIAL ANSWER FINAL ANSWER');
   });
 
+  it('keeps round order when a restarted index lands on a slot a markerless thinking block left empty', () => {
+    // Round 1: a thinking block with no reasoning text at index 0, prose at 1, then a tool call.
+    // Round 2 skips thinking, so its answer restarts at index 0.
+    const replies: ReplySlots = { 0: '' };
+    appendStreamedChunk(replies, 'Let me check. ', 1, 'replace');
+    appendStreamedChunk(replies, 'It is sunny.', 0, 'replace');
+
+    expect(Object.values(replies).join('')).toBe('Let me check. It is sunny.');
+  });
+
   it('funnels every chunk into slot 0 in append mode, whatever the index', () => {
     const replies: ReplySlots = {};
     appendStreamedChunk(replies, 'rapid reply ', 0, 'append');
@@ -87,7 +97,7 @@ describe('appendStreamedChunk', () => {
 describe('TTFVT visibility over a stream that opens with a thinking block', () => {
   it('reports nothing visible until real text arrives, then attributes it to that chunk', () => {
     // The exact shape anthropicBackend streams on the extended-thinking path: a bare
-    // '<think>' marker on content_block_start, thinking_delta text, then the answer.
+    // '<think>' marker ahead of the first thinking_delta text, then the answer.
     const visibility = visibilityAfterEachChunk([
       { text: '<think>' },
       { text: 'weighing the options' },

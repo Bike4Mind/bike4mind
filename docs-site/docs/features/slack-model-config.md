@@ -111,11 +111,11 @@ Suppose your org default is GPT-4.1 Mini, you have a custom agent `@codebot` con
 The model dropdown in configuration modals shows the same models available in the web app:
 
 - Models are fetched from all configured backends (OpenAI, Anthropic, AWS Bedrock, Gemini, xAI, Moonshot (Kimi), DeepSeek, Ollama)
-- Models disabled by the system admin in the LLM Dashboard are excluded
+- Models an admin turned off in **Admin > Models** are excluded
 - Deprecated models are automatically filtered out
 - Models are grouped by provider for easier navigation
 
-If your admin enables or disables a model in the web app LLM Dashboard, the Slack dropdown updates automatically on next modal open.
+If your admin turns a model on or off in **Admin > Models** in the web app, the Slack dropdown updates the next time the modal opens.
 
 ## Troubleshooting
 
@@ -127,7 +127,7 @@ If your admin enables or disables a model in the web app LLM Dashboard, the Slac
 ### The model dropdown is empty
 
 - Your system admin may not have configured any LLM API keys
-- Check the web app LLM Dashboard to verify models are enabled
+- Check **Admin > Models** in the web app to verify the models are turned on
 
 ### Changes don't seem to take effect
 

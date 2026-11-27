@@ -75,7 +75,19 @@
     "send_referral_success": "Referral sent successfully!",
     "send_referral_failed": "{{count}} invite(s) could not be sent. Please try again.",
     "send_referral_error": "Error sending referral. Please try again.",
-    "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL"
+    "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL",
+    "reward_first_answer": "You earn <strong>{{credits}} credits</strong> when your friend verifies their email and gets their first answer.",
+    "reward_first_payment": "You earn <strong>{{credits}} credits</strong> on your friend's first full-price Professional subscription payment, usable after a hold.",
+    "reward_second_payment": "You earn <strong>{{credits}} credits</strong> on your friend's second full-price Professional subscription payment, usable after a hold.",
+    "share_link_label": "Your share link",
+    "share_link_copy": "Copy",
+    "share_link_copied": "Copied",
+    "share_link_hint": "Anyone who signs up through this link counts as your referral.",
+    "milestone_next_one": "<strong>{{count}} more active friend</strong> to earn a <strong>{{credits}} credit</strong> bonus.",
+    "milestone_next_other": "<strong>{{count}} more active friends</strong> to earn a <strong>{{credits}} credit</strong> bonus.",
+    "milestone_all_reached": "You have reached every referral milestone.",
+    "milestone_chip_one": "{{count}} friend: {{credits}}",
+    "milestone_chip_other": "{{count}} friends: {{credits}}"
   },
   "activateVoice": "Activate this voice",
   "liveVoice": "Live voice",
@@ -107,19 +119,126 @@
   "deleteVoiceConfirm": "Are you sure you want to delete this Voice?",
   "organization": {
     "organizations": "Teams",
-    "defaultName": "My Organization",
+    "defaultName": "My Team",
     "shared": "Shared with Me",
     "create": "Create Team",
     "search": "Search teams...",
     "no_organizations": "No teams found",
     "view_details": "View Details",
-    "x_seats": "{{count}} seats",
+    "x_seats_one": "{{count}} seat",
+    "x_seats_other": "{{count}} seats",
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
     "payment_issue": "Payment Issue",
-    "x_members": "{{count}} members",
-    "x_credits": "{{count}} credits",
-    "owner": "Owner"
+    "plan_states": {
+      "none": "No Active Plan",
+      "payment_issue": "Payment Issue",
+      "ending": "Team Plan (ending)",
+      "trialing": "Team Plan (trial)",
+      "granted": "Team Plan (granted)",
+      "active": "Team Plan"
+    },
+    "x_members_one": "{{count}} member",
+    "x_members_other": "{{count}} members",
+    "x_credits_one": "{{amount}} credit",
+    "x_credits_other": "{{amount}} credits",
+    "personal_team": "Personal team",
+    "shared_team": "Shared team",
+    "learn_about": "Learn about Teams",
+    "document_title_suffix": " | Team",
+    "roles": {
+      "label": "Role",
+      "owner": "Owner",
+      "manager": "Manager",
+      "billingManager": "Billing manager",
+      "member": "Member"
+    },
+    "admin_preview": {
+      "title": "Explore Team administration before subscribing",
+      "description": "See sample members, monthly credit limits and usage, plus which controls each role can access.",
+      "button": "Preview Team administration"
+    },
+    "tabs": {
+      "domains": "Domains",
+      "overview": "Overview",
+      "members": "Members",
+      "library": "Library",
+      "groups": "Groups",
+      "usage": "Usage",
+      "analysis": "Analysis",
+      "billing": "Billing",
+      "api-keys": "API keys",
+      "audit": "Audit",
+      "integrations": "Integrations",
+      "settings": "Settings"
+    },
+    "tab_groups": {
+      "team": "Team",
+      "insights": "Insights",
+      "integrations": "Integrations",
+      "admin": "Admin"
+    },
+    "descriptions": {
+      "domains": "Manage the email domains associated with your team.",
+      "overview": "Plan and credits for this team.",
+      "members": "Seats, pending invitations and roles for everyone on the team.",
+      "library": "Shared definitions the team owns. They stay available when their author leaves.",
+      "groups": "Appoint managers and organize members into groups.",
+      "usage": "Credit spend across the team.",
+      "analysis": "Feedback members left on AI responses, summarized.",
+      "integrations": "Connect GitHub, Slack, webhooks and custom connectors for the whole team.",
+      "billing": "Subscription, seats and payment details.",
+      "api-keys": "Keys the team owns, and members' own keys billed to this team.",
+      "audit": "Team activity recorded from the time audit logging was enabled. Dates use UTC.",
+      "settings": "Team-wide AI context, ownership and deletion."
+    },
+    "integration_sections": {
+      "github": "GitHub",
+      "slack": "Slack",
+      "webhooks": "Webhooks",
+      "connectors": "Connectors"
+    },
+    "integration_descriptions": {
+      "github": "API access for PR summaries, code context and repository features.",
+      "slack": "Link the team's Slack workspace.",
+      "webhooks": "Receive GitHub repository events and share them with members.",
+      "connectors": "Which custom MCP servers members may connect, and on what terms."
+    },
+    "overview": {
+      "total_members": "Total Members",
+      "available_credits": "Available Credits",
+      "subscription_status": "Subscription Status",
+      "plan": "Plan",
+      "status": "Status",
+      "canceling": "Canceling",
+      "active": "Active",
+      "next_billing": "Next Billing",
+      "not_available": "N/A"
+    },
+    "api_keys": {
+      "member_keys": "Member API keys"
+    },
+    "access_notice": {
+      "owner_only": "Owner only",
+      "denied_owner": "Only the team owner can open {{tab}}. Ask the owner if you need it.",
+      "denied_managers": "Only the team owner and managers can open {{tab}}. Ask the owner if you need it.",
+      "billing_locked": "Changing the plan, seats and payment details",
+      "billing_locked_description": "Credits and seats for this team, read-only.",
+      "billing_summary": "What you can see from here",
+      "credits_remaining": "Credits remaining",
+      "seats_used": "Seats used",
+      "seats_value": "{{current}} of {{max}}",
+      "integrations_locked": "Setting up Slack, GitHub and webhooks",
+      "owner_only_label": "Owner only:",
+      "owner_only_detail": "{{what}}. Ask the team owner; the Members tab shows who that is.",
+      "settings_locked": "Exporting team data, transferring ownership and deleting the team",
+      "no_seats_ask_owner": "No seats available. Ask the team owner to add seats.",
+      "seat_limit_add_seats": "All seats are in use. <addSeats>Add seats</addSeats>.",
+      "seat_limit_ask_owner": "All seats are in use. Ask the team owner to add seats.",
+      "add_limit_ask_owner": "You can only add up to {{available}} more members. Ask the team owner to add seats.",
+      "seat_limit_upgrade": "You've reached your seat limit. Upgrade your plan to add more members.",
+      "add_limit_upgrade": "You can only add up to {{available}} more members with your current plan"
+    }
   },
   "session": {
     "typeYourMessage": "Type your message here",
@@ -133,8 +252,10 @@
     "errors": {
       "notebookDeleted": "This notebook was deleted. Please create a new one.",
       "noPermission": "You do not have permission to access this notebook.",
+      "modelUnavailable": "This model is no longer available to you. Pick another model and send again.",
       "invalidRequest": "Invalid request. Please try again.",
       "tooManyRequests": "Too many requests. Please wait a moment and try again.",
+      "dailyFreeLimitReached": "You have reached today's free-tier credit limit. It resets at midnight UTC, or upgrade your plan to keep going.",
       "serverError": "Server error. Please try again later.",
       "networkError": "Failed to send message. Please check your connection.",
       "sendFailed": "Failed to send message. Please try again."
@@ -149,7 +270,7 @@
     "modals": {
       "files": {
         "title": "Add Files to Project",
-        "subtitle": "Select files to add to your project",
+        "subtitle": "Select files to add. Everyone in the project will be able to view them.",
         "button_label": "Add Files",
         "search_placeholder": "Search files",
         "no_files": "No files found."
@@ -168,7 +289,7 @@
       },
       "sessions": {
         "title": "Add Notebook to a Project",
-        "subtitle": "Select notebooks to add to your project or create a new one",
+        "subtitle": "Select notebooks to add or create a new one. Everyone in the project will be able to view them.",
         "button_label": "Add Notebooks",
         "search_placeholder": "Search",
         "create_button": "Create",
@@ -211,10 +332,10 @@
     "password": "Password",
     "confirmPassword": "Confirm Password",
     "fullName": "Full Name",
-    "inviteCode": "Invite Code",
     "needCode": "Need Code?",
     "noAccount": "No Account?",
     "registerNow": "Register now",
+    "newHereEmailCreates": "New here? Enter your email above and we'll create your account.",
     "haveAccount": "Already have an account?",
     "loginWithProvider": "Login with {{ provider }}",
     "checking": "Checking...",
@@ -239,9 +360,15 @@
     "verifyCode": "Verify Code",
     "verifying": "Verifying...",
     "resendCode": "Resend code",
+    "noCodeHint": "Didn't get a code? Check your spam folder or contact support.",
     "createAccount": "Create Account",
     "accountExists": "An account with this email already exists. Please sign in.",
-    "registrationClosed": "Sign-ups are currently closed. Contact your administrator to request access.",
+    "registrationClosed": "Sign-ups are invite-only right now. Join the waitlist to request an invite.",
+    "joinWaitlist": "Join the waitlist",
+    "noInviteCode": "No invite code?",
+    "inviteCodeLabel": "Invite code",
+    "inviteCodeOptionalLabel": "Invite code (optional)",
+    "inviteCodeOptionalHint": "Have a code from a friend? Add it here.",
     "back": "Back",
     "redirectingToProvider": "Redirecting to your organization's login...",
     "email": "Email",
@@ -254,6 +381,10 @@
     "enterPassword": "Enter password",
     "signInOrCreate": "Enter your email and we'll send a one-time code to sign in or create an account. No password required.",
     "justAMoment": "Just a moment...",
+    "signInToContinueTo": "Sign in to continue to {{product}}",
+    "signUpToContinueTo": "Create an account to continue to {{product}}",
+    "signInProductReads": "Sign in and {{product}} reads {{site}}",
+    "signUpProductReads": "Create an account and {{product}} reads {{site}}",
     "fieldErrors": {
       "invalidUsername": "Invalid username",
       "invalidEmail": "Invalid email",
@@ -369,7 +500,11 @@
     "subscription": "Subscription",
     "edit": "Edit Profile",
     "manage_subscription": "Manage Subscription",
+    "pay_now": "Pay now",
+    "pay_now_success": "Payment received. Your plan will be restored in a moment.",
+    "pay_now_received": "Payment received",
     "upgrade": "Upgrade",
+    "seat_plan_via": "Included with your seat in {{organization}}",
     "credit_analytics": "Credit Analytics",
     "pricing": "Credits Pricing",
     "show_purchases": "Show Purchases",
@@ -388,6 +523,9 @@
     "renews_on": "Renews on {{ date }}",
     "payment_issue": "Payment failed - update your payment method to keep this plan."
   },
+  "account": {
+    "team_suffix": "(Team)"
+  },
   "billing": {
     "title": "Billing",
     "balance": "Balance",
@@ -397,6 +535,7 @@
     "free_plan": "Free",
     "free_plan_detail": "Pay as you go with credit packs",
     "low_org": "An organization admin can add credits to this account.",
+    "low_seat_plan": "A pack tops you up now. Your team's credits are on the {{organization}} account.",
     "low_with_plan": "Top up to keep working until your allowance renews.",
     "low_without_plan": "A plan adds credits every month; a pack tops you up now.",
     "payment_failed": "Payment failed",
@@ -412,6 +551,11 @@
     "plans_upgrade_sub": "Get a monthly credit allowance instead of topping up by hand.",
     "retry": "Retry",
     "see_plans": "See plans",
+    "seat_plan_detail": "Included with your seat in {{organization}}",
+    "seat_plan_notice": "Your team covers your plan, so there is nothing to upgrade here. Credit packs still top up your personal balance.",
+    "team_no_plan": "No team plan",
+    "team_no_plan_detail": "Credits are added by a team admin",
+    "team_plan": "Team",
     "top_up": "Top up"
   },
   "credits": {
@@ -479,7 +623,7 @@
     "current_credits": "Current credits amount",
     "best_value": "Best Value",
     "purchase_success": "Purchased {{credits}} credits",
-    "history_title": "Credits purchase history",
+    "activity_title": "Purchases and plan credits",
     "purchase": "Purchase",
     "no_transactions": "No transactions yet",
     "low_credits": "Your credits are low",
@@ -493,7 +637,8 @@
     },
     "buy_pack": "Buy {{credits}} credits for {{price}}",
     "choose_pack": "Choose a credit pack",
-    "history_usage_hint": "This lists purchases only.",
+    "activity_usage_hint": "This lists purchases and plan credits only.",
+    "plan_credits_label": "Plan credits",
     "organization_credits_active": "Organization Credits Active",
     "rate_per_thousand": "{{rate}} per 1,000 credits",
     "see_usage": "See usage",
@@ -649,6 +794,10 @@
     "add_files_to_notebook_other": "Add {{count}} Files to Notebook",
     "add_files_to_project_one": "Add {{count}} File to Project",
     "add_files_to_project_other": "Add {{count}} Files to Project",
+    "add_files_to_production_one": "Add {{count}} File to Production",
+    "add_files_to_production_other": "Add {{count}} Files to Production",
+    "use_files_as_data_one": "Use {{count}} File as Data",
+    "use_files_as_data_other": "Pick One File at a Time",
     "in_project": "In Project"
   },
   "file_properties": {
@@ -761,5 +910,13 @@
     "menuTooltip": "Integrations like Google Drive and Slack, plus API keys for your own code",
     "sections": "Connections sections",
     "title": "Connections"
+  },
+  "desktopApp": {
+    "dismissSuggestion": "Dismiss desktop app suggestion",
+    "getTheApp": "Get the desktop app",
+    "tryTheApp": "Try the desktop app"
+  },
+  "preferenceArena": {
+    "menuLabel": "Rate answers, earn credits"
   }
 }

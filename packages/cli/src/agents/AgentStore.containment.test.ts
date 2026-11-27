@@ -62,15 +62,32 @@ describe('AgentStore project-agent containment', () => {
 });
 
 describe('AgentStore frontmatter is inert', () => {
+  it('preserves numeric settings when loading an existing global agent', async () => {
+    const globalAgents = path.join(fakeHome, '.claude', 'agents');
+    await fs.mkdir(globalAgents, { recursive: true });
+    await fs.writeFile(
+      path.join(globalAgents, 'budget.md'),
+      '---\ndescription: budget\nmax-iterations:\n  quick: 010\nretry:\n  maxRetries: 0b10\n  initialDelay: 1:20.5\n---\nBudget body.',
+      'utf-8'
+    );
+
+    const store = new AgentStore(builtinDir, projectRoot);
+    await store.loadAgents();
+
+    expect(store.getAgent('budget')).toMatchObject({
+      maxIterations: { quick: 8 },
+      retry: { maxRetries: 2, initialDelayMs: 80.5 },
+      systemPrompt: 'Budget body.',
+    });
+  });
+
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).__frontmatterPwned;
   });
 
   it('does not evaluate a `---js` frontmatter block, and keeps scanning valid siblings', async () => {
-    // parseAgentFile must route through parseFrontmatter, not gray-matter's raw
-    // matter() (which eval()s a `---js` engine). Reverting AgentStore.ts to
-    // `matter(content)` runs this payload at load time -> the pwned flag is set.
-    // A `---js` fence yields empty frontmatter, which fails the required-description
+    // parseAgentFile must route through parseFrontmatter, which never evaluates a
+    // `---js` fence. A `---js` fence yields empty frontmatter, which fails the required-description
     // schema, so the hostile file is REJECTED (not loaded) rather than eval'd. The
     // valid sibling makes this two-sided: a no-op scanner regression (which would
     // ALSO leave the flag unset) fails to load `real`, so this no longer passes on

@@ -17,6 +17,22 @@ export interface IOverwatchRollupDoc {
   wau: number;
   /** Monthly active users (unique users in 30-day window ending on this date) */
   mau: number;
+  /**
+   * The synthetic-lane share of `dau`, `wau` and `mau`: users marked `lane: 'synthetic'` in the same
+   * window. Absent on a rollup computed before lanes were counted, which reads as "not split",
+   * never as zero.
+   */
+  syntheticDau?: number;
+  syntheticWau?: number;
+  syntheticMau?: number;
+  /**
+   * The internal-account share of the same windows: users marked internal and not synthetic, so the
+   * synthetic, internal and remaining parts never overlap. Absent on a rollup computed before
+   * internal accounts were counted, which reads as "not split".
+   */
+  internalDau?: number;
+  internalWau?: number;
+  internalMau?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,6 +46,14 @@ const OverwatchRollupSchema = new Schema<IOverwatchRollupDoc>(
     dau: { type: Number, required: true, default: 0 },
     wau: { type: Number, required: true, default: 0 },
     mau: { type: Number, required: true, default: 0 },
+    // No defaults: mongoose fills a default into an old rollup when it hydrates one, turning
+    // "not split" into 0, and a save would then write it.
+    syntheticDau: { type: Number },
+    syntheticWau: { type: Number },
+    syntheticMau: { type: Number },
+    internalDau: { type: Number },
+    internalWau: { type: Number },
+    internalMau: { type: Number },
   },
   { timestamps: true }
 );

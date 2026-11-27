@@ -67,7 +67,52 @@ pnpm rebuild
 b4m
 ```
 
-The CLI will prompt you to authenticate with your Bike4Mind account on first run.
+When you are signed out, the CLI starts on a local model from Ollama or a model server saved in Desktop. With no local model available, it offers Bike4Mind sign-in.
+
+### Optional fullscreen mode
+
+Run `b4m --fullscreen` to use the terminal's alternate screen. This opt-in mode
+redraws the live display after resizing and restores the original shell screen
+when it exits. It requires interactive stdin and stdout; piped and headless runs
+keep their normal output behavior. The default normal-screen mode is unchanged,
+including its known resize artifacts in some reflowing terminals.
+
+Alternate screen has no native scrollback. Press Ctrl+O to browse completed
+messages, Left/Right to change messages, and Up/Down or PageUp/PageDown to scroll
+wrapped text. Press Ctrl+O again to return to the input. Completed agent steps
+are available as plain JSON text below the message body. Session persistence is
+unchanged. As with other terminal applications, a forced kill cannot run cleanup.
+Command help and diagnostics are retained separately in the fullscreen history
+browser (most recent 64K characters); they do not become conversation messages.
+Retained diagnostics are printed after the original screen is restored on exit,
+so initialization failures and restart hints remain available in shell history.
+While a permission prompt is active, PageUp/PageDown scrolls its complete pending
+arguments and preview. Paging never approves or denies; use the displayed
+decision keys explicitly.
+
+### Chat without signing in
+
+Start Ollama and pull a model, then open the CLI:
+
+```bash
+ollama serve
+# In another terminal:
+ollama pull qwen3.5
+b4m
+```
+
+The signed-out session lists only local models. Run `/login` to use Bike4Mind cloud models; finish or stop the current reply with Esc before signing in. From a local session, cancelling sign-in returns you to that session.
+
+For headless prompts, save a local default first:
+
+```bash
+b4m models use qwen3.5
+b4m -p "say hello" </dev/null
+```
+
+A signed-out headless run uses the selected local model or your saved local default. With a cloud default and no saved local default, it exits with an error instead of choosing an arbitrary model. ACP sessions also support local models while signed out.
+
+If no local model is found, start Ollama, pull a model, or check the saved model server's address and credentials. A server login hint uses `b4m models servers login <name>`. An expired Bike4Mind sign-in is refreshed at startup; a temporary refresh failure keeps the saved sign-in and uses local models for that run, so restart the CLI to retry.
 
 ### CLI Flags
 
@@ -81,7 +126,7 @@ A bare positional argument seeds **and** submits the first turn while keeping th
 
 | Flag              | Effect                                                                                                                                                                                        |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--dev`           | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local`, single-dash forms.                                                                       |
+| `--dev`           | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local` (except after `b4m mcp serve`), single-dash forms.                                        |
 | `--prod`          | Point the CLI at Bike4Mind production and remember it. Alias: `--production`.                                                                                                                 |
 | `--api-url <url>` | Point the CLI at **any** instance — a self-hosted stack, an AWS deployment, `http://localhost:3000`, etc. Clears cached auth (bound to the old origin) and exits; run `b4m` again to sign in. |
 | `--reset-api`     | Reset the API URL to the built-in default and clear auth, then exit.                                                                                                                          |
@@ -143,7 +188,42 @@ b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
 b4m skills push <path>                    # Create a skill from a folder, SKILL.md, or commands/*.md
 b4m skills push <path> --update           # Update your skill with the same name without a prompt
+b4m models ls | search | show | curated | pull | rm | use   # Find, download and use local models (see below)
 ```
+
+### Local models
+
+`b4m models` manages models on a local Ollama and finds GGUF builds on Hugging Face.
+
+```bash
+b4m models ls --ollama-host http://127.0.0.1:11434   # list installed models; a host that answers is saved
+b4m models search qwen2.5 0.5b                       # Hugging Face GGUF repos: downloads, likes, license, gated
+b4m models show Qwen/Qwen2.5-0.5B-Instruct-GGUF      # builds with size, fit, quant and Ollama ref, license, gating
+b4m models curated                                   # Bike4Mind's picks for this computer, then every curated build
+b4m models pull Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M
+b4m models pull qwen2.5:0.5b                         # Ollama registry names (model[:tag], ollama.com/owner/model)
+b4m models pull <ref> --force                        # pull even when the fit check rates it too large
+b4m models use hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M   # default model for chat
+b4m models rm qwen2.5:0.5b
+```
+
+`search` hides abliterated and uncensored builds and prints how many it hid; `--include-abliterated` lists them last, labelled as not recommended.
+
+`show` rates each build `fits`, `tight` or `too large` for this machine, and `pull` prints the verdict with its reasoning before asking anything. It is a rough estimate using the shared memory-budget and compute-buffer calculations: the file size (plus any vision projector) and compute buffers against the memory a model can use here, at the context the CLI asks Ollama for (the model's trained length capped at 32K, or at `OLLAMA_MAX_NUM_CTX`). `pull` refuses a too-large build unless `--force`. The fit is `unknown`, and never blocks, when download sizes are unavailable, the hardware cannot be read, or the Ollama host is another machine. An Ollama reached through an SSH tunnel on localhost is rated as this machine, so use `--force` when the far host has the memory.
+
+`curated` prints the curated list Desktop uses: the list bundled with the CLI, or a newer signed one when this build has a list URL and a trusted key (the published CLI bakes both in once they are configured; otherwise it only has the bundled list). A newer list is checked for at most every 6 hours, for up to 3 seconds, verified against the shipped keys and cached under `~/.bike4mind/model-hub/curated/`; a list that fails verification is ignored and the last good one stays. `--refresh` checks now. `--offline` or `B4M_CURATED=off` uses the last verified cached list (else the bundled one) and makes no request; `pull` accepts `--offline` too. The output names where the list came from. It lists the picks for this computer's memory first, then every build with the ref to pull, its size, license and tags (including the Ollama version a build needs). It contacts no runtime and downloads nothing; pull a row with `b4m models pull <ref>`, which asks for the license as below but does not check the build against the reviewed one. Abliterated builds are never on it, and a license that is not permissive, the model's own or its base model's, is shown as `restricted: <license>` (with `(base: <license>)`) and must be accepted before `pull`. With a saved Ollama host on another machine, the picks still describe this computer.
+
+Nothing downloads without confirmation: `pull` prints the size and license first and asks (`--yes` skips the question). A license that is not a permissive open-source one (Apache-2.0, MIT, BSD and similar), or no declared license, is named with a link and must be accepted at a prompt or with `--accept-license`. For Ollama registry models the license is read from the model's own license texts, and only unmodified Apache-2.0 or MIT texts count as permissive. Refs naming any other registry are refused. A gated repo needs access granted on Hugging Face first, `HF_TOKEN` set to that account's token, and your Ollama public key added at https://huggingface.co/settings/keys. Ctrl-C cancels a pull without installing anything; pulling again resumes, and says how much was already downloaded. Without a saved host, `b4m models` uses the first local runtime it detects; a scheme-less host without a port uses 11434, and `--ollama-host ''` clears the saved host. `--output-format json` prints `ls`, `search`, `show` and `curated` as JSON. With a saved host, `b4m -p` fails instead of switching to another model when the model picked with `b4m models use` is not available, or Ollama does not answer.
+
+`b4m models servers` also lists saved SSH servers with an invalid port or destination as
+refused and explains what to fix. Remove the server in Desktop and add it again; the CLI
+never edits Desktop's list. You can still clear its CLI credential by name with
+`b4m models servers logout <name>`. During `b4m models servers login`, Ctrl-C ends the
+credential check, prints "Cancelled." and exits with code 130 without saving the credential.
+
+`b4m mcp serve` (stdio only) offers the same operations to MCP clients as `models_list`, `models_search`, `models_pull` and `models_remove`, with the same checks. Pull and remove act only on the user's own approval. A client that supports elicitation asks the user directly, showing the size and every license, with a separate tick for a license that is not all permissive. With any other client nothing changes: the tool returns the preview and the `b4m models pull` or `b4m models rm` command for the user to run in a terminal, where the CLI asks them. `models_pull` reports the same fit verdict in its preview and prompt, and refuses a too-large model before asking unless the caller passes `force: true`, which still leaves the download to the user's approval. `models_search` leaves abliterated and uncensored builds out unless `includeAbliterated` is true, and then lists them last, labelled `notRecommended`, as `b4m models search --include-abliterated` does. The host comes from `B4M_OLLAMA_HOST`, the saved host, or detection, as for `b4m models`. `b4m mcp serve --local` serves these four tools alone and needs no Bike4Mind backend.
+
+A chat with a model on this computer's Ollama (`http://127.0.0.1:11434`) or on an Ollama model server saved in Desktop uses that model's settings from Desktop's Models screen: a fixed context size, keep-alive, draft tokens, sampling (in place of the CLI's `temperature` preference), max output and, on a model with effort levels such as gpt-oss, its effort. Under Auto the CLI keeps its own context size (the trained length capped at 32K or `OLLAMA_MAX_NUM_CTX`) and only applies the model's cap. The CLI reads `model-settings.json` on every turn and never writes it, but the context size is the one it listed at startup, so a context change takes effect after a CLI restart. The file comes from the same Desktop userData folder as the saved model servers: `B4M_DESKTOP_USER_DATA` when set, else the first of `@bike4mind/desktop` and `Bike4Mind` under the app-data folder that holds `model-servers.json` or `model-settings.json`, or failing that the first that exists (a source run of Desktop uses `Bike4Mind Dev`, so point `B4M_DESKTOP_USER_DATA` at it). From WSL with mirrored networking, set `B4M_DESKTOP_USER_DATA=/mnt/c/Users/<you>/AppData/Roaming/@bike4mind/desktop` to use the Windows Desktop's settings. No file means no settings and values this CLI does not know are ignored; a broken file, or a broken entry for the model in use, fails that model's turns with a message naming the file, the model and the field. `B4M_DESKTOP_MODEL_SETTINGS=<path>` reads another file, which must exist, and `off`, `0`, `false`, `no` or `none` ignores Desktop's settings.
 
 ### Pushing a local skill
 
@@ -187,6 +267,16 @@ shown in the startup banner (`🌍 API Environment: …`).
 
 > For a one-off custom/self-hosted URL, use the in-session `/set-api <url>` command
 > (see [API Configuration](#api-configuration) below).
+
+### Typing while the agent works
+
+You can keep typing while a turn is running. Nothing you send is dropped, and a second turn never starts in parallel with the first.
+
+- **Enter** steers the running turn. The message is added to the agent's next model request, which is sent after the current batch of tool calls finishes. If the agent has just answered and has iterations left, it reopens to take the message into account. A message the turn never reaches runs as the next turn.
+- **Tab** queues the message as a follow-up. It runs as a new turn once the current one ends. Everything still queued at that point runs together as a single turn, in the order you sent it.
+- **Esc** cancels the turn and moves any queued messages back into the input, where you can edit and resend them or clear them with Ctrl+C. Any message you send while the cancelled turn is still shutting down runs once the turn has stopped.
+
+Queued messages appear above the input. Follow-ups are labelled `[next turn]`.
 
 ## Commands
 
@@ -266,7 +356,7 @@ Configuration is stored in `~/.bike4mind/config.json`
 
 ### Authentication
 
-The CLI uses OAuth to authenticate with your Bike4Mind account. On first run, you'll be prompted to log in through the device authorization flow:
+Bike4Mind cloud models use OAuth authentication. You can chat with local models while signed out; run `/login` when you want to use your Bike4Mind account:
 
 1. Run `b4m` or use the `/login` command
 2. Visit the verification URL shown in the terminal
@@ -291,6 +381,11 @@ Because that default is injected only at build time, the endpoint is resolved li
    `--prod` / `--api-url` to point it elsewhere.
 4. Otherwise (a published, unbranded fork with no baked default), the first `b4m` **prompts you
    to choose a backend**.
+
+A build with a baked default also shows this picker on a fresh install, listing the default
+first and preselected, then the local dev server and a custom URL. Any choice (the picker,
+`--prod`, `--dev`, `--api-url`, `--reset-api`, `/set-api`, `/reset-api`) is remembered, so
+later launches go straight to sign-in.
 
 **Quick switch between local dev and production:** use the `b4m --dev` / `b4m --prod`
 launch flags (see [Switching environments](#switching-environments---dev----prod)).
@@ -435,7 +530,9 @@ You can also run any MCP server via npx or custom executables:
 
 #### Serve Bike4Mind itself as an MCP server (`b4m mcp serve`)
 
-The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises twenty-six tools (`list_notebooks`, `get_notebook`, `create_notebook`, `rename_notebook`, `clone_notebook`, `delete_notebook`, `list_projects`, `get_project`, `create_project`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`, `text_to_speech`, `generate_image`, `create_artifact`, `publish_artifact`, `bob_read_site`, `bob_compare_sites`, `bob_recheck`, `get_bob_report`, `get_bob_comparison`, `list_bob_reports`, `bob_runs_left`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
+The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises twenty-seven tools (`list_notebooks`, `get_notebook`, `create_notebook`, `rename_notebook`, `clone_notebook`, `delete_notebook`, `list_projects`, `get_project`, `create_project`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `upload_file`, `generate_sound_effect`, `text_to_speech`, `generate_image`, `create_artifact`, `publish_artifact`, `bob_read_site`, `bob_compare_sites`, `bob_recheck`, `get_bob_report`, `get_bob_comparison`, `list_bob_reports`, `bob_runs_left`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
+
+Use `upload_file { path: "/path/to/report.pdf", projectId: "project-id" }` to upload a local regular file, or `upload_file { base64: "YWJj", name: "note.txt" }` to send bytes. Choose exactly one source; base64 requires a name. Local files and decoded base64 have a 100 MiB limit, and local dotfiles, hidden directories and links into them are refused. The tool requires `files:write`; an optional `projectId` also requires `projects:write`. Success returns a `fileId` with pending ingestion. If project association fails, the error includes the retained file ID so you can retry association without uploading again.
 
 To get answers grounded in a data lake, call `list_lakes`, then `create_notebook { dataLakeId }` with a lake's id, then `send_message { notebookId }` on that notebook: the result carries the `reply` plus the `citables` it was grounded in. `list_lakes` needs a key with `datalake:read` (and data lakes enabled on the instance).
 
@@ -444,11 +541,26 @@ The seven Bob tools read websites with Bob on an instance that serves it. `bob_r
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process
 b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0.0.1:7000/mcp
+b4m mcp serve --local                # stdio, local model tools only; no backend needed
 ```
+
+`--local` serves only `models_list`, `models_search`, `models_pull` and `models_remove`, ignores any configured endpoint, and notes this in one stderr line. It is stdio only (`--http` with it is an error, as are `--dev` and `--prod`). Only after `b4m mcp serve` is `--local` serve's own flag and leaves the saved backend alone; before it, as in `b4m --local mcp serve`, it is the `--dev` alias. Without it, `mcp serve` exits with `No API endpoint configured` when no backend is set.
 
 Over stdio only, when the caller is entitled to OptiHashi and the key carries `optihashi:read` and `optihashi:compute`, the server also offers `optihashi_solvers` and `optihashi_solve` (a free, bounded classical solver race). With an API key, the CLI first checks the key's own scopes and offers them only when it holds both. The solve input schema comes from the server at startup, with a 5 second discovery budget; restart the session to pick up changed family ids, solver ids or limits. `optihashi_solvers` fetches the current roster on every call. With no entitlement, scopes or feature, they are simply not listed. No paid compute is exposed, and HTTP mode never offers them.
 
-Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and has no per-request auth, so do not expose it off-host. The advertised scopes are the recommended key configuration, not per-route hard gates, apart from Bob's, which its routes enforce. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
+Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool _listing_ needs no credentials, apart from the optional stdio-only tools above, which are fetched once at startup; tool _calls_ authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and requires an `Authorization: Bearer <token>` header on every request. The token is `--token`, else `B4M_MCP_TOKEN`, else a random one generated at startup and printed to stderr (a token you set yourself is printed masked). Prefer `B4M_MCP_TOKEN` over `--token`, which shows up in process listings. The advertised scopes are the recommended key configuration, not per-route hard gates, apart from Bob's, which its routes enforce. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details. Point an HTTP client at it like this:
+
+```json
+{
+  "mcpServers": {
+    "bike4mind": {
+      "type": "http",
+      "url": "http://127.0.0.1:7000/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
 
 ## Plugins
 
@@ -635,6 +747,32 @@ tail -f ~/.bike4mind/debug/[session-id].txt
 
 - Without `--verbose`: Debug logs only written to file (clean console output)
 - With `--verbose`: Debug logs shown in console AND written to file
+
+### Hearth hook troubleshooting
+
+If the standalone `bin/hearth-hook.mjs` reporter is not reaching Hearth, enable its diagnostic:
+
+```bash
+export B4M_HEARTH_DEBUG=1
+echo '{}' | node packages/cli/bin/hearth-hook.mjs
+```
+
+Set `B4M_API_URL` and `B4M_API_KEY` first. With missing credentials the hook makes no request.
+Diagnostics are off by default; an empty `B4M_HEARTH_DEBUG` or exactly `0` also disables them.
+Other nonempty values enable one stderr line on failure:
+
+- `POST /api/hearth/events failed: HTTP 401`: check whether the API key is valid.
+- `POST /api/hearth/events error: ECONNREFUSED`: check the endpoint and server availability.
+- `POST /api/hearth/events error: TimeoutError`: check connectivity and server responsiveness.
+- `stdin payload error: SyntaxError`: the hook received malformed JSON.
+- `configuration error: ERR_INVALID_URL`: check that `B4M_API_URL` is a valid absolute URL.
+- `configuration error: missing B4M_API_URL or B4M_API_KEY`: set both variables before running the hook.
+
+Each line starts with `hearth-hook:`. Errors expose a native error code or name, never the error
+message, API key, URL, or hook payload. The hook still exits `0` on reporting failures. With debugging
+enabled, the request gets 2.75 seconds and the diagnostic flush gets up to 250 ms within the 3-second
+request/diagnostic budget. A closed or stalled stderr can lose the diagnostic; reporting remains
+best-effort. Unset `B4M_HEARTH_DEBUG` after troubleshooting to keep routine hook events quiet.
 
 ## Development
 
@@ -857,6 +995,117 @@ Mirrors claude's hook contract for the host's `action_required` signal: a
 interactive permission prompt blocks; `PostToolUse` / `Stop` / `UserPromptSubmit`
 commands remove it. Each hook command runs via a real shell with its stdin piped
 then closed (EOF), so a blocking `cat > <file>` hook returns immediately.
+
+### Folder trust on a host launch
+
+A launch with a positional prompt **and** at least one host flag (`--mcp-config`,
+`--append-system-prompt`, `--allowedTools`, `--settings`, `--session-id` or
+`--resume`) does not show the folder-trust prompt or the repo MCP-approval prompt,
+since no hook fires for either and the auto-fired turn would wait behind it. An
+untrusted folder's repo config (`CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.claude/`,
+`.bike4mind/`) stays inert for that session, exactly as if "Not now" had been
+chosen, and nothing is persisted. A one-line notice says so; run `/trust folder`
+to trust it. Pending repo MCP servers stay off with the usual warning. Context the
+host needs should reach the session through `--append-system-prompt` and
+`--mcp-config`.
+
+## Local CLI session messaging
+
+On macOS and Linux, independently launched interactive CLI sessions can discover
+and message each other without Desktop running. Messaging is off at startup;
+repository settings, agent tools, and saved histories cannot enable it.
+
+In two terminals working in the same repository (separate Git worktrees work):
+
+1. Run `/peers on api-worker` in the first terminal and `/peers on client-worker`
+   in the second. Each command prints that process's session ID.
+2. Run `/peers list` to see reachable sessions and their advertised readiness.
+3. Run `/peers send <session-id> The response field is now displayName.`
+4. In the recipient, inspect `/peers inbox`, then run `/peers release <message-id>`
+   to approve that message. It runs only when the recipient is safely idle.
+5. The sender can run `/peers status <session-id> <message-id>` for the exact
+   correlated result. The recipient can send an explicit reply with
+   `/peers reply <received-message-id> Confirmed; the client uses displayName.`
+
+Incoming messages are held by default. `/peers accept` explicitly allows pending
+and future incoming messages to start idle model turns and incur usage.
+`/peers hold` pauses pending delivery; `/peers refuse` rejects incoming work.
+`/peers cancel <session-id> <message-id>` withdraws an undelivered message, and
+`/peers delete <message-id>` removes stored message content when safe.
+`/peers off` unregisters the session and closes its local endpoint.
+If a receiver has gone away, deleting an unresolved outgoing receipt archives it
+locally and retains a bounded tombstone. It does not cancel or retry remote work.
+Already running work may still finish after `/peers off`; its correlated outcome
+is saved for this conversation's history without starting more work.
+
+While enabled, the agent has `peer_list`, `peer_send`, and `peer_status` tools, but cannot enable
+messaging or change inbound policy. Every agent send requires a separate human
+review, including in auto-accept mode. Peer-origin turns can only send back to
+their sender and preserve the reply hop limit. A message is peer input, never
+human permission, and cannot answer approval prompts or bypass denied actions.
+Approval identifies the recipient process and conversation before sending. If
+that recipient restarts while approval is pending, request a new approval.
+The recipient-specific review is the single normal send prompt, and it runs
+for every payload even in auto-accept mode. Plan mode and explicit tool denials
+still apply before that review. Human `/peers send` and `/peers reply`
+commands are independent of the agent's reply chain and send allowance.
+
+Discovery is limited to the same local user, account/API environment, canonical
+repository, and additional granted directories. Local-only profiles use the
+user-owned CLI profile identity. Other projects/accounts and different folder
+grants cannot communicate in this release; explicit cross-scope pairing is not
+implemented. Session/model/account/folder changes disable messaging and require
+another `/peers on`. Automatic delivery is paused outside normal permission mode,
+while drafting input, while another turn holds the session, and during dialogs.
+
+Only explicit text crosses the connection. Messages do not expand `@file` or
+image references, execute slash commands, or attach full conversation histories.
+Receiving agents can use their own tools subject to their existing permissions.
+Human input entered during peer work waits for a separate human turn. Its text
+and expanded file references are not steered into the peer's turn or its result.
+Custom commands, generated handoffs, compaction, and rewind are unavailable until
+peer work finishes. Replacing the conversation retires peer enrollment and prevents late
+peer output from entering the replacement conversation.
+Transport credentials stay outside model context in owner-only registry files
+under `~/.bike4mind/peers`. These controls do not isolate malicious programs
+already running as the same OS user.
+The CLI secures its own config and peer directories to 0700 when enabling peers;
+it does not change arbitrary parent-directory permissions. Unsafe ancestors or
+uncertain stale enrollment claims produce an actionable error instead of being
+silently trusted. A terminal transport failure disables peer tools and prints a
+notice; re-enroll only after resolving the reported problem.
+
+Messages are limited to 8 KiB UTF-8, with 20 pending messages per recipient,
+two agent sends per turn, a five-hop reply-chain limit, and per-sender rate
+limits. Pending messages expire after 15 minutes. Receipt content is bounded
+and retained for up to seven days; unresolved outgoing receipts in the current
+process retain visible status metadata until reconciled. Correlated result
+previews are bounded separately.
+Queued/held, delivered, completed, stopped, cancelled, failed, expired, rejected,
+and unknown are separate states. Completed means the turn finished, not that its
+claims were independently verified. An ambiguous disconnect is unknown; do not
+blindly resend it.
+Sender-side deadlines cannot prove remote work expired. Unconfirmed outgoing
+work remains unknown and visible until its remote status is reconciled, including
+when the recipient started running before the deadline. If that receiver is no
+longer discoverable, the user can archive the local receipt without claiming the
+execution stopped.
+If a model turn finishes but its conversation history cannot be saved, the receipt
+reports a storage failure with the completed result. This does not mean the work
+never ran; do not automatically retry it.
+
+Each launch has a new process identity, separate from its saved conversation.
+Use distinct saved conversations for concurrent processes. Peer enrollment is
+serialized per account, project, and saved conversation. This is not a general
+lock on history files used by sessions that have not enabled peer messaging.
+Old process addresses are not redirected to resumed histories. Restarted work
+does not replay pending peer messages automatically. `/peers inbox` can show
+retired receipts for the same saved conversation; unfinished historical work is
+marked unknown and must be reconciled manually. When context needs compaction,
+peer work stops before starting a model turn; compact manually and enable peers
+again. Native Windows, headless/ACP
+enrollment, cross-machine delivery, mid-turn injection, shared task boards, and
+autonomous coordination are outside this first release.
 
 ## License
 

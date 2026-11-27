@@ -16,8 +16,8 @@ import {
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
+import { signedUrlExpiresAt } from './get';
 import { assertRewriteFits, commitContentRewrite } from './rewriteStorage';
 import { assertStorageOwnerTransferFits, reassignStorageOwner } from './reassignStorageOwner';
 import { storedTagNames } from '../tagService/bulkTagNames';
@@ -133,6 +133,7 @@ export const updateFabFile = async (
   ) as IFabFileDocument;
 
   const contentChanges: Partial<IFabFileDocument> = {};
+  let freshFileUrl: string | undefined;
   // Measured up front so a joining tag write can be quota-gated against the bytes this rewrite will
   // charge, before anything is uploaded or persisted. Refreshed from storage metadata after upload.
   const rewrite =
@@ -175,7 +176,7 @@ export const updateFabFile = async (
     const { content, size } = rewrite;
     const mimeType = params.mimeType ?? fabFile.mimeType;
     const ext = mime.extension(mimeType) || null;
-    const filePath = fabFile.filePath ?? `${uuidv4()}${ext ? `.${ext}` : '.txt'}`;
+    const filePath = fabFile.filePath ?? `${crypto.randomUUID()}${ext ? `.${ext}` : '.txt'}`;
 
     let fileSize = size;
     // A transfer moves every byte off the current owner, and the gate above graded the new owner on this size.
@@ -205,8 +206,7 @@ export const updateFabFile = async (
       Logger.globalInstance.warn(`Content rewrite of FabFile ${fabFile.id} matched no live row; storage not charged`);
     }
 
-    contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
-    contentChanges.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
+    freshFileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
 
     // The bytes just changed, so any cached extracted length now describes the previous content, and a
     // stale count leaves the pre-send attachment warning silent about a file that no longer fits.
@@ -225,15 +225,17 @@ export const updateFabFile = async (
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
-  const updatedFabFile: IFabFileDocument = { ...fabFile, ...changes };
+  const updatedFabFile: IFabFileDocument = {
+    ...fabFile,
+    ...changes,
+    ...(freshFileUrl && {
+      fileUrl: freshFileUrl,
+      fileUrlExpireAt: signedUrlExpiresAt(freshFileUrl, EXPIRE_IN_SECONDS),
+    }),
+  };
 
-  // An edit (rename/tag/notes/etc.) must not echo back a working GET url for an image
-  // that isn't clean (pending scan) or was quarantined (blocked) by upload moderation.
-  // Mirrors the withhold-but-keep-metadata pattern in fabFileService/get.ts
-  // generateSignedUrl so the client can still render a placeholder instead of the file
-  // vanishing. MUST run BEFORE db.fabFiles.update() below - clearing after the write would
-  // still persist the stale fileUrl (only the in-memory/returned object was cleared), so a
-  // subsequent read would resurrect a working URL for a file that isn't serveable.
+  // Withholds the URL from the response for an image that is pending scan or blocked, keeping its metadata
+  // so the client can render a placeholder (same pattern as fabFileService/get.ts generateSignedUrl).
   const serveable = isImageServeable(updatedFabFile);
   if (!serveable) {
     updatedFabFile.fileUrl = undefined;

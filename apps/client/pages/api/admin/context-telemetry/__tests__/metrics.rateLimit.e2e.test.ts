@@ -10,7 +10,7 @@ import {
 /**
  * The context-telemetry/metrics rate limit, driven through the real baseApi and the real
  * Mongo-backed limiter: the counter lives in the Cache collection, so a mocked store would prove
- * nothing about whether the increment bounds anything. The route's own gate is an isAdmin check,
+ * nothing about whether the increment bounds anything. The route's own gate is the adminApi permission check,
  * which says who the caller is and not how often they may ask, so this limiter is the only thing
  * bounding the uncached Quest.aggregate.
  *
@@ -28,7 +28,7 @@ const mockRefs = vi.hoisted(() => ({
   aggregateQuests: vi.fn(async () => []),
 }));
 
-vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
 vi.mock('@server/middlewares/logging', () => ({
   logging: (req: Record<string, unknown>, _res: unknown, next: () => void) => {
     // `log` and `debug` matter here: baseApi's own error path calls them, and a logger without

@@ -164,8 +164,8 @@ export interface IRapidReplyAuditLog {
   entityId: string;
 
   // Change details
-  previousValue?: any;
-  newValue?: any;
+  previousValue?: unknown;
+  newValue?: unknown;
   changedFields?: string[];
 
   // Context

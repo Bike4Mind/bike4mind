@@ -14,6 +14,7 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  await DataLakeModel.init();
 });
 
 afterAll(async () => {
@@ -35,11 +36,13 @@ const file = (name: string, tags: string[], extra: Record<string, unknown> = {})
 beforeEach(async () => {
   await DataLakeModel.collection.deleteMany({});
   await FabFile.collection.deleteMany({});
-  await DataLakeModel.collection.insertMany([
-    { _id: oldLakeId, datalakeTag: 'datalake:old', organizationId: 'org-a', createdAt: new Date('2025-01-01') },
-    { _id: newLakeId, datalakeTag: 'datalake:new', organizationId: 'org-b', createdAt: new Date('2026-01-01') },
-    { datalakeTag: 'datalake:mine', createdAt: new Date('2024-01-01') },
-  ]);
+  await DataLakeModel.collection.insertMany(
+    [
+      { _id: oldLakeId, datalakeTag: 'datalake:old', organizationId: 'org-a', createdAt: new Date('2025-01-01') },
+      { _id: newLakeId, datalakeTag: 'datalake:new', organizationId: 'org-b', createdAt: new Date('2026-01-01') },
+      { datalakeTag: 'datalake:mine', createdAt: new Date('2024-01-01') },
+    ].map(lake => ({ ...lake, createdByUserId: 'uploader', fileTagPrefix: `${lake.datalakeTag}:` }))
+  );
   await FabFile.collection.insertMany([
     file('org-only', ['datalake:new', 'topic:x']),
     file('personal', ['datalake:mine']),

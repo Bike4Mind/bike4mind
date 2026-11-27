@@ -1,9 +1,10 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import { BaseArtifact, ArtifactTypeSchema, RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { organizationContentPolicyPlugin } from '../../utils/organizationSharingPolicy';
 
 // Mongoose document interface - omit 'id' from BaseArtifact to avoid conflict with Document._id
-export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document {
+export interface IArtifactDocument extends Omit<BaseArtifact, 'id'>, Document<string> {
   id: string; // Custom id field
   softDelete(): Promise<IArtifactDocument>;
   restore(): Promise<IArtifactDocument>;
@@ -58,6 +59,13 @@ const ArtifactSchema = new Schema(
       type: String,
       maxlength: 100,
     },
+    // Last allocated version number; unset on artifacts that predate it. Written only by
+    // claimNextVersionNumber/seedVersionCounter; select:false keeps it out of reads.
+    lastVersionNumber: {
+      type: Number,
+      min: 1,
+      select: false,
+    },
     currentVersionId: {
       type: Schema.Types.ObjectId,
       ref: 'ArtifactVersion',
@@ -97,6 +105,7 @@ const ArtifactSchema = new Schema(
     },
     organizationId: {
       type: String,
+      immutable: true,
     },
     visibility: {
       type: String,
@@ -119,6 +128,9 @@ const ArtifactSchema = new Schema(
     parentArtifactId: {
       type: String,
       index: true,
+    },
+    identifier: {
+      type: String,
     },
 
     // Status
@@ -177,6 +189,9 @@ ArtifactSchema.index({ projectId: 1, status: 1 }); // Project artifacts by statu
 ArtifactSchema.index({ organizationId: 1, visibility: 1 }); // Org artifacts by visibility
 ArtifactSchema.index({ type: 1, status: 1, visibility: 1 }); // Public artifacts by type
 ArtifactSchema.index({ sessionId: 1, createdAt: -1 }); // Session artifacts chronologically
+// The row a re-emitted `<artifact identifier=...>` versions. Pre-built by
+// 20260921235979_ensure-artifact-session-identifier-index, same reason as the keyset index below.
+ArtifactSchema.index({ sessionId: 1, identifier: 1 });
 ArtifactSchema.index({ tags: 1, status: 1 }); // Tag-based discovery
 ArtifactSchema.index({ createdAt: -1, status: 1 }); // Recent artifacts
 ArtifactSchema.index({ updatedAt: -1, status: 1 }); // Recently updated
@@ -190,8 +205,8 @@ ArtifactSchema.index({ deletedAt: 1 }); // Soft delete queries
 ArtifactSchema.index({ sourceQuestId: 1 });
 // Public v1 artifact list (listOwnedBeforeId): equality on owner and live, then the _id keyset
 // (scanned in reverse for newest first).
-// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: prod
-// runs DocumentDB, where the build takes a foreground lock on a cold Lambda boot.
+// Pre-built by 20260921235993_ensure-artifact-owned-keyset-index rather than left to autoIndex: the
+// build is fire-and-forget and would start on a cold Lambda boot, on a user request.
 ArtifactSchema.index({ userId: 1, deletedAt: 1, _id: 1 });
 
 // Text search index for title and description
@@ -254,15 +269,36 @@ ArtifactSchema.methods.restore = function () {
   return this.save();
 };
 
-export const Artifact =
+ArtifactSchema.plugin(organizationContentPolicyPlugin);
+
+export const Artifact: Model<IArtifactDocument> =
   (mongoose.models.Artifact as mongoose.Model<IArtifactDocument>) ||
   model<IArtifactDocument>('Artifact', ArtifactSchema);
 
 // Repository implementation
-export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
-  // Add shareable property required by interface
-  public shareable: any = {}; // Placeholder for IShareableStaticMethods
+// Fields the public artifact list and search return; content and sharing state are never loaded.
+const PUBLIC_ARTIFACT_LIST_FIELDS =
+  'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt';
 
+type PublicArtifactListItem = Pick<
+  IArtifactDocument,
+  | '_id'
+  | 'id'
+  | 'type'
+  | 'title'
+  | 'description'
+  | 'version'
+  | 'versionTag'
+  | 'status'
+  | 'tags'
+  | 'sessionId'
+  | 'projectId'
+  | 'visibility'
+  | 'createdAt'
+  | 'updatedAt'
+>;
+
+export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   constructor(model: Model<IArtifactDocument>) {
     super(model);
   }
@@ -288,20 +324,101 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   }
 
   /**
-   * Partial update that matches only while `userId` still owns the artifact or is in
-   * permissions.canWrite, and it is not deleted; null otherwise. `deletedAt: null` is explicit because
-   * Artifact is not a softDeletePlugin model. Must stay in sync with canUserWriteArtifact in
-   * b4m-core/services/src/artifactService/update.ts.
+   * Matches the artifact only while `userId` owns it or is in permissions.canWrite, and it is not deleted
+   * (`deletedAt: null` is explicit because Artifact is not a softDeletePlugin model).
+   * Must stay in sync with canUserWriteArtifact in b4m-core/services/src/artifactService/update.ts.
    */
+  private writeAccessFilter(userId: string, id: string) {
+    return { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] };
+  }
+
+  /** Partial update under the write-access filter; null when refused. `extraFilter` narrows the match but cannot widen it. */
   async updateWithWriteAccess(
     userId: string,
-    data: Partial<IArtifactDocument> & { id: string }
+    data: Partial<IArtifactDocument> & { id: string },
+    extraFilter?: Record<string, unknown>
   ): Promise<IArtifactDocument | null> {
     const { id, ...updateData } = data;
     return this._plainUpdate<IArtifactDocument>(
-      { id, deletedAt: null, $or: [{ userId }, { 'permissions.canWrite': userId }] },
+      { ...extraFilter, ...this.writeAccessFilter(userId, id) },
       updateData as Record<string, unknown>
     );
+  }
+
+  /** Atomically allocates the next version number under the write-access filter; null when refused or not yet seeded. */
+  async claimNextVersionNumber(userId: string, id: string): Promise<number | null> {
+    const query = this.model
+      .findOneAndUpdate(
+        { ...this.writeAccessFilter(userId, id), lastVersionNumber: { $exists: true } },
+        { $inc: { lastVersionNumber: 1 }, $set: { updatedAt: new Date() } },
+        { new: true, runValidators: true }
+      )
+      .select('+lastVersionNumber');
+    if (this._txn) query.session(this._txn);
+    const doc = await query;
+    // The counter is schema-only, deliberately absent from IArtifactDocument.
+    return (doc as { lastVersionNumber?: number } | null)?.lastVersionNumber ?? null;
+  }
+
+  /** Seeds the counter (seed = highest existing version) under the write-access filter; no-op when set or access is refused. */
+  async seedVersionCounter(userId: string, id: string, seed: number): Promise<void> {
+    const query = this.model.updateOne(
+      { ...this.writeAccessFilter(userId, id), lastVersionNumber: { $exists: false } },
+      { $set: { lastVersionNumber: seed } },
+      { runValidators: true }
+    );
+    if (this._txn) query.session(this._txn);
+    await query;
+  }
+
+  /** Keep collaborator grants and flags while replacing the scoped owner's access in one write. */
+  async reassignMemberContent(
+    scope: { organizationId: string; userId: string; deletedAt: null },
+    recipientId: string
+  ): Promise<{ modifiedCount: number }> {
+    const { organizationId, userId } = scope;
+    if (!organizationId || !userId || !recipientId || userId === recipientId) {
+      throw new Error('Artifact reassignment requires an organization and two distinct users');
+    }
+    const query = this.model.updateMany(
+      { organizationId, userId, deletedAt: null },
+      {
+        $set: { userId: recipientId },
+        $pull: {
+          'permissions.canRead': userId,
+          'permissions.canWrite': userId,
+          'permissions.canDelete': userId,
+        },
+      }
+    );
+    if (this._txn) query.session(this._txn);
+    return query.exec();
+  }
+
+  /**
+   * One newest-first page of `conditions`, bounded before `beforeId` when given. Shared by the public
+   * list and search so their cursor handling, projection and hasMore rule cannot drift apart.
+   */
+  private async pageBeforeId(
+    conditions: Record<string, unknown>,
+    { beforeId, limit }: { beforeId?: string; limit: number }
+  ) {
+    const bounded = { ...conditions };
+    if (beforeId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
+      bounded._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    }
+
+    const result = await this.model
+      .find(bounded)
+      .select(PUBLIC_ARTIFACT_LIST_FIELDS)
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .lean<PublicArtifactListItem[]>()
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit), hasMore };
   }
 
   /**
@@ -309,24 +426,25 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
    * the by-id read. Content and sharing fields are not loaded.
    */
   async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
-    const conditions: Record<string, unknown> = { userId, deletedAt: null };
-    if (beforeId !== undefined) {
-      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
-      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-    }
+    return this.pageBeforeId({ userId, deletedAt: null }, { beforeId, limit });
+  }
 
-    const result = await this.model
-      .find(conditions)
-      .select(
-        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
-      )
-      .sort({ _id: -1 })
-      .limit(limit + 1)
-      .lean()
-      .exec();
-
-    const hasMore = result.length > limit;
-    return { data: result.slice(0, limit), hasMore };
+  /**
+   * One newest-first page of the live artifacts a user owns that match a text search, for the public
+   * search. Pages are keyset on `_id` like listOwnedBeforeId, so they never overlap. Unlike
+   * listOwnedBeforeId, a `$text` query cannot use the {userId, deletedAt, _id} index for the sort. The text
+   * index is global, not compounded with userId, so each page matches every user's hits for the term before
+   * the owner, deleted and `_id` filters trim them: cost grows with the whole collection.
+   */
+  async searchOwnedBeforeId(
+    userId: string,
+    searchTerm: string,
+    { type, beforeId, limit }: { type?: string; beforeId?: string; limit: number }
+  ) {
+    return this.pageBeforeId(
+      { userId, deletedAt: null, $text: { $search: searchTerm }, ...(type !== undefined && { type }) },
+      { beforeId, limit }
+    );
   }
 
   // Implement artifact-specific methods

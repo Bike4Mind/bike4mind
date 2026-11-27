@@ -10,9 +10,9 @@ import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService } from '@bike4mind/services';
 import mongoose from 'mongoose';
-import * as dotenv from 'dotenv';
+import { existsSync } from 'fs';
 
-dotenv.config();
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 // Build the PromptCrafter input payload from an agent's metadata.
 const createAgentMetadataForPrompt = (agent: IAgent): string => {

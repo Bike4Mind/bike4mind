@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { QaRunStatus } from '@bike4mind/common';
 import { decideAlarm, type AlarmInput } from './alarm';
 
-const URL = 'https://app.example.com/status/runs/r1';
+const URL = 'https://app.example.com/admin/qa/runs/r1';
 const t = (title: string) => ({ testKey: `notebook.spec.ts > ${title}`, title });
 
 const input = (o: {

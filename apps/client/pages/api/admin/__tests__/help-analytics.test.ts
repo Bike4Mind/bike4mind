@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   feedbackTexts: [] as unknown[],
 }));
 
+// Keep routed-comment/date tests isolated from the unrelated triage provider graph.
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
@@ -33,7 +36,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 // FeedbackModel/FeedbackTextModel are reached through stitchRoutedComments, which the route calls
 // to stitch routed comments back onto the events. Omitting them here does not fail loudly:

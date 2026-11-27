@@ -6,6 +6,7 @@
  * then dispatches matching events to the merged sreJobQueue, tagged by jobType:
  *   - issues -> jobType: 'analysis' (initial diagnosis)
  *   - pull_request_review -> jobType: 'revision' (revision on change requests)
+ * and records merges and verdict labels on sre-fix/* PRs against their tracking docs.
  *
  * Works with both GitHub App webhooks and manually-configured repo/org webhooks.
  */
@@ -24,14 +25,15 @@ import {
   verifyGitHubPayloadTimestamp,
 } from '@server/integrations/github/webhookUtils';
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import {
   dispatchIssueToSre,
   syncSreIssueStateFromWebhook,
   SreIssuePayloadSchema,
-} from '@server/integrations/github/sreWebhookDispatch';
-import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
+} from '@bike4mind/server-utils/integrations/github/sreWebhookDispatch';
+import { dispatchReviewToSreRevision } from '@bike4mind/server-utils/integrations/github/sreRevisionDispatch';
+import { recordSrePullRequestEvent } from '@bike4mind/server-utils/integrations/github/srePullRequestTracking';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { randomUUID } from 'crypto';
 
@@ -155,7 +157,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // 12. Filter: only process supported event types
-    if (eventType !== 'issues' && eventType !== 'pull_request_review') {
+    if (eventType !== 'issues' && eventType !== 'pull_request_review' && eventType !== 'pull_request') {
       logger.debug('[SRE-WEBHOOK] Event type not processed', { eventType, deliveryId });
       return res.status(200).json({ success: true, message: 'Accepted' });
     }
@@ -207,6 +209,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logger.info('[SRE-WEBHOOK] Issue dispatch complete', {
           deliveryId,
           dispatched: result.dispatched,
+          correlationId,
+        });
+      } else if (eventType === 'pull_request') {
+        const result = await recordSrePullRequestEvent(payload, logger);
+        logger.info('[SRE-WEBHOOK] Pull request tracking complete', {
+          deliveryId,
+          recorded: result.recorded,
+          reason: result.reason,
           correlationId,
         });
       } else {

@@ -1,0 +1,400 @@
+import { z } from 'zod';
+import { accountCampaignGroupSchema } from './accountCampaign';
+import { completionSynchronyEvidenceSchema } from './completionSynchrony';
+import { completionSequenceEvidenceSchema } from './completionSequence';
+import { assessmentAiDecisionSchema } from './adminAi';
+
+/**
+ * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
+ * without acting, so admins can grade each one and measure detection errors before any automated
+ * containment is switched on. Recording never changes access, credits, API keys or
+ * riskScore.reviewState. The record lives in the ShadowDetection collection (packages/database);
+ * detectors write it, the admin Detections page reads and grades it.
+ */
+
+export const SHADOW_DETECTORS = [
+  'signupNetworkBurst',
+  'accountCampaign',
+  'completionSequence',
+  'completionSynchrony',
+  'youngAccountSpend',
+  'paymentRisk',
+  /** A new account that signed up from the same IP as a blocked account, close in time. */
+  'signupIpLinkedToBlocked',
+  'signupDomainHold',
+  /** A new account used from the same uncommon device as a banned account, with a corroborating signal. */
+  'deviceLinkedToBlocked',
+  /** A fresh account that ran the scripted grant-drain sequence (usage pattern signals). */
+  'scriptedGrantDrain',
+  /** An actor the API probe detector reported (apps/workers/src/cron/apiProbeDetector.ts). */
+  'apiProbe',
+] as const;
+export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
+
+/**
+ * Detectors whose detections already carry their own Decisions verdict
+ * (apps/workers/src/security/signupDomainHoldAssessment), so the abuse assessment sweep and the
+ * Detections assessment panel leave them alone.
+ */
+export const SELF_ASSESSED_SHADOW_DETECTORS: readonly ShadowDetector[] = ['signupDomainHold'];
+
+/**
+ * The action the detector's policy maps the detection to. contain/suspend/restrict match the admin
+ * bulk user actions; blockIp is for actors with no signed-in account, where containing a user is not
+ * possible. confirmHold/releaseHold/none are the signup domain hold assessment's outcomes (confirm the
+ * hold, release it, or leave it for an admin). limit/verify are graduated interventions a detector
+ * opts into (apps/workers/src/security/autoContainment/policy.ts maps each action to a tier).
+ */
+export const SHADOW_DETECTION_ACTIONS = [
+  'contain',
+  'suspend',
+  'restrict',
+  'limit',
+  'verify',
+  'blockIp',
+  'confirmHold',
+  'releaseHold',
+  'none',
+] as const;
+export type ShadowDetectionAction = (typeof SHADOW_DETECTION_ACTIONS)[number];
+
+export const SHADOW_DETECTION_VERDICTS = [
+  'confirmed_abuse',
+  'legitimate_human',
+  'legitimate_automation',
+  'insufficient_evidence',
+] as const;
+export type ShadowDetectionVerdict = (typeof SHADOW_DETECTION_VERDICTS)[number];
+
+/** Detections returned by one list request; the table pages locally, `truncated` says the cap was hit. */
+export const SHADOW_DETECTION_LIST_LIMIT = 500;
+
+const ObjectIdStringSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Not a valid id');
+
+/** One measured signal: what was observed against the threshold that tripped. */
+export const shadowDetectionSignalSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  observed: z.number().nullable(),
+  threshold: z.number().nullable(),
+});
+export type ShadowDetectionSignal = z.infer<typeof shadowDetectionSignalSchema>;
+
+/** How a signal is compared with its threshold when it trips its detector. */
+export type ShadowDetectionSignalRule = 'above' | 'atLeast' | 'below' | 'atMost';
+
+/**
+ * The comparison each producer applies, keyed by signal key. Must stay in sync with the producers:
+ * signupNetworkAlerts (ipSignups, asnSignups), paymentRisk (youngAccount, sharedCard, manyCards*),
+ * strongLink (blockedSignupIpLinks, hoursToBlockedLink), accountCampaignSignals (directMembers, axes),
+ * signupDomainHoldAssessment (confidence) and youngAccountSpendShadowDetections (farmSignals,
+ * apiOnlySpend, minutesToApiKey, minutesToAuthenticator, youngNetworkPeers, linkedFlaggedAccounts).
+ * A key not listed here is shown as context, never as the reason a detector fired.
+ */
+export const SHADOW_DETECTION_SIGNAL_RULES: Readonly<Record<string, ShadowDetectionSignalRule>> = {
+  ipSignups: 'above',
+  asnSignups: 'above',
+  sharedCard: 'above',
+  manyCardsPerAccount: 'above',
+  manyCardsPerNetwork: 'above',
+  youngAccount: 'below',
+  blockedSignupIpLinks: 'atLeast',
+  hoursToBlockedLink: 'atMost',
+  directMembers: 'atLeast',
+  axes: 'atLeast',
+  confidence: 'atLeast',
+  farmSignals: 'atLeast',
+  apiOnlySpend: 'atLeast',
+  minutesToApiKey: 'atMost',
+  minutesToAuthenticator: 'atMost',
+  youngNetworkPeers: 'atLeast',
+  linkedFlaggedAccounts: 'atLeast',
+};
+
+/** The signal's rule when it has one and its observed value met it; null otherwise. */
+export function shadowDetectionSignalTrip(signal: ShadowDetectionSignal): ShadowDetectionSignalRule | null {
+  const rule = SHADOW_DETECTION_SIGNAL_RULES[signal.key];
+  const { observed, threshold } = signal;
+  if (!rule || observed === null || threshold === null) return null;
+  const met = {
+    above: observed > threshold,
+    atLeast: observed >= threshold,
+    below: observed < threshold,
+    atMost: observed <= threshold,
+  }[rule];
+  return met ? rule : null;
+}
+
+export const shadowDetectionNetworkSchema = z.object({
+  ip: z.string().nullable(),
+  asn: z.number().nullable(),
+  asnOrg: z.string().nullable(),
+  country: z.string().nullable(),
+  hosting: z.boolean().nullable(),
+});
+export type ShadowDetectionNetwork = z.infer<typeof shadowDetectionNetworkSchema>;
+
+export const SHADOW_DETECTION_PAYMENT_KINDS = ['credits', 'subscription'] as const;
+export const SHADOW_DETECTION_PAYMENT_OUTCOMES = ['succeeded', 'failed'] as const;
+
+/**
+ * The Stripe payment a paymentRisk detection screened. Ids only: no card details. `livemode` is
+ * Stripe's own flag, so it says which Stripe Dashboard (live or /test) the ids resolve in.
+ */
+export const shadowDetectionPaymentSchema = z.object({
+  paymentIntentId: z.string(),
+  chargeId: z.string().nullable(),
+  kind: z.enum(SHADOW_DETECTION_PAYMENT_KINDS),
+  outcome: z.enum(SHADOW_DETECTION_PAYMENT_OUTCOMES),
+  /** Minor currency units (cents). */
+  amount: z.number().nullable(),
+  currency: z.string().nullable(),
+  riskLevel: z.string().nullable(),
+  livemode: z.boolean(),
+});
+export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema>;
+
+/**
+ * Where a verdict came from. `review` is a grade recorded on the Detections page; `suspension` and
+ * `reinstatement` are recorded for the admin who suspended or reinstated an account the detection
+ * names; `automation` is the stale-detection grader (apps/workers/src/security/shadowDetectionAutoGrade.ts),
+ * which never counts as a human verdict. Absent on entries written before the field existed, which
+ * were all reviews.
+ */
+export const SHADOW_DETECTION_VERDICT_SOURCES = ['review', 'suspension', 'reinstatement', 'automation'] as const;
+export type ShadowDetectionVerdictSource = (typeof SHADOW_DETECTION_VERDICT_SOURCES)[number];
+
+/** reviewerId on an `automation` verdict entry: no admin made it. */
+export const SHADOW_DETECTION_AUTOMATION_REVIEWER_ID = 'automation';
+
+/** True when the record's latest verdict was recorded by the automation grader. */
+export const isAutomationVerdict = (item: {
+  verdict: ShadowDetectionVerdict | null;
+  verdicts: readonly { source?: ShadowDetectionVerdictSource }[];
+}): boolean => item.verdict !== null && item.verdicts.at(-1)?.source === 'automation';
+
+export const shadowDetectionVerdictEntrySchema = z.object({
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS),
+  reason: z.string(),
+  reviewerId: z.string(),
+  reviewedAt: z.date(),
+  source: z.enum(SHADOW_DETECTION_VERDICT_SOURCES).optional(),
+  /** The account whose suspension or reinstatement recorded this entry; absent on reviews and older entries. */
+  accountId: z.string().optional(),
+});
+export type ShadowDetectionVerdictEntry = z.infer<typeof shadowDetectionVerdictEntrySchema>;
+
+export const shadowDetectionItemSchema = z.object({
+  id: z.string(),
+  detector: z.enum(SHADOW_DETECTORS),
+  /** Bumped whenever a detector's thresholds-to-action mapping changes, so precision is per policy. */
+  policyVersion: z.number().int(),
+  wouldAction: z.enum(SHADOW_DETECTION_ACTIONS),
+  /** Short human summary of why the detector fired, e.g. "3 signups from one IP in 180 minutes". */
+  summary: z.string(),
+  userIds: z.array(z.string()),
+  network: shadowDetectionNetworkSchema.nullable(),
+  signals: z.array(shadowDetectionSignalSchema),
+  windowMinutes: z.number().nullable(),
+  /** The linked-account evidence of an accountCampaign detection; null for single-actor detectors. */
+  group: accountCampaignGroupSchema.nullable(),
+  /** Optional for older records. Participants follow userIds order. Observation only. */
+  completionSequence: completionSequenceEvidenceSchema.optional(),
+  completionSynchrony: completionSynchronyEvidenceSchema.optional(),
+  /** The screened payment of a paymentRisk detection; null for detectors that do not watch payments. */
+  payment: shadowDetectionPaymentSchema.nullable(),
+  detectedAt: z.date(),
+  /** The latest verdict; null until reviewed. Earlier verdicts stay in `verdicts`. */
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS).nullable(),
+  verdicts: z.array(shadowDetectionVerdictEntrySchema),
+  /** Optimistic-concurrency token: a verdict must name the revision it was decided against. */
+  revision: z.number().int(),
+});
+export type ShadowDetectionItem = z.infer<typeof shadowDetectionItemSchema>;
+
+/**
+ * Verdict counts for one detector and policy version. Precision is derived on the client. Verdict
+ * counts cover only records that would have acted; `noAction` counts the `wouldAction: 'none'`
+ * records, which are listed and gradable but never counted in precision. A review-only detector
+ * (isReviewOnlyCompletionDetector) never acts, so its verdicts are counted and `noAction` stays 0.
+ */
+export const shadowDetectionSummaryRowSchema = z.object({
+  detector: z.enum(SHADOW_DETECTORS),
+  policyVersion: z.number().int(),
+  recorded: z.number(),
+  noAction: z.number(),
+  confirmedAbuse: z.number(),
+  legitimateHuman: z.number(),
+  legitimateAutomation: z.number(),
+  /** insufficient_evidence verdicts given by a reviewer; automation verdicts are counted apart. */
+  insufficientEvidence: z.number(),
+  /** Records whose latest verdict is the automation grader's; never in the verdict counts above. */
+  automated: z.number(),
+});
+export type ShadowDetectionSummaryRow = z.infer<typeof shadowDetectionSummaryRowSchema>;
+
+export const SHADOW_DETECTION_ACCOUNT_STATUSES = ['active', 'suspended', 'deleted', 'missing'] as const;
+export type ShadowDetectionAccountStatus = (typeof SHADOW_DETECTION_ACCOUNT_STATUSES)[number];
+
+/**
+ * An account a listed detection names, as it is now, so a reviewer sees a suspended or drained account
+ * without opening its profile. `missing` is an id with no user record.
+ */
+export const shadowDetectionAccountSchema = z.object({
+  userId: z.string(),
+  status: z.enum(SHADOW_DETECTION_ACCOUNT_STATUSES),
+  signupMethod: z.string().nullable(),
+  currentCredits: z.number().nullable(),
+});
+export type ShadowDetectionAccount = z.infer<typeof shadowDetectionAccountSchema>;
+
+/** A reviewer named in the listed detections' verdict histories; `name` is null for a missing account. */
+export const shadowDetectionReviewerSchema = z.object({
+  userId: z.string(),
+  name: z.string().nullable(),
+});
+export type ShadowDetectionReviewer = z.infer<typeof shadowDetectionReviewerSchema>;
+
+/** Burst peers listed per detection; `truncated` says more accounts signed up in the window. */
+export const SHADOW_DETECTION_BURST_PEER_LIMIT = 10;
+
+/**
+ * The other accounts that signed up from a signupNetworkBurst detection's IP inside its window. The
+ * detection names only the signup that tripped it; these are read from the users at list time.
+ */
+export const shadowDetectionBurstPeersSchema = z.object({
+  detectionId: z.string(),
+  userIds: z.array(z.string()),
+  truncated: z.boolean(),
+});
+export type ShadowDetectionBurstPeers = z.infer<typeof shadowDetectionBurstPeersSchema>;
+
+export const shadowDetectionListSchema = z.object({
+  data: z.array(shadowDetectionItemSchema),
+  truncated: z.boolean(),
+  summary: z.array(shadowDetectionSummaryRowSchema),
+  /** Every account the listed detections and their burst peers name. */
+  accounts: z.array(shadowDetectionAccountSchema),
+  burstPeers: z.array(shadowDetectionBurstPeersSchema),
+  /** Everyone who recorded a verdict on the listed detections, so the page can name them. */
+  reviewers: z.array(shadowDetectionReviewerSchema),
+});
+export type ShadowDetectionList = z.infer<typeof shadowDetectionListSchema>;
+
+export const shadowDetectionListQuerySchema = z.object({
+  detector: z.enum(SHADOW_DETECTORS).optional(),
+  /** `automated` lists records whose latest verdict is the automation grader's. */
+  verdict: z.enum([...SHADOW_DETECTION_VERDICTS, 'unreviewed', 'automated']).optional(),
+});
+export type ShadowDetectionListQuery = z.infer<typeof shadowDetectionListQuerySchema>;
+
+/** The reason is validated by the shared admin reason rule on the server. */
+export const shadowDetectionVerdictRequestSchema = z.object({
+  id: ObjectIdStringSchema,
+  expectedRevision: z.number().int().min(0),
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS),
+  reason: z.unknown(),
+  /** Set when the grade was taken from the detection's assessment suggestion (accepted or overridden). */
+  aiDecision: assessmentAiDecisionSchema.optional(),
+});
+export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
+
+/** Detections one bulk verdict request may grade. */
+export const SHADOW_DETECTION_BULK_VERDICT_LIMIT = 200;
+
+/**
+ * One verdict and reason for many detections. Each item names the revision it was selected at, so a
+ * record graded by someone else since then is reported back as a conflict instead of overwritten.
+ */
+export const shadowDetectionBulkVerdictRequestSchema = z.object({
+  items: z
+    .array(z.object({ id: ObjectIdStringSchema, expectedRevision: z.number().int().min(0) }))
+    .min(1)
+    .max(SHADOW_DETECTION_BULK_VERDICT_LIMIT)
+    .refine(items => new Set(items.map(item => item.id.toLowerCase())).size === items.length, 'Duplicate detection id'),
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS),
+  reason: z.unknown(),
+});
+export type ShadowDetectionBulkVerdictRequest = z.infer<typeof shadowDetectionBulkVerdictRequestSchema>;
+
+export const shadowDetectionBulkVerdictResponseSchema = z.object({
+  graded: z.array(shadowDetectionItemSchema),
+  /** Records changed since they were selected, at their current state; not graded. */
+  conflicts: z.array(shadowDetectionItemSchema),
+  /** Ids that no longer exist (e.g. purged with a deleted account). */
+  missing: z.array(z.string()),
+  /** Ids whose write errored; they may or may not have been graded. */
+  failed: z.array(z.string()),
+});
+export type ShadowDetectionBulkVerdictResponse = z.infer<typeof shadowDetectionBulkVerdictResponseSchema>;
+
+/**
+ * Suspension reasons that mean the admin judged the account abusive, so its open detections are graded
+ * confirmed abuse. The admin suspend dialog offers these as presets (adminReason.ts); a reason counts
+ * when it is the preset alone or "Preset: note".
+ */
+export const ABUSE_SUSPENSION_REASONS = ['Abuse / automated signups', 'Payment fraud', 'Terms violation'] as const;
+
+export function isAbuseSuspensionReason(reason: string): boolean {
+  return ABUSE_SUSPENSION_REASONS.some(preset => reason === preset || reason.startsWith(`${preset}: `));
+}
+
+/**
+ * Precision of a would-act decision among graded detections. insufficient_evidence is excluded from
+ * both sides: it says the reviewer could not tell, not that the detector was wrong. Null with no
+ * conclusive verdicts, so the UI never shows a ratio over zero. `noAction` records never enter it:
+ * the row's verdict counts already exclude them (shadowDetectionRepository.summarize), and a verdict
+ * on a record that would not have acted says nothing about a would-act decision. For a review-only
+ * detector (every record is wouldAction 'none') it is the share of its flags confirmed as abuse.
+ */
+export function shadowDetectionPrecision(row: ShadowDetectionSummaryRow): number | null {
+  const falsePositives = row.legitimateHuman + row.legitimateAutomation;
+  const conclusive = row.confirmedAbuse + falsePositives;
+  return conclusive === 0 ? null : row.confirmedAbuse / conclusive;
+}
+
+export type ShadowDetectionBar = { readonly minConclusive: number; readonly minPrecision: number };
+
+/**
+ * The bar a detector version should clear before an admin moves autoContainmentConfig.mode from shadow
+ * to enforce: enough conclusive verdicts to trust the ratio, and precision at or above the floor. It
+ * is guidance shown on the Detections page; nothing enforces it, and the mode is one setting for every
+ * detector.
+ */
+export const SHADOW_DETECTION_ENFORCE_BAR = {
+  minConclusive: 50,
+  minPrecision: 0.95,
+} as const satisfies ShadowDetectionBar;
+
+/**
+ * The lower bar for moving a reversible tier (autoContainmentConfig.tiers: Limit, Hold signup grant and
+ * the rest) from shadow to enforce. Those tiers expire on their own and an admin can release them, so a
+ * false positive costs less than a full Contain. Guidance only, like SHADOW_DETECTION_ENFORCE_BAR.
+ */
+export const REVERSIBLE_TIER_ENFORCE_BAR = {
+  minConclusive: 20,
+  minPrecision: 0.9,
+} as const satisfies ShadowDetectionBar;
+
+export type ShadowDetectionReadiness = {
+  /** collecting: too few conclusive verdicts yet; below_bar / ready: enough, judged by precision. */
+  status: 'collecting' | 'below_bar' | 'ready';
+  conclusive: number;
+  precision: number | null;
+};
+
+export function shadowDetectionReadiness(
+  row: ShadowDetectionSummaryRow,
+  bar: ShadowDetectionBar = SHADOW_DETECTION_ENFORCE_BAR
+): ShadowDetectionReadiness {
+  const conclusive = row.confirmedAbuse + row.legitimateHuman + row.legitimateAutomation;
+  const precision = shadowDetectionPrecision(row);
+  if (conclusive < bar.minConclusive || precision === null) {
+    return { status: 'collecting', conclusive, precision };
+  }
+  return {
+    status: precision >= bar.minPrecision ? 'ready' : 'below_bar',
+    conclusive,
+    precision,
+  };
+}

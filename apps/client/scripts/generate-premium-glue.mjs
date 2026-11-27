@@ -12,17 +12,32 @@
  *   app/premium-generated/premiumReplyAccessories.generated.ts - chat reply accessory slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
- *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
- *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   server/premium-generated/premiumPartnerSignupHooks.generated.ts - post-signup partner-rule hooks
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
- *   server/premium-generated/premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
- *   server/premium-generated/premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
+ *   app/premium-generated/premiumToolRunningCopy.generated.ts - overlay tool loading copy
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
- *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
+ *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec patch (null form)
+ *
+ * plus packages/scripts/migrate/migrations/core.generated.ts, the core migrations registry built
+ * from the migration files on disk (not overlay glue, but every consumer already runs this script),
+ *
+ * and, because apps/workers reaches them too, into packages/server-utils/src/premium-generated/:
+ *
+ *   premiumLlmTools.generated.ts - LLM tool contributions
+ *   premiumSystemPrompts.generated.ts - system prompt contributions
+ *   premiumNavigableViews.generated.ts - navigation view registry contributions
+ *   premiumAgentExtensions.generated.ts - agent surface profiles + tool-map guards
+ *   premiumAdminSettings.generated.ts - contributed admin setting definitions
+ *   premiumTutorialOwners.generated.ts - tutorial owner contributions
+ *   premiumSlackInteractiveActions.generated.ts - Slack interactive action handlers
+ *   premiumWorkspaceSessionSettings.generated.ts - session fields owned per workspace
+ *   premiumWorkspaceDeniedTools.generated.ts - tools denied per workspace
+ *   premiumEntitlementGrants.generated.ts - entitlement registry rows
+ *   premiumApiKeyScopes.generated.ts - contributed API-key scopes
+ *   premiumDataSubjectRegistry.generated.ts - overlay data-subject classifications
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -33,7 +48,7 @@
  * real imports for an unlinked package fails typecheck/build repo-wide, which is
  * worse than the overlay's features being un-wired until it is linked.
  *
- * Relative-import glue (infra + migrations + contracts) is exempt: it imports overlay source by
+ * Relative-import glue (infra, migrations, contracts and the overlay-importing server-utils glue) is exempt: it imports overlay source by
  * relative path and needs no link. Note: infra glue itself is link-independent, but
  * the handler stubs it references (from generateServerHandlerStubs) are bare-specifier
  * and therefore omitted in the unlinked case. This is caught at deploy/bundle time
@@ -64,6 +79,9 @@ const REPO_ROOT = resolve(CLIENT_ROOT, '../..');
 const PREMIUM_DIR = join(REPO_ROOT, 'packages/premium');
 const GENERATED_DIR = join(CLIENT_ROOT, 'app/premium-generated');
 const INFRA_GENERATED_DIR = join(REPO_ROOT, 'infra/premium-generated');
+// Glue that apps/workers reaches as well as apps/client. No overlay is linked into this package, so
+// the generators that import an overlay emit relative imports (see relativeOverlayImport()).
+const SERVER_UTILS_GENERATED_DIR = join(REPO_ROOT, 'packages/server-utils/src/premium-generated');
 
 // --- Discover premium packages ---
 
@@ -621,7 +639,7 @@ function readWorkspaceKeyTable(pkg, field, { allowDisplay = false } = {}) {
 const TOOL_NAME_RE = /^[a-z0-9][a-z0-9_.:-]*(__[A-Za-z0-9_.:-]+)?$/;
 
 function generateWorkspaceDeniedTools(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceDeniedTools.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumWorkspaceDeniedTools.generated.ts');
   const typeImport = `import type { WorkspaceDeniedToolsTable } from '@bike4mind/common';`;
   const field = 'workspaceDeniedTools';
 
@@ -753,37 +771,56 @@ function generateWorkspaceCopyEntitlements(packages) {
 const TOOL_ID_RE = /^[a-z0-9][a-z0-9_.-]*$/i;
 
 function generateToolDisplayLabels(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumToolDisplayLabels.generated.ts');
-  const typeImport = `import type { PremiumToolDisplayLabels } from '../premiumContract';`;
+  generateToolStringMap(packages, {
+    key: 'toolDisplayLabels',
+    file: 'premiumToolDisplayLabels.generated.ts',
+    typeName: 'PremiumToolDisplayLabels',
+    exportName: 'premiumToolDisplayLabels',
+  });
+}
+
+// Loading copy shown while an overlay tool runs (b4mContributions.toolRunningCopy), same shape and limits.
+function generateToolRunningCopy(packages) {
+  generateToolStringMap(packages, {
+    key: 'toolRunningCopy',
+    file: 'premiumToolRunningCopy.generated.ts',
+    typeName: 'PremiumToolRunningCopy',
+    exportName: 'premiumToolRunningCopy',
+  });
+}
+
+function generateToolStringMap(packages, { key, file, typeName, exportName }) {
+  const outPath = join(GENERATED_DIR, file);
+  const typeImport = `import type { ${typeName} } from '../premiumContract';`;
 
   // tool id -> { label, from }
   const merged = new Map();
   for (const pkg of packages) {
-    const declared = pkg.contributions.toolDisplayLabels;
+    const declared = pkg.contributions[key];
     if (declared === undefined) continue;
     if (!isPlainObject(declared)) {
       throw new Error(
-        `[codegen] invalid toolDisplayLabels from package "${pkg.name}": ` +
+        `[codegen] invalid ${key} from package "${pkg.name}": ` +
           `expected an object of tool id -> label, got ${JSON.stringify(declared)}`
       );
     }
     for (const [toolId, label] of Object.entries(declared)) {
       if (!TOOL_ID_RE.test(toolId)) {
         throw new Error(
-          `[codegen] invalid toolDisplayLabels tool id from package "${pkg.name}": ` +
+          `[codegen] invalid ${key} tool id from package "${pkg.name}": ` +
             `${JSON.stringify(toolId)} is not of [A-Za-z0-9_.-]`
         );
       }
       if (typeof label !== 'string' || label.length > GRANT_LABEL_MAX || !GRANT_LABEL_RE.test(label)) {
         throw new Error(
-          `[codegen] invalid toolDisplayLabels label for "${toolId}" from package "${pkg.name}": ` +
+          `[codegen] invalid ${key} label for "${toolId}" from package "${pkg.name}": ` +
             `${JSON.stringify(label)} must be one trimmed line of at most ${GRANT_LABEL_MAX} characters`
         );
       }
       const prior = merged.get(toolId);
       if (prior && prior.label !== label) {
         throw new Error(
-          `[codegen] toolDisplayLabels names "${toolId}" differently in packages "${prior.from}" and ` +
+          `[codegen] ${key} names "${toolId}" differently in packages "${prior.from}" and ` +
             `"${pkg.name}"; declare its label in one.`
         );
       }
@@ -796,7 +833,252 @@ function generateToolDisplayLabels(packages) {
 
   writeFile(
     outPath,
-    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumToolDisplayLabels: PremiumToolDisplayLabels = ${body};\n`
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const ${exportName}: ${typeName} = ${body};\n`
+  );
+}
+
+// --- Generate entitlement grants ---
+
+// Entitlement registry rows (b4mContributions.entitlementGrants), added to the built-in rows in
+// lib/entitlements/registry.ts. Pure data like the labels above. Keys must already be normalized,
+// since the registry matches on the lowercase form. The built-in rows are TypeScript this script
+// cannot load, so a collision with them is dropped by mergeContributedRows instead of failing here.
+const GRANT_KEY_RE = /^[a-z0-9][a-z0-9:_-]*$/;
+// Must stay in sync with isReservedContributionKey and MAX_CONTRIBUTED_SIGNUP_CREDITS in the registry.
+const isReservedGrantKey = key =>
+  key === 'base' ||
+  key.startsWith('datalake:') ||
+  key.startsWith('embed:') ||
+  key.startsWith('source:') ||
+  key === 'customer' ||
+  key === 'pending-free-credits' ||
+  key === 'plan:paid';
+const MAX_CONTRIBUTED_SIGNUP_CREDITS = 250_000;
+const ENTITLEMENT_GRANT_FIELDS = ['tagGrants', 'impliedEntitlements', 'signupCredits', 'internalStaffEntitlements'];
+
+function generateEntitlementGrants(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumEntitlementGrants.generated.ts');
+  const typeImport = `import type { PremiumEntitlementGrants } from '@bike4mind/common';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid entitlementGrants from package "${pkg.name}": ${detail}`);
+  };
+  const readKey = (pkg, where, value) => {
+    if (typeof value !== 'string' || !GRANT_KEY_RE.test(value)) {
+      fail(pkg, `${where} ${JSON.stringify(value)} must be lowercase and match ${GRANT_KEY_RE}`);
+    }
+    if (isReservedGrantKey(value)) fail(pkg, `${where} ${JSON.stringify(value)} is reserved`);
+    return value;
+  };
+  const readKeyList = (pkg, where, value) => {
+    if (!Array.isArray(value) || value.length === 0) fail(pkg, `${where} must be a non-empty array of keys`);
+    return [...new Set(value.map(key => readKey(pkg, where, key)))];
+  };
+  const readRows = (pkg, field, value) => {
+    if (!Array.isArray(value)) fail(pkg, `${field} must be an array`);
+    return value.map(row => {
+      if (!isPlainObject(row)) fail(pkg, `${field} rows must be objects, got ${JSON.stringify(row)}`);
+      return row;
+    });
+  };
+  // One value per id across every package; an identical repeat collapses, a different one fails.
+  const claim = (table, field, id, value, pkg) => {
+    const prior = table.get(id);
+    if (prior && JSON.stringify(prior.value) !== JSON.stringify(value)) {
+      throw new Error(
+        `[codegen] entitlementGrants.${field} gives "${id}" different values in packages "${prior.from}" and ` +
+          `"${pkg.name}"; declare it in one.`
+      );
+    }
+    if (!prior) table.set(id, { value, from: pkg.name });
+  };
+
+  const tagGrants = new Map();
+  const tagOfKey = new Map();
+  const implied = new Map();
+  const signupCredits = new Map();
+  const internalStaff = new Set();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.entitlementGrants;
+    if (declared === undefined) continue;
+    if (!isPlainObject(declared)) fail(pkg, `expected an object, got ${JSON.stringify(declared)}`);
+    for (const field of Object.keys(declared)) {
+      if (!ENTITLEMENT_GRANT_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+    }
+    if (declared.tagGrants !== undefined) {
+      for (const row of readRows(pkg, 'tagGrants', declared.tagGrants)) {
+        const tag = readKey(pkg, 'tagGrants tag', row.tag);
+        const keys = readKeyList(pkg, `tagGrants entitlements for "${tag}"`, row.entitlements).sort();
+        claim(tagGrants, 'tagGrants', tag, keys, pkg);
+        for (const key of keys) {
+          const other = tagOfKey.get(key);
+          if (other && other.tag !== tag) {
+            throw new Error(
+              `[codegen] entitlementGrants.tagGrants grants "${key}" from tag "${other.tag}" (package "${other.from}") ` +
+                `and tag "${tag}" (package "${pkg.name}"); a key has one granting tag.`
+            );
+          }
+          tagOfKey.set(key, { tag, from: pkg.name });
+        }
+      }
+    }
+    if (declared.impliedEntitlements !== undefined) {
+      for (const row of readRows(pkg, 'impliedEntitlements', declared.impliedEntitlements)) {
+        const ifHeld = readKey(pkg, 'impliedEntitlements ifHeld', row.ifHeld);
+        const keys = readKeyList(pkg, `impliedEntitlements alsoGrant for "${ifHeld}"`, row.alsoGrant).sort();
+        claim(implied, 'impliedEntitlements', ifHeld, keys, pkg);
+      }
+    }
+    if (declared.signupCredits !== undefined) {
+      for (const row of readRows(pkg, 'signupCredits', declared.signupCredits)) {
+        const key = readKey(pkg, 'signupCredits key', row.key);
+        if (!Number.isInteger(row.credits) || row.credits <= 0 || row.credits > MAX_CONTRIBUTED_SIGNUP_CREDITS) {
+          fail(
+            pkg,
+            `signupCredits for "${key}" must be an integer from 1 to ${MAX_CONTRIBUTED_SIGNUP_CREDITS}, ` +
+              `got ${JSON.stringify(row.credits)}`
+          );
+        }
+        claim(signupCredits, 'signupCredits', key, row.credits, pkg);
+      }
+    }
+    if (declared.internalStaffEntitlements !== undefined) {
+      for (const key of readKeyList(pkg, 'internalStaffEntitlements', declared.internalStaffEntitlements)) {
+        internalStaff.add(key);
+      }
+    }
+  }
+
+  // Built-in grants are invisible here, so an implication may only start from a key a contribution grants.
+  const granted = new Set([...tagOfKey.keys(), ...internalStaff]);
+  const grounded = new Set();
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [ifHeld, { value }] of implied) {
+      if (grounded.has(ifHeld) || !granted.has(ifHeld)) continue;
+      grounded.add(ifHeld);
+      for (const key of value) granted.add(key);
+      grew = true;
+    }
+  }
+  for (const [ifHeld, { from }] of implied) {
+    if (!grounded.has(ifHeld)) {
+      fail({ name: from }, `impliedEntitlements ifHeld "${ifHeld}" is not granted by any contributed row`);
+    }
+  }
+  for (const [key, { from }] of signupCredits) {
+    if (!internalStaff.has(key)) {
+      fail({ name: from }, `signupCredits key "${key}" must be a contributed internalStaffEntitlements key`);
+    }
+  }
+
+  const grants = {};
+  if (tagGrants.size > 0) grants.tagGrants = [...tagGrants].map(([tag, { value }]) => ({ tag, entitlements: value }));
+  if (implied.size > 0) {
+    grants.impliedEntitlements = [...implied].map(([ifHeld, { value }]) => ({ ifHeld, alsoGrant: value }));
+  }
+  if (signupCredits.size > 0) {
+    grants.signupCredits = [...signupCredits].map(([key, { value }]) => ({ key, credits: value }));
+  }
+  if (internalStaff.size > 0) grants.internalStaffEntitlements = [...internalStaff].sort();
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumEntitlementGrants: PremiumEntitlementGrants = ${JSON.stringify(grants, null, 2)};\n`
+  );
+}
+
+// --- Generate API-key scopes ---
+
+// API-key scopes (b4mContributions.apiKeyScopes), merged into the built-in catalog in
+// constants/apiKeyScopes.ts. Like the grants above, the built-in rows are TypeScript this script
+// cannot load, so a collision with them is resolved by the merge in that module, not here.
+const API_KEY_SCOPE_VALUE_RE = /^[a-z0-9][a-z0-9-]*:[a-z0-9-]+$/;
+// isWellFormedApiKeyScope (@bike4mind/common) caps stored values at this length.
+const API_KEY_SCOPE_VALUE_MAX = 100;
+// Resources bound to privileged or dedicated-flow keys; a contributed scope may not join them.
+const RESERVED_API_KEY_SCOPE_RESOURCES = ['admin', 'cc-bridge', 'embed', 'datalake'];
+const API_KEY_SCOPE_FIELDS = ['value', 'label', 'description', 'endpoints', 'requiredEntitlement'];
+const API_KEY_SCOPE_DESCRIPTION_MAX = 200;
+const API_KEY_SCOPE_ENDPOINTS_MAX = 50;
+const API_KEY_SCOPE_ENDPOINT_RE = /^(GET|POST|PUT|PATCH|DELETE) \/[A-Za-z0-9._~:/{}-]*$/;
+const API_KEY_SCOPE_ENDPOINT_MAX = 160;
+
+function generateApiKeyScopes(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumApiKeyScopes.generated.ts');
+  const typeImport = `import type { PremiumApiKeyScope } from '@bike4mind/common';`;
+
+  const fail = (pkg, detail) => {
+    throw new Error(`[codegen] invalid apiKeyScopes from package "${pkg.name}": ${detail}`);
+  };
+  const readText = (pkg, where, value, max) => {
+    if (typeof value !== 'string' || value.length > max || !GRANT_LABEL_RE.test(value) || /\p{Cc}/u.test(value)) {
+      fail(pkg, `${where} must be 1-${max} characters with no control characters or edge whitespace`);
+    }
+    return value;
+  };
+
+  const scopes = new Map();
+  for (const pkg of packages) {
+    const declared = pkg.contributions.apiKeyScopes;
+    if (declared === undefined) continue;
+    if (!Array.isArray(declared)) fail(pkg, `expected an array, got ${JSON.stringify(declared)}`);
+    for (const entry of declared) {
+      if (!isPlainObject(entry)) fail(pkg, `rows must be objects, got ${JSON.stringify(entry)}`);
+      for (const field of Object.keys(entry)) {
+        if (!API_KEY_SCOPE_FIELDS.includes(field)) fail(pkg, `unknown field ${JSON.stringify(field)}`);
+      }
+      const { value } = entry;
+      if (typeof value !== 'string' || !API_KEY_SCOPE_VALUE_RE.test(value)) {
+        fail(pkg, `value ${JSON.stringify(value)} must match ${API_KEY_SCOPE_VALUE_RE}`);
+      }
+      if (value.length > API_KEY_SCOPE_VALUE_MAX) {
+        fail(pkg, `value ${JSON.stringify(value)} must be at most ${API_KEY_SCOPE_VALUE_MAX} characters`);
+      }
+      if (RESERVED_API_KEY_SCOPE_RESOURCES.includes(value.slice(0, value.indexOf(':')))) {
+        fail(pkg, `value ${JSON.stringify(value)} uses a reserved resource`);
+      }
+      const row = {
+        value,
+        label: readText(pkg, `label of "${value}"`, entry.label, GRANT_LABEL_MAX),
+        description: readText(pkg, `description of "${value}"`, entry.description, API_KEY_SCOPE_DESCRIPTION_MAX),
+        endpoints: [],
+      };
+      if (!Array.isArray(entry.endpoints) || entry.endpoints.length > API_KEY_SCOPE_ENDPOINTS_MAX) {
+        fail(pkg, `endpoints of "${value}" must be an array of at most ${API_KEY_SCOPE_ENDPOINTS_MAX} lines`);
+      }
+      for (const line of entry.endpoints) {
+        if (
+          typeof line !== 'string' ||
+          line.length > API_KEY_SCOPE_ENDPOINT_MAX ||
+          !API_KEY_SCOPE_ENDPOINT_RE.test(line)
+        ) {
+          fail(pkg, `endpoint ${JSON.stringify(line)} of "${value}" must look like "GET /api/path"`);
+        }
+        row.endpoints.push(line);
+      }
+      if (entry.requiredEntitlement !== undefined) {
+        if (typeof entry.requiredEntitlement !== 'string' || !GRANT_KEY_RE.test(entry.requiredEntitlement)) {
+          fail(pkg, `requiredEntitlement of "${value}" must be lowercase and match ${GRANT_KEY_RE}`);
+        }
+        row.requiredEntitlement = entry.requiredEntitlement;
+      }
+
+      const prior = scopes.get(value);
+      if (prior && JSON.stringify(prior.row) !== JSON.stringify(row)) {
+        throw new Error(
+          `[codegen] apiKeyScopes gives "${value}" different rows in packages "${prior.from}" and "${pkg.name}"; ` +
+            `declare it in one.`
+        );
+      }
+      if (!prior) scopes.set(value, { row, from: pkg.name });
+    }
+  }
+
+  const rows = [...scopes.values()].map(({ row }) => row);
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumApiKeyScopes: readonly PremiumApiKeyScope[] = ${JSON.stringify(rows, null, 2)};\n`
   );
 }
 
@@ -868,18 +1150,16 @@ function resolveExportToDeclaredPath(pkg, exportFrom) {
   } catch {
     return null;
   }
-  const target = pkgJson.exports?.[subpath];
+  const target = declaredExportTarget(pkgJson, subpath);
   if (target === undefined) return null; // no exports entry for this subpath - nothing to resolve.
   if (typeof target !== 'string') {
-    // A conditional-exports object ({ import, require, ... }) or array target exists at this
-    // key but isn't a plain string path we can read - warn rather than silently returning null,
-    // matching extractConfigLiteral's posture: an unresolvable source file means any `config`
-    // export it might have is silently dropped from the generated stub, which can reintroduce
-    // the exact bodyParser hang this file exists to prevent.
+    // An exports entry exists at this key but no condition in it names a source path - warn
+    // rather than silently returning null, matching extractConfigLiteral's posture: callers that
+    // read the source drop its `config` export, and the relative-import generators throw.
     console.warn(
-      `[codegen] WARNING: ${pkg.name}'s package.json exports["${subpath}"] is not a plain string ` +
-        `path (got ${JSON.stringify(target)}) - can't resolve it to check for a "config" export. ` +
-        `If this route needs Next's bodyParser config, the generated stub will be missing it.`
+      `[codegen] WARNING: ${pkg.name}'s package.json exports["${subpath}"] has no plain-string ` +
+        `path under import/default/require (got ${JSON.stringify(target)}) - can't resolve it to a ` +
+        `declared source file.`
     );
     return null;
   }
@@ -895,11 +1175,82 @@ function resolveExportToDeclaredPath(pkg, exportFrom) {
   return resolved;
 }
 
+// The path `pkgJson` declares for `subpath`, mirroring Node's exports resolution for the shapes
+// overlays use: a string `exports` (the "." entry), an exact key, a single-`*` pattern key, and a
+// conditional object or array, preferring import/default/require ("types" names a .d.ts, never
+// source). Falls back to `main` for "." when there is no `exports` field. Returns the raw entry
+// when it is present but has no usable string, and undefined when nothing is declared.
+function declaredExportTarget(pkgJson, subpath) {
+  const exportsField = pkgJson.exports;
+  if (exportsField === undefined) return subpath === '.' && typeof pkgJson.main === 'string' ? pkgJson.main : undefined;
+  if (typeof exportsField === 'string' || Array.isArray(exportsField)) {
+    return subpath === '.' ? pickExportCondition(exportsField) : undefined;
+  }
+  if (typeof exportsField !== 'object' || exportsField === null) return undefined;
+  // A conditional object at the top level ({ import, default }) stands for the "." entry alone.
+  if (!Object.keys(exportsField).some(key => key.startsWith('.'))) {
+    return subpath === '.' ? pickExportCondition(exportsField) : undefined;
+  }
+  if (Object.hasOwn(exportsField, subpath)) return pickExportCondition(exportsField[subpath]);
+  // Node picks the pattern with the longest prefix before its `*`.
+  let best;
+  for (const [key, value] of Object.entries(exportsField)) {
+    const star = key.indexOf('*');
+    if (star === -1 || key.indexOf('*', star + 1) !== -1) continue;
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    if (subpath.length < prefix.length + suffix.length) continue;
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue;
+    if (best && best.prefix.length >= prefix.length) continue;
+    best = { prefix, value, match: subpath.slice(prefix.length, subpath.length - suffix.length) };
+  }
+  if (!best) return undefined;
+  const picked = pickExportCondition(best.value);
+  return typeof picked === 'string' ? picked.replaceAll('*', best.match) : picked;
+}
+
+function pickExportCondition(entry) {
+  if (typeof entry === 'string') return entry;
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      const picked = pickExportCondition(item);
+      if (typeof picked === 'string') return picked;
+    }
+    return entry;
+  }
+  if (typeof entry === 'object' && entry !== null) {
+    for (const condition of ['import', 'default', 'require']) {
+      if (!Object.hasOwn(entry, condition)) continue;
+      const picked = pickExportCondition(entry[condition]);
+      if (typeof picked === 'string') return picked;
+    }
+  }
+  return entry;
+}
+
 // As above, but additionally requires the source file to be present, because every
 // caller of this one goes on to READ it. Unchanged behaviour for those callers.
 function resolveExportFromToSourceFile(pkg, exportFrom) {
   const resolved = resolveExportToDeclaredPath(pkg, exportFrom);
   return resolved !== null && existsSync(resolved) ? resolved : null;
+}
+
+// The overlay's declared export of `exportFrom`, as an import specifier relative to `outPath`'s dir.
+// For glue generated outside apps/client, where pnpm links no overlay, so a bare specifier fails to
+// resolve; same declared-path reasoning as generateMigrations(). Throws when the export can't be
+// resolved, because silently dropping the import would un-wire the overlay.
+function relativeOverlayImport(pkg, exportFrom, field, outPath) {
+  const sourceFile = resolveExportToDeclaredPath(pkg, exportFrom);
+  if (!sourceFile) {
+    throw new Error(
+      `[codegen] cannot resolve ${field} ${JSON.stringify(exportFrom)} from package "${pkg.name}" ` +
+        `to a declared path - its package.json "exports" map declares no source path for that ` +
+        `subpath. A bare specifier can't be used from ${relative(REPO_ROOT, dirname(outPath))}.`
+    );
+  }
+  let rel = relative(dirname(outPath), sourceFile).split(sep).join('/').replace(/\.tsx?$/, '');
+  if (!rel.startsWith('.')) rel = `./${rel}`;
+  return rel;
 }
 
 // Next.js's Pages Router requires `export const config = {...}` to be a literal,
@@ -1043,9 +1394,13 @@ function generateServerHandlerStubs(packages) {
       // forwards all named exports (handler, dispatch, ...) that SST references.
       assertModuleSpecifier(exportFrom, pkg.name, 'serverHandlerStubs.exportFrom');
 
+      // Cron and queue Lambdas do not go through baseApi, so each stub registers the contributed
+      // admin settings itself before the handler module reads one.
+      let registerSpec = relative(dirname(outPath), ADMIN_SETTINGS_REGISTER_MODULE).split(sep).join('/');
+      if (!registerSpec.startsWith('.')) registerSpec = `./${registerSpec}`;
       writeFile(
         outPath,
-        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nexport * from '${exportFrom}';\n`
+        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.serverHandlerStubs\nimport '${registerSpec}';\nexport * from '${exportFrom}';\n`
       );
     }
   }
@@ -1060,10 +1415,8 @@ function generateServerHandlerStubs(packages) {
 // `externalTools`, so it must exist in BOTH forms (same annotate-both-forms
 // rule as routes/nav): present -> aggregated spread of each package's map;
 // absent -> empty object typed with the core-owned ToolDefinition contract.
-// Written after generateServerHandlerStubs, whose wipe clears the whole
-// server/premium-generated/ dir.
 function generateLlmTools(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumLlmTools.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumLlmTools.generated.ts');
   const typeImport = `import type { ToolDefinition } from '@bike4mind/services/llm/tools';`;
 
   const contributors = packages.filter(p => p.contributions.llmToolsExport);
@@ -1079,7 +1432,10 @@ function generateLlmTools(packages) {
   contributors.forEach(p => assertModuleSpecifier(p.contributions.llmToolsExport, p.name, 'llmToolsExport'));
 
   const imports = contributors
-    .map((p, i) => `import { llmTools as tools${i} } from '${p.contributions.llmToolsExport}';`)
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.llmToolsExport, 'llmToolsExport', outPath);
+      return `import { llmTools as tools${i} } from '${spec}';`;
+    })
     .join('\n');
 
   const spreads = contributors.map((_, i) => `  ...tools${i}`).join(',\n');
@@ -1091,8 +1447,8 @@ function generateLlmTools(packages) {
 }
 
 function generateSystemPrompts(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumSystemPrompts.generated.ts');
-  const typeImport = `import type { DefaultSystemPrompt } from '@server/utils/systemPrompts/defaults';`;
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumSystemPrompts.generated.ts');
+  const typeImport = `import type { DefaultSystemPrompt } from '../utils/systemPrompts/defaults';`;
 
   const contributors = packages.filter(p => p.contributions.systemPromptsExport);
 
@@ -1107,7 +1463,10 @@ function generateSystemPrompts(packages) {
   contributors.forEach(p => assertModuleSpecifier(p.contributions.systemPromptsExport, p.name, 'systemPromptsExport'));
 
   const imports = contributors
-    .map((p, i) => `import { systemPrompts as prompts${i} } from '${p.contributions.systemPromptsExport}';`)
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.systemPromptsExport, 'systemPromptsExport', outPath);
+      return `import { systemPrompts as prompts${i} } from '${spec}';`;
+    })
     .join('\n');
 
   const spreads = contributors.map((_, i) => `  ...prompts${i}`).join(',\n');
@@ -1115,6 +1474,43 @@ function generateSystemPrompts(packages) {
   writeFile(
     outPath,
     `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSystemPrompts: DefaultSystemPrompt[] = [\n${spreads}\n];\n`
+  );
+}
+
+// Premium packages can contribute admin pages to the navigate_view registry
+// (b4mContributions.navigableViewsExport -> a module exporting `navigableViews: NavigableView[]`).
+// server-utils' navigation/registerContributedViews.ts imports this file for its side effect, so it
+// must exist in BOTH forms; the registry validates every entry when it registers.
+function generateNavigableViews(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumNavigableViews.generated.ts');
+  const typeImport = `import type { NavigableView } from '@bike4mind/common';`;
+
+  const contributors = packages.filter(p => p.contributions.navigableViewsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumNavigableViews: NavigableView[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.navigableViewsExport, p.name, 'navigableViewsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.navigableViewsExport, 'navigableViewsExport', outPath);
+      return `import { navigableViews as views${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...views${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumNavigableViews: NavigableView[] = [\n${items}\n];\n`
   );
 }
 
@@ -1152,13 +1548,210 @@ function generatePartnerSignupHooks(packages) {
   );
 }
 
+// Premium packages can classify their own models for data-subject erasure and export
+// (b4mContributions.dataSubjectRegistryExport -> a module whose import registers the package's
+// mongoose models and which exports `dataSubjectRegistry: ContributedDataHolderRegistry`).
+// packages/server-utils/src/dataSubject/registry/index.ts statically imports this file, so it must exist in BOTH forms.
+// One entry per package, not a spread, so the registry merge sees a model two packages both claim.
+function generateDataSubjectRegistry(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumDataSubjectRegistry.generated.ts');
+  const typeImport = `import type { ContributedDataHolderRegistry } from '../dataSubject/types';`;
+  const declaration = 'export const premiumDataSubjectRegistries: readonly ContributedDataHolderRegistry[]';
+
+  const contributors = packages.filter(p => p.contributions.dataSubjectRegistryExport);
+
+  if (contributors.length === 0) {
+    writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n\n${declaration} = [];\n`);
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.dataSubjectRegistryExport, p.name, 'dataSubjectRegistryExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(
+        p,
+        p.contributions.dataSubjectRegistryExport,
+        'dataSubjectRegistryExport',
+        outPath
+      );
+      return `import { dataSubjectRegistry as registry${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  registry${i}`).join(',\n');
+
+  writeFile(outPath, `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\n${declaration} = [\n${items}\n];\n`);
+}
+
+// Premium packages can contribute agent-executor extensions (b4mContributions.agentExtensionsExport
+// -> a module exporting `agentExtensions: AgentExtensionContribution`): a per-surface orchestration
+// profile and tool-map guards. The workers' executor registry imports this file statically, so like
+// the LLM tools it must exist in BOTH forms.
+function generateAgentExtensions(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumAgentExtensions.generated.ts');
+  const typeImport = `import type { AgentExtensionContribution } from '@bike4mind/agents';`;
+
+  const contributors = packages.filter(p => p.contributions.agentExtensionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.agentExtensionsExport, p.name, 'agentExtensionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.agentExtensionsExport, 'agentExtensionsExport', outPath);
+      return `import { agentExtensions as extensions${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  extensions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAgentExtensions: AgentExtensionContribution[] = [\n${items}\n];\n`
+  );
+}
+
+// --- Generate admin setting contributions ---
+//
+// Premium packages can contribute admin setting definitions (b4mContributions.adminSettingsExport ->
+// a module exporting `adminSettings: SettingDefinition<string>[]`, built with core's make*Setting
+// factories). server-utils' lib/settings/registerContributedSettings.ts imports this file for its side effect on
+// both the server and the client, so it must exist in BOTH forms and stay serializable data. Whatever the
+// export module imports reaches the client bundle: no server-only imports, and no secret defaults.
+const ADMIN_SETTINGS_REGISTER_MODULE = join(REPO_ROOT, 'packages/server-utils/src/lib/settings/registerContributedSettings');
+
+function generateAdminSettings(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumAdminSettings.generated.ts');
+  const typeImport = `import type { SettingDefinition } from '@bike4mind/common';`;
+
+  const contributors = packages.filter(p => p.contributions.adminSettingsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumAdminSettings: SettingDefinition<string>[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.adminSettingsExport, p.name, 'adminSettingsExport'));
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.adminSettingsExport, 'adminSettingsExport', outPath);
+      return `import { adminSettings as settings${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...settings${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumAdminSettings: SettingDefinition<string>[] = [\n${items}\n];\n`
+  );
+}
+
+// --- Generate tutorial owner contributions ---
+//
+// A premium package that owns tutorials contributes b4mContributions.tutorialOwnersExport -> a module exporting
+// `tutorialOwners: TutorialOwner[]` ({ owner, label, adminBase, adminHref }). It carries no tutorial content: core
+// serves the list to full admins only. The entries are data inside the overlay module, so the generated file
+// validates them with assertTutorialOwners when it loads.
+function generateTutorialOwners(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumTutorialOwners.generated.ts');
+
+  const contributors = packages.filter(p => p.contributions.tutorialOwnersExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\nimport type { TutorialOwner } from '@bike4mind/common';\n\nexport const premiumTutorialOwners: TutorialOwner[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.tutorialOwnersExport, p.name, 'tutorialOwnersExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(p, p.contributions.tutorialOwnersExport, 'tutorialOwnersExport', outPath);
+      return `import { tutorialOwners as owners${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...owners${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\nimport { assertTutorialOwners, type TutorialOwner } from '@bike4mind/common';\n${imports}\n\nexport const premiumTutorialOwners: TutorialOwner[] = assertTutorialOwners([\n${items}\n]);\n`
+  );
+}
+
+// --- Generate Slack interactive action contributions ---
+//
+// A premium package can handle Slack interactive action ids (b4mContributions.slackInteractiveActionsExport ->
+// a module exporting `slackInteractiveActions: SlackInteractiveActionHandler[]`). Only the Slack interactive API
+// route imports the generated file, so it must exist in BOTH forms; it is server-only and never reachable from
+// apps/client/app. The registry validates each entry at load, so the file carries no checks of its own.
+function generateSlackInteractiveActions(packages) {
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumSlackInteractiveActions.generated.ts');
+  const typeImport = `import type { SlackInteractiveActionHandler } from '../integrations/slack/interactiveActionRegistry';`;
+
+  const contributors = packages.filter(p => p.contributions.slackInteractiveActionsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.slackInteractiveActionsExport, p.name, 'slackInteractiveActionsExport')
+  );
+
+  const imports = contributors
+    .map((p, i) => {
+      const spec = relativeOverlayImport(
+        p,
+        p.contributions.slackInteractiveActionsExport,
+        'slackInteractiveActionsExport',
+        outPath
+      );
+      return `import { slackInteractiveActions as actions${i} } from '${spec}';`;
+    })
+    .join('\n');
+
+  const items = contributors.map((_, i) => `  ...actions${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumSlackInteractiveActions: readonly SlackInteractiveActionHandler[] = [\n${items}\n];\n`
+  );
+}
+
 const RESERVED_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Session fields a workspace owns, resolved at read time. Each id must name an open
 // workspace or be registered by the same package via workspaceSurfaceIds. Both generated
 // forms must exist so builds without overlays never import an absent package.
 function generateWorkspaceSessionSettings(packages) {
-  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumWorkspaceSessionSettings.generated.ts');
+  const outPath = join(SERVER_UTILS_GENERATED_DIR, 'premiumWorkspaceSessionSettings.generated.ts');
   const typeImport = `import type { WorkspaceSessionSettingsTable } from '@bike4mind/common';`;
   const field = 'workspaceSessionSettingsExport';
 
@@ -1207,11 +1800,11 @@ function generateWorkspaceSessionSettings(packages) {
       if (merged.has(workspaceId)) {
         throw new Error(
           `[codegen] duplicate ${field} workspace id "${workspaceId}": declared by both ` +
-            `"${merged.get(workspaceId).pkgName}" and "${pkg.name}"`
+            `"${merged.get(workspaceId).pkg.name}" and "${pkg.name}"`
         );
       }
       assertModuleSpecifier(specifier, pkg.name, field);
-      merged.set(workspaceId, { pkgName: pkg.name, specifier });
+      merged.set(workspaceId, { pkg, specifier });
     }
   }
 
@@ -1225,7 +1818,10 @@ function generateWorkspaceSessionSettings(packages) {
 
   const contributions = [...merged];
   const imports = contributions
-    .map(([, { specifier }], i) => `import { workspaceSessionSettings as settings${i} } from '${specifier}';`)
+    .map(([, { pkg, specifier }], i) => {
+      const spec = relativeOverlayImport(pkg, specifier, field, outPath);
+      return `import { workspaceSessionSettings as settings${i} } from '${spec}';`;
+    })
     .join('\n');
   const entries = contributions.map(([workspaceId], i) => `  ${JSON.stringify(workspaceId)}: settings${i},`).join('\n');
 
@@ -1324,8 +1920,8 @@ function generateContracts(packages) {
   writeFile(
     join(CLIENT_ROOT, 'server/premium-generated/deploymentOpenApi.generated.ts'),
     `${GENERATED_BANNER}// Overwritten by: pnpm --filter @bike4mind/common openapi:generate:deployment\n\n` +
-      `import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';\n\n` +
-      `export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;\n`
+      `import type { OpenApiPatchNode } from '@bike4mind/common';\n\n` +
+      `export const deploymentOpenApiPatch: OpenApiPatchNode | null = null;\n`
   );
 
   const contributors = packages.filter(p => p.contributions.contractsExport);
@@ -1452,6 +2048,231 @@ export function contributeInfra(_params: Record<string, unknown>): void {}
   }
 }
 
+// Infra resources an overlay declares as plain data (b4mContributions.infraResources).
+// The same literal goes to infra/ (deploy side) and to server-utils (runtime side), so
+// the two can never register different lists. Name rules (collisions with core,
+// duplicates, bad characters) are applied by both consumers via @bike4mind/infra's
+// partitionContributed; this only checks shape, since the values become TS literals.
+// The core name list is read from infra/, so it is only as complete as that tree.
+const INFRA_RESOURCE_TARGETS = [
+  join(INFRA_GENERATED_DIR, 'infraResources.generated.ts'),
+  join(REPO_ROOT, 'packages/server-utils/src/premium-generated/infraResources.generated.ts'),
+];
+// Mirror QUEUE_HELP_MAX and QUEUE_REPLAY_VALUES in b4m-core/infra/src/contributions.ts; keep in sync.
+const QUEUE_HELP_MAX = { description: 200, replayNote: 400, owner: 64 };
+const QUEUE_REPLAY_VALUES = ['safe', 'side-effects', 'unsafe'];
+
+function readInfraResources(pkg) {
+  const raw = pkg.contributions.infraResources;
+  const fail = msg => {
+    throw new Error(`[codegen] invalid b4mContributions.infraResources from package "${pkg.name}": ${msg}`);
+  };
+  if (!isPlainObject(raw)) fail('must be an object');
+  const list = field => {
+    const value = raw[field] === undefined ? [] : raw[field];
+    if (!Array.isArray(value) || !value.every(isPlainObject)) fail(`${field} must be an array of objects`);
+    return value;
+  };
+  const secrets = list('secrets').map(s => {
+    if (typeof s.name !== 'string') fail('secret name must be a string');
+    if (s.placeholder !== undefined && typeof s.placeholder !== 'string')
+      fail(`${s.name}.placeholder must be a string`);
+    if (s.env !== undefined && typeof s.env !== 'boolean') fail(`${s.name}.env must be a boolean`);
+    if (s.env && s.name.length < 2) fail(`${s.name}.env requires a name of at least two characters for Lambda`);
+    return { name: s.name, placeholder: s.placeholder, env: s.env };
+  });
+  const rotations = list('rotations').map(r => {
+    if (typeof r.secret !== 'string') fail('rotation secret must be a string');
+    if (typeof r.description !== 'string' || typeof r.rotationProcess !== 'string') {
+      fail(`${r.secret} rotation needs string description and rotationProcess`);
+    }
+    if (!Number.isInteger(r.rotationIntervalDays) || r.rotationIntervalDays <= 0) {
+      fail(`${r.secret}.rotationIntervalDays must be a positive integer`);
+    }
+    if (r.rotationIntervalDays > 365) fail(`${r.secret}.rotationIntervalDays must be at most 365`);
+    if (typeof r.isAutomatic !== 'boolean') fail(`${r.secret}.isAutomatic must be a boolean`);
+    const { secret, description, rotationIntervalDays, isAutomatic, rotationProcess } = r;
+    return { secret, description, rotationIntervalDays, isAutomatic, rotationProcess };
+  });
+  const optional = (q, field, check, what) => {
+    if (q[field] !== undefined && !check(q[field])) fail(`${q.name}.${field} must be ${what}`);
+    return q[field];
+  };
+  const isString = v => typeof v === 'string';
+  const isIntBetween = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
+  const help = (q, field) =>
+    optional(
+      q,
+      field,
+      v => isString(v) && v.length <= QUEUE_HELP_MAX[field] && GRANT_LABEL_RE.test(v) && !/\p{Cc}/u.test(v),
+      `one trimmed line of 1-${QUEUE_HELP_MAX[field]} characters with no control characters`
+    );
+  const queues = list('queues').map(q => {
+    for (const field of ['name', 'visibilityTimeout', 'label', 'displayName', 'application']) {
+      if (typeof q[field] !== 'string') fail(`queue ${field} must be a string`);
+    }
+    const tags = optional(q, 'tags', v => isPlainObject(v) && Object.values(v).every(isString), 'an object of strings');
+    return {
+      name: q.name,
+      dlqName: optional(q, 'dlqName', isString, 'a string'),
+      visibilityTimeout: q.visibilityTimeout,
+      dlqVisibilityTimeout: optional(q, 'dlqVisibilityTimeout', isString, 'a string'),
+      retry: optional(q, 'retry', isIntBetween(1, 1000), 'an integer from 1 to 1000'),
+      encryption: optional(q, 'encryption', v => ['kms', 'sse-sqs', 'none'].includes(v), "'kms', 'sse-sqs' or 'none'"),
+      dlqEncryption: optional(q, 'dlqEncryption', v => ['kms', 'none'].includes(v), "'kms' or 'none'"),
+      dlqMessageRetentionSeconds: optional(
+        q,
+        'dlqMessageRetentionSeconds',
+        isIntBetween(60, 1209600),
+        'an integer from 60 to 1209600'
+      ),
+      tags: tags === undefined ? undefined : Object.fromEntries(Object.entries(tags)),
+      label: q.label,
+      displayName: q.displayName,
+      application: q.application,
+      description: help(q, 'description'),
+      replay: optional(q, 'replay', v => QUEUE_REPLAY_VALUES.includes(v), "'safe', 'side-effects' or 'unsafe'"),
+      replayNote: help(q, 'replayNote'),
+      owner: help(q, 'owner'),
+    };
+  });
+  return { secrets, rotations, queues };
+}
+
+// Every name core links into Resource: its secrets plus the other SST components declared
+// in infra/*.ts, and the built-in App. Null when infra/ is absent (an image install step
+// that runs before the source copy): the runtime then registers no contributed secret
+// rather than one that might shadow a core name, until a later run sees infra/.
+function readCoreResourceNames() {
+  const infraDir = join(REPO_ROOT, 'infra');
+  if (!existsSync(join(infraDir, 'secrets.ts'))) return null;
+  const names = new Set(['App']);
+  for (const file of readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .sort()) {
+    const source = readFileSync(join(infraDir, file), 'utf8');
+    const code = source
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+      .join('\n');
+    const captured = [...code.matchAll(/new sst\.[A-Za-z.]+\(\s*'([A-Za-z0-9_]+)'/g)];
+    // The contributed secret and queue loops are the only constructors named from data;
+    // those names are not core's. Each pattern exempts one constructor, so a second one named
+    // the same way is counted as unreadable instead of silently left out.
+    const fromData = { 'secrets.ts': [/^\s*spec\.name,/], 'queues.ts': [/^\s*pair\.name,/, /^\s*pair\.dlqName,/] };
+    const exempted = new Set();
+    const constructors = [...code.matchAll(/new sst\.[A-Za-z.]+\(/g)].filter(m => {
+      const rest = code.slice(m.index + m[0].length);
+      const pattern = (fromData[file] ?? []).find(p => !exempted.has(p) && p.test(rest));
+      if (pattern) exempted.add(pattern);
+      return !pattern;
+    });
+    if (constructors.length !== captured.length) {
+      throw new Error(
+        `infra/${file}: ${constructors.length - captured.length} sst constructor(s) not named by a ` +
+          `single-quoted literal; core resource names cannot be read reliably`
+      );
+    }
+    for (const m of captured) names.add(m[1]);
+  }
+  return [...names];
+}
+
+// Mirrors toEnvKey in b4m-core/resource/src/index.ts; keep in sync.
+function toEnvKey(name) {
+  if (/^[A-Z0-9_]+$/.test(name)) return name;
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+}
+
+// Env var names core is known to own: the env form of every core resource, plus every upper-snake
+// key in infra/*.ts. This catches accidental collisions only; it is not a sandbox, since a package's
+// own code can read process.env. The env example files are not scanned: they list core secrets a
+// package may later take over. Null when coreNames is null.
+function readCoreEnvNames(coreNames) {
+  if (coreNames === null) return null;
+  const names = new Set(coreNames.map(toEnvKey));
+  const keyPattern = /(?:^|[{,])\s*(?:-\s*)?#?\s*([A-Z][A-Z0-9_]*)\s*[:=]/gm;
+  const infraDir = join(REPO_ROOT, 'infra');
+  const files = readdirSync(infraDir)
+    .filter(f => f.endsWith('.ts'))
+    .map(f => join(infraDir, f));
+  for (const file of files) {
+    for (const m of readFileSync(file, 'utf8').matchAll(keyPattern)) names.add(m[1]);
+  }
+  return [...names].sort();
+}
+
+// Every DLQ label infra/dlqAlarms.ts alarms on, registry-listed or alarm-only. Null when
+// infra/ is absent, like the core resource names. A label that is not a string literal
+// would be missed, so one fails codegen; the contributed pairs' spec.label is the exception.
+function readCoreDlqLabels() {
+  const file = join(REPO_ROOT, 'infra/dlqAlarms.ts');
+  if (!existsSync(file)) return null;
+  const code = readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(line => !/^\s*(\/\/|\/?\*)/.test(line))
+    .join('\n');
+  // Only the contributed loop's spec.label is exempt; a second one is reported like any other.
+  let contributedLabelSeen = false;
+  const computed = [...code.matchAll(/\blabel:\s*(?![\s'"])([^,}\n]+)/g)]
+    .map(m => m[1].trim())
+    .filter(value => {
+      if (value !== 'spec.label' || contributedLabelSeen) return true;
+      contributedLabelSeen = true;
+      return false;
+    });
+  if (computed.length > 0) {
+    throw new Error(
+      `infra/dlqAlarms.ts: DLQ label(s) not written as a string literal: ${computed.join(', ')}. ` +
+        'Codegen reads core labels from literals; write the label inline.'
+    );
+  }
+  const labels = [...code.matchAll(/\blabel:\s*(['"])([a-z0-9]+(?:-[a-z0-9]+)*)\1/g)].map(m => m[2]);
+  return [...new Set(labels)].sort();
+}
+
+function generateInfraResources(packages) {
+  const merged = { secrets: [], rotations: [], queues: [] };
+  for (const pkg of packages) {
+    if (pkg.contributions.infraResources === undefined) continue;
+    const { secrets, rotations, queues } = readInfraResources(pkg);
+    merged.secrets.push(...secrets);
+    merged.rotations.push(...rotations);
+    merged.queues.push(...queues);
+  }
+  const coreNames = readCoreResourceNames();
+  const content =
+    `${GENERATED_BANNER}import type { InfraResourceContributions } from '@bike4mind/infra';\n\n` +
+    `export const contributedInfraResources: InfraResourceContributions = ${JSON.stringify(merged, null, 2)};\n\n` +
+    `export const coreResourceNames: readonly string[] | null = ${JSON.stringify(coreNames)};\n\n` +
+    `export const coreEnvNames: readonly string[] | null = ${JSON.stringify(readCoreEnvNames(coreNames))};\n\n` +
+    `export const coreDlqLabels: readonly string[] | null = ${JSON.stringify(readCoreDlqLabels())};\n`;
+  for (const target of INFRA_RESOURCE_TARGETS) writeFile(target, content);
+}
+
+// --- Generate core migrations registry ---
+
+// Same pattern packages/scripts/migrate/migrations/index.test.ts scans with; keep them in sync.
+const CORE_MIGRATION_FILE_RE = /^\d{11,14}[-_].+\.ts$/;
+
+// Static imports, not a runtime readdir: the DatabaseMigrator Lambda is esbuild-bundled, so the
+// registry has to be resolvable at bundle time. A missing directory (a Docker install layer that
+// has only package.json files) writes nothing; the post-COPY regeneration emits the real list.
+function generateCoreMigrations() {
+  const migrationsDir = join(REPO_ROOT, 'packages/scripts/migrate/migrations');
+  if (!existsSync(migrationsDir)) return;
+  const files = readdirSync(migrationsDir)
+    .filter(f => CORE_MIGRATION_FILE_RE.test(f) && !f.endsWith('.test.ts'))
+    .sort();
+  const imports = files.map((f, i) => `import migration${i} from './${f.replace(/\.ts$/, '')}';`).join('\n');
+  const entries = files.map((_, i) => `  migration${i},`).join('\n');
+  writeFile(
+    join(migrationsDir, 'core.generated.ts'),
+    `${GENERATED_BANNER}\nimport type { MigrationFile } from '@bike4mind/database';\n${imports}\n\n` +
+      `export const coreMigrations: MigrationFile[] = [\n${entries}\n];\n`
+  );
+}
+
 // --- Main ---
 
 const packages = discoverPremiumPackages();
@@ -1486,6 +2307,12 @@ if (linkedPackages.length < packages.length && process.env.CI === 'true') {
 }
 
 ensureDir(GENERATED_DIR);
+ensureDir(SERVER_UTILS_GENERATED_DIR);
+// These used to be generated under apps/client; drop a stale copy so nothing resolves to it.
+// generateServerHandlerStubs' wipe already covers the server/premium-generated ones.
+for (const name of ['premiumAdminSettings', 'premiumEntitlementGrants', 'premiumApiKeyScopes']) {
+  rmSync(join(GENERATED_DIR, `${name}.generated.ts`), { force: true });
+}
 // Bare-specifier glue: linked packages only (an unresolvable import fails every build).
 generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
@@ -1494,12 +2321,22 @@ generateNotebookSidenavs(linkedPackages);
 generateReplyAccessories(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
+generatePartnerSignupHooks(linkedPackages);
+// Relative-import glue the server and workers load at runtime: linked packages only too. The
+// relative path itself resolves without a link, but the overlay source's own imports resolve only
+// once pnpm has installed the overlay, which linking it into apps/client implies.
 generateLlmTools(linkedPackages);
 generateSystemPrompts(linkedPackages);
-generatePartnerSignupHooks(linkedPackages);
+generateNavigableViews(linkedPackages);
+generateAgentExtensions(linkedPackages);
+generateAdminSettings(linkedPackages);
+generateDataSubjectRegistry(linkedPackages);
+generateTutorialOwners(linkedPackages);
+generateSlackInteractiveActions(linkedPackages);
 generateWorkspaceSessionSettings(linkedPackages);
-// Relative-import glue: needs no node_modules link, so it gets the full list.
-// Any NEW generator goes in whichever group matches how it imports the overlay.
+// Relative-import glue read only at build or deploy time: needs no node_modules link, so it gets
+// the full list. Any NEW generator goes in whichever group matches how it imports the overlay.
+generateCoreMigrations();
 generateMigrations(packages);
 generateContracts(packages);
 generateInfraGlue(packages);
@@ -1509,5 +2346,9 @@ generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
+generateToolRunningCopy(packages);
+generateEntitlementGrants(packages);
+generateApiKeyScopes(packages);
+generateInfraResources(packages);
 
 console.log('[codegen] done.');

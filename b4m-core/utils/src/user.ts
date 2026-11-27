@@ -7,9 +7,10 @@ import {
   storageLimitToBytes,
 } from '@bike4mind/common';
 
-export const checkStorageLimit = async (user: IUserDocument, fileSize: number) => {
+/** `reservedBytes`: bytes already promised to the user but not yet counted in currentStorageSize. */
+export const checkStorageLimit = async (user: IUserDocument, fileSize: number, reservedBytes = 0) => {
   const storageLimit = storageLimitToBytes(user.storageLimit ?? DEFAULT_STORAGE_LIMIT_MB);
-  const currentStorageSize = user.currentStorageSize ?? 0;
+  const currentStorageSize = (user.currentStorageSize ?? 0) + reservedBytes;
   if (fileSize + currentStorageSize > storageLimit) {
     throw new StorageLimitError('File size exceeds storage limit', {
       errorCode: 'storage_limit_exceeded',
@@ -24,9 +25,13 @@ export const checkStorageLimit = async (user: IUserDocument, fileSize: number) =
 };
 
 /** Cumulative: every file the org owns (FabFile.organizationId) counts, whoever uploaded it. */
-export const checkOrganizationStorageLimit = async (organization: IOrganizationDocument, fileSize: number) => {
+export const checkOrganizationStorageLimit = async (
+  organization: IOrganizationDocument,
+  fileSize: number,
+  reservedBytes = 0
+) => {
   const storageLimit = organizationStorageLimitBytes(organization);
-  const currentStorageSize = organization.currentStorageSize ?? 0;
+  const currentStorageSize = (organization.currentStorageSize ?? 0) + reservedBytes;
   if (fileSize + currentStorageSize > storageLimit) {
     throw new StorageLimitError('Organization storage limit exceeded', {
       errorCode: 'org_storage_limit_exceeded',
@@ -43,13 +48,15 @@ export const checkOrganizationStorageLimit = async (organization: IOrganizationD
  * @bike4mind/common): the org named by `organizationId` when set, else `user`. Pass the org the new
  * row will be STAMPED with (pickOwnerOrganizationId over the lakes it is written into), never the
  * user's selected org - that is a display preference and would gate personal files on the org's pool.
+ * `pendingBytes` is that pool's in-flight upload bytes, counted as used: currentStorageSize only moves
+ * once bytes land.
  */
 export const checkStorageLimitForOwner = async (
-  owner: { user: IUserDocument; organizationId?: string },
+  owner: { user: IUserDocument; organizationId?: string; pendingBytes?: number },
   bytes: number,
   getOrganization?: (id: string) => Promise<IOrganizationDocument | null>
 ) => {
-  if (!owner.organizationId) return checkStorageLimit(owner.user, bytes);
+  if (!owner.organizationId) return checkStorageLimit(owner.user, bytes, owner.pendingBytes);
   if (!getOrganization) {
     throw new Error('checkStorageLimitForOwner: an org-owned file needs getOrganization to check the org quota');
   }
@@ -65,5 +72,5 @@ export const checkStorageLimitForOwner = async (
       owner: 'org',
     });
   }
-  await checkOrganizationStorageLimit(organization, bytes);
+  await checkOrganizationStorageLimit(organization, bytes, owner.pendingBytes);
 };

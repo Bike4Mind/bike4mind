@@ -129,7 +129,7 @@ export function FleetIntegrationCard() {
           />
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={busy}
             onClick={() => void run(() => window.b4m.fleet.refresh())}
@@ -154,7 +154,7 @@ export function FleetIntegrationCard() {
             </Typography>
             <Button
               size="sm"
-              variant="soft"
+              variant="outlined"
               color="neutral"
               disabled={busy || state.pending === 0 || state.status !== 'active'}
               onClick={() => void run(() => window.b4m.fleet.sendNow())}

@@ -25,6 +25,7 @@
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { chatCompletion } from './chatCompletion';
 import { secrets } from './secrets';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { subscriberFanout } from './subscriberFanout';
 import { cluster } from './vpc';
 import {
@@ -34,7 +35,12 @@ import {
 } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
-const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
+export const isServiceHealthMonitoredStage = _isMonitoredStage(
+  $app.stage,
+  MONITORED_STAGES,
+  process.env.ENABLE_MONITORING
+);
+const isMonitoredStage = isServiceHealthMonitoredStage;
 
 /**
  * Shared SNS topic for every long-running-service health signal. Subscribe once to
@@ -57,6 +63,9 @@ export const serviceHealthAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('
  * ignore the one that matters. Both entries below satisfy it: subscriberFanout takes SST's
  * default min=max=1, and chatCompletion is min 2 in production and min 1 elsewhere. A service
  * that can reach zero needs a different signal, not this one.
+ *
+ * Preview stages scale both services to zero on a schedule (infra/previewSleep.ts). That module
+ * stands down on any stage this file monitors, so keep both gates on isServiceHealthMonitoredStage.
  */
 const MONITORED_SERVICES: (EcsServiceHealthAlarmDescriptor & { service: sst.aws.Service })[] = [
   {
@@ -100,11 +109,17 @@ if (isMonitoredStage) {
     ),
   });
 
+  const mentionArgs = alarmSlackMentionFunctionArgs();
   serviceHealthAlarmTopic!.subscribe(
     {
       handler: 'apps/workers/src/events/serviceHealthAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      link: [
+        secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
+        secrets.SLACK_ALARMS_WEBHOOK_URL,
+        secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+      ],
+      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT, ...mentionArgs.environment },
+      permissions: mentionArgs.permissions,
     },
     {
       transform: {

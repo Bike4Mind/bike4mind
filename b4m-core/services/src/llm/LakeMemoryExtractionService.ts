@@ -2,7 +2,8 @@ import { BadRequestError, InternalServerError } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, getQuestErrorCode } from '@bike4mind/common';
+import { meterCompletionBackend, type CompletionMeter } from '../billing/completionMeter';
 
 const SingleLakeFactSchema = z.object({
   /** The durable, standalone fact, stated plainly. */
@@ -102,8 +103,8 @@ ${LAKE_FACT_GUIDANCE}
  * Extract durable, citable facts from ONE lake reference document (#1440 producer). Mirrors
  * `MementoEvaluationService` structurally - resolve the model, stream a JSON-only completion, parse and
  * validate - but targets reference knowledge rather than personal mementos. Returns the facts, capped
- * and highest-importance-first, or null when the document yields none (or extraction fails - fail-soft,
- * a doc that will not extract simply contributes no beliefs).
+ * and highest-importance-first, an empty array when extraction succeeds without facts, or null on a
+ * failure. Callers can record paid, successful coverage without advancing past a failed extraction.
  */
 export class LakeMemoryExtractionService {
   private logger: Logger;
@@ -118,6 +119,7 @@ export class LakeMemoryExtractionService {
     docTitle,
     docText,
     endUserId,
+    meter,
   }: {
     apiKeyTable: ApiKeyTable;
     model?: ChatModels;
@@ -125,17 +127,20 @@ export class LakeMemoryExtractionService {
     docText: string;
     /** Lake owner, for provider abuse attribution. */
     endUserId?: string;
+    /** Bills the call to the lake owner; its insufficient_credits refusal is rethrown, not swallowed. */
+    meter?: CompletionMeter;
   }): Promise<LakeFact[] | null> {
-    if (!docText.trim()) return null;
+    if (!docText.trim()) return [];
 
     let responseContent = '';
     try {
       const modelInfo = (await getAvailableModels(apiKeyTable)).find(m => m.id === model);
       if (!modelInfo) throw new BadRequestError(`Invalid model: "${model}" is not available`);
 
-      const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId });
-      if (!llm) throw new InternalServerError(`Failed to initialize LLM for model: "${model}"`);
+      const backend = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId });
+      if (!backend) throw new InternalServerError(`Failed to initialize LLM for model: "${model}"`);
 
+      const llm = meter ? meterCompletionBackend(backend, meter, modelInfo) : backend;
       await llm.complete(
         model,
         [{ role: 'user', content: buildLakeFactExtractionPrompt(docTitle, docText) }],
@@ -147,11 +152,12 @@ export class LakeMemoryExtractionService {
       );
 
       const validJsonStringOnly = responseContent.match(/\{[\s\S]*\}/)?.[0];
-      const parsed = LakeFactResponseSchema.parse(JSON.parse(validJsonStringOnly || '{}'));
+      if (!validJsonStringOnly) throw new BadRequestError('Lake extraction did not return a JSON object');
+      const parsed = LakeFactResponseSchema.parse(JSON.parse(validJsonStringOnly));
 
       if (!parsed.facts || parsed.facts.length === 0) {
         this.logger.info('Lake extraction found no durable facts in document, skipping', { docTitle });
-        return null;
+        return [];
       }
 
       // Cap to the most important, so a huge document cannot flood one lake's profile.
@@ -159,6 +165,7 @@ export class LakeMemoryExtractionService {
       this.logger.info('Extracted lake facts from document', { docTitle, count: facts.length });
       return facts;
     } catch (error) {
+      if (getQuestErrorCode(error) === 'insufficient_credits') throw error;
       this.logger.updateMetadata({ responseContent });
       this.logger.warn('Failed to extract lake facts from document:', error);
       return null;

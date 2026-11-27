@@ -189,10 +189,9 @@ export const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 /**
  * Verbatim-history token budget shared by every caller that sizes one: how much of the model's
  * safe input window recent conversation turns may claim before older ones fall out to
- * contextSummary. Pulled into one place because ChatCompletionProcess.ts and
- * ChatCompletionFeatures.ts (QuestMaster) both need it and must not drift apart - the first
- * version of the QuestMaster call site hand-copied the formula and got the window wrong for
- * every model below the unknown-model floor.
+ * contextSummary. Pulled into one place so callers cannot drift apart - an earlier second call
+ * site hand-copied the formula and got the window wrong for every model below the unknown-model
+ * floor.
  *
  * Always returns at least 1, even on a window so small or a message so long that the raw
  * subtraction goes to zero or negative: `Math.max(0, budget) && budget > 0` downstream treats a

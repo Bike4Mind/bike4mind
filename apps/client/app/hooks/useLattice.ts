@@ -11,7 +11,6 @@
 
 import { create } from 'zustand';
 import { persist, subscribeWithSelector } from 'zustand/middleware';
-import { v4 as uuidv4 } from 'uuid';
 
 import type {
   ILatticeModel,
@@ -25,6 +24,7 @@ import type {
   PrimitiveValue,
   LatticeOperationType,
 } from '@bike4mind/common';
+import { randomUuid } from '@bike4mind/common';
 
 // TYPES
 
@@ -114,7 +114,7 @@ type LatticeStore = LatticeState & LatticeActions;
 // HELPERS
 
 const createEmptyModel = (name: string, modelType: ILatticeModel['modelType'] = 'custom'): ILatticeModel => ({
-  id: uuidv4(),
+  id: randomUuid(),
   name,
   modelType,
   userId: '', // Will be set on server
@@ -142,7 +142,7 @@ const createOperation = (
   inverse: Record<string, unknown>,
   description: string
 ): ILatticeOperation => ({
-  id: uuidv4(),
+  id: randomUuid(),
   type,
   timestamp: new Date(),
   data,
@@ -264,7 +264,7 @@ export const useLattice = create<LatticeStore>()(
 
           const entity: ILatticeEntity = {
             ...entityData,
-            id: uuidv4(),
+            id: randomUuid(),
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -427,7 +427,7 @@ export const useLattice = create<LatticeStore>()(
 
           const rule: ILatticeRule = {
             ...ruleData,
-            id: uuidv4(),
+            id: randomUuid(),
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -535,7 +535,7 @@ export const useLattice = create<LatticeStore>()(
 
           const view: ILatticeView = {
             ...viewData,
-            id: uuidv4(),
+            id: randomUuid(),
             createdAt: new Date(),
             updatedAt: new Date(),
           };
@@ -636,7 +636,7 @@ export const useLattice = create<LatticeStore>()(
           if (!model) return '';
 
           const scenario: ILatticeScenario = {
-            id: uuidv4(),
+            id: randomUuid(),
             name,
             description,
             overrides: [],

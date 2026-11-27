@@ -1,4 +1,7 @@
 import {
+  ACCOUNT_SEGMENTS,
+  type AccountSegment,
+  type AssignableOrgRole,
   getMemberCreditPeriodStart,
   IOrganizationDocument,
   IOrganizationRepository,
@@ -7,6 +10,8 @@ import {
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
   OrgMemberPopulation,
   orgAclRowConfersMembership,
+  DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+  ConcurrencyConflictError,
 } from '@bike4mind/common';
 import mongoose, { type ClientSession, HydratedDocument, Model, Schema } from 'mongoose';
 import { softDeletePlugin } from '../../../utils/mongo';
@@ -14,6 +19,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../../content/SharableDocumentModel';
 import User from '../../auth/UserModel';
+import { Logger } from '@bike4mind/observability';
 
 export interface IOrganizationObject extends HydratedDocument<IOrganizationDocument> {}
 
@@ -31,6 +37,30 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
 // shared with the engine's derived member counts (assembleLakeAccessView's org holderCount), which
 // must count exactly the members this gate admits.
 const MEMBER_PERMISSIONS = ORG_MEMBERSHIP_ACL_PERMISSIONS;
+
+type StorageSnapshot = Pick<IOrganizationDocument, 'storageLimit' | 'storageLimitOverride' | 'planStorageLimit'> & {
+  __v?: number;
+};
+const STORAGE_SNAPSHOT_FIELDS = ['storageLimitOverride', 'planStorageLimit', 'storageLimit', '__v'] as const;
+const STORAGE_SNAPSHOT_PROJECTION = { storageLimitOverride: 1, planStorageLimit: 1, storageLimit: 1, __v: 1 };
+const STORAGE_LIMIT_UPDATE_ATTEMPTS = 3;
+
+function storageSnapshotFilter(snapshot: StorageSnapshot): mongoose.FilterQuery<IOrganizationDocument> {
+  return {
+    $and: STORAGE_SNAPSHOT_FIELDS.map(field =>
+      Object.hasOwn(snapshot, field)
+        ? { [field]: { $eq: snapshot[field], $exists: true } }
+        : { [field]: { $exists: false } }
+    ),
+  };
+}
+
+function captureLegacyStorageOverride(snapshot: StorageSnapshot): number | null {
+  if (Object.hasOwn(snapshot, 'storageLimitOverride')) return snapshot.storageLimitOverride ?? null;
+  // Even an explicitly null plan retires the legacy effective-limit fallback.
+  if (Object.hasOwn(snapshot, 'planStorageLimit')) return null;
+  return snapshot.storageLimit ?? null;
+}
 
 /**
  * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.
@@ -86,9 +116,13 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     },
     // Group-type keys this org may have (platform-admin writes only). Default empty = fail-closed.
     allowedGroupTypes: { type: [String], default: [] },
+    // See IOrganization.accountSegment. No default: absent reads as customer.
+    accountSegment: { type: String, required: false, enum: [...ACCOUNT_SEGMENTS] },
     // Org managers appointed by the billing owner / platform admin (not a Permission verb). Each also
-    // holds a users[] row, which the authority checks require (isOrgOwnerOrCurrentAdmin).
+    // holds a users[] row, which the authority checks require (hasOrgPermission, orgRoles.ts).
     adminUserIds: { type: [String], default: [] },
+    // Billing managers (orgRoles.ts). Same users[]-row requirement; adminUserIds wins on overlap.
+    billingManagerUserIds: { type: [String], default: [] },
     // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
     // every membership check reads it. `userDetails[]` below is a per-member credit side-table
     // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
@@ -146,8 +180,11 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       required: false,
       default: null,
     },
-    // MB; no schema default so an unset limit keeps tracking DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
+    // MB. Stored effective limit (override, else plan, else default); written only by setPlanStorageLimit
+    // and setStorageLimitOverride. No schema default so an unset limit tracks DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB.
     storageLimit: { type: Number, min: 0 },
+    storageLimitOverride: { type: Number, min: 0 },
+    planStorageLimit: { type: Number, min: 0 },
     // Bytes owned by the org; written only through incrementCurrentStorage and the reconciliation's
     // setCurrentStorageIfUnchanged.
     currentStorageSize: { type: Number, min: 0 },
@@ -165,6 +202,53 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     maxCreditsPerMember: { type: Number, required: false },
+    serviceAccountUserId: { type: String, required: false },
+    redactPushContent: { type: Boolean, default: false },
+    // Preserve raw shapes: [String] casting could repair a corrupt restriction before fail-closed validation.
+    // Writes use OrgModelPolicySchema; every reader must use readOrgModelPolicy.
+    modelPolicy: { type: Schema.Types.Mixed, required: false, default: undefined },
+    budgetAlerts: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean, default: false },
+          monthlyBudgetCredits: { type: Number, default: null },
+          percentThresholds: { type: [Number], default: [] },
+          lowBalanceCredits: { type: Number, default: null },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    sharingPolicy: {
+      type: new Schema(
+        {
+          allowPublicLinks: { type: Boolean, required: true },
+          allowExternalSharing: { type: Boolean, required: true },
+          allowedDomains: { type: [String], default: [] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    mfaPolicy: {
+      type: new Schema(
+        { required: { type: Boolean, default: false }, graceEndsAt: { type: Date, default: null } },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    retentionPolicy: {
+      type: new Schema(
+        {
+          chats: { type: Number, min: 1, max: 36500, default: null },
+          files: { type: Number, min: 1, max: 36500, default: null },
+          media: { type: Number, min: 1, max: 36500, default: null },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+    retentionVersion: { type: Number, default: 0 },
   },
   {
     virtuals: true,
@@ -182,6 +266,14 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     },
   }
 );
+
+// Server-owned lifetime grant budget. Kept outside the public organization shape;
+// no API accepts writes to it. Missing values are initialized from existing grants.
+OrganizationSchema.path('signupGrantUnlockCount', { type: Number, min: 0, select: false });
+// Same, for organization invite bonuses: bounded by seats in apps/client/server/credits/orgInviteBonus.ts.
+OrganizationSchema.path('signupInviteBonusCount', { type: Number, min: 0, select: false });
+OrganizationSchema.path('retentionSweepRevision', { type: Number, select: false });
+OrganizationSchema.path('retentionLastSweptAt', { type: Date, select: false });
 
 OrganizationSchema.virtual('logo', {
   ref: 'AppFile',
@@ -202,10 +294,18 @@ OrganizationSchema.plugin(softDeletePlugin);
 // data-lake request - Mongo index-unions an `$or` only when EVERY branch is index-supported, so
 // without both the org-admin resolution would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
+OrganizationSchema.index({ name: 1 }, { collation: { locale: 'en', strength: 2 }, name: 'organization_name_ci' });
+OrganizationSchema.index({ stripeCustomerId: 1 }, { name: 'organization_stripeCustomerId' });
 // Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
 // membership question collscanned. The owner arm rides the existing { userId: 1 } index.
 OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
+// Keeps the account-erasure `$or` (purgeAccountContent) index-unioned now that it has a billing-manager arm.
+OrganizationSchema.index({ billingManagerUserIds: 1 });
+OrganizationSchema.index(
+  { personal: 1, retentionLastSweptAt: 1, _id: 1 },
+  { name: 'retention_opted_in_sweep', partialFilterExpression: { retentionVersion: { $gt: 0 } } }
+);
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??
@@ -226,6 +326,58 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
 
   async findByStripeCustomerId(stripeCustomerId: string): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOne({ stripeCustomerId });
+  }
+
+  async setPlanStorageLimit(organizationId: string, limitMb: number): Promise<boolean> {
+    if (!mongoose.isValidObjectId(organizationId)) return false;
+    for (let attempt = 0; attempt < STORAGE_LIMIT_UPDATE_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.organizationModel
+        .findById(organizationId, STORAGE_SNAPSHOT_PROJECTION)
+        .lean<StorageSnapshot | null>();
+      if (!snapshot) return false;
+      const override = captureLegacyStorageOverride(snapshot);
+      const updated = await this.organizationModel.findOneAndUpdate(
+        { _id: organizationId, ...storageSnapshotFilter(snapshot) },
+        {
+          $set: { storageLimitOverride: override, planStorageLimit: limitMb, storageLimit: override ?? limitMb },
+          $inc: { __v: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (updated) return true;
+    }
+    throw new ConcurrencyConflictError('Organization', { organizationId });
+  }
+
+  async setStorageLimitOverride(organizationId: string, limitMb: number | null): Promise<IOrganizationDocument | null> {
+    for (let attempt = 0; attempt < STORAGE_LIMIT_UPDATE_ATTEMPTS; attempt += 1) {
+      const snapshot = await this.organizationModel
+        .findById(organizationId, STORAGE_SNAPSHOT_PROJECTION)
+        .lean<StorageSnapshot | null>();
+      if (!snapshot) return null;
+      const updated = await this.organizationModel.findOneAndUpdate(
+        { _id: organizationId, ...storageSnapshotFilter(snapshot) },
+        {
+          $set: {
+            storageLimitOverride: limitMb,
+            storageLimit: limitMb ?? snapshot.planStorageLimit ?? DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+          },
+          $inc: { __v: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (updated) return updated.toJSON();
+    }
+    throw new ConcurrencyConflictError('Organization', { organizationId });
+  }
+
+  /** Seat counts keyed by Stripe customer id, in one query. Not on the interface: only the billing reconciliation needs it. */
+  async findSeatsByStripeCustomerIds(stripeCustomerIds: string[]): Promise<Map<string, number>> {
+    if (stripeCustomerIds.length === 0) return new Map();
+    const orgs = await this.organizationModel
+      .find({ stripeCustomerId: { $in: stripeCustomerIds } }, { stripeCustomerId: 1, seats: 1 })
+      .lean();
+    return new Map(orgs.map(org => [org.stripeCustomerId as string, org.seats as number]));
   }
 
   /**
@@ -252,7 +404,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     const counterFilter = expected === 0 ? { $in: [0, null] } : expected;
     const res = await this.organizationModel.updateOne(
       { _id: organizationId, currentStorageSize: counterFilter },
-      { $set: { currentStorageSize: next } }
+      { $set: { currentStorageSize: Math.max(0, next) } }
     );
     return res.matchedCount === 1;
   }
@@ -286,6 +438,24 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       { $inc: { currentCredits: amount } },
       { new: true }
     );
+  }
+
+  /** Same contract as UserRepository.decrementCreditsFloored, against the org pool. */
+  async decrementCreditsFloored(organizationId: string, credits: number): Promise<number> {
+    const available = { $max: [{ $ifNull: ['$currentCredits', 0] }, 0] };
+    const before = await this.organizationModel.findOneAndUpdate(
+      { _id: organizationId },
+      [
+        {
+          $set: {
+            currentCredits: { $subtract: [{ $ifNull: ['$currentCredits', 0] }, { $min: [credits, available] }] },
+          },
+        },
+      ],
+      { new: false, projection: { currentCredits: 1 } }
+    );
+    if (!before) return 0;
+    return Math.min(credits, Math.max(before.currentCredits ?? 0, 0));
   }
 
   /**
@@ -358,17 +528,23 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *
    * The `$expr` capacity guard (`$size users + 1 < seats`: owner + members must leave room for one
    * more, the same owner-inclusive accounting `addMember`/`validateSeatChange` use, #1423) is
-   * evaluated inside the atomic match, so the fit check can't race the write.
+   * evaluated inside the atomic match, so the fit check can't race the write. Organization invite
+   * accept (sharingService/accept.ts) also joins through here; a share-link accept passes
+   * `reservedSeats` so seats promised to outstanding named invites stay free.
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(
+    organizationId: string,
+    member: IUserShare,
+    reservedSeats = 0
+  ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1] }, '$seats'] },
+        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1, Math.max(0, reservedSeats)] }, '$seats'] },
       },
       [
         {
@@ -481,6 +657,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return docs.map(d => String(d._id));
   }
 
+  /** Whether some live organization counts both users as members, by the findMembershipOrgIds predicate. */
+  async sharesMembership(userId: string, otherUserId: string): Promise<boolean> {
+    const shared = await this.organizationModel.exists({
+      $and: [orgMembershipFilter(userId), orgMembershipFilter(otherUserId)],
+    });
+    return shared !== null;
+  }
+
   /**
    * Membership (owner + users[] ACL) widened with adminUserIds, so an org manager without a member
    * row still resolves the org plan. Plan resolution only: deliberately a
@@ -536,17 +720,16 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {
-    // Billing owner OR a manager (adminUserIds). Broader than findIdsAdministeredBy, which also
-    // requires the manager's users[] row - see the interface doc for why this is a separate method.
+    // Same set as findIdsAdministeredBy; kept as a separate name for its data-lake callers.
     const orgs = await this.organizationModel
-      .find({ $or: [{ userId }, { adminUserIds: userId }] })
+      .find({ $or: [{ userId }, { adminUserIds: userId, 'users.userId': userId }] })
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
   }
 
   /**
-   * Atomically drop a member from `users`, `userDetails` and `adminUserIds` in one pipeline update, so a concurrent add or credit `$inc` on
+   * Atomically drop a member from `users`, `userDetails` and both role lists in one pipeline update, so a concurrent add or credit `$inc` on
    * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
    * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
    * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
@@ -565,9 +748,41 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           users: without('users', '$$this.userId'),
           userDetails: without('userDetails', '$$this.id'),
           adminUserIds: without('adminUserIds', '$$this'),
+          billingManagerUserIds: without('billingManagerUserIds', '$$this'),
         },
       },
     ]);
+  }
+
+  /**
+   * Give one member one assignable role: drop them from both role lists, then add them to the list the
+   * role is stored in, in a single pipeline update, so the lists stay disjoint and two concurrent edits
+   * of different members both survive. Pipelines for the same reasons as `removeMember`: a stored `null`
+   * breaks `$addToSet`/`$pull`, and ids compare via `$toString` so a legacy ObjectId entry still matches.
+   * For Manager and Billing manager the filter re-checks that the member's row confers membership
+   * (MEMBER_PERMISSIONS, as `orgMembershipFilter`), so a row downgraded after the caller's read refuses
+   * the appointment. Returns false when nothing matched.
+   */
+  async setMemberRole(organizationId: string, userId: string, role: AssignableOrgRole): Promise<boolean> {
+    const listWithRole = (field: 'adminUserIds' | 'billingManagerUserIds', holds: boolean) => {
+      const without = {
+        $filter: { input: { $ifNull: [`$${field}`, []] }, cond: { $ne: [{ $toString: '$$this' }, userId] } },
+      };
+      return holds ? { $concatArrays: [without, [userId]] } : without;
+    };
+    const filter =
+      role === 'member'
+        ? { _id: organizationId }
+        : { _id: organizationId, users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } };
+    const result = await this.organizationModel.updateOne(filter, [
+      {
+        $set: {
+          adminUserIds: listWithRole('adminUserIds', role === 'manager'),
+          billingManagerUserIds: listWithRole('billingManagerUserIds', role === 'billingManager'),
+        },
+      },
+    ]);
+    return result.matchedCount > 0;
   }
 
   /**
@@ -603,6 +818,14 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     );
   }
 
+  /** Sets the account segment, or unsets the field for `null` (absent reads as customer). */
+  async setAccountSegment(organizationId: string, accountSegment: AccountSegment | null): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId },
+      accountSegment ? { $set: { accountSegment } } : { $unset: { accountSegment: 1 } }
+    );
+  }
+
   /**
    * Set one member's monthly credit budget override; false when they have no `userDetails` row or
    * are no longer a member. The membership arm (owner or a `users[]` row - the same tiers
@@ -617,6 +840,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         $or: [{ userId }, { 'users.userId': userId }],
       },
       { $set: { 'userDetails.$.maxCredits': maxCredits } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Stamps `updatedAt` on a live org and resolves false when it is soft-deleted or missing. Run inside
+   * a transaction, the write conflicts with a concurrent org delete (which writes `deletedAt`), so the
+   * two serialize: whichever commits second retries and sees the other's outcome.
+   */
+  async touchIfLive(organizationId: string): Promise<boolean> {
+    const result = await this.organizationModel.updateOne(
+      { _id: organizationId, deletedAt: null },
+      { $set: { updatedAt: new Date() } },
+      { timestamps: false }
     );
     return result.matchedCount > 0;
   }
@@ -677,9 +914,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     ]);
 
     if (result.matchedCount === 0) {
-      console.warn(
-        `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
-          'Credits were deducted from the org but usage was not tracked for this user.'
+      Logger.warn(
+        'updateUserDetails: No userDetails entry found; credits were deducted from the org but usage was not tracked for this user',
+        { userId, organizationId }
       );
     }
   }

@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { adminUpdateUser } from './adminUpdate';
+import { adminUpdateUser, adminUpdateUserSchema } from './adminUpdate';
+import { updateUserSchema } from './update';
+import { checkStorageLimit } from '@bike4mind/utils';
+import { CreditHolderType } from '@bike4mind/common';
 
+vi.mock('@bike4mind/db-core', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/db-core')>()),
+  withTransaction: <T>(fn: () => Promise<T>) => fn(),
+}));
 vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
 
 const ADMIN_ID = 'admin-1';
@@ -29,6 +36,8 @@ function makeAdapters(startingCredits: number) {
     return { id: TARGET_ID, currentCredits: target.currentCredits };
   });
   const update = vi.fn().mockResolvedValue(undefined);
+  // No purchase on the ledger unless a test says otherwise.
+  const findUnreversedPurchase = vi.fn().mockResolvedValue(null);
 
   const db: any = {
     users: {
@@ -41,22 +50,25 @@ function makeAdapters(startingCredits: number) {
       existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
       existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
       setModerationStatus: vi.fn().mockResolvedValue(undefined),
+      setRiskReviewState: vi.fn().mockResolvedValue(true),
       incrementCredits,
     },
     organizations: { findById: vi.fn(), update: vi.fn() },
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
     realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-    creditTransactions: { createTransaction },
+    creditTransactions: { createTransaction, findUnreversedPurchase },
   };
   return {
     adapters: { db },
     createTransaction,
+    findUnreversedPurchase,
     incrementCredits,
     update,
     target,
     deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
     endConnections: db.realtimeConnections.endConnections,
+    setRiskReviewState: db.users.setRiskReviewState,
   };
 }
 
@@ -82,6 +94,29 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     });
     // Atomic increment applies the delta, not an overwrite.
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 50, expect.anything());
+  });
+
+  it('sets an absolute 0 balance from a positive balance as an audited deduction', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Abusive signup' }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
+    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
+      note: 'Abusive signup',
+      previousBalance: 100,
+      resultingBalance: 0,
+    });
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -100);
+  });
+
+  it('sets an absolute 0 balance from a negative balance as a grant', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(-40);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 0, creditReason: 'Reset balance' }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 40, expect.anything());
   });
 
   it('routes a credit decrease through a generic_deduct transaction', async () => {
@@ -248,7 +283,42 @@ describe('adminUpdateUser — audited credit adjustments', () => {
       previousBalance: 100,
       resultingBalance: 0,
       note: 'Refund chargeback',
+      creditTransactionId: 'tx-1',
     });
+  });
+
+  it('reports the committed delta after a deduction is clamped against a changed live balance', async () => {
+    const { adapters, target, incrementCredits, createTransaction } = makeAdapters(500);
+    target.currentCredits = 40;
+
+    const result = await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, creditDelta: -100, creditReason: 'Correct balance' },
+      adapters
+    );
+
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -40);
+    expect(target.currentCredits).toBe(0);
+    expect(createTransaction.mock.calls[0][1].credits).toBe(-40);
+    expect(result.creditAdjustment?.credits).toBe(-40);
+  });
+
+  it('links a grant to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-grant' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-grant');
+  });
+
+  it('links a deduction to the ledger row it wrote', async () => {
+    const { adapters, createTransaction } = makeAdapters(100);
+    createTransaction.mockResolvedValueOnce({ id: 'tx-deduct' });
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -30 }, adapters);
+
+    expect(result.creditAdjustment?.creditTransactionId).toBe('tx-deduct');
   });
 
   it('returns no credit adjustment when the balance does not change', async () => {
@@ -263,7 +333,7 @@ describe('adminUpdateUser — audited credit adjustments', () => {
 describe('adminUpdateUser - signed creditDelta path', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('routes a positive creditDelta through a generic_add and stamps lastCreditsPurchasedAt', async () => {
+  it('routes a positive creditDelta through a generic_add without stamping lastCreditsPurchasedAt', async () => {
     const { adapters, createTransaction, incrementCredits, update } = makeAdapters(100);
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 50, creditReason: 'Bonus' }, adapters);
@@ -273,8 +343,8 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(data.credits).toBe(50);
     expect(data.metadata).toMatchObject({ actorId: ADMIN_ID, previousBalance: 100, resultingBalance: 150 });
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 50, expect.anything());
-    // A grant stamps the purchase timestamp even though the UI sends only creditDelta.
-    expect(update.mock.calls[0][0].lastCreditsPurchasedAt).toBeInstanceOf(Date);
+    // The stamp confers paid standing; an admin credit grant must not.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 
   it('routes a negative creditDelta through a generic_deduct', async () => {
@@ -286,19 +356,37 @@ describe('adminUpdateUser - signed creditDelta path', () => {
     expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -30);
   });
 
-  it('does not invert a deduction when the balance is already negative', async () => {
-    const { adapters, createTransaction, incrementCredits } = makeAdapters(-100);
+  it('rejects a deduction from a non-positive balance without writing anything', async () => {
+    const { adapters, createTransaction, incrementCredits, update, target } = makeAdapters(-100);
 
-    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters);
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -50 }, adapters)).rejects.toThrow(
+      'Balance is already at or below zero; nothing to deduct'
+    );
 
-    // The clamp must not floor at -previousBalance (+100): that would turn a 50-credit
-    // deduction into a +100 grant. The deduction applies verbatim on a negative balance.
-    expect(createTransaction.mock.calls[0][0]).toBe('generic_deduct');
-    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, -50);
-    expect(createTransaction.mock.calls[0][1].metadata).toMatchObject({
-      previousBalance: -100,
-      resultingBalance: -150,
-    });
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(target.currentCredits).toBe(-100);
+  });
+
+  it('applies creditDelta and ignores currentCredits when both are passed', async () => {
+    const { adapters, createTransaction, incrementCredits } = makeAdapters(100);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 20, currentCredits: 500 }, adapters);
+
+    expect(createTransaction.mock.calls[0][0]).toBe('generic_add');
+    expect(incrementCredits).toHaveBeenCalledWith(TARGET_ID, 20, expect.anything());
+  });
+
+  it('rejects negative absolute and oversized credit values', () => {
+    const base = { id: TARGET_ID };
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: -5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 1e308 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, creditDelta: -1e308 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 12.5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, creditDelta: 0.5 }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: Infinity }).success).toBe(false);
+    expect(adminUpdateUserSchema.safeParse({ ...base, currentCredits: 0, creditDelta: -50 }).success).toBe(true);
   });
 });
 
@@ -326,6 +414,27 @@ describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
     expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 
+  it('strips throttleTier and throttleReason from the doc write', async () => {
+    const { adapters, update } = makeAdapters(100);
+
+    await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, tags: ['vip'], throttleTier: 'shadow', throttleReason: 'bulk signups' },
+      adapters
+    );
+
+    const written = update.mock.calls[0][0];
+    expect(written).toHaveProperty('tags');
+    expect(written).not.toHaveProperty('throttleTier');
+    expect(written).not.toHaveProperty('throttleReason');
+  });
+
+  it('leaves a blank throttleReason for the route to reject as a 400', () => {
+    expect(
+      adminUpdateUserSchema.safeParse({ id: TARGET_ID, throttleTier: 'shadow', throttleReason: '   ' }).success
+    ).toBe(true);
+  });
+
   it('omits lastCreditsPurchasedAt from the write for an edit that touches no credits', async () => {
     const { adapters, update, target } = makeAdapters(12000);
     target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
@@ -337,15 +446,48 @@ describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
     expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 
-  it('stamps lastCreditsPurchasedAt when an admin grant increases the balance', async () => {
+  it('does not stamp lastCreditsPurchasedAt when an admin grant increases the balance', async () => {
     const { adapters, update, target } = makeAdapters(12000);
-    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+    target.lastCreditsPurchasedAt = null;
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 14500 }, adapters);
 
-    const stamped = update.mock.calls[0][0].lastCreditsPurchasedAt;
-    expect(stamped).toBeInstanceOf(Date);
-    expect(stamped.getTime()).toBeGreaterThan(PRIOR_PURCHASE.getTime());
+    // An admin credit grant confers no paid standing; only a purchase (addCredits type 'purchase') does.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('re-stamps lastCreditsPurchasedAt when an admin grant repairs an account with a purchase row', async () => {
+    const { adapters, update, target, findUnreversedPurchase } = makeAdapters(100);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+    findUnreversedPurchase.mockResolvedValueOnce({ id: 'purchase-row', type: 'purchase' });
+    const before = Date.now();
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'repair' }, adapters);
+
+    expect(findUnreversedPurchase).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User);
+    // Newer than the row, so creditPurchaseReconciliation stops flagging the repaired purchase.
+    const stamp = update.mock.calls[0][0].lastCreditsPurchasedAt as Date;
+    expect(stamp.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it('does not re-stamp when every purchase on the ledger was refunded or lost a dispute', async () => {
+    const { adapters, update, target, findUnreversedPurchase } = makeAdapters(100);
+    target.lastCreditsPurchasedAt = null;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'goodwill' }, adapters);
+
+    expect(findUnreversedPurchase).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User);
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('does not read the ledger for a deduction, so a clawback never stamps a buyer', async () => {
+    const { adapters, update, findUnreversedPurchase } = makeAdapters(12000);
+    findUnreversedPurchase.mockResolvedValue({ id: 'purchase-row', type: 'purchase' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -2500 }, adapters);
+
+    expect(findUnreversedPurchase).not.toHaveBeenCalled();
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 
   it('drops a caller-supplied lastCreditsPurchasedAt on a non-grant save', async () => {
@@ -415,6 +557,15 @@ describe('adminUpdateUser - username changes', () => {
 
     expect(update.mock.calls[0][0].username).toBe('New Name');
   });
+
+  it('lets an admin give an account the reserved test-persona prefix', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.username = 'oldname';
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, username: 'persona-seed' }, adapters);
+
+    expect(update.mock.calls[0][0].username).toBe('persona-seed');
+  });
 });
 
 describe('adminUpdateUser - email changes', () => {
@@ -458,6 +609,24 @@ describe('adminUpdateUser - email changes', () => {
 
 describe('adminUpdateUser - API key deactivation on entering a blocked state', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('clears the suspension category when reinstating an account', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: false }, adapters);
+
+    expect(update.mock.calls[0][0]).toHaveProperty('suspensionReasonCategory', null);
+  });
+
+  it('omits the suspension category when the patch does not change the ban state', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { isBanned: true, suspensionReasonCategory: 'payment_fraud' });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['reviewed'] }, adapters);
+
+    expect(update.mock.calls[0][0]).not.toHaveProperty('suspensionReasonCategory');
+  });
 
   it.each([
     ['ban', {}, { isBanned: true }],
@@ -508,6 +677,49 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
       'write failed'
     );
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser - signup risk review on ban', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const scored = (reviewState: string) => ({
+    riskScore: { score: 60, signals: [], computedAt: new Date(), reviewState },
+  });
+
+  it.each(['pending', 'none', 'approved'])('moves a %s review to banned and reports it', async reviewState => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, scored(reviewState));
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+
+    expect(setRiskReviewState).toHaveBeenCalledExactlyOnceWith(TARGET_ID, reviewState, 'banned');
+    expect(result.bannedRiskReviewFrom).toBe(reviewState);
+  });
+
+  it('reports nothing when the review moved before the ban reached it', async () => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, scored('pending'));
+    setRiskReviewState.mockResolvedValueOnce(false);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+
+    expect(result.bannedRiskReviewFrom).toBeNull();
+  });
+
+  it.each([
+    ['an unscored account', {}, { isBanned: true }],
+    ['a review already banned', scored('banned'), { isBanned: true }],
+    ['re-banning a banned user', { isBanned: true, ...scored('pending') }, { isBanned: true }],
+    ['unbanning, which leaves the review banned', { isBanned: true, ...scored('banned') }, { isBanned: false }],
+    ['an unrelated update', scored('pending'), { name: 'New Name' }],
+  ])('leaves the review alone for %s', async (_label, seed, patch) => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(setRiskReviewState).not.toHaveBeenCalled();
+    expect(result.bannedRiskReviewFrom).toBeNull();
   });
 });
 
@@ -572,5 +784,121 @@ describe('adminUpdateUser - org move membership row', () => {
 
     expect(adapters.db.organizations.update).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser storage overrides', () => {
+  it('writes an override and effective limit together, preserving usage', async () => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { storageLimit: 5000, planStorageLimit: 5000, currentStorageSize: 8_000_000_000 });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimitOverride: 250.5 }, adapters);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: TARGET_ID,
+        storageLimitOverride: 250.5,
+        storageLimit: 250.5,
+      })
+    );
+    expect(update.mock.calls[0][0]).not.toHaveProperty('currentStorageSize');
+    expect(update.mock.calls[0][0]).not.toHaveProperty('planStorageLimit');
+    const persisted = { ...target, ...update.mock.calls[0][0] };
+    await expect(checkStorageLimit(persisted, 1)).rejects.toThrow('File size exceeds storage limit');
+    expect(persisted.currentStorageSize).toBe(8_000_000_000);
+  });
+
+  it.each([
+    [5000, 5000],
+    [null, 1000],
+  ])('clears to plan %s or default %s', async (plan, expected) => {
+    const { adapters, target, update } = makeAdapters(100);
+    Object.assign(target, { storageLimit: 2500, storageLimitOverride: 2500, planStorageLimit: plan });
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimitOverride: null }, adapters);
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ storageLimitOverride: null, storageLimit: expected })
+    );
+  });
+
+  it('maps the legacy admin input to an explicit override', async () => {
+    const { adapters, update } = makeAdapters(100);
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, storageLimit: 0 }, adapters);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ storageLimitOverride: 0, storageLimit: 0 }));
+  });
+
+  it('does not rewrite quota on unrelated edits', async () => {
+    const { adapters, update } = makeAdapters(100);
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, name: 'Updated' }, adapters);
+    expect(update.mock.calls[0][0]).not.toHaveProperty('storageLimitOverride');
+    expect(update.mock.calls[0][0]).not.toHaveProperty('storageLimit');
+  });
+
+  it.each([-1, Infinity, NaN, 1_000_000_001])('rejects invalid overrides: %s', value => {
+    expect(adminUpdateUserSchema.safeParse({ id: TARGET_ID, storageLimitOverride: value }).success).toBe(false);
+  });
+});
+
+describe('adminUpdateUser - users:moderate delegate', () => {
+  const MODERATOR_ID = 'moderator-1';
+  const withActor = (actor: Record<string, unknown>) => {
+    const made = makeAdapters(100);
+    const findById = made.adapters.db.users.findById;
+    made.adapters.db.users.findById = vi.fn(async (id: string) =>
+      id === MODERATOR_ID ? { id: MODERATOR_ID, ...actor } : findById(id)
+    );
+    return made;
+  };
+
+  it('lets a users:moderate delegate suspend', async () => {
+    const { adapters, update } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+    await adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_ID, isBanned: true }));
+  });
+
+  it.each([{ isAdmin: true }, { adminPermissions: ['support:read'] }])(
+    'refuses an admin-access target at the service boundary: %j',
+    async targetAccess => {
+      const { adapters, target, update } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+      Object.assign(target, targetAccess);
+      await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+        'Only full administrators can suspend or restrict users with admin access'
+      );
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('counts a role-held users:moderate on the re-read actor through resolveAdminRoles', async () => {
+    const { adapters, update } = withActor({ isAdmin: false, adminPermissions: [], adminRoleIds: ['a'.repeat(24)] });
+    const resolveAdminRoles = vi.fn(async (user: object) => ({ ...user, roleAdminPermissions: ['users:moderate'] }));
+
+    await adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, { ...adapters, resolveAdminRoles });
+
+    expect(resolveAdminRoles).toHaveBeenCalledWith(expect.objectContaining({ id: MODERATOR_ID }));
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: TARGET_ID, isBanned: true }));
+  });
+
+  it('refuses a delegate any field outside moderation', async () => {
+    const { adapters, update, incrementCredits } = withActor({ isAdmin: false, adminPermissions: ['users:moderate'] });
+    await expect(
+      adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true, currentCredits: 0 }, adapters)
+    ).rejects.toThrow('Unauthorized');
+    expect(update).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses a delegate without users:moderate', async () => {
+    const { adapters } = withActor({ isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(adminUpdateUser(MODERATOR_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+      'Unauthorized'
+    );
+  });
+});
+
+describe('mfaEnforcement is not writable through user updates', () => {
+  // Only POST /api/test/create-user may set it (IUser.mfaEnforcement); a self or admin update must drop it.
+  it.each([
+    ['the self-service schema', updateUserSchema],
+    ['the admin schema', adminUpdateUserSchema],
+  ])('%s strips it', (_label, schema) => {
+    expect(Object.keys(schema.shape)).not.toContain('mfaEnforcement');
+    expect(schema.parse({ id: TARGET_ID, mfaEnforcement: 'force' })).not.toHaveProperty('mfaEnforcement');
   });
 });

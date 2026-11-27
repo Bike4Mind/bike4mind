@@ -12,8 +12,12 @@ export type GitHubLakeCallbackSearch = {
 export type GitHubLakeCallbackStep =
   | { kind: 'cancelled' }
   | { kind: 'failed'; message: string }
-  /** The authorize return: exchange `code` for the lake id, then open its repository picker. */
-  | { kind: 'authorize'; dataLakeId: string; state: string; code: string }
+  /**
+   * The authorize return: exchange `code` for the lake id, then open its repository picker. The
+   * server reads the lake from the signed `state`, so `dataLakeId` (from the handoff) is only for
+   * reporting a failure and is absent when the handoff was lost.
+   */
+  | { kind: 'authorize'; dataLakeId?: string; state: string; code: string }
   /**
    * Reopen the picker without a server round-trip: the server already holds this flow's GitHub
    * token from the first authorize. Reached from the install fallback's return (no `code`) and from
@@ -43,12 +47,13 @@ export function resolveGitHubLakeCallbackStep(
   if (!handoff && !search.state && !search.error && (search.installation_id || search.setup_action)) {
     return { kind: 'repaired' };
   }
-  if (!handoff) return { kind: 'failed', message: RESTART_MESSAGE };
   if (search.error) return { kind: 'failed', message: RESTART_MESSAGE };
 
   if (search.code && search.state) {
-    return { kind: 'authorize', dataLakeId: handoff.dataLakeId, state: search.state, code: search.code };
+    return { kind: 'authorize', dataLakeId: handoff?.dataLakeId, state: search.state, code: search.code };
   }
+
+  if (!handoff) return { kind: 'failed', message: RESTART_MESSAGE };
 
   // A GitHub org member who is not an owner can only request the install, so nothing is installed yet.
   if (search.setup_action === 'request') {

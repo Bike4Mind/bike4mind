@@ -21,6 +21,11 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector: (s: typeof userState) => unknown) => selector(userState),
 }));
 
+const configState = { toolAvailability: undefined as Record<string, boolean> | undefined };
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: { toolAvailability: configState.toolAvailability } }),
+}));
+
 const { toastInfo, toastError } = vi.hoisted(() => ({ toastInfo: vi.fn(), toastError: vi.fn() }));
 vi.mock('sonner', () => ({
   toast: { info: (m: string) => toastInfo(m), error: (m: string) => toastError(m) },
@@ -46,6 +51,7 @@ beforeEach(() => {
   llmState.n = undefined;
   llmState.toolMode = 'smart';
   llmState.tools = [];
+  configState.toolAvailability = undefined;
   userState.currentUser.preferences.hiddenSurfaces = [];
 });
 
@@ -82,6 +88,48 @@ describe('useLLMSettingsAssembly › assembleSettings', () => {
 });
 
 describe('useLLMSettingsAssembly › resolveTools', () => {
+  describe('Smart mode always offers the web tools', () => {
+    const resolve = (extra: Record<string, unknown> = {}) => {
+      llmState.toolMode = 'smart';
+      recommendToolsMock.mockReturnValue([]);
+      mergeToolsMock.mockImplementation((_r: unknown, t: B4MLLMTools[]) => Array.from(new Set(t)));
+      return render().current.resolveTools({ prompt: 'I heard Polygon rebranded', supportsTools: true, ...extra });
+    };
+
+    it('offers web_search and web_fetch when no keyword matched', () => {
+      expect(resolve().effectiveTools).toEqual(['web_search', 'web_fetch']);
+      expect(toastInfo).not.toHaveBeenCalled();
+    });
+
+    it('keeps the user pinned tools alongside, without duplicates', () => {
+      llmState.tools = ['web_search', 'dice_roll'] as B4MLLMTools[];
+      expect(resolve().effectiveTools).toEqual(['web_search', 'dice_roll', 'web_fetch']);
+    });
+
+    it('leaves out web_search when the deployment has no search provider', () => {
+      configState.toolAvailability = { web_search: false };
+      expect(resolve().effectiveTools).toEqual(['web_fetch']);
+    });
+
+    it('leaves out a tool the session denies', () => {
+      expect(resolve({ deniedTools: ['web_search'] }).effectiveTools).toEqual(['web_fetch']);
+    });
+
+    it('offers nothing extra under "Only tools I pick"', () => {
+      llmState.tools = ['dice_roll'] as B4MLLMTools[];
+      expect(resolve({ skipAutoOffers: true }).effectiveTools).toEqual(['dice_roll']);
+    });
+
+    it('offers nothing when the model cannot run tools', () => {
+      expect(resolve({ supportsTools: false }).effectiveTools).toEqual([]);
+    });
+
+    it('offers nothing in Fast mode', () => {
+      llmState.toolMode = 'fast';
+      expect(render().current.resolveTools({ prompt: 'x', supportsTools: true }).effectiveTools).toEqual([]);
+    });
+  });
+
   it('returns no tools (and never refuses) when the model cannot run tools', () => {
     llmState.tools = ['web_search'] as B4MLLMTools[];
     const result = render().current.resolveTools({ prompt: 'hi', supportsTools: false });
@@ -251,7 +299,7 @@ describe('useLLMSettingsAssembly - resolveTools with a hidden workspace', () => 
     const result = render().current.resolveTools({ prompt: 'optimize my shifts', supportsTools: true });
 
     expect(result.effectiveTools).not.toContain(OPTI_TOOL);
-    expect(mergeToolsMock).toHaveBeenCalledWith([], []);
+    expect(mergeToolsMock).toHaveBeenCalledWith([], ['web_search', 'web_fetch']);
     expect(toastInfo).not.toHaveBeenCalled();
   });
 

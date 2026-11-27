@@ -3,25 +3,9 @@ import {
   getPackageName,
   isExternalPackage,
   findUndeclaredBundleDeps,
-  collectGraphSpecifiers,
-  type ModuleGraph,
+  collectChunkImports,
+  type EmittedBundle,
 } from './verifyBundleExternals';
-
-/** Build a fake rolldown module graph from an id -> {static, dynamic} map. */
-function fakeGraph(
-  modules: Record<string, { importedIds?: string[]; dynamicallyImportedIds?: string[] }>
-): ModuleGraph {
-  return {
-    getModuleIds: () => Object.keys(modules),
-    getModuleInfo: id =>
-      modules[id]
-        ? {
-            importedIds: modules[id].importedIds ?? [],
-            dynamicallyImportedIds: modules[id].dynamicallyImportedIds ?? [],
-          }
-        : null,
-  };
-}
 
 describe('getPackageName', () => {
   it('returns unscoped package names, stripping subpaths', () => {
@@ -65,31 +49,67 @@ describe('isExternalPackage', () => {
   });
 });
 
-describe('collectGraphSpecifiers', () => {
-  it('collects both static and dynamic import ids across all modules', () => {
-    const graph = fakeGraph({
-      '/abs/entry.mjs': { importedIds: ['tldts', '/abs/internal.mjs'], dynamicallyImportedIds: ['jimp'] },
-      '/abs/internal.mjs': { importedIds: ['axios'] },
-    });
-    expect([...collectGraphSpecifiers(graph)].sort()).toEqual(['/abs/internal.mjs', 'axios', 'jimp', 'tldts']);
+describe('collectChunkImports', () => {
+  it('collects static and dynamic imports across chunks, skipping sibling chunks and assets', () => {
+    const bundle: EmittedBundle = {
+      'index.mjs': {
+        type: 'chunk',
+        code: 'import { x } from "./shared-abc.mjs";\nimport { parse } from "tldts";\nawait import("jimp");\n',
+        imports: ['shared-abc.mjs', 'tldts'],
+        dynamicImports: ['jimp'],
+      },
+      'shared-abc.mjs': { type: 'chunk', code: 'import axios from "axios";\n', imports: ['axios'] },
+      'curated-build.json': { type: 'asset' },
+    };
+    expect([...collectChunkImports(bundle)].sort()).toEqual(['axios', 'jimp', 'tldts']);
   });
 
-  it('skips modules whose info is null', () => {
-    const graph: ModuleGraph = {
-      getModuleIds: () => ['/abs/a.mjs', '/abs/missing.mjs'],
-      getModuleInfo: id => (id === '/abs/a.mjs' ? { importedIds: ['tldts'], dynamicallyImportedIds: [] } : null),
+  it('drops an import the chunk lists but its rendered code no longer contains', () => {
+    const bundle: EmittedBundle = {
+      'index.mjs': {
+        type: 'chunk',
+        code: 'import axios from "axios";\n',
+        imports: ['axios', '@google/genai'],
+      },
     };
-    expect([...collectGraphSpecifiers(graph)]).toEqual(['tldts']);
+    expect([...collectChunkImports(bundle)]).toEqual(['axios']);
+  });
+
+  it('counts a backtick-quoted dynamic import, so an undeclared one still fails the guard', () => {
+    const bundle: EmittedBundle = {
+      'index.mjs': {
+        type: 'chunk',
+        code: 'async function load(){return import(`zz-undeclared`)}',
+        dynamicImports: ['zz-undeclared'],
+      },
+    };
+    expect([...collectChunkImports(bundle)]).toEqual(['zz-undeclared']);
+    expect(findUndeclaredBundleDeps(collectChunkImports(bundle), new Set())).toEqual(['zz-undeclared']);
+  });
+
+  it('handles a minified-shape chunk mixing from"x" and import(`y`)', () => {
+    const bundle: EmittedBundle = {
+      'index.mjs': {
+        type: 'chunk',
+        code: 'import{a}from"x";export async function f(){return import(`y`)}',
+        imports: ['x'],
+        dynamicImports: ['y'],
+      },
+    };
+    expect([...collectChunkImports(bundle)].sort()).toEqual(['x', 'y']);
   });
 
   it('feeds findUndeclaredBundleDeps end-to-end (the plugin path)', () => {
-    const graph = fakeGraph({
-      '/abs/entry.mjs': {
-        importedIds: ['tldts', 'node:fs', '@bike4mind/utils', '/abs/x.mjs'],
-        dynamicallyImportedIds: ['jimp'],
+    const bundle: EmittedBundle = {
+      'index.mjs': {
+        type: 'chunk',
+        code: 'import "tldts";\nimport fs from "node:fs";\nimport { y } from "./x.mjs";\nimport("jimp");\n',
+        imports: ['tldts', 'node:fs', 'x.mjs'],
+        dynamicImports: ['jimp'],
       },
-    });
-    const missing = findUndeclaredBundleDeps(collectGraphSpecifiers(graph), new Set(['tldts']));
+      'x.mjs': { type: 'chunk', code: '' },
+    };
+    const missing = findUndeclaredBundleDeps(collectChunkImports(bundle), new Set(['tldts']));
     expect(missing).toEqual(['jimp']);
   });
 });

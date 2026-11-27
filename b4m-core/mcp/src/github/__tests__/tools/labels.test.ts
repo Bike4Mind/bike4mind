@@ -244,4 +244,24 @@ describe('Label Tools', () => {
       expect((parsed.labels as any)[0].name).toBe('bug');
     });
   });
+
+  it('logs the HTTP status when a tool call fails', async () => {
+    vi.mocked(octokit.issues.createLabel).mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      await registeredTools.get(TOOL_CREATE_LABEL)!.handler({
+        owner: 'owner',
+        repo: 'repo',
+        name: 'bug',
+        color: 'd73a4a',
+        _executeFromButton: true,
+      });
+      const lines = stderr.mock.calls.map(([c]) => JSON.parse(String(c)));
+      expect(lines).toContainEqual(
+        expect.objectContaining({ severity: 'error', toolName: TOOL_CREATE_LABEL, status: 404 })
+      );
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 });

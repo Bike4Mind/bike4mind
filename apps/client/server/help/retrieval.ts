@@ -7,7 +7,7 @@
  * exists. The split is still worth keeping for the reason below, not for a second caller.
  *
  * Retrieval stays in the Next.js app on purpose: the embeddings index (`app/generated/
- * help-embeddings.json`) and the bundled markdown are app assets read via `process.cwd()`. The
+ * help-embeddings.json` + `help-embeddings.bin`) and the bundled markdown are app assets read via `process.cwd()`. The
  * LLM completion workers (questProcessor/agentExecutor) run in separate Lambdas without those
  * files, so they reach this logic over HTTP rather than importing it.
  *
@@ -21,8 +21,15 @@
  */
 
 import { computeCosineSimilarity } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import {
+  buildEmbeddingRegistry,
+  bindEmbeddingModel,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/services/llm/embeddingProviders';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { decodeHelpEmbeddings } from '@bike4mind/scripts/help/embeddingsCodec';
 import type { HelpIndex, HelpIndexEntry, HelpEmbeddingsIndex, HelpEmbeddingChunk } from '@bike4mind/scripts/help/types';
 import {
   ADMIN_HELP_CONTENT_DIR,
@@ -101,6 +108,8 @@ export interface HelpSearchResult {
   relevantArticles: RelevantArticle[];
   /** Which strategy produced the result. */
   method: 'vector' | 'keyword' | 'none';
+  /** The query embedding this search paid for, if one ran (even when it then fell back to keywords). */
+  embedding?: { model: string; provider: string; inputTokens: number };
 }
 
 // ===========================
@@ -110,13 +119,17 @@ export interface HelpSearchResult {
 async function loadHelpEmbeddings(logger: HelpLogger): Promise<HelpEmbeddingsIndex | null> {
   if (embeddingsCache) return embeddingsCache;
   try {
-    const embeddingsPath = path.join(process.cwd(), 'app/generated/help-embeddings.json');
-    const content = await fs.promises.readFile(embeddingsPath, 'utf-8');
-    embeddingsCache = JSON.parse(content) as HelpEmbeddingsIndex;
+    const metadataPath = path.join(process.cwd(), 'app/generated/help-embeddings.json');
+    const vectorsPath = path.join(process.cwd(), 'app/generated/help-embeddings.bin');
+    const [metadataJson, vectors] = await Promise.all([
+      fs.promises.readFile(metadataPath, 'utf-8'),
+      fs.promises.readFile(vectorsPath),
+    ]);
+    embeddingsCache = decodeHelpEmbeddings(metadataJson, vectors);
     logger.info(`[HelpRetrieval] Loaded ${embeddingsCache.chunks.length} embedding chunks`);
     return embeddingsCache;
-  } catch {
-    logger.warn('[HelpRetrieval] help-embeddings.json not found, will use keyword fallback');
+  } catch (error) {
+    logger.warn('[HelpRetrieval] help embeddings unavailable, will use keyword fallback', error);
     return null;
   }
 }
@@ -421,6 +434,7 @@ export async function searchHelpContext(params: {
   const { question, currentHelpSlug, isAdmin, apiKeys, logger } = params;
 
   const embeddingsIndex = await loadHelpEmbeddings(logger);
+  let embedding: HelpSearchResult['embedding'];
 
   if (embeddingsIndex) {
     try {
@@ -431,17 +445,23 @@ export async function searchHelpContext(params: {
       if (!isSupportedEmbeddingModel(embeddingModel)) {
         logger.warn(`[HelpRetrieval] Embeddings model "${embeddingModel}" unsupported, using keyword search`);
       } else {
-        const requiredProvider = getProviderFromModel(embeddingModel);
+        const requiredProvider = embeddingBackendForModel(embeddingModel);
         // Gate on a MISSING credential, not on the config being non-empty. A keyless provider
         // (Bedrock, via the AWS credential chain) correctly populates nothing, and the old
         // emptiness check read that as "no credentials" and fell through to keyword search.
-        const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeys);
+        const { config: embeddingConfig, missing } = resolveEmbeddingCredentials(requiredProvider, apiKeys);
 
         if (!missing) {
-          const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-          const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
+          const embeddingRuntime = buildEmbeddingRegistry(embeddingConfig);
+          const embeddingService = bindEmbeddingModel(embeddingRuntime, embeddingModel);
 
-          const fullQueryEmbedding = await embeddingService.generateEmbedding(question);
+          const fullQueryEmbedding = await embedOne(embeddingService, question);
+          // The embedding client reports no usage; ~4 chars per token, as the other query-embed recorders estimate.
+          embedding = {
+            model: embeddingModel,
+            provider: requiredProvider,
+            inputTokens: Math.ceil(question.length / 4),
+          };
           const queryEmbedding = truncateAndNormalize(fullQueryEmbedding, embeddingsIndex.dimensions);
           const searchResult = vectorSearch(queryEmbedding, embeddingsIndex, currentHelpSlug, isAdmin);
 
@@ -466,7 +486,7 @@ export async function searchHelpContext(params: {
               .slice(0, MAX_RELEVANT_ARTICLES)
               .map(([slug, info]) => ({ slug, title: info.title }));
 
-            if (context) return { context, relevantArticles, method: 'vector' };
+            if (context) return { context, relevantArticles, method: 'vector', embedding };
           }
         } else {
           logger.warn(`[HelpRetrieval] No API key for ${requiredProvider}; using keyword search`);
@@ -483,5 +503,6 @@ export async function searchHelpContext(params: {
     context: fallback.context,
     relevantArticles: fallback.relevantArticles,
     method: fallback.context ? 'keyword' : 'none',
+    embedding,
   };
 }

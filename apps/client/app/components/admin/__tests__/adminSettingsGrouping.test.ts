@@ -7,24 +7,31 @@
  * only looks up inlineChildrenByParent[topLevel], not grandchildren. This test
  * catches that class of silent-drop for the whole settings map.
  */
-import { describe, it, expect } from 'vitest';
-import { settingsMap, API_SERVICE_GROUPS } from '@bike4mind/common';
+import { describe, it, expect, afterEach } from 'vitest';
+import {
+  settingsMap,
+  API_SERVICE_GROUPS,
+  allSettingDefinitions,
+  makeContributedBooleanSetting,
+  registerContributedSettings,
+  resetContributedSettings,
+  resolveSettingDefinition,
+} from '@bike4mind/common';
 
 type SettingKey = keyof typeof settingsMap;
 
-function simulateGrouping(settingKeys: SettingKey[]) {
+function simulateGrouping(settingKeys: string[]) {
   const settingKeysInGroup = new Set<string>(settingKeys);
-  const inlineChildrenByParent = new Map<string, SettingKey[]>();
-  const topLevelSettings: SettingKey[] = [];
+  const inlineChildrenByParent = new Map<string, string[]>();
+  const topLevelSettings: string[] = [];
 
   for (const key of settingKeys) {
-    const meta = settingsMap[key];
-    const dep = meta.dependsOn as string | undefined;
-    if (dep && settingKeysInGroup.has(dep) && meta.type === 'boolean') {
-      const parentMeta = settingsMap[dep as SettingKey];
-      const grandparentDep = parentMeta?.dependsOn as string | undefined;
-      const resolvedParent =
-        grandparentDep && settingKeysInGroup.has(grandparentDep) ? (grandparentDep as SettingKey) : (dep as SettingKey);
+    const meta = resolveSettingDefinition(key);
+    const dep = meta?.dependsOn;
+    if (dep && settingKeysInGroup.has(dep) && meta?.type === 'boolean') {
+      const parentMeta = resolveSettingDefinition(dep);
+      const grandparentDep = parentMeta?.dependsOn;
+      const resolvedParent = grandparentDep && settingKeysInGroup.has(grandparentDep) ? grandparentDep : dep;
       const children = inlineChildrenByParent.get(resolvedParent) ?? [];
       children.push(key);
       inlineChildrenByParent.set(resolvedParent, children);
@@ -50,7 +57,7 @@ describe('AdminSettingsTab grouping — render completeness', () => {
     // grouped under a non-top-level parent is NOT rendered - so counting all
     // inlineChildrenByParent values would give a false pass for a 4+ level chain the
     // single-hop re-parent doesn't reach. Compute reachability the way the DOM does.
-    const allRendered = new Set<SettingKey>([
+    const allRendered = new Set<string>([
       ...topLevelSettings,
       ...topLevelSettings.flatMap(parent => inlineChildrenByParent.get(parent) ?? []),
     ]);
@@ -78,5 +85,32 @@ describe('AdminSettingsTab grouping — render completeness', () => {
 
     const canvasserChildren = inlineChildrenByParent.get('EnableOptiHashi') ?? [];
     expect(canvasserChildren.includes('EnableComputeSubmission')).toBe(true);
+  });
+});
+
+describe('AdminSettingsTab grouping - contributed settings', () => {
+  afterEach(() => resetContributedSettings());
+
+  it('nests a contributed child under its contributed parent, by each definition group', () => {
+    const group = API_SERVICE_GROUPS.EXPERIMENTAL.id;
+    registerContributedSettings([
+      makeContributedBooleanSetting({ key: 'ExtensionParent', name: 'Parent', description: 'x', group }),
+      makeContributedBooleanSetting({
+        key: 'ExtensionChild',
+        name: 'Child',
+        description: 'x',
+        group,
+        dependsOn: 'ExtensionParent',
+      }),
+    ]);
+    const groupKeys = allSettingDefinitions()
+      .filter(s => s.group === group)
+      .map(s => s.key);
+    expect(groupKeys).toEqual(expect.arrayContaining(['ExtensionParent', 'ExtensionChild']));
+
+    const { topLevelSettings, inlineChildrenByParent } = simulateGrouping(groupKeys);
+    expect(topLevelSettings).toContain('ExtensionParent');
+    expect(topLevelSettings).not.toContain('ExtensionChild');
+    expect(inlineChildrenByParent.get('ExtensionParent')).toEqual(['ExtensionChild']);
   });
 });

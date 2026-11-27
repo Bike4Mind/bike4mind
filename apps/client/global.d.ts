@@ -1,10 +1,12 @@
-import { Ability } from '@server/auth/ability';
+import { Ability } from '@bike4mind/server-utils/auth/ability';
 import {
   ApiKeyBillingOwnerType,
   ApiKeyCompletionSource,
-  ApiKeyScope,
+  ApiKeyScopeValue,
   IUserApiKeyRateLimit,
   IUserDocument,
+  OAuthClientUnpaidAccountLimits,
+  PayerStanding,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
@@ -15,8 +17,14 @@ declare global {
 
     interface ApiKeyInfo {
       keyId: string;
-      scopes: ApiKeyScope[];
+      /** Owner of the key; recorded on scope refusals. */
+      userId?: string;
+      scopes: ApiKeyScopeValue[];
       rateLimit: IUserApiKeyRateLimit;
+      /** Owner trust before API key scopes can withhold the admin role. */
+      ownerUntrusted?: boolean;
+      /** The minting OAuth client's limits for unpaid owners; replaces the global untrusted limits. */
+      unpaidAccountLimits?: OAuthClientUnpaidAccountLimits;
       expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */
       productId?: string;
@@ -31,6 +39,12 @@ declare global {
        * the underlying user could otherwise manage that lake.
        */
       preauthorizedLakeIds?: string[];
+      /** When the key was minted; decides legacy status for grandfathered scope checks. */
+      createdAt?: Date;
+      /** OAuth client that minted this key, present only for a federated exchange key. */
+      oauthExchangeClientId?: string;
+      /** The exchange key owner's paid standing at mint; absent when the mint could not read it. */
+      payerStanding?: PayerStanding;
     }
 
     interface ApiKeyUsageInfo {
@@ -42,6 +56,8 @@ declare global {
       startTime: number;
       source: ApiKeyCompletionSource;
       ownerType: ApiKeyBillingOwnerType;
+      oauthClientId?: string;
+      payerStanding?: PayerStanding;
     }
 
     interface Request {

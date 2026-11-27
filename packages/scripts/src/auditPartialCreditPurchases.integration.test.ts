@@ -21,10 +21,16 @@ describe('classifyPurchase', () => {
   const evidence = (overrides: Partial<PurchaseEvidence>): PurchaseEvidence => ({
     createdAt: AFTER,
     backfilledAt: null,
+    reversedAt: null,
     hasLot: false,
     lastCreditsPurchasedAt: null,
     stampSince: STAMP_SINCE,
     ...overrides,
+  });
+
+  it('never marks a refunded or lost-dispute purchase ungranted, so the repair cannot grant against it', () => {
+    const result = classifyPurchase(evidence({ reversedAt: AFTER, lastCreditsPurchasedAt: null }));
+    expect(result).toEqual({ verdict: 'unverifiable', reason: 'purchase reversed by refund or lost dispute' });
   });
 
   it('trusts a pack lot as proof of a grant', () => {

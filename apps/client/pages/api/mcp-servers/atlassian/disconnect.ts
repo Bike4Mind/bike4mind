@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, jiraWebhookConfigRepository, jiraWebhookSubscriptionRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { McpServer } from '@bike4mind/database/ai';
-import { revokeAtlassianGrant } from '@server/integrations/jira/revokeAtlassianGrant';
+import { revokeAtlassianGrant } from '@bike4mind/server-utils/integrations/jira/revokeAtlassianGrant';
 
 const handler = baseApi().delete(async (req, res) => {
   try {
@@ -23,9 +23,11 @@ const handler = baseApi().delete(async (req, res) => {
           if (webhookConfig?.createdBy === req.user.id) {
             const deletedSubs = await jiraWebhookSubscriptionRepository.deleteByWebhookConfig(webhookConfig.id);
             await jiraWebhookConfigRepository.delete(webhookConfig.id);
-            console.log(
-              `[Atlassian Disconnect] ✅ Deleted webhook config and ${deletedSubs} subscription(s) for cloud ${resource.id}`
-            );
+            req.logger.info('Atlassian disconnect deleted webhook config', {
+              userId: req.user.id,
+              cloudId: resource.id,
+              deletedSubscriptions: deletedSubs,
+            });
           } else if (webhookConfig) {
             const ownSub = await jiraWebhookSubscriptionRepository.findByUserAndConfig(req.user.id, webhookConfig.id);
             if (ownSub) {
@@ -33,10 +35,11 @@ const handler = baseApi().delete(async (req, res) => {
             }
           }
         } catch (webhookError) {
-          console.error(
-            `[Atlassian Disconnect] ❌ Failed to clean up webhooks for cloud ${resource.id}:`,
-            webhookError
-          );
+          req.logger.error('Atlassian disconnect webhook cleanup failed', {
+            userId: req.user.id,
+            cloudId: resource.id,
+            error: webhookError,
+          });
         }
       }
     }
@@ -54,19 +57,18 @@ const handler = baseApi().delete(async (req, res) => {
         userId: req.user.id,
       });
 
-      if (deletedMcpServer) {
-        console.log('[Atlassian Disconnect] ✅ MCP server permanently deleted.');
-      } else {
-        console.log('[Atlassian Disconnect] ⚠️ No Atlassian MCP server found - nothing to delete');
-      }
+      req.logger.info('Atlassian disconnect MCP server cleanup', {
+        userId: req.user.id,
+        deleted: Boolean(deletedMcpServer),
+      });
     } catch (mcpError) {
       // Log the MCP error but don't fail the disconnect operation
-      console.error('[Atlassian Disconnect] ❌ Failed to delete Atlassian MCP server:', mcpError);
+      req.logger.error('Atlassian disconnect MCP server delete failed', { userId: req.user.id, error: mcpError });
     }
 
     res.status(200).json({ success: true });
   } catch (error) {
-    console.error('[Atlassian Disconnect] ❌ Fatal error during disconnect:', error);
+    req.logger.error('Atlassian disconnect failed', { userId: req.user.id, error });
     res.status(500).json({
       error: 'Failed to disconnect Atlassian',
       message: error instanceof Error ? error.message : 'Unknown error',

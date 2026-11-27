@@ -1,0 +1,78 @@
+name: iOS TestFlight
+
+# The iOS lane of the mobile release train (docs/mobile-release-train.md): archive, sign and upload a build to
+# TestFlight. A mobile-v* tag ships that version; a manual run ships the version and rc it is given. Either way
+# the plan job derives the build number and refuses a train the parity matrix blocks.
+on:
+  push:
+    tags: ['mobile-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Train version, YY.M.PATCH (e.g. 26.12.0)'
+        required: true
+        type: string
+      rc:
+        description: 'Release candidate number, 1-98; empty for the final build'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Manual runs ship from main or a hotfix branch only, so a stray branch cannot spend a build number.
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/mobile-')
+    uses: ./.github/workflows/_mobile-release-plan.yml
+    with:
+      platform: ios
+      version: ${{ inputs.version }}
+      rc: ${{ inputs.rc }}
+
+  testflight:
+    name: Archive and upload to TestFlight
+    needs: plan
+    runs-on: macos-26
+    timeout-minutes: 60
+    # Environment-scoped secrets: add required reviewers on the environment to gate every upload.
+    environment: mobile-release
+    defaults:
+      run:
+        working-directory: apps/ios
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Same toolchain pin as ios.yml: the newest Xcode 26.x installed on the image, never the image default.
+      - name: Select Xcode
+        working-directory: .
+        run: |
+          xcode_app=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$xcode_app" ]; then
+            echo "No Xcode 26.x found on this runner image" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode_app"
+          xcodebuild -version
+
+      - uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1.338.0
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: apps/ios
+
+      - name: Archive and upload
+        env:
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_CONTENT_BASE64: ${{ secrets.ASC_KEY_CONTENT_BASE64 }}
+          B4M_MARKETING_VERSION: ${{ needs.plan.outputs.version }}
+          B4M_BUILD_NUMBER: ${{ needs.plan.outputs.build_number }}
+        run: bundle exec fastlane beta

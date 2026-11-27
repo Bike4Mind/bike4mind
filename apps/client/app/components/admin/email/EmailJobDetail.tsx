@@ -17,17 +17,11 @@ import {
   Radio,
   RadioGroup,
   Checkbox,
-  Table,
   LinearProgress,
   Accordion,
   AccordionSummary,
   AccordionDetails,
   AccordionGroup,
-  Modal,
-  ModalDialog,
-  ModalClose,
-  DialogTitle,
-  DialogContent,
   IconButton,
 } from '@mui/joy';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -58,10 +52,14 @@ import {
 } from '@client/app/hooks/data/emailMarketing';
 import { EmailJobStatus, EmailJobOverallStatus, IEmailTemplateDocument } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
+import { getErrorMessage } from '@client/app/utils/error';
 import EmailStatusSummary from './EmailStatusSummary';
 import EmailActivityHistory from './EmailActivityHistory';
 import EmailPreviewModal from './EmailPreviewModal';
 import { parseTestEmailAddresses } from './parseTestEmailAddresses';
+import { AdminDialog } from '../shared/AdminDialog';
+import { DataTable, type DataColumn } from '../shared/DataTable';
+import { EmptyState } from '../shared/EmptyState';
 
 // Email attempt for Activity History
 interface EmailAttempt {
@@ -105,13 +103,13 @@ const RECIPIENT_TYPE_INFO: Record<RecipientType, { label: string; description: s
     icon: <PersonIcon />,
   },
   all_subscribers: {
-    label: 'All Subscribers',
-    description: 'Newsletter subscribers (may not have accounts)',
+    label: 'Waitlist',
+    description: 'People on the waitlist (may not have accounts)',
     icon: <GroupIcon />,
   },
   both: {
-    label: 'All Users & Subscribers',
-    description: 'Both registered users and newsletter subscribers (deduplicated)',
+    label: 'All users and waitlist',
+    description: 'Both registered users and the waitlist (deduplicated)',
     icon: <PeopleIcon />,
   },
   specific_emails: {
@@ -127,6 +125,12 @@ interface RecipientPreview {
   name?: string;
   type: 'user' | 'subscriber' | 'direct';
 }
+
+const recipientColumns: DataColumn<RecipientPreview>[] = [
+  { id: 'email', label: 'Email', width: '60%', render: r => r.email },
+  { id: 'name', label: 'Name', width: '40%', render: r => r.name || '-' },
+];
+const getRecipientId = (r: RecipientPreview) => r.email;
 
 interface EmailJobDetailProps {
   jobId?: string; // undefined for create mode
@@ -150,6 +154,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
   const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [recipientPreviewData, setRecipientPreviewData] = useState<{
     totalCount: number;
     eligibleCount: number;
@@ -166,8 +172,6 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   // Recipients list state
   const [viewUsersSearch, setViewUsersSearch] = useState('');
   const [viewUsersModalOpen, setViewUsersModalOpen] = useState(false);
-  const [viewUsersPage, setViewUsersPage] = useState(1);
-  const USERS_PER_PAGE = 25;
 
   // Email Preview Modal state
   const [emailPreviewModalOpen, setEmailPreviewModalOpen] = useState(false);
@@ -311,6 +315,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   const parseTestEmails = () => parseTestEmailAddresses(formData.testEmailAddresses);
 
   const handleSave = async () => {
+    setActionError(null);
     const recipientFilter = buildRecipientFilter();
     const testEmailAddresses = parseTestEmails();
 
@@ -339,6 +344,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
       setHasUnsavedChanges(false);
     } catch (error) {
       console.error('Failed to save campaign:', error);
+      setActionError(getErrorMessage(error));
     }
   };
 
@@ -356,7 +362,13 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     }
   };
 
+  const clearActionErrors = () => {
+    setActionError(null);
+    setScheduleError(null);
+  };
+
   const handleSend = async () => {
+    clearActionErrors();
     let targetJobId = jobId;
     const testEmailAddresses = parseTestEmails();
     const recipientFilter = buildRecipientFilter();
@@ -386,29 +398,43 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
       }
       setHasUnsavedChanges(false);
     } catch (error) {
-      console.error('Failed to save campaign before sending:', error);
+      setActionError(getErrorMessage(error));
       return;
     }
 
     if (!targetJobId) return;
 
-    await sendMutation.mutateAsync({
-      id: targetJobId,
-      testMode: formData.isTestMode,
-      testRecipients: formData.isTestMode ? testEmailAddresses : undefined,
-      testSubjectIndicator: formData.isTestMode, // Only add [TEST] prefix when in test mode
-      recipientFilter,
-    });
+    try {
+      await sendMutation.mutateAsync({
+        id: targetJobId,
+        testMode: formData.isTestMode,
+        testRecipients: formData.isTestMode ? testEmailAddresses : undefined,
+        testSubjectIndicator: formData.isTestMode, // Only add [TEST] prefix when in test mode
+        recipientFilter,
+      });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   const handleCancelPending = async () => {
     if (!jobId) return;
-    await cancelPendingMutation.mutateAsync({ jobId });
+    clearActionErrors();
+    try {
+      await cancelPendingMutation.mutateAsync({ jobId });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   const handleCancel = async () => {
     if (!jobId) return;
-    await cancelMutation.mutateAsync(jobId);
+    clearActionErrors();
+    try {
+      await cancelMutation.mutateAsync(jobId);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   // Filter recipients for View Users modal
@@ -421,11 +447,16 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
   const handleSchedule = async () => {
     if (!jobId || !scheduleDate) return;
-    await scheduleMutation.mutateAsync({
-      id: jobId,
-      scheduledAt: new Date(scheduleDate),
-    });
-    setShowSchedule(false);
+    clearActionErrors();
+    try {
+      await scheduleMutation.mutateAsync({
+        id: jobId,
+        scheduledAt: new Date(scheduleDate),
+      });
+      setShowSchedule(false);
+    } catch (error) {
+      setScheduleError(getErrorMessage(error));
+    }
   };
 
   const getProgress = () => {
@@ -434,6 +465,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   };
 
   const isSending = job?.overallStatus === EmailJobOverallStatus.SENDING;
+  // overallStatus stays non-draft once a send went out, so gate on status: the schedule route accepts only drafts.
+  const canSchedule = isEditing && job?.status === EmailJobStatus.DRAFT;
   // Reusable campaigns can be edited anytime except when actively sending
   const canEdit = !job || !isSending;
   const isSaving = createMutation.isPending || updateMutation.isPending;
@@ -463,15 +496,44 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     );
   }
 
+  const renderRecipientsEmpty = (testId: string) =>
+    viewUsersSearch ? (
+      <EmptyState
+        title="No recipients match your search"
+        action={
+          <Button variant="outlined" onClick={() => setViewUsersSearch('')} data-testid={`${testId}-clear-search-btn`}>
+            Clear search
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState
+        title="No recipients found"
+        action={
+          <Button
+            variant="outlined"
+            onClick={handlePreviewRecipients}
+            loading={previewRecipientsMutation.isPending}
+            data-testid={`${testId}-refresh-btn`}
+          >
+            Refresh recipients
+          </Button>
+        }
+      />
+    );
+
   // Scrolling layout - no nested scroll areas
   return (
     <Box sx={{ pb: 4 }}>
       {/* Header */}
       <Box
+        data-testid="email-job-detail-header"
         sx={{
           display: 'flex',
+          flexWrap: 'wrap',
           justifyContent: 'space-between',
           alignItems: 'center',
+          gap: 1,
           p: 2,
           borderBottom: '1px solid',
           borderColor: 'divider',
@@ -482,8 +544,25 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           Back to Campaigns
         </Button>
 
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Typography level="h4">{isEditing ? job?.name || 'Edit Campaign' : 'Create Campaign'}</Typography>
+        {/* Below sm the title gets its own row under Back and Save, so neither squeezes the other */}
+        <Stack
+          data-testid="email-job-detail-title"
+          direction="row"
+          alignItems="center"
+          useFlexGap
+          sx={{
+            flexWrap: 'wrap',
+            gap: 1,
+            minWidth: 0,
+            flex: { xs: '1 1 100%', sm: '1 1 0%' },
+            order: { xs: 1, sm: 0 },
+            justifyContent: { xs: 'flex-start', sm: 'center' },
+            '& .MuiChip-root': { flexShrink: 0 },
+          }}
+        >
+          <Typography level="h4" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            {isEditing ? job?.name || 'Edit Campaign' : 'Create Campaign'}
+          </Typography>
           {job?.overallStatus && job.overallStatus !== EmailJobOverallStatus.DRAFT && (
             <Chip
               size="sm"
@@ -513,9 +592,10 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
           )}
         </Stack>
 
-        <Stack direction="row" spacing={1}>
+        <Stack data-testid="email-job-detail-actions" direction="row" spacing={1} sx={{ flexShrink: 0 }}>
           {canEdit && (
             <Button
+              data-testid="email-job-detail-save-btn"
               variant="solid"
               color="primary"
               startDecorator={<SaveIcon />}
@@ -529,14 +609,26 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Stack>
       </Box>
 
-      {/* Main Content - Two Column Layout */}
-      <Box sx={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid', borderColor: 'divider' }}>
+      {/* Main Content - two columns from md up, stacked below so the editor never scrolls sideways */}
+      <Box
+        data-testid="email-job-detail-columns"
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          alignItems: 'stretch',
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
         {/* Left Column - Form */}
         <Box
+          data-testid="email-job-detail-form-column"
           sx={{
-            width: '50%',
-            p: 3,
-            borderRight: '1px solid',
+            width: { xs: '100%', md: '50%' },
+            minWidth: 0,
+            p: { xs: 2, md: 3 },
+            borderRight: { xs: 'none', md: '1px solid' },
+            borderBottom: { xs: '1px solid', md: 'none' },
             borderColor: 'divider',
           }}
         >
@@ -732,28 +824,21 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                       </Box>
 
                       {/* Recipients List - Compact inline preview */}
-                      <Box sx={{ maxHeight: 150, overflow: 'auto' }}>
-                        <Table size="sm" stickyHeader>
-                          <thead>
-                            <tr>
-                              <th style={{ width: '60%' }}>Email</th>
-                              <th style={{ width: '40%' }}>Name</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {filteredViewUsersRecipients.slice(0, 5).map(recipient => (
-                              <tr key={recipient.email}>
-                                <td>
-                                  <Typography level="body-xs">{recipient.email}</Typography>
-                                </td>
-                                <td>
-                                  <Typography level="body-xs">{recipient.name || '-'}</Typography>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </Table>
-                      </Box>
+                      <DataTable
+                        label="Recipients preview"
+                        testId="email-job-recipients-inline-table"
+                        rows={filteredViewUsersRecipients.slice(0, 5)}
+                        columns={recipientColumns}
+                        getRowId={getRecipientId}
+                        pagination={false}
+                        framed={false}
+                        // At most five rows, so the table never needs its own scroll box.
+                        maxHeight="none"
+                        // The form column is a fixed half of the page, so the table squeezes to fit it.
+                        minWidth="0"
+                        onRetry={handlePreviewRecipients}
+                        empty={renderRecipientsEmpty('email-job-recipients-inline-table')}
+                      />
 
                       {/* View All Button */}
                       {filteredViewUsersRecipients.length > 5 && (
@@ -763,20 +848,10 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                             variant="soft"
                             color="primary"
                             startDecorator={<PeopleIcon />}
-                            onClick={() => {
-                              setViewUsersPage(1);
-                              setViewUsersModalOpen(true);
-                            }}
+                            onClick={() => setViewUsersModalOpen(true)}
                           >
                             View All {filteredViewUsersRecipients.length} Recipients
                           </Button>
-                        </Box>
-                      )}
-                      {filteredViewUsersRecipients.length === 0 && viewUsersSearch && (
-                        <Box sx={{ p: 2, textAlign: 'center' }}>
-                          <Typography level="body-sm" color="neutral">
-                            No recipients match your search
-                          </Typography>
                         </Box>
                       )}
                     </Sheet>
@@ -932,8 +1007,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                       </Button>
                     )}
 
-                    {/* Schedule - Only in edit mode and not sending */}
-                    {isEditing && job && !isSending && (
+                    {canSchedule && !isSending && (
                       <Button
                         variant="soft"
                         color="primary"
@@ -943,6 +1017,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                           defaultDate.setHours(defaultDate.getHours() + 1);
                           defaultDate.setMinutes(0, 0, 0);
                           setScheduleDate(defaultDate.toISOString().slice(0, 16));
+                          setScheduleError(null);
                           setShowSchedule(true);
                         }}
                       >
@@ -976,6 +1051,19 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                     )}
                   </Stack>
 
+                  {actionError && (
+                    <Alert color="danger" variant="soft" data-testid="email-job-action-error">
+                      {actionError}
+                    </Alert>
+                  )}
+
+                  {/* A rejected schedule refetches the job; if it is no longer a draft the form below is gone. */}
+                  {!canSchedule && scheduleError && (
+                    <Alert color="danger" variant="soft" data-testid="email-job-schedule-error">
+                      {scheduleError}
+                    </Alert>
+                  )}
+
                   {/* Recipient count reminder */}
                   {recipientPreviewData && (
                     <Alert color="primary" variant="soft">
@@ -985,8 +1073,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                     </Alert>
                   )}
 
-                  {/* Schedule Form - Only show in edit mode */}
-                  {isEditing && showSchedule && (
+                  {canSchedule && showSchedule && (
                     <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }}>
                       <Stack spacing={2}>
                         <FormControl>
@@ -1002,6 +1089,11 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                             }}
                           />
                         </FormControl>
+                        {scheduleError && (
+                          <Alert color="danger" variant="soft" data-testid="email-job-schedule-error">
+                            {scheduleError}
+                          </Alert>
+                        )}
                         <Stack direction="row" spacing={1}>
                           <Button
                             variant="solid"
@@ -1013,7 +1105,14 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                           >
                             Schedule
                           </Button>
-                          <Button variant="plain" color="neutral" onClick={() => setShowSchedule(false)}>
+                          <Button
+                            variant="plain"
+                            color="neutral"
+                            onClick={() => {
+                              setShowSchedule(false);
+                              setScheduleError(null);
+                            }}
+                          >
                             Cancel
                           </Button>
                         </Stack>
@@ -1027,10 +1126,21 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         </Box>
 
         {/* Right Column - Preview */}
-        <Box sx={{ width: '50%', display: 'flex', flexDirection: 'column', bgcolor: 'background.level1' }}>
+        <Box
+          data-testid="email-job-detail-preview-column"
+          sx={{
+            width: { xs: '100%', md: '50%' },
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            bgcolor: 'background.level1',
+          }}
+        >
           <Box
+            data-testid="email-job-detail-preview-header"
             sx={{
               display: 'flex',
+              flexWrap: 'wrap',
               justifyContent: 'space-between',
               alignItems: 'center',
               p: 2,
@@ -1046,6 +1156,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
             {/* Recipient Selection for Variable Testing */}
             <Select
+              data-testid="email-job-detail-recipient-select"
               size="sm"
               placeholder={
                 recipientPreviewData
@@ -1058,7 +1169,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                 const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
                 setSelectedPreviewRecipient(recipient || null);
               }}
-              sx={{ minWidth: 250, flex: 1, maxWidth: 350 }}
+              sx={{ minWidth: { xs: '100%', sm: 250 }, flex: 1, maxWidth: 350 }}
             >
               {recipientPreviewData?.recipients.map(recipient => (
                 <Option key={recipient.email} value={recipient.email}>
@@ -1091,6 +1202,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                 onClick={() => setFullscreenPreviewOpen(true)}
                 disabled={!previewHtml}
                 title="Full screen preview"
+                data-testid="email-job-fullscreen-btn"
               >
                 <FullscreenIcon />
               </IconButton>
@@ -1188,200 +1300,115 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
         attemptId={selectedAttempt?.id || null}
       />
 
-      {/* View All Recipients Modal */}
-      <Modal open={viewUsersModalOpen} onClose={() => setViewUsersModalOpen(false)}>
-        <ModalDialog sx={{ width: 600, maxHeight: '80vh', overflow: 'hidden' }}>
-          <ModalClose />
-          <DialogTitle>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <PeopleIcon />
-              <span>Recipients ({recipientPreviewData?.eligibleCount || 0} total)</span>
-            </Stack>
-          </DialogTitle>
-          <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, p: 0, overflow: 'hidden' }}>
-            {/* Info about limited preview */}
-            {recipientPreviewData?.hasMore && (
-              <Alert color="neutral" variant="soft" sx={{ mx: 2, mt: 1 }}>
-                Showing first {recipientPreviewData.recipients.length} of {recipientPreviewData.eligibleCount}{' '}
-                recipients for preview.
-              </Alert>
-            )}
+      <AdminDialog
+        open={viewUsersModalOpen}
+        onClose={() => setViewUsersModalOpen(false)}
+        title={`Recipients (${recipientPreviewData?.eligibleCount ?? 0} total)`}
+        width={600}
+        data-testid="email-job-recipients-dialog"
+      >
+        <Stack gap={2}>
+          {recipientPreviewData?.hasMore && (
+            <Alert color="neutral" variant="soft">
+              Showing first {recipientPreviewData.recipients.length} of {recipientPreviewData.eligibleCount} recipients
+              for preview.
+            </Alert>
+          )}
+          <Input
+            size="sm"
+            placeholder="Search by email or name..."
+            value={viewUsersSearch}
+            onChange={e => setViewUsersSearch(e.target.value)}
+            startDecorator={<SearchIcon />}
+          />
+          <DataTable
+            label="Recipients"
+            testId="email-job-recipients-table"
+            rows={filteredViewUsersRecipients}
+            columns={recipientColumns}
+            getRowId={getRecipientId}
+            pageResetKey={viewUsersSearch}
+            maxHeight="55vh"
+            minWidth="16rem"
+            onRetry={handlePreviewRecipients}
+            empty={renderRecipientsEmpty('email-job-recipients-table')}
+          />
+        </Stack>
+      </AdminDialog>
 
-            {/* Search */}
-            <Box sx={{ px: 2, pt: recipientPreviewData?.hasMore ? 0 : 1 }}>
-              <Input
-                size="sm"
-                placeholder="Search by email or name..."
-                value={viewUsersSearch}
-                onChange={e => {
-                  setViewUsersSearch(e.target.value);
-                  setViewUsersPage(1);
-                }}
-                startDecorator={<SearchIcon />}
+      <AdminDialog
+        open={fullscreenPreviewOpen}
+        onClose={() => setFullscreenPreviewOpen(false)}
+        title="Email preview"
+        width={1200}
+        data-testid="email-job-fullscreen-preview-dialog"
+      >
+        <Stack gap={2}>
+          <Select
+            size="sm"
+            placeholder={
+              recipientPreviewData
+                ? `Select recipient (${recipientPreviewData.eligibleCount} total)...`
+                : 'Loading recipients...'
+            }
+            disabled={!recipientPreviewData || recipientPreviewData.recipients.length === 0}
+            value={selectedPreviewRecipient?.email || ''}
+            onChange={(_, value) => {
+              const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
+              setSelectedPreviewRecipient(recipient || null);
+            }}
+            sx={{ width: '100%', maxWidth: 420 }}
+            data-testid="email-job-preview-recipient-select"
+          >
+            {recipientPreviewData?.recipients.map(recipient => (
+              <Option key={recipient.email} value={recipient.email}>
+                {recipient.email}
+                {recipient.name ? ` - ${recipient.name}` : ''}
+              </Option>
+            ))}
+            {recipientPreviewData?.hasMore && (
+              <Option disabled value="__more__">
+                ... and {recipientPreviewData.eligibleCount - recipientPreviewData.recipients.length} more
+              </Option>
+            )}
+          </Select>
+          <Box>
+            {selectedPreviewRecipient && (
+              <Chip size="sm" variant="soft" color="primary" sx={{ mb: 1 }}>
+                Previewing as: {selectedPreviewRecipient.name || selectedPreviewRecipient.email}
+              </Chip>
+            )}
+            <Typography level="body-xs" sx={{ color: 'neutral.500', mb: 0.5 }}>
+              Subject:
+            </Typography>
+            <Typography level="body-lg" fontWeight="md">
+              {formData.isTestMode ? '[TEST] ' : ''}
+              {renderedSubject || 'No subject'}
+            </Typography>
+          </Box>
+          {previewHtml && (
+            // Leaves room for the title, select and subject under the dialog's max height, so only the email scrolls.
+            <Box
+              sx={{
+                height: 'calc(100vh - 340px)',
+                minHeight: 320,
+                bgcolor: 'white',
+                borderRadius: 'md',
+                overflow: 'hidden',
+              }}
+            >
+              <iframe
+                srcDoc={previewHtml}
+                // Opaque-origin, no scripts: rendered email HTML must not run with the
+                // admin's app-origin session.
+                sandbox=""
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title="Email Preview Fullscreen"
               />
             </Box>
-
-            {/* Recipients Table */}
-            <Box sx={{ flex: 1, overflow: 'auto', px: 2 }}>
-              <Table size="sm" stickyHeader>
-                <thead>
-                  <tr>
-                    <th style={{ width: '60%' }}>Email</th>
-                    <th style={{ width: '40%' }}>Name</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredViewUsersRecipients
-                    .slice((viewUsersPage - 1) * USERS_PER_PAGE, viewUsersPage * USERS_PER_PAGE)
-                    .map(recipient => (
-                      <tr key={recipient.email}>
-                        <td>
-                          <Typography level="body-sm">{recipient.email}</Typography>
-                        </td>
-                        <td>
-                          <Typography level="body-sm">{recipient.name || '-'}</Typography>
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </Table>
-              {filteredViewUsersRecipients.length === 0 && (
-                <Box sx={{ p: 4, textAlign: 'center' }}>
-                  <Typography level="body-md" color="neutral">
-                    {viewUsersSearch ? 'No recipients match your search' : 'No recipients found'}
-                  </Typography>
-                </Box>
-              )}
-            </Box>
-
-            {/* Pagination */}
-            {Math.ceil(filteredViewUsersRecipients.length / USERS_PER_PAGE) > 1 && (
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  gap: 2,
-                  p: 2,
-                  borderTop: '1px solid',
-                  borderColor: 'divider',
-                }}
-              >
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={viewUsersPage <= 1}
-                  onClick={() => setViewUsersPage(p => p - 1)}
-                >
-                  Previous
-                </Button>
-                <Typography level="body-sm">
-                  Page {viewUsersPage} of {Math.ceil(filteredViewUsersRecipients.length / USERS_PER_PAGE)}
-                </Typography>
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  disabled={viewUsersPage >= Math.ceil(filteredViewUsersRecipients.length / USERS_PER_PAGE)}
-                  onClick={() => setViewUsersPage(p => p + 1)}
-                >
-                  Next
-                </Button>
-              </Box>
-            )}
-          </DialogContent>
-        </ModalDialog>
-      </Modal>
-
-      {/* Fullscreen Preview Modal */}
-      <Modal open={fullscreenPreviewOpen} onClose={() => setFullscreenPreviewOpen(false)}>
-        <ModalDialog
-          size="lg"
-          sx={{
-            width: '95vw',
-            height: '95vh',
-            maxWidth: '95vw',
-            maxHeight: '95vh',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
-        >
-          <ModalClose />
-          <DialogTitle sx={{ pb: 1 }}>
-            <Stack
-              direction="row"
-              spacing={2}
-              alignItems="center"
-              justifyContent="space-between"
-              sx={{ width: '100%', pr: 4 }}
-            >
-              <Typography level="title-lg">Email Preview</Typography>
-              {/* Recipient Selection in Fullscreen */}
-              <Select
-                size="sm"
-                placeholder={
-                  recipientPreviewData
-                    ? `Select recipient (${recipientPreviewData.eligibleCount} total)...`
-                    : 'Loading recipients...'
-                }
-                disabled={!recipientPreviewData || recipientPreviewData.recipients.length === 0}
-                value={selectedPreviewRecipient?.email || ''}
-                onChange={(_, value) => {
-                  const recipient = recipientPreviewData?.recipients.find(r => r.email === value);
-                  setSelectedPreviewRecipient(recipient || null);
-                }}
-                sx={{ minWidth: 300 }}
-              >
-                {recipientPreviewData?.recipients.map(recipient => (
-                  <Option key={recipient.email} value={recipient.email}>
-                    {recipient.email}
-                    {recipient.name ? ` - ${recipient.name}` : ''}
-                  </Option>
-                ))}
-                {recipientPreviewData?.hasMore && (
-                  <Option disabled value="__more__">
-                    ... and {recipientPreviewData.eligibleCount - recipientPreviewData.recipients.length} more
-                  </Option>
-                )}
-              </Select>
-            </Stack>
-          </DialogTitle>
-          <DialogContent sx={{ display: 'flex', flexDirection: 'column', p: 0, overflow: 'hidden', flex: 1 }}>
-            {/* Subject Preview */}
-            <Box sx={{ p: 2, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.surface' }}>
-              {selectedPreviewRecipient && (
-                <Chip size="sm" variant="soft" color="primary" sx={{ mb: 1 }}>
-                  Previewing as: {selectedPreviewRecipient.name || selectedPreviewRecipient.email}
-                </Chip>
-              )}
-              <Typography level="body-xs" sx={{ color: 'neutral.500', mb: 0.5 }}>
-                Subject:
-              </Typography>
-              <Typography level="body-lg" fontWeight="md">
-                {formData.isTestMode ? '[TEST] ' : ''}
-                {renderedSubject || 'No subject'}
-              </Typography>
-            </Box>
-
-            {/* Full HTML Preview */}
-            <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'white' }}>
-              {previewHtml && (
-                <iframe
-                  srcDoc={previewHtml}
-                  // Opaque-origin, no scripts: rendered email HTML must not run with the
-                  // admin's app-origin session.
-                  sandbox=""
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    border: 'none',
-                  }}
-                  title="Email Preview Fullscreen"
-                />
-              )}
-            </Box>
-          </DialogContent>
-        </ModalDialog>
-      </Modal>
+          )}
+        </Stack>
+      </AdminDialog>
     </Box>
   );
 }

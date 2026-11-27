@@ -1,4 +1,9 @@
-import { RESEARCH_SCHEDULE_CADENCES } from '@bike4mind/common';
+import {
+  RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_SCHEDULE_CADENCES,
+  RESEARCH_SOURCES,
+  RESEARCH_UNLISTED_SOURCES,
+} from '@bike4mind/common';
 import { z } from 'zod';
 
 /**
@@ -12,6 +17,8 @@ import { z } from 'zod';
  * belongs is a client bug, and the clamps cannot catch it.
  */
 export const ResearchLeversInput = z.object({
+  source: z.enum(RESEARCH_SOURCES).optional(),
+  feedUrl: z.string().nullable().optional(),
   query: z.string().optional(),
   // Nullable for the same reason as `recencyDays`: the UI's Default option has value '' and the
   // panel sends `model: null` for it, which is the state EVERY new configuration starts in.
@@ -21,11 +28,19 @@ export const ResearchLeversInput = z.object({
   // Nullable so a client can CLEAR the window. The normalizer reads 0 and null alike as "no
   // recency constraint", and null is what the UI sends when the field is emptied.
   recencyDays: z.number().nullable().optional(),
+  // Legacy: still sent by tabs opened before the tiers. Ignored when the tier fields are present.
   allowedDomains: z.array(z.string()).optional(),
+  trustedDomains: z.array(z.string()).optional(),
+  reviewDomains: z.array(z.string()).optional(),
+  unlistedSources: z.enum(RESEARCH_UNLISTED_SOURCES).optional(),
+  autoAdmitTrusted: z.boolean().optional(),
+  maxAutoAdmits: z.number().optional(),
   blockedDomains: z.array(z.string()).optional(),
   minRelevance: z.number().optional(),
   costCeilingMicroUsd: z.number().optional(),
   proposedTags: z.array(z.string()).optional(),
+  // Length and count limits are the service's 400s, on the raw list.
+  itemRules: z.array(z.object({ condition: z.string(), action: z.enum(RESEARCH_ITEM_RULE_ACTIONS) })).optional(),
 });
 
 export type ResearchLeversInputShape = z.infer<typeof ResearchLeversInput>;
@@ -37,4 +52,5 @@ export type ResearchLeversInputShape = z.infer<typeof ResearchLeversInput>;
 export const ResearchScheduleInput = z.object({
   cadence: z.enum(RESEARCH_SCHEDULE_CADENCES).optional(),
   reviewBacklogLimit: z.number().optional(),
+  schedulePaused: z.boolean().optional(),
 });

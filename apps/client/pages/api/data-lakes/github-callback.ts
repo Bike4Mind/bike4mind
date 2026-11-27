@@ -1,13 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_WRITE_SCOPES } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
-import { consumeGitHubLakeAuthGrant } from '@server/integrations/github/dataLake/githubLakeAuthGrant';
+import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { getGitHubLakeAppConfig } from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
+import { consumeGitHubLakeAuthGrant } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeAuthGrant';
 import {
   authorizeGitHubLakeConnection,
   requireGitHubLakeAppConfig,
-} from '@server/integrations/github/dataLake/githubLakeConnection';
+} from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { Request } from 'express';

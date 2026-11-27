@@ -1,5 +1,5 @@
 import { DELEGATION_TOOLS, resolveWorkspaceDeniedTools } from '@bike4mind/common';
-import { premiumWorkspaceDeniedTools } from '@server/premium-generated/premiumWorkspaceDeniedTools.generated';
+import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { CONTENT_READ_TOOL } from './agentExecutor.firstIterationQuery';
 
 /**
@@ -107,6 +107,19 @@ export function applySessionToolPolicy(input: SessionToolPolicyInput): string[] 
   if (denied.size === 0) return result;
 
   return result.filter(tool => !denied.has(tool));
+}
+
+/**
+ * The session knowledge ids a run may read. A run whose key may not read files (its `scopeDeniedTools`
+ * carry the content reader, see fileToolsDeniedFor) gets none, so pinned knowledge is neither inlined
+ * nor offered to its tools.
+ */
+export function runSessionKnowledgeIds(
+  execution: { scopeDeniedTools?: readonly string[] | null } | null | undefined,
+  sessionKnowledgeIds: string[] | null | undefined
+): string[] {
+  if (execution?.scopeDeniedTools?.includes(CONTENT_READ_TOOL)) return [];
+  return sessionKnowledgeIds ?? [];
 }
 
 /**

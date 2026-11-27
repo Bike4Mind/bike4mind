@@ -6,24 +6,15 @@ import {
   type PrReviewThread,
   type PrSnapshot,
 } from '@shared/pullRequest';
-
-/**
- * Auto-fix turns allowed per PR before it gives up.
- *
- * Five: a fix often uncovers the next failure, so the first few turns are spent converging. Each
- * is a full agent turn spending the user's credits with nobody watching, and a problem that five
- * attempts have not moved is one that needs a person, not a sixth guess. Re-checking the box is
- * that person deciding otherwise, and refills it.
- */
-export const MAX_AUTO_FIX_ATTEMPTS = 5;
+import { SET_SESSION_PULL_REQUEST_TOOL_NAME } from '../chat/tools/pullRequestTool';
 
 const LEGACY_MAX_AUTO_FIX_ATTEMPTS = 3;
 
 /**
- * The attempts this PR's box was ticked for. Kept per binding so changing the limit never restarts
- * a PR that already gave up - raising it does not grant more, and lowering it does not cut the turn
- * budget short: only re-ticking the box grants the new budget. A binding ticked before the budget
- * was stored had the legacy one.
+ * The attempts this PR's box was ticked for, from the Settings value at that moment. Kept per
+ * binding so lowering the setting never cuts a running PR short; re-ticking the box grants the
+ * current value, and raising the setting raises PRs already on (see PrMonitor.setAutoFixAttempts).
+ * A binding ticked before the budget was stored had the legacy one.
  */
 export function autoFixBudget(binding: PrBinding): number {
   return binding.autoFixMax ?? LEGACY_MAX_AUTO_FIX_ATTEMPTS;
@@ -281,6 +272,9 @@ export function autoFixRefusal(command: string): string | null {
 /** Why a tool call is refused inside an auto-fix turn, or null. */
 export function autoFixToolRefusal(name: string, input: Record<string, unknown>): string | null {
   if (DELEGATING_TOOLS.has(name)) return 'An auto-fix turn may not hand work to another conversation; fix it here.';
+  // Only the user says which PR the session follows, and a CI log or review comment is not the user.
+  if (name === SET_SESSION_PULL_REQUEST_TOOL_NAME)
+    return 'An auto-fix turn may not change which PR this session follows.';
   if (!SHELL_TOOLS.has(name)) return null;
   return autoFixRefusal(typeof input.command === 'string' ? input.command : '');
 }

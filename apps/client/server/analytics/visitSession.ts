@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { parseCookies } from './cookies';
+import { parseCookies } from '@bike4mind/server-utils/analytics/cookies';
 
 /**
  * A visit, expressed as a first-party cookie.
@@ -56,9 +56,10 @@ export function readVisitId(cookieHeader: string | undefined): string | undefine
 }
 
 /**
- * Set-Cookie value for a visit id. Sent on every beacon request, not only when minting:
+ * Set-Cookie value for a visit id. Sent on every visit beacon request, not only when minting:
  * re-sending it is what slides the inactivity window forward, so an active browser keeps
- * one visit instead of accumulating one per 30 minutes.
+ * one visit instead of accumulating one per 30 minutes. Only a page load slides it; the page
+ * beacon (pages/api/analytics/page.ts) never sends it.
  *
  * HttpOnly because no client code reads it. SameSite=Lax rather than Strict so a visitor
  * arriving by a top-level link from a campaign, an email or a search result still presents
@@ -67,6 +68,29 @@ export function readVisitId(cookieHeader: string | undefined): string | undefine
  */
 export function visitCookieHeader(visitId: string, opts: { secure: boolean }): string {
   const attrs = [`${VISIT_COOKIE}=${visitId}`, 'Path=/', `Max-Age=${VISIT_TTL_SECONDS}`, 'HttpOnly', 'SameSite=Lax'];
+  if (opts.secure) attrs.push('Secure');
+  return attrs.join('; ');
+}
+
+/**
+ * Set while a visit's event is held for the visitor's consent answer (pages/api/analytics/visit.ts).
+ * Carries no id, only that the visit is not recorded yet, and slides with the visit cookie.
+ */
+export const VISIT_PENDING_COOKIE = 'b4m_vid_pending';
+
+export function readVisitPending(cookieHeader: string | undefined): boolean {
+  return parseCookies(cookieHeader)[VISIT_PENDING_COOKIE] === '1';
+}
+
+/** Set-Cookie value that marks the visit as held, or with `pending: false`, expires the mark. */
+export function visitPendingCookieHeader(pending: boolean, opts: { secure: boolean }): string {
+  const attrs = [
+    `${VISIT_PENDING_COOKIE}=${pending ? '1' : ''}`,
+    'Path=/',
+    `Max-Age=${pending ? VISIT_TTL_SECONDS : 0}`,
+    'HttpOnly',
+    'SameSite=Lax',
+  ];
   if (opts.secure) attrs.push('Secure');
   return attrs.join('; ');
 }

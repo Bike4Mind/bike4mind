@@ -5,6 +5,7 @@ import {
   useRevokeUserApiKey,
   useDeleteUserApiKey,
   useBillingOrganizations,
+  useApiKeyEligibility,
   useRotateCallbackSigningSecret,
   CreateUserApiKeyRequest,
   CreateUserApiKeyResponse,
@@ -45,6 +46,7 @@ import {
 import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { cardSurfaceSx, hairlineBorderColor, tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
+import { ScopeEndpointList } from '@client/app/components/profile/ScopeEndpointList';
 import AddIcon from '@mui/icons-material/Add';
 import RotateLeftIcon from '@mui/icons-material/RotateLeft';
 import BlockIcon from '@mui/icons-material/Block';
@@ -57,7 +59,10 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {
   IUserApiKeyDocument,
+  IUserApiKeyListItem,
   ApiKeyScope,
+  ApiKeyScopeValue,
+  CONFINED_API_KEY_SCOPE_FAMILIES,
   getMeContract,
   getCreditBalanceContract,
   listModelsContract,
@@ -65,9 +70,15 @@ import {
   listProjectsContract,
   listAgentsContract,
   listDataLakesContract,
+  listFunctionsContract,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import {
+  EXPLICIT_ONLY_API_KEY_SCOPES,
+  findApiKeyScopeOption,
+  type ApiKeyScopeOption,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
+import { useCallableFunctionsEnabled } from '@client/app/hooks/data/callableFunctions';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
@@ -111,6 +122,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   'marketing-reports': 'Marketing Reports',
   optihashi: 'OptiHashi',
   me: 'Account',
+  'api-keys': 'API Keys',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -119,6 +131,7 @@ const ACTION_LABELS: Record<string, string> = {
   generate: 'Generate',
   chat: 'Chat',
   compute: 'Compute',
+  manage: 'Manage',
 };
 
 const humanize = (s: string) =>
@@ -131,7 +144,7 @@ interface ScopeGroup {
   resource: string;
   resourceLabel: string;
   scopes: {
-    value: ApiKeyScope;
+    value: ApiKeyScopeValue;
     actionLabel: string;
     description: string;
     isMutating: boolean;
@@ -141,9 +154,9 @@ interface ScopeGroup {
 type PresetId = 'read' | 'readwrite' | 'full';
 
 interface ScopeModel {
-  scopeValues: ApiKeyScope[];
+  scopeValues: ApiKeyScopeValue[];
   groups: ScopeGroup[];
-  presetScopes: Record<PresetId, ApiKeyScope[]>;
+  presetScopes: Record<PresetId, ApiKeyScopeValue[]>;
 }
 
 // Built from the viewer's generic-flow scopes, not a module constant, so the "full"
@@ -169,11 +182,16 @@ const buildScopeModel = (scopes: ApiKeyScopeOption[]): ScopeModel => {
 
   const scopeValues = scopes.map(s => s.value);
   const readScopes = scopeValues.filter(value => value.endsWith(':read'));
-  const writeScopes = scopeValues.filter(value => value.endsWith(':write'));
+  // Publishing to the Skill Market is outward-facing, so it is never implied by a preset short of Full access.
+  const writeScopes = scopeValues.filter(value => value.endsWith(':write') && value !== ApiKeyScope.SKILLS_WRITE);
   return {
     scopeValues,
     groups: [...groups.values()],
-    presetScopes: { read: readScopes, readwrite: [...readScopes, ...writeScopes], full: [...scopeValues] },
+    presetScopes: {
+      read: readScopes,
+      readwrite: [...readScopes, ...writeScopes],
+      full: scopeValues.filter(value => !EXPLICIT_ONLY_API_KEY_SCOPES.has(value)),
+    },
   };
 };
 
@@ -183,7 +201,16 @@ const PRESETS: { id: PresetId; label: string; description: string }[] = [
   { id: 'full', label: 'Full access', description: 'Everything, including AI generation & chat.' },
 ];
 
-const sameScopeSet = (a: ApiKeyScope[], b: ApiKeyScope[]) => a.length === b.length && a.every(x => b.includes(x));
+const sameScopeSet = (a: ApiKeyScopeValue[], b: ApiKeyScopeValue[]) =>
+  a.length === b.length && a.every(x => b.includes(x));
+
+// Confined, so it is an access level of its own: a functions key carries no scope but these two.
+const FUNCTIONS_SCOPE_OPTION = findApiKeyScopeOption(ApiKeyScope.FUNCTIONS_INVOKE);
+const FUNCTIONS_SCOPES: readonly ApiKeyScopeValue[] =
+  CONFINED_API_KEY_SCOPE_FAMILIES.find(family => family.includes(ApiKeyScope.FUNCTIONS_INVOKE)) ?? [];
+
+const isFunctionsOnly = (scopes: ApiKeyScopeValue[]) =>
+  scopes.includes(ApiKeyScope.FUNCTIONS_INVOKE) && scopes.every(scope => FUNCTIONS_SCOPES.includes(scope));
 
 interface NewKeyModalProps {
   open: boolean;
@@ -213,6 +240,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     const previousModel = seededModel;
     setSeededModel(scopeModel);
     setFormData(fd => {
+      if (isFunctionsOnly(fd.scopes)) return fd;
       const presetId = PRESETS.find(p => sameScopeSet(fd.scopes, previousModel.presetScopes[p.id]))?.id;
       const scopes = presetId
         ? [...scopeModel.presetScopes[presetId]]
@@ -223,6 +251,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const { data: billingOrgs } = useBillingOrganizations();
   const canBillOrg = (billingOrgs?.length ?? 0) > 0;
+  const { data: eligibility } = useApiKeyEligibility();
 
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
@@ -252,18 +281,27 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
     createMutation.mutate(submitData);
   };
 
+  const functionsOffered = useCallableFunctionsEnabled() && FUNCTIONS_SCOPE_OPTION !== undefined;
+  const functionsOnly = isFunctionsOnly(formData.scopes);
   const activePreset = PRESETS.find(p => sameScopeSet(formData.scopes, scopeModel.presetScopes[p.id]))?.id;
-  const isCustom = !activePreset;
+  const isCustom = !activePreset && !functionsOnly;
 
   const applyPreset = (id: PresetId) => setFormData(fd => ({ ...fd, scopes: [...scopeModel.presetScopes[id]] }));
+  const applyFunctions = () => setFormData(fd => ({ ...fd, scopes: [ApiKeyScope.FUNCTIONS_INVOKE] }));
 
-  const toggleScope = (value: ApiKeyScope) =>
+  const toggleScope = (value: ApiKeyScopeValue) =>
     setFormData(fd => ({
       ...fd,
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
     }));
 
-  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0;
+  // A refusal covers personal keys; an org-billed key still passes unless the access switch refuses that org.
+  const refusedOrgIds = eligibility?.refusedOrgIds ?? [];
+  const blockedByGate =
+    eligibility?.canCreate === false && (!formData.organizationId || refusedOrgIds.includes(formData.organizationId));
+  const someOrgAdmitted = (billingOrgs ?? []).some(org => !refusedOrgIds.includes(org.id));
+  const canSubmit =
+    !!formData.name.trim() && formData.scopes.length > 0 && !blockedByGate && (!functionsOnly || functionsOffered);
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-modal">
@@ -280,6 +318,14 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         </Typography>
 
         <Stack spacing={2.5} className="project-api-keys-modal-content">
+          {blockedByGate && (
+            <Alert color="warning" variant="soft" data-testid="api-key-gate-alert">
+              {canBillOrg && someOrgAdmitted
+                ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
+                : eligibility?.message}
+            </Alert>
+          )}
+
           <FormControl required className="project-api-keys-name-control">
             <FormLabel className="project-api-keys-name-label">Name</FormLabel>
             <Input
@@ -307,7 +353,11 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
               >
                 <Option value="personal">Personal (your credits)</Option>
                 {billingOrgs?.map(org => (
-                  <Option key={org.id} value={org.id}>
+                  <Option
+                    key={org.id}
+                    value={org.id}
+                    disabled={eligibility?.canCreate === false && refusedOrgIds.includes(org.id)}
+                  >
                     {org.name} (organization credits)
                   </Option>
                 ))}
@@ -341,6 +391,21 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                   </Tooltip>
                 );
               })}
+              {functionsOffered && (
+                <Tooltip title={FUNCTIONS_SCOPE_OPTION?.description} variant="soft" size="sm">
+                  <Chip
+                    variant={functionsOnly ? 'solid' : 'outlined'}
+                    color={functionsOnly ? 'primary' : 'neutral'}
+                    startDecorator={functionsOnly ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
+                    onClick={applyFunctions}
+                    slotProps={{ action: { 'aria-pressed': functionsOnly } }}
+                    data-testid="api-key-preset-functions"
+                    sx={{ '--Chip-radius': '8px', py: 0.5, px: 1.25 }}
+                  >
+                    {FUNCTIONS_SCOPE_OPTION?.label}
+                  </Chip>
+                </Tooltip>
+              )}
               {isCustom && (
                 <Chip variant="solid" color="warning" sx={{ '--Chip-radius': '8px' }}>
                   Custom
@@ -349,60 +414,82 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             </Box>
           </FormControl>
 
-          <Box className="project-api-keys-scopes-control">
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-              <Typography level="title-sm">Permissions</Typography>
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {formData.scopes.length} of {scopeModel.scopeValues.length} enabled
+          {functionsOnly ? (
+            <Sheet
+              variant="outlined"
+              sx={{ borderRadius: 'md', px: 1.5, py: 1.25 }}
+              data-testid="api-key-functions-summary"
+            >
+              <Typography level="title-sm">Functions</Typography>
+              <Typography level="body-sm" sx={{ color: 'text.secondary', mt: 0.5 }}>
+                Lists, reads, and calls your live functions, and nothing else. A Functions key holds no other
+                permission.
               </Typography>
-            </Box>
-            <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
-              {scopeModel.groups.map((group, i) => (
-                <Box
-                  key={group.resource}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 1,
-                    px: 1.5,
-                    py: 1.25,
-                    borderTop: i === 0 ? 'none' : '1px solid',
-                    borderColor: 'divider',
-                  }}
-                  className="project-api-keys-scope-item"
-                >
-                  <Typography level="title-sm">{group.resourceLabel}</Typography>
-                  <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    {group.scopes.map(scope => {
-                      const selected = formData.scopes.includes(scope.value);
-                      return (
-                        <Tooltip key={scope.value} title={scope.description} variant="soft" size="sm">
-                          <Chip
-                            variant={selected ? 'solid' : 'outlined'}
-                            color={selected ? (scope.isMutating ? 'warning' : 'success') : 'neutral'}
-                            startDecorator={selected ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
-                            onClick={() => toggleScope(scope.value)}
-                            slotProps={{
-                              action: {
-                                'aria-pressed': selected,
-                                'aria-label': `${group.resourceLabel}: ${scope.actionLabel}`,
-                              },
-                            }}
-                            data-testid={`api-key-scope-${scope.value}`}
-                            className="project-api-keys-scope-checkbox"
-                            sx={{ '--Chip-radius': '8px' }}
-                          >
-                            {scope.actionLabel}
-                          </Chip>
-                        </Tooltip>
-                      );
-                    })}
-                  </Box>
-                </Box>
-              ))}
+              <Checkbox
+                size="sm"
+                sx={{ mt: 1 }}
+                label="Also write, test, promote, and share your functions"
+                checked={formData.scopes.includes(ApiKeyScope.FUNCTIONS_AUTHOR)}
+                onChange={() => toggleScope(ApiKeyScope.FUNCTIONS_AUTHOR)}
+                data-testid="api-key-functions-author-checkbox"
+              />
             </Sheet>
-          </Box>
+          ) : (
+            <Box className="project-api-keys-scopes-control">
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                <Typography level="title-sm">Permissions</Typography>
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  {formData.scopes.length} of {scopeModel.scopeValues.length} enabled
+                </Typography>
+              </Box>
+              <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
+                {scopeModel.groups.map((group, i) => (
+                  <Box
+                    key={group.resource}
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 1,
+                      px: 1.5,
+                      py: 1.25,
+                      borderTop: i === 0 ? 'none' : '1px solid',
+                      borderColor: 'divider',
+                    }}
+                    className="project-api-keys-scope-item"
+                  >
+                    <Typography level="title-sm">{group.resourceLabel}</Typography>
+                    <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                      {group.scopes.map(scope => {
+                        const selected = formData.scopes.includes(scope.value);
+                        return (
+                          <Tooltip key={scope.value} title={scope.description} variant="soft" size="sm">
+                            <Chip
+                              variant={selected ? 'solid' : 'outlined'}
+                              color={selected ? (scope.isMutating ? 'warning' : 'success') : 'neutral'}
+                              startDecorator={selected ? <CheckIcon sx={{ fontSize: 14 }} /> : undefined}
+                              onClick={() => toggleScope(scope.value)}
+                              slotProps={{
+                                action: {
+                                  'aria-pressed': selected,
+                                  'aria-label': `${group.resourceLabel}: ${scope.actionLabel}`,
+                                },
+                              }}
+                              data-testid={`api-key-scope-${scope.value}`}
+                              className="project-api-keys-scope-checkbox"
+                              sx={{ '--Chip-radius': '8px' }}
+                            >
+                              {scope.actionLabel}
+                            </Chip>
+                          </Tooltip>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                ))}
+              </Sheet>
+            </Box>
+          )}
 
           <AccordionGroup sx={{ '--Accordion-gap': '0px' }} className="project-api-keys-advanced">
             <Accordion>
@@ -548,10 +635,11 @@ const KEY_TEST_CONTRACTS = [
   listProjectsContract,
   listAgentsContract,
   listDataLakesContract,
+  listFunctionsContract,
 ];
 
 /** The GET path a key with `scopes` can call to prove it works, or undefined when none of them fits. */
-export const keyTestPath = (scopes: readonly ApiKeyScope[]): string | undefined =>
+export const keyTestPath = (scopes: readonly ApiKeyScopeValue[]): string | undefined =>
   KEY_TEST_CONTRACTS.find(contract => contract.scopes?.some(scope => scopes.includes(scope)))?.path;
 
 interface KeyCreatedModalProps {
@@ -561,7 +649,7 @@ interface KeyCreatedModalProps {
   /** Present only for a fresh create response; absent for a rotated key or a pre-feature key. */
   callbackSigningSecret?: string;
   /** The key's scopes, which pick the endpoint the test snippet calls. */
-  scopes: readonly ApiKeyScope[];
+  scopes: readonly ApiKeyScopeValue[];
 }
 
 function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret, scopes }: KeyCreatedModalProps) {
@@ -578,7 +666,7 @@ curl -H "Authorization: Bearer $B4M_API_KEY" \\
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-created-modal">
-      <ModalDialog size="lg" className="project-api-keys-created-dialog">
+      <ModalDialog size="lg" className="project-api-keys-created-dialog" data-testid="api-key-created-dialog">
         <Typography level="h4" mb={2} color="success" className="project-api-keys-created-title">
           🎉 API Key Created Successfully!
         </Typography>
@@ -650,7 +738,11 @@ curl -H "Authorization: Bearer $B4M_API_KEY" \\
           <Button variant="outlined" onClick={onClose} className="project-api-keys-created-cancel-button">
             I&apos;ve Copied My Key
           </Button>
-          <Button onClick={onClose} className="project-api-keys-created-continue-button">
+          <Button
+            onClick={onClose}
+            className="project-api-keys-created-continue-button"
+            data-testid="api-key-created-continue-btn"
+          >
             Continue
           </Button>
         </Stack>
@@ -968,7 +1060,7 @@ ai_response = response.json()`,
         <TabList sx={{ gap: 1, mb: '20px', flexWrap: 'wrap' }}>
           <StyledTab>Quick Start</StyledTab>
           <StyledTab>Endpoints</StyledTab>
-          <StyledTab>Scopes</StyledTab>
+          <StyledTab data-testid="api-keys-docs-scopes-tab">Scopes</StyledTab>
           <StyledTab>Examples</StyledTab>
         </TabList>
 
@@ -1331,9 +1423,7 @@ ai_response = response.json()`,
                         {item.description}
                       </Typography>
                     </Stack>
-                    <Typography level="body-xs" sx={{ color: theme => alpha(theme.palette.text.primary, 0.5) }}>
-                      <strong>Endpoints:</strong> {item.endpoints.join(', ')}
-                    </Typography>
+                    <ScopeEndpointList scope={item.value} endpoints={item.endpoints} />
                   </CardContent>
                 </Card>
               ))}
@@ -1913,11 +2003,15 @@ export default function UserApiKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: billingOrgs } = useBillingOrganizations();
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
+  const { data: eligibility } = useApiKeyEligibility();
+  const createBlockedByGate =
+    eligibility?.canCreate === false &&
+    !(billingOrgs ?? []).some(org => !(eligibility.refusedOrgIds ?? []).includes(org.id));
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
   const [newlyCreatedSigningSecret, setNewlyCreatedSigningSecret] = useState<string | undefined>(undefined);
-  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScope[]>([]);
+  const [newlyCreatedScopes, setNewlyCreatedScopes] = useState<ApiKeyScopeValue[]>([]);
   const [mainTab, setMainTab] = useState(0);
   // Off by default: revoked rows accumulate forever (scopes are write-once, so
   // every scope change mints a replacement and leaves one behind) and their
@@ -1991,8 +2085,13 @@ export default function UserApiKeysTab() {
     return 'Active';
   };
 
+  // The server decides legacy status. The badge waits for an end date: while none is announced
+  // every older key is legacy, and a dateless badge on all of them would only alarm.
+  const legacyEndsAt = (key: IUserApiKeyListItem) => (key.legacy ? key.legacyEndsAt : null);
+
   const keys = data ?? [];
   const revokedCount = keys.filter(isRevoked).length;
+  const legacyKeyEndDates = keys.map(legacyEndsAt).filter(endsAt => endsAt !== null);
   const visibleKeys = showRevoked ? keys : keys.filter(key => !isRevoked(key));
 
   return (
@@ -2010,7 +2109,7 @@ export default function UserApiKeysTab() {
       <Tabs value={mainTab} onChange={(_, value) => setMainTab(value as number)}>
         <TabList sx={{ gap: '2px', mb: '20px', flexWrap: 'wrap' }}>
           <StyledTab>My keys</StyledTab>
-          <StyledTab>API Documentation</StyledTab>
+          <StyledTab data-testid="api-keys-docs-tab">API Documentation</StyledTab>
         </TabList>
 
         <TabPanel value={0}>
@@ -2046,11 +2145,36 @@ export default function UserApiKeysTab() {
                   <RefreshIcon />
                 </IconButton>
               </Tooltip>
-              <Button startDecorator={<AddIcon />} onClick={() => setShowNewKeyModal(true)} variant="solid">
+              <Button
+                startDecorator={<AddIcon />}
+                onClick={() => setShowNewKeyModal(true)}
+                variant="solid"
+                disabled={createBlockedByGate}
+                data-testid="api-keys-create-btn"
+              >
                 Create API Key
               </Button>
             </Box>
           </Box>
+
+          {createBlockedByGate && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-gate-notice">
+              {eligibility?.message}
+            </Alert>
+          )}
+
+          {legacyKeyEndDates.length > 0 && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-legacy-alert">
+              <Typography level="body-sm">
+                {legacyKeyEndDates.length === 1
+                  ? 'One key in this list uses'
+                  : `${legacyKeyEndDates.length} keys in this list use`}{' '}
+                legacy access, which ends on {dayjs(legacyKeyEndDates[0]).format('MMM D, YYYY')}. After that, endpoints
+                that now require scopes refuse a key that does not hold them. Create a new key with the scopes your
+                integration needs and switch to it; rotating a legacy key keeps it legacy.
+              </Typography>
+            </Alert>
+          )}
 
           {isLoading ? (
             <Box display="flex" justifyContent="center" alignItems="center" minHeight="200px">
@@ -2106,7 +2230,26 @@ export default function UserApiKeysTab() {
                   {visibleKeys.map(key => (
                     <tr key={key.id}>
                       <td>
-                        <Typography fontWeight="lg">{key.name}</Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <Typography fontWeight="lg">{key.name}</Typography>
+                          {legacyEndsAt(key) && (
+                            <Tooltip
+                              title="This key was created before scopes were enforced. Before this date, create a new key with the scopes it needs; rotating keeps the key legacy."
+                              variant="soft"
+                              size="sm"
+                              sx={{ maxWidth: 320 }}
+                            >
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color="warning"
+                                data-testid={`api-key-legacy-badge-${key.id}`}
+                              >
+                                Legacy until {dayjs(legacyEndsAt(key)).format('MMM D, YYYY')}
+                              </Chip>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </td>
                       <td>
                         {key.organizationId ? (

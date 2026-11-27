@@ -1,5 +1,5 @@
 import { colorPalettes, shades } from '@client/app/constants/tools';
-import { Casino } from '@mui/icons-material';
+import Casino from '@mui/icons-material/Casino';
 import { Box, Divider, Dropdown, IconButton, Input, Menu, MenuButton } from '@mui/joy';
 import colors from '@mui/joy/colors';
 import { blackAlpha } from '../../../utils/themes/colors';

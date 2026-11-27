@@ -7,7 +7,12 @@ import {
   createMockRealtimeConnectionRepository,
   createMockUserRepository,
 } from '../__tests__/utils/testUtils';
-import { ABSOLUTE_SESSION_MAX_MS, DEFAULT_REFRESH_TTL_MS, MAX_SESSION_RECOVERIES } from './constants';
+import {
+  ABSOLUTE_SESSION_MAX_MS,
+  DEFAULT_REFRESH_TTL_MS,
+  MAX_SESSION_RECOVERIES,
+  PERSONA_SESSION_IDLE_TTL_MS,
+} from './constants';
 
 const SID = 'sid-1';
 const future = () => new Date(Date.now() + 60_000);
@@ -127,6 +132,97 @@ const setupStateful = (initialSecret: string) => {
 };
 
 describe('rotateSession', () => {
+  it('rejects a refresh that crosses the hard deadline during user lookup', async () => {
+    const { authSessions, users, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: new Date(now + 1000),
+      })
+    );
+    users.findById.mockImplementation(async () => {
+      vi.setSystemTime(now + 1001);
+      return { id: 'user-1' } as never;
+    });
+    try {
+      await expect(rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken })).rejects.toThrow(
+        UnauthorizedError
+      );
+      expect(signAccessToken).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('rejects impersonation after its fixed deadline even when refresh expiry is still live', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    authSessions.findBySid.mockResolvedValue(makeSession({ impersonatedBy: 'admin', impersonationExpiresAt: past() }));
+    await expect(
+      rotateSession(buildRefreshToken(SID, generateRefreshSecret()), { db, signAccessToken })
+    ).rejects.toThrow(UnauthorizedError);
+    expect(signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('never slides impersonation lifetime on refresh', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    const expiresAt = future();
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: expiresAt,
+        expiresAt,
+      })
+    );
+    await rotateSession(buildRefreshToken(SID, secret), {
+      db,
+      signAccessToken,
+      isImpersonatorAuthorized: async () => true,
+    });
+    expect(authSessions.rotateHash).toHaveBeenCalledWith(SID, expect.objectContaining({ newExpiresAt: expiresAt }));
+    expect(signAccessToken).toHaveBeenCalledWith('user-1', 7, {
+      sid: SID,
+      impersonatedBy: 'admin',
+      impersonationExpiresAt: expiresAt.getTime(),
+    });
+  });
+  it.each([
+    { label: 'the admin no longer may impersonate', isImpersonatorAuthorized: async () => false },
+    { label: 'the caller cannot check the admin', isImpersonatorAuthorized: undefined },
+  ])('refuses to refresh an impersonation session when $label', async ({ isImpersonatorAuthorized }) => {
+    const { authSessions, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(secret),
+        impersonatedBy: 'admin',
+        impersonationExpiresAt: future(),
+      })
+    );
+    const checker = isImpersonatorAuthorized && vi.fn(isImpersonatorAuthorized);
+    await expect(
+      rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken, isImpersonatorAuthorized: checker })
+    ).rejects.toThrow(UnauthorizedError);
+    if (checker) expect(checker).toHaveBeenCalledWith('admin');
+    expect(signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the impersonator check for an ordinary session', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    const secret = generateRefreshSecret();
+    authSessions.findBySid.mockResolvedValue(makeSession({ refreshTokenHash: hashRefreshSecret(secret) }));
+    const isImpersonatorAuthorized = vi.fn(async () => false);
+    await expect(
+      rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken, isImpersonatorAuthorized })
+    ).resolves.toMatchObject({ status: 'rotated' });
+    expect(isImpersonatorAuthorized).not.toHaveBeenCalled();
+  });
+
   it('rotates on a current-hash match and returns a fresh opaque token + access token', async () => {
     const { authSessions, signAccessToken, db } = setup();
     const secret = generateRefreshSecret();
@@ -368,6 +464,22 @@ describe('rotateSession', () => {
       await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
       const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt?: Date };
       expect(Math.abs(params.newExpiresAt!.getTime() - (Date.now() + DEFAULT_REFRESH_TTL_MS))).toBeLessThan(5000);
+    });
+
+    it('slides a persona-mint session by the persona idle window, never the 30-day one', async () => {
+      const { authSessions, db, signAccessToken } = setup();
+      const secret = generateRefreshSecret();
+      authSessions.findBySid.mockResolvedValue(
+        makeSession({
+          refreshTokenHash: hashRefreshSecret(secret),
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          createdVia: 'persona-mint',
+        })
+      );
+      await rotateSession(buildRefreshToken(SID, secret), { db, signAccessToken });
+      const params = authSessions.rotateHash.mock.calls[0][1] as { newExpiresAt: Date };
+      expect(Math.abs(params.newExpiresAt.getTime() - (Date.now() + PERSONA_SESSION_IDLE_TTL_MS))).toBeLessThan(5000);
     });
 
     it('clamps the slide to createdAt + ABSOLUTE_SESSION_MAX_MS', async () => {

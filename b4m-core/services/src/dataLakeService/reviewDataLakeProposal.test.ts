@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeProposalDocument } from '@bike4mind/common';
-import { FabFileSourceType } from '@bike4mind/common';
+import { FabFileSourceType, UrlBlockedError } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { approveDataLakeProposal, declineDataLakeProposal, restoreDataLakeProposal } from './reviewDataLakeProposal';
+import {
+  approveDataLakeProposal,
+  autoApproveDataLakeProposal,
+  declineDataLakeProposal,
+  restoreDataLakeProposal,
+  unapproveDataLakeProposal,
+  type AutoApprovalRule,
+} from './reviewDataLakeProposal';
 import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
+import { FILE_NOT_IN_LAKE_MESSAGE } from './lakeMembership';
 
 const OWNER = 'owner-1';
 
@@ -119,6 +127,45 @@ describe('approveDataLakeProposal', () => {
     });
     expect(provenance.sourceMetadata.retrievedAt).toEqual(new Date('2026-08-01T00:00:00Z'));
     expect(provenance.sourceMetadata.approvedAt).toBeInstanceOf(Date);
+  });
+
+  it('leaves the feed url out of the admitted file metadata, since a private feed address can carry a token', async () => {
+    const { deps, admitSource } = adapters({
+      proposal: proposal({
+        provenance: {
+          producer: 'research_run',
+          runId: 'run-7',
+          query: 'quarterly filings',
+          feedUrl: 'https://example.com/feed.xml?token=secret',
+          retrievedAt: new Date('2026-08-01T00:00:00Z'),
+        },
+      }),
+    });
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    const { sourceMetadata } = admitSource.mock.calls[0][1].provenance;
+    expect(sourceMetadata).not.toHaveProperty('feedUrl');
+    expect(JSON.stringify(sourceMetadata)).not.toContain('secret');
+  });
+
+  it('leaves the review reason out of the admitted file metadata', async () => {
+    const { deps, admitSource } = adapters({
+      proposal: proposal({
+        provenance: {
+          producer: 'research_run',
+          runId: 'run-7',
+          retrievedAt: new Date('2026-08-01T00:00:00Z'),
+          reviewReason: { kind: 'rule_match', conditions: ['About a sensitive topic'] },
+        },
+      }),
+    });
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    const { sourceMetadata } = admitSource.mock.calls[0][1].provenance;
+    expect(sourceMetadata).not.toHaveProperty('reviewReason');
+    expect(JSON.stringify(sourceMetadata)).not.toContain('sensitive');
   });
 
   it('never stamps producer-proposed tags onto the file - they are advisory only', async () => {
@@ -331,6 +378,17 @@ describe('approveDataLakeProposal', () => {
 
     await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
       /URL blocked for security reasons: private address\. Nothing was added to the lake/
+    );
+  });
+
+  it('wraps a UrlBlockedError like any other fetch failure', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new UrlBlockedError('URL blocked for security reasons: private address');
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(
+      /Could not add this source: URL blocked for security reasons: private address\. Nothing was added to the lake/
     );
   });
 
@@ -650,5 +708,334 @@ describe('approveDataLakeProposal - admission runs the real lake-tag gate', () =
     const { deps } = adapters({ lake: orgLake, admitSource });
 
     await expect(approveDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(ForbiddenError);
+  });
+});
+
+describe('autoApproveDataLakeProposal', () => {
+  const rule = (over: Partial<AutoApprovalRule> = {}): AutoApprovalRule => ({
+    configId: 'cfg-1',
+    configName: 'Weekly filings',
+    owner: ctx({ userId: OWNER }),
+    isTrusted: (url: string) => (new URL(url).hostname.endsWith('example.com') ? 'example.com' : null),
+    ...over,
+  });
+
+  const autoAdapters = (
+    over: Parameters<typeof adapters>[0] & { declinedHash?: boolean; approvedKey?: boolean } = {}
+  ) => {
+    const base = adapters(over);
+    const hasDeclinedWithTextHash = vi.fn(async () => !!over.declinedHash);
+    const hasApprovedForSourceKey = vi.fn(async () => !!over.approvedKey);
+    return {
+      ...base,
+      hasDeclinedWithTextHash,
+      hasApprovedForSourceKey,
+      deps: {
+        ...base.deps,
+        db: {
+          ...base.deps.db,
+          dataLakeProposals: { ...base.deps.db.dataLakeProposals, hasDeclinedWithTextHash, hasApprovedForSourceKey },
+        },
+      },
+    };
+  };
+
+  it('admits with no reviewer, stamps the rule, and audits under the system principal', async () => {
+    const { deps, admitSource, claimForReview, recordAdmission, record } = autoAdapters();
+    // The door calls the predicate with the page it landed on; simulate that.
+    admitSource.mockImplementation(async (_actor: unknown, params: { assertFinalUrl?: (u: string) => unknown }) => {
+      params.assertFinalUrl?.('https://docs.example.com/report');
+      return { id: 'file-9', fileName: 'Quarterly report' };
+    });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'admitted' });
+    expect(claimForReview.mock.calls[0][1]).toMatchObject({
+      status: 'approved',
+      reviewedByUserId: null,
+      autoAdmission: { configId: 'cfg-1' },
+    });
+    const { sourceMetadata } = admitSource.mock.calls[0][1].provenance;
+    expect(sourceMetadata).toMatchObject({
+      proposalId: 'prop-1',
+      autoAdmittedByConfigId: 'cfg-1',
+      autoAdmittedByConfigName: 'Weekly filings',
+    });
+    expect(sourceMetadata).not.toHaveProperty('approvedByUserId');
+    expect(recordAdmission).toHaveBeenCalledWith('prop-1', 'file-9', 'example.com');
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'auto-approve-proposal',
+        principalKind: 'system',
+        principalId: 'research-auto-admit',
+      })
+    );
+    const change = record.mock.calls[0][0].changes[0];
+    expect(change.after).toContain('config Weekly filings (cfg-1)');
+    expect(change.after).toContain('trusted site example.com');
+  });
+
+  it('uses the lake owner as the file owner, with their real rights', async () => {
+    const { deps, admitSource } = autoAdapters();
+    const owner = ctx({ userId: OWNER, administeredOrgIds: ['org-9'] });
+
+    await autoApproveDataLakeProposal('prop-1', rule({ owner }), deps);
+
+    expect(admitSource.mock.calls[0][0]).toMatchObject({ userId: OWNER, administeredOrgIds: ['org-9'] });
+  });
+
+  it('releases the claim and reports left_pending when admission fails', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new Error('fetch failed');
+    });
+    const { deps, releaseClaim, recordAdmission, record } = autoAdapters({ admitSource });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'admit_failed' });
+    expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+    expect(recordAdmission).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('leaves the row pending when the final URL is not trusted, writing nothing', async () => {
+    const admitSource = vi.fn(async (_actor: unknown, params: { assertFinalUrl?: (u: string) => unknown }) => {
+      params.assertFinalUrl?.('https://elsewhere.net/landing');
+      return { id: 'file-9', fileName: 'f' };
+    });
+    const { deps, releaseClaim, recordAdmission, record } = autoAdapters({ admitSource });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'final_url_untrusted' });
+    expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+    expect(recordAdmission).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('stamps the entry that matched the final URL after a redirect between trusted entries', async () => {
+    const admitSource = vi.fn(async (_actor: unknown, params: { assertFinalUrl?: (u: string) => unknown }) => {
+      params.assertFinalUrl?.('https://news.example.org/moved');
+      return { id: 'file-9', fileName: 'f' };
+    });
+    const { deps, recordAdmission } = autoAdapters({ admitSource });
+    const matches = (url: string) => (new URL(url).hostname === 'news.example.org' ? 'example.org' : 'example.com');
+
+    await autoApproveDataLakeProposal('prop-1', rule({ isTrusted: matches }), deps);
+
+    expect(recordAdmission).toHaveBeenCalledWith('prop-1', 'file-9', 'example.org');
+  });
+
+  it('returns left_pending without admitting when the claim is lost', async () => {
+    const { deps, admitSource } = autoAdapters({ claimed: null });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'claim_lost' });
+    expect(admitSource).not.toHaveBeenCalled();
+  });
+
+  it('refuses a demoted former owner, who still passes the manage rule as a curator', async () => {
+    const grants = [
+      { principalType: 'user', principalId: 'new-owner', role: 'owner' },
+      { principalType: 'user', principalId: OWNER, role: 'curator' },
+    ];
+    const { deps, claimForReview, admitSource } = autoAdapters({ grants });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'owner_check_failed' });
+    expect(claimForReview).not.toHaveBeenCalled();
+    expect(admitSource).not.toHaveBeenCalled();
+  });
+
+  it('admits for a grant-transferred owner', async () => {
+    const grants = [{ principalType: 'user', principalId: 'new-owner', role: 'owner' }];
+    const { deps } = autoAdapters({ grants });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule({ owner: ctx({ userId: 'new-owner' }) }), deps);
+
+    expect(result).toEqual({ outcome: 'admitted' });
+  });
+
+  it('leaves a proposal pending when a declined row in the lake has the same text', async () => {
+    const { deps, claimForReview, hasDeclinedWithTextHash } = autoAdapters({ declinedHash: true });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'declined_text_match' });
+    expect(hasDeclinedWithTextHash).toHaveBeenCalledWith('lake-1', 'abc123');
+    expect(claimForReview).not.toHaveBeenCalled();
+  });
+
+  it('leaves a proposal pending when an approved row already holds the same source key', async () => {
+    const { deps, claimForReview, hasApprovedForSourceKey } = autoAdapters({ approvedKey: true });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'already_approved' });
+    expect(hasApprovedForSourceKey).toHaveBeenCalledWith('lake-1', 'https://example.com/report', 'prop-1');
+    expect(claimForReview).not.toHaveBeenCalled();
+  });
+
+  it('does not admit into an archived lake', async () => {
+    const { deps, claimForReview } = autoAdapters({ lake: lake({ status: 'archived' }) });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'lake_not_writable' });
+    expect(claimForReview).not.toHaveBeenCalled();
+  });
+
+  it('leaves a proposal that is no longer pending alone', async () => {
+    const { deps, claimForReview } = autoAdapters({ proposal: proposal({ status: 'declined' }) });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'not_pending' });
+    expect(claimForReview).not.toHaveBeenCalled();
+  });
+
+  it('reports a vanished proposal as left_pending rather than throwing', async () => {
+    const { deps } = autoAdapters({ proposal: null });
+
+    const result = await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(result).toEqual({ outcome: 'left_pending', reason: 'not_found' });
+  });
+
+  it('runs the gate and claim inside serializeClaim, admitting after it returns', async () => {
+    const order: string[] = [];
+    const { deps, serializeClaim, claimForReview, admitSource } = autoAdapters();
+    serializeClaim.mockImplementation(async <T>(claim: () => Promise<T>) => {
+      order.push('enter');
+      const result = await claim();
+      order.push('exit');
+      return result;
+    });
+    claimForReview.mockImplementation(async (_id: string, input: { status: string }) => {
+      order.push('claim');
+      return { ...proposal(), status: input.status } as IDataLakeProposalDocument;
+    });
+    admitSource.mockImplementation(async () => (order.push('admit'), { id: 'file-9', fileName: 'f' }));
+
+    await autoApproveDataLakeProposal('prop-1', rule(), deps);
+
+    expect(order).toEqual(['enter', 'claim', 'exit', 'admit']);
+  });
+});
+
+describe('unapproveDataLakeProposal', () => {
+  const approved = proposal({ status: 'approved', admittedFabFileId: 'file-9' });
+  const unapproveDeps = (
+    over: {
+      latest?: IDataLakeProposalDocument | null;
+      unapprove?: ReturnType<typeof vi.fn>;
+      removeAdmittedFile?: ReturnType<typeof vi.fn>;
+    } = {}
+  ) => {
+    const base = adapters({ proposal: approved });
+    const unapprove =
+      over.unapprove ??
+      vi.fn(async () => ({
+        unapproved: true,
+        previous: approved,
+        proposal: { ...approved, status: 'pending', admittedFabFileId: undefined },
+      }));
+    const rollbackUnapprove = vi.fn(async () => undefined);
+    const removeAdmittedFile = over.removeAdmittedFile ?? vi.fn(async () => undefined);
+    return {
+      deps: {
+        ...base.deps,
+        db: {
+          ...base.deps.db,
+          dataLakeProposals: {
+            ...base.deps.db.dataLakeProposals,
+            findLatestBySourceKey: vi.fn(async () => (over.latest === undefined ? approved : over.latest)),
+            unapprove,
+            rollbackUnapprove,
+          },
+        },
+        removeAdmittedFile,
+      } as never,
+      unapprove,
+      rollbackUnapprove,
+      removeAdmittedFile,
+      record: base.record,
+    };
+  };
+
+  it('returns the proposal to pending, removes the file and records one linked row', async () => {
+    const { deps, removeAdmittedFile, record } = unapproveDeps();
+
+    const result = await unapproveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.removedFabFileId).toBe('file-9');
+    expect(removeAdmittedFile).toHaveBeenCalledWith(expect.anything(), 'lake-1', 'file-9', {
+      causedByEventId: result.eventId,
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0][0]).toMatchObject({
+      eventId: result.eventId,
+      action: 'restore-proposal',
+      admittedFabFileId: 'file-9',
+    });
+  });
+
+  it('takes the file id from the approval event when the proposal row lost it', async () => {
+    const bare = proposal({ status: 'approved', admittedFabFileId: undefined });
+    const { deps, removeAdmittedFile, record } = unapproveDeps({
+      unapprove: vi.fn(async () => ({
+        unapproved: true,
+        previous: bare,
+        proposal: { ...bare, status: 'pending' },
+      })),
+    });
+
+    const result = await unapproveDataLakeProposal('prop-1', ctx(), deps, { admittedFabFileId: 'file-7' });
+
+    expect(result.removedFabFileId).toBe('file-7');
+    expect(removeAdmittedFile).toHaveBeenCalledWith(expect.anything(), 'lake-1', 'file-7', expect.anything());
+    expect(record.mock.calls[0][0]).toMatchObject({ admittedFabFileId: 'file-7' });
+  });
+
+  it('counts a file already out of the lake as done', async () => {
+    const { deps, rollbackUnapprove } = unapproveDeps({
+      removeAdmittedFile: vi.fn(async () => {
+        throw new NotFoundError(FILE_NOT_IN_LAKE_MESSAGE);
+      }),
+    });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).resolves.toBeDefined();
+    expect(rollbackUnapprove).not.toHaveBeenCalled();
+  });
+
+  it('rolls the proposal back when the removal fails', async () => {
+    const { deps, rollbackUnapprove, record } = unapproveDeps({
+      removeAdmittedFile: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow('boom');
+    expect(rollbackUnapprove).toHaveBeenCalledTimes(1);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('refuses when a newer row exists for the same source', async () => {
+    const { deps, unapprove } = unapproveDeps({ latest: proposal({ id: 'prop-2', status: 'pending' }) });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/waiting for review again/);
+    expect(unapprove).not.toHaveBeenCalled();
+  });
+
+  it('leaves the file alone when a pending row appears first', async () => {
+    const { deps, removeAdmittedFile } = unapproveDeps({
+      unapprove: vi.fn(async () => ({ unapproved: false, reason: 'pending_exists' })),
+    });
+
+    await expect(unapproveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/already waiting for review/);
+    expect(removeAdmittedFile).not.toHaveBeenCalled();
   });
 });

@@ -18,7 +18,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 vi.mock('@bike4mind/database', () => ({ mcpServerRepository: { findOne: h.findOne, update: h.update } }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: vi.fn() }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: vi.fn() }));
 
 await import('../repositories');
 

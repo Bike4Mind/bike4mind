@@ -1,7 +1,7 @@
 /**
  * DLQ Health Monitoring - Alarms and Dashboard
  *
- * Unified monitoring for all 28 Dead Letter Queues across the application.
+ * Unified monitoring for registered dead-letter queues across the application.
  * Uses a single shared SNS topic for all DLQ alarm notifications.
  *
  * Default alarm thresholds (per-queue overrides available via DlqDescriptor):
@@ -9,12 +9,22 @@
  *   for 3 consecutive 60s evaluation periods (3 min) before firing
  * - Message age: any message older than 1 hour (3600s) triggers alarm
  *   (single evaluation period — the 1hr threshold already provides built-in delay)
+ * - Missing data: 'ignore', which holds the current state, so a range with no SQS datapoint
+ *   cannot resolve a firing alarm to OK and re-page on the next point. The age alarms score
+ *   IF(visible > 0, age, 0) because SQS stops publishing the age metric on an empty queue;
+ *   the known residuals are documented at the age alarms below.
  *
  * Stage-gated: Only deployed to `dev` and `production` stages.
  * Set ENABLE_MONITORING=true to opt in for other stages.
  */
 
 import { secrets } from './secrets';
+import { lambdaVpc } from './vpc';
+import { dlqAlarmHandlerDlq } from './dlqAlarmHandlerDeadLetter';
+import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
+import { llmSpendLogSources } from './llmSpendLogGroups';
+import { businessMetricAlertsDLQ } from './businessMetricAlerts';
+import { sideAppHealthAlertsDLQ } from './sideAppHealthAlerts';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import {
   fabFileVectorizeQueueDLQ,
@@ -25,24 +35,29 @@ import {
   generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
-  whatsNewHighlightsQueueDLQ,
   notebookCurationQueueDLQ,
   agentProactiveMessageQueueDLQ,
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
+  callableFunctionCallQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
+  accountErasureQueueDLQ,
+  publishThumbnailQueueDLQ,
+  generatedMediaPurgeQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  riskEvidenceQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   generationJobDLQ,
-  liveOpsTriageQueueDLQ,
+  renderJobDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
   sreFixQueueDLQ,
@@ -53,31 +68,63 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
   libreoncologyAudioRenderQueueDLQ,
+  contributedQueues,
 } from './queues';
-import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
+import {
+  telemetryAlertDeadLetter,
+  moderationAlertsDeadLetter,
+  sessionEnrichmentDeadLetter,
+  billingEventsDeadLetter,
+  emailEventsDeadLetter,
+  pushEventsDeadLetter,
+  notebookEventsDeadLetter,
+  completionEventsDeadLetter,
+} from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
-import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
-import type { DlqDescriptor } from '@bike4mind/infra';
+import {
+  isMonitoredStage as _isMonitoredStage,
+  bindDlqAlarmDimensions,
+  buildDlqAgeMetricQueries,
+  buildDlqAlarmSpecs,
+} from '@bike4mind/infra';
+import type { InspectableDlqDescriptor } from '@bike4mind/infra';
+import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
+import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
+import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
+import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
+import { organizationRetentionDeadLetter } from './organizationRetention';
+import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { subscriptionReconciliationDeadLetter } from './subscriptionReconciliationDeadLetter';
+import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
+import { dlqTriageSweepDeadLetter } from './dlqTriageSweepDeadLetter';
+import { dlqTriageEvidencePermissions, dlqTriagePermissions, dlqTriageRoleNames } from './dlqTriagePermissions';
+import { refusedRequestRuleName, type RefusedRequestRuleKind } from './refusedRequestRules';
+import { cloudSecurityScanDeadLetter } from './cloudScanDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
 /**
  * Shared SNS topic for all DLQ alarm notifications.
- * Subscribe once to receive alerts from all 28 DLQs.
+ * Subscribe once to receive the fleet's DLQ alerts.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
+
+/** Email-only topic (OPS_ALERT_EMAIL) that does not depend on the Slack forwarding Lambda. */
+export const oobAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('OobAlarmTopic') : undefined;
 
 /**
  * Wire DLQ alarm SNS topic → Slack.
  * Only ALARM state transitions are forwarded; OK (resolved) events are suppressed.
  */
-if (isMonitoredStage) {
-  const dlqAlarmHandlerDlq = new aws.sqs.Queue('DlqAlarmHandlerDlq', {
-    messageRetentionSeconds: 14 * 24 * 3600,
-  });
-
+if (isMonitoredStage && dlqAlarmHandlerDlq) {
+  const alarmHandlerDescriptor = {
+    label: 'alarm-handler',
+    displayName: 'DLQ Alarm Handler',
+    application: 'AlarmPipeline',
+  };
   // Policy not captured — SST's subscribe() has no dependsOn surface, so explicit sequencing
   // isn't achievable here. SNS validates DLQ permissions lazily on first SendMessage, not at
   // subscribe time, so convergence order is safe in practice.
@@ -99,11 +146,57 @@ if (isMonitoredStage) {
     ),
   });
 
-  dlqAlarmTopic!.subscribe(
+  const mentionArgs = alarmSlackMentionFunctionArgs();
+  // The young-account spend alarms list the accounts behind a breach by querying the log groups
+  // their metric is filtered from (apps/workers/src/events/youngAccountSpendDetail.ts).
+  // A log group arn drops the API's trailing stream wildcard, so the policy names both forms.
+  const spendLogSources = llmSpendLogSources();
+  const spendLogGroupNames = spendLogSources.map(source => source.logGroupName);
+  const spendLogGroupArns = spendLogSources.flatMap(({ logGroupName }) => {
+    const arn = aws.cloudwatch.getLogGroupOutput({ name: logGroupName }).arn;
+    return [arn, $interpolate`${arn}:*`];
+  });
+  // The refused-request burst alarm names its top IPs and paths from the rules it is built on
+  // (apps/workers/src/events/refusedRequestBurstDetail.ts, infra/refusedRequestAlarms.ts).
+  const refusedRequestRules: Record<RefusedRequestRuleKind, string> = {
+    'by-ip': refusedRequestRuleName($app.name, $app.stage, 'by-ip'),
+    'by-ip-path': refusedRequestRuleName($app.name, $app.stage, 'by-ip-path'),
+  };
+  const refusedRequestRuleArns = $util
+    .all([aws.getPartitionOutput().partition, aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
+    .apply(([partition, region, accountId]) =>
+      Object.values(refusedRequestRules).map(
+        name => `arn:${partition}:cloudwatch:${region}:${accountId}:insight-rule/${name}`
+      )
+    );
+  const triageSubscription = dlqAlarmTopic!.subscribe(
     {
+      vpc: lambdaVpc,
       handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
-      link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
-      environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+      link: [
+        secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL,
+        secrets.SLACK_ALARMS_WEBHOOK_URL,
+        secrets.SLACK_COST_ALARMS_WEBHOOK_URL,
+        secrets.MONGODB_URI,
+      ],
+      // Room for the Logs Insights query (25 s budget) ahead of the Slack post.
+      timeout: '60 seconds',
+      environment: {
+        ...DEFAULT_LAMBDA_ENVIRONMENT,
+        ...mentionArgs.environment,
+        LLM_SPEND_LOG_GROUPS: $util.all(spendLogGroupNames).apply(names => names.join(',')),
+        REFUSED_REQUEST_IP_RULE: refusedRequestRules['by-ip'],
+        REFUSED_REQUEST_IP_PATH_RULE: refusedRequestRules['by-ip-path'],
+      },
+      permissions: [
+        ...mentionArgs.permissions,
+        { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+        dlqTriagePermissions(),
+        ...dlqTriageEvidencePermissions(),
+        { actions: ['logs:StartQuery'], resources: spendLogGroupArns },
+        { actions: ['logs:GetQueryResults', 'logs:StopQuery'], resources: ['*'] },
+        { actions: ['cloudwatch:GetInsightRuleReport'], resources: refusedRequestRuleArns },
+      ],
     },
     {
       transform: {
@@ -114,12 +207,13 @@ if (isMonitoredStage) {
     }
   );
 
+  dlqTriageRoleNames.push(triageSubscription.apply(subscription => subscription.nodes.function.nodes.role.name));
+
   // Out-of-band alarm for DlqAlarmHandlerDlq itself.
   // Cannot route to dlqAlarmTopic -- that would loop into the same failing Lambda.
   // Routes to a dedicated SNS topic with a direct email subscription instead.
   // NOTE: after the first deploy, check your inbox for an SNS confirmation email and click
   // the link -- subscriptions stay in PendingConfirmation and deliver nothing until confirmed.
-  const oobAlarmTopic = new sst.aws.SnsTopic('OobAlarmTopic');
   if (process.env.OPS_ALERT_EMAIL) {
     // retainOnDelete: the AWS provider cannot destroy a PendingConfirmation subscription.
     // If OPS_ALERT_EMAIL is unset on a later deploy before the confirmation link is clicked,
@@ -130,7 +224,7 @@ if (isMonitoredStage) {
     new aws.sns.TopicSubscription(
       'OobAlarmTopicEmailSub',
       {
-        topic: oobAlarmTopic.arn,
+        topic: oobAlarmTopic!.arn,
         protocol: 'email',
         endpoint: process.env.OPS_ALERT_EMAIL,
       },
@@ -150,7 +244,7 @@ if (isMonitoredStage) {
   new aws.cloudwatch.MetricAlarm('DlqAlarmHandlerDlqMessages', {
     name: `${$app.name}-${$app.stage}-dlq-alarm-handler-dlq-messages`,
     alarmDescription:
-      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
+      'DlqAlarmHandlerDlq has messages -- the alarm-to-Slack Lambda is failing; check SLACK_ALARMS_WEBHOOK_URL, SLACK_ERROR_REPORTING_WEBHOOK_URL and Lambda errors.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
     metricName: 'ApproximateNumberOfMessagesVisible',
@@ -158,10 +252,10 @@ if (isMonitoredStage) {
     period: 60,
     statistic: 'Maximum',
     threshold: 0,
-    treatMissingData: 'notBreaching',
+    treatMissingData: 'ignore',
     dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
-    tags: { Application: 'AlarmPipeline', Severity: 'Critical', MonitoringType: 'DLQ' },
+    alarmActions: [oobAlarmTopic!.arn],
+    tags: { Application: alarmHandlerDescriptor.application, Severity: 'Critical', MonitoringType: 'DLQ' },
   });
 
   // Age alarm: same 1-hour threshold as the standard DLQ fleet. period is 60s (vs fleet
@@ -172,19 +266,17 @@ if (isMonitoredStage) {
       'DlqAlarmHandlerDlq oldest message exceeds 1 hour -- the alarm-to-Slack Lambda has been failing for an extended period.',
     comparisonOperator: 'GreaterThanThreshold',
     evaluationPeriods: 1,
-    metricName: 'ApproximateAgeOfOldestMessage',
-    namespace: 'AWS/SQS',
-    period: 60,
-    statistic: 'Maximum',
     threshold: 3600,
-    treatMissingData: 'notBreaching',
-    dimensions: { QueueName: dlqAlarmHandlerDlq.name },
-    alarmActions: [oobAlarmTopic.arn],
-    tags: { Application: 'AlarmPipeline', Severity: 'High', MonitoringType: 'DLQ' },
+    treatMissingData: 'ignore',
+    // Same IF(visible > 0, age, 0) metric math as the fleet age alarms; see
+    // b4m-core/infra/src/dlqAlarmSpecs.ts for why and its residuals.
+    metricQueries: buildDlqAgeMetricQueries(60, { QueueName: dlqAlarmHandlerDlq.name }),
+    alarmActions: [oobAlarmTopic!.arn],
+    tags: { Application: alarmHandlerDescriptor.application, Severity: 'High', MonitoringType: 'DLQ' },
   });
 }
 
-type InfraDlqDescriptor = DlqDescriptor & {
+type InfraDlqDescriptor = InspectableDlqDescriptor & {
   /** The sst.aws.Queue resource for this DLQ */
   queue: sst.aws.Queue;
   /** Override message count alarm evaluation periods (default: 3) */
@@ -244,17 +336,10 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   },
   {
     label: 'release-notes',
-    displayName: 'Release Notes',
+    displayName: 'Release Notes and Highlights',
     application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
-  },
-  {
-    label: 'whats-new-highlights',
-    displayName: "What's New Highlights",
-    application: 'WhatsNewGeneration',
-    sourceQueue: 'whatsNewHighlightsQueue',
-    queue: whatsNewHighlightsQueueDLQ,
   },
   {
     label: 'notebook-curation',
@@ -292,11 +377,32 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: slackExportQueueDLQ,
   },
   {
+    label: 'callable-function-call',
+    displayName: 'Callable Function Call',
+    application: 'CallableFunctionCall',
+    sourceQueue: 'callableFunctionCallQueue',
+    queue: callableFunctionCallQueueDLQ,
+  },
+  {
     label: 'quest-export',
     displayName: 'Quest Export',
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
     queue: questExportQueueDLQ,
+  },
+  {
+    label: 'account-data-export',
+    displayName: 'Account Data Export',
+    application: 'AccountDataExport',
+    sourceQueue: 'accountDataExportQueue',
+    queue: accountDataExportQueueDLQ,
+  },
+  {
+    label: 'account-erasure',
+    displayName: 'Account Erasure',
+    application: 'AccountErasure',
+    sourceQueue: 'accountErasureQueue',
+    queue: accountErasureQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',
@@ -325,6 +431,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
     queue: lakeMemoryQueueDLQ,
+  },
+  {
+    label: 'risk-evidence',
+    displayName: 'Account Risk Evidence',
+    application: 'Signup',
+    sourceQueue: 'riskEvidenceQueue',
+    queue: riskEvidenceQueueDLQ,
   },
   {
     label: 'lake-inconsistency-model',
@@ -362,6 +475,20 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
+    label: 'publish-thumbnail',
+    displayName: 'Published Artifact Thumbnail',
+    application: 'PublishedArtifacts',
+    sourceQueue: 'publishThumbnailQueue',
+    queue: publishThumbnailQueueDLQ,
+  },
+  {
+    label: 'generated-media-purge',
+    displayName: 'Generated Media Purge',
+    application: 'Notebooks',
+    sourceQueue: 'generatedMediaPurgeQueue',
+    queue: generatedMediaPurgeQueueDLQ,
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',
@@ -369,11 +496,11 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: generationJobDLQ,
   },
   {
-    label: 'liveops-triage',
-    displayName: 'LiveOps Triage',
-    application: 'LiveOpsTriage',
-    sourceQueue: 'liveOpsTriageQueue',
-    queue: liveOpsTriageQueueDLQ,
+    label: 'render-job',
+    displayName: 'Studio Render Job',
+    application: 'GenerationJob',
+    sourceQueue: 'renderJobQueue',
+    queue: renderJobDLQ,
   },
   // SRE Agent DLQs
   {
@@ -486,21 +613,34 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
   },
 ];
 
+// Contributed pairs follow the core descriptors, so adding one appends dashboard widgets
+// rather than moving the existing ones.
+const ALARMED_DLQS: InfraDlqDescriptor[] = [
+  ...DLQ_DESCRIPTORS,
+  ...Object.values(contributedQueues).map(({ spec, dlq }) => ({
+    label: spec.label,
+    displayName: spec.displayName,
+    application: spec.application,
+    sourceQueue: spec.name,
+    queue: dlq,
+  })),
+];
+
 // --- Alarm creation ---
 
 /**
  * Creates the standard pair of CloudWatch alarms (message count + message age) for a DLQ,
- * wired to the shared dlqAlarmTopic. Shared by the DLQ_DESCRIPTORS loop below and by any
- * alarm-only DLQ (one with no DLQ_REGISTRY/admin-replay counterpart — see fabFileModerationDLQ).
+ * wired to the shared dlqAlarmTopic, including DLQs without an SQS replay destination.
  * `sourceQueue` is omitted: this function only alarms on the DLQ itself and never needs it.
  */
 function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
   // Alarm names, thresholds, and tags come from the shared spec builder; only the
   // resource-bound pieces (queue dimensions, SNS actions) are wired here.
+  const dimensions = { QueueName: dlq.queue.nodes.queue.name };
   for (const spec of buildDlqAlarmSpecs(dlq, { appName: $app.name, stage: $app.stage })) {
     new aws.cloudwatch.MetricAlarm(spec.resourceName, {
       ...spec.args,
-      dimensions: { QueueName: dlq.queue.nodes.queue.name },
+      ...bindDlqAlarmDimensions(spec, dimensions),
       alarmActions: [dlqAlarmTopic!.arn],
       okActions: [dlqAlarmTopic!.arn],
     });
@@ -508,20 +648,107 @@ function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
 }
 
 if (isMonitoredStage) {
-  for (const dlq of DLQ_DESCRIPTORS) {
+  if (dlqTriageSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'dlq-triage-sweep',
+      displayName: 'DLQ Triage Sweep',
+      application: 'LiveOps',
+      queue: dlqTriageSweepDeadLetter.queue,
+    });
+  }
+  for (const dlq of ALARMED_DLQS) {
     createDlqAlarms(dlq);
   }
 
-  // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
-  // It backs apps/workers/src/s3/objectCreated's Lambda async-invocation dead-letter
-  // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
-  // DLQ_DESCRIPTORS entry has a `sourceQueue` that DLQ_REGISTRY (apps/client/server/utils/
-  // dlqRegistry.ts) resolves to a real SQS queue URL for the admin "replay" UI — but this
-  // DLQ has no such source: S3 invokes the Lambda directly, so there is no queue to replay
-  // a recovered message into. Adding a fake `sourceQueue` would either break
-  // dlqRegistrySync.test.ts's DLQ_DESCRIPTORS/DLQ_REGISTRY parity check or wire a
-  // non-functional "Replay" button into the admin UI. Ops still gets full alarm coverage
-  // via this standalone call.
+  if (youngAccountSpendAlertDeadLetter) {
+    createDlqAlarms({
+      label: 'young-account-spend-alert',
+      displayName: 'Young Account Spend Alert',
+      application: 'Signup',
+      queue: youngAccountSpendAlertDeadLetter.queue,
+    });
+  }
+
+  if (apiProbeDetectorDeadLetter) {
+    createDlqAlarms({
+      label: 'api-probe-detector',
+      displayName: 'API Probe Detector',
+      application: 'Security',
+      queue: apiProbeDetectorDeadLetter.queue,
+    });
+  }
+
+  if (imageModerationReviewSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'image-moderation-review-sweep',
+      displayName: 'Image Moderation Review Sweep',
+      application: 'Moderation',
+      queue: imageModerationReviewSweepDeadLetter.queue,
+    });
+  }
+
+  if (spendMonitorDeadLetter) {
+    createDlqAlarms({
+      label: 'spend-monitor',
+      displayName: 'Spend Monitor',
+      application: 'Billing',
+      queue: spendMonitorDeadLetter.queue,
+    });
+  }
+
+  if (signupGrantHeldReleaseDeadLetter) {
+    createDlqAlarms({
+      label: 'signup-grant-held-release',
+      displayName: 'Signup Grant Held Release',
+      application: 'Signup',
+      queue: signupGrantHeldReleaseDeadLetter.queue,
+    });
+  }
+
+  if (revenueSnapshotDeadLetter) {
+    createDlqAlarms({
+      label: 'revenue-snapshot',
+      displayName: 'Revenue Snapshot',
+      application: 'Billing',
+      queue: revenueSnapshotDeadLetter.queue,
+    });
+  }
+
+  if (subscriptionReconciliationDeadLetter) {
+    createDlqAlarms({
+      label: 'subscription-reconciliation',
+      displayName: 'Subscription Reconciliation',
+      application: 'Billing',
+      queue: subscriptionReconciliationDeadLetter.queue,
+    });
+  }
+
+  if (accountDeletionSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'account-deletion-sweep',
+      displayName: 'Account Deletion Sweep',
+      application: 'Account',
+      queue: accountDeletionSweepDeadLetter.queue,
+    });
+  }
+
+  if (organizationRetentionDeadLetter) {
+    createDlqAlarms({
+      label: 'organization-retention',
+      displayName: 'Organization Retention',
+      application: 'Organization',
+      queue: organizationRetentionDeadLetter.queue,
+    });
+  }
+
+  createDlqAlarms({
+    label: 'cloud-security-scan',
+    displayName: 'Cloud Security Scan',
+    application: 'Security',
+    queue: cloudSecurityScanDeadLetter.queue,
+  });
+
+  // S3 invokes the Lambda directly; the registry exposes this DLQ without a replay destination.
   createDlqAlarms({
     label: 'fab-file-moderation',
     displayName: 'FabFile Moderation',
@@ -529,24 +756,74 @@ if (isMonitoredStage) {
     queue: fabFileModerationDLQ,
   });
 
-  // Telemetry Alert rule DLQ - alarm-only for the same reason as fabFileModerationDLQ:
-  // it backs the EventBridge telemetry-alert rule target (see infra/eventBus.ts), not an
-  // sst.aws.Queue `.subscribe()` consumer, so there is no source queue for the admin
-  // "replay" UI to re-enqueue into (recovery is re-emitting the event onto the bus).
+  // Event bus dead letters - alarm-only for the same reason: they back EventBridge rule
+  // targets and their Lambdas' async-invoke failures, not a queue consumer, so there is no
+  // source queue to replay into (see infra/eventBusDeadLetter.ts).
   createDlqAlarms({
     label: 'telemetry-alert-rule',
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
-    queue: telemetryAlertRuleDLQ,
+    queue: telemetryAlertDeadLetter.queue,
   });
-
-  // Session enrichment DLQ - alarm-only for the same reason: it backs the session.* rule
-  // targets and their Lambdas' async-invoke failures (see infra/eventBus.ts), not a queue consumer.
+  createDlqAlarms({
+    label: 'moderation-alerts',
+    displayName: 'Moderation Escalation Alerts',
+    application: 'ModerationAlerts',
+    queue: moderationAlertsDeadLetter.queue,
+  });
   createDlqAlarms({
     label: 'session-enrichment',
     displayName: 'Session Enrichment',
     application: 'SessionEnrichment',
-    queue: sessionEnrichmentDLQ,
+    queue: sessionEnrichmentDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'billing-events',
+    displayName: 'Billing Events',
+    application: 'Billing',
+    queue: billingEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'email-events',
+    displayName: 'Email Events',
+    application: 'Email',
+    queue: emailEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'push-events',
+    displayName: 'Push Events',
+    application: 'Notifications',
+    queue: pushEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'notebook-events',
+    displayName: 'Notebook Events',
+    application: 'NotebookCuration',
+    queue: notebookEventsDeadLetter.queue,
+  });
+  createDlqAlarms({
+    label: 'completion-events',
+    displayName: 'Completion Events',
+    application: 'Completions',
+    queue: completionEventsDeadLetter.queue,
+  });
+}
+
+if (businessMetricAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'business-metric-alerts',
+    displayName: 'Business Metric Alerts',
+    application: 'Analytics',
+    queue: businessMetricAlertsDLQ,
+  });
+}
+
+if (sideAppHealthAlertsDLQ && dlqAlarmTopic) {
+  createDlqAlarms({
+    label: 'side-app-health-alerts',
+    displayName: 'Side App Health Alerts',
+    application: 'SideApps',
+    queue: sideAppHealthAlertsDLQ,
   });
 }
 
@@ -555,12 +832,12 @@ if (isMonitoredStage) {
 export let dlqHealthDashboard: aws.cloudwatch.Dashboard | undefined;
 
 if (isMonitoredStage) {
-  const dlqNames = DLQ_DESCRIPTORS.map(d => d.queue.nodes.queue.name);
+  const dlqNames = ALARMED_DLQS.map(d => d.queue.nodes.queue.name);
 
   const dashboardBody = $util
     .all([$util.all(dlqNames), aws.getRegionOutput().name, aws.getCallerIdentityOutput().accountId])
     .apply(([names, region, accountId]) => {
-      const alarmArns = DLQ_DESCRIPTORS.flatMap(d => [
+      const alarmArns = ALARMED_DLQS.flatMap(d => [
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-messages`,
         `arn:aws:cloudwatch:${region}:${accountId}:alarm:${$app.name}-${$app.stage}-dlq-${d.label}-age`,
       ]);
@@ -587,7 +864,7 @@ if (isMonitoredStage) {
       ];
 
       // Per-DLQ metric widgets: 2 per row, message count + age on dual Y axes
-      DLQ_DESCRIPTORS.forEach((dlq, idx) => {
+      ALARMED_DLQS.forEach((dlq, idx) => {
         const queueName = names[idx];
         const row = Math.floor(idx / 2);
         const col = idx % 2;

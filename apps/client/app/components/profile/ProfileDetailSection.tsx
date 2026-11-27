@@ -37,8 +37,7 @@ const ProfileDetailSection = ({ userId, extra, canEdit, email }: ProfileDetailSe
     );
   }
 
-  const handleUploadComplete = (photoUrl: string) => {
-    // Photo URL will be automatically updated through the API
+  const handleUploadComplete = () => {
     setIsUploadModalOpen(false);
   };
 
@@ -127,7 +126,7 @@ const ProfileDetailSection = ({ userId, extra, canEdit, email }: ProfileDetailSe
           {avatarSection}
 
           {user.data && editing ? (
-            <ProfileDataForm userData={user.data} adminMode={false} onCancel={() => setEditing(false)} />
+            <ProfileDataForm userData={user.data} onCancel={() => setEditing(false)} />
           ) : (
             <Box
               className="profile-detail-info-container"

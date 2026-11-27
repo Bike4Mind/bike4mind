@@ -1,5 +1,6 @@
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import type { IOptiPlanState, IOptiPlanStep } from '@bike4mind/database';
+import { planStepProgress } from '@bike4mind/common';
 
 /** One planned sub-problem: its family and the short title the decomposition gave it. */
 type PlanStep = IOptiPlanStep;
@@ -37,13 +38,6 @@ export function capturePlan(result: string): PlanStep[] | null {
   } catch {
     return null;
   }
-}
-
-/** Planned count per family, derived from the ordered steps. */
-function neededByFamily(steps: PlanStep[]): Record<string, number> {
-  const needed: Record<string, number> = {};
-  for (const s of steps) needed[s.family] = (needed[s.family] ?? 0) + 1;
-  return needed;
 }
 
 /** The family a schedule/solve call targets: scheduling for schedule, `problem.family` for solve. */
@@ -111,20 +105,13 @@ function matchWinner(md: string): string | null {
 }
 
 /**
- * Complete when every planned family has at least as many successful solves as the plan calls for.
- * `min(solved, needed)` per family caps re-solves so over-solving one step can't mask an unsolved
- * one; the run is done only when the covered-step count reaches the plan length.
+ * Complete when every planned step is covered by a successful solve. The counting rule is shared
+ * with the public `step_progress` field (`planStepProgress` in @bike4mind/common), so the poll
+ * response reads `completed === total` exactly when this guard fires.
  */
 export function planIsComplete(state: PlanProgressState): boolean {
-  if (state.steps.length === 0) return false;
-  const needed = neededByFamily(state.steps);
-  let planSteps = 0;
-  let covered = 0;
-  for (const [fam, n] of Object.entries(needed)) {
-    planSteps += n;
-    covered += Math.min(state.solved[fam] ?? 0, n);
-  }
-  return planSteps > 0 && covered >= planSteps;
+  const progress = planStepProgress(state);
+  return progress !== null && progress.completed >= progress.total;
 }
 
 /**

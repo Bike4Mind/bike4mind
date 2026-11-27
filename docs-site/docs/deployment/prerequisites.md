@@ -146,7 +146,11 @@ Choose one of these options:
 3. Configure network access (IP allowlist or VPC peering)
 4. Get connection string: `mongodb+srv://...`
 
-### Option B: AWS DocumentDB
+### Option B: AWS DocumentDB (Deprecated)
+
+:::warning Deprecated
+AWS DocumentDB support is deprecated and will be removed in a future release. Use MongoDB Atlas or MongoDB Community 7 or later instead. While you still connect to DocumentDB, Bike4Mind logs a deprecation warning at startup.
+:::
 
 1. **Navigate to DocumentDB Console** → Clusters → Create
 2. **Configure**:

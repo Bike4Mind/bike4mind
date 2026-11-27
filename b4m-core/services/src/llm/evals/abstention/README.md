@@ -30,7 +30,7 @@ Point it at any OpenAI-compatible `/chat/completions` endpoint - Ollama, a gatew
 ABSTENTION_EVAL_BASE_URL=http://localhost:11434/v1 \
 ABSTENTION_EVAL_MODEL=qwen2.5-coder:32b \
 ABSTENTION_EVAL_SAMPLES=3 \
-  pnpm --filter @bike4mind/services test run.live
+  pnpm --filter @bike4mind/services-core test run.live
 ```
 
 `ABSTENTION_EVAL_SAMPLES` defaults to 3, and a value that is not a positive integer is a hard error rather than a skip - at 0 samples every pass rate is `NaN`, no comparison against it holds, and the suite would go green having called the model zero times.

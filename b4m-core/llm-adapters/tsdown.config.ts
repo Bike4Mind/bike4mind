@@ -6,4 +6,5 @@ export default defineConfig({
   dts: true,
   outDir: 'dist',
   clean: false,
+  noExternal: [/^@bike4mind\/local-models/],
 });

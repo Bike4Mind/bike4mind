@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 import { createMocks } from 'node-mocks-http';
 
 // Regression guard for the embed allowlist on the publish (finalize) path. The
@@ -44,13 +48,17 @@ vi.mock('@bike4mind/database', () => ({
 
 // Keep the REAL validateEmbedOrigins (that's the logic under test); stub the rest of
 // the heavy publish-service surface so the handler reaches the upsert.
+// finalize reaches the quota check through planVersionedPublish, which imports it from this module.
+vi.mock('@server/services/publish/checkPublishQuota', async importOriginal => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, checkPublishQuota: () => Promise.resolve({ ok: true }) };
+});
 vi.mock('@server/services/publish', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
     ...actual,
     validateBundle: () => ({ valid: true, violations: [] }),
     checkScopePermission: () => Promise.resolve({ ok: true }),
-    checkPublishQuota: () => Promise.resolve({ ok: true }),
     resolveVisibility: (_tier: string, visibility: string) => ({ ok: true, visibility }),
     buildPublishS3KeyPrefix: () => 'user/owner1/s/',
     buildPublishUrlPath: () => '/p/u/owner1/s',

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { ApiKeyScope, CREDITS_PAGE_READ } from '@bike4mind/common';
 import {
   allKnownEntitlementKeys,
   grantTagForEntitlement,
@@ -8,7 +9,7 @@ import {
   EMBED_WHITELABEL_ENTITLEMENT_KEY,
   PRICE_ENTITLEMENTS,
   __registryRows,
-} from '@client/lib/entitlements/registry';
+} from '@bike4mind/server-utils/lib/entitlements/registry';
 
 const { mockUserFind, mockSubs, mockPartnerKeys } = vi.hoisted(() => ({
   mockUserFind: vi.fn(),
@@ -16,14 +17,15 @@ const { mockUserFind, mockSubs, mockPartnerKeys } = vi.hoisted(() => ({
   mockPartnerKeys: vi.fn(),
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
         use: () => chain,
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
+        _config: config,
       }
     );
     return chain;
@@ -47,14 +49,15 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
 }));
 
-vi.mock('@server/entitlements/activeSubscriptions', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
   getActiveSubscriptionsForUser: (...a: unknown[]) => mockSubs(...a),
 }));
 
-vi.mock('@server/entitlements/partnerRules', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/partnerRules', () => ({
   partnerEntitlementsForEmail: (...a: unknown[]) => mockPartnerKeys(...a),
 }));
 
+import { SUBSCRIPTION_PLANS_MAP } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import handler from '../entitlements';
 
 const ADMIN = { id: 'admin1', isAdmin: true };
@@ -72,16 +75,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/:userId/entitlements', () => {
-  it('rejects non-admins before touching any data source', async () => {
-    const { promise } = run({ user: { id: 'u2', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
-    expect(mockUserFind).not.toHaveBeenCalled();
-  });
-
-  it('rejects an unauthenticated request (no req.user)', async () => {
-    const { promise } = run();
-    await expect(promise).rejects.toThrow();
-    expect(mockUserFind).not.toHaveBeenCalled();
+  it('is admin-scoped and gated on the credits page permissions', () => {
+    expect((handler as unknown as { _config?: unknown })._config).toEqual({
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: CREDITS_PAGE_READ },
+    });
   });
 
   it('rejects when the target user does not exist', async () => {
@@ -378,5 +376,25 @@ describe('GET /api/admin/users/:userId/entitlements', () => {
     const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === key);
     expect(row.held).toBe(true);
     expect(row.sources.some((s: { type: string }) => s.type === 'subscription')).toBe(true);
+  });
+  it('reports Questmaster as held through an active paid plan, with a subscription source', async () => {
+    const paidPriceId = Object.keys(SUBSCRIPTION_PLANS_MAP)[0];
+    expect(paidPriceId).toBeDefined();
+    mockSubs.mockResolvedValue([{ priceId: paidPriceId }]);
+    mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: false, email: null, emailVerified: false });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === 'questmaster:pro');
+    expect(row.held).toBe(true);
+    expect(row.sources).toContainEqual({ type: 'subscription', detail: 'Active paid subscription' });
+  });
+
+  it('does not report Questmaster as held for a lapsed subscriber with no active rows', async () => {
+    mockSubs.mockResolvedValue([]);
+    mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: false, email: null, emailVerified: false });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === 'questmaster:pro');
+    expect(row.held).toBe(false);
   });
 });

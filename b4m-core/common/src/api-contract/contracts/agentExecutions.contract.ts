@@ -8,7 +8,7 @@ import {
 } from '../../schemas/agentExecution';
 import { BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION } from '../../schemas/billingOrganization';
 import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from '../../schemas/chat';
-import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE } from '../../apiErrorCodes';
+import { BILLING_ORGANIZATION_MISMATCH_ERROR_CODE, ORG_TOOL_NOT_ALLOWED_ERROR_CODE } from '../../apiErrorCodes';
 
 /**
  * Contracts for the agent-executor (ReAct) pipeline over REST.
@@ -61,8 +61,11 @@ export const startAgentExecutionContract = defineEndpoint({
     },
     403: {
       description:
-        'The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key ' +
-        `names any organization but its own (\`errorCode: ${BILLING_ORGANIZATION_MISMATCH_ERROR_CODE}\`).`,
+        'The API key holds neither the `ai:chat` nor the `ai:generate` scope, or it sent `file_ids` or ' +
+        '`session_file_ids` without the `files:read` scope, or an organization-billed API key ' +
+        `names any organization but its own (\`errorCode: ${BILLING_ORGANIZATION_MISMATCH_ERROR_CODE}\`), ` +
+        'or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed ' +
+        `organization does not allow (\`errorCode: ${ORG_TOOL_NOT_ALLOWED_ERROR_CODE}\`).`,
       schema: BillingOrganizationForbiddenErrorSchema,
     },
     404: {
@@ -102,7 +105,8 @@ export const getAgentExecutionContract = defineEndpoint({
     '`POST /api/v1/agent-executions`. `steps` grows while the run is in flight, so polling this ' +
     'endpoint is also how a REST caller follows the loop. Safe (GET) requests on this route are ' +
     'exempt from the per-day API-key quota: a poll consumes no daily slot, and only the per-minute ' +
-    'burst limit applies.',
+    "burst limit applies. For a caller who only holds a share on the run's session, `observation` steps " +
+    'keep their place in the trace but their `content` is empty.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],

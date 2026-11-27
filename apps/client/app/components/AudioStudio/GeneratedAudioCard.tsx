@@ -1,4 +1,6 @@
 import { Box, Button, Card, Stack, Typography } from '@mui/joy';
+import StudioTrailButton from '@client/app/components/Studio/trail/StudioTrailButton';
+import type { StudioTrailRestore } from '@client/app/components/Studio/trail/StudioTrail';
 import { toast } from 'sonner';
 import {
   isStoredPromptPossiblyTruncated,
@@ -9,6 +11,7 @@ import {
 } from '@bike4mind/common';
 import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import { MediaPlayer } from '@client/app/components/Media/MediaPlayer';
+import { useElevenLabsTtsVoices } from '@client/app/hooks/data/ttsVoices';
 import { useAudioGenSettings, type AudioGenMode } from '@client/app/stores/useAudioGenSettings';
 import { readGeneration, settingsFromGeneration } from './generatedAudioSettings';
 import { useAudioStudioDraft } from './useAudioStudioDraft';
@@ -18,10 +21,10 @@ const providerLabel = (provider: string): string => {
   return vendor.success ? VOICE_VENDOR_LABELS[vendor.data] : provider;
 };
 
-const settingsSummary = (generation: GeneratedAssetMetadata): string => {
+const settingsSummary = (generation: GeneratedAssetMetadata, voiceName: string | undefined): string => {
   const parts =
     generation.generator === 'speech'
-      ? [providerLabel(generation.provider), generation.voice, generation.format, generation.languageCode]
+      ? [providerLabel(generation.provider), voiceName, generation.format, generation.languageCode]
       : [
           generation.durationSeconds ? `${generation.durationSeconds}s` : 'Auto length',
           generation.promptInfluence !== undefined && `Prompt influence ${generation.promptInfluence}`,
@@ -32,14 +35,24 @@ const settingsSummary = (generation: GeneratedAssetMetadata): string => {
 type GeneratedAudioCardProps = {
   mode: AudioGenMode;
   file: IFabFileDocument;
+  // Create v2 only: adds the take's trail.
+  onRestore?: StudioTrailRestore;
 };
 
 /** One saved speech or sound-effect file in a Studio audio gallery. */
-const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
+const GeneratedAudioCard = ({ mode, file, onRestore }: GeneratedAudioCardProps) => {
   const openFiles = useFileBrowser(state => state.setOpen);
   const applySettings = useAudioGenSettings(state => state.applySettings);
   const setText = useAudioStudioDraft(state => state.setText);
   const generation = readGeneration(file);
+  // ElevenLabs stores an opaque voice id; show its name from the (shared, cached) voice list, else the id.
+  const isElevenLabsVoice =
+    generation?.generator === 'speech' && generation.provider === 'elevenlabs' && !!generation.voice;
+  const { data: elevenLabsVoices } = useElevenLabsTtsVoices({ enabled: isElevenLabsVoice });
+  const voiceName =
+    generation?.generator === 'speech'
+      ? (isElevenLabsVoice && elevenLabsVoices?.find(voice => voice.id === generation.voice)?.name) || generation.voice
+      : undefined;
 
   const reuseSettings = (reused: GeneratedAssetMetadata) => {
     applySettings(settingsFromGeneration(reused));
@@ -58,7 +71,7 @@ const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
     <Card variant="outlined" data-testid="generated-audio-card" data-file-id={file.id} sx={{ gap: 1 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
         <Typography level="body-xs" data-testid="generated-audio-card-settings">
-          {generation ? settingsSummary(generation) : file.fileName}
+          {generation ? settingsSummary(generation, voiceName) : file.fileName}
         </Typography>
         <Typography level="body-xs" sx={{ color: 'text.tertiary', flexShrink: 0 }}>
           {new Date(file.createdAt).toLocaleString()}
@@ -106,6 +119,9 @@ const GeneratedAudioCard = ({ mode, file }: GeneratedAudioCardProps) => {
         >
           Open in Files
         </Button>
+        {onRestore && (
+          <StudioTrailButton fileId={file.id} testId="generated-audio-card-trail-btn" onRestore={onRestore} />
+        )}
       </Stack>
     </Card>
   );

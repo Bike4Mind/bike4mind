@@ -1,0 +1,144 @@
+vi.mock('./reserveRequestCredits', () => ({ reserveRequestCredits: vi.fn() }));
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
+  PAID_PLAN_ENTITLEMENT_KEY,
+} from '@bike4mind/common';
+
+const mocks = vi.hoisted(() => ({
+  user: vi.fn(),
+  entitlements: vi.fn(),
+  settings: vi.fn(),
+  org: vi.fn(),
+}));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { findById: mocks.user },
+  adminSettingsRepository: { findOne: async () => null },
+  organizationRepository: { findById: mocks.org },
+  usageEventRepository: {},
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: mocks.settings,
+}));
+vi.mock('../entitlements/index', () => ({ getUserEntitlements: mocks.entitlements }));
+import {
+  assertMediaModelAdmission,
+  filterAdmittedMediaModels,
+  isMediaModelAdmitted,
+} from './assertMediaModelAdmission';
+
+describe('media model admission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.user.mockResolvedValue({ id: 'user-1', currentCredits: 10_000 });
+    mocks.entitlements.mockResolvedValue(['base']);
+    mocks.settings.mockResolvedValue({
+      freeTierModelGateEnabled: 'true',
+      freeTierAllowedModels: '["cheap-text"]',
+      enforceCredits: 'true',
+    });
+  });
+
+  it.each(['image-model', 'video-model', 'music_v1', 'eleven_text_to_sound_v2', 'tts-1', 'gpt-realtime-1.5'])(
+    'refuses a free account with credits from %s with the existing paid-plan code',
+    async modelId => {
+      await expect(assertMediaModelAdmission('user-1', modelId)).rejects.toMatchObject({
+        additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+      });
+      expect(mocks.user).toHaveBeenCalledWith('user-1');
+    }
+  );
+
+  it('uses a loaded user document without re-fetching it', async () => {
+    const user = { id: 'user-1', currentCredits: 10_000 } as Parameters<typeof filterAdmittedMediaModels>[0];
+    await expect(assertMediaModelAdmission(user, 'image-model')).rejects.toMatchObject({
+      additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+    });
+    expect(mocks.user).not.toHaveBeenCalled();
+  });
+
+  it('filters video/music picker choices with the same admission rule', async () => {
+    const models = [{ id: 'music_v1' }, { id: 'video-model' }];
+    const user = { id: 'user-1' } as Parameters<typeof filterAdmittedMediaModels>[0];
+    expect(await filterAdmittedMediaModels(user, models)).toEqual([]);
+    mocks.settings.mockResolvedValue({
+      freeTierModelGateEnabled: 'true',
+      freeTierAllowedModels: '["music_v1"]',
+    });
+    expect(await filterAdmittedMediaModels(user, models)).toEqual([{ id: 'music_v1' }]);
+  });
+
+  it('preserves an API key caller whose admin role was withheld on the request', async () => {
+    mocks.user.mockImplementation(async () => ({ id: 'user-1', isAdmin: true, currentCredits: 10_000 }));
+    await expect(assertMediaModelAdmission('user-1', 'image-model', true)).rejects.toMatchObject({
+      additionalInfo: { errorCode: MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE },
+    });
+    await expect(assertMediaModelAdmission('user-1', 'image-model', false)).resolves.toBeUndefined();
+  });
+
+  it('allows the same media model with a paid plan', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    await expect(assertMediaModelAdmission('user-1', 'image-model')).resolves.toBeUndefined();
+  });
+
+  it('applies the billing organization model policy when an org id is given', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedModels: ['video-model'] } });
+    await expect(assertMediaModelAdmission('user-1', 'image-model', false, 'org-1')).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(mocks.org).toHaveBeenCalledWith('org-1');
+    await expect(assertMediaModelAdmission('user-1', 'video-model', false, 'org-1')).resolves.toBeUndefined();
+    await expect(assertMediaModelAdmission('user-1', 'image-model', false, null)).resolves.toBeUndefined();
+  });
+
+  it('admits an allowed provider media model under a provider allowlist and refuses the others', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['openai'] } });
+    for (const modelId of ['gpt-image-1', 'tts-1-hd', 'gpt-4o-mini-tts']) {
+      await expect(assertMediaModelAdmission('user-1', modelId, false, 'org-1')).resolves.toBeUndefined();
+    }
+    for (const modelId of ['flux-pro', 'music_v1', 'eleven_text_to_sound_v2']) {
+      await expect(assertMediaModelAdmission('user-1', modelId, false, 'org-1')).rejects.toMatchObject({
+        additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+      });
+    }
+    const user = { id: 'user-1' } as Parameters<typeof filterAdmittedMediaModels>[0];
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['xai'] } });
+    const videos = [{ id: 'grok-imagine-video-1.5' }, { id: 'flux-3-video' }];
+    expect(await filterAdmittedMediaModels(user, videos, 'org-1')).toEqual([{ id: 'grok-imagine-video-1.5' }]);
+  });
+
+  it('judges an org provider allowlist by the dispatch vendor when one is given', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['openai'] } });
+    // An OpenAI model id sent to a vendor outside ModelBackend (null) is refused, whatever its id suggests.
+    await expect(assertMediaModelAdmission('user-1', 'gpt-4o-mini-tts', false, 'org-1', null)).rejects.toMatchObject({
+      additionalInfo: { errorCode: ORG_MODEL_NOT_ALLOWED_ERROR_CODE },
+    });
+    expect(await isMediaModelAdmitted('user-1', 'gpt-4o-mini-tts', false, 'org-1', null)).toBe(false);
+    expect(await isMediaModelAdmitted('user-1', 'gpt-4o-mini-tts', false, 'org-1')).toBe(true);
+    expect(await isMediaModelAdmitted('user-1', 'eleven_multilingual_v2', false, 'org-1', null)).toBe(false);
+  });
+
+  it('fails closed with a retryable error if plan lookup fails', async () => {
+    mocks.entitlements.mockRejectedValue(new Error('unavailable'));
+    await expect(assertMediaModelAdmission('user-1', 'image-model')).rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  it('admits Gemini music consistently in job admission and picker filtering', async () => {
+    mocks.entitlements.mockResolvedValue([PAID_PLAN_ENTITLEMENT_KEY]);
+    mocks.org.mockResolvedValue({ id: 'org-1', modelPolicy: { allowedProviders: ['gemini'] } });
+    const user = { id: 'user-1' } as Parameters<typeof filterAdmittedMediaModels>[0];
+    await expect(assertMediaModelAdmission(user, 'lyria-3.5', false, 'org-1')).resolves.toBeUndefined();
+    expect(
+      await filterAdmittedMediaModels(
+        user,
+        [{ id: 'lyria-3.5' }, { id: 'lyria-3-clip-preview' }, { id: 'music_v2_5' }, { id: 'test-music' }],
+        'org-1'
+      )
+    ).toEqual([{ id: 'lyria-3.5' }, { id: 'lyria-3-clip-preview' }]);
+  });
+});

@@ -35,8 +35,7 @@ const PICKED_THING: Record<LakeSourceKind, string> = { github: 'repository', goo
  * connector the lake was created for (`pendingConnector`); an absent or unrecognized value falls back
  * to GitHub.
  *
- * Shown only once both connection reads have resolved to "none" and the caller may connect (an
- * appointed org admin can read the status, but both connect routes are owner/manager only): a failed
+ * Shown only once both connection reads have resolved to "none" and the caller may connect: a failed
  * or in-flight read, a bound Drive folder or GitHub repository, or any file in the lake hides it. The reads, not
  * `pendingConnector`, decide "no source", because clearing that field on bind is best-effort
  * server-side. With EnableDataLakeGitHub off the GitHub read is replaced by the list's

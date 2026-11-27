@@ -1,16 +1,18 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { createOAuthClient, listOAuthClients } from '@bike4mind/database';
 import { ApiKeyScope, createOAuthClientSchema } from '@bike4mind/common';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  fullAdminMethods: ['POST'],
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     res.status(200).json(await listOAuthClients());
   })
   .post(async (req, res) => {
-    ensureAdmin(req.user?.isAdmin);
     const input = parseOrBadRequest(createOAuthClientSchema, req.body);
     const result = await createOAuthClient(input);
 
@@ -22,6 +24,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         clientId: result.client.clientId,
         clientType: result.client.clientType,
         redirectUris: result.client.redirectUris,
+        postLogoutRedirectUris: result.client.postLogoutRedirectUris,
         federated: !!result.client.federatedIdp,
       },
     });

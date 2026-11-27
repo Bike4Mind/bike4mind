@@ -1,12 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import {
+  ForbiddenError,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionId,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
 
 /**
  * Admin reset-rate-limit route contract: the admin guard short-circuits before
  * any repo call, the id param is validated before the lookup, a missing key
  * 404s before the reset, and a success clears the counters and writes the
  * audit event. The reset primitive itself (atomicity, per-counter failure
- * isolation) is covered by server/utils/apiKeyRateLimitCheck.test.ts and
+ * isolation) is covered by packages/server-utils/src/utils/apiKeyRateLimitCheck.test.ts and
  * apiKeyRateLimitReset.e2e.test.ts - only `resetApiKeyRateLimit` is mocked
  * here; `evaluateCounterLockout`, `resolveCounterLimit`, and
  * `MANAGEMENT_RATE_LIMIT` run for real so this route's ceiling-resolution
@@ -14,15 +21,17 @@ import { createMocks } from 'node-mocks-http';
  */
 
 const mockRefs = vi.hoisted(() => ({
+  options: null as unknown,
   postHandler: null as null | ((req: any, res: any) => unknown),
   otherVerbs: [] as string[],
 }));
 
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const verb = (name: string) => () => {
     mockRefs.otherVerbs.push(name);
     return chain;
   };
+  let permissions: Partial<Record<string, AdminPermissionRequirement>> = {};
   const chain: any = {
     use: () => chain,
     get: verb('get'),
@@ -30,11 +39,26 @@ vi.mock('@server/middlewares/baseApi', () => {
     patch: verb('patch'),
     delete: verb('delete'),
     post: (fn: any) => {
-      mockRefs.postHandler = fn;
+      mockRefs.postHandler = async (
+        req: { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] },
+        res: unknown
+      ) => {
+        const requirement = permissions.POST;
+        if (requirement && !meetsAdminPermissionRequirement(req.user, requirement)) {
+          throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+        }
+        return fn(req, res);
+      };
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    adminApi: (options: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
+      permissions = options.adminPermissions;
+      mockRefs.options = options;
+      return chain;
+    },
+  };
 });
 vi.mock('@server/middlewares/csrfProtection', () => ({
   csrfProtection: () => (_req: any, _res: any, next: any) => next(),
@@ -42,11 +66,13 @@ vi.mock('@server/middlewares/csrfProtection', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
 const findById = vi.hoisted(() => vi.fn());
+const findOwner = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById: findOwner } }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
 
 const resetApiKeyRateLimit = vi.hoisted(() => vi.fn());
-vi.mock('@server/utils/apiKeyRateLimitCheck', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/utils/apiKeyRateLimitCheck')>();
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/utils/apiKeyRateLimitCheck')>();
   return { ...actual, resetApiKeyRateLimit };
 });
 
@@ -61,7 +87,13 @@ vi.mock('@bike4mind/services', async importOriginal => {
 // The real failure path (logEventSafe swallowing a thrown write) is covered by
 // analytics-failure.test.ts, which leaves analyticsLog unmocked.
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
+
+const recordAdminActionFromRequest = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest,
+}));
 
 import '@pages/api/admin/user-api-keys/[id]/reset-rate-limit';
 
@@ -72,8 +104,12 @@ const storedKey = {
   rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
 };
 
-function post(query: Record<string, unknown>, user?: Record<string, unknown>) {
-  const { req, res } = createMocks({ method: 'POST', query });
+function post(
+  query: Record<string, unknown>,
+  user?: Record<string, unknown>,
+  body: unknown = { reason: 'Support request' }
+) {
+  const { req, res } = createMocks({ method: 'POST', query, body });
   if (user) (req as any).user = user;
   (req as any).ability = {};
   (req as any).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -81,27 +117,36 @@ function post(query: Record<string, unknown>, user?: Record<string, unknown>) {
 }
 
 const admin = { id: 'admin-1', username: 'admin', isAdmin: true };
+const delegate = {
+  id: 'mod-1',
+  username: 'mod',
+  isAdmin: false,
+  adminPermissions: ['users:moderate' as AdminPermissionId],
+};
+
+const postAs = (user: Record<string, unknown>) => post({ id: 'key-1' }, user);
 
 describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findById.mockResolvedValue(storedKey);
+    findOwner.mockResolvedValue({ id: 'owner-1' });
     resetApiKeyRateLimit.mockResolvedValue({
       request: { minute: 0, day: 0 },
       management: { minute: 0, day: 0 },
     });
   });
 
-  it('rejects a non-admin before touching any data source', async () => {
-    const { req, res } = post({ id: 'key-1' }, { id: 'u1', isAdmin: false });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
+  it('refuses a delegate without users:moderate before touching any data source', async () => {
+    const { req, res } = post({ id: 'key-1' }, { id: 'u1', isAdmin: false, adminPermissions: ['support:read'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(findById).not.toHaveBeenCalled();
     expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
   });
 
-  it('rejects an unauthenticated request (no req.user) the same way', async () => {
+  it('refuses an unauthenticated request (no req.user) the same way', async () => {
     const { req, res } = post({ id: 'key-1' });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
     expect(findById).not.toHaveBeenCalled();
   });
 
@@ -120,6 +165,18 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     const { req, res } = post({ id: 'ghost' }, admin);
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/not found/i);
     expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', {}],
+    ['too short', { reason: 'no' }],
+    ['blank', { reason: '   ' }],
+  ])('rejects a %s reason without reading or resetting a key', async (_label, body) => {
+    const { req, res } = post({ id: 'key-1' }, admin, body);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+    expect(findById).not.toHaveBeenCalled();
+    expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
   });
 
   it('resets the resolved key id and writes the audit event on success', async () => {
@@ -153,6 +210,25 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
       { ability: (req as any).ability },
       (req as any).logger,
       'API key key-1'
+    );
+  });
+
+  it('records user.api_key.rate_limit_reset against the key after the reset', async () => {
+    const { req, res } = post({ id: 'key-1' }, admin);
+    await mockRefs.postHandler!(req, res);
+
+    expect(recordAdminActionFromRequest).toHaveBeenCalledTimes(1);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.api_key.rate_limit_reset',
+        target: { kind: 'apiKey', id: 'key-1', displayName: 'wedged key' },
+        reason: 'Support request',
+        details: expect.objectContaining({ ownerUserId: 'owner-1' }),
+      })
+    );
+    expect(recordAdminActionFromRequest.mock.invocationCallOrder[0]).toBeGreaterThan(
+      resetApiKeyRateLimit.mock.invocationCallOrder[0]
     );
   });
 
@@ -226,5 +302,46 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
   it('registers POST only, so next-connect 405s every other verb', () => {
     expect(mockRefs.postHandler).not.toBeNull();
     expect(mockRefs.otherVerbs).toEqual([]);
+  });
+
+  it('declares users:moderate for POST', () => {
+    expect(mockRefs.options).toEqual(expect.objectContaining({ adminPermissions: { POST: 'users:moderate' } }));
+  });
+
+  it.each([
+    ['a full administrator', { isAdmin: true }],
+    ['a delegate with admin permissions', { adminPermissions: ['support:read'] }],
+  ])('refuses a users:moderate delegate acting on the key of %s', async (_label, adminFields) => {
+    findOwner.mockResolvedValue({ id: 'owner-1', ...adminFields });
+    const { req, res } = postAs(delegate);
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(
+      'Only full administrators can reset the API key limits of users with admin access'
+    );
+    expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
+    expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+  });
+
+  it('lets a delegate act on the key of an ordinary user', async () => {
+    const { req, res } = postAs(delegate);
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('lets a full admin act on the key of an admin user', async () => {
+    findOwner.mockResolvedValue({ id: 'owner-1', isAdmin: true });
+    const { req, res } = postAs(admin);
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('skips the owner check for an orphaned key', async () => {
+    findOwner.mockResolvedValue(null);
+    const { req, res } = postAs(delegate);
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
   });
 });

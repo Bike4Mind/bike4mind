@@ -10,20 +10,18 @@ interface ScriptComponentProps {
 }
 const ScriptComponent = Script as React.ComponentType<ScriptComponentProps>;
 import { Button, Select, Option, IconButton, Input, CircularProgress } from '@mui/joy';
-import {
-  Google as GoogleIcon,
-  Folder,
-  Description,
-  Image,
-  FilePresent,
-  MoreVert,
-  Download,
-  Share,
-  BorderAll,
-  Slideshow,
-  Search,
-  Upload,
-} from '@mui/icons-material';
+import GoogleIcon from '@mui/icons-material/Google';
+import Folder from '@mui/icons-material/Folder';
+import Description from '@mui/icons-material/Description';
+import Image from '@mui/icons-material/Image';
+import FilePresent from '@mui/icons-material/FilePresent';
+import MoreVert from '@mui/icons-material/MoreVert';
+import Download from '@mui/icons-material/Download';
+import Share from '@mui/icons-material/Share';
+import BorderAll from '@mui/icons-material/BorderAll';
+import Slideshow from '@mui/icons-material/Slideshow';
+import Search from '@mui/icons-material/Search';
+import Upload from '@mui/icons-material/Upload';
 import { toast } from 'sonner';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { IFabFileDocument, IShareableDocument, KnowledgeType } from '@bike4mind/common';

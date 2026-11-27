@@ -1,9 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import { ADMIN_AUDIT_LOG_TAB_SLUG, ADMIN_FEEDBACK_TAB_SLUG, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import { AdminTab } from './adminSidebarConfig';
-import { adminTabFromSlug, adminTabToSlug } from './adminTabSlugs';
+import { ADMIN_WAITLIST_TAB_SLUG } from './adminTabParams';
+import {
+  ADMIN_TAB_SLUG_REDIRECTS,
+  adminTabAlias,
+  adminTabFromSlug,
+  adminTabLinkSearch,
+  adminTabRedirectFromSlug,
+  adminTabToSlug,
+} from './adminTabSlugs';
 
-const ALL_TABS = Object.values(AdminTab).filter((value): value is AdminTab => typeof value === 'number');
+const RETIRED_TABS = [
+  AdminTab.RegistrationInvites,
+  AdminTab.PartnerSignupRules,
+  AdminTab.HeldSignupGrants,
+  AdminTab.SecOpsTriage,
+];
+const ALL_TABS = Object.values(AdminTab).filter(
+  (value): value is AdminTab => typeof value === 'number' && !RETIRED_TABS.includes(value)
+);
 
 describe('adminTabToSlug', () => {
   it('gives every AdminTab member a URL-safe slug', () => {
@@ -18,7 +34,7 @@ describe('adminTabToSlug', () => {
   });
 
   it('round-trips every tab through its slug', () => {
-    for (const tab of ALL_TABS) {
+    for (const tab of ALL_TABS.filter(tab => tab !== AdminTab.ModelLifecycle)) {
       expect(adminTabFromSlug(adminTabToSlug(tab))).toBe(tab);
     }
   });
@@ -33,6 +49,72 @@ describe('adminTabToSlug', () => {
     expect(adminTabToSlug('some-injected-tab')).toBeUndefined();
     expect(adminTabToSlug(9999 as AdminTab)).toBeUndefined();
   });
+
+  it.each(RETIRED_TABS)('has no slug of its own for retired tab %s', tab => {
+    expect(adminTabToSlug(tab)).toBeUndefined();
+  });
+});
+
+describe('adminTabRedirectFromSlug', () => {
+  it.each([
+    ['subscribers', undefined],
+    ['registration-invites', 'invites'],
+    ['partner-signup-rules', 'partners'],
+    ['held-signup-grants', 'pending'],
+  ])('sends %s to the waitlist tab with section %s', (slug, section) => {
+    const redirect = adminTabRedirectFromSlug(slug);
+    expect(redirect?.tab).toBe(AdminTab.Waitlist);
+    expect(redirect?.search?.inviteSection).toBe(section);
+    expect(redirect?.search?.heldGrants).toBe(slug === 'held-signup-grants' ? 'open' : undefined);
+    expect(adminTabFromSlug(slug)).toBeUndefined();
+  });
+
+  it('sends the retired issue filing page to the Security page, Scans view', () => {
+    const redirect = adminTabRedirectFromSlug('sec-ops-triage');
+    expect(redirect?.tab).toBe(AdminTab.SecurityDashboard);
+    expect(redirect?.search).toEqual({ securityView: 'scans' });
+    expect(adminTabFromSlug('sec-ops-triage')).toBeUndefined();
+  });
+
+  it('never redirects a current slug', () => {
+    for (const slug of ADMIN_TAB_SLUG_REDIRECTS.keys()) {
+      expect(ALL_TABS.map(tab => adminTabToSlug(tab))).not.toContain(slug);
+    }
+    expect(adminTabRedirectFromSlug('waitlist')).toBeUndefined();
+  });
+
+  it.each([undefined, '', 'toString', 'constructor', '__proto__'])('reports %j as no redirect', slug => {
+    expect(adminTabRedirectFromSlug(slug)).toBeUndefined();
+  });
+});
+
+describe('adminTabLinkSearch', () => {
+  it('links a current tab by its slug', () => {
+    expect(adminTabLinkSearch(AdminTab.Users)).toEqual({ tab: 'users' });
+  });
+
+  it.each([
+    [AdminTab.RegistrationInvites, 'invites'],
+    [AdminTab.PartnerSignupRules, 'partners'],
+  ])('links retired tab %s to its Invite Center section', (tab, section) => {
+    expect(adminTabLinkSearch(tab)).toEqual({ tab: 'waitlist', inviteSection: section });
+  });
+
+  it('links the retired held grants tab to Pending with the held actions open', () => {
+    expect(adminTabLinkSearch(AdminTab.HeldSignupGrants)).toEqual({
+      tab: 'waitlist',
+      inviteSection: 'pending',
+      heldGrants: 'open',
+    });
+  });
+
+  it('links the retired issue filing page to the Security page, Scans view', () => {
+    expect(adminTabLinkSearch(AdminTab.SecOpsTriage)).toEqual({ tab: 'security-dashboard', securityView: 'scans' });
+  });
+
+  it('names no tab for a value that is not a member', () => {
+    expect(adminTabLinkSearch(Number.NaN)).toEqual({ tab: undefined });
+  });
 });
 
 describe('adminTabFromSlug', () => {
@@ -42,6 +124,23 @@ describe('adminTabFromSlug', () => {
 
   it('resolves the audit log slug to the audit log tab', () => {
     expect(adminTabFromSlug(ADMIN_AUDIT_LOG_TAB_SLUG)).toBe(AdminTab.AuditLog);
+  });
+
+  it('resolves the renamed waitlist slug to the waitlist tab', () => {
+    expect(adminTabFromSlug('waitlist')).toBe(AdminTab.Waitlist);
+    expect(adminTabToSlug(AdminTab.Waitlist)).toBe(ADMIN_WAITLIST_TAB_SLUG);
+    expect(ADMIN_WAITLIST_TAB_SLUG).toBe('waitlist');
+  });
+
+  it('resolves the renamed models slug and the retired model lifecycle slug to the models tab', () => {
+    expect(adminTabToSlug(AdminTab.Models)).toBe('models');
+    expect(adminTabFromSlug('models')).toBe(AdminTab.Models);
+    expect(adminTabFromSlug('llm-dashboard')).toBe(AdminTab.Models);
+    expect(adminTabAlias('llm-dashboard')).toEqual({ tab: AdminTab.Models });
+    expect(adminTabToSlug(AdminTab.ModelLifecycle)).toBe('model-lifecycle');
+    expect(adminTabFromSlug('model-lifecycle')).toBe(AdminTab.Models);
+    expect(adminTabAlias('model-lifecycle')).toEqual({ tab: AdminTab.Models, search: { modelsSection: 'discovery' } });
+    expect(adminTabAlias('models')).toBeUndefined();
   });
 
   it('resolves the users slug to the users tab', () => {

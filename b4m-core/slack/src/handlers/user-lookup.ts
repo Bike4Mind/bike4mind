@@ -1,21 +1,20 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { slackIdentityFilter, type IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import type { Block, KnownBlock } from '@slack/web-api';
 import { getSlackDb } from '../di/registry';
 
 /**
- * Find a user by their Slack ID with timeout handling
- * @param slackUserId - The Slack user ID to search for
- * @returns User document if found, null otherwise
+ * Find the account linked to a Slack member in the given workspace, with timeout handling.
+ * Returns null without querying when the request carried no team id.
  */
-export async function findUserBySlackId(slackUserId: string) {
+export async function findUserBySlackId(
+  slackUserId: string,
+  slackTeamId: string | undefined
+): Promise<IUserDocument | null> {
+  if (!slackTeamId) return null;
   try {
     const { User } = getSlackDb();
-    const user = await (User as any)
-      .findOne({
-        'slackSettings.slackUserId': slackUserId,
-        ...VERIFIED_SLACK_IDENTITY_FILTER,
-      })
-      .maxTimeMS(5000); // 5 second timeout instead of default 10 seconds
+    const user = await (User as any).findOne(slackIdentityFilter(slackUserId, slackTeamId)).maxTimeMS(5000); // 5 second timeout instead of default 10 seconds
 
     if (user) {
       // user found; nothing to do here
@@ -56,8 +55,8 @@ export async function handleUnlinkedUser(
     text: string,
     slackBotToken?: string,
     threadTs?: string,
-    blocks?: any[]
-  ) => Promise<any>
+    blocks?: (KnownBlock | Block)[]
+  ) => Promise<unknown>
 ) {
   // Log as warning (not error) since this is an expected scenario for unlinked accounts
   Logger.warn(`⚠️ Slack account not linked - Slack ID: ${slackUserId}`, {

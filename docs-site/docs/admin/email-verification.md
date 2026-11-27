@@ -11,7 +11,7 @@ The Email Verification tab allows administrators to monitor and manage the email
 
 ## Overview
 
-The tab displays a table of users with their email verification details. It supports search, status filtering, pagination, and bulk actions. All actions require confirmation through a modal dialog before execution.
+The tab displays a table of users with their email verification details. It supports search, status filtering and pagination. The page opens with the title **Email verification** and the number of matching users, with a help button and **Refresh** on the right. Verify and unverify open a dialog that asks for a reason; resending a link applies at once.
 
 ## Search and Filtering
 
@@ -21,14 +21,15 @@ The search input supports finding users by username, email, or name. Search is d
 
 ### Status Filter
 
-A dropdown filter narrows the user list by verification status:
+The **Status** filter chip, next to the search box, narrows the user list by verification status. While it is unset, all users are shown regardless of verification status. Its menu offers:
 
 | Filter Value | Description |
 |-------------|-------------|
-| **All Users** | Shows all users regardless of verification status |
 | **Verified** | Shows only users whose email has been verified |
 | **Unverified** | Shows only users who have not yet verified their email |
-| **Pending Verification** | Shows users who have been sent a verification email but have not yet confirmed |
+| **Pending verification** | Shows users who have been sent a verification email but have not yet confirmed |
+
+The filter applies as soon as you pick a value; there is no Apply button. Click the x on the chip to clear it. Changing the search or the status returns the list to its first page.
 
 ## User Table
 
@@ -36,72 +37,79 @@ The table displays the following columns:
 
 | Column | Description |
 |--------|-------------|
-| **Username** | The user's login username |
-| **Email** | Current email address. If a pending email change exists, the new email is shown below with an arrow indicator. Blank for an account created through an OAuth provider that did not assert a verified email - that account has no email on file and signs in through its provider |
-| **Name** | The user's display name |
-| **Status** | Color-coded chip indicating the current state (see Status Indicators below) |
-| **Verified At** | Date and time the email was verified, or `-` if not yet verified |
-| **Last Sent** | Date and time the last verification email was sent |
-| **Expires** | Expiration date of the verification token, or a warning indicator if expired |
-| **Actions** | Context-sensitive action buttons |
+| **User** | The user's login username, their display name below it, and the user ID as a short chip (for example `690078...0001`). Click the chip to copy the full ID. |
+| **Email** | Current email address, shortened with an ellipsis when it is too long for the column. If a pending email change exists, the new email is shown below with an arrow indicator. Blank for an account created through an OAuth provider that did not assert a verified email - that account has no email on file and signs in through its provider |
+| **Status** | Status chip indicating the current state (see Status Indicators below) |
+| **Verified** | Date and time the email was verified, or a dash if not yet verified |
+| **Last sent** | Date and time the last verification email was sent, or a dash |
+| **Link expires** | Expiration date and time of the verification link, or **Expired** with the date once it has passed |
+
+The last cell of each row holds a **...** button that opens the row's actions (see Actions below). On a narrow window the table keeps its columns and scrolls sideways inside its own frame instead of squeezing them.
 
 ## Status Indicators
 
-The status column uses color-coded chips to indicate the user's current verification state:
+The status column uses status chips to indicate the user's current verification state:
 
 | Status | Color | Condition |
 |--------|-------|-----------|
 | **Verified** | Green | Email has been successfully verified |
-| **Pending** | Yellow (warning) | Verification email sent but not yet confirmed, token still valid |
-| **Expired** | Red (danger) | Verification email was sent but the token has expired |
-| **Not Sent** | Gray (neutral) | No verification email has been sent to this user |
-| **Changing Email** | Blue (primary) | User has a pending email change request |
+| **Pending** | Amber | Verification email sent but not yet confirmed, token still valid |
+| **Expired** | Red | Verification email was sent but the token has expired |
+| **Not sent** | Gray | No verification email has been sent to this user |
+| **Changing email** | Indigo | User has a pending email change request |
 
 ## Actions
 
-The available actions depend on the user's current verification state:
+Open a row's menu (**...**) to see its actions. The available actions depend on the user's current verification state:
 
 ### For Unverified Users
 
 | Action | Description |
 |--------|-------------|
-| **Verify** | Manually mark the email as verified without requiring the user to click a verification link |
-| **Resend** | Send a new verification email to the user's current email address |
+| **Verify email** | Manually mark the email as verified without requiring the user to click a verification link |
+| **Resend verification email** | Send a new verification email to the user's current email address |
 
 ### For Verified Users
 
 | Action | Description |
 |--------|-------------|
-| **Unverify** | Revoke the verified status, requiring the user to verify their email again |
+| **Unverify email** | Revoke the verified status, requiring the user to verify their email again |
 
 ### For Users with Pending Email Changes
 
 | Action | Description |
 |--------|-------------|
-| **Resend Change** | Resend the email change verification to the user's pending new email address |
+| **Resend email change link** | Resend the email change verification to the user's pending new email address |
 
-## Confirmation Modal
+## Verify and Unverify Dialog
 
-All actions trigger a confirmation modal before execution. The modal displays:
+**Verify email** and **Unverify email** open a dialog before anything changes. The dialog displays:
 
-- The action being performed (Resend, Verify, Unverify, or Resend Email Change)
+- The action being performed (Verify email or Unverify email)
 - The affected user's email and username
-- For unverify actions, a warning that the user will need to verify again
-- Cancel and confirm buttons (the confirm button uses danger styling for unverify actions)
+- For unverify, a note that the user will have to verify the address again
+- A reason: pick a preset or write a note of at least 5 characters. The reason is recorded with the change. Verify offers Ownership confirmed by support and Internal testing; Unverify also offers Bounced or invalid address.
+- Cancel and confirm buttons (the confirm button is red for unverify)
+
+## Resending Links
+
+**Resend verification email** and **Resend email change link** apply as soon as you pick them, with no confirmation step, and a toast confirms the send. While a send is in progress, the same item in that row's menu is disabled and reads **Sending verification email** or **Sending email change link**, so a second click cannot send twice.
 
 ## Pagination
 
-Pagination controls appear above and below the table:
+The table has one pager, in its footer:
 
 | Setting | Values |
 |---------|--------|
-| Items per page | 10, 20 (default), 50 |
-| Navigation | Previous / Next buttons with current page and total pages |
-| Total count | Displayed as "Total Users: N" |
+| Rows per page | 25 (default), 50, 100 |
+| Navigation | Previous and next arrow buttons |
+| Range | Displayed as "1 to 25 of N", where N is the number of matching users (also shown beside the page title) |
+
+While the next page loads, the current rows stay on screen.
 
 ## Refresh
 
-The **Refresh** button reloads the verification data from the server. It is disabled while data is being fetched.
+The **Refresh** button in the page header reloads the verification data from the server. It is disabled while data is being fetched. If the list fails to load, a **Try again** button appears in place of the rows.
 
 ## Error Handling
 
@@ -109,8 +117,8 @@ When an action fails, the error message from the backend is displayed as a toast
 
 ## Best Practices
 
-- Use the **Pending Verification** filter to identify users who may need a reminder or manual verification.
-- Check the **Expires** column before resending -- if a token is still valid and not expired, consider waiting before resending.
+- Use the **Pending verification** filter to identify users who may need a reminder or manual verification.
+- Check the **Link expires** column before resending -- if a token is still valid and not expired, consider waiting before resending.
 - Use **manual verification** sparingly and only for cases where the user cannot receive email (such as email delivery issues).
 - The **Unverify** action should be used cautiously, as it requires the user to go through the verification process again.
 - Monitor the **Changing Email** status to ensure email change requests are completing successfully.

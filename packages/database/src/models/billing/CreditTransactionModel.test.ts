@@ -3,7 +3,13 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
 import { CreditTransaction, creditTransactionRepository } from './CreditTransactionModel';
-import { CreditHolderType } from '@bike4mind/common';
+import {
+  COMPLETION_RUN_USAGE_MAX_ATTEMPTS,
+  CreditHolderType,
+  GenericCreditDeductTransaction,
+  GenericDeductReasons,
+  LEDGER_USAGE_TRANSACTION_TYPES,
+} from '@bike4mind/common';
 
 let mongod: MongoMemoryServer;
 
@@ -176,6 +182,20 @@ describe('CreditTransactionRepository.apiKeyUsageForOwner', () => {
     ]);
   });
 
+  it('adds every key-attributed row to creditsSpent but counts only completion and decision rows as requests', async () => {
+    await seed([
+      // One chat turn writes a text row and a tool row; neither is an API request of its own.
+      { type: 'text_generation_usage', apiKeyId: 'key-a', credits: -40, createdAt: recent() },
+      { type: 'tool_usage', apiKeyId: 'key-a', credits: -5, createdAt: recent() },
+      { type: 'completion_api_usage', apiKeyId: 'key-a', credits: -10, createdAt: recent() },
+      { type: 'decision_usage', apiKeyId: 'key-a', credits: -3, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.apiKeyUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toMatchObject([{ apiKeyId: 'key-a', requests: 2, creditsSpent: 58 }]);
+  });
+
   it('scopes to the owner and the trailing window', async () => {
     await seed([{ type: 'completion_api_usage', apiKeyId: 'key-a', credits: -10, createdAt: recent() }]);
     await seed([
@@ -294,74 +314,58 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
   });
 });
 
-describe('CreditTransactionRepository.queryAdminAdjustmentsPage', () => {
-  const USER = 'user-1';
+describe('CreditTransactionRepository.usageTotalForOwner', () => {
   const recent = () => new Date();
-  const seedAdjustments = (rows: Array<Record<string, unknown>>) =>
-    CreditTransaction.collection.insertMany(
-      rows.map(r => ({
-        ownerId: USER,
-        ownerType: CreditHolderType.User,
-        credits: 50,
-        type: 'generic_add',
-        reason: 'admin_adjustment',
-        createdAt: day(1),
-        updatedAt: day(1),
-        ...r,
-      }))
-    );
 
-  it('returns admin adjustments across all users, newest first, paginated', async () => {
-    await seedAdjustments([
-      { ownerId: 'user-a', createdAt: day(1) },
-      { ownerId: 'user-b', type: 'generic_deduct', credits: -20, createdAt: day(3) },
-      { ownerId: 'user-c', createdAt: day(2) },
-    ]);
-
-    const page1 = await creditTransactionRepository.queryAdminAdjustmentsPage({ limit: 2, skip: 0 });
-    expect(page1.total).toBe(3);
-    expect(page1.data.map(d => d.createdAt.getTime())).toEqual([day(3).getTime(), day(2).getTime()]);
-    expect(page1.data.map(d => d.ownerId)).toEqual(['user-b', 'user-c']);
-  });
-
-  it('excludes non-admin generic writes and usage/org rows', async () => {
-    await seedAdjustments([{ createdAt: recent() }]); // admin adjustment (kept)
+  it('sums every usage type, including generic deducts, and leaves out transfers and credits added', async () => {
     await seed([
-      // OTC-style generic_add against a user, but not an admin adjustment
-      {
-        ownerId: USER,
-        ownerType: CreditHolderType.User,
-        type: 'generic_add',
-        reason: 'OTC registration',
-        credits: 100,
-        createdAt: recent(),
-      },
-      // usage row
-      {
-        ownerId: USER,
-        ownerType: CreditHolderType.User,
-        type: 'text_generation_usage',
-        credits: -5,
-        createdAt: recent(),
-      },
-      // admin_adjustment but on an organization holder
-      { type: 'generic_deduct', reason: 'admin_adjustment', credits: -10, createdAt: recent() },
+      { credits: -40, createdAt: recent() },
+      { type: 'tool_usage', credits: -5000, createdAt: recent() },
+      { type: 'generic_deduct', credits: -29, createdAt: recent() },
+      { type: 'transfer_credit', credits: -100, createdAt: recent() },
+      { type: 'purchase', credits: 500, createdAt: recent() },
     ]);
 
-    const { data, total } = await creditTransactionRepository.queryAdminAdjustmentsPage({ limit: 50, skip: 0 });
-    expect(total).toBe(1);
-    expect(data[0].ownerType).toBe(CreditHolderType.User);
-    expect(data[0].reason).toBe('admin_adjustment');
+    const total = await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization);
+
+    expect(total).toEqual({ creditsCharged: 5069, transactions: 3 });
   });
 
-  it('honors the trailing-day window', async () => {
-    await seedAdjustments([{ createdAt: recent() }]);
-    let res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
-    expect(res.total).toBe(1);
+  it('agrees with the ledger section total (same type filter and abs) over one fixture set', async () => {
+    const ago = (days: number) => new Date(Date.now() - days * 86_400_000);
+    const rows = [
+      { type: 'text_generation_usage', credits: -40, createdAt: ago(1) },
+      { type: 'tool_usage', credits: -5000, createdAt: ago(2) },
+      { type: 'generic_deduct', credits: -29, createdAt: ago(3) },
+      { type: 'generic_deduct', credits: -11, createdAt: ago(20) },
+      { type: 'transfer_credit', credits: -100, createdAt: ago(1) },
+      { type: 'purchase', credits: 500, createdAt: ago(1) },
+      { type: 'generic_deduct', credits: -7, createdAt: ago(60) },
+    ];
+    await seed(rows);
 
-    await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
-    res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
-    expect(res.total).toBe(0);
+    for (const days of [7, 30]) {
+      const expected = rows
+        .filter(r => r.createdAt >= ago(days) && LEDGER_USAGE_TRANSACTION_TYPES.includes(r.type as never))
+        .reduce((sum, r) => sum + Math.abs(r.credits), 0);
+      const total = await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization, days);
+      expect(total.creditsCharged).toBe(expected);
+    }
+  });
+
+  it('scopes to the owner and the trailing window, and is zero when nothing matches', async () => {
+    await seed([{ credits: -10, createdAt: recent() }]);
+    await seed([{ ownerId: 'org-2', credits: -999, createdAt: recent() }]);
+    await seed([{ credits: -7, createdAt: new Date('2020-01-01') }]);
+
+    expect(await creditTransactionRepository.usageTotalForOwner(ORG, CreditHolderType.Organization, 30)).toEqual({
+      creditsCharged: 10,
+      transactions: 1,
+    });
+    expect(await creditTransactionRepository.usageTotalForOwner('nobody', CreditHolderType.Organization)).toEqual({
+      creditsCharged: 0,
+      transactions: 0,
+    });
   });
 });
 
@@ -414,5 +418,434 @@ describe('CreditTransactionRepository.findAdminAdjustmentsForUser', () => {
     const rows = await creditTransactionRepository.findAdminAdjustmentsForUser('user-1', day(2), day(6), 2);
 
     expect(rows.map(row => row.credits)).toEqual([-20, 10]);
+  });
+});
+
+describe('generic_deduct rows with built-in reasons', () => {
+  it('read back through the per-owner ledger query and still satisfy the transaction schema', async () => {
+    await seed(
+      GenericDeductReasons.map((reason, i) => ({
+        type: 'generic_deduct',
+        reason,
+        credits: -1,
+        createdAt: day(i + 1),
+        updatedAt: day(i + 1),
+      }))
+    );
+
+    const rows = await creditTransactionRepository.findByOwnerWithFilters(ORG, CreditHolderType.Organization, {
+      transactionTypes: ['generic_deduct'],
+    });
+
+    expect(rows.map(r => r.reason).sort()).toEqual([...GenericDeductReasons].sort());
+    for (const row of rows) {
+      const parsed = GenericCreditDeductTransaction.safeParse(row.toObject());
+      expect(parsed.success, `${row.reason}: ${parsed.error?.message}`).toBe(true);
+    }
+  });
+});
+
+describe('admin ledger repository methods', () => {
+  const USER = 'user-ledger';
+  const userRow = (r: Record<string, unknown>) => seed([{ ownerId: USER, ownerType: CreditHolderType.User, ...r }]);
+  const at = (hour: number) => new Date(Date.UTC(2026, 0, 10, hour));
+
+  describe('findLedgerPage', () => {
+    it('pages newest-first with an _id tiebreak and never skips or repeats rows sharing a timestamp', async () => {
+      await seed(
+        [1, 2, 3, 4, 5].map(i => ({
+          ownerId: USER,
+          ownerType: CreditHolderType.User,
+          createdAt: i <= 3 ? at(12) : at(i),
+        }))
+      );
+
+      const seen: string[] = [];
+      let after: { createdAt: Date; id: string } | undefined;
+      for (let guard = 0; guard < 10; guard++) {
+        const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+          after,
+          limit: 2,
+        });
+        if (page.length === 0) break;
+        seen.push(...page.map(row => row.id));
+        const last = page[page.length - 1];
+        after = { createdAt: last.createdAt, id: last.id };
+      }
+
+      expect(seen).toHaveLength(5);
+      expect(new Set(seen).size).toBe(5);
+    });
+
+    it('filters by type and ignores other owners', async () => {
+      await userRow({ type: 'purchase', createdAt: at(1) });
+      await userRow({ type: 'text_generation_usage', createdAt: at(2) });
+      await seed([{ ownerId: 'someone-else', ownerType: CreditHolderType.User, type: 'purchase' }]);
+
+      const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        types: ['purchase'],
+        limit: 10,
+      });
+      expect(page.map(row => row.type)).toEqual(['purchase']);
+    });
+
+    it('filters by model, source and a [from, before) createdAt range, also past a cursor', async () => {
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(1) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(2) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(3) });
+      await userRow({ model: 'm-a', source: 'cli', createdAt: at(4) });
+      await userRow({ model: 'm-b', source: 'cli', createdAt: at(2) });
+      await userRow({ model: 'm-a', source: 'web', createdAt: at(2) });
+
+      const filter = { model: 'm-a', source: 'cli', createdFrom: at(2), createdBefore: at(4) };
+      const page = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        ...filter,
+        limit: 10,
+      });
+      expect(page.map(row => row.createdAt)).toEqual([at(3), at(2)]);
+
+      const next = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, {
+        ...filter,
+        after: { createdAt: page[0].createdAt, id: page[0].id },
+        limit: 10,
+      });
+      expect(next.map(row => row.createdAt)).toEqual([at(2)]);
+    });
+  });
+
+  describe('sumSignedCreditsNewerThan', () => {
+    it('sums only strictly newer rows with type-derived signs', async () => {
+      await userRow({ type: 'text_generation_usage', credits: -5, createdAt: at(1) });
+      await userRow({ type: 'purchase', credits: 100, createdAt: at(2) });
+      await userRow({ type: 'text_generation_usage', credits: 7, createdAt: at(3) });
+      await userRow({ type: 'generic_deduct', credits: -20, createdAt: at(4) });
+
+      const oldest = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, { limit: 10 });
+      const first = oldest[oldest.length - 1];
+      const total = await creditTransactionRepository.sumSignedCreditsNewerThan(USER, CreditHolderType.User, {
+        createdAt: first.createdAt,
+        id: first.id,
+      });
+      // purchase +100, usage -7, deduct -20; the row at the position itself is excluded.
+      expect(total).toBe(73);
+    });
+
+    it('returns 0 when nothing is newer', async () => {
+      await userRow({ type: 'purchase', credits: 10, createdAt: at(1) });
+      const [newest] = await creditTransactionRepository.findLedgerPage(USER, CreditHolderType.User, { limit: 1 });
+      expect(
+        await creditTransactionRepository.sumSignedCreditsNewerThan(USER, CreditHolderType.User, {
+          createdAt: newest.createdAt,
+          id: newest.id,
+        })
+      ).toBe(0);
+    });
+  });
+
+  describe('summarizeAiSpend', () => {
+    const now = new Date(Date.UTC(2026, 5, 15, 12));
+    const hoursAgo = (h: number) => new Date(now.getTime() - h * 3600_000);
+
+    it('splits spend across windows, picks the top model and buckets days', async () => {
+      await userRow({ type: 'text_generation_usage', credits: -10, model: 'm-a', createdAt: hoursAgo(1) });
+      await userRow({ type: 'completion_api_usage', credits: -30, model: 'm-b', createdAt: hoursAgo(48) });
+      await userRow({ type: 'text_generation_usage', credits: -100, model: 'm-a', createdAt: hoursAgo(24 * 20) });
+      await userRow({ type: 'text_generation_usage', credits: -1000, model: 'm-c', createdAt: hoursAgo(24 * 60) });
+      await userRow({ type: 'purchase', credits: 500, createdAt: hoursAgo(2) });
+      await userRow({ type: 'transfer_credit', credits: -999, createdAt: hoursAgo(2) });
+
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary.spent).toEqual({ last24h: 10, last7d: 40, last30d: 140 });
+      expect(summary.topModel30d).toEqual({ model: 'm-a', credits: 110 });
+      expect(summary.dailyCredits.reduce((sum, d) => sum + d.credits, 0)).toBe(1140);
+      expect(summary.dailyCredits.map(d => d.day)).toEqual([...summary.dailyCredits.map(d => d.day)].sort());
+    });
+
+    it('buckets spend by model and source over day-aligned 7/30/90 windows that match the daily series', async () => {
+      // Inside a rolling 7 x 24h window but before the first of the last 7 UTC days (June 9).
+      const june8Evening = new Date(Date.UTC(2026, 5, 8, 18));
+      await userRow({ credits: -10, model: 'm-a', source: 'web', createdAt: june8Evening });
+      await userRow({ credits: -5, model: 'm-a', source: 'web', createdAt: hoursAgo(1) });
+      await userRow({ credits: -20, model: 'm-b', source: 'cli', createdAt: hoursAgo(24 * 20) });
+      await userRow({ credits: -40, source: 'cli', createdAt: hoursAgo(24 * 60) });
+      await userRow({ credits: -80, model: 'm-a', createdAt: hoursAgo(24 * 100) });
+      await userRow({ type: 'purchase', credits: 500, model: 'm-a', createdAt: hoursAgo(1) });
+
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary.byModel).toEqual([
+        { key: null, last7d: 0, last30d: 0, last90d: 40 },
+        { key: 'm-b', last7d: 0, last30d: 20, last90d: 20 },
+        { key: 'm-a', last7d: 5, last30d: 15, last90d: 15 },
+      ]);
+      expect(summary.bySource).toEqual([
+        { key: 'cli', last7d: 0, last30d: 20, last90d: 60 },
+        { key: 'web', last7d: 5, last30d: 15, last90d: 15 },
+      ]);
+      const last7Days = summary.dailyCredits.filter(d => d.day >= '2026-06-09');
+      expect(last7Days.reduce((sum, d) => sum + d.credits, 0)).toBe(5);
+    });
+
+    it('returns zeros and a null top model when there is no usage', async () => {
+      const summary = await creditTransactionRepository.summarizeAiSpend(USER, CreditHolderType.User, now);
+      expect(summary).toEqual({
+        spent: { last24h: 0, last7d: 0, last30d: 0 },
+        topModel30d: null,
+        dailyCredits: [],
+        byModel: [],
+        bySource: [],
+      });
+    });
+  });
+
+  describe('findLatestTopUp', () => {
+    it('returns the newest completed purchase or subscription, skipping pending purchases', async () => {
+      await userRow({ type: 'subscription', credits: 50, createdAt: at(1) });
+      await userRow({ type: 'purchase', credits: 200, status: 'completed', createdAt: at(2) });
+      await userRow({ type: 'purchase', credits: 900, status: 'pending', createdAt: at(3) });
+      await userRow({ type: 'generic_add', credits: 1, createdAt: at(4) });
+
+      const top = await creditTransactionRepository.findLatestTopUp(USER, CreditHolderType.User);
+      expect(top?.type).toBe('purchase');
+      expect(top?.credits).toBe(200);
+    });
+
+    it('returns null when the owner never topped up', async () => {
+      expect(await creditTransactionRepository.findLatestTopUp(USER, CreditHolderType.User)).toBeNull();
+    });
+  });
+});
+
+describe('purchase reversal', () => {
+  const USER = 'user-1';
+  const purchase = (r: Record<string, unknown>) => ({
+    ownerId: USER,
+    ownerType: CreditHolderType.User,
+    type: 'purchase',
+    status: 'completed',
+    amount: 1000,
+    ...r,
+  });
+
+  it('marks a purchase reversed once and keeps the first reason on redelivery', async () => {
+    await seed([purchase({ stripePaymentIntentId: 'pi_1' })]);
+
+    const first = await creditTransactionRepository.markPurchaseReversed('pi_1', 'refunded');
+    const again = await creditTransactionRepository.markPurchaseReversed('pi_1', 'dispute_lost');
+
+    expect(first?.reversalReason).toBe('refunded');
+    expect(again?.reversalReason).toBe('refunded');
+    expect(again?.reversedAt?.getTime()).toBe(first?.reversedAt?.getTime());
+  });
+
+  it('returns null when no purchase row carries the payment intent', async () => {
+    await seed([
+      { ownerId: USER, ownerType: CreditHolderType.User, type: 'subscription', stripePaymentIntentId: 'pi_s' },
+    ]);
+
+    expect(await creditTransactionRepository.markPurchaseReversed('pi_s', 'refunded')).toBeNull();
+    expect(await creditTransactionRepository.markPurchaseReversed('pi_none', 'refunded')).toBeNull();
+  });
+
+  it('counts a legacy row without the field as unreversed and skips reversed and failed rows', async () => {
+    await seed([
+      purchase({ stripePaymentIntentId: 'pi_rev', reversedAt: day(2), reversalReason: 'refunded' }),
+      purchase({ stripePaymentIntentId: 'pi_fail', status: 'failed' }),
+    ]);
+    expect(await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User)).toBeNull();
+
+    await seed([purchase({ stripePaymentIntentId: 'pi_legacy' })]);
+    const found = await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User);
+    expect(found?.stripePaymentIntentId).toBe('pi_legacy');
+    expect(await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.Organization)).toBeNull();
+  });
+
+  it.each([
+    ['missing', (row: Record<string, unknown>) => delete row.status],
+    ['null', (row: Record<string, unknown>) => (row.status = null)],
+  ])('counts a legacy purchase whose status is %s as unreversed', async (_label, strip) => {
+    const row = purchase({ stripePaymentIntentId: 'pi_nostatus' });
+    strip(row);
+    await seed([row]);
+    const stored = await CreditTransaction.collection.findOne({ stripePaymentIntentId: 'pi_nostatus' });
+    expect(stored?.status ?? 'absent').not.toBe('completed');
+
+    const found = await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User);
+    expect(found?.stripePaymentIntentId).toBe('pi_nostatus');
+  });
+});
+
+describe('CreditTransactionRepository.completionRunSpend', () => {
+  const RUN = '0b6f3c2e-7d4a-4f51-9a8e-2c1d5e6f7a80';
+  const OWNER = { ownerId: ORG, ownerType: CreditHolderType.Organization };
+
+  /** A settled completion row as cliCompletions writes it: negative credits, lineage under metadata.run. */
+  const completionRow = (
+    credits: number,
+    run: Record<string, unknown>,
+    extra: Record<string, unknown> = {}
+  ): Record<string, unknown> => ({
+    type: 'completion_api_usage',
+    credits: -credits,
+    model: 'claude-sonnet-5-5',
+    inputTokens: 100,
+    outputTokens: 10,
+    cacheReadTokens: 1000,
+    cacheWriteTokens: 50,
+    metadata: { requestId: `req-${credits}`, run: { runId: RUN, ...run } },
+    ...extra,
+  });
+
+  it('sums each settled row once, with breakdowns by role, purpose, model and attempt', async () => {
+    await seed([
+      completionRow(40, { role: 'root' }),
+      completionRow(30, { role: 'worker', purpose: 'turn', taskId: 'task-a', attemptId: 'a1' }),
+      // A retry of the same task is its own attempt.
+      completionRow(20, { role: 'worker', taskId: 'task-a', attemptId: 'a2' }, { model: 'claude-haiku-5-5' }),
+      completionRow(10, { role: 'worker', purpose: 'explore', taskId: 'task-a', attemptId: 'a2' }),
+      // A settled request the ledger charged nothing for still counts as a request.
+      completionRow(0, { role: 'worker', taskId: 'task-b', attemptId: 'b1' }),
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled).toEqual({
+      creditsCharged: 100,
+      requests: 5,
+      inputTokens: 500,
+      outputTokens: 50,
+      cacheReadTokens: 5000,
+      cacheWriteTokens: 250,
+    });
+    expect(spend.byRole.map(r => [r.role, r.creditsCharged, r.requests])).toEqual([
+      ['worker', 60, 4],
+      ['root', 40, 1],
+    ]);
+    // A request sent without a purpose was a turn.
+    expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
+      ['turn', 90],
+      ['explore', 10],
+    ]);
+    expect(spend.byModel.map(r => [r.model, r.creditsCharged])).toEqual([
+      ['claude-sonnet-5-5', 80],
+      ['claude-haiku-5-5', 20],
+    ]);
+    expect(spend.byAttempt.map(r => [r.role, r.taskId, r.attemptId, r.creditsCharged, r.requests])).toEqual([
+      ['root', undefined, undefined, 40, 1],
+      ['worker', 'task-a', 'a1', 30, 1],
+      ['worker', 'task-a', 'a2', 30, 2],
+      ['worker', 'task-b', 'b1', 0, 1],
+    ]);
+    expect(spend.byAttempt[0]).not.toHaveProperty('taskId');
+    expect(spend.byAttemptTruncated).toBe(false);
+  });
+
+  it("counts only this owner's completion rows for this run", async () => {
+    await seed([
+      completionRow(40, { role: 'root' }),
+      // Same run id on another holder's row: never read through this owner's run.
+      completionRow(500, { role: 'root' }, { ownerId: 'org-2' }),
+      completionRow(500, { role: 'root' }, { ownerType: CreditHolderType.User }),
+      // Another run of the same owner.
+      completionRow(500, { role: 'root', runId: '11111111-2222-4333-8444-555555555555' }),
+      // A non-completion row carrying the same metadata shape.
+      completionRow(500, { role: 'root' }, { type: 'tool_usage' }),
+      // An unattributed completion.
+      { type: 'completion_api_usage', credits: -500, model: 'claude-sonnet-5-5' },
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled.creditsCharged).toBe(40);
+    expect(spend.settled.requests).toBe(1);
+  });
+
+  it('counts paid tool rows attributed to the run as settled spend, under the tool purpose', async () => {
+    const toolRow = (type: string, credits: number) => ({
+      type,
+      credits: -credits,
+      model: 'tool-model',
+      metadata: { run: { runId: RUN, role: 'worker', purpose: 'tool', taskId: 'task-a' } },
+    });
+    await seed([
+      completionRow(40, { role: 'root' }),
+      toolRow('image_generation_usage', 25),
+      toolRow('image_edit_usage', 6),
+      toolRow('video_generation_usage', 15),
+      toolRow('music_generation_usage', 8),
+      toolRow('text_to_speech_usage', 4),
+      toolRow('sound_effects_usage', 2),
+    ]);
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.settled.creditsCharged).toBe(100);
+    expect(spend.settled.requests).toBe(7);
+    expect(spend.settled.inputTokens).toBe(100);
+    expect(spend.byPurpose.map(r => [r.purpose, r.creditsCharged])).toEqual([
+      ['tool', 60],
+      ['turn', 40],
+    ]);
+  });
+
+  it('reports zero spend and empty breakdowns for a run with nothing settled', async () => {
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend).toEqual({
+      settled: {
+        creditsCharged: 0,
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      byRole: [],
+      byPurpose: [],
+      byModel: [],
+      byAttempt: [],
+      byAttemptTruncated: false,
+    });
+  });
+
+  it('lists the largest attempts up to the cap and flags the rest, while settled counts them all', async () => {
+    await seed(
+      Array.from({ length: COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 2 }, (_, index) =>
+        completionRow(index + 1, { role: 'worker', taskId: 'task', attemptId: `attempt-${index}` })
+      )
+    );
+
+    const spend = await creditTransactionRepository.completionRunSpend(RUN, OWNER);
+
+    expect(spend.byAttempt).toHaveLength(COMPLETION_RUN_USAGE_MAX_ATTEMPTS);
+    expect(spend.byAttempt[0].attemptId).toBe(`attempt-${COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 1}`);
+    expect(spend.byAttemptTruncated).toBe(true);
+    expect(spend.settled.requests).toBe(COMPLETION_RUN_USAGE_MAX_ATTEMPTS + 2);
+  });
+
+  it('is served by the partial run index', async () => {
+    const indexes = await CreditTransaction.collection.indexes();
+
+    expect(indexes.find(index => index.name === 'credit_tx_completion_run')).toMatchObject({
+      key: { 'metadata.run.runId': 1 },
+      partialFilterExpression: { 'metadata.run.runId': { $exists: true } },
+    });
+  });
+});
+
+describe('CreditTransactionRepository.queryLedgerPage tiebreak', () => {
+  it('pages over rows sharing a createdAt with each one appearing exactly once', async () => {
+    const rows = Array.from({ length: 7 }, () => ({ _id: new mongoose.Types.ObjectId(), createdAt: day(3) }));
+    await seed(rows);
+    const expected = rows.map(r => String(r._id)).sort((a, b) => b.localeCompare(a));
+
+    const ids: string[] = [];
+    for (let skip = 0; skip < rows.length + 3; skip += 3) {
+      const page = await creditTransactionRepository.queryLedgerPage(ORG, CreditHolderType.Organization, {
+        limit: 3,
+        skip,
+      });
+      ids.push(...page.data.map(d => String(d._id)));
+    }
+    expect(ids).toEqual(expected);
   });
 });

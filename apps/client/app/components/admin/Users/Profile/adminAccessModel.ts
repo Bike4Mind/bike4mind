@@ -1,0 +1,69 @@
+import {
+  ADMIN_PERMISSIONS,
+  hasAdminPermission,
+  isExplicitOnlyAdminPermission,
+  sortAdminRoleIds,
+  type AdminPermissionId,
+} from '@bike4mind/common';
+import type { AdminRoleListItem } from '../useAdminRoleList';
+import { ADMIN_PERMISSION_LABELS } from './userProfileModel';
+
+type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
+type RoleRef = Pick<AdminRoleListItem, 'id' | 'name' | 'permissions'>;
+
+/** One effective permission and every source that grants it. */
+export type PermissionProvenance = { id: AdminPermissionId; direct: boolean; roleNames: string[] };
+
+/**
+ * Effective permissions (direct grants UNION role permissions, as server-utils auth/adminRoles.ts
+ * resolves them), in ADMIN_PERMISSIONS order. Ids naming no known role grant nothing, as on the server.
+ */
+export const permissionProvenance = (
+  direct: readonly string[],
+  roleIds: readonly string[],
+  roles: readonly RoleRef[]
+): PermissionProvenance[] => {
+  const held = new Set(sortAdminRoleIds(roleIds));
+  const heldRoles = roles.filter(role => held.has(role.id.toLowerCase()));
+  return ADMIN_PERMISSIONS.flatMap(id => {
+    const roleNames = heldRoles.filter(role => role.permissions.includes(id)).map(role => role.name);
+    const isDirect = direct.includes(id);
+    return isDirect || roleNames.length > 0 ? [{ id, direct: isDirect, roleNames }] : [];
+  });
+};
+
+/** "from Support agent", "granted directly", or both joined. */
+export const describeProvenance = ({ direct, roleNames }: Pick<PermissionProvenance, 'direct' | 'roleNames'>) =>
+  [roleNames.length > 0 && `from ${roleNames.join(', ')}`, direct && 'granted directly'].filter(Boolean).join('; ');
+
+/**
+ * Why the actor cannot assign this role, or null. Mirrors assertCanGrantAdminAccess: holding a role
+ * grants its permissions, so a delegate may only assign roles whose permissions they hold.
+ */
+export const roleGrantBlockedReason = (actor: AdminIdentity, role: Pick<RoleRef, 'permissions'>): string | null => {
+  // A full admin holds every permission but the explicit-only ones, which only their holders can hand out.
+  const unheld = role.permissions.filter(permission => !hasAdminPermission(actor, permission));
+  return unheld.length > 0
+    ? `You do not hold ${unheld.map(permission => ADMIN_PERMISSION_LABELS[permission].label).join(', ')}`
+    : null;
+};
+
+export const UNHELD_EXPLICIT_ONLY_HINT = 'Only an admin who holds this permission can grant or revoke it.';
+
+/**
+ * Why the actor cannot remove this held role, or null; mirrors assertCanChangeExplicitOnlyPermissions: only a
+ * holder can revoke an explicit-only permission that no `remaining` source keeps.
+ */
+export const roleRemovalBlockedReason = (
+  actor: AdminIdentity,
+  role: Pick<RoleRef, 'permissions'>,
+  remaining: readonly string[]
+): string | null =>
+  role.permissions.some(
+    permission =>
+      isExplicitOnlyAdminPermission(permission) &&
+      !hasAdminPermission(actor, permission) &&
+      !remaining.includes(permission)
+  )
+    ? UNHELD_EXPLICIT_ONLY_HINT
+    : null;

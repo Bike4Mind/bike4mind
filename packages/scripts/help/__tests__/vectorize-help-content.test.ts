@@ -1,3 +1,11 @@
+vi.mock('@bike4mind/utils/embeddingProviders', () => ({
+  buildEmbeddingRegistry: vi.fn(),
+  bindEmbeddingModel: vi.fn(),
+  embedOne: vi.fn(),
+  embeddingBackendForModel: vi.fn(),
+  resolveEmbeddingCredentials: vi.fn(),
+  resolveEmbeddingWithKeylessFallback: vi.fn(),
+}));
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -6,7 +14,7 @@ import * as path from 'path';
 // vectorize-help-content.ts imports these for its embedding step (unused by the
 // functions under test here), but they need a core-package build to resolve. The
 // Help Docs Guards CI job runs this suite standalone without one, so mock them out.
-vi.mock('@bike4mind/fab-pipeline', () => ({ EmbeddingFactory: vi.fn() }));
+
 vi.mock('@bike4mind/common', () => ({ OpenAIEmbeddingModel: { TEXT_EMBEDDING_3_SMALL: 'text-embedding-3-small' } }));
 
 import {

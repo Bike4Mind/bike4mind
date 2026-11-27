@@ -1,9 +1,12 @@
 import type { IMemoryLedgerEvent, MemoryPrincipalKind } from '@bike4mind/database';
-import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
+import { z } from 'zod';
+import { InternalServerError, MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
+  commitFact,
   foldEvents,
   activationConfigForKind,
   sealEvent,
+  verifyChain,
   type Belief,
   type EvidenceTier,
   type MemoryEvent,
@@ -156,16 +159,28 @@ export async function appendMemoryEvent(
   throw new Error('memory ledger append: exceeded retry budget under concurrent contention');
 }
 
+const factEnvelopeSchema = z
+  .object({
+    factCipher: z.string(),
+    factIv: z.string().min(1),
+    factTag: z.string().min(1),
+  })
+  .transform(({ factCipher, factIv, factTag }) => ({ cipher: factCipher, iv: factIv, tag: factTag }));
+const livePayloadSchema = z.object({ salt: z.string(), fact: z.string().optional() });
+const hasFactEnvelope = (event: IMemoryLedgerEvent) =>
+  event.factCipher !== undefined || event.factIv !== undefined || event.factTag !== undefined;
+
 /**
  * Rehydrate a stored document into the core's `MemoryEvent` shape, decrypting the fact with the
  * principal's `dek`. A ciphered fact that will not decrypt - because the key was destroyed (shred)
  * or the ciphertext was altered - folds as shredded, so lost content redacts rather than leaks.
  */
 function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
-  let fact = d.fact; // legacy plaintext, for events written before at-rest encryption
+  let fact = d.shredded ? undefined : d.fact; // legacy plaintext, for events written before at-rest encryption
   let shredded = d.shredded;
-  if (d.factCipher && d.factIv && d.factTag) {
-    const plain = dek ? decryptFact(dek, { cipher: d.factCipher, iv: d.factIv, tag: d.factTag }) : null;
+  const envelope = !shredded && hasFactEnvelope(d) ? factEnvelopeSchema.safeParse(d) : undefined;
+  if (envelope?.success) {
+    const plain = dek ? decryptFact(dek, envelope.data) : null;
     if (plain === null) {
       fact = undefined;
       shredded = true;
@@ -184,7 +199,12 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
   // Permanent, not a migration shim: the ledger backfill (migrateLedgerVectorsForPrincipal) only
   // repairs what an operator has run it over.
   const embedding =
-    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag && d.embeddingModel === MEMENTO_EMBEDDING_ID
+    !shredded &&
+    dek &&
+    d.embeddingCipher &&
+    d.embeddingIv &&
+    d.embeddingTag &&
+    d.embeddingModel === MEMENTO_EMBEDDING_ID
       ? (decryptVector(dek, { cipher: d.embeddingCipher, iv: d.embeddingIv, tag: d.embeddingTag }) ?? undefined)
       : undefined;
 
@@ -192,7 +212,7 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
     principal: { kind: d.principalKind, id: d.principalId },
     kind: d.kind,
     subject: d.subject,
-    fact,
+    ...(!shredded && fact !== undefined ? { fact } : {}),
     ...(embedding?.length ? { embedding } : {}),
     evidenceTier: d.evidenceTier as EvidenceTier | undefined,
     salience: d.salience,
@@ -200,10 +220,70 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
     sources: d.sources,
     hash: d.hash,
     prevHash: d.prevHash,
-    salt: d.salt ?? '',
+    ...(!shredded && d.salt !== undefined ? { salt: d.salt } : {}),
     commitment: d.commitment ?? '',
     shredded,
   };
+}
+
+/** A public, stable message to the client; the specific detail rides on `cause`, which the logger serializes. */
+export function integrityError(message: string, detail: string): InternalServerError {
+  const error = new InternalServerError(message);
+  Object.defineProperty(error, 'cause', { value: new Error(detail), enumerable: false, configurable: true });
+  return error;
+}
+
+const LEDGER_INTEGRITY_MESSAGE = 'Memory ledger failed integrity checks.';
+
+export async function listPrincipalLedger(deps: {
+  ledger: Pick<LedgerRepo, 'listChain'>;
+  keys: Pick<KeyProvider, 'getDek'>;
+  principal: Principal;
+  ownerUserId: string;
+}): Promise<MemoryEvent[]> {
+  if (!deps.principal.id || !deps.ownerUserId) throw new Error('Memory export requires a principal and owner');
+  const docs = await deps.ledger.listChain(deps.principal.kind, deps.principal.id, deps.ownerUserId, {
+    withEmbeddings: false,
+  });
+  if (docs.length === 0) return [];
+  if (docs.some(d => !d.shredded && hasFactEnvelope(d) && !factEnvelopeSchema.safeParse(d).success)) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete live encryption envelope');
+  }
+  const dek = await deps.keys.getDek(deps.principal);
+  if (docs.some(d => !d.shredded && hasFactEnvelope(d) && !dek)) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains live ciphertext without its decryption key');
+  }
+  const events = docs.map(d => toMemoryEvent(d, dek));
+  if (docs.some((d, i) => !d.shredded && events[i].shredded)) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains unreadable live ciphertext');
+  }
+  if (
+    docs.some(
+      (d, i) =>
+        d.seq !== i ||
+        d.principalKind !== deps.principal.kind ||
+        d.principalId !== deps.principal.id ||
+        d.ownerUserId !== deps.ownerUserId
+    )
+  ) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete or mismatched chain');
+  }
+  const invalidPayload = events.some(event => {
+    if (event.shredded) return false;
+    const payload = livePayloadSchema.safeParse(event);
+    return (
+      !payload.success ||
+      (event.kind === 'assert' && payload.data.fact === undefined) ||
+      event.commitment !== commitFact(payload.data.salt, payload.data.fact)
+    );
+  });
+  if (invalidPayload) {
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, 'Memory ledger contains an incomplete or inconsistent live payload');
+  }
+  const verification = verifyChain(events);
+  if (!verification.ok)
+    throw integrityError(LEDGER_INTEGRITY_MESSAGE, `Memory ledger is invalid at event ${verification.brokenAt}`);
+  return events;
 }
 
 /**

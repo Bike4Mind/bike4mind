@@ -146,7 +146,7 @@ const updateBodySchema = z.object({
   // update can never flip an agent onto a balance it was not funded with.
   systemPrompt: z.string().optional(),
   lastSystemPromptGeneratedAt: dateParamSchema.optional(),
-  // The seven fields below keep the imperative validators in `agentValidation.ts`, which already
+  // The ten fields below keep the imperative validators in `agentValidation.ts`, which already
   // reject a wrong type with a 400 and additionally bound length and range. `z.unknown()` here
   // means "this key is known, leave it for the validator" rather than "anything goes" -- dropping
   // them from this schema would strip them instead.
@@ -154,6 +154,9 @@ const updateBodySchema = z.object({
   deniedTools: z.unknown().optional(),
   maxIterations: z.unknown().optional(),
   defaultThoroughness: z.unknown().optional(),
+  confidenceGateThreshold: z.unknown().optional(),
+  confidenceGateMode: z.unknown().optional(),
+  confidenceGateSelfReport: z.unknown().optional(),
   defaultVariables: z.unknown().optional(),
   exclusiveMcpServers: z.unknown().optional(),
   fallbackModels: z.unknown().optional(),
@@ -264,7 +267,12 @@ const handler = baseApi({ requiredScopes: AGENTS_READ_OR_WRITE_SCOPES })
     const agent = await agentRepository.findById(id as string);
     assertAgentAccess(agent, req.user!.id, 'own', "You don't have permission to update this agent");
 
-    validateAgentUpdate(agentData);
+    // The edit form resubmits the stored models on every save; re-checking an unchanged model against a
+    // possibly partial catalog listing would reject a rename when that provider is briefly down.
+    if (agentData.preferredModel === agent.preferredModel) delete agentData.preferredModel;
+    if (agentData.preferredImageModel === agent.preferredImageModel) delete agentData.preferredImageModel;
+
+    await validateAgentUpdate(agentData, req.user!, undefined, req.logger);
 
     // Handle capabilities conversion if it's in the old format
     if (

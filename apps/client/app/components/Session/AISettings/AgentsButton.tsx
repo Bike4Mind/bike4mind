@@ -1,5 +1,5 @@
 import { FC, useRef, useState } from 'react';
-import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
+import { Box, Dropdown, Menu, MenuButton, Modal, ModalDialog, Tooltip, Typography } from '@mui/joy';
 import SmartToyIcon from '@mui/icons-material/SmartToyOutlined';
 import AgentsSection from './AgentsSection';
 import AgentsCountBadge from '../../common/AgentsCountBadge';
@@ -28,6 +28,9 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
   // Mobile agents modal is driven by the shared store (triggered from AttachFileButton)
   const mobileOpen = useAdvancedAISettings(s => s.agentsDropdownOpen);
   const setMobileOpen = useAdvancedAISettings(s => s.setAgentsDropdownOpen);
+
+  const labelHidden = isTablet || iconOnly;
+  const hiddenLabel = !iconOnly && activeAgentsCount > 0 ? `Agents, ${activeAgentsCount} active` : 'Agents';
 
   if (isMobile) {
     return (
@@ -58,42 +61,46 @@ const AgentsButton: FC<AgentsButtonProps> = ({ isMobile, isTablet, activeAgentsC
         }
       }}
     >
-      <MenuButton
-        data-testid="session-agents-dropdown-toggle"
-        variant="outlined"
-        aria-label={iconOnly ? 'Agents' : undefined}
-        sx={{
-          display: 'flex',
-          borderRadius: '6px',
-          // Holds its width so the row overflows and collapses to icons rather than squeezing the
-          // label under the count (see ToolsButton).
-          flexShrink: 0,
-          px: 1,
-          ...fixedHeight,
-          ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
-        }}
-      >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <SmartToyIcon sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]} />
-            {!isTablet && !iconOnly && (
-              <Typography
-                level="body-sm"
-                sx={{
-                  color: 'text.primary',
-                  fontWeight: '400',
-                  fontSize: '13px',
-                }}
-              >
-                Agents
-              </Typography>
+      <Tooltip title={labelHidden ? hiddenLabel : ''} placement="top">
+        <MenuButton
+          data-testid="session-agents-dropdown-toggle"
+          variant="outlined"
+          aria-label={labelHidden ? hiddenLabel : undefined}
+          sx={{
+            display: 'flex',
+            borderRadius: '6px',
+            // Holds its width so the row overflows and collapses to icons rather than squeezing the
+            // label under the count (see ToolsButton).
+            flexShrink: 0,
+            px: 1,
+            ...fixedHeight,
+            ...(iconOnly && { px: 0, width: '32px', minWidth: '32px' }),
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <SmartToyIcon
+                sx={[{ width: '16px', height: '16px' }, toolbarIconSx('var(--joy-palette-text-primary)')]}
+              />
+              {!isTablet && !iconOnly && (
+                <Typography
+                  level="body-sm"
+                  sx={{
+                    color: 'text.primary',
+                    fontWeight: '400',
+                    fontSize: '13px',
+                  }}
+                >
+                  Agents
+                </Typography>
+              )}
+            </Box>
+            {!iconOnly && (
+              <AgentsCountBadge count={activeAgentsCount} sx={{ px: 1, minWidth: 'auto', width: 'auto', ml: 0 }} />
             )}
           </Box>
-          {!iconOnly && (
-            <AgentsCountBadge count={activeAgentsCount} sx={{ px: 1, minWidth: 'auto', width: 'auto', ml: 0 }} />
-          )}
-        </Box>
-      </MenuButton>
+        </MenuButton>
+      </Tooltip>
       <Menu
         ref={menuRef}
         placement="top"

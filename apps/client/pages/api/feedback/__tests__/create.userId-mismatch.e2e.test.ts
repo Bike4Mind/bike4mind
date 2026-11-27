@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 /**
  * End-to-end regression test for the real chain: POST handler -> logEvent -> incrementUserCounter
- * -> User.findById. Deliberately does NOT mock @server/utils/analyticsLog or the database models,
+ * -> User.findById. Deliberately does NOT mock @bike4mind/server-utils/utils/analyticsLog or the database models,
  * because a mock would hide the real Mongoose CastError this bug produces -- the handler must
  * pass logEvent the same resolved id it already used to build the saved document, not the raw,
  * client-controlled request-body userId.
@@ -35,9 +35,13 @@ const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+// Triage has dedicated coverage; keep this suite's settings failures scoped to its own read path.
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: () => chain,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     post: (fn: any) => {
@@ -49,12 +53,12 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
 
 const mockEmailPublish = vi.fn().mockResolvedValue(undefined);
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: { Send: { publish: (...args: unknown[]) => mockEmailPublish(...args) } },
 }));
 
@@ -155,6 +159,7 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     // The saved document and the analytics call must agree on the same resolved id -- the
     // authenticated user's real id, not the untrusted body value.
     expect(saved!.userId).toBe(realUser.id);
+    expect(saved!.userIdVerified).toBe(true);
 
     // A passing 201 alone doesn't prove logEvent actually ran under the resolved id -- deleting the
     // whole logEvent call would still pass the assertions above. Pin that the analytics write happened.
@@ -372,5 +377,32 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     });
     expect(mockPostFeedbackToSlack).not.toHaveBeenCalled();
     expect(mockEmailPublish).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/feedback - unauthenticated caller', () => {
+  it("stores the body userId as unverified, so it cannot pass for another user's report", async () => {
+    const victim = await User.create({ username: 'e2e-victim', name: 'Victim', email: 'victim@example.com' });
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: victim.id,
+        content: 'forged',
+        tags: [],
+        username: 'Victim',
+        userEmail: 'victim@example.com',
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
+
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    const saved = await FeedbackModel.findOne({ userId: victim.id }).lean();
+    expect(saved?.userIdVerified).toBe(false);
   });
 });

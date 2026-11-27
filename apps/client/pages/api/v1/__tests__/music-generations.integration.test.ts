@@ -5,7 +5,13 @@
  * and the repository are mocked: their behaviour is covered in services and database.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  ForbiddenError,
+  NotFoundError,
+  UnprocessableEntityError,
+} from '@bike4mind/common';
 import {
   asUser,
   fire,
@@ -16,19 +22,25 @@ import {
   validateWithScopes,
 } from '@server/generations/__test__/routeHarness';
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig =>
   (await import('@server/generations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
 );
-vi.mock('@server/middlewares/rateLimit', async () =>
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', async () =>
   (await import('@server/generations/__test__/routeHarness')).rateLimitMiddlewareMock()
 );
-vi.mock('@server/utils/userRateTier', async () =>
+vi.mock('@bike4mind/server-utils/utils/userRateTier', async () =>
   (await import('@server/generations/__test__/routeHarness')).userRateTierMock()
 );
-vi.mock('@server/utils/orgAccess', async orig =>
+vi.mock('@bike4mind/server-utils/utils/orgAccess', async orig =>
   (await import('@server/generations/__test__/routeHarness')).orgAccessMock(orig)
 );
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
   (await import('@server/generations/__test__/routeHarness')).servicesMock(orig)
 );
@@ -38,12 +50,19 @@ vi.mock('@bike4mind/services/musicJobs', async orig =>
 vi.mock('@bike4mind/database', async orig =>
   (await import('@server/generations/__test__/routeHarness')).databaseMock(orig)
 );
-vi.mock('@server/generationJobs/wiring', async () =>
+vi.mock('@bike4mind/server-utils/generationJobs/wiring', async () =>
   (await import('@server/generations/__test__/routeHarness')).wiringMock()
 );
-vi.mock('@server/generations/signOutputUrl', async () =>
+vi.mock('@bike4mind/server-utils/generations/signOutputUrl', async () =>
   (await import('@server/generations/__test__/routeHarness')).signOutputUrlMock()
 );
+const paidCallRun = vi.hoisted(() => ({
+  resolve: vi.fn(async (_req: unknown, run: { runId: string } | undefined, _organizationId?: string | null) =>
+    run ? { attribution: { ...run, purpose: 'tool' as const }, billingOrganizationId: null } : undefined
+  ),
+}));
+vi.mock('@server/completionRuns/paidCallRun', () => ({ resolvePaidCallRun: paidCallRun.resolve }));
+
 vi.mock('@server/auth/auth', async orig => (await import('@server/generations/__test__/routeHarness')).authMock(orig));
 
 import handler from '../music-generations/index';
@@ -72,9 +91,10 @@ describe('POST /api/v1/music-generations', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, object: 'music_generation', state: 'pending' });
     expect(h.createMusicJob).toHaveBeenCalledWith(
       {
-        user: { id: 'user-1', organizationId: null },
+        user: { id: 'user-1', organizationId: null, adminRoleWithheld: true },
         source: 'api',
         request: { model: 'test-music', prompt: 'a calm piano piece' },
+        apiKeyId: 'k1',
       },
       expect.anything()
     );
@@ -156,7 +176,11 @@ describe('POST /api/v1/music-generations', () => {
     const { req, res } = post({ model: 'test-music', prompt: 'p', organization_id: 'some-org' });
     await handler(req, res);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'some-org');
-    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: 'billing-org',
+      adminRoleWithheld: true,
+    });
   });
 
   it('bills personal credits when organization_id is explicitly null', async () => {
@@ -167,7 +191,11 @@ describe('POST /api/v1/music-generations', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(202);
     expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), null);
-    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
+    expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+      id: 'user-1',
+      organizationId: null,
+      adminRoleWithheld: true,
+    });
   });
 
   it.each(['', '   '])('rejects a blank organization_id %j (422) instead of billing personal', async orgId => {
@@ -198,7 +226,11 @@ describe('POST /api/v1/music-generations', () => {
       const { req, res } = post(base);
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it('bills the key org when the body names the same org', async () => {
@@ -206,7 +238,11 @@ describe('POST /api/v1/music-generations', () => {
       const { req, res } = post({ ...base, organization_id: KEY_ORG });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(202);
-      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: KEY_ORG });
+      expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+        id: 'user-1',
+        organizationId: KEY_ORG,
+        adminRoleWithheld: true,
+      });
     });
 
     it.each([
@@ -233,7 +269,9 @@ describe('POST /api/v1/music-generations', () => {
     describe('without an org-billed key', () => {
       beforeEach(async () => {
         asUser('user-1', HOME_ORG);
-        const actual = await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+        const actual = await vi.importActual<typeof import('@bike4mind/server-utils/utils/orgAccess')>(
+          '@bike4mind/server-utils/utils/orgAccess'
+        );
         h.resolveBillingOrgId.mockImplementation(actual.resolveBillingOrgId);
         h.orgFindAccessibleById.mockImplementation(async (_user: unknown, id: string) =>
           id === HOME_ORG ? { id } : null
@@ -245,7 +283,11 @@ describe('POST /api/v1/music-generations', () => {
         const { req, res } = post(base);
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
 
@@ -254,7 +296,11 @@ describe('POST /api/v1/music-generations', () => {
         const { req, res } = post({ ...base, organization_id: HOME_ORG });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: HOME_ORG });
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+          id: 'user-1',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: true,
+        });
       });
 
       it('keeps a session caller on the org the body names', async () => {
@@ -266,7 +312,11 @@ describe('POST /api/v1/music-generations', () => {
         });
         await handler(req, res);
         expect(res._getStatusCode()).toBe(202);
-        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({ id: 'jwt-user', organizationId: HOME_ORG });
+        expect(h.createMusicJob.mock.calls[0][0].user).toEqual({
+          id: 'jwt-user',
+          organizationId: HOME_ORG,
+          adminRoleWithheld: false,
+        });
         expect(h.orgFindById).not.toHaveBeenCalled();
       });
     });
@@ -436,5 +486,76 @@ describe('GET /api/v1/music-generations', () => {
     await handler(req, res);
     expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ requestedBy: 'member-a' }));
     expect(h.listByRequester.mock.calls[0][0]).not.toHaveProperty('ownerId');
+  });
+});
+
+describe('POST /api/v1/music-generations with a completion run', () => {
+  beforeEach(resetHarness);
+  const RUN_ID = '0b6f3c1e-8a52-4c4e-9d55-3f0a6f2c7d11';
+  const runBody = { runId: RUN_ID, role: 'worker' as const, taskId: 'task-1' };
+  const attribution = { ...runBody, purpose: 'tool' as const };
+
+  it("bills the run's account and hands the run attribution to the domain", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockResolvedValueOnce({ attribution, billingOrganizationId: 'run-org' });
+    h.createMusicJob.mockResolvedValue({ ok: true, job: musicJob(), created: true });
+    const { req, res } = post({ model: 'test-music', prompt: 'p', run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, undefined);
+    expect(h.resolveBillingOrgId).not.toHaveBeenCalled();
+    const input = h.createMusicJob.mock.calls[0][0];
+    expect(input.user).toMatchObject({ id: 'user-1', organizationId: 'run-org' });
+    expect(input.run).toEqual(attribution);
+  });
+
+  it('passes organization_id to the run check, which refuses a different account (403)', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockRejectedValueOnce(
+      new ForbiddenError('This run bills a different account', { errorCode: 'billing_organization_mismatch' })
+    );
+    const { req, res } = post({ model: 'test-music', prompt: 'p', run: runBody, organization_id: null });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(403);
+    expect(paidCallRun.resolve).toHaveBeenCalledWith(expect.anything(), runBody, null);
+    expect(h.createMusicJob).not.toHaveBeenCalled();
+  });
+
+  it("refuses another caller's run (404) before creating a job", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    paidCallRun.resolve.mockRejectedValueOnce(new NotFoundError('Run not found', { errorCode: 'run_not_found' }));
+    const { req, res } = post({ model: 'test-music', prompt: 'p', run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'run_not_found' });
+    expect(h.createMusicJob).not.toHaveBeenCalled();
+  });
+
+  it('answers 422 run_budget_exhausted when the job does not fit the run', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createMusicJob.mockRejectedValue(
+      new UnprocessableEntityError('run budget used up', { errorCode: 'run_budget_exhausted' })
+    );
+    const { req, res } = post({ model: 'test-music', prompt: 'p', run: runBody });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ errorCode: 'run_budget_exhausted' });
+  });
+
+  it('sends no run to the domain when none is given', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createMusicJob.mockResolvedValue({ ok: true, job: musicJob(), created: true });
+    const { req, res } = post({ model: 'test-music', prompt: 'p' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createMusicJob.mock.calls[0][0]).not.toHaveProperty('run');
+  });
+
+  it('rejects a malformed run (422) before the domain', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = post({ model: 'test-music', prompt: 'p', run: { runId: 'not-a-uuid', role: 'worker' } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createMusicJob).not.toHaveBeenCalled();
   });
 });

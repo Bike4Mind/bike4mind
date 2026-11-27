@@ -7,7 +7,7 @@ import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { Box, CircularProgress, Stack, Typography, IconButton, Tooltip } from '@mui/joy';
 import { redAlpha, red, brandAlpha } from '@client/app/utils/themes/colors';
 import { useQueryClient } from '@tanstack/react-query';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { useNavigate } from '@tanstack/react-router';
 import { FC, useCallback, useEffect, useMemo, useState } from 'react';
 import AddMembersModal from './AddMembersModal';

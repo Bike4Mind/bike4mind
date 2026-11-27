@@ -53,10 +53,11 @@ describe('Data Lake surface - brand-agnostic defaults (#842)', () => {
   it('names the all-lakes scope neutrally on the lake picker', () => {
     render(
       <Wrapper>
-        <DataLakeLakePicker {...pickerProps} />
+        <DataLakeLakePicker {...pickerProps} lakes={undefined} isLoading />
       </Wrapper>
     );
 
+    // Once the list loads the trigger prints the scope's counts; until then the label stands in.
     const trigger = screen.getByTestId('datalake-lake-picker-btn');
     expect(trigger).toHaveTextContent('All data lakes');
     expect(trigger.textContent ?? '').not.toMatch(BRANDED);
@@ -89,7 +90,7 @@ describe('Data Lake surface - injected tokens (#842)', () => {
   it('takes the all-lakes label from the provider', () => {
     render(
       <Wrapper tokens={{ copy: { allLakesLabel: 'Every scope' } }}>
-        <DataLakeLakePicker {...pickerProps} />
+        <DataLakeLakePicker {...pickerProps} lakes={undefined} isLoading />
       </Wrapper>
     );
 

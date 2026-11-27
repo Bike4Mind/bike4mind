@@ -8,6 +8,8 @@
  * builder needs db/storage and is wired by the host, keeping this module pure
  * and testable.
  */
+import { z } from 'zod';
+
 export interface ToolbeltProfile {
   role: string;
   description: string;
@@ -72,7 +74,66 @@ export const TOOLBELT_PROFILES: Record<string, ToolbeltProfile> = {
   },
 };
 
-/** Resolve the toolbelt profile for a role, falling back to the default. */
+// Roles a mounted package adds at host startup. Kept apart from TOOLBELT_PROFILES so a
+// contribution can add a role but never redefine a built-in one.
+const contributedToolbelts = new Map<string, ToolbeltProfile>();
+
+const toolbeltRuntimeSchema = z.object({
+  role: z.string().min(1),
+  enabledToolNames: z.array(z.string()),
+  maxIterations: z.number().int().positive(),
+  maxTotalTokens: z.number().positive(),
+  temperature: z.number(),
+  codeExecute: z.boolean().optional(),
+});
+
+function isToolbeltShaped(profile: unknown): boolean {
+  return toolbeltRuntimeSchema.safeParse(profile).success;
+}
+
+// A host module re-evaluated in the same process (dev HMR, `vi.resetModules`) registers the same
+// profiles again; that is not a collision worth reporting.
+function isSameToolbelt(a: ToolbeltProfile, b: ToolbeltProfile): boolean {
+  return (
+    a.role === b.role &&
+    a.description === b.description &&
+    a.maxIterations === b.maxIterations &&
+    a.maxTotalTokens === b.maxTotalTokens &&
+    a.temperature === b.temperature &&
+    a.codeExecute === b.codeExecute &&
+    a.enabledToolNames.length === b.enabledToolNames.length &&
+    a.enabledToolNames.every((name, index) => name === b.enabledToolNames[index])
+  );
+}
+
+/**
+ * Add toolbelt profiles for new roles. A profile whose role is already taken (built-in or
+ * contributed earlier) is dropped, not merged, and so is a malformed one; both are returned for
+ * the host to log. Re-registering an identical contributed profile is a silent no-op.
+ */
+export function registerToolbelts(profiles: readonly ToolbeltProfile[]): { taken: string[]; invalid: number } {
+  const taken: string[] = [];
+  let invalid = 0;
+  for (const profile of profiles) {
+    if (!profile || typeof profile !== 'object' || !isToolbeltShaped(profile)) {
+      invalid++;
+      continue;
+    }
+    const existing = contributedToolbelts.get(profile.role);
+    if (existing && isSameToolbelt(existing, profile)) continue;
+    if (Object.hasOwn(TOOLBELT_PROFILES, profile.role) || existing) {
+      taken.push(profile.role);
+      continue;
+    }
+    contributedToolbelts.set(profile.role, { ...profile, enabledToolNames: [...profile.enabledToolNames] });
+  }
+  return { taken, invalid };
+}
+
+/** Resolve the toolbelt profile for a role (built-in, then contributed), falling back to the default. */
 export function resolveToolbeltProfile(role: string): ToolbeltProfile {
-  return TOOLBELT_PROFILES[role] ?? TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE];
+  return (
+    (Object.hasOwn(TOOLBELT_PROFILES, role) ? TOOLBELT_PROFILES[role] : contributedToolbelts.get(role)) ??
+    TOOLBELT_PROFILES[DEFAULT_TOOLBELT_ROLE]
+  );
 }

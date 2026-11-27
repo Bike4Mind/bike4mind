@@ -21,7 +21,9 @@ import {
   Tooltip,
   CircularProgress,
 } from '@mui/joy';
-import { ContentCopy as ContentCopyIcon, Download as DownloadIcon, Save as SaveIcon } from '@mui/icons-material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DownloadIcon from '@mui/icons-material/Download';
+import SaveIcon from '@mui/icons-material/Save';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { TFunction } from 'i18next';

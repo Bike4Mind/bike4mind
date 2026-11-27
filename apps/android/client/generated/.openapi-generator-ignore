@@ -1,0 +1,13 @@
+# The generator emits a standalone Gradle project; only the Kotlin sources are kept. The module's own
+# build.gradle.kts owns the build.
+build.gradle
+build.gradle.kts
+settings.gradle
+settings.gradle.kts
+gradle.properties
+gradlew
+gradlew.bat
+gradle/**
+README.md
+docs/**
+src/test/**

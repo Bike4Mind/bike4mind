@@ -58,22 +58,36 @@ for await (const event of b4m.completions({
 
 The endpoint opens the stream before it validates, authenticates or rate-limits, so an invalid body, a rejected key or a rate limit arrives as a yielded `{ type: 'error' }` event, not a thrown error. Only a response that never becomes a stream (a malformed JSON body, a wrong method, a proxy error) throws `B4mApiError`. Pass `{ signal }` to cancel, or `{ url }` to stream from a different endpoint; a relative `url` is joined under `baseUrl`. An absolute `url` receives the same `Authorization` header, so pass only an origin you trust. A stream that ends without `[DONE]` and without an error event throws.
 
-## Chat and image jobs
+## Chat turns
 
-Chat turns and image generations and edits are queued. Each helper returns a handle whose `poll()` waits for the job to finish:
+Chat turns are queued. `chat` returns a handle whose `poll()` waits for the turn to finish:
 
 ```ts
 const turn = await b4m.chat({ message: 'Summarize my last notebook' });
 const quest = await turn.poll({ timeoutMs: 120_000 });
 console.log(quest.reply);
-
-const image = await b4m.generateImage({ prompt: 'a red bicycle', model: 'gpt-image-1' });
-const { images } = await image.poll();
 ```
 
 `poll` backs off from `intervalMs` (default 1000 ms) up to `maxIntervalMs` (default 5000 ms). It throws `B4mQuestError` when the job ends with `type: "error"` (`reason: 'error'`), ends `stopped` (`'stopped'`), or outlives `timeoutMs` (`'timeout'`). `error.quest` holds the last state. To resume polling a known quest id, use `pollQuest(id)`.
 
-Other async jobs (agent executions, video generations, file uploads) are plain `call`s: start the job, then poll its `get*` operation.
+## Image, video and music jobs
+
+Image, video and music generations, agent executions and file uploads are plain `call`s: start the job, then poll its `get*` operation until `state` is terminal.
+
+```ts
+const { data: [job] } = await b4m.call('createImageJob', {
+  body: { model: 'gpt-image-1', mode: 'generate', prompt: 'a red bicycle' },
+  headers: { 'Idempotency-Key': crypto.randomUUID() },
+});
+let current = job;
+while (current.state === 'pending' || current.state === 'running' || current.state === 'storing') {
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  current = await b4m.call('getImageJob', { params: { id: job.id } });
+}
+console.log(current.output?.url);
+```
+
+`generateImage` and `editImage` (the quest-based `POST /api/v1/image-generations` and `/api/v1/image-edits`) are deprecated and stop working on 2027-02-17.
 
 ## Audio
 
@@ -88,9 +102,31 @@ if (result.kind === 'audio' && result.data.delivery === 'inline') {
 
 `tts` also returns `{ kind: 'saved-too-large', data }` when an older server rejects oversized audio with a 413 but kept a saved copy (`data.fabFileId`). To get binary audio directly, use `raw('synthesizeSpeech', { body: { text, encoding: 'binary' } })`.
 
+## Bill the signed-in user
+
+`exchangeIdToken` trades a user's B4M ID token for a short-lived API key that bills that user's credits. It is **server only**: it sends your client secret.
+
+```ts
+import { createClient, exchangeIdToken } from '@bike4mind/sdk';
+
+const baseUrl = 'https://your-b4m-host';
+const { apiKey, expiresAt } = await exchangeIdToken({
+  baseUrl,
+  clientId,
+  clientSecret,
+  idToken,
+  signal: AbortSignal.timeout(10_000),
+});
+const b4m = createClient({ baseUrl, apiKey });
+```
+
+A failure throws `B4mApiError` with `errorCode` set to the OAuth `error` (`invalid_request`, `invalid_client`, `invalid_grant`, `access_denied`, `invalid_scope`, `subscription_required`, `temporarily_unavailable`) and `message` set to its `error_description`. On a 429, wait `retryAfterSeconds`.
+
+Caching is yours: there is one live key per user and app (each exchange revokes the previous one), so keep the key per user and re-mint shortly before `expiresAt`. See [Bill the user, not yourself](https://docs.bike4mind.com/developers/building-on-b4m#5-bill-the-user-not-yourself) for the full contract.
+
 ## Errors
 
-Any non-2xx response throws `B4mApiError`:
+Any non-2xx response throws `B4mApiError`. An OAuth-style body (a snake_case `error` code and `error_description`) maps `error` to `errorCode` and `error_description` to `message`:
 
 ```ts
 import { B4mApiError } from '@bike4mind/sdk';

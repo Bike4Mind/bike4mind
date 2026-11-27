@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/llm-adapters",
-  "version": "1.5.1",
+  "version": "2.10.3",
   "publishConfig": {
     "access": "restricted"
   },
@@ -53,9 +53,8 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -63,21 +62,19 @@
     "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
+    "@aws-sdk/client-sts": "^3.1150.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@google/genai": "^1.46.0",
     "axios": "1.20.0",
-    "lodash": "^4.18.1",
     "ollama": "^0.6.3",
     "openai": "^6.46.0",
-    "undici": "^7.29.0",
-    "uuid": "^14.0.2"
+    "undici": "^7.29.0"
   },
   "devDependencies": {
-    "@types/lodash": "^4.17.24",
-    "dotenv": "^17.4.2",
+    "@bike4mind/local-models": "workspace:*",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

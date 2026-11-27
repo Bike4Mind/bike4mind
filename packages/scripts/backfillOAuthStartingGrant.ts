@@ -1,12 +1,13 @@
-#!/usr/bin/env npx ts-node -r tsconfig-paths/register
+#!/usr/bin/env tsx
+import { signupProtectionRepository } from '@bike4mind/database';
 
 /**
  * Grant the starting free credits to Google/GitHub signups that got none before OAuth signup
  * learned to grant them (see createOAuthUser.ts + verifyCallback.ts).
  *
- * Selection lives in oauthStartingGrantPlan.ts. An account qualifies only with a 0 balance, a
- * non-disposable email, no pending-grant tag and no credit ledger entry at all, so a re-run after
- * --execute selects nobody. Internal accounts are excluded by NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+ * Selection lives in oauthStartingGrantPlan.ts. An account qualifies only with a 0 balance, an
+ * email the signup gate allows (not disposable, not on an admin-blocked domain), no pending-grant
+ * tag and no credit ledger entry at all, so a re-run after --execute selects nobody. Internal accounts are excluded by NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
  * (plus --exclude-email-domain) and the same test-email pattern as the external-users report.
  * The grant goes through userService.grantFreeCredits: same `verify-grant:<id>` transactionId as
  * the runtime paths, so it is recorded in the ledger and can never double-credit.
@@ -15,7 +16,7 @@
  *   --created-before=<ISO>         required; when the fix went live on this stage (prod lags main)
  *   --exclude-email-domain=<d>     repeatable; added to NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
  *   --execute                      write; without it the run is a dry run
- *   --expect-amount=<n>            required with --execute; must equal resolved defaultFreeCredits
+ *   --expect-amount=<n>            required with --execute; must equal the signup schedule's initial credits
  *
  * Usage (inside an SST shell so Resource.MONGODB_URI resolves; staging's stage is `dev`):
  *   npx sst shell --stage production pnpm --filter @bike4mind/scripts backfill:oauth-starting-grant --created-before=<ISO>
@@ -93,14 +94,8 @@ const findOAuthUsers = async (): Promise<StartingGrantUser[]> => {
 
 /** Settings read failures throw and abort the run, rather than withholding grants silently. */
 const findDisposableEmailUserIds = async (users: readonly StartingGrantUser[]): Promise<Set<string>> => {
-  const blocked = new Set<string>();
-  for (const user of users) {
-    if (!user.email) continue;
-    if (await userService.shouldBlockDisposableEmail(user.email, { adminSettings: adminSettingsRepository })) {
-      blocked.add(user.id);
-    }
-  }
-  return blocked;
+  const shouldBlock = await userService.createSignupEmailGate(adminSettingsRepository);
+  return new Set(users.filter(user => user.email && shouldBlock(user.email)).map(user => user.id));
 };
 
 /** Old ledger rows may carry only the deprecated `userId`, so both owner fields are checked. */
@@ -139,10 +134,15 @@ const grantAll = async (users: readonly StartingGrantUser[]): Promise<{ granted:
             creditTransactions: creditTransactionRepository,
             creditLots: creditLotRepository,
             users: userRepository,
+            signupProtection: { repository: signupProtectionRepository, mode: 'enforce' },
           },
           reason: GRANT_REASON,
         }
       );
+      if (result.withheld) {
+        console.log(`  deferred ${describeUser(user)} - pending domain review`);
+        continue;
+      }
       granted++;
       console.log(`  ok  ${describeUser(user)}  +${result.creditsGranted} credits`);
     } catch (error) {
@@ -181,9 +181,9 @@ const run = async (): Promise<number> => {
   await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', stage));
 
   const amount = await userService.resolveFreeCreditAmount(null, adminSettingsRepository);
-  console.log(`defaultFreeCredits (admin setting): ${amount}`);
+  console.log(`Signup schedule initial credits: ${amount}`);
   if (args.execute && amount !== args.expectAmount) {
-    console.error(`Aborting: defaultFreeCredits is ${amount}, but --expect-amount=${args.expectAmount}.`);
+    console.error(`Aborting: signup schedule initial credits are ${amount}, but --expect-amount=${args.expectAmount}.`);
     return 1;
   }
   console.log('');

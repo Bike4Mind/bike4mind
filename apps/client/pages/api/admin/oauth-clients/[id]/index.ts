@@ -1,11 +1,14 @@
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ensureAdmin, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { updateOAuthClient } from '@bike4mind/database';
 import { ApiKeyScope, updateOAuthClientSchema } from '@bike4mind/common';
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (req, res) => {
-  ensureAdmin(req.user?.isAdmin);
+const handler = adminApi({
+  adminPermissions: { PATCH: 'settings:manage' },
+  fullAdminMethods: ['PATCH'],
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).patch(async (req, res) => {
   const { id } = req.query;
   if (typeof id !== 'string' || !id) throw new BadRequestError('OAuth client id required');
 
@@ -26,7 +29,25 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).patch(async (re
       action === 'oauth_client.updated' ? 'updated the OAuth client' : `${action.split('.')[1]} the OAuth client`,
     changes: [
       { field: 'redirectUris', before: before.redirectUris, after: after.redirectUris },
+      {
+        field: 'postLogoutRedirectUris',
+        before: before.postLogoutRedirectUris,
+        after: after.postLogoutRedirectUris,
+      },
       { field: 'isActive', before: before.isActive, after: after.isActive },
+      { field: 'allowedScopes', before: before.allowedScopes, after: after.allowedScopes },
+      { field: 'federatedIdp', before: before.federatedIdp ?? null, after: after.federatedIdp ?? null },
+      { field: 'rateLimit', before: before.rateLimit ?? null, after: after.rateLimit ?? null },
+      {
+        field: 'unpaidAccountLimits',
+        before: before.unpaidAccountLimits ?? null,
+        after: after.unpaidAccountLimits ?? null,
+      },
+      {
+        field: 'unpaidAccountsAllowed',
+        before: before.unpaidAccountsAllowed ?? null,
+        after: after.unpaidAccountsAllowed ?? null,
+      },
     ],
     details: { clientId: after.clientId },
   });

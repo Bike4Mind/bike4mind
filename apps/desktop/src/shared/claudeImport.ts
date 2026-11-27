@@ -1,10 +1,12 @@
 /**
- * Conversations brought in from Claude: Claude Code transcripts (synced from
- * `~/.claude/projects`) and claude.ai chats (from the user's data export). Read-only on the
- * source side - see main/claudeImport for the importers.
+ * Conversations brought in from elsewhere: Claude Code transcripts (synced from
+ * `~/.claude/projects`), claude.ai chats (from the user's data export), and the signed-in
+ * account's Bike4Mind web notebooks. Read-only on the source side - see main/claudeImport.
  */
 
-export type ClaudeImportKind = 'claude-code' | 'claude-chat';
+export type ClaudeImportKind = 'claude-code' | 'claude-chat' | 'b4m-web';
+
+const IMPORT_KINDS: readonly ClaudeImportKind[] = ['claude-code', 'claude-chat', 'b4m-web'];
 
 /**
  * Where an imported session came from. Separate from ChatSessionOrigin, which is agent-spawn
@@ -12,7 +14,7 @@ export type ClaudeImportKind = 'claude-code' | 'claude-chat';
  */
 export interface ChatImportOrigin {
   kind: ClaudeImportKind;
-  /** The Claude session id, subagent id, or conversation uuid. */
+  /** The Claude session id, subagent id, conversation uuid, or web notebook id. */
   sourceId: string;
   sourcePath?: string;
   importedAt: string;
@@ -27,6 +29,12 @@ export interface ChatImportOrigin {
   gitBranch?: string;
   /** A subagent transcript's parent Claude session. */
   parentSourceId?: string;
+  /**
+   * Bike4Mind web only: when a reply in the notebook was last known to be still being written,
+   * by a sync or by a desktop send that walked away from it. A lease, not a flag: see
+   * isLinkedReplyRunning in webLinkedChat.ts.
+   */
+  runningSince?: string;
 }
 
 /**
@@ -36,16 +44,30 @@ export interface ChatImportOrigin {
 export const IMPORTED_MESSAGE_PREFIX: Readonly<Record<ClaudeImportKind, string>> = {
   'claude-code': 'cc-',
   'claude-chat': 'cl-',
+  'b4m-web': 'bw-',
 };
 
+/**
+ * The ids a Bike4Mind web quest's prompt (`p`) and reply (`r`) take in the desktop copy. Must stay
+ * in sync with mapQuests (main/claudeImport/webSessionMapper.ts): a desktop send through the web
+ * session writes these same ids, so the next sync replaces its messages rather than adding to them.
+ */
+export function webQuestMessageId(questId: string, part: 'p' | 'r'): string {
+  return `${IMPORTED_MESSAGE_PREFIX['b4m-web']}${questId}-${part}`;
+}
+
 export function isImportedMessageId(id: string): boolean {
-  return id.startsWith(IMPORTED_MESSAGE_PREFIX['claude-code']) || id.startsWith(IMPORTED_MESSAGE_PREFIX['claude-chat']);
+  return IMPORT_KINDS.some(kind => id.startsWith(IMPORTED_MESSAGE_PREFIX[kind]));
+}
+
+export function isImportKind(value: unknown): value is ClaudeImportKind {
+  return IMPORT_KINDS.includes(value as ClaudeImportKind);
 }
 
 export function normalizeImportOrigin(value: unknown): ChatImportOrigin | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Partial<ChatImportOrigin>;
-  if (raw.kind !== 'claude-code' && raw.kind !== 'claude-chat') return null;
+  if (!isImportKind(raw.kind)) return null;
   if (typeof raw.sourceId !== 'string' || !raw.sourceId) return null;
   const text = (key: keyof ChatImportOrigin) => (typeof raw[key] === 'string' && raw[key] ? { [key]: raw[key] } : {});
   return {
@@ -58,6 +80,7 @@ export function normalizeImportOrigin(value: unknown): ChatImportOrigin | null {
     ...text('cwd'),
     ...text('gitBranch'),
     ...text('parentSourceId'),
+    ...text('runningSince'),
   };
 }
 
@@ -93,9 +116,32 @@ export interface ClaudeChatImportSummary {
   retryable?: boolean;
 }
 
+export interface WebSyncSettings {
+  enabled: boolean;
+}
+
+/** The sidebar's dismissible pointers to the syncs; see renderer chat/SyncHints. */
+export type SyncHintId = 'sidebar-empty' | 'claude-code' | 'web';
+
+const SYNC_HINT_IDS: readonly SyncHintId[] = ['sidebar-empty', 'claude-code', 'web'];
+
+export function isSyncHintId(value: unknown): value is SyncHintId {
+  return SYNC_HINT_IDS.includes(value as SyncHintId);
+}
+
+export interface SyncHintsState {
+  /** Hints this account closed for good. */
+  dismissed: SyncHintId[];
+  /** Claude Code worktree sessions in the default folder, by file name alone; null until looked. */
+  codeSessions: number | null;
+  /** Notebooks the account has on the web; null until counted. */
+  webNotebooks: number | null;
+}
+
 export interface ClaudeImportState {
   /** Imports land in the signed-in account's sessions, so nothing runs while signed out. */
   signedIn: boolean;
+  hints: SyncHintsState;
   code: {
     settings: ClaudeCodeImportSettings;
     /** The folder actually read: the setting, or the default. */
@@ -112,6 +158,18 @@ export interface ClaudeImportState {
     watchFolder: string | null;
     running: boolean;
     lastImport: ClaudeChatImportSummary | null;
+  };
+  web: {
+    settings: WebSyncSettings;
+    running: boolean;
+    /** While running: notebooks this run has to read (new or changed on the web) and how many it has read. */
+    progress?: { done: number; total: number };
+    lastSyncAt: string | null;
+    lastSyncMs: number | null;
+    /** Notebooks on the web; imported includes the ones continued here. */
+    counts: ClaudeImportCounts;
+    forked: number;
+    error?: string;
   };
 }
 

@@ -13,7 +13,9 @@ import {
   isLakeIngestable,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { createFabFile } from '@server/managers/fabFileManager';
+import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { admitPendingUploads } from '@server/files/pendingUploads';
+import { createFabFile } from '@bike4mind/server-utils/managers/fabFileManager';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -21,9 +23,10 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
   organizationRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import {
   checkStorageLimitForOwner,
   getSettingsMap,
@@ -31,14 +34,13 @@ import {
   resolveSupportedMimeType,
 } from '@bike4mind/utils';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
 import { Resource } from 'sst';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
-import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
+import { FILES_WRITE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 
 const s3Client = createS3Client();
 const EXPIRES = 600; // 10 minutes
@@ -228,9 +230,15 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       (bytesByOwnerOrganization.get(ownerOrganizationId) ?? 0) + (fileItem.fileSize || 0)
     );
   }
+  const pending = await admitPendingUploads(req, data.files.length, bytesByOwnerOrganization.keys());
+  // Personal usage may have changed since auth while a landed upload was being charged.
+  const quotaUser = bytesByOwnerOrganization.has(undefined) ? await userRepository.findById(userId) : req.user;
+  if (!quotaUser) throw new UnauthorizedError('Sign in to upload files');
   for (const [organizationId, bytes] of bytesByOwnerOrganization) {
-    await checkStorageLimitForOwner({ user: req.user, organizationId }, bytes, id =>
-      organizationRepository.findById(id)
+    await checkStorageLimitForOwner(
+      { user: quotaUser, organizationId, pendingBytes: pending.bytesFor(organizationId) },
+      bytes,
+      id => organizationRepository.findById(id)
     );
   }
 
@@ -250,10 +258,13 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
     await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
   }
 
+  // Spent after every gate above, so a batch they refuse costs nothing.
+  await consumeFileUploadBudget(req, data.files.length);
+
   const results = await Promise.all(
     resolvedFiles.map(async ({ item: fileItem, mimeType }) => {
       const ext = mime.extension(mimeType);
-      const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+      const fileKey = `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`;
 
       // Merge data lake meta-tag with file-specific tags, then guarantee the file also lands
       // under the lake's content prefix. Reconciling AFTER the injection is load-bearing: the
@@ -296,10 +307,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       );
 
       // Bound to the declared size the size and storage checks above ran on: S3 refuses any other length.
+      // Create-only: the uploader must send `If-None-Match: *` (uploadFileToUrl, the CLI's uploadFileBytes).
       const command = new PutObjectCommand({
         Bucket: Resource.fabFileBucket.name,
         Key: fileKey,
         ContentLength: fileItem.fileSize,
+        IfNoneMatch: '*',
       });
 
       // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL

@@ -31,6 +31,14 @@ body {
   /* Font family is now managed by next/font/google in layout.tsx for optimal performance */
 }
 
+/* The theme's styles arrive with the client-only SPA ([[...slug]]/SpaShell), but the color-scheme
+   script marks <html> before first paint, so a dark-mode load paints dark instead of flashing white.
+   Once the theme mounts, the variable resolves to its own value. */
+[data-joy-color-scheme='dark'] body {
+  background-color: var(--joy-palette-background-body, #0e1214);
+  color-scheme: dark;
+}
+
 * {
   min-width: 0;
 }
@@ -479,8 +487,8 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
 [class*='JoyTextarea']::before,
 [class*='JoySelect-button']::before,
 [class*='MuiSelect-button']::before,
-[class*='JoySelect-root']::before,
-[class*='MuiSelect-root']::before {
+[class*='JoySelect-root']:not(.Mui-focusVisible)::before,
+[class*='MuiSelect-root']:not(.Mui-focusVisible)::before {
   opacity: 0 !important;
 }
 
@@ -509,13 +517,10 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
   opacity: 1 !important;
 }
 
-/* Remove Joy UI focus effect for Select components */
-[class*='JoySelect'] {
-  --Select-focusedHighlight: transparent !important;
-}
-
-[class*='JoySelect']:focus,
-[class*='JoySelect']:focus-within {
+/* Remove Joy UI focus effect for Select components, except on keyboard focus: Joy puts `Mui-focusVisible`
+   on the Select root only then, and its ring is the Select's only focus indicator. The Select ::before
+   rule above is scoped the same way. */
+[class*='JoySelect']:not(.Mui-focusVisible) {
   --Select-focusedHighlight: transparent !important;
 }
 

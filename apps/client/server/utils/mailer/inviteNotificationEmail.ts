@@ -1,6 +1,9 @@
 import { InviteType } from '@bike4mind/common';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'inviteNotificationEmail' } });
 
 /** Human-readable noun for an invite type, as used in invite email copy. */
 export const getInviteTypeName = (type: InviteType): string => {
@@ -15,6 +18,8 @@ export const getInviteTypeName = (type: InviteType): string => {
       return 'organization';
     case InviteType.Group:
       return 'group';
+    case InviteType.Space:
+      return 'space';
     default:
       return 'content';
   }
@@ -35,6 +40,11 @@ export const sendInviteNotificationEmails = async (
   description?: string
 ) => {
   const brand = process.env.APP_NAME || '';
+  // The UI calls an organization a team, and its invite should say which one.
+  const isTeam = typeName === getInviteTypeName(InviteType.Organization);
+  const subjectAction = isTeam
+    ? `invited you to join ${documentName.replace(/[\r\n]+/g, ' ')}`
+    : `shared a ${typeName} with you`;
   const emailBody = `
     <!DOCTYPE html>
     <html>
@@ -102,10 +112,14 @@ export const sendInviteNotificationEmails = async (
         <div class="content">
           <p>Hello!</p>
 
-          <p><strong>${escapeHtml(sharerName)}</strong> (${escapeHtml(sharerEmail)}) has shared a ${typeName} with you${brand ? ` on ${brand}` : ''}.</p>
+          <p><strong>${escapeHtml(sharerName)}</strong> (${escapeHtml(sharerEmail)}) ${
+            isTeam
+              ? `invited you to join the team <strong>${escapeHtml(documentName)}</strong>`
+              : `has shared a ${typeName} with you`
+          }${brand ? ` on ${brand}` : ''}.</p>
 
           <div class="shared-item">
-            <strong>${typeName.charAt(0).toUpperCase() + typeName.slice(1)}:</strong> ${escapeHtml(documentName)}
+            <strong>${isTeam ? 'Team' : typeName.charAt(0).toUpperCase() + typeName.slice(1)}:</strong> ${escapeHtml(documentName)}
           </div>
 
           ${
@@ -136,15 +150,15 @@ export const sendInviteNotificationEmails = async (
     </html>
   `;
 
-  // A subject is plain text, so it is not HTML-escaped; line breaks are dropped so the name
-  // cannot spill into further header lines.
+  // A subject is plain text, so it is not HTML-escaped; line breaks are dropped (here and in
+  // subjectAction) so a name cannot spill into further header lines.
   const emailPromises = recipients.map(recipient =>
     EmailEvents.Send.publish({
       to: recipient,
-      subject: `${sharerName.replace(/[\r\n]+/g, ' ')} shared a ${typeName} with you${brand ? ` on ${brand}` : ''}`,
+      subject: `${sharerName.replace(/[\r\n]+/g, ' ')} ${subjectAction}${brand ? ` on ${brand}` : ''}`,
       body: emailBody,
     }).catch(error => {
-      console.error(`Failed to send invite notification to ${recipient}:`, error);
+      logger.error('Failed to send invite notification', { recipient, error });
     })
   );
 

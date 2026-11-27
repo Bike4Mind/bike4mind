@@ -1,8 +1,21 @@
+import type {
+  ModelBuildReport,
+  ModelLighting,
+  ModelPose,
+  ModelVersion,
+  ModelView,
+  ModelViewState,
+} from '@shared/model3d';
+import type { SpawnOptions, TaskAction } from '@shared/orchestration';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
+import type { BrowserSnapshot } from '@shared/browserPage';
 import type { McpServerState, McpServersState } from '@shared/mcp';
+import type { LoopResult, LoopStart, LoopState } from '@shared/loop';
+import type { PrActionResult, PrBindOutcome } from '@shared/pullRequest';
 import type {
   ChatApprovalOption,
+  ChatArtifact,
   ChatDiff,
   ChatToolDetail,
   ChatMedia,
@@ -14,11 +27,13 @@ import type {
   SpawnRefusal,
 } from '@shared/chat';
 
+import { HEAD_SHARE } from './cappedOutput';
 import type { ScrollTarget } from '../browser/pageScripts';
 import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
 import type { MemoryStore } from '../project/memory';
+import type { BranchReservation } from '../project/workspace';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { VideoJobScheduler } from '../media/VideoJobScheduler';
@@ -38,18 +53,12 @@ import type { WebSearchTurn } from './webSearchLimits';
 export interface MediaContext {
   client: MediaApiClient;
   store: MediaStore;
-  /** Base for generated-file URLs, from serverConfig. Relative on self-host, absolute on a CDN. */
-  cdnUrl: string;
-  /** Names the notebook the server creates for this conversation's first generation. */
-  notebookName: string;
   /** Image models this deployment offers. Lazy: a turn with no image generation never asks. */
   listImageModels(): Promise<string[]>;
   /** Video models this caller can use; cached, and read at turn start to decide whether to offer the tool. */
   listVideoModels(): Promise<VideoModel[]>;
   /** Records and follows a created video job. Absent where nothing can follow one. */
   videoJobs?: Pick<VideoJobScheduler, 'track'>;
-  getRemoteSessionId(): string | undefined;
-  setRemoteSessionId(remoteSessionId: string): Promise<void>;
 }
 
 /**
@@ -106,7 +115,7 @@ export interface WebContext {
 export interface ToolReporter {
   /** Replaces the previous line. For work measured in tens of seconds. */
   progress(text: string): void;
-  /** Attach a generated image or audio clip to this call, for the UI only - not sent to the model. */
+  /** Attach an image or audio clip to this call, for the UI only - not sent to the model. */
   media(item: ChatMedia): void;
   /** Raise a cost or provider outcome to its own state; see ChatToolNotice. */
   notice(notice: ChatToolNotice): void;
@@ -130,12 +139,8 @@ export interface ToolReporter {
    * result text the model and the user both read.
    */
   moved(): void;
-  /**
-   * This call's result is text the user wrote or chose to load - a skill from their own folder or
-   * from a project they trusted - so reading it does not make the reply untrusted. See
-   * ChatToolCall.ownContent.
-   */
-  ownContent(): void;
+  /** The result comes from a trusted local skill rather than an imported body. */
+  ownContent?(): void;
 }
 
 /** One conversation's agent browser: a hidden window with its own cookie jar. */
@@ -153,10 +158,7 @@ export interface BrowserPage {
   stop(): void;
   back(): Promise<void>;
   /** With `inView`, only what intersects the viewport. */
-  snapshot(
-    maxChars: number,
-    inView?: boolean
-  ): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
+  snapshot(maxChars: number, inView?: boolean): Promise<BrowserSnapshot>;
   click(ref: string): Promise<string>;
   /** Scroll and describe what moved; an element target resolves to its visible name. */
   scroll(target: ScrollTarget): Promise<string>;
@@ -179,6 +181,8 @@ export interface BrowserProvider {
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext;
   closeSession(sessionId: string): Promise<void>;
+  /** Reload, in place, any of the conversation's tabs showing one of these artifacts at an older version. */
+  refreshArtifacts?(sessionId: string, artifacts: readonly ChatArtifact[]): void;
 }
 
 /** One of a conversation's tabs, as browser_tabs lists it. */
@@ -208,6 +212,160 @@ export interface BrowserContext {
    * it in every mode. Reading the flag is all a tool may do: nothing here can cause an import.
    */
   usesImportedCookies(url: string): boolean;
+}
+
+/** An image fitted to what the model's provider accepts, and the size it was read at. */
+export interface PreparedImage {
+  bytes: Buffer;
+  mediaType: string;
+  width: number;
+  height: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
+/** How a tool shows the model an image through ToolReporter.image. */
+export interface ImageContext {
+  /**
+   * False when the turn's model is known not to read images. ChatService drops the image then
+   * anyway; this is so the tool can say so rather than tell the model to look at nothing.
+   */
+  vision: boolean;
+  /**
+   * Downscale to the long-edge limit and fit under `maxBytes`. Null for bytes the decoder cannot
+   * read, which nativeImage does not for GIF and WebP. Injected so only main/chat imports Electron.
+   */
+  prepare(bytes: Buffer, mediaType: string, maxBytes: number): PreparedImage | null;
+  /**
+   * Keep `display` in the conversation's media folder for the transcript, once per distinct
+   * `source`: the same bytes read again return the copy already kept. Resolves undefined when
+   * there is nowhere to keep it or the write failed; reading the image goes on regardless.
+   */
+  keep?(source: Buffer, display: KeptImage, caption: string): Promise<ChatMedia | undefined>;
+}
+
+/** The fitted copy of an image a tool keeps for the transcript. Sizes are absent for a format the decoder cannot read. */
+export interface KeptImage {
+  bytes: Buffer;
+  mediaType: string;
+  width?: number;
+  height?: number;
+}
+
+/** A window or display, as screen_capture lists it. */
+export interface ScreenSource {
+  /** desktopCapturer's id, `window:<n>:<n>` or `screen:<n>:<n>`: stable for the window's lifetime. */
+  id: string;
+  kind: 'window' | 'screen';
+  /** A window's title, or a display's name. */
+  name: string;
+}
+
+export type ScreenAccess =
+  | { state: 'granted' }
+  /** macOS has not asked yet; the first capture raises its prompt. */
+  | { state: 'not-determined' }
+  /** `message` is what the model is told, with where the user can change it. */
+  | { state: 'denied' | 'unsupported'; message: string };
+
+/** The desktop's windows and displays: Electron's desktopCapturer in the app, a fake in tests. */
+export interface ScreenCapturer {
+  /** Read on every call, never cached: the user can grant it in System Settings at any time. */
+  access(): ScreenAccess;
+  list(): Promise<ScreenSource[]>;
+  /** A PNG at most `maxEdge` pixels on its long side; null when the source is gone or came back blank. */
+  capture(id: string, maxEdge: number): Promise<Buffer | null>;
+}
+
+export interface ScreenContext {
+  capturer: ScreenCapturer;
+  /** Keep a capture for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+}
+
+/** One simulator device, as `xcrun simctl list` reports it. */
+export interface SimulatorDevice {
+  udid: string;
+  name: string;
+  /** "iOS 27.0", from the runtime identifier. */
+  runtime: string;
+  /** simctl's own word: Booted, Shutdown, Booting, Shutting Down. */
+  state: string;
+}
+
+/** A screen size in points, the unit every input coordinate is given in. */
+export interface SimulatorScreen {
+  width: number;
+  height: number;
+  /** Pixels per point: a screenshot is `width * scale` pixels wide. */
+  scale: number;
+}
+
+export type SimulatorButton = 'home' | 'lock' | 'side-button' | 'siri' | 'apple-pay';
+export type SimulatorKey = 'return' | 'delete' | 'tab' | 'escape' | 'space' | 'up' | 'down' | 'left' | 'right';
+
+export interface SimulatorBuildRequest {
+  /** Absolute path to a .xcodeproj or .xcworkspace. */
+  container: string;
+  scheme: string;
+  udid: string;
+  configuration?: string;
+}
+
+/**
+ * The iOS Simulator on this Mac: simctl for lifecycle and screens, AXe for touch and keys. A
+ * fake in tests. Every failure the user has to fix (no Xcode, licence, missing AXe) throws a
+ * SimulatorSetupError naming the exact fix; see simulator/toolchain.ts.
+ */
+export interface SimulatorDriver {
+  devices(): Promise<{ devices: SimulatorDevice[]; runtimes: string[] }>;
+  boot(udid: string): Promise<void>;
+  /** Returns the built .app's path and the tail of the build log. */
+  build(request: SimulatorBuildRequest, signal: AbortSignal): Promise<{ appPath: string; log: string }>;
+  /** Installs the bundle and returns its bundle identifier. */
+  install(udid: string, appPath: string): Promise<string>;
+  launch(udid: string, bundleId: string): Promise<void>;
+  /** A PNG scaled to the screen's size in points, so pixel coordinates in it are tap coordinates. */
+  screenshot(udid: string): Promise<{ png: Buffer; screen: SimulatorScreen }>;
+  tap(udid: string, x: number, y: number, duration?: number): Promise<void>;
+  swipe(udid: string, from: { x: number; y: number }, to: { x: number; y: number }, duration?: number): Promise<void>;
+  type(udid: string, text: string): Promise<void>;
+  key(udid: string, key: SimulatorKey): Promise<void>;
+  button(udid: string, button: SimulatorButton, duration?: number): Promise<void>;
+  openUrl(udid: string, url: string): Promise<void>;
+  appearance(udid: string): Promise<string>;
+  setAppearance(udid: string, mode: 'light' | 'dark'): Promise<void>;
+  rotate(udid: string, direction: 'left' | 'right'): Promise<void>;
+}
+
+export interface SimulatorContext {
+  driver: SimulatorDriver;
+  /** Keep a screenshot for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+  /** The device this session's live view shows, if any; input defaults to it. */
+  attached(): string | undefined;
+  /** Opens the user's live view on this device. */
+  attach(udid: string): Promise<void>;
+  detach(): void;
+}
+
+/** The parts of main's ModelLiveView (main/chat/model3d) the model tools use. */
+export interface ModelViewPort {
+  current(): ModelViewState;
+  open(path: string): Promise<ModelViewState>;
+  waitForBuild(): Promise<ModelBuildReport>;
+  capture(views: ModelView[], pose?: ModelPose): Promise<Uint8Array>;
+  /** An 8 s turntable clip of the current model, as WebM. */
+  recordTurntable(lighting: ModelLighting): Promise<Uint8Array>;
+  glbPath(): string | null;
+  /** This conversation's kept builds, oldest first (ModelVersionStore.ts). */
+  versions(): Promise<ModelVersion[]>;
+}
+
+export interface ModelContext {
+  view: ModelViewPort;
+  /** Keep a screenshot for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
 }
 
 /**
@@ -241,6 +399,15 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Folders inside protectedPaths that request_directory may still share, such as chat attachments. */
+  shareableUnderProtected?: readonly string[];
+  /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
+  unresolvedProtectedPaths?: readonly string[];
+  /**
+   * Folders no allow rule may cover (see protectedLocations.ts). A shell command reaching one asks in auto
+   * mode, as the rules would refuse it.
+   */
+  uncoverablePaths?: readonly string[];
   /**
    * The conversation this call belongs to. Background processes are scoped by it, so one
    * conversation cannot read or stop another's just by naming a handle.
@@ -265,6 +432,14 @@ export interface ToolContext {
   web?: WebContext;
   /** Absent outside a Code session; the browser tools are then not declared at all. */
   browser?: BrowserContext;
+  /** Absent in a build without desktopCapturer; screen_capture is then not declared at all. */
+  screen?: ScreenContext;
+  /** Absent off macOS and in tests; the simulator tools are then not declared at all. */
+  simulator?: SimulatorContext;
+  /** Absent outside a Code session with a working directory; the model tools are then not declared. */
+  model?: ModelContext;
+  /** Absent outside the chat loop, where an image has nowhere to go; file_read then describes it in text. */
+  images?: ImageContext;
   /**
    * Where this project's memories live. Resolved from the project, never from the tool's
    * arguments: the model names a memory, and nothing it can say chooses the folder.
@@ -277,8 +452,18 @@ export interface ToolContext {
   skills?: SkillContext;
   /** The user's MCP servers. Absent in a build or test without them; the mcp_* tools then refuse. */
   mcp?: McpToolContext;
+  /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
+  pullRequests?: PullRequestContext;
+  /** The calling session's /loop. Absent when no user is present; the `loop` tool then refuses. */
+  loop?: LoopContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+  /**
+   * Stops the turn's time budget while a call blocks on something that is not the agent working
+   * (bash_output waiting on a background process), until the returned function is called. Absent
+   * outside the chat loop. See TurnClock in ../turnClock.
+   */
+  pauseTurnClock?: () => () => void;
   /**
    * The approval key this call was let through under, whether the user answered the card, a
    * standing answer covered it, or the mode did. Absent for a call that was never gated. Set by
@@ -303,6 +488,21 @@ export interface McpToolContext {
   removeServer(id: string): Promise<McpServersState>;
 }
 
+/** One session's loop, through the same start path as the user's /loop. See ChatService.startLoop. */
+export interface LoopContext {
+  /** Whether this turn is one of the session's own loop runs, which may not start another. */
+  inRun(): boolean;
+  start(request: LoopStart): Promise<LoopResult>;
+  current(): LoopState | null;
+  stop(): void;
+}
+
+/** One session's PR binding, as set_session_pull_request may change it. See PrMonitor. */
+export interface PullRequestContext {
+  bind(target: string): Promise<PrBindOutcome>;
+  clear(): Promise<PrActionResult>;
+}
+
 /**
  * The skills this conversation may run, as the `skill` tool sees them.
  *
@@ -314,6 +514,12 @@ export interface McpToolContext {
  */
 export interface SkillContext {
   available(): Promise<readonly CustomCommand[]>;
+  /**
+   * True when `name` exists but is withheld from the model by `disable-model-invocation`, so a
+   * refusal can say the user has to start it rather than that it is missing. Optional: without it
+   * the tool reports a plain miss.
+   */
+  isUserOnly?(name: string): Promise<boolean>;
 }
 
 /** What one session looks like to the host-control tools. */
@@ -328,7 +534,24 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** What a 'needs-action' session waits on; absent otherwise. */
+  waitingOn?: 'approval' | 'decision' | 'message';
+  /** The project folder's name; absent for a conversation with no project. */
+  project?: string;
+  /** The branch of a session in a worktree of its own. */
+  branch?: string;
+  /** How its last assistant turn ended, and a one-line excerpt of it; see summarizeSession. */
+  lastOutcome?: string;
+  lastSnippet?: string;
 }
+
+/**
+ * What session_rename got back. 'out-of-scope' covers a session outside this project as well as
+ * one in it that is neither the caller nor a child of it, so the model cannot probe either.
+ */
+export type HostRenameOutcome =
+  | { ok: true; session: HostSessionView }
+  | { ok: false; reason: 'out-of-scope' | 'user-title' };
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
 export interface SpawnRejected {
@@ -348,20 +571,33 @@ export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnReje
  * checkout back and be isolated in name only. `base` is what that branch is cut from - the
  * parent's own branch, never the parent's checkout - see HostContext.spawnBase.
  */
-export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string; base: string };
+export type SpawnPlacement =
+  | { kind: 'local' }
+  | {
+      kind: 'worktree';
+      branch: string;
+      base: string;
+      /** Set when the app picked `branch` and already holds it; the spawn then owns releasing it. */
+      reservation?: BranchReservation | null;
+    };
 
 /**
  * A delivered message, and whether the target took it up straight away.
  *
  * `title` is what the caller's transcript row names, resolved here because the model only ever
- * had the id. `queued` is the honest half: the target was mid-reply, so the message is waiting
- * behind that turn rather than running now.
+ * had the id. `queued` is the honest half: the target was mid-reply, so the message waits for
+ * that turn's next round boundary, or its end, rather than running now.
  */
 export interface RelayAccepted {
   ok: true;
   sessionId: string;
   title: string;
   queued: boolean;
+  /**
+   * Waiting for the receiver's user to let it in rather than delivered; see relayHoldReason.
+   * Nothing runs there until they do, and they may decline.
+   */
+  held: boolean;
 }
 
 export interface RelayRejected {
@@ -396,25 +632,54 @@ export interface HostContext {
    * Refused rather than queued when a cap is hit; see SpawnRefusal for which caps and why the
    * model is told them apart.
    */
-  spawn(prompt: string, title: string | undefined, placement: SpawnPlacement): Promise<SpawnOutcome>;
+  spawn(
+    prompt: string,
+    title: string | undefined,
+    placement: SpawnPlacement,
+    options?: SpawnOptions
+  ): Promise<SpawnOutcome>;
+  taskAction?(sessionId: string, action: TaskAction): Promise<string>;
   /**
    * What a worktree child's new branch is cut from: the branch this session is on. Resolved once,
    * for the approval card, and carried from there in the placement, so the base the card names
    * is the base the child gets.
    */
   spawnBase(): Promise<string>;
-  /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
-  listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
-  /** One session's transcript as plain text, or null when it is gone or not in this project. */
-  readSession(sessionId: string): Promise<string | null>;
+  /**
+   * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
+   * conversation of the signed-in account, which is as far as the session store reaches.
+   */
+  listSessions(options: {
+    includeArchived: boolean;
+    scope: 'project' | 'all';
+    /** Only the sessions the calling conversation started, in any project. */
+    childrenOnly?: boolean;
+  }): Promise<HostSessionView[]>;
+  /**
+   * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
+   * Outside this project only for a session the user mentioned here or that messaged this one:
+   * listing shows every conversation exists, reading one has to trace back to something the user
+   * did. Throws with the reason when it cannot be read.
+   */
+  readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
+  /**
+   * Retitle this conversation or one it started, and lock the title against the generator.
+   * Refused for any other session, and for a title the user chose by hand; see agentMayRetitle.
+   */
+  renameSession(sessionId: string, title: string): Promise<HostRenameOutcome>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
-  /** How a session is described in an approval prompt, so the user reads a title not a uuid. */
-  describeSession(sessionId: string): Promise<string | null>;
   /**
-   * Deliver `message` to an existing session in this project and let it run as a turn there.
+   * How a session is described in an approval prompt, so the user reads a title not a uuid. Scope
+   * 'project' (default) matches what archive/delete can act on; 'all' matches what sendTo reaches.
+   */
+  describeSession(ref: string, options?: { scope: 'project' | 'all' }): Promise<string | null>;
+  /**
+   * Deliver `message` to an existing session - any of this account's, addressed as readSession
+   * is - and let it run as a turn there. A delivery that could widen what the sender reaches is
+   * held for the receiver's user instead; see RelayAccepted.held.
    *
    * Fire and forget, like `spawn`: it resolves once the message is accepted, never when the
    * target has answered. Waiting would deadlock the moment the target parks at the approval
@@ -423,13 +688,36 @@ export interface HostContext {
    * Bounded by the hop count on the relay and by the sends this turn has already made; see
    * ChatRelayOrigin. A refusal here is the bound working, not a transient failure.
    */
-  sendTo(sessionId: string, message: string): Promise<RelayOutcome>;
+  sendTo(ref: string, message: string, options: { notify: boolean }): Promise<RelayOutcome>;
   /**
    * Present only when a user is in this conversation to act on a suggestion. session_spawn then
    * proposes rather than starts, and the turn is never held on the answer. Absent in a spawned
    * session, which keeps the approval-gated start.
    */
   suggestions?: SpawnSuggestionHost;
+  /**
+   * Set when Orchestrate is in effect for this conversation (orchestratesAgents): session_spawn
+   * then starts the child at once with no card. The spawn caps still apply. Never set together
+   * with `suggestions`.
+   */
+  delegates?: DelegationHost;
+  /** Set with `delegates`: whether the orchestrated job may be declared complete (quest_complete). */
+  quest?: QuestHost;
+}
+
+export interface QuestHost {
+  /** Whether the job can be declared complete now; both texts are for the model. */
+  readiness(): Promise<QuestReadiness>;
+}
+
+export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
+
+export interface DelegationHost {
+  /**
+   * Where a delegated child goes: the parent's checkout, or with `isolate` a worktree of its own
+   * when the project is a repository.
+   */
+  placement(title: string | undefined, prompt: string, isolate: boolean): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {
@@ -453,6 +741,17 @@ export interface SpawnSuggestionHost {
 export interface ApprovalPrompt {
   /** Shown to the user verbatim. */
   detail: string;
+  /**
+   * The model's own few words on what a shell command does, shown beside `detail`. Display
+   * only: it can be wrong, so it never feeds `key`, `reasons`, rules or refusals.
+   */
+  summary?: string;
+  /**
+   * Why the gate stops for this call, each already a paragraph of `detail`. Kept apart as well so a
+   * surface that shows less than the full card (the menu bar, the mini window) can tell the call
+   * carries a reason it would otherwise drop.
+   */
+  reasons?: readonly string[];
   /** Identity for "always allow": two calls share a key only if they would do the same thing. */
   key: string;
   /**
@@ -477,15 +776,11 @@ export interface ApprovalPrompt {
   /**
    * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
    * default but has a specific reason to stop first: a shell command naming a path outside the
-   * project, a read of a `.env` file, or a command that can send data out.
+   * project, a read of a `.env` file, or a write to protected settings.
    */
   askInAuto?: true;
-  /**
-   * Proven by the shell scan to keep to this computer or only read from GitHub (see
-   * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
-   * to ask: steered or not, the call has nowhere to send what it reads.
-   */
-  contained?: true;
+  /** An "always" on this card allows this call only and is never recorded. */
+  allowOnce?: true;
   /**
    * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
    * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
@@ -496,6 +791,15 @@ export interface ApprovalPrompt {
    * gave it, it just cannot be inherited from a mode they set for something else.
    */
   askInFull?: true;
+  /** The scan could not fully follow this shell command; diagnostic confidence, separate from mode approval. */
+  unchecked?: true;
+  /** The shell scan cannot positively prove every executed command keeps data local. */
+  outbound?: true;
+  /**
+   * `askInAuto` and `askInFull` come only from parts that say so in `always.commands[].ask`, with no reason
+   * that holds for the whole script: each part is then decided on its own, and only the undecided ones ask.
+   */
+  byPart?: true;
   /**
    * For a shell command: what "always allow" remembers. Each sub-command of the script is
    * covered by a prefix pattern, and each directory outside the project by the directory.
@@ -505,7 +809,30 @@ export interface ApprovalPrompt {
   mcp?: { server: string; tool: string };
   /** What "always allow" in this conversation covers, for a `key` broader than this one call. */
   alwaysCovers?: string;
+  /**
+   * What "Allow in this chat" is filed under when it stands for more than this one call. A write
+   * tool's `key` names the exact change, which the stale-file check needs; this names the file.
+   */
+  chatKey?: string;
 }
+
+/** One sub-command of a shell script, as a rule, a chat allowance or the mode decides it. */
+export interface ApprovalPart {
+  text: string;
+  pattern: string;
+  coverable: boolean;
+  words?: string;
+  expanded?: string;
+  opaque?: string;
+  /**
+   * Why this part asks, and the most permissive mode that still asks: 'ask' only in "Ask for approval",
+   * 'auto' there and in "Approve for me". Only set with `byPart`.
+   */
+  ask?: { mode: 'ask' | 'auto'; reason: string; kinds: readonly PartAskKind[] };
+}
+
+/** What makes a part ask: an "Allow in this chat" covers it only when given over every one of these. */
+export type PartAskKind = 'env';
 
 export interface ApprovalAlways {
   /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
@@ -514,11 +841,26 @@ export interface ApprovalAlways {
    * One per sub-command, as written; matched against remembered `patterns`. Never covered when
    * not `coverable` (see ShellCommand.coverable).
    */
-  commands: readonly { text: string; pattern: string; coverable: boolean; words?: string; opaque?: string }[];
+  commands: readonly ApprovalPart[];
   /** Directories outside every granted root that the command reaches. */
   directories: readonly string[];
+  /**
+   * The `directories` a command may write in, the only ones auto mode asks about; absent when the tool
+   * cannot tell, and then every one counts.
+   */
+  writtenDirectories?: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */
+  globFolders?: readonly string[];
+  /** See ShellScan.dotlessGlobFolders. */
+  dotlessGlobFolders?: readonly string[];
+  /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
+  ungranted?: readonly string[];
+  /** See ShellScan.writes: a rule never covers a write to a permission file. */
+  writes?: readonly string[];
+  /** See ShellScan.writtenTrees. */
+  writtenTrees?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */
@@ -600,7 +942,7 @@ export function capOutput(text: string, limit = MAX_TOOL_OUTPUT_CHARS): string {
  * where the failure and the exit line are at the bottom and a head-only cut discards both.
  * The result never exceeds `limit`, so a later capOutput at the same limit leaves it alone.
  */
-export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = 0.25): string {
+export function capOutputMiddle(text: string, limit = MAX_TOOL_OUTPUT_CHARS, headShare = HEAD_SHARE): string {
   if (text.length <= limit) return text;
   const marker = (dropped: number) => `\n\n[... ${dropped} characters omitted from the middle ...]\n\n`;
   const room = limit - marker(text.length).length;

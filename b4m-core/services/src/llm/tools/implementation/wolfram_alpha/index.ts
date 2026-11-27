@@ -61,7 +61,7 @@ export async function wolframAlphaQuery(
   const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
-    logger?.log('🔢 Wolfram Alpha: Querying:', params.query);
+    logger?.log('Wolfram Alpha: Querying', { queryLength: params.query.length });
 
     const response = await fetch(url.toString(), {
       method: 'GET',
@@ -73,7 +73,7 @@ export async function wolframAlphaQuery(
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger?.error('Wolfram Alpha: API error', {
+      logger?.[response.status === 501 ? 'warn' : 'error']('Wolfram Alpha: API error', {
         status: response.status,
         statusText: response.statusText,
         errorText,

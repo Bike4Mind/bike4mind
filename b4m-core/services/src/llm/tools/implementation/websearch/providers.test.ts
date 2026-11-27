@@ -144,6 +144,192 @@ describe('createSerpApiProvider', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('serpapi.com/search');
   });
 
+  describe('Google redirect links', () => {
+    const goto = 'https://www.google.com/goto?url=CAESbQHEIkXXfkdQfUOcj3jCcCrbU_Q9Sm6KNCsW3U00gfIe4yo0ZAllFg';
+
+    const searchWith = async (entry: Record<string, unknown>) => {
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(jsonRes({ organic_results: [{ title: 'T', snippet: 's', ...entry }] }));
+      return createSerpApiProvider(adapters).search('q', 3);
+    };
+
+    const malformedLabelValues: ReadonlyArray<{ label: string; value: unknown }> = [
+      { label: 'a number', value: 42 },
+      { label: 'zero', value: 0 },
+      { label: 'false', value: false },
+      { label: 'true', value: true },
+      { label: 'an object', value: {} },
+      { label: 'an array', value: [] },
+      { label: 'null', value: null },
+      { label: 'undefined', value: undefined },
+      { label: 'an empty string', value: '' },
+    ];
+
+    it.each(malformedLabelValues)('keeps valid hits when optional source is $label', async ({ value }) => {
+      const direct = 'https://example.com/healthy?original=1';
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(
+        jsonRes({
+          organic_results: [
+            { title: 'Redirect', link: goto, displayed_link: '10+ comments', source: value },
+            { title: 'Healthy sibling', link: direct },
+          ],
+        })
+      );
+
+      const results = await createSerpApiProvider(adapters).search('q', 3);
+
+      expect(results.map(result => result.url)).toEqual([goto, direct]);
+      expect(results[0]).not.toHaveProperty('displayHost');
+      expect(results[1].title).toBe('Healthy sibling');
+    });
+
+    it.each(malformedLabelValues)(
+      'retains the platform fallback when optional breadcrumb is $label',
+      async ({ value }) => {
+        const results = await searchWith({ link: goto, displayed_link: value, source: 'Reddit \u00b7 r/investing' });
+
+        expect(results[0]).toMatchObject({ url: goto, displayHost: 'Reddit' });
+      }
+    );
+
+    it('keeps the redirect as url and carries the destination host from the breadcrumb', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: 'https://massive.com \u203a blog \u203a polygon-is-now-massive',
+      });
+
+      expect(results[0]).toMatchObject({ url: goto, displayHost: 'massive.com' });
+    });
+
+    it('reads the host of a /url redirect and a bare-host breadcrumb', async () => {
+      const redirect = 'https://www.google.com/url?sa=t&url=CAESVQ';
+      const results = await searchWith({ link: redirect, displayed_link: 'https://www.massive.com' });
+
+      expect(results[0]).toMatchObject({ url: redirect, displayHost: 'www.massive.com' });
+    });
+
+    it('still reads the host when the breadcrumb path is cut short', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: 'https://www.lambdafin.com \u203a articles \u203a api-for-stock-t\u2026',
+      });
+
+      expect(results[0].displayHost).toBe('www.lambdafin.com');
+    });
+
+    it('reads the host when the breadcrumb has no spaces around its separator', async () => {
+      const results = await searchWith({ link: goto, displayed_link: 'https://massive.com\u203ablog\u203aapi' });
+
+      expect(results[0].displayHost).toBe('massive.com');
+    });
+
+    it('reads unspaced ASCII breadcrumbs without a platform fallback and retains sibling URLs', async () => {
+      const direct = 'https://example.com/healthy?original=1';
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(
+        jsonRes({
+          organic_results: [
+            { title: 'Redirect', link: goto, displayed_link: 'https://site.com>section>page' },
+            { title: 'Healthy sibling', link: direct },
+          ],
+        })
+      );
+
+      const results = await createSerpApiProvider(adapters).search('q', 3);
+
+      expect(results.map(result => result.url)).toEqual([goto, direct]);
+      expect(results[0]).toMatchObject({ title: 'Redirect', displayHost: 'site.com' });
+      expect(results[1]).toMatchObject({ title: 'Healthy sibling', url: direct });
+    });
+
+    it('strips markdown link characters from a platform name', async () => {
+      const results = await searchWith({ link: goto, displayed_link: '5 likes', source: 'Foo](https://x.y) (Bar)' });
+
+      expect(results[0].displayHost).toBe('Foohttps://x.y Bar');
+    });
+
+    it('falls back to the platform name in source when the breadcrumb is not a URL', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: '10+ comments',
+        source: 'Reddit \u00b7 r/investing',
+      });
+
+      expect(results[0]).toMatchObject({ url: goto, displayHost: 'Reddit' });
+    });
+
+    it('uses a source without a separator as the platform name', async () => {
+      const results = await searchWith({ link: goto, displayed_link: '5 likes', source: 'DataDrivenInvestor' });
+
+      expect(results[0].displayHost).toBe('DataDrivenInvestor');
+    });
+
+    it('caps a long platform name at 40 characters', async () => {
+      const source = 'abcdefghij'.repeat(6);
+      const results = await searchWith({ link: goto, displayed_link: '10+ comments', source });
+
+      expect(results[0].displayHost).toHaveLength(40);
+      expect(results[0].displayHost).toBe(source.slice(0, 40));
+    });
+
+    it('prefers the breadcrumb host over source', async () => {
+      const results = await searchWith({
+        link: goto,
+        displayed_link: 'https://medium.datadriveninvestor.com \u203a best-stock-ma...',
+        source: 'DataDrivenInvestor',
+      });
+
+      expect(results[0].displayHost).toBe('medium.datadriveninvestor.com');
+    });
+
+    it.each([
+      ['a Google source', 'Google \u00b7 Search'],
+      ['an empty source', ''],
+      ['a source with no platform name', ' \u00b7 r/investing'],
+    ])('sets no displayHost for %s', async (_label, source) => {
+      const results = await searchWith({ link: goto, displayed_link: '10+ comments', source });
+
+      expect(results[0]).not.toHaveProperty('displayHost');
+    });
+
+    it('does not read source on a direct link', async () => {
+      const direct = 'https://www.reddit.com/r/investing/comments/1/best_apis/';
+      const results = await searchWith({
+        link: direct,
+        displayed_link: '10+ comments',
+        source: 'Reddit \u00b7 r/investing',
+      });
+
+      expect(results[0]).toEqual({ title: 'T', url: direct, snippet: 's' });
+    });
+
+    it.each([
+      ['a non-URL such as a video view count', '920+ views'],
+      ['a breadcrumb that is itself a Google host', 'https://www.google.com \u203a search'],
+      ['no displayed_link', undefined],
+      ['a breadcrumb with a non-web scheme', 'ftp://example.com \u203a a'],
+    ])('sets no displayHost for %s', async (_label, displayed_link) => {
+      const results = await searchWith({ link: goto, displayed_link });
+
+      expect(results[0].url).toBe(goto);
+      expect(results[0]).not.toHaveProperty('displayHost');
+    });
+
+    it('sets no displayHost on a /goto link from a non-Google host', async () => {
+      const lookalike = 'https://google.evil.com/goto?url=CAESbQ';
+      const results = await searchWith({ link: lookalike, displayed_link: 'https://massive.com' });
+
+      expect(results[0]).toEqual({ title: 'T', url: lookalike, snippet: 's' });
+    });
+
+    it('sets no displayHost on a direct link even when displayed_link differs', async () => {
+      const results = await searchWith({ link: 'https://x.com/a?b=1', displayed_link: 'https://other.com \u203a a' });
+
+      expect(results[0]).toEqual({ title: 'T', url: 'https://x.com/a?b=1', snippet: 's' });
+    });
+  });
+
   it('carries organic thumbnails through as thumbnail + images', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     fetchMock.mockResolvedValue(
@@ -286,7 +472,7 @@ describe('createSerpApiProvider', () => {
     });
 
     it('returns nothing when no key is configured', async () => {
-      mockGetSerperKey.mockResolvedValue(null);
+      mockGetSerperKey.mockResolvedValue(undefined);
 
       await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
       expect(fetchMock).not.toHaveBeenCalled();
@@ -364,7 +550,7 @@ describe('outgoing search request logging', () => {
 
   const loggedRequest = (spy: ReturnType<typeof vi.spyOn>, message: string) =>
     (
-      spy.mock.calls.find(([msg]) => String(msg).includes(message))?.[1] as
+      spy.mock.calls.find(([msg]: readonly unknown[]) => String(msg).includes(message))?.[1] as
         { request?: Record<string, string> } | undefined
     )?.request;
   const allLoggedText = () => JSON.stringify([...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls]);
@@ -437,6 +623,66 @@ describe('outgoing search request logging', () => {
     });
   });
 
+  it('logs an empty SearXNG answer at warn with the engines that did not respond', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        results: [],
+        unresponsive_engines: [
+          ['google', 'Suspended: too many requests'],
+          ['duckduckgo', 'CAPTCHA'],
+        ],
+      })
+    );
+
+    await expect(createSearxngProvider('http://searxng:8080').search('job shop scheduling', 5)).resolves.toEqual([]);
+
+    expect(warnSpy).toHaveBeenCalledWith('WebSearch Tool: SearXNG answered with no results', {
+      status: 200,
+      request: { q: 'job shop scheduling', limit: 5 },
+      hits: 0,
+      rawResults: 0,
+      unresponsiveEngines: [
+        { engine: 'google', reason: 'Suspended: too many requests' },
+        { engine: 'duckduckgo', reason: 'CAPTCHA' },
+      ],
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a missing or malformed unresponsive_engines field on an empty SearXNG answer', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [{ title: 'no url' }], unresponsive_engines: ['bing', [42]] }));
+
+    await createSearxngProvider('http://searxng:8080').search('q', 5);
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ hits: 0, rawResults: 1, unresponsiveEngines: [] })
+    );
+  });
+
+  it('keeps a plain zero-hit answer at log level, so warn means an engine did not answer', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [] }));
+
+    await createSearxngProvider('http://searxng:8080').search('no hits', 5);
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ hits: 0, unresponsiveEngines: [] })
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unresponsive engine with a non-string reason, and still warns', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ results: [], unresponsive_engines: [['google', 42]] }));
+
+    await createSearxngProvider('http://searxng:8080').search('q', 5);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG answered with no results',
+      expect.objectContaining({ unresponsiveEngines: [{ engine: 'google', reason: '' }] })
+    );
+  });
+
   it('logs the SearXNG request on a non-OK response', async () => {
     fetchMock.mockResolvedValue(jsonRes({}, false, 500));
 
@@ -492,7 +738,7 @@ describe('resolveWebSearchProvider precedence', () => {
   it('forces SearXNG when the admin choice is searxng and a URL is set', async () => {
     mockGetProvider.mockResolvedValue('searxng');
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
@@ -512,7 +758,7 @@ describe('resolveWebSearchProvider precedence', () => {
 
   it('returns null when serpapi is forced but no key is configured', async () => {
     mockGetProvider.mockResolvedValue('serpapi');
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
@@ -527,7 +773,7 @@ describe('resolveWebSearchProvider precedence', () => {
   it('auto: falls back to SearXNG when only a URL is configured', async () => {
     mockGetProvider.mockResolvedValue('auto');
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
@@ -541,7 +787,7 @@ describe('resolveWebSearchProvider precedence', () => {
   it('auto: returns null when neither is configured', async () => {
     mockGetProvider.mockResolvedValue(null);
     mockGetSearxngUrl.mockResolvedValue(null);
-    mockGetSerperKey.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue(undefined);
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
 });
@@ -922,7 +1168,7 @@ describe('resolveWebSearchProviders lead and backup', () => {
   });
 
   it.each([
-    ['auto: SearXNG only', null, ['searxng', null]],
+    ['auto: SearXNG only', undefined, ['searxng', null]],
     ['auto: Serper key only', 'serp-key', ['serpapi', null]],
   ])('%s leads with the configured provider and has no backup', async (_label, serperKey, order) => {
     mockGetProvider.mockResolvedValue('auto');
@@ -950,5 +1196,80 @@ describe('resolveWebSearchProviders lead and backup', () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
 
     await expect(resolveWebSearchProviders(adapters)).resolves.toEqual([null, null]);
+  });
+});
+
+describe('supplementary SerpAPI lookup failure logging', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    warnSpy = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('warns, not errors, when our own timeout aborts the image search', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSerpApiProvider(adapters).searchImages!('q');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SerpAPI image search request failed:',
+      expect.objectContaining({ timedOut: true })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns on a transient image search status (429/5xx)', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 503));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('WebSearch Tool: SerpAPI image search failed', { status: 503 });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  // No retry or later request fixes a revoked key, so it keeps paging.
+  it('keeps a non-transient image search status at error', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 401));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith('WebSearch Tool: SerpAPI image search failed', { status: 401 });
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('degrades a null body to no images or places without logging a failure', async () => {
+    fetchMock.mockResolvedValue(jsonRes(null));
+
+    await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('warns on a network failure of the place search but keeps an unexpected error at error', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'));
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SerpAPI place search request failed:',
+      expect.objectContaining({ timedOut: false, error: 'fetch failed' })
+    );
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    fetchMock.mockRejectedValueOnce(new Error('unexpected'));
+    await expect(createSerpApiProvider(adapters).searchPlaces!('tivoli')).resolves.toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SerpAPI place search request failed:',
+      expect.objectContaining({ error: 'unexpected' })
+    );
   });
 });

@@ -1,4 +1,7 @@
 import { BadRequestError } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'dice' } });
 
 /**
  * Upper bounds on a parsed dice spec. `numDice` drives the allocation loop below, so an
@@ -10,7 +13,7 @@ export const MAX_DICE_COUNT = 10_000;
 export const MAX_DICE_SIDES = 10_000;
 
 export function rollDice(diceSpec: string): number {
-  console.log(`[DICE-MANAGER] Rolling dice with spec: ${diceSpec}`);
+  logger.debug('Rolling dice', { diceSpec });
 
   let numDice = 1;
   let numSides = 100;
@@ -29,7 +32,7 @@ export function rollDice(diceSpec: string): number {
     throw new BadRequestError(`Dice sides must be a whole number between 1 and ${MAX_DICE_SIDES}`);
   }
 
-  console.log(`[DICE-MANAGER] Parsed spec: ${numDice} dice with ${numSides} sides each`);
+  logger.debug('Parsed dice spec', { numDice, numSides });
 
   let roll = 0;
   const individualRolls: number[] = [];
@@ -40,6 +43,6 @@ export function rollDice(diceSpec: string): number {
     roll += singleRoll;
   }
 
-  console.log(`[DICE-MANAGER] Individual rolls: [${individualRolls.join(', ')}], Total: ${roll}`);
+  logger.debug('Dice rolled', { individualRolls, total: roll });
   return roll;
 }

@@ -6,7 +6,18 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { WebClient } from '@slack/web-api';
 
 vi.mock('sst', () => ({ Resource: {} }));
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@server/slack/resolveSlackInstallation', () => ({ resolveSlackInstallation: vi.fn() }));
+const testSlackInstallation = {
+  ok: true as const,
+  installation: {
+    kind: 'dev' as const,
+    signingSecret: 'secret',
+    botToken: 'xoxb-test',
+    workspace: { id: 'workspace-1', name: 'Test workspace' } as never,
+    workspaceWithCreds: { id: 'workspace-1', name: 'Test workspace', slackBotName: 'test-bot' } as never,
+  },
+};
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
   isDevelopment: () => false,
@@ -14,18 +25,19 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 vi.mock('@server/integrations/slack/slackWebhookVerification', () => ({
   verifySlackRequest: () => ({ valid: true }),
 }));
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: { create: () => ({ success: vi.fn(), failure: vi.fn() }) },
 }));
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
-vi.mock('@server/utils/pendingActionExecutor', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: () => 'xoxb-test' }));
+vi.mock('@bike4mind/server-utils/utils/pendingActionExecutor', () => ({
   executePendingAction: vi.fn(),
   cancelPendingActionOnQuest: vi.fn(),
+  claimPendingAction: vi.fn(),
   isPendingActionRequester: vi.fn(),
   MCP_DISABLED_MESSAGE: 'MCP disabled',
 }));
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({ isFeatureEnabled: vi.fn() }));
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
 vi.mock('@server/integrations/atlassian/confluenceAttachmentCleanup', () => ({
   cleanupConfluencePageContent: vi.fn(),
 }));
@@ -36,11 +48,8 @@ vi.mock('@bike4mind/database', async () => {
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: { findOne: vi.fn() },
     Quest: { findById: vi.fn(), updateOne: vi.fn() },
+    Session: { findOne: vi.fn() },
   };
-});
-vi.mock('@bike4mind/database/infra', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/database/infra')>('@bike4mind/database/infra');
-  return { ...actual, SlackDevWorkspace: { findOne: vi.fn() } };
 });
 vi.mock('@bike4mind/slack', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/slack')>('@bike4mind/slack');
@@ -55,15 +64,16 @@ vi.mock('@bike4mind/slack', async () => {
   };
 });
 
-import { User, Quest } from '@bike4mind/database';
-import { SlackDevWorkspace } from '@bike4mind/database/infra';
+import { User, Quest, Session } from '@bike4mind/database';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
 import {
   cancelPendingActionOnQuest,
+  claimPendingAction,
   executePendingAction,
   isPendingActionRequester,
-} from '@server/utils/pendingActionExecutor';
+} from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
 import { buildAttachmentDownloadButtons } from '@bike4mind/slack';
 import handler from '../interactive';
@@ -124,15 +134,7 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () =>
-        Promise.resolve({
-          id: 'workspace-1',
-          name: 'Test workspace',
-          slackOAuthSigningSecret: 'secret',
-          slackBotToken: 'encrypted',
-        }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
     vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
     vi.mocked(cancelPendingActionOnQuest).mockResolvedValue({ success: true, message: 'Cancelled' });
     vi.mocked(isPendingActionRequester).mockResolvedValue(true);
@@ -393,5 +395,141 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     expect(cleanupConfluencePageContent).not.toHaveBeenCalled();
     expect(Quest.updateOne).not.toHaveBeenCalled();
     expect(lastPosted(responseUrl).text).toContain('Failed to delete');
+  });
+});
+
+describe('POST /api/slack/interactive on a message posted through the API', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
+    vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
+    vi.mocked(isPendingActionRequester).mockResolvedValue(true);
+    vi.mocked(isFeatureEnabled).mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('refuses every action, whatever its action_id', async () => {
+    const response = await postAction(
+      `confirm_action`,
+      `${QUEST_ID}:${PENDING_ACTION_TS}`,
+      undefined,
+      {},
+      {
+        message: { ts: '1730000000.123456', metadata: { event_type: 'b4m_api_post', event_payload: { key_id: 'k' } } },
+      }
+    );
+
+    expect(response._getStatusCode()).toBe(200);
+    expect(response._getJSONData()).toEqual({});
+    expect(executePendingAction).not.toHaveBeenCalled();
+  });
+
+  it('still handles the same action on a message without that metadata', async () => {
+    await postAction(
+      `confirm_action`,
+      `${QUEST_ID}:${PENDING_ACTION_TS}`,
+      undefined,
+      {},
+      {
+        message: { ts: '1730000000.123456', metadata: { event_type: 'something_else' } },
+      }
+    );
+
+    expect(executePendingAction).toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/slack/interactive set_default_notebook', () => {
+  const NOTEBOOK_ID = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1', slackSettings: {} } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
+    (User as unknown as { findByIdAndUpdate?: unknown }).findByIdAndUpdate = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses a notebook outside the clicker's account and saves nothing", async () => {
+    vi.mocked(Session.findOne).mockReturnValue({ select: () => Promise.resolve(null) } as never);
+
+    const response = await postAction('set_default_notebook', NOTEBOOK_ID);
+
+    expect(Session.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: NOTEBOOK_ID, userId: 'user-1' }));
+    expect(response._getJSONData().text).toMatch(/not found in your account/);
+  });
+
+  it('saves a notebook the clicker owns', async () => {
+    vi.mocked(Session.findOne).mockReturnValue({ select: () => Promise.resolve({ _id: NOTEBOOK_ID }) } as never);
+
+    const response = await postAction('set_default_notebook', NOTEBOOK_ID);
+
+    expect((User as unknown as { findByIdAndUpdate: ReturnType<typeof vi.fn> }).findByIdAndUpdate).toHaveBeenCalledWith(
+      'user-1',
+      { $set: { slackSettings: expect.objectContaining({ defaultNotebookId: NOTEBOOK_ID }) } },
+      expect.anything()
+    );
+    expect(response._getJSONData().text).toMatch(/Default notebook set/);
+  });
+
+  it('refuses a malformed notebook id without a lookup', async () => {
+    const response = await postAction('set_default_notebook', 'not-an-id');
+
+    expect(Session.findOne).not.toHaveBeenCalled();
+    expect(response._getJSONData().text).toMatch(/not found in your account/);
+  });
+});
+
+describe('POST /api/slack/interactive image model picker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      pendingAction: {
+        tool: 'image_generation',
+        params: { prompt: 'a lighthouse', userId: 'user-1' },
+        ts: PENDING_ACTION_TS,
+      },
+    } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('queues nothing when a concurrent click already claimed the request', async () => {
+    vi.mocked(claimPendingAction).mockResolvedValue(false);
+
+    const response = await postAction(
+      `image_gen_model_0`,
+      `${QUEST_ID}:gpt-image-1`,
+      undefined,
+      {},
+      {
+        message: { ts: '1700000000.000100' },
+      }
+    );
+
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, PENDING_ACTION_TS, 'approved');
+    expect(response._getJSONData()).toMatchObject({
+      response_type: 'ephemeral',
+      text: expect.stringMatching(/already handled/),
+    });
   });
 });

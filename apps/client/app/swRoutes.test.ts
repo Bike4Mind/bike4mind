@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isApiPath } from './swRoutes';
+import { bypassesServiceWorker, isApiPath, isNeverCached, isPrecacheName } from './swRoutes';
 
 describe('isApiPath', () => {
   it('matches Next.js API routes that must never be SW-cached', () => {
@@ -20,5 +20,54 @@ describe('isApiPath', () => {
     expect(isApiPath('/apiary')).toBe(false);
     expect(isApiPath('/api-docs')).toBe(false);
     expect(isApiPath('/foo/api/bar')).toBe(false);
+  });
+});
+
+describe('bypassesServiceWorker', () => {
+  it('lets the Turnstile script and widget frame bypass the worker', () => {
+    expect(
+      bypassesServiceWorker(new URL('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'))
+    ).toBe(true);
+    expect(
+      bypassesServiceWorker(
+        new URL('https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/abc')
+      )
+    ).toBe(true);
+  });
+
+  it('keeps every other request on the normal caching path', () => {
+    expect(bypassesServiceWorker(new URL('https://app.bike4mind.com/login'))).toBe(false);
+    expect(bypassesServiceWorker(new URL('https://app.bike4mind.com/challenges.cloudflare.com'))).toBe(false);
+    expect(bypassesServiceWorker(new URL('https://challenges.cloudflare.com.example.com/x'))).toBe(false);
+    expect(bypassesServiceWorker(new URL('https://fonts.gstatic.com/s/inter.woff2'))).toBe(false);
+  });
+});
+
+describe('isNeverCached', () => {
+  const origin = 'https://app.example.com';
+  it('keeps API routes and published artifact pages out of the cache', () => {
+    expect(isNeverCached(new URL('/api/files', origin), true)).toBe(true);
+    expect(isNeverCached(new URL('/p/some-artifact', origin), true)).toBe(true);
+    expect(isNeverCached(new URL('/a/some-artifact/index.html', origin), true)).toBe(true);
+  });
+
+  it('keeps cross-origin media out of the cache but not fonts', () => {
+    expect(isNeverCached(new URL('https://bucket.s3.amazonaws.com/img.png?X-Amz-Signature=abc'), false)).toBe(true);
+    expect(isNeverCached(new URL('https://fonts.gstatic.com/s/inter.woff2'), false)).toBe(false);
+    expect(isNeverCached(new URL('https://fonts.googleapis.com/css2?family=Inter'), false)).toBe(false);
+  });
+
+  it('leaves the app shell and static assets cacheable', () => {
+    expect(isNeverCached(new URL('/', origin), true)).toBe(false);
+    expect(isNeverCached(new URL('/_next/static/chunk.js', origin), true)).toBe(false);
+    expect(isNeverCached(new URL('/pricing', origin), true)).toBe(false);
+  });
+});
+
+describe('isPrecacheName', () => {
+  it('tells the build precache from runtime caches', () => {
+    expect(isPrecacheName('serwist-precache-v2-https://app.example.com/')).toBe(true);
+    expect(isPrecacheName('others')).toBe(false);
+    expect(isPrecacheName('cross-origin')).toBe(false);
   });
 });

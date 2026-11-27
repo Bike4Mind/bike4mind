@@ -6,14 +6,16 @@ import {
   IUserDocument,
   Permission,
   ShareableAccessShape,
+  UserShareGrant,
   grantablePermissions,
   secureParameters,
   BadRequestError,
   NotFoundError,
+  withoutOrgApiKeyReach,
 } from '@bike4mind/common';
 import { z } from 'zod';
-import { pushShareable } from '../sharingService';
 import { distinctIdCount, mergeIds } from '../utils/objectIds';
+import { AttachableItem, assertCanAttachToProject } from './attachGate';
 
 const addFilesProjectSchema = z.object({
   projectId: z.string().nonempty(),
@@ -52,7 +54,7 @@ export const addFiles = async (
       : found
   ) as IProjectDocument;
 
-  const files = await db.fabFiles.shareable.findAllAccessibleByIds(user, fileIds);
+  const files = await db.fabFiles.shareable.findAllAccessibleByIds(withoutOrgApiKeyReach(user), fileIds);
 
   // BadRequestError, not a bare Error: an id the caller cannot reach is a client mistake, and a
   // bare Error is a 500 that pages LiveOps. Reachable now that the repository skips uncastable
@@ -60,6 +62,14 @@ export const addFiles = async (
   // DEDUPED list, since the reader returns distinct rows and a file sent twice is not one that
   // could not be reached.
   if (files.length !== distinctIdCount(fileIds)) throw new BadRequestError('Some files are not accessible');
+  // Attaching shares the file (read) with every member, so a read-only holder may not attach it. A
+  // file already in the project as a system prompt is already shared, as in addSystemPrompts.
+  assertCanAttachToProject(
+    files as unknown as AttachableItem[],
+    user,
+    [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)],
+    'files'
+  );
 
   // The ids that RESOLVED, like addSessions: pushing the request list would store `ABC` alongside
   // an existing `abc` as if they were two different files. mergeIds, not uniq, because a row
@@ -87,12 +97,28 @@ export const addFiles = async (
 /**
  * Caps a grant pushed onto `doc` at what `adder` holds on it (its owner holds everything), so adding
  * a file or session you can only read to a project cannot hand the project's members update on it.
- * Returns a filter to call BEFORE pushing: pushShareable mutates `doc.users`, and the adder may be
- * one of the members being pushed.
  */
 export const grantCap = (doc: ShareableAccessShape, adder: Pick<IUserDocument, 'id' | 'groups'>) => {
   const grantable = grantablePermissions(doc, adder.id, adder.groups ?? []);
   return (permissions: Permission[]) => permissions.filter(p => grantable.has(p));
+};
+
+/** The project-tagged grants `doc` gets for the project owner (when not the adder) and each member, capped by grantCap. */
+export const sharesCappedFor = (
+  doc: ShareableAccessShape,
+  adder: Pick<IUserDocument, 'id' | 'groups'>,
+  project: Pick<IProjectDocument, 'id' | 'userId' | 'users'>
+): UserShareGrant[] => {
+  const cap = grantCap(doc, adder);
+  const wanted = [
+    ...(project.userId !== adder.id
+      ? [{ userId: project.userId, permissions: [Permission.read, Permission.update] }]
+      : []),
+    ...project.users.map(({ userId, permissions }) => ({ userId, permissions })),
+  ];
+  return wanted
+    .map(({ userId, permissions }) => ({ userId, permissions: cap(permissions), projectId: project.id }))
+    .filter(grant => grant.permissions.length > 0);
 };
 
 export const updateShareableFiles = async (
@@ -104,16 +130,7 @@ export const updateShareableFiles = async (
   const { db } = adapters;
 
   for (const file of files) {
-    const cap = grantCap(file as ShareableAccessShape, adder);
-    const push = (userId: string, permissions: Permission[]) => {
-      const capped = cap(permissions);
-      if (capped.length > 0) pushShareable(file, { userId, permissions: capped, projectId: project.id });
-    };
-
-    if (project.userId !== adder.id) push(project.userId, [Permission.read, Permission.update]);
-
-    for (const user of project.users) push(user.userId, user.permissions);
-
-    await db.fabFiles.update({ id: file.id, users: file.users });
+    const add = sharesCappedFor(file as ShareableAccessShape, adder, project);
+    if (add.length > 0) await db.fabFiles.shareable.updateUserShares(file.id, { add });
   }
 };

@@ -15,6 +15,9 @@ interface ContentLogger {
  * other block (text, image, tool_use, tool_result, thinking) is already structurally
  * the SDK's shape and passes through with its `cache_control` stamp intact.
  *
+ * A tool_use block a Gemini round produced loses its Gemini-only `thought_signature`, which
+ * Anthropic (direct and Bedrock) rejects with a 400 when a Gemini turn falls back to Claude.
+ *
  * An image we cannot translate is dropped with a warning: Anthropic rejects the whole
  * request over one unknown block, which would lose the text too.
  */
@@ -23,6 +26,11 @@ export function toAnthropicContent(content: MessageContent, logger?: ContentLogg
 
   const blocks: unknown[] = [];
   for (const block of content) {
+    if (block?.type === 'tool_use' && 'thought_signature' in block) {
+      const { thought_signature: _geminiOnly, ...anthropicBlock } = block;
+      blocks.push(anthropicBlock);
+      continue;
+    }
     if (!block || block.type !== 'image_url') {
       blocks.push(block);
       continue;

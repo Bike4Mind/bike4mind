@@ -51,6 +51,21 @@ pnpm sst secret set MAIL_PASSWORD <password> --stage <stage>
 pnpm sst secret set MAIL_FROM "noreply@yourdomain.com" --stage <stage>
 ```
 
+`MAIL_FROM` is the sender of every system email until an admin sets the **System Email Sender** (`mailFrom`) admin setting, which takes over from the next email without a deploy. Clearing the setting goes back to `MAIL_FROM`. Either value can be an address (`noreply@yourdomain.com`) or a name and address (`Your App <noreply@yourdomain.com>`).
+
+### Personal stages
+
+A personal stage (any stage other than `production`, `dev`, `shared-dev` or a `pr<number>` preview) can send through SES without exporting anything. At deploy time it reads two SSM String parameters from the account it deploys into:
+
+- `/<app>/shared/mail/ses-configuration-set` - the SES configuration set name
+- `/<app>/shared/mail/ses-identity` - the verified SES identity (usually a domain)
+
+`<app>` is the SST app name (`bike4mind` unless you override it). When both exist and are non-empty, the stage deploys with `MAIL_TRANSPORT=ses` and those names, and the deploy output says so in a `[mail]` line. When either is missing, unreadable or not a plain SES name, the deploy logs a warning and stays on SMTP. `shared-dev` and the other team stages only use SES when you export `MAIL_TRANSPORT=ses`, `SES_CONFIGURATION_SET` and `SES_IDENTITY` yourself.
+
+- Anything you export wins. Setting `MAIL_TRANSPORT`, `SES_CONFIGURATION_SET` or `SES_IDENTITY` skips the defaults entirely, so `MAIL_TRANSPORT=smtp` opts a personal stage out of SES.
+- The stage's `MAIL_FROM` secret must be an address on the SES identity's domain. The `mailFrom` admin setting is only saved with an address on the same domain as `MAIL_FROM`.
+- While the account's SES is in sandbox mode, recipients must be verified addresses too.
+
 ## DNS Records for Deliverability
 
 Regardless of provider, add these DNS records:

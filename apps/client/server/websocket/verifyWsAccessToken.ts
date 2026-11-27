@@ -1,11 +1,13 @@
 import { User } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/secretRotationGrace';
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { assertAccountStateUsable } from '@server/auth/assertAccountStateUsable';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@server/auth/mfaEnforcement';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import jwt from 'jsonwebtoken';
 
@@ -14,7 +16,7 @@ import jwt from 'jsonwebtoken';
  *
  * Applies seven gates: signature (with the rotation grace window), the `typ` claim, the OAuth `kind`
  * refusal, the `mfaPending` refusal, the tokenVersion kill switch, assertAccountStateUsable, and
- * the enforceMFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
+ * the MFA enrollment gate (isMfaEnrollmentOwed, shared with auth.ts and cli/auth.ts).
  * Signature, `typ`, tokenVersion and account state match the REST strategy (auth/verifyJwtPayload.ts),
  * the CLI verifier (cli/auth.ts verifyJwtToken) and connect.ts. The `kind` and `mfaPending` refusals
  * match the CLI verifier and connect.ts; REST instead surfaces both on the user for oauthRouteGate
@@ -29,6 +31,17 @@ export async function verifyWsAccessToken(accessToken: string | undefined) {
 }
 
 /**
+ * verifyWsAccessToken plus the user's role-held admin permissions, for the one WS action that
+ * builds an ability from the user (dataSubscribeRequest). Reauth and unsubscribe stay on the
+ * plain verifier so a role lookup failure cannot fail them.
+ */
+export async function verifyWsSubscriberToken(accessToken: string | undefined) {
+  const user = await verifyWsAccessToken(accessToken);
+  await resolveRoleAdminPermissions(user);
+  return user;
+}
+
+/**
  * verifyWsAccessToken plus the claims a Connection row records: the session id, the verified
  * tokenVersion and the token's expiry. Used by reauth_connection to re-stamp a live socket.
  */
@@ -36,7 +49,7 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
   let previousSecret = undefined;
   // Accept the previous key only within the shared rotation grace window. `previousKey`
-  // is stored encrypted at rest (see secret-rotations/renewed.ts); decrypt before
+  // is stored encrypted at rest (encryptAtRest); decrypt before
   // verifying. Legacy plaintext rows pass through unchanged.
   if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
     previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;
@@ -58,6 +71,9 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
   if (decoded.mfaPending) {
     throw new UnauthorizedError('MFA verification required');
   }
+  if (decoded.impersonatedBy) {
+    throw new ForbiddenError('Impersonated sessions cannot use realtime credentials.');
+  }
 
   const user = await User.findById(decoded.id);
   if (!user) throw new NotFoundError('User not found');
@@ -68,6 +84,7 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
     throw new UnauthorizedError('Session expired');
   }
   assertAccountStateUsable(user);
+  assertNoPendingDeletion(user);
   // enforceMFA binds sessions minted before it applied, as on REST (auth.ts). Forbidden, not
   // Unauthorized: the credential is valid, so a client must re-enroll rather than refresh.
   if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {

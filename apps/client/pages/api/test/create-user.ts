@@ -2,11 +2,17 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 import { issueSessionForRequest } from '@server/auth/issueSession';
-import { userRepository } from '@bike4mind/database';
+import { adminRoleRepository, userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
-import { PREDEFINED_USER_TAGS, CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import {
+  PREDEFINED_USER_TAGS,
+  CURRENT_POLICY_VERSION,
+  AdminPermissionsSchema,
+  AdminRoleIdsSchema,
+  sortAdminRoleIds,
+} from '@bike4mind/common';
 import { E2E_USERNAME_SUFFIX_PATTERN } from '@server/utils/e2eCleanupScope';
-import { Resource } from 'sst';
+import { isValidE2eTestSecret } from '@server/auth/e2eTestSecret';
 import { Request } from 'express';
 
 interface CreateTestUserBody {
@@ -20,6 +26,12 @@ interface CreateTestUserBody {
   // Optional so an emailless account can be minted passwordless, like the OAuth shape it mimics.
   password?: string;
   isAdmin?: boolean;
+  // Delegated admin grants (e.g. ['settings:manage']) without full isAdmin. Unknown or repeated
+  // values are rejected with a 400.
+  adminPermissions?: string[];
+  // Admin roles to hold (ids from POST /api/admin/admin-roles), e.g. to mint a role-only delegate.
+  // Malformed, repeated or unknown ids are rejected with a 400.
+  adminRoleIds?: string[];
   emailVerified?: boolean;
   tags?: string[];
   // PREDEFINED_USER_TAGS are prepended to `tags` by default. Pass exactly false to get only the
@@ -29,9 +41,16 @@ interface CreateTestUserBody {
   // /accept-policies interstitial. Defaults to true - test users start fully onboarded like
   // `emailVerified`. Pass false to mint an un-consented user for testing the gate itself.
   acceptedPolicies?: boolean;
+  // Pass true to admin-approve the account for the new-account trust gate (assertOutboundActionAllowed),
+  // so a minutes-old test user can send invites. Defaults to false like a real signup; note the flag
+  // also counts as paid standing for thinking visibility (userApiKeyService/trust.ts).
+  apiKeyTrustApproved?: boolean;
   // Starting credit balance. Defaults to a deliberately enormous grant so latency/tool suites
   // never run dry mid-run. Pass a small value to mint a low-balance user for the credit-gate spec.
   initialCredits?: number;
+  // 'force' holds this account to MFA enforcement with the stage setting untouched (IUser.mfaEnforcement),
+  // so a spec can drive the real enrollment gate. This route is the only writer of the field.
+  mfaEnforcement?: 'force';
 }
 
 // Effectively unlimited for E2E: large enough that no realistic multi-prompt run can exhaust it,
@@ -46,10 +65,8 @@ const handler = baseApi({ auth: false }).post(
       return res.status(403).json({ error: 'Test user creation is only available in development/preview' });
     }
 
-    // Guard 2: Require shared secret - read from SST secret (local/staging) or env var (preview deploys)
-    const secret = req.headers['x-e2e-cleanup-secret'];
-    const expectedSecret = Resource.E2E_CLEANUP_SECRET?.value || process.env.E2E_CLEANUP_SECRET;
-    if (!expectedSecret || expectedSecret === 'not-configured' || secret !== expectedSecret) {
+    // Guard 2: E2E secret header
+    if (!isValidE2eTestSecret(req.headers['x-e2e-cleanup-secret'])) {
       return res.status(401).json({ error: 'Invalid cleanup secret' });
     }
 
@@ -59,11 +76,15 @@ const handler = baseApi({ auth: false }).post(
       name,
       password,
       isAdmin,
+      adminPermissions,
+      adminRoleIds,
       emailVerified,
       tags,
       includePredefinedTags,
       acceptedPolicies,
+      apiKeyTrustApproved,
       initialCredits,
+      mfaEnforcement,
     } = req.body;
 
     // Guard 3: Only allow creating users the cleanup sweep can find - by the E2E email
@@ -74,6 +95,25 @@ const handler = baseApi({ auth: false }).post(
     }
     if (!email && !E2E_USERNAME_SUFFIX_PATTERN.test(username)) {
       return res.status(400).json({ error: 'Emailless test users must use the -e2e username suffix' });
+    }
+
+    if (mfaEnforcement !== undefined && mfaEnforcement !== 'force') {
+      return res.status(400).json({ error: "mfaEnforcement must be 'force' when set" });
+    }
+
+    const parsedPermissions =
+      adminPermissions === undefined ? undefined : AdminPermissionsSchema.safeParse(adminPermissions);
+    if (parsedPermissions && !parsedPermissions.success) {
+      return res.status(400).json({ error: 'Invalid adminPermissions', details: parsedPermissions.error.issues });
+    }
+
+    const parsedRoleIds = adminRoleIds === undefined ? undefined : AdminRoleIdsSchema.safeParse(adminRoleIds);
+    if (parsedRoleIds && !parsedRoleIds.success) {
+      return res.status(400).json({ error: 'Invalid adminRoleIds', details: parsedRoleIds.error.issues });
+    }
+    const roleIds = parsedRoleIds ? sortAdminRoleIds(parsedRoleIds.data) : undefined;
+    if (roleIds && (await adminRoleRepository.findByIds(roleIds)).length !== roleIds.length) {
+      return res.status(400).json({ error: 'Unknown adminRoleIds' });
     }
 
     const newUser = await userService.createUser(
@@ -89,12 +129,18 @@ const handler = baseApi({ auth: false }).post(
           // Stamp AUP/ToS acceptance so the seeded user clears the consent gate and isn't bounced
           // to /accept-policies on first load. Defaults on; opt out to test the gate itself.
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),
+          apiKeyTrustApproved: apiKeyTrustApproved === true,
+          ...(roleIds ? { adminRoleIds: roleIds } : {}),
+          ...(mfaEnforcement ? { mfaEnforcement } : {}),
         },
         isAdmin: isAdmin ?? false,
+        adminPermissions: parsedPermissions?.data,
         // No address means nothing to have verified.
         emailVerified: email ? (emailVerified ?? true) : false,
         tags: [...(includePredefinedTags === false ? [] : PREDEFINED_USER_TAGS), ...(tags ?? [])],
         initialCredits: initialCredits ?? DEFAULT_E2E_INITIAL_CREDITS,
+        // Secret-gated and disabled in production: test tooling mints test-persona accounts here.
+        allowReservedUsername: true,
       },
       { db: { users: userRepository } }
     );

@@ -1,5 +1,33 @@
 # @bike4mind/client-auth
 
+## 0.5.0
+
+### Minor Changes
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - add session Studio generation and asset workspaces
+
+- [#7811](https://github.com/Bike4Mind/bike4mind/pull/7811) [`b97dca6`](https://github.com/Bike4Mind/bike4mind/commit/b97dca6d9d94ac731253ebbeefd802c1d24c1d54) Thanks [@vinchi777](https://github.com/vinchi777)! - Add session-bound API clients with shared token refresh, and keep Studio availability, generation records and conversation deletion consistent with the active account.
+
+## 0.4.0
+
+### Minor Changes
+
+- [#6790](https://github.com/Bike4Mind/bike4mind/pull/6790) [`841f45f`](https://github.com/Bike4Mind/bike4mind/commit/841f45fed7786b1f104861e2466a93e2d02cf264) Thanks [@maconard](https://github.com/maconard)! - chat with local models without signing in
+
+## 0.3.0
+
+### Minor Changes
+
+- [#6322](https://github.com/Bike4Mind/bike4mind/pull/6322) [`08cd6cc`](https://github.com/Bike4Mind/bike4mind/commit/08cd6ccc0439fa9949750c3f730e7246a9d68250) Thanks [@maconard](https://github.com/maconard)! - show a sign-in link with the code filled in and a key to copy it
+
+## 0.2.2
+
+### Patch Changes
+
+- [#5647](https://github.com/Bike4Mind/bike4mind/pull/5647) [`2588adc`](https://github.com/Bike4Mind/bike4mind/commit/2588adcf8b7c7211fb72b062d2a3ed803034414f) Thanks [@vinchi777](https://github.com/vinchi777)! - refresh and retry on 401, and ask to sign in again instead of failing every message
+
+- [#5955](https://github.com/Bike4Mind/bike4mind/pull/5955) [`a295054`](https://github.com/Bike4Mind/bike4mind/commit/a2950546d13fbf978e70ee33156e6094db9aabcd) Thanks [@ken-b4m](https://github.com/ken-b4m)! - clear open Dependabot alerts with in-major overrides and bumps
+
 ## 0.2.1
 
 ### Patch Changes

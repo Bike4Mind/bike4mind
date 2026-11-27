@@ -6,7 +6,11 @@ is consistent across endpoints rather than per-endpoint improvisation.
 
 **Public** means API-key-callable: it appears in `CONTRACTS`, is registered into the
 OpenAPI spec, and someone outside the SPA can call it. Internal SPA-backend routes under
-`pages/api/*` are out of scope and stay plain handlers.
+`pages/api/*` are out of scope and stay plain handlers, but a new one must declare
+`auth: 'jwtOnly'` (the api-key chain is not installed in that mode). Otherwise it is
+treated as potentially API-key-callable and must be a contract under `/api/v1`. A route
+that is deliberately unauthenticated (`auth: false`) has no jwtOnly form, so it needs a
+last-resort entry in `scripts/contract-gate-api-key-allowlist.txt` with a `# reason`.
 
 Anything marked **[gated]** is asserted structurally by
 `assertContractConventions.ts`, which runs at spec-generation time - a violation fails
@@ -143,41 +147,61 @@ re-deciding per endpoint:
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
 | Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
+| Valid credential, but an admin suspended the owner's account | `403` | `account_suspended` (the body carries `suspension`: `reason_category`, and `terms_url` / `appeal_url` when the deployment has a website; never the signals behind the decision; not retryable) |
 | Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | Model id unknown or not available to the caller | `400` | `unknown_model` |
+| Assistant prefill sent for a model that does not support it | `400` | `assistant_prefill_unsupported` |
 | Tool search server tool, `tool_reference` or tool search block sent for a model that cannot serve it on this route | `400` | `tool_search_unsupported` |
 | Every tool is `defer_loading: true` and no tool search server tool is sent (native tool search models only) | `400` | `all_tools_deferred` |
 | A deferred tool also carries `cache_control` (native tool search models only) | `400` | `deferred_tool_cache_control` |
 | A `tool_reference` (native tool search models only) or a `tool_addition` / `tool_removal` block (native tool changes models only) names a tool absent from the request's `tools`, or a `tool_reference` carries no string `tool_name` | `400` | `unknown_tool_reference` |
 | A `tool_addition` / `tool_removal` system message is sent for a model that cannot serve it on this route | `400` | `tool_changes_unsupported` |
 | A `tool_addition` / `tool_removal` message is malformed (not strictly typed `tool_reference` blocks only) or misplaced | `400` | `invalid_tool_change` |
+| `end_user_id` sent on a credential other than an API key holding `ai:end-user-id` (a well-formed value) | `400` | `end_user_id_not_allowed` |
+| `end_user_id` that is not 1-64 characters of letters, digits, `_`, `:` and `-` (checked before the credential) | `400` | `invalid_end_user_id` |
 | The model's provider is not configured on this deployment, or the self-hosted model server that lists it (Ollama, local image) is unreachable | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| An admin paused spending for the account, organization or API key | `403` | `spend_frozen` (the body carries `frozenScope`: `user`, `organization` or `api_key`, and `frozenAt`; never the reason; not retryable) |
+| A reasoning model spent the caller's own `max_tokens` thinking and produced no answer (a server-chosen budget is a plain `502`) | `422` | `output_budget_exhausted` |
+| Free-tier daily credit allowance used up (`Retry-After` is the next UTC midnight) | `429` | `daily_free_limit_reached` |
 | Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Per-tier agent cap reached | `400` | `agent_limit_reached` |
+| Standing assistant instruction cap reached | `400` | `instruction_limit_reached` |
 | User storage quota exceeded | `400` | `storage_limit_exceeded` |
 | Organization per-file storage ceiling exceeded | `400` | `org_storage_limit_exceeded` |
 | Per-file size cap exceeded | `400` | `file_too_large` |
+| Key requests-per-minute allowance used up (`Retry-After`; body carries `limit`, `windowSeconds`) | `429` | `api_key_rate_limit_exceeded` |
+| Key requests-per-day allowance used up (`Retry-After`; body carries `limit`, `windowSeconds`) | `429` | `api_key_daily_limit_exceeded` |
 | Rate limit exceeded | `429` | - |
+| Account tokens-per-minute allowance used up (`Retry-After`) | `429` | `token_rate_limit_exceeded` |
+| Account already has its allowed number of completions in flight | `429` | `concurrency_limit_exceeded` |
 | Database unreachable while authenticating the credential | `503` | - (`Retry-After`; the credential was not judged, so retry rather than re-prompt for a key) |
 | A blocking request ran past its server-side deadline (the work is ended, not left running) | `504` | `request_timeout` |
 | Generated payload exceeds the platform ceiling, raw-bytes response | `303` | - (`Location` is a signed URL for the payload) |
 | Generated payload exceeds the platform ceiling and could not be offloaded | `413` | - |
 | Referenced resource does not exist | `404` | - |
+| A completion's `run`, or the run whose usage is read, does not exist or was minted by another user or billing owner (indistinguishable on purpose) | `404` | `run_not_found` (mint one with `POST /api/v1/completion-runs`) |
+| A completion's `run` was minted with a budget that cannot spare even a short answer (its settled charges plus in-flight claims leave too little) | `422` | `run_budget_exhausted` (retry once the run's in-flight requests settle and release their unused claims, or raise the run budget with `POST /api/v1/completion-runs/{runId}/budget`; buying credits does not raise it) |
+| A run budget change that does not raise it: the new budget is not above the current one, or the run was minted without a budget | `409` | `run_budget_not_raised` |
 | Malformed path/query resource id | `404` | - |
 | Concurrent write lost to another request on the same resource | `409` | - (the loser undoes any side effect, such as refunding a credit reserve; callers retry) |
+| Free-tier account calls a model that needs a paid plan (admin-set free-tier allowlist) | `403` | `model_requires_subscription` (upgrade, or choose a free-tier model from `GET /api/v1/models`) |
 | Org-billed API key names a billing organization other than its own | `403` | `billing_organization_mismatch` |
+| The caller's organization policy does not allow the requested model | `403` | `org_model_not_allowed` (choose a model from `GET /api/v1/models`, which lists only allowed ones) |
+| The request names a built-in tool the caller's organization policy does not allow | `403` | `org_tool_not_allowed` (drop the tool from the request) |
 | Org-billed API key's organization is gone, or its holder has left it | `400` | - (re-mint the key) |
 | Cancel of a job the provider is already rendering and billing | `409` | `not_cancellable` (do not retry; the job runs to its end and is charged if it produces output) |
+| Declared client build (`X-Client-Name` + `X-Client-Version`) is below the minimum served for that client | `426` | `upgrade_required` (the body carries `client_name` and `minimum_version`; answered by every transport, auto-documented on every operation, see [section 9](#9-client-versions)) |
 
 The four tool search rows are `400`, not the `422` used for schema failures: the body is well-formed and passes the schema, and whether it is acceptable depends on the requested model (`tool_search_unsupported`, like `unknown_model`) or on how the request's tools relate to each other, which is request semantics rather than body shape.
 
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `303`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
-`503`, `504`).
+`503`, `504`). `426` is not in it on purpose: the client-version gate answers it for every
+operation, so `registerContract` injects it the way it injects `405`, and no contract declares it.
 
 A **malformed** resource id is a `404`, not a `400`: a string that is not an ObjectId names a
 resource that cannot exist, and telling a caller apart-from-404 that their id was the wrong
@@ -186,12 +210,11 @@ failure used to be remapped to `404` by the error handler.
 
 This row describes the target, not the whole deployed surface. Roughly 27 files guard a malformed
 id with a `400` today and have **not** been converged - most inherit it from one of the three
-shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts`,
-`questMasterPlanAccess.ts`), the rest are their own guards, concentrated in `quest-plans/[id]/*`,
+shared access helpers (`server/utils/orgAccess.ts`, `sessionAccess.ts` and a since-removed
+plan access helper), the rest are their own guards, concentrated in
 `business-links/*`, `sre/*`, `users/[id]/slack-settings.ts`, `fabfiles/[id]/*`,
-`admin/liveops-triage-configs/*`, `[type]/[id]/index.ts` and
-`data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current set rather than trusting this
-paragraph to stay current:
+`[type]/[id]/index.ts` and `data-lakes/[id]/files/[fabFileId]/purge.ts`. Enumerate the current
+set rather than trusting this paragraph to stay current:
 
 ```
 grep -rn --include='*.ts' -A3 'isValidObjectId\|isObjectIdOrHexString\|ObjectId.isValid' \
@@ -281,7 +304,8 @@ are published wire shapes, so what had to be shared was the vocabulary, not the 
 
 `/api/ai/v1/completions` classifies its frame with `COMPLETION_SSE_ERROR_CODES`: the billing
 codes plus `provider_rejected` (the provider refused our credentials), `content_blocked` (the
-model's safety classifier declined the request) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
+model's safety classifier declined the request), `output_budget_exhausted` (a reasoning model spent the
+caller's whole `max_tokens` thinking; unchanged retries fail the same way) and `provider_error` (any other provider failure). The frame message is sanitized; a raw upstream body never
 reaches the client.
 
 The pairing a caller needs is worth stating in the contract `description`: `/api/chat`,
@@ -325,6 +349,19 @@ for the whole window. Removing an alias is a major-version change.
   old path stays and keeps working.
 - The other roots in the tree (`/api/ai/v1`, `/api/voice/v2`, `/api/overwatch/v1`) are
   frozen, as is unversioned `/api/*`. They keep serving; nothing new is added to them.
+  `scripts/check-contract-gate.sh` enforces this for every handler outside `pages/api/v1`
+  (these roots included): it must declare `auth: 'jwtOnly'` or be listed in
+  `scripts/contract-gate-api-key-allowlist.txt`.
+- **A Lambda exposed through a Function URL needs a contract too.** An `sst.aws.Function` in
+  `infra/` with `url:` serves requests with none of the Next.js middleware chain, so the
+  handler must be built on `defineLambdaRoute(contract, ...)`: the gate accepts a call in the
+  handler file or in a module up to three imports away, reached by a relative or `@workers/*`
+  import (the transport is `apps/workers/src/cli/defineLambdaRoute.ts`; a thin entry that
+  imports the routed module is fine, see `CliToolHandler`). `scripts/check-contract-gate.sh`
+  fails otherwise. Handlers under `premium-generated/` are skipped, since they are re-exported
+  from an overlay. The other escape is `scripts/contract-gate-function-url-allowlist.txt`,
+  which is frozen debt: entries are only ever removed (the gate prints an already-ported entry
+  as INFO but does not fail), and every entry needs a trailing `# reason`.
 - `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention
@@ -404,6 +441,11 @@ additionally carry the six rate-limit headers set by
 `X-RateLimit-{Limit,Remaining,Reset}-{Minute,Day}` - on API-key-authenticated requests.
 Reset values are Unix epoch **seconds**.
 
+Every `baseApi` response to a request whose API key validated, the scope `403` included, carries
+`X-Api-Key-Scopes`: the calling key's own scopes, comma-separated (empty for a legacy key
+with none). It is the one way a key without `api-keys:manage` reads its own scopes, and it
+says nothing about other keys, the user, or the organization.
+
 **A contract declares whether it emits them**, via `emitsRateLimitHeaders: true`. This is
 declared, not inferred, because reaching that middleware is a transport fact the contract
 cannot derive: the Lambda adapter sets no rate-limit headers, and the Fargate SSE route
@@ -475,6 +517,48 @@ a `pagination` conventionExemption stating why, the same escape hatch `status-ta
 `scope-required` use.
 
 This exemption is not live-caller debt, so the exemption policy at the top of this file does not govern it. It records that the list inference misfired on a GET whose `data` array has nothing to page through. Prefer renaming the field over exempting it.
+
+## 9. Client versions
+
+A long-lived client - an SDK pinned in someone's lockfile, a first-party client shipped as a
+binary - cannot be redeployed with the server. A change that a stale build does not understand
+breaks it silently, and nothing on our side can reach it to fix it. So such a client declares
+which build it is, and the server can tell an outdated build to upgrade instead.
+
+**The handshake.** A client sends both request headers on every call:
+
+- `X-Client-Name`: a stable, lowercase name for the client (`[a-z0-9][a-z0-9._-]*`, at most 64
+  characters), e.g. `b4m-sdk-ts`.
+- `X-Client-Version`: its SemVer 2.0.0 version, e.g. `2.1.0` or `2.2.0-rc.1`.
+
+Both are optional, and **a request that omits either, or sends a malformed value, is never
+blocked**: older and third-party clients keep working exactly as before. The transports parse
+the pair once (`parseClientIdentity`, `clientVersion.ts`) into a validated `ClientIdentity`, or
+nothing.
+
+**The kill switch.** The `minimumClientVersions` admin setting maps a client name to the oldest
+version still served, e.g. `{"b4m-sdk-ts": "2.1.0"}`. A request from a listed client whose
+declared version has lower SemVer precedence than that minimum gets `426` with the shared
+envelope plus `errorCode: "upgrade_required"`, `client_name` and `minimum_version`
+(`UpgradeRequiredResponse` in the spec). Exactly the minimum passes; a pre-release of it
+(`2.1.0-rc.1`) does not. A client absent from the map is never gated, and changes apply within
+15 seconds. The gate fails open: if the setting cannot be read, nothing is blocked.
+
+Every transport runs the same gate (`packages/server-utils/src/middlewares/clientVersionGate.ts`)
+ahead of rate limiting and validation: `nextRouteForContract`'s prelude, `defineLambdaRoute`, and
+the completions route. That is what makes the injected `426` true on every operation, so a new
+transport must call it too. It is a compatibility signal, not an access control: a caller can
+always omit the headers.
+
+`426` is borrowed from RFC 9110, which defines it for a protocol change and asks for an
+`Upgrade` header. No protocol changes here, so none is sent; the body says what to upgrade to.
+
+**The policy it backs.** Within a version path (`/api/v1`) changes stay additive: new optional
+request fields, new response fields, new endpoints (section 3). A client has to tolerate
+unknown response fields and enum values it was not built with. `426` is the last resort for
+the change that cannot be additive - a security fix a client must pick up, a removal past its
+sunset (section 7) - not a substitute for a deprecation window. Raise a minimum only once the
+release it names is published, and announce it first, the same as a sunset.
 
 ---
 

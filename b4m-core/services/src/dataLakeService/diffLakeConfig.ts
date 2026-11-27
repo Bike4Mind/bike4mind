@@ -12,6 +12,7 @@ import {
   LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_FINGERPRINTED_FIELDS,
   capLakeConfigValue,
+  feedLabel,
   lakeConfigTextFingerprint,
 } from '@bike4mind/common';
 
@@ -203,11 +204,30 @@ export function grantChange(
  */
 export function proposalReviewChange(
   proposal: { title?: string; sourceUrl: string },
-  decision: 'approved' | 'declined' | 'restored'
+  decision: 'approved' | 'declined' | 'restored' | 'unapproved'
 ): ILakeConfigLiteralChange {
   const title = proposal.title?.trim();
   const label = title ? `${title} (${proposal.sourceUrl})` : proposal.sourceUrl;
   return literalChange('proposalReview', undefined, `${decision}: ${label}`);
+}
+
+/**
+ * A proposal admitted by a research config's trusted-site rule rather than a person. Names the
+ * config and the matched site in the value, since no actor field can: the recorded principal is the
+ * system. Same derived-field encoding as `proposalReviewChange`.
+ */
+export function autoApprovalChange(
+  proposal: { title?: string; sourceUrl: string },
+  rule: { configId: string; configName: string; trustedDomain?: string }
+): ILakeConfigLiteralChange {
+  const title = proposal.title?.trim();
+  const label = title ? `${title} (${proposal.sourceUrl})` : proposal.sourceUrl;
+  const site = rule.trustedDomain ? `, trusted site ${rule.trustedDomain}` : '';
+  return literalChange(
+    'proposalReview',
+    undefined,
+    `auto-approved: ${label} [config ${rule.configName} (${rule.configId})${site}]`
+  );
 }
 
 /**
@@ -221,6 +241,75 @@ export function researchConfigChange(
   decision: 'created' | 'updated' | 'deleted'
 ): ILakeConfigLiteralChange {
   return literalChange('researchConfig', undefined, `${decision}: ${configName}`);
+}
+
+/** One changed research-config lever as a line, for the levers with no dedicated phrasing above. */
+export function researchLeverChange(configName: string, description: string): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `${description}: ${configName}`);
+}
+
+/** Auto-admit being switched on or off on a research config, as an event entry on the same field. */
+export function researchAutoAdmitChange(configName: string, enabled: boolean): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `auto-admit ${enabled ? 'on' : 'off'}: ${configName}`);
+}
+
+/** A research config's schedule being paused or resumed by a manager. */
+export function researchSchedulePausedChange(configName: string, paused: boolean): ILakeConfigLiteralChange {
+  return literalChange(
+    'researchConfig',
+    undefined,
+    `research schedule ${paused ? 'paused' : 'resumed'}: ${configName}`
+  );
+}
+
+/** A research config's cadence changing, naming both values (for example weekly to off). */
+export function researchScheduleCadenceChange(
+  configName: string,
+  before: string,
+  after: string
+): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `research schedule ${before} -> ${after}: ${configName}`);
+}
+
+/** A research config's review backlog limit changing, naming both values. */
+export function researchReviewBacklogLimitChange(
+  configName: string,
+  before: number,
+  after: number
+): ILakeConfigLiteralChange {
+  return literalChange('researchConfig', undefined, `review backlog limit ${before} -> ${after}: ${configName}`);
+}
+
+/** The trusted-site list of a research config changing, naming the entries added and removed. */
+export function researchTrustedSitesChange(
+  configName: string,
+  added: readonly string[],
+  removed: readonly string[]
+): ILakeConfigLiteralChange {
+  const parts = [
+    ...(added.length > 0 ? [`added ${added.join(', ')}`] : []),
+    ...(removed.length > 0 ? [`removed ${removed.join(', ')}`] : []),
+  ];
+  return literalChange('researchConfig', undefined, `trusted sites ${parts.join('; ')}: ${configName}`);
+}
+
+/** The item rules of a research config changing. Counts only: the conditions stay on the config itself. */
+export function researchItemRulesChange(configName: string, added: number, removed: number): ILakeConfigLiteralChange {
+  const parts = [...(added > 0 ? [`${added} added`] : []), ...(removed > 0 ? [`${removed} removed`] : [])];
+  return literalChange('researchConfig', undefined, `item rules ${parts.join(', ')}: ${configName}`);
+}
+
+/**
+ * A research config's source changing between web search and a feed, or to a different feed. The
+ * feed is named by origin and path only: the query string of a private feed can carry a token.
+ */
+export function researchSourceChange(
+  configName: string,
+  source: 'search' | 'feed',
+  feedUrl: string | null
+): ILakeConfigLiteralChange {
+  const label = source === 'feed' ? `feed ${feedUrl ? feedLabel(feedUrl) : ''}`.trim() : 'web search';
+  return literalChange('researchConfig', undefined, `source: ${label}: ${configName}`);
 }
 
 /**

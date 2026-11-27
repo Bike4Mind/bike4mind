@@ -5,10 +5,8 @@ import {
   API_KEY_RATE_LIMIT_HEADER_NAMES,
   API_KEY_RATE_LIMIT_HEADERS,
   MAX_REQUEST_ID_LENGTH,
-  MIN_PASSAGE_TOKEN_TARGET,
-  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
-import type { ApiKeyScopeOption } from '@client/app/constants/apiKeyScopes';
+import type { ApiKeyScopeOption } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 // Generated from the same catalog the New-Key modals offer, so the table can't drift from
 // what a user can actually select. A literal `|` would split a GFM table cell.
@@ -94,6 +92,8 @@ every scope involved. Containment is checked literally: \`admin:*\` is not treat
 superset of other scopes, so an \`admin:*\`-scoped key still can't mint or rotate a key
 holding scopes it doesn't literally list.
 
+Keys minted for a connected app reach only routes that declare their scopes.
+
 ### Rate Limits
 
 | Limit | Default |
@@ -125,169 +125,52 @@ the [generated API docs](/api/v1/docs) (raw spec: \`/api/v1/openapi.json\`, whic
 use to build a typed client). They are deliberately not repeated here, so the two cannot disagree.
 
 - Chat and quests: \`/api/chat\`, \`/api/v1/quests/{id}\`, \`/api/v1/quests/{id}/files\`,
-  \`/api/v1/agent-executions[/{id}]\`
-- Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`
+  \`/api/v1/agent-executions[/{id}]\`, \`/api/v1/delegations[/{id}]\`,
+  \`/api/v1/obligations\` (hand off, list), \`/api/v1/obligations/{id}\` (get, correct + confirm)
+- Sessions: \`/api/v1/sessions\`, \`/api/v1/sessions/{id}\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`,
+  \`/api/v1/sessions/{id}/files\`, \`/api/v1/sessions/semantic-search\`,
+  \`/api/v1/sessions/{id}/messages/{messageId}\`, \`/api/v1/turns\` (add a turn to a session, streamed)
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
-  \`/api/v1/artifacts/{id}/versions[/{version}]\`
-- Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
-- Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`
+  \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
+  \`/api/v1/artifacts/types\`, \`/api/v1/artifacts/{id}/publish\` (publish, unpublish),
+  \`/api/v1/artifacts/{id}/republish\`
+- Agents (custom personas; \`agents:read\` or \`agents:write\` to read, \`agents:write\` for the rest): \`/api/v1/agents\`,
+  \`/api/v1/agents/{id}\`, \`/api/v1/agents/from-context\`, \`/api/v1/agents/{id}/transfer-credits\`,
+  and the authoring assistants \`/api/v1/agents/{id}/generate-avatar\`, \`generate-description\`,
+  \`generate-system-prompt\` and \`enhance-field\`
+- Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`, \`/api/v1/projects/{id}/files[/{file_id}]\`,
+  \`/api/v1/projects/{id}/sessions[/{session_id}]\`, \`/api/v1/projects/{id}/members/{user_id}\`,
+  \`/api/v1/projects/{id}/invites\`, \`/api/v1/projects/{id}/system-prompts[/{file_id}]\`
 - Files and data lakes: \`/api/v1/files[?search=]\` (list, upload), \`/api/v1/files/{id}\` (get, update,
-  delete), \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
-- Generation: \`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-*\`,
-  \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
-  \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
+  delete), \`/api/v1/files/{id}/chunk\`, \`/api/v1/files/search\`, \`/api/v1/files/by-ids\`, \`/api/v1/files/{id}/lineage\`,
+  \`/api/v1/files/bulk-delete\`, \`/api/v1/data-lakes\`, \`/api/v1/data-lakes/*\`
+- Generation: \`/api/v1/image-jobs\`, \`/api/v1/image-models\`, \`/api/v1/video-*\`,
+  \`/api/v1/music-*\`, \`/api/v1/scene-compositions\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
+  \`/api/v1/image-generations\` and \`/api/v1/image-edits\` (deprecated, sunset 2027-02-17; use
+  \`/api/v1/image-jobs\`), \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
-- Completions, embeddings and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`
+- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/completion-runs\`,
+  \`/api/v1/completion-runs/{runId}/usage\`, \`/api/v1/completion-runs/{runId}/budget\`,
+  \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`, \`/api/v1/text-refinements\`
+- Web tools (search, page fetch, weather): \`/api/v1/tools/web-search\`, \`/api/v1/tools/web-fetch\`,
+  \`/api/v1/tools/weather\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
-- Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Account and models: \`/api/v1/me\`, \`/api/v1/client-config\`, \`/api/v1/credits\`, \`/api/v1/models\`
+- Skills (create and update from a SKILL.md): \`/api/v1/skills\`, \`/api/v1/skills/mine\`, \`/api/v1/skills/{id}\`
 - Skill Market as a Claude Code plugin marketplace: \`/api/v1/skills/market/claude-marketplace.json\`,
   \`/api/v1/skills/market/{id}/claude-plugin.zip\`
+- Skill Market listings: \`/api/v1/skills/market/listings\`, \`/api/v1/skills/market/listings/mine\`,
+  \`/api/v1/skills/market/listings/{id}\` (+ \`/versions\`, \`/import\`),
+  \`/api/v1/skills/market/versions/{vid}/rescan\`
+- Skill Market review (org admins): \`/api/v1/skills/market/review-queue\`,
+  \`/api/v1/skills/market/versions/{vid}/review\`
 - Release notes: \`/api/v1/whats-new\`, \`/api/v1/whats-new/media/*\` (public, no key needed)
+- Slack (post to channels an org owner enabled): \`/api/v1/slack/messages\`
+- Functions (your live functions; \`functions:invoke\`): \`/api/v1/functions\`, \`/api/v1/functions/{id}\`,
+  \`/api/v1/functions/{id}/invoke\`
 
 Image, video, music and chat work is asynchronous; the Async jobs section of the
 [generated API docs](/api/v1/docs) says what to poll for each kind of job and when it is terminal.
-
----
-
-## Endpoints not yet migrated
-
-The sections below are still hand-written. Each row was checked against its route file, but
-treat the handler as authoritative.
-
-### Files (FabFiles)
-
-File list, upload, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/files/chunk | Trigger the chunking and embedding pipeline |
-| GET | /api/files/search | Full-text search across file content |
-| DELETE | /api/files/bulk-delete | Delete multiple files |
-| GET | /api/files/byIds | Get multiple files by ID |
-| GET | /api/files/getFabFileNameById | Get filename by ID |
-
-\`POST /api/files/chunk\` takes \`fabFileId\` (string) and \`chunkSize\`, the passage target in tokens: an integer
-between ${MIN_PASSAGE_TOKEN_TARGET} and ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}, inclusive.
-
----
-
-### Sessions (Notebooks)
-
-Session create, list, get, update, delete and clone are covered by the generated docs (see above). The routes
-below are still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/sessions/[id]/files | List session files |
-| POST | /api/sessions/semantic-search | Semantic search across sessions |
-| GET | /api/sessions/[id]/chat/[messageId] | Get a specific message |
-| PUT | /api/sessions/[id]/chat/[messageId] | Update a message |
-| DELETE | /api/sessions/[id]/chat/[messageId] | Delete a message |
-
----
-
-### Projects
-
-Project create, list, get, update and delete are covered by the generated docs (see above). The routes below are
-still hand-written.
-
-**Required API-key scope:** \`projects:read\` (or \`projects:write\`) for the GET routes, \`projects:write\` for the rest.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/projects/[id]/files | List project files |
-| GET | /api/projects/[id]/sessions | List project sessions |
-| DELETE | /api/projects/[id]/members | Remove a project member (send \`userId\` in the body), or leave the project when omitted |
-| GET | /api/projects/[id]/invites | List project invites (requires share permission) |
-| POST | /api/projects/[id]/systemPrompts | Add system prompt files to a project (\`fileIds\` in the body) |
-| DELETE | /api/projects/[id]/systemPrompts | Remove system prompt files from a project (\`fileIds\`, or legacy single \`fileId\`, in the body) |
-| POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
-| DELETE | /api/projects/removeNonExistintFiles | Clean up orphan file references |
-
----
-
-### Agents
-
-Custom AI agents with configurable personas, system prompts, and tool access.
-
-**Required API-key scope:** \`agents:read\` (or \`agents:write\`) to list and read,
-\`agents:write\` to create, update, and delete.
-
-#### List, Get, Create, Update, and Delete Agents
-
-\`\`\`
-GET    /api/v1/agents
-GET    /api/v1/agents/[id]
-POST   /api/v1/agents
-PATCH  /api/v1/agents/[id]
-DELETE /api/v1/agents/[id]
-\`\`\`
-
-> **These endpoints are generated from their contracts.** The full request/response
-> reference lives in the [generated API docs](/api/v1/docs) under \`listAgents\`,
-> \`getAgent\`, \`createAgent\`, \`updateAgent\`, and \`deleteAgent\`.
-
-#### List Agents (existing app route)
-
-\`GET /api/agents\` is paginated and accepts \`query\`, \`page\`, \`limit\`, \`orderBy\` (\`createdAt\`,
-\`updatedAt\`, or \`name\`) and \`orderDirection\`.
-
-#### Agent Endpoints Summary
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | /api/v1/agents | List agents (cursor-paginated) |
-| POST | /api/v1/agents | Create an agent |
-| GET | /api/v1/agents/[id] | Get agent details |
-| PATCH | /api/v1/agents/[id] | Update an agent |
-| DELETE | /api/v1/agents/[id] | Delete an agent |
-| GET | /api/agents | List agents (page-based pagination) |
-| POST | /api/agents | Create an agent |
-| GET | /api/agents/[id] | Get agent details |
-| PUT | /api/agents/[id] | Update agent |
-| DELETE | /api/agents/[id] | Delete agent |
-| POST | /api/agents/[id]/generate-avatar | AI-generate agent avatar |
-| POST | /api/agents/[id]/generate-description | AI-generate agent description |
-| POST | /api/agents/[id]/generate-system-prompt | AI-generate system prompt |
-| POST | /api/agents/[id]/enhance-field | AI-enhance a specific field |
-| POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
-| POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### AI Services
-
-Transcription is covered by the generated docs (see above).
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/ai/refineText | Refine and improve text |
-
-**Required API-key scope for \`refineText\`:** \`ai:generate\`.
-
----
-
-### Artifacts
-
-Artifact list, create, get, update, delete and version reads are covered by the generated docs (see above).
-The routes below are still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/artifacts/[id]/versions | Add an artifact version |
-| GET | /api/artifacts/search | Search artifacts |
-| GET | /api/artifacts/types | List artifact types |
-
----
-
-### Tools
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/tools/web-search | Web search |
-| POST | /api/tools/web-fetch | Fetch web page content |
-| POST | /api/tools/weather | Get weather data |
 
 ---
 

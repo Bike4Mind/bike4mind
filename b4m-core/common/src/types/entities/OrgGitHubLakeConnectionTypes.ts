@@ -141,6 +141,8 @@ export interface IOrgGitHubLakeConnectionResponse {
   syncStale: boolean;
   /** Files this connection has ingested into the lake - what a disconnect permanently deletes. */
   fileCount: number;
+  /** No other lake binds this installation; disconnecting also uninstalls the App. */
+  isLastInstallationBinding: boolean;
   /** A disconnect was accepted and its file purge is running in the background. */
   disconnecting: boolean;
   /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */

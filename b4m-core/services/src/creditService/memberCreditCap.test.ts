@@ -199,3 +199,24 @@ describe('isMemberCreditCapError', () => {
     expect(isMemberCreditCapError(undefined)).toBe(false);
   });
 });
+
+describe('org service account exemption', () => {
+  // The org's service account holds its org-owned API keys and is not a member, so no per-member
+  // budget applies to it, even with a tracked row at the org default.
+  const capped = org({
+    maxCreditsPerMember: 50,
+    serviceAccountUserId: 'sa1',
+    userDetails: [{ id: 'sa1', usedCredits: 500, lastCreditUsedAt: null, periodStart: getMemberCreditPeriodStart() }],
+  });
+
+  it('applies no cap to the service account', () => {
+    expect(getMemberCreditCap(capped, 'sa1')).toBeNull();
+    expect(isMemberCreditCapExceeded(capped, 'sa1', 10_000)).toBe(false);
+    expect(isMemberAtOrOverCap(capped, 'sa1')).toBe(false);
+  });
+
+  it('still caps every member', () => {
+    expect(getMemberCreditCap(capped, 'user1')).toBe(50);
+    expect(isMemberCreditCapExceeded(capped, 'user1', 60)).toBe(true);
+  });
+});

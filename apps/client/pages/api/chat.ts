@@ -14,14 +14,19 @@ import {
 } from '@bike4mind/utils';
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
+import { adminRoleWithheldFor, requesterScopedUsers } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { resolveCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { resolveCallerDefaultModel } from '@server/utils/callerModelList';
 import {
   getDefaultChatCompletionOptions,
   getSharedTokenizer,
   isChatModelUsable,
   resolveDefaultChatModel,
-} from '@server/utils/chatCompletionDefaults';
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import {
   adminSettingsRepository,
   agentRepository,
@@ -29,30 +34,44 @@ import {
   projectRepository,
   questRepository,
   sessionRepository,
+  spendFreezeRepository,
+  usageEventRepository,
   User,
   Session,
 } from '@bike4mind/database';
 import {
   B4MLLMTools,
+  BadGatewayError,
   chatContract,
   filterKnownTools,
   GatewayTimeoutError,
+  OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE,
   REQUEST_TIMEOUT_ERROR_CODE,
   questReplyText,
   toToolPayloads,
   type ChatToolMode,
+  type RequestBodyOf,
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
-import { requestTurnAuth } from '@server/auth/turnAuth';
+import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
+import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
+import { readVisitId } from '@server/analytics/visitSession';
+import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
+import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
+import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/freeTierDailyCapGate';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import { runWithDeadline, WAIT_TURN_BUDGET_MS, WAIT_TURN_WIND_DOWN_MS } from '@server/utils/waitTurnDeadline';
 import {
   TIMED_OUT_RUN,
@@ -64,6 +83,8 @@ import {
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
 // part of the documented contract (see the `tools` description in schemas/chat.ts).
 const UNRECOGNIZED_TOOL_REPORT_LIMIT = 10;
+
+type ChatRequest = Request & { validated: RequestBodyOf<typeof chatContract> };
 
 // Auth mode, required scopes, and request validation all come from chatContract
 // (the single source of truth also driving the OpenAPI spec). `req.validated` is
@@ -77,6 +98,40 @@ const handler = nextRouteForContract(chatContract, {
     windowMs: 60 * 1000,
   }),
 }).post(async (req, res) => {
+  // Admitted before the notebook is resolved, so a refused turn creates nothing. Only a blocking
+  // turn holds a concurrency slot: a queued one finishes in the ChatCompletion service.
+  const quota = isApiKeyAuth(req)
+    ? await admitApiKeyCompletion({
+        owner: req.user,
+        ownerUntrusted: req.apiKeyInfo?.ownerUntrusted,
+        billingOwnerType: req.apiKeyInfo?.billingOwnerType,
+        unpaidAccountLimits: req.apiKeyInfo?.unpaidAccountLimits,
+        holdSlot: Boolean(req.validated.wait),
+        req,
+      })
+    : NO_COMPLETION_QUOTA;
+  let completionStarted = false;
+  const runCompletion = async (complete: () => Promise<unknown>): Promise<unknown> => {
+    completionStarted = true;
+    try {
+      return await complete();
+    } finally {
+      await quota.release();
+    }
+  };
+  try {
+    return await handleChat(req, res, runCompletion);
+  } finally {
+    // A timed-out provider can outlive the response; its completion still owns the slot.
+    if (!completionStarted) await quota.release();
+  }
+});
+
+async function handleChat(
+  req: ChatRequest,
+  res: Response,
+  runCompletion: (complete: () => Promise<unknown>) => Promise<unknown>
+) {
   const requestStartedAt = Date.now();
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
@@ -86,17 +141,30 @@ const handler = nextRouteForContract(chatContract, {
 
   const simplifiedRequest = req.validated;
 
+  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
+  // caller's home-org field. When the request names an organizationId we validate the caller
+  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
+  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
+  // is what lets an org member whose org pool is empty still spend their own credits.
+  // An org-billed API key is the exception: its org pays whether or not the body names one, the
+  // same rule as sseRoute and the v1 routes (resolveRequestBillingOrgId). An org-owned key's
+  // service account is on no roster, so resolveActiveOrg's membership check would refuse it.
+  const organizationId = apiKeyBillingOrgId(req.apiKeyInfo)
+    ? ((await resolveRequestBillingOrgId(req, simplifiedRequest.organizationId)) ?? undefined)
+    : await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
   // An explicit request model wins. Otherwise fall back to the admin default, which on a
   // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
   // only probe when no explicit model was sent.
-  let model = simplifiedRequest.model;
+  let model = simplifiedRequest.model?.trim();
   if (!model) {
     const resolved = await resolveDefaultChatModel({
       configuredModel: getSettingsValue('DefaultAPIModel', settings),
       userId: req.user.id,
       logger: req.logger,
     });
-    model = resolved.model;
+    // A free account must not start on a paid-only admin default.
+    model = await resolveCallerDefaultModel(resolved.model, req.user, req.logger, { organizationId });
     // Self-host, no-explicit-model guard: apiKeys/models are populated only on self-host.
     // If even the resolved default is unusable (no provider key and no local model), fail
     // fast with actionable guidance instead of a cryptic backend error deep in the pipeline.
@@ -130,7 +198,15 @@ const handler = nextRouteForContract(chatContract, {
   //    name. The other branches already deduped: `smart` via `mergeTools`, `fast` via `[]`.
   //  - The unrecognized ids are deduped too: what a caller debugging a typo needs is the SET of
   //    ids that are not tools here, not one entry per occurrence.
-  const requestedTools = Array.from(new Set(filterKnownTools(simplifiedRequest.tools)));
+  // Overlay-contributed names are recognized by the generated map, not the enum; they are typed as
+  // B4MLLMTools here only because the downstream signatures predate open tool names.
+  const premiumToolNames = new Set(Object.keys(premiumLlmTools));
+  const requestedTools = Array.from(
+    new Set([
+      ...filterKnownTools(simplifiedRequest.tools),
+      ...((simplifiedRequest.tools ?? []).filter(id => premiumToolNames.has(id)) as B4MLLMTools[]),
+    ])
+  );
   const recognized = new Set<string>(requestedTools);
   const unrecognizedIds = new Set((simplifiedRequest.tools ?? []).filter(id => !recognized.has(id)));
   const unrecognizedTools = Array.from(unrecognizedIds).slice(0, UNRECOGNIZED_TOOL_REPORT_LIMIT);
@@ -140,12 +216,19 @@ const handler = nextRouteForContract(chatContract, {
     );
   }
 
-  // Billing target is an explicit, opt-in choice - never an automatic consequence of the
-  // caller's home-org field. When the request names an organizationId we validate the caller
-  // actually belongs to it (resolveActiveOrg; throws 403/404 otherwise) and bill + scope
-  // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
-  // is what lets an org member whose org pool is empty still spend their own credits.
-  const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
+  assertAiAccessAllowed(req.user);
+  // Refuse frozen and capped turns before creating a notebook or quest. The freeze goes first so a
+  // frozen caller is not told to wait for the daily reset; process() re-checks it for queued turns.
+  await assertSpendNotFrozen(spendFreezeSubjectForRequest(req, organizationId ?? null), {
+    db: { spendFreezes: spendFreezeRepository },
+  });
+  await checkFreeTierDailySpendCap({
+    user: req.user,
+    req,
+    billingOrganizationId: organizationId,
+    usageEventRepository,
+    logger: req.logger,
+  });
 
   // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
   // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have
@@ -162,7 +245,7 @@ const handler = nextRouteForContract(chatContract, {
     organizationId,
     recommendations,
     requestedTools,
-    dataLakeToolsDeniedFor(req)
+    apiKeyToolsDeniedFor(req)
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
@@ -177,6 +260,12 @@ const handler = nextRouteForContract(chatContract, {
   // Shared options for ChatCompletionInvoke and ChatCompletionProcess
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // Not on the shared defaults (surfaces without a confirm card must not offer custom tools);
+    // the queued path registers it in questProcessor, so the inline wait=true path must too.
+    customMcp: functionAndConnectorToolHost('chat'),
+    ...(simplifiedRequest.wait ? { customMcpDeadline: requestStartedAt + WAIT_TURN_BUDGET_MS } : {}),
+    // As questProcessor: the inline wait=true path runs audio_generation itself.
+    audioToolJobs: buildAudioToolJobs(),
     queue: new SQSService(), // Create per-request to ensure fresh credentials
     tokenizer: getSharedTokenizer(req.logger),
     user: req.user,
@@ -194,6 +283,12 @@ const handler = nextRouteForContract(chatContract, {
       await dispatchQuest(params, req.logger);
     },
   };
+  // wait=true runs tools inline: one that re-reads the owner by id must see the same role as req.user.
+  // Kept out of the literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
+  chatCompletionOptions.db = {
+    ...chatCompletionOptions.db,
+    users: requesterScopedUsers(req, chatCompletionOptions.db.users),
+  };
 
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');
@@ -206,6 +301,13 @@ const handler = nextRouteForContract(chatContract, {
       userId: req.user.id,
       // The key (when one authenticated the turn) also attributes a lake write a tool drives.
       ...turnAuth,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+      oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      fileInputsAllowed: fileInputsAllowedFor(req),
+      contributedToolNames: premiumToolNames,
+      // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
+      visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
   } catch (error) {
     // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
@@ -235,34 +337,40 @@ const handler = nextRouteForContract(chatContract, {
     const processService = new ChatCompletionProcess(chatCompletionOptions);
     const turn = await runWithDeadline(
       abortSignal =>
-        processService.process({
-          body: {
-            ...internalRequest,
-            questId: quest.id,
-            userId: req.user.id,
-            // Mirrors invoke() above: process() reads the tool context's auth from this body only.
-            ...turnAuth,
-            embeddingModel: currentEmbeddingModel,
-            queryComplexity: 'simple',
-            // Optional schema fields - declared for QuestStartBodySchema type conformance
-            dashboardParams: undefined,
-            questMaster: undefined,
-            researchMode: undefined,
-            imageConfig: undefined,
-          },
-          logger: req.logger,
-          // Pass quest from invoke to skip redundant DB read
-          prefetchedQuest: quest,
-          // Pass session from invoke to skip redundant DB read
-          prefetchedSession: invokeService.prefetchedSession,
-          // Pass organization from invoke to skip redundant DB read
-          prefetchedOrganization: invokeService.prefetchedOrganization,
-          // Premium overlay tool implementations: a session whose effective enabledTools
-          // (its own, or its workspace's resolved at read time) include premium names needs
-          // the merge or those tools silently no-op on this synchronous path.
-          externalTools: premiumLlmTools,
-          abortSignal,
-        }),
+        runCompletion(() =>
+          processService.process({
+            body: {
+              ...internalRequest,
+              ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
+              questId: quest.id,
+              userId: req.user.id,
+              // Mirrors invoke() above: process() reads the tool context's auth from this body only.
+              ...turnAuth,
+              apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
+              fileInputsAllowed: fileInputsAllowedFor(req),
+              embeddingModel: currentEmbeddingModel,
+              queryComplexity: 'simple',
+              // Optional schema fields - declared for QuestStartBodySchema type conformance
+              dashboardParams: undefined,
+              researchMode: undefined,
+              imageConfig: undefined,
+            },
+            logger: req.logger,
+            callableFunctionsResolver: () => resolveCallableFunctionsEnabled(req.user),
+            // Pass quest from invoke to skip redundant DB read
+            prefetchedQuest: quest,
+            // Pass session from invoke to skip redundant DB read
+            prefetchedSession: invokeService.prefetchedSession,
+            // Pass organization from invoke to skip redundant DB read
+            prefetchedOrganization: invokeService.prefetchedOrganization,
+            // Premium overlay tool implementations: a session whose effective enabledTools
+            // (its own, or its workspace's resolved at read time) include premium names needs
+            // the merge or those tools silently no-op on this synchronous path.
+            externalTools: premiumLlmTools,
+            contributedToolNames: premiumToolNames,
+            abortSignal,
+          })
+        ),
       { budgetMs: WAIT_TURN_BUDGET_MS - (Date.now() - requestStartedAt), windDownMs: WAIT_TURN_WIND_DOWN_MS }
     );
 
@@ -323,6 +431,22 @@ const handler = nextRouteForContract(chatContract, {
       throw timeoutError;
     }
 
+    // A reasoning model spent its whole output budget: process() settled the quest as an error
+    // without rethrowing. Who chose the budget decides the status - the caller (422) or us (502).
+    if (processService.terminalError) {
+      const details = { quest_id: quest.id, sessionId };
+      const budgetError =
+        internalRequest.params.max_tokens !== undefined
+          ? new UnprocessableEntityError(
+              'The model used its whole max_tokens budget reasoning before it could answer. Raise max_tokens, or omit it to use the model default.',
+              { errorCode: OUTPUT_BUDGET_EXHAUSTED_ERROR_CODE, ...details }
+            )
+          : new BadGatewayError('The model used its whole output budget reasoning before it could answer.', details);
+      // An expected, classified failure rather than a server fault: errorHandler logs it at warn.
+      budgetError.expected = true;
+      throw budgetError;
+    }
+
     // Use the in-memory quest directly - process() mutates it in place with
     // reply, replies, status, promptMeta. No need to re-fetch from DB.
     const completedQuest = quest;
@@ -350,7 +474,7 @@ const handler = nextRouteForContract(chatContract, {
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
       // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
-      // conditional since only the billing failures set it.
+      // conditional since only the billing failures and a moderation refusal set it.
       type: completedQuest.type,
       ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
       // Additive twin of `response`: the machine-readable state the turn's tools produced, which
@@ -393,7 +517,7 @@ const handler = nextRouteForContract(chatContract, {
       poll_url: `/api/quests/${quest.id}`,
     },
   });
-});
+}
 
 /**
  * The tool decision this layer made, echoed back as the response's `tools` field so a caller can
@@ -462,9 +586,12 @@ async function resolveChatSessionId(
   }
 
   if (request.newConversation || isApiKeyAuth(req)) {
+    // The generated name is also the auto-name placeholder: the auto-naming worker skips a session
+    // renamed in the last 10s unless its name is a placeholder, and a fast async turn lands inside that window.
+    const name = newNotebookName(req);
     const session = await sessionService.createSession(
       req.user,
-      { name: newNotebookName(req) },
+      { name, autoNamePlaceholder: name },
       {
         db: {
           sessions: sessionRepository,
@@ -543,7 +670,8 @@ function transformToInternalFormat(
         : !!request.enableTools || requestedTools.length > 0;
 
   // Determine capability defaults: legacy enableTools=true defaults to true,
-  // toolMode='smart' defaults to false (conservative - just tools, no QuestMaster etc.)
+  // toolMode='smart' defaults to false (conservative - just tools, no mementos or agents).
+  // `enableQuestMaster` on the request is deprecated and ignored.
   const isLegacyToolsPath = !request.toolMode && request.enableTools;
 
   return {
@@ -583,12 +711,11 @@ function transformToInternalFormat(
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.
           // toolMode='smart' callers get conservative defaults (just tools).
-          enableQuestMaster: request.enableQuestMaster ?? (isLegacyToolsPath ? true : false),
           enableMementos: request.enableMementos ?? (isLegacyToolsPath ? true : false),
           enableAgents: request.enableAgents ?? (isLegacyToolsPath ? true : false),
           ...(effectiveTools && effectiveTools.length > 0 ? { tools: effectiveTools } : {}),
         }
-      : { enableQuestMaster: false, enableMementos: false, enableAgents: false, tools: [] }),
+      : { enableMementos: false, enableAgents: false, tools: [] }),
   };
 }
 

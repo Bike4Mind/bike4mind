@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
+import { attachOrgApiKeyReach } from '@bike4mind/common';
 
 const { mockFindMembershipOrgIds } = vi.hoisted(() => ({ mockFindMembershipOrgIds: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
@@ -30,6 +31,31 @@ describe('getRequestMembershipOrgIds', () => {
 
   it('fails closed on a nullish user without touching the repository', async () => {
     expect(await getRequestMembershipOrgIds({} as MembershipRequest)).toEqual([]);
+    expect(mockFindMembershipOrgIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('getRequestMembershipOrgIds for an org-owned API key', () => {
+  beforeEach(() => {
+    mockFindMembershipOrgIds.mockReset();
+  });
+
+  const keyUser = (dataLakeOrgIds: string[]) =>
+    attachOrgApiKeyReach(
+      { id: 'svc', groups: [] as string[] },
+      { organizationId: 'org-1', readGroupIds: [], dataLakeOrgIds }
+    );
+
+  it('returns the reach dataLakeOrgIds instead of the account membership', async () => {
+    const req = { user: keyUser(['org-1']) } as unknown as MembershipRequest;
+    expect(await getRequestMembershipOrgIds(req)).toEqual(['org-1']);
+    expect(mockFindMembershipOrgIds).not.toHaveBeenCalled();
+  });
+
+  it('returns [] when the key has no whole-org grant', async () => {
+    mockFindMembershipOrgIds.mockResolvedValue(['org-1']);
+    const req = { user: keyUser([]) } as unknown as MembershipRequest;
+    expect(await getRequestMembershipOrgIds(req)).toEqual([]);
     expect(mockFindMembershipOrgIds).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PermissionDeniedError, insufficientCreditsError } from '@bike4mind/common';
-import { executeToolsBatch, DEFAULT_MAX_PARALLEL_TOOLS, shouldEndTurnAfterTools } from './executeToolsBatch';
+import {
+  AiAccessRefusedError,
+  ExpectedToolError,
+  ForbiddenError,
+  PermissionDeniedError,
+  insufficientCreditsError,
+} from '@bike4mind/common';
+import {
+  executeToolsBatch,
+  DEFAULT_MAX_PARALLEL_TOOLS,
+  shouldEndTurnAfterTools,
+  ToolBlockedError,
+  toolFailureLogLevel,
+} from './executeToolsBatch';
 
 /** Helper: create a task that resolves after a delay */
 const delayedTask = <T>(value: T, delayMs: number): (() => Promise<T>) => {
@@ -191,6 +203,34 @@ describe('executeToolsBatch', () => {
     });
   });
 
+  describe('terminal account refusals', () => {
+    it('throws the refusal before returning any results (parallel)', async () => {
+      const tasks = [
+        delayedTask('ok', 5),
+        failingTask(new AiAccessRefusedError('Your account is suspended.'), 10),
+        delayedTask('also-ok', 15),
+      ];
+
+      await expect(executeToolsBatch(tasks, { parallel: true })).rejects.toThrow('Your account is suspended.');
+    });
+
+    it('breaks the sequential loop on a refusal so later tools do not run', async () => {
+      const taskC = vi.fn(async () => 'C-result');
+      const tasks = [async () => 'A-result' as string, failingTask(new AiAccessRefusedError('Banned.')), taskC];
+
+      await expect(executeToolsBatch(tasks, { parallel: false })).rejects.toThrow('Banned.');
+      expect(taskC).not.toHaveBeenCalled();
+    });
+
+    it('keeps an ordinary 403 recoverable', async () => {
+      const outcomes = await executeToolsBatch([failingTask(new ForbiddenError('No access to that notebook.'))], {
+        parallel: false,
+      });
+
+      expect(outcomes[0]).toMatchObject({ ok: false });
+    });
+  });
+
   describe('concurrency limiting (maxConcurrency)', () => {
     it('respects maxConcurrency cap', async () => {
       let activeTasks = 0;
@@ -307,6 +347,12 @@ describe('shouldEndTurnAfterTools', () => {
     expect(shouldEndTurnAfterTools(['suggest_links'], tools, undefined)).toBe(false);
   });
 
+  it('requires visible prose beyond inline reasoning before ending the turn', () => {
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '<think>Plan first.</think>')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '<think>Unfinished thought')).toBe(false);
+    expect(shouldEndTurnAfterTools(['suggest_links'], tools, '<think>Plan first.</think>Answer.')).toBe(true);
+  });
+
   it('keeps recursing when any called tool is unflagged, explicitly false, or unknown', () => {
     expect(shouldEndTurnAfterTools(['suggest_links', 'web_search'], tools, 'Answer')).toBe(false);
     expect(shouldEndTurnAfterTools(['off'], tools, 'Answer')).toBe(false);
@@ -321,5 +367,26 @@ describe('shouldEndTurnAfterTools', () => {
 
   it('ignores nameless slots left by a text block ahead of the tool call', () => {
     expect(shouldEndTurnAfterTools([undefined, 'suggest_links'], tools, 'Answer')).toBe(true);
+  });
+});
+
+describe('toolFailureLogLevel', () => {
+  it('logs a failure guard refusal at warn', () => {
+    expect(toolFailureLogLevel(new ToolBlockedError('Not run'))).toBe('warn');
+  });
+
+  it('logs any other tool failure at error', () => {
+    expect(toolFailureLogLevel(new Error('provider down'))).toBe('error');
+    expect(toolFailureLogLevel('string failure')).toBe('error');
+  });
+});
+
+describe('expected tool failures', () => {
+  it('warns for recoverable validation failures while preserving unexpected error severity', () => {
+    expect(toolFailureLogLevel(new ExpectedToolError('Invalid expression'))).toBe('warn');
+    expect(toolFailureLogLevel(new Error('Internal failure'))).toBe('error');
+    expect(toolFailureLogLevel(Object.assign(new Error('Invalid expression'), { name: 'ExpectedToolError' }))).toBe(
+      'warn'
+    );
   });
 });

@@ -319,11 +319,9 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         // When main response is complete, mark rapid reply as replaced
         // Only mark as replaced when the main response is actually finished, not when it starts
         const hasMainResponse = typedMsg.quest.replies && typedMsg.quest.replies.length > 0;
-        const hasQuestMasterResponse = typedMsg.quest.questMasterPlanId || typedMsg.quest.questMasterReply;
 
-        if (isComplete && (hasMainResponse || hasQuestMasterResponse) && chatCompletionRef.current.rapidReply) {
-          const responseLength =
-            hasMainResponse && typedMsg.quest.replies ? typedMsg.quest.replies.join('').length : 'QuestMaster';
+        if (isComplete && hasMainResponse && chatCompletionRef.current.rapidReply) {
+          const responseLength = typedMsg.quest.replies ? typedMsg.quest.replies.join('').length : 0;
           perfLogger.log(`🔄 [RAPID_REPLY] Clearing rapid reply - main response complete (${responseLength} chars)`);
           setChatCompletion(prev => ({
             ...prev,

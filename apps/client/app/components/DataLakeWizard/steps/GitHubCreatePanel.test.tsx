@@ -40,7 +40,9 @@ const resolveBegin = (response: { dataLakeId: string; authorizeUrl: string }) =>
     opts.onSuccess(response)
   );
 const rejectBegin = (error: unknown) =>
-  h.beginMutate.mockImplementation((_orgId: string | undefined, opts: { onError: (e: unknown) => void }) => opts.onError(error));
+  h.beginMutate.mockImplementation((_orgId: string | undefined, opts: { onError: (e: unknown) => void }) =>
+    opts.onError(error)
+  );
 
 /** getServerErrorField reads this through axios's own isAxiosError guard, so the flag is required. */
 const serverRefusal = (message: string) => ({ isAxiosError: true, response: { data: { error: message } } });
@@ -195,5 +197,19 @@ describe('GitHubCreatePanel - failures before the redirect', () => {
     expect(h.beginMutate).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(screen.queryByTestId('github-create-error')).toBeNull());
     expect(assign).toHaveBeenCalledWith('https://github.com/login/oauth/authorize?state=s2');
+  });
+});
+
+describe('GitHubCreatePanel - entitlement refusals', () => {
+  it('shows a lake-cap or plan refusal without a Try again button', async () => {
+    rejectBegin({
+      isAxiosError: true,
+      response: { data: { error: 'Data lakes need a paid plan.', code: 'DATA_LAKE_PLAN_REQUIRED' } },
+    });
+    renderPanel();
+    fireEvent.click(screen.getByTestId('github-create-continue-btn'));
+
+    await waitFor(() => expect(screen.getByTestId('github-create-error')).toHaveTextContent('need a paid plan'));
+    expect(screen.queryByTestId('github-create-retry-btn')).toBeNull();
   });
 });

@@ -1,53 +1,73 @@
 /**
- * Data hooks for the admin QA status page (`/status`). Read models are
+ * Data hooks for the admin QA status page (`/admin/qa`). Read models are
  * type-only imports from server/qa/reads.ts, as in hooks/data/deepAgents.ts.
  */
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type {
   QaDiffTest,
+  QaE2eStats,
   QaFacets,
   QaFlakyRow,
+  QaLatencyStats,
   QaMediaView,
   QaOverview,
+  QaProductSummary,
   QaRunDetail,
   QaRunDiff,
   QaRunPage,
   QaRunSummary,
   QaSeriesPoint,
+  QaSummary,
   QaTestHistory,
   QaTestView,
   QaTile,
 } from '@server/qa/reads';
 import { api } from '@client/app/contexts/ApiContext';
+import { rangeInstants, resolveRange } from '@client/app/components/QaStatus/dateRange';
 
 export type {
   QaDiffTest,
+  QaE2eStats,
   QaFacets,
   QaFlakyRow,
+  QaLatencyStats,
   QaMediaView,
   QaOverview,
+  QaProductSummary,
   QaRunDetail,
   QaRunDiff,
   QaRunPage,
   QaRunSummary,
   QaSeriesPoint,
+  QaSummary,
   QaTestHistory,
   QaTestView,
   QaTile,
 };
 
-/** `/status` search params. Server-side twin: parseQaFilters in server/qa/filters.ts. */
+/** `/admin/qa` search params. Server-side twin: parseQaFilters in server/qa/filters.ts. */
 export interface QaStatusSearch {
   product?: string;
   tenant?: string;
   env?: string;
   branch?: string;
+  /** Inclusive local days, YYYY-MM-DD; see components/QaStatus/dateRange.ts. */
+  from?: string;
+  to?: string;
+  /** Older links only; from/to win when present. */
   range?: '7d' | '30d';
+}
+
+export const QA_SEARCH_KEYS = ['product', 'tenant', 'env', 'branch', 'from', 'to', 'range'] as const;
+
+/** True when the search carries any QA filter key, whatever its value. */
+export function hasQaSearchKeys(search: Record<string, unknown>): boolean {
+  return QA_SEARCH_KEYS.some(key => key in search);
 }
 
 export function parseQaStatusSearch(search: Record<string, unknown>): QaStatusSearch {
   const out: QaStatusSearch = {};
-  for (const key of ['product', 'tenant', 'env', 'branch'] as const) {
+  for (const key of ['product', 'tenant', 'env', 'branch', 'from', 'to'] as const) {
     const value = search[key];
     if (typeof value === 'string' && value) out[key] = value;
   }
@@ -59,7 +79,7 @@ function filterParams(search: QaStatusSearch): Record<string, string> {
   const params: Record<string, string> = {
     product: search.product ?? '',
     branch: search.branch || 'main',
-    range: search.range ?? '7d',
+    ...rangeInstants(resolveRange(search)),
   };
   if (search.tenant) params.tenant = search.tenant;
   if (search.env) params.env = search.env;
@@ -80,6 +100,17 @@ export function useQaOverview(search: QaStatusSearch) {
     enabled: Boolean(search.product),
     refetchInterval: 60_000,
     queryFn: async () => (await api.get<QaOverview>('/api/admin/qa/overview', { params })).data,
+  });
+}
+
+/** Every product, so product and tenant are left out of the key and the request. */
+export function useQaSummary(search: QaStatusSearch) {
+  const { branch, from, to, env } = filterParams(search);
+  const params = { branch, from, to, ...(env ? { env } : {}) };
+  return useQuery({
+    queryKey: ['qa-summary', params],
+    refetchInterval: 60_000,
+    queryFn: async () => (await api.get<QaSummary>('/api/admin/qa/summary', { params })).data,
   });
 }
 

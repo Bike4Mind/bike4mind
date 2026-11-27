@@ -39,7 +39,7 @@ it('minifies the routing code while preserving the CloudFront entry point and mo
   expect(Buffer.byteLength(minified)).toBeLessThan(10_240);
   const router = readFileSync(new URL('../../../infra/router.ts', import.meta.url), 'utf8');
   expect(router).toContain("if (name !== 'RouterCloudfrontFunctionRequest') return;");
-  expect(router).toContain('args.code = $output(args.code).apply(minifyRouterFunction)');
+  expect(router).toContain('args.code = $output(args.code).apply(prepareRouterRequestFunction)');
 });
 
 it('rejects routing code that still exceeds the CloudFront byte limit after minification', () => {

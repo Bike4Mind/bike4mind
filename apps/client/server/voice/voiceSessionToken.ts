@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { AuthOriginSchema, type AuthOrigin } from '@bike4mind/common';
+import { AuthOriginSchema, CreditHolderType, type AuthOrigin } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 // Voice v2 session token - a short-lived signed JWT that binds an ElevenLabs
@@ -27,6 +27,13 @@ export const VoiceSessionContextSchema = z
     authOrigin: AuthOriginSchema.optional(),
     // The `b4m_live_` key that minted the token, when one did, forwarded as ToolContext.apiKeyId.
     apiKeyId: z.string().min(1).optional(),
+    // Who that key bills, from the minting request's verified key info. No longer read by the spend freeze
+    // check, which keeps the acting user for every key.
+    apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
+    // That key lacks the admin scope, so the proxy withholds the owner's admin role on its reload.
+    adminRoleWithheld: z.boolean().optional(),
+    // Trusted file-input admission from the minting door; absent key claims fail closed downstream.
+    fileInputsAllowed: z.boolean().optional(),
     // ISO start of the credit hold this call bills against, so its activity marks only that hold.
     // Optional: tokens minted before the claim existed still verify until they expire.
     // Follow-up: make it required once one token TTL has passed after deploy, deleting the proxy's claimless branch.

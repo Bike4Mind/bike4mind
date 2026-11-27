@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { reportCcAgentPresence } from '@server/websocket/ccAgentHearth';
-import { sendToClient, withWebSocketContext } from '@server/websocket/utils';
+import { sendToClient, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async function (event, context, logger) {
@@ -24,10 +24,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     // Only mark user offline if no other connections remain (e.g., CLI + web client both connected)
     const remainingConnections = await Connection.countDocuments({ userId });
     if (remainingConnections === 0) {
-      await User.updateOne({ _id: userId }, { lastActiveAt: new Date(), isOnline: false });
+      await User.updateOne({ _id: userId }, { isOnline: false });
       await userService.updateLogoutTime(userId.toString(), { db: { users: userRepository }, logger });
-    } else {
-      await User.updateOne({ _id: userId }, { lastActiveAt: new Date() });
     }
   }
 

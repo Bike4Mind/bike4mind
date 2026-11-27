@@ -7,8 +7,8 @@ import {
 } from '../schemas/openai';
 import {
   IMAGES_PER_EDIT_REQUEST,
-  MAX_REFERENCE_IMAGES,
-  isBflImageModel,
+  getMaxReferenceImages,
+  supportsBflSeed,
   isBflUltraImageModel,
   isExtendedGptImageQuality,
   isGPTImage25Model,
@@ -17,7 +17,7 @@ import {
   isGeminiImageModel,
   isKontextModel,
   requiresImageInput,
-  supportsImageEdit,
+  supportsImageEditEndpoint,
   supportsTransparentBackground,
   usesDiscreteImageDimensions,
 } from './modelHelpers';
@@ -58,6 +58,10 @@ export type ImageSizing =
   | { kind: 'inputImage'; aspectRatio: boolean }
   | { kind: 'fixed' };
 
+/**
+ * @deprecated Read an image model's capabilities from IMAGE_MODEL_CATALOG (GET /api/v1/image-models). This still
+ * backs the `image` block of GET /api/v1/models and the chat size picker until the quest image path retires.
+ */
 export type ImageModelCapabilities = {
   sizing: ImageSizing;
   supports: {
@@ -120,6 +124,8 @@ function resolveQualities(model: ImageModels): readonly OpenAIImageQuality[] {
  * The size rules and supported params of an image model, derived from IMAGE_SIZE_CONSTRAINTS and
  * the modelHelpers predicates the request path enforces, so the advertised block cannot drift
  * from what a request is validated against.
+ *
+ * @deprecated Use IMAGE_MODEL_CATALOG; see ImageModelCapabilities.
  */
 export function getImageModelCapabilities(model: ImageModels): ImageModelCapabilities {
   return {
@@ -127,11 +133,11 @@ export function getImageModelCapabilities(model: ImageModels): ImageModelCapabil
     supports: {
       transparentBackground: supportsTransparentBackground(model),
       // OpenAIImageService forwards a seed, but OpenAI's image API documents none to honour it.
-      seed: isBflImageModel(model),
+      seed: supportsBflSeed(model),
       qualities: resolveQualities(model),
       maxImages: requiresImageInput(model) ? IMAGES_PER_EDIT_REQUEST : MAX_IMAGES_PER_REQUEST,
-      maxReferenceImages: isGPTImageModel(model) ? MAX_REFERENCE_IMAGES : 0,
-      edit: supportsImageEdit(model),
+      maxReferenceImages: getMaxReferenceImages(model),
+      edit: supportsImageEditEndpoint(model),
       requiresInputImage: requiresImageInput(model),
     },
   };

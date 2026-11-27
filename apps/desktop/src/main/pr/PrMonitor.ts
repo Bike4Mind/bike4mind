@@ -1,7 +1,11 @@
 import type { ChatAutomaticOrigin, ChatToolCall } from '@shared/chat';
 import type { AutomaticTurnResult } from '../chat/ChatService';
 import {
+  isExplicitBinding,
+  isBindingCommand,
   isFinishedState,
+  isPrNumber,
+  parsePullRequestTarget,
   parsePullRequestUrl,
   prDisplayState,
   pullRequestFromShell,
@@ -11,6 +15,7 @@ import {
   type PrAutoFixStatus,
   type PrBarSnapshot,
   type PrBarState,
+  type PrBindOutcome,
   type PrBinding,
   type PrBindingSource,
   type PrGhStatus,
@@ -24,10 +29,12 @@ import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
 import { shouldAutoArchive } from './autoArchive';
-import { MAX_AUTO_FIX_ATTEMPTS, SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
+import { DEFAULT_AUTO_FIX_ATTEMPTS, parseAutoFixAttempts } from '@shared/autoFixSetting';
+import { SHELL_TOOLS, autoFixBudget, planAutoFix } from './autoFix';
 import { desktopMergeReadiness } from './autoMerge';
 import { MAX_BATCH, mergeMethodFor } from './github';
 import { POLL_MS, alignToTick, pollDelay } from './pollSchedule';
+import { prIconStatus, type PrIconStatus } from '@shared/prAttention';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
 const UNOWNED_BRANCHES = new Set(['main', 'master', 'develop', 'HEAD']);
@@ -44,6 +51,9 @@ const AFTER_PUSH_MS = 15_000;
 /** A missing or signed-out gh is re-tried on opening a conversation at most this often. */
 const GH_RETRY_MS = 60_000;
 
+/** Leave room for the GitHub response time before the dialog's next 30s tick. */
+const SELECTED_AGENT_STALE_MS = 25_000;
+
 /**
  * How long after enqueueing a PR missing from the queue with no removal recorded is still
  * taken for GitHub catching up, rather than the queue having let it go.
@@ -54,6 +64,9 @@ const ENQUEUE_SETTLE_MS = 60_000;
 const UNOPENED_JITTER_MS = 60_000;
 
 const PUSH_COMMAND = /(^|[\s;&|(])git\s+push\b/;
+
+/** formatOutcome's footer for a command that exited 0; see shellTools. */
+const EXITED_CLEANLY = /\n\[exit 0\](?:\n\[no output\])?\s*$/;
 
 export interface PrTimers {
   set(callback: () => void, ms: number): unknown;
@@ -72,8 +85,14 @@ const realTimers: PrTimers = {
 export interface PrChatHooks {
   /** Whether the conversation is a Code session; a pasted PR binds only there. */
   isCode(sessionId: string): Promise<boolean>;
-  /** Where a Code session runs and the branch checked out there; null for anything else. */
-  project(sessionId: string): Promise<{ workingDirectory: string; branch: string | null } | null>;
+  /**
+   * Where a Code session runs and the branch checked out there; null for anything else. `live`
+   * reads the checkout before the recorded branch, which the agent may have renamed since.
+   */
+  project(
+    sessionId: string,
+    options?: { live?: boolean }
+  ): Promise<{ workingDirectory: string; branch: string | null } | null>;
   /** Move the conversation to the sidebar's Archived section. */
   archive(sessionId: string): Promise<void>;
   /** Whether a turn is running in the conversation. */
@@ -100,6 +119,8 @@ export interface PrMonitorDeps {
   random?: () => number;
   /** How long a read waits for others to share its query, in ms. */
   batchWindowMs?: number;
+  /** The Settings attempt budget, read at start and on each tick of the box; the default without it. */
+  autoFixAttempts?: () => Promise<number>;
 }
 
 /** Reads that land within this long of each other go to GitHub as one query; see readTogether. */
@@ -116,6 +137,8 @@ interface QueuedRead {
 interface Live {
   snapshot: PrSnapshot | null;
   error?: string;
+  /** The last read found no such PR: a typo or an issue number, which must not hold a pin. */
+  missing?: boolean;
   /** The read in flight, so a second ask joins it rather than starting another gh. */
   inflight: Promise<void> | null;
   failures: number;
@@ -163,6 +186,8 @@ export class PrMonitor {
   private readonly timers: PrTimers;
   /** What the sidebar was last told, per conversation; built on first use. */
   private sidebar: Map<string, PrSummary> | null = null;
+  /** The Settings budget as last read, so drawing a bar never waits on it. */
+  private autoFixLimit = DEFAULT_AUTO_FIX_ATTEMPTS;
 
   constructor(protected readonly deps: PrMonitorDeps) {
     this.timers = deps.timers ?? realTimers;
@@ -173,6 +198,7 @@ export class PrMonitor {
    * No read happens here: the first one is a full unopened interval away.
    */
   async start(): Promise<void> {
+    await this.readAutoFixLimit();
     const all = await this.deps.store.all();
     for (const [sessionId, binding] of all) {
       if (isFinishedState(binding.lastState) || !this.armed(binding)) continue;
@@ -223,6 +249,15 @@ export class PrMonitor {
     return this.state(sessionId, binding);
   }
 
+  /** Inspect a selected agent without changing the window's conversation watch. */
+  async getState(sessionId: string): Promise<PrBarState | null> {
+    if (this.gh !== 'ok' && this.now() - this.ghFailedAt > GH_RETRY_MS) this.gh = 'ok';
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding || binding.dismissed) return null;
+    if (this.wantsRead(sessionId, binding, SELECTED_AGENT_STALE_MS)) void this.read(sessionId);
+    return this.state(sessionId, binding);
+  }
+
   /** A window closed. */
   unwatch(viewer: number): void {
     const previous = this.onScreen.get(viewer);
@@ -231,11 +266,11 @@ export class PrMonitor {
   }
 
   /** Whether opening this conversation should start a read: nothing in hand, or it went stale. */
-  protected wantsRead(sessionId: string, binding: PrBinding): boolean {
+  protected wantsRead(sessionId: string, binding: PrBinding, staleMs: number = POLL_MS.onScreenActive): boolean {
     if (this.gh !== 'ok' || this.now() < this.pausedUntil) return false;
     const snapshot = this.live.get(sessionId)?.snapshot ?? binding.finalSnapshot;
     if (!snapshot) return true;
-    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > POLL_MS.onScreenActive;
+    return snapshot.state === 'OPEN' && this.now() - snapshot.fetchedAt > staleMs;
   }
 
   /**
@@ -251,40 +286,88 @@ export class PrMonitor {
       return;
     }
     if (PUSH_COMMAND.test(command) && this.live.has(sessionId)) this.nudge(sessionId, AFTER_PUSH_MS);
+    if (isBindingCommand(command) && EXITED_CLEANLY.test(call.preview ?? '')) {
+      void this.lookUpAfterShell(sessionId).catch(err => this.deps.logger.warn(`PR: branch lookup failed: ${err}`));
+    }
   }
 
   /** The user pasted a URL. Always replaces what was there, unless auto-merge is armed on it. */
   async bindManual(sessionId: string, url: string): Promise<PrActionResult> {
-    if (!(await this.deps.chat.isCode(sessionId))) {
-      return { ok: false, error: 'Pull requests can only be added to a Code conversation.' };
-    }
-    const ref = parsePullRequestUrl(url);
-    if (!ref) return { ok: false, error: 'That is not a GitHub pull request URL.' };
-    const current = await this.deps.store.get(sessionId);
-    if (current?.autoMerge && !samePullRequest(current, ref)) {
-      return { ok: false, error: `Turn off auto-merge on #${current.number} before binding another PR.` };
-    }
-    await this.bind(sessionId, ref, 'manual');
-    return { ok: true };
+    const outcome = await this.bindExplicit(
+      sessionId,
+      'manual',
+      () => parsePullRequestUrl(url) ?? 'That is not a GitHub pull request URL.'
+    );
+    return outcome.ok ? { ok: true } : outcome;
   }
 
   /**
-   * Bind, or re-bind. The same PR keeps its options and its dismissal (a manual bind lifts that).
-   * A different PR replaces it only when nothing is armed on the old one: an automatic detection
-   * must not silently abandon an auto-merge the user switched on.
+   * The agent, at the user's word: bindManual's guards, plus `owner/repo#N` and a bare `#N`
+   * resolved in the repo of the PR bound now.
+   */
+  async bindForAgent(sessionId: string, target: string): Promise<PrBindOutcome> {
+    return this.bindExplicit(sessionId, 'agent', current => {
+      const ref = parsePullRequestTarget(target, current);
+      if (ref) return ref;
+      const digits = /^#?(\d+)$/.exec(target.trim())?.[1];
+      if (!current && digits && isPrNumber(Number(digits))) {
+        return 'No pull request is bound yet, so a bare number names no repository. Give the full URL or owner/repo#N.';
+      }
+      return 'That is not a GitHub pull request URL, owner/repo#N, or #N.';
+    });
+  }
+
+  private async bindExplicit(
+    sessionId: string,
+    source: 'manual' | 'agent',
+    resolve: (current: PrBinding | null) => PrRef | string
+  ): Promise<PrBindOutcome> {
+    if (!(await this.deps.chat.isCode(sessionId))) {
+      return { ok: false, error: 'Pull requests can only be added to a Code conversation.' };
+    }
+    const current = await this.deps.store.get(sessionId);
+    const ref = resolve(current);
+    if (typeof ref === 'string') return { ok: false, error: ref };
+    if (current?.autoMerge && !samePullRequest(current, ref)) {
+      return { ok: false, error: `Turn off auto-merge on #${current.number} before binding another PR.` };
+    }
+    await this.bind(sessionId, ref, source);
+    return { ok: true, pr: ref };
+  }
+
+  /**
+   * Bind, or re-bind. The same PR keeps its options and its dismissal (an explicit bind lifts
+   * that, and marks a detected PR as chosen). A detection never replaces a PR with automation
+   * armed - it must not silently abandon an auto-merge the user switched on - nor one the user
+   * or agent chose, until that one is merged or closed.
    */
   protected async bind(sessionId: string, ref: PrRef, source: PrBindingSource): Promise<void> {
     const current = await this.deps.store.get(sessionId);
+    const explicit = isExplicitBinding(source);
     if (current && samePullRequest(current, ref)) {
-      if (source === 'manual' && current.dismissed) {
-        await this.deps.store.set(sessionId, { ...current, dismissed: false });
+      if (!explicit) return;
+      const undismiss = current.dismissed === true;
+      if (undismiss || !isExplicitBinding(current.source)) {
+        await this.deps.store.set(sessionId, {
+          ...current,
+          source: isExplicitBinding(current.source) ? current.source : source,
+          dismissed: false,
+        });
+      }
+      if (undismiss) {
         if (current.finalSnapshot) await this.publish(sessionId);
         else void this.read(sessionId);
       }
       return;
     }
-    if (current && source !== 'manual' && !current.dismissed && this.armed(current)) {
-      this.deps.logger.debug(`PR: kept #${current.number} on ${sessionId}; it has automation armed`);
+    const contested = current && !explicit && !current.dismissed && !this.armed(current);
+    // A pin that rests on a state saved before this launch may be stale: the chosen PR can have
+    // merged since, and a follow-up PR must then bind. One read settles it.
+    if (contested && this.pinned(sessionId, current) && !this.live.get(sessionId)?.snapshot) {
+      await this.read(sessionId);
+    }
+    if (current && !explicit && !current.dismissed && (this.armed(current) || this.pinned(sessionId, current))) {
+      this.deps.logger.debug(`PR: kept #${current.number} on ${sessionId}; it has automation armed or was chosen`);
       return;
     }
     const binding: PrBinding = { ...ref, source, boundAt: new Date(this.now()).toISOString() };
@@ -294,6 +377,13 @@ export class PrMonitor {
     this.deps.logger.debug(`PR: bound ${sessionId} to ${ref.url} (${source})`);
     await this.publish(sessionId);
     void this.read(sessionId);
+  }
+
+  /** A PR the user or agent chose, and not known to be finished; a follow-up PR may replace a merged one. */
+  private pinned(sessionId: string, binding: PrBinding): boolean {
+    if (!isExplicitBinding(binding.source)) return false;
+    if (this.live.get(sessionId)?.missing) return false;
+    return !isFinishedState(this.live.get(sessionId)?.snapshot?.state ?? binding.lastState);
   }
 
   protected armed(binding: PrBinding): boolean {
@@ -324,13 +414,14 @@ export class PrMonitor {
     } else if (option === 'autoMerge') {
       result = await this.changeAutoMerge(sessionId, enabled);
     } else {
-      // Checking the box is fresh consent, so the attempt budget refills. What was already
-      // handled stays handled: the same failure or comment is never sent twice.
-      await this.deps.store.set(sessionId, {
-        ...binding,
+      // Checking the box is fresh consent, so the attempt budget refills to the current setting.
+      // What was already handled stays handled: the same failure or comment is never sent twice.
+      const limit = enabled ? await this.readAutoFixLimit() : 0;
+      await this.deps.store.update(sessionId, current => ({
+        ...current,
         autoFix: enabled,
-        ...(enabled ? { autoFixAttempts: 0, autoFixMax: MAX_AUTO_FIX_ATTEMPTS } : {}),
-      });
+        ...(enabled ? { autoFixAttempts: 0, autoFixMax: limit } : {}),
+      }));
       const live = this.entry(sessionId);
       live.autoFix = { status: enabled ? 'watching' : 'off' };
       // Threads are only read while auto-fix is on, so turning it on needs a read that has them.
@@ -339,6 +430,54 @@ export class PrMonitor {
     await this.schedule(sessionId);
     await this.publish(sessionId);
     return result;
+  }
+
+  private async readAutoFixLimit(): Promise<number> {
+    const read = this.deps.autoFixAttempts;
+    if (read) this.autoFixLimit = parseAutoFixAttempts(await read().catch(() => this.autoFixLimit));
+    return this.autoFixLimit;
+  }
+
+  /**
+   * A new Settings budget. Raising it raises every open PR with auto-fix on, so one that gave up
+   * carries on without a re-check. Lowering it leaves those PRs on the budget they were ticked
+   * for, so none is stopped under a count it already started on; each takes the lower value the
+   * next time its box is ticked. One store write however many PRs change.
+   */
+  async setAutoFixAttempts(attempts: number): Promise<void> {
+    const limit = parseAutoFixAttempts(attempts);
+    this.autoFixLimit = limit;
+    const raised = await this.deps.store.updateEach(binding =>
+      binding.autoFix && !binding.dismissed && !isFinishedState(binding.lastState) && autoFixBudget(binding) < limit
+        ? { ...binding, autoFixMax: limit }
+        : null
+    );
+    const changed = new Set(raised);
+    for (const [sessionId, live] of this.live) {
+      if (live.autoFix?.status !== 'exhausted') continue;
+      if (changed.has(sessionId)) {
+        live.autoFix = { status: 'watching' };
+        // Whatever it gave up on is still unhandled, so a read now picks it back up.
+        void this.read(sessionId);
+        continue;
+      }
+      // Its note names what a re-check would grant, which just changed.
+      const binding = await this.deps.store.get(sessionId);
+      if (!binding?.autoFix) continue;
+      live.autoFix = this.exhaustedStatus(autoFixBudget(binding));
+      changed.add(sessionId);
+    }
+    for (const sessionId of this.onScreen.values()) {
+      if (await this.deps.store.get(sessionId)) changed.add(sessionId);
+    }
+    for (const sessionId of changed) await this.publish(sessionId);
+  }
+
+  private exhaustedStatus(budget: number): { status: 'exhausted'; note: string } {
+    return {
+      status: 'exhausted',
+      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow ${this.autoFixLimit} more.`,
+    };
   }
 
   /**
@@ -627,6 +766,36 @@ export class PrMonitor {
     }
   }
 
+  /**
+   * A push or `gh pr create` succeeded but its output, cut for length, carried no PR URL. Asks
+   * for the branch's PR at once, past the TTL. Skipped while an unfinished PR is bound: a push
+   * to it prints no URL, and asking would only find it again.
+   */
+  protected async lookUpAfterShell(sessionId: string): Promise<void> {
+    if (this.gh !== 'ok') return;
+    const before = await this.deps.store.get(sessionId);
+    if (before && !this.finished(sessionId, before)) return;
+    this.branchLookups.set(sessionId, this.now());
+    const project = await this.deps.chat.project(sessionId, { live: true }).catch(() => null);
+    const branch = project?.branch;
+    if (!project || !branch || UNOWNED_BRANCHES.has(branch)) return;
+    try {
+      const url = await this.withGh(() => this.deps.github.findOpenForBranch(project.workingDirectory, branch));
+      const ref = url ? parsePullRequestUrl(url) : null;
+      if (!ref) return;
+      // Another bind may have landed while gh ran; bind keeps its own guards for the rest.
+      const current = await this.deps.store.get(sessionId);
+      if (current && !samePullRequest(current, before) && !this.finished(sessionId, current)) return;
+      await this.bind(sessionId, ref, 'branch');
+    } catch (err) {
+      this.noteGhFailure(err);
+    }
+  }
+
+  private finished(sessionId: string, binding: PrBinding): boolean {
+    return isFinishedState(this.live.get(sessionId)?.snapshot?.state ?? binding.lastState);
+  }
+
   /** One gh process per conversation at a time, and a small cap across all of them. */
   protected async withGh<T>(work: () => Promise<T>): Promise<T> {
     // A finished run hands its slot straight to the next waiter, so no third caller can slip
@@ -704,10 +873,12 @@ export class PrMonitor {
       live.snapshot = snapshot;
       live.failures = 0;
       delete live.error;
+      delete live.missing;
       await this.afterRead(sessionId, binding, snapshot);
     } catch (err) {
       live.error = this.noteGhFailure(err);
       live.failures += 1;
+      live.missing = err instanceof GhError && err.kind === 'not-found';
       if (err instanceof GhError && err.kind === 'rate-limited') {
         this.pausedUntil = this.now() + POLL_MS.rateLimitPause;
         this.deps.logger.warn('PR: GitHub rate limit hit; pausing every PR read');
@@ -726,13 +897,22 @@ export class PrMonitor {
     const archiving = shouldAutoArchive(current, snapshot.state);
     const finished = isFinishedState(snapshot.state);
     const draftChanged = (current.lastDraft === true) !== snapshot.isDraft;
-    if (current.lastState !== snapshot.state || draftChanged || archiving || finished || current.finalSnapshot) {
-      const { finalSnapshot: _previous, ...rest } = current;
+    const icon = storedIcon(snapshot);
+    if (
+      current.lastState !== snapshot.state ||
+      draftChanged ||
+      !sameStoredIcon(current, icon) ||
+      archiving ||
+      finished ||
+      current.finalSnapshot
+    ) {
+      const { finalSnapshot: _previous, lastAttention: _a, lastBehind: _b, lastAutoMerge: _m, ...rest } = current;
       // Recorded before archiving, so a crash in between errs toward not archiving twice.
       await this.deps.store.set(sessionId, {
         ...rest,
         lastState: snapshot.state,
         lastDraft: snapshot.isDraft,
+        ...icon,
         ...(archiving ? { archivedOnClose: true } : {}),
         // Without checks: a finished bar draws none, and every launch reads this file whole.
         ...(finished ? { finalSnapshot: { ...forTheBar(snapshot), checks: [] } } : {}),
@@ -774,10 +954,7 @@ export class PrMonitor {
       return;
     }
     const budget = autoFixBudget(binding);
-    const exhausted = {
-      status: 'exhausted' as const,
-      note: `Auto-fix gave up after ${budget} attempts. Re-check the box to allow more.`,
-    };
+    const exhausted = this.exhaustedStatus(budget);
     const plan = planAutoFix(binding, snapshot, this.deps.chat.isBusy(sessionId));
     if (plan.kind === 'none') {
       if (live.autoFix?.status === 'started') return;
@@ -851,6 +1028,7 @@ export class PrMonitor {
     return {
       sessionId,
       binding: binding && !binding.dismissed ? withoutFinal(binding) : null,
+      ...(binding?.dismissed ? { dismissed: true } : {}),
       snapshot: snapshot ? forTheBar(snapshot) : null,
       gh: this.gh,
       ...(live?.error ? { error: live.error } : {}),
@@ -864,7 +1042,7 @@ export class PrMonitor {
       autoFix: {
         status: binding?.autoFix ? (live?.autoFix?.status ?? 'watching') : 'off',
         attempts: binding?.autoFixAttempts ?? 0,
-        max: binding?.autoFix ? autoFixBudget(binding) : MAX_AUTO_FIX_ATTEMPTS,
+        max: binding?.autoFix ? autoFixBudget(binding) : this.autoFixLimit,
         ...(binding?.autoFix && live?.autoFix?.note ? { note: live.autoFix.note } : {}),
         ...(binding?.autoFix && live?.autoFix?.status === 'started' && live.autoFix.conflicts
           ? { conflicts: true }
@@ -881,14 +1059,23 @@ export class PrMonitor {
   /**
    * The sidebar's view of a conversation's PR, from what is already in hand. Falls back to the
    * state stored at the last read for a conversation not read since launch, and to nothing for
-   * one never read at all. A dismissed bar keeps its icon: the PR is still this session's.
+   * one never read at all. A dismissed bar has no icon either, so the two agree.
    */
   private summaryOf(sessionId: string, binding: PrBinding | null): PrSummary | null {
-    if (!binding) return null;
+    if (!binding || binding.dismissed) return null;
     const snapshot = this.snapshotFor(sessionId, binding);
-    if (snapshot) return { number: binding.number, state: prDisplayState(snapshot.state, snapshot.isDraft) };
+    // live.queued, which the bar's icon and chip also read: set from this launch's reads and the
+    // app's own enqueue, never from the binding file. A PR sits in the queue for minutes, so a
+    // stored flag would keep a row the app has not re-read queued long after it left.
+    const queued = !!this.live.get(sessionId)?.queued;
+    const repo = `${binding.owner}/${binding.repo}`;
+    const appAutoMerge = binding.autoMerge === true;
+    if (snapshot) return { number: binding.number, ...prIconStatus(snapshot, { queued, appAutoMerge }), repo };
     if (!binding.lastState) return null;
-    return { number: binding.number, state: prDisplayState(binding.lastState, binding.lastDraft) };
+    const state = prDisplayState(binding.lastState, binding.lastDraft);
+    // A finished PR will not change again, so its stored state is not merely last known.
+    if (isFinishedState(binding.lastState)) return { number: binding.number, state, repo };
+    return { number: binding.number, state, ...storedExtras(binding, state === 'open'), stale: true, repo };
   }
 
   private async sidebarSummaries(): Promise<Map<string, PrSummary>> {
@@ -922,6 +1109,35 @@ export class PrMonitor {
     this.deps.emit(await this.state(sessionId, binding));
     await this.pushSummary(sessionId, binding);
   }
+}
+
+type StoredIcon = Pick<PrBinding, 'lastAttention' | 'lastBehind' | 'lastAutoMerge'>;
+
+/** The icon extras a read found, as the binding file keeps them: absent rather than false. */
+function storedIcon(snapshot: PrSnapshot): StoredIcon {
+  const icon = prIconStatus(snapshot, { queued: false, appAutoMerge: false });
+  return {
+    ...(icon.attention ? { lastAttention: icon.attention } : {}),
+    ...(icon.behind ? { lastBehind: true } : {}),
+    ...(icon.autoMerge ? { lastAutoMerge: true } : {}),
+  };
+}
+
+function storedExtras(binding: PrBinding, open: boolean): Omit<PrIconStatus, 'state' | 'stale'> {
+  if (!open) return {};
+  return {
+    ...(binding.lastAttention ? { attention: binding.lastAttention } : {}),
+    ...(binding.lastBehind ? { behind: true } : {}),
+    ...(binding.lastAutoMerge || binding.autoMerge ? { autoMerge: true } : {}),
+  };
+}
+
+function sameStoredIcon(binding: PrBinding, icon: StoredIcon): boolean {
+  return (
+    binding.lastAttention === icon.lastAttention &&
+    binding.lastBehind === icon.lastBehind &&
+    binding.lastAutoMerge === icon.lastAutoMerge
+  );
 }
 
 function forTheBar(snapshot: PrSnapshot): PrBarSnapshot {

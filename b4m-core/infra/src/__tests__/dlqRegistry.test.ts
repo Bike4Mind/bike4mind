@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { expectTypeOf } from 'vitest';
-import { createDlqRegistry } from '../dlqRegistry.js';
-import type { DlqDescriptor } from '../types.js';
+import { createDlqRegistry, createInspectableDlqRegistry } from '../dlqRegistry.js';
+import type { DlqDescriptor, InspectableDlqDescriptor } from '../types.js';
 
 const TEST_DESCRIPTORS = [
   { label: 'queue-a', displayName: 'Queue A', application: 'AppA', sourceQueue: 'queueASource' },
@@ -57,6 +57,22 @@ describe('createDlqRegistry', () => {
       expect(all[0].label).toBe('queue-a');
       expect(all[1].label).toBe('queue-b');
     });
+  });
+
+  it('lists inspection-only queues while keeping source resolution available for replayable queues', () => {
+    const inspection = {
+      label: 'inspection',
+      displayName: 'Inspection',
+      application: 'Example',
+      sourceQueue: null,
+    } as const satisfies InspectableDlqDescriptor;
+    const registry = createInspectableDlqRegistry(
+      [...TEST_DESCRIPTORS, inspection],
+      makeResolvers({ ...defaultDlqUrls, inspection: 'inspection-url' }, defaultSourceUrls)
+    );
+    expect(registry.getDlqByLabel('inspection')?.sourceQueue).toBeNull();
+    expect(registry.getDlqUrl('inspection')).toBe('inspection-url');
+    expect(registry.getSourceQueueUrl('queueASource')).toBe(defaultSourceUrls.queueASource);
   });
 
   describe('error handling', () => {

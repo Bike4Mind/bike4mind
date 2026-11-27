@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -13,6 +14,10 @@ import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { toolsForRequest } from './tools/registry';
 import { bashExecute } from './tools/shellTools';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
@@ -117,6 +122,86 @@ describe('ChatService permission rules', () => {
     streams[before].write(frame('[DONE]'));
     return created.id;
   }
+
+  const SIGNING_CASES = [
+    ['git status; git commit -m test', '[commit]\ngpgsign = true\n', 'commit.gpgsign'],
+    [
+      "git status; git log --format='%+G?'",
+      '[log]\nshowSignature = false\n[gpg]\nprogram = /unreachable/test-only-verifier\n',
+      'may verify signatures',
+    ],
+    ['git stash list', '[log]\nshowSignature = true\n', 'log.showsignature'],
+    [
+      'git log --pretty=SIG.foo',
+      '[pretty "SIG"]\nfoo = format:%G?\n[pretty "sig"]\nfoo = format:%h\n',
+      'may print signatures',
+    ],
+  ] as const;
+
+  /** A repository whose config is `config`, a broad Git rule, and `command` sent in `mode`. */
+  async function runSigning(mode: 'auto' | 'full', command: string, config: string, allow = ['Bash(git:*)']) {
+    execFileSync('git', ['init', '-q', root]);
+    await writeFile(join(root, '.git/config'), '[core]\nrepositoryformatversion = 0\n' + config);
+    rules = ruleSet({ allow });
+    const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+    await run(mode, 'bash_execute', { command, cwd: root });
+    return execute;
+  }
+
+  it.each(SIGNING_CASES)(
+    'holds %s before execution in auto under config that signs or verifies, over a broad Git rule',
+    async (command, config, named) => {
+      const execute = await runSigning('auto', command, config);
+      const asked = await awaitCall('bash_execute', 'awaiting-approval');
+      expect(asked.approvalDetail).toContain(named);
+      expect(execute).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(SIGNING_CASES)('holds %s before execution in full under signing config', async (command, config, named) => {
+    const execute = await runSigning('full', command, config);
+    const asked = await awaitCall('bash_execute', 'awaiting-approval');
+    expect(asked.approvalDetail).toContain(named);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(['auto', 'full'] as const)('holds an assembled protected-settings write in %s', async mode => {
+    await mkdir(join(root, '.claude'), { recursive: true });
+    const settings = join(root, '.claude/settings.json');
+    const original = '{"marker":"original"}';
+    await writeFile(settings, original);
+    await writeFile(join(root, 'evil.json'), '{"marker":"replacement"}');
+    const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('controlled result');
+    await run(mode, 'bash_execute', { command: 'cp evil.json "$(printf .cl%sude a)"/settings.json', cwd: root });
+    const result = await vi.waitUntil(
+      () => calls('bash_execute', 'awaiting-approval')[0] ?? calls('bash_execute', 'done')[0],
+      { timeout: 5000, interval: 10 }
+    );
+    expect(result.status).toBe('awaiting-approval');
+    expect(result.approvalInAppOnly).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    expect(await readFile(settings, 'utf8')).toBe(original);
+  });
+
+  it('runs a signing command an exact Bash rule names in auto', async () => {
+    const command = 'git commit -m test';
+    const execute = await runSigning('auto', command, '[commit]\ngpgsign = true\n', [`Bash(${command})`]);
+    await awaitCall('bash_execute', 'done');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['auto', 'full'] as const)('keeps opaque shell approval under a broad Bash allow rule in %s', async mode => {
+    rules = ruleSet({ allow: ['Bash(*)'] });
+    const execute = vi.spyOn(bashExecute, 'run').mockResolvedValue('test execution');
+    await run(mode, 'bash_execute', {
+      command: 'cat notes.txt && rm "$OPAQUE_TARGET"',
+      cwd: root,
+    });
+
+    await awaitCall('bash_execute', 'awaiting-approval');
+    expect(execute).not.toHaveBeenCalled();
+    expect(await readFile(join(root, 'notes.txt'), 'utf8')).toBe('hello\n');
+  });
 
   it.each(['ask', 'auto', 'full'] as const)('refuses tool execution when rules fail to load in %s', async mode => {
     rulesFailure = new Error('permission file unreadable');

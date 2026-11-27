@@ -6,9 +6,18 @@ import {
 } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { CreditHolderType, UnprocessableEntityError, type IUserDocument } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  RUN_BUDGET_EXHAUSTED_ERROR_CODE,
+  UnprocessableEntityError,
+  type CompletionRunAttribution,
+  type IUserDocument,
+} from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
-import { reserveRequestCredits, type CreditLedgerEntry } from '@server/billing/reserveRequestCredits';
+import { reserveRequestCredits, type CreditLedgerEntry } from '@bike4mind/server-utils/billing/reserveRequestCredits';
+import type { SpendFreezeApiKey } from '@bike4mind/server-utils/billing/spendFreezeSubject';
+import { attributeToRequestApiKey } from '@bike4mind/server-utils/billing/attributeToRequestApiKey';
+import { notifyOrgEvent } from '@bike4mind/services/organizationService/orgEventObserver';
 
 // A billing state, not a bug. Each caller maps it onto its own established
 // response (422 `insufficient_credits` or 400) so this change does not
@@ -37,7 +46,7 @@ export interface CreditPreflightArgs {
  * (TTS in deductTtsCredits.ts, transcription in pages/api/ai/transcribe). Run it
  * before the provider so a caller who cannot pay never incurs provider cost.
  *
- * A check, not a reservation (compare server/billing/reserveRequestCredits.ts):
+ * A check, not a reservation (compare packages/server-utils/src/billing/reserveRequestCredits.ts):
  * the post-call deduction moves the balance, so concurrent requests can still
  * overdraw by the cost of the calls in flight.
  *
@@ -70,6 +79,7 @@ export async function assertPreflightCredits({
   // (deductCreditsWithOrgSupport reserves the cap for pre-reserved routes - see creditHold.ts).
   if (organization) {
     if (creditService.isMemberCreditCapExceeded(organization, userId, requiredCredits)) {
+      await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization.id, userId, refused: true });
       throw new InsufficientCreditsPreflightError(
         `Your organization member credit limit has been reached for ${featureLabel}. Contact your organization administrator.`
       );
@@ -94,7 +104,8 @@ export async function assertPreflightCredits({
 /** The slice of an authenticated request a hold reads. */
 export interface PreflightBillingRequest {
   user: IUserDocument;
-  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'> &
+    Partial<Pick<Express.ApiKeyInfo, 'keyId'>>;
   logger: ILogger;
 }
 
@@ -116,7 +127,7 @@ export interface PreflightCreditHold {
 /**
  * Reserve the estimated cost of a provider call (TTS, transcription) BEFORE it runs, so concurrent
  * calls cannot overdraw the balance, on top of the same durable hold primitive the stateless paid
- * API routes use (server/billing/reserveRequestCredits.ts): the hold is a `PendingCreditHold` row,
+ * API routes use (packages/server-utils/src/billing/reserveRequestCredits.ts): the hold is a `PendingCreditHold` row,
  * so a lambda killed mid-call leaves a refund for the expired-hold sweep instead of a silent debit.
  *
  * Refuses with InsufficientCreditsPreflightError like assertPreflightCredits.
@@ -126,11 +137,17 @@ export async function holdPreflightCredits({
   requiredCredits,
   featureLabel,
   billingOrganizationId,
+  spendFreezeApiKey,
+  run,
 }: {
   req: PreflightBillingRequest;
   requiredCredits: number;
   featureLabel: string;
   billingOrganizationId?: string | null;
+  /** See reserveRequestCredits' spendFreezeApiKey: joins the freeze subject, never moves the payer. */
+  spendFreezeApiKey?: SpendFreezeApiKey;
+  /** The completion run this call draws from (resolvePaidCallRun): claimed with the hold, recorded on the ledger row. */
+  run?: CompletionRunAttribution;
 }): Promise<PreflightCreditHold> {
   const { user, logger } = req;
   const settings = await getSettingsMap(
@@ -146,8 +163,14 @@ export async function holdPreflightCredits({
       enforceCredits: getSettingsValue('enforceCredits', settings),
       featureLabel,
       billingOrganizationId,
+      spendFreezeApiKey,
+      run,
     });
   } catch (err) {
+    // A spent run is not a credit shortfall: it keeps its own 422 code so the caller can pause rather than top up.
+    if (err instanceof UnprocessableEntityError && err.additionalInfo?.errorCode === RUN_BUDGET_EXHAUSTED_ERROR_CODE) {
+      throw err;
+    }
     if (err instanceof UnprocessableEntityError) throw new InsufficientCreditsPreflightError(err.message);
     throw err;
   }
@@ -157,7 +180,14 @@ export async function holdPreflightCredits({
     ownerType: reservation.ownerType,
     async settle(credits, entry) {
       if (reservation.reservedCredits > 0) return reservation.settle(credits, entry);
-      return chargeDirectly({ userId: user.id, reservation, credits, entry, featureLabel, logger });
+      return chargeDirectly({
+        userId: user.id,
+        reservation,
+        credits,
+        entry: attributeToRequestApiKey(run ? { ...entry, run } : entry, req),
+        featureLabel,
+        logger,
+      });
     },
     async release() {
       await reservation.refund();

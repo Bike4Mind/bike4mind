@@ -18,3 +18,4 @@ export * from './SlackAuditLogModel';
 export * from './SlackChannelConfigModel';
 export * from './SlackDevWorkspaceModel';
 export * from './SlackExportJobModel';
+export * from './SlackFeedbackModel';

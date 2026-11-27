@@ -32,6 +32,7 @@ import {
   useGetDataLakesWithRetrievability,
   useGetDataLakeTagCounts,
   useGetScopedDataLakeTagCounts,
+  useRefreshLakePickerReads,
   useGetDataLakeUncategorizedFiles,
   useRemoveFileFromDataLake,
 } from '@client/app/hooks/data/dataLakes';
@@ -316,9 +317,12 @@ export default function DataLakeExplorer({
   const {
     data: lakes,
     isLoading: lakesLoading,
-    isError: lakesError,
+    isError: lakesQueryError,
     refetch: refetchLakes,
   } = useGetDataLakesWithRetrievability(currentSessionId);
+  // A failed background refresh (the picker refetches on open) must not hide rows already cached.
+  const lakesError = lakesQueryError && lakes === undefined;
+  const refreshPickerReads = useRefreshLakePickerReads(currentSessionId, source);
   const lakeFileTagPrefixes = useMemo(() => lakes?.map(l => l.fileTagPrefix) ?? [], [lakes]);
   const libraryFiles = useSetIncludeLibraryFiles(lakeFileTagPrefixes);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
@@ -748,6 +752,7 @@ export default function DataLakeExplorer({
                 totalFileCount={tagCountsData?.totalLakeFileCount}
                 onCreate={onCreateLake}
                 onDiscover={onDiscover}
+                onOpen={refreshPickerReads}
               />
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. The

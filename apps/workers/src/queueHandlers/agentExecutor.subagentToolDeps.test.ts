@@ -1,4 +1,12 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/thinkingVisibility', () => ({
+  resolveThinkingVisibility: vi.fn(async () => 'raw'),
+}));
+
+// Model admission reads admin settings from the real repository; these tests exercise other gates.
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+}));
 
 // Drives the real `handler` through a `dag_node_dispatch` message and asserts what
 // `processSubagentDispatch` hands `buildSharedTools`. Harness mirrors agentExecutor.subagentMediaBilling.test.ts.
@@ -110,7 +118,7 @@ const childDoc = {
 const baseSession = { id: 'session-1', userId: 'user-1', disableUserIntegrations: true };
 
 const resolveWorkspaceSettings = vi.hoisted(() => vi.fn());
-vi.mock('@server/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
+vi.mock('@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated', () => ({
   premiumWorkspaceSessionSettings: {
     'settings-workspace': { ownedFields: ['disableUserIntegrations'], resolve: resolveWorkspaceSettings },
   },
@@ -124,6 +132,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentExecutionRepository, 'markComplete').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'markFailed').mockResolvedValue(undefined as never);
+  vi.spyOn(actual.agentExecutionRepository, 'markFailedIfActive').mockResolvedValue(true as never);
   vi.spyOn(actual.agentExecutionRepository, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'checkAbortFlag').mockResolvedValue(false as never);
   vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
@@ -135,6 +144,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.adminSettingsRepository, 'getSettingsValue').mockResolvedValue(false as never);
   // No model configurations; an unread one fails the run closed (see loadRunnableModels).
   vi.spyOn(actual.adminSettingsRepository, 'findOne').mockResolvedValue(null as never);
+  vi.spyOn(actual.spendFreezeRepository, 'findActiveForSubject').mockResolvedValue(null);
   return { ...actual, connectDB: vi.fn().mockResolvedValue(undefined) };
 });
 
@@ -233,6 +243,27 @@ describe('processSubagentDispatch tool deps', () => {
     }
   });
 
+  it('withholds the owner admin role on a child of a run whose key lacks the admin scope', async () => {
+    const { agentExecutionRepository, User } = await import('@bike4mind/database');
+    vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, isAdmin: true } as never);
+    vi.mocked(agentExecutionRepository.findById).mockResolvedValue({ ...childDoc, adminRoleWithheld: true } as never);
+    try {
+      const deps = await dispatchWithSession(baseSession);
+
+      expect((deps.user as { isAdmin?: boolean }).isAdmin).toBe(false);
+      const { userRepository } = await import('@bike4mind/database');
+      const users = (deps.db as { users: typeof userRepository }).users;
+      const findUser = vi.spyOn(userRepository, 'findById').mockResolvedValueOnce({ isAdmin: true } as never);
+      try {
+        expect(((await users.findById('user-1')) as { isAdmin?: boolean }).isAdmin).toBe(false);
+      } finally {
+        findUser.mockRestore();
+      }
+    } finally {
+      vi.mocked(agentExecutionRepository.findById).mockResolvedValue(childDoc as never);
+    }
+  });
+
   it('passes an empty attachedFileIds when the session has no attached files', async () => {
     const deps = await dispatchWithSession(baseSession);
 
@@ -253,7 +284,7 @@ describe('processSubagentDispatch tool deps', () => {
 
     expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
     expect(buildSharedToolsMock).not.toHaveBeenCalled();
-    expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+    expect(agentExecutionRepository.markFailedIfActive).toHaveBeenCalledExactlyOnceWith(
       'child-1',
       expect.objectContaining({
         message: 'Workspace session settings resolver for "settings-workspace" failed',

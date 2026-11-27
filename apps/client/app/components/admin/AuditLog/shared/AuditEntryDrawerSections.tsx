@@ -1,17 +1,18 @@
 import { useState } from 'react';
-import { Box, Button, IconButton, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Button, IconButton, Sheet, Stack, Typography } from '@mui/joy';
+import { DataTable, SectionCard } from '../../shared';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import type { AuditChange, AuditEntry } from '@bike4mind/common';
 import { activateOnKey } from './activateOnKey';
 import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 
+// Free-form content, not label/value facts: the default `facts` body is a 2-col <dl> that squeezes it into the label column.
 export const DrawerSection: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <Box>
-    <Typography level="title-sm" sx={{ mb: 0.5 }}>
-      {title}
-    </Typography>
-    {children}
-  </Box>
+  <SectionCard title={title} body="custom">
+    <Stack spacing={1} sx={{ px: 2, py: 1.75 }} data-testid="audit-drawer-section-body">
+      {children}
+    </Stack>
+  </SectionCard>
 );
 
 export const KeyValueRows: React.FC<{ rows: Array<[string, string | undefined]> }> = ({ rows }) => (
@@ -19,7 +20,7 @@ export const KeyValueRows: React.FC<{ rows: Array<[string, string | undefined]> 
     {rows
       .filter((row): row is [string, string] => row[1] !== undefined && row[1] !== '')
       .map(([label, value]) => (
-        <Typography key={label} level="body-sm" sx={{ wordBreak: 'break-all' }}>
+        <Typography key={label} level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
           <Typography component="span" level="body-xs" sx={{ mr: 1 }}>
             {label}
           </Typography>
@@ -29,8 +30,6 @@ export const KeyValueRows: React.FC<{ rows: Array<[string, string | undefined]> 
   </Stack>
 );
 
-const WRAP_STYLE = { overflowWrap: 'anywhere' } as const;
-
 const formatValue = (value: unknown): string => {
   if (typeof value === 'string') return value;
   if (value === undefined) return '';
@@ -38,29 +37,35 @@ const formatValue = (value: unknown): string => {
 };
 
 export const ChangesTable: React.FC<{ changes: AuditChange[] }> = ({ changes }) => (
-  <Table size="sm" data-testid="audit-drawer-changes">
-    <thead>
-      <tr>
-        <th>Field</th>
-        <th>Before</th>
-        <th>After</th>
-      </tr>
-    </thead>
-    <tbody>
-      {changes.map((change, index) => (
-        <tr key={`${change.field}-${index}`}>
-          <td style={WRAP_STYLE}>{change.field}</td>
-          <td style={WRAP_STYLE}>{formatValue(change.before)}</td>
-          <td style={WRAP_STYLE}>{formatValue(change.after)}</td>
-        </tr>
-      ))}
-    </tbody>
-  </Table>
+  <DataTable
+    rows={changes.map((change, index) => ({ ...change, id: `${index}` }))}
+    getRowId={change => change.id}
+    label="Recorded changes"
+    testId="audit-drawer-changes"
+    onRetry={() => {}}
+    columns={[
+      {
+        id: 'field',
+        label: 'Field',
+        render: change => <Typography sx={{ overflowWrap: 'anywhere' }}>{change.field}</Typography>,
+      },
+      {
+        id: 'before',
+        label: 'Before',
+        render: change => <Typography sx={{ overflowWrap: 'anywhere' }}>{formatValue(change.before)}</Typography>,
+      },
+      {
+        id: 'after',
+        label: 'After',
+        render: change => <Typography sx={{ overflowWrap: 'anywhere' }}>{formatValue(change.after)}</Typography>,
+      },
+    ]}
+  />
 );
 
 export const CopyableId: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <Stack direction="row" spacing={0.5} alignItems="center">
-    <Typography level="body-sm" sx={{ wordBreak: 'break-all' }}>
+    <Typography level="body-sm" sx={{ overflowWrap: 'anywhere' }}>
       <Typography component="span" level="body-xs" sx={{ mr: 1 }}>
         {label}
       </Typography>

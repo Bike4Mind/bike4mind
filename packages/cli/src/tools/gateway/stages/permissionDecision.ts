@@ -3,12 +3,18 @@ import type { PermissionResponse } from '../../../components/PermissionPrompt.js
 import type { PermissionManager } from '../../../utils/PermissionManager.js';
 import { isHostAllowlisted } from './hostAllowlist.js';
 import type { InteractionMode } from '../../../bootstrap/types.js';
+import { commandTextOf } from '../toolPolicy.js';
+import { logger } from '../../../utils/Logger.js';
 
 export type AutoRunInput = {
   toolName: string;
+  /** The tool came from an MCP server (`_isMcpTool`); lets `mcp__<server>__*` host patterns match it. */
+  isMcpTool: boolean;
   /** A gate (high-risk command, fuzzy edit) demanded an explicit prompt; nothing below may skip it. */
   forcePrompt: boolean;
   isSandboxed: boolean;
+  /** The call's command text, when the tool has one. */
+  command?: string;
   interactionMode: InteractionMode;
   permissionManager: PermissionManager;
 };
@@ -18,19 +24,20 @@ export type AutoRunInput = {
  * auto-allowed, or auto-accept mode (Shift+Tab). A forced prompt overrides all three.
  */
 export function canRunWithoutPrompt(input: AutoRunInput): boolean {
-  const { toolName, forcePrompt, isSandboxed, interactionMode, permissionManager } = input;
+  const { toolName, isMcpTool, forcePrompt, isSandboxed, command, interactionMode, permissionManager } = input;
   // Evaluated before the forcePrompt check so the allowlist is parsed on the first call, as
   // it always has been.
-  const hostAllowlisted = isHostAllowlisted(toolName);
+  const hostAllowlisted = isHostAllowlisted(toolName, { isMcpTool });
   if (forcePrompt) return false;
   if (hostAllowlisted) return true;
-  if (!permissionManager.needsPermission(toolName, { isSandboxed })) return true;
+  if (!permissionManager.needsPermission(toolName, { isSandboxed, command })) return true;
   return interactionMode === 'auto-accept';
 }
 
 /**
- * Apply the user's answer to a permission prompt: deny throws, allow-session trusts the tool for
- * the session, allow-always persists the trust. Every non-deny answer lets the call run.
+ * Apply the user's answer to a permission prompt: deny throws, allow-session trusts the tool (or,
+ * for a shell tool, the command's scopes) for the session, allow-always persists the trust.
+ * Every non-deny answer lets the call run.
  */
 export async function applyPromptResponse(
   toolName: string,
@@ -44,11 +51,30 @@ export async function applyPromptResponse(
     throw new PermissionDeniedError(toolName, rawArgs);
   }
   if (action === 'allow-session') {
-    permissionManager.trustToolForSession(toolName);
+    if (permissionManager.isCommandScoped(toolName)) {
+      const command = commandTextOf(permissionManager.catalog.resolve(toolName), rawArgs);
+      if (command !== undefined) permissionManager.trustCommandForSession(toolName, command);
+    } else {
+      permissionManager.trustToolForSession(toolName);
+    }
   }
   if (action === 'allow-always') {
     await persistToolTrust(toolName, permissionManager, configStore);
   }
+}
+
+/**
+ * What "allow for this session" would remember for this call, for the prompt to show: undefined
+ * for a tool trusted whole, null when nothing would be remembered.
+ */
+export function promptSessionScope(
+  toolName: string,
+  rawArgs: unknown,
+  permissionManager: PermissionManager
+): string[] | null | undefined {
+  if (!permissionManager.isCommandScoped(toolName)) return undefined;
+  const command = commandTextOf(permissionManager.catalog.resolve(toolName), rawArgs);
+  return command === undefined ? null : permissionManager.sessionScopeFor(toolName, command);
 }
 
 /**
@@ -83,5 +109,11 @@ export async function persistToolTrust(
       // Fall back to global if local persistence fails.
     }
   }
-  await configStore.trustTool(toolName);
+  try {
+    await configStore.trustTool(toolName);
+  } catch (error) {
+    // The tool stays trusted for this session; a failed save must not fail the tool call.
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.warn(`Trusted ${toolName} for this session only; could not save it: ${msg}`);
+  }
 }

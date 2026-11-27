@@ -3,7 +3,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/er
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { getAtlassianOAuthConfig } from '@bike4mind/server-utils/integrations/jira/atlassianConfig';
-import { encryptToken, decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
+import { encryptToken, decryptToken, encryptEnvVariables } from '@bike4mind/server-utils/security/tokenEncryption';
 
 interface TokenResponse {
   access_token: string;
@@ -12,7 +12,7 @@ interface TokenResponse {
   token_type: string;
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
   const user = await userRepository.findById(req.user.id);
 
   if (!user || !user.atlassianConnect) {
@@ -41,8 +41,7 @@ const handler = baseApi().post(async (req, res) => {
     });
 
     if (!tokenResponse.ok) {
-      const error = await tokenResponse.text();
-      throw new Error(`Token refresh failed: ${error}`);
+      throw new Error(`Token refresh failed with status ${tokenResponse.status}`);
     }
 
     const tokenData: TokenResponse = await tokenResponse.json();
@@ -98,7 +97,7 @@ const handler = baseApi().post(async (req, res) => {
       accessToken: tokenData.access_token,
     });
   } catch (error) {
-    console.error('Token refresh error:', error);
+    req.logger.error('Atlassian token refresh failed', { userId: req.user.id, error });
     throw new BadRequestError(`Failed to refresh token: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 });

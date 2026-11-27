@@ -8,7 +8,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
-import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 import { ApiKeyScope } from '@bike4mind/common';
 
 /**
@@ -104,6 +104,9 @@ describe('GET /api/admin/users/:userId/user-api-keys (end-to-end, real model + M
     expect(key.keyPrefix).toBe('b4m_live_e2e00001');
     expect(key.keyHash).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('$2b$12$');
+
+    expect(body.requests).toEqual({});
+    expect(body.access).toMatchObject({ allowed: expect.any(Boolean), mode: expect.any(String) });
 
     const usage = body.liveUsage[created.id];
     expect(usage).toMatchObject({ minute: 2, day: 2 });

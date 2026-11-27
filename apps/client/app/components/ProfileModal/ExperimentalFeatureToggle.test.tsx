@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 
@@ -55,7 +55,7 @@ const withAdminTelemetry = (enabled: boolean) => {
 };
 
 beforeEach(() => {
-  updatePreferences.mockClear();
+  updatePreferences.mockReset();
   userSettingsState = {
     settings: { contextTelemetryLevel: 'basic', agentModeDefault: 'off', experimentalFeatures: {} },
     updatePreferences,
@@ -104,7 +104,7 @@ describe('ExperimentalFeatureToggle telemetry level control', () => {
 
     fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
 
-    expect(updatePreferences).toHaveBeenCalledWith({ contextTelemetryLevel: 'none' });
+    expect(updatePreferences).toHaveBeenCalledWith({ contextTelemetryLevel: 'none' }, { rerunTelemetryDeletion: true });
   });
 
   it('leaves the export button in place regardless of the admin setting', () => {
@@ -121,5 +121,141 @@ describe('ExperimentalFeatureToggle telemetry level control', () => {
     expect(screen.getByTestId('telemetry-export-helper')).toHaveTextContent(
       'use Export All on the Notebooks and Knowledge Files cards'
     );
+  });
+});
+
+describe('ExperimentalFeatureToggle telemetry deletion outcome', () => {
+  const NONE_WITH_RERUN = [{ contextTelemetryLevel: 'none' }, { rerunTelemetryDeletion: true }];
+
+  // The real context applies the level optimistically; the mock has to be told.
+  const confirmStopAndDelete = () => {
+    fireEvent.click(screen.getByTestId('telemetry-level-none'));
+    fireEvent.click(screen.getByTestId('confirmation-confirm-btn'));
+  };
+
+  beforeEach(() => {
+    userSettingsState.settings.contextTelemetryLevel = 'none';
+  });
+
+  it('shows no deletion notice before anything was requested', () => {
+    renderToggle();
+
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
+    expect(screen.queryByTestId('telemetry-deletion-complete')).toBeNull();
+    expect(screen.queryByTestId('telemetry-deletion-pending')).toBeNull();
+  });
+
+  it('confirms the deletion once the server verified it', async () => {
+    updatePreferences.mockResolvedValue({ telemetryDeletion: { verified: true, remainingCount: 0 } });
+    renderToggle();
+
+    confirmStopAndDelete();
+
+    expect(await screen.findByTestId('telemetry-deletion-complete')).toHaveTextContent(
+      'Deleted the telemetry we could identify from the last 90 days.'
+    );
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
+  });
+
+  it('tells the user when the deletion could not be confirmed and offers a retry', async () => {
+    updatePreferences.mockResolvedValue({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+    renderToggle();
+
+    confirmStopAndDelete();
+
+    expect(await screen.findByTestId('telemetry-deletion-incomplete')).toHaveTextContent(
+      'could not confirm deletion of the telemetry we can identify from the last 90 days'
+    );
+    expect(screen.getByTestId('telemetry-deletion-retry-btn')).toHaveTextContent('Retry deletion');
+    expect(screen.queryByTestId('telemetry-deletion-complete')).toBeNull();
+  });
+
+  it('re-runs the deletion from the retry action, without the confirmation step', async () => {
+    updatePreferences.mockResolvedValueOnce({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+    updatePreferences.mockResolvedValueOnce({ telemetryDeletion: { verified: true, remainingCount: 0 } });
+    renderToggle();
+    confirmStopAndDelete();
+
+    fireEvent.click(await screen.findByTestId('telemetry-deletion-retry-btn'));
+
+    expect(await screen.findByTestId('telemetry-deletion-complete')).toBeTruthy();
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
+    expect(updatePreferences.mock.calls).toEqual([NONE_WITH_RERUN, NONE_WITH_RERUN]);
+  });
+
+  it('keeps the retry action when the retry is incomplete as well', async () => {
+    updatePreferences.mockResolvedValue({ telemetryDeletion: { verified: false } });
+    renderToggle();
+    confirmStopAndDelete();
+
+    fireEvent.click(await screen.findByTestId('telemetry-deletion-retry-btn'));
+
+    await waitFor(() => expect(updatePreferences).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('telemetry-deletion-retry-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('telemetry-deletion-incomplete')).toBeTruthy();
+  });
+
+  it('keeps the notice and the retry action when the retry request does not land', async () => {
+    updatePreferences.mockResolvedValueOnce({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+    updatePreferences.mockResolvedValueOnce(undefined);
+    renderToggle();
+    confirmStopAndDelete();
+
+    fireEvent.click(await screen.findByTestId('telemetry-deletion-retry-btn'));
+
+    await waitFor(() => expect(updatePreferences).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('telemetry-deletion-retry-btn')).not.toBeDisabled());
+    expect(screen.getByTestId('telemetry-deletion-incomplete')).toBeTruthy();
+    expect(screen.queryByTestId('telemetry-deletion-complete')).toBeNull();
+  });
+
+  it('drops the result of a deletion request the user moved on from', async () => {
+    let resolveFirst: (value: unknown) => void = () => {};
+    updatePreferences.mockReturnValueOnce(new Promise(resolve => (resolveFirst = resolve)));
+    const { rerender } = renderToggle();
+    const rerenderToggle = () =>
+      rerender(
+        <CssVarsProvider theme={appTheme}>
+          <ExperimentalFeatureToggle />
+        </CssVarsProvider>
+      );
+    confirmStopAndDelete();
+
+    // Back to a collecting level while the first request is still in flight, then its result arrives.
+    fireEvent.click(screen.getByTestId('telemetry-level-basic'));
+    await act(async () => resolveFirst({ telemetryDeletion: { verified: false, remainingCount: 2 } }));
+    userSettingsState.settings.contextTelemetryLevel = 'none';
+    rerenderToggle();
+
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
+    expect(screen.queryByTestId('telemetry-deletion-pending')).toBeNull();
+  });
+
+  it('shows no deletion notice when the save itself did not land', async () => {
+    updatePreferences.mockResolvedValue(undefined);
+    renderToggle();
+
+    confirmStopAndDelete();
+
+    await waitFor(() => expect(screen.queryByTestId('telemetry-deletion-pending')).toBeNull());
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
+    expect(screen.queryByTestId('telemetry-deletion-complete')).toBeNull();
+  });
+
+  it('clears the notice when the user picks a collecting level again', async () => {
+    updatePreferences.mockResolvedValue({ telemetryDeletion: { verified: false, remainingCount: 2 } });
+    const { rerender } = renderToggle();
+    confirmStopAndDelete();
+    await screen.findByTestId('telemetry-deletion-incomplete');
+
+    fireEvent.click(screen.getByTestId('telemetry-level-basic'));
+    userSettingsState.settings.contextTelemetryLevel = 'basic';
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <ExperimentalFeatureToggle />
+      </CssVarsProvider>
+    );
+
+    expect(screen.queryByTestId('telemetry-deletion-incomplete')).toBeNull();
   });
 });

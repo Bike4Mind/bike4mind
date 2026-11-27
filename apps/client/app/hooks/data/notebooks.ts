@@ -1,6 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
+import { getErrorMessage } from '@client/app/utils/error';
 import { MAX_EMAIL_RECIPIENTS, MAX_EMAIL_RECIPIENTS_ERROR } from '@client/types/api';
 import type { ExportFormat } from '@bike4mind/common';
 import type { z } from 'zod';
@@ -153,7 +154,7 @@ export function useSendNotebooksEmail(callbacks?: {
     },
     onError: (error: Error) => {
       console.error('Email error:', error);
-      toast.error(error.message || 'Failed to send curated notebooks via email');
+      toast.error(getErrorMessage(error));
       callbacks?.onError?.(error);
     },
   });

@@ -1,6 +1,9 @@
-import { User } from '@bike4mind/database';
+import { User, authSessionRepository } from '@bike4mind/database';
+import { isAuthSessionActive } from '@bike4mind/common';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
-import { assertAccountStateUsable } from './assertAccountStateUsable';
+import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
+import { isImpersonatorAuthorized } from '@bike4mind/server-utils/auth/impersonatorAccess';
 
 export interface JwtPayloadClaims {
   id: string;
@@ -47,7 +50,11 @@ export async function verifyJwtPayload(
     if (!isTokenTypeAcceptable(jwt_payload.typ, 'access')) {
       return done(null, false);
     }
-    const user = await User.findById(jwt_payload.id);
+    // The session lookup runs alongside the user lookup, so the liveness check adds no latency.
+    const [user, session] = await Promise.all([
+      User.findById(jwt_payload.id),
+      jwt_payload.sid ? authSessionRepository.findBySid(jwt_payload.sid) : null,
+    ]);
     if (user) {
       if (user.isSystem) return done(null, false);
       // Server-side kill switch: reject tokens whose embedded tokenVersion
@@ -58,15 +65,30 @@ export async function verifyJwtPayload(
         return done(null, false);
       }
       assertAccountStateUsable(user);
+      // A token carrying a sid is only as live as its AuthSession: revoking the session (logout,
+      // per-device sign-out, reuse detection) rejects its access tokens on the next request. Tokens
+      // without a sid (legacy, mfaPending, OAuth relying-party) have no session to check.
+      if (jwt_payload.sid && (!session || session.userId !== user.id || !isAuthSessionActive(session))) {
+        return done(null, false);
+      }
+      if (jwt_payload.impersonatedBy) {
+        if (
+          !session ||
+          session.impersonatedBy !== jwt_payload.impersonatedBy ||
+          !(await isImpersonatorAuthorized(jwt_payload.impersonatedBy))
+        )
+          return done(null, false);
+        Object.assign(user, { impersonationWriteEnabled: !!session.impersonationWriteEnabled });
+      }
       (user as any).mfaPending = !!jwt_payload.mfaPending;
       if (jwt_payload.mfaPending && jwt_payload.signInStrategy && jwt_payload.signInVia) {
         (user as any).mfaSignIn = { strategy: jwt_payload.signInStrategy, createdVia: jwt_payload.signInVia };
       }
       // Propagate the impersonation marker (set by loginAs) so request handlers
-      // can distinguish an admin-driven session from the real customer's - see logout.ts.
+      // can distinguish an admin-driven session from the real customer's - see signOutBrowserSession.ts.
       (user as any).impersonatedBy = jwt_payload.impersonatedBy;
       // Surface the session id so per-device logout can revoke exactly THIS session
-      // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
+      // (see signOutBrowserSession.ts + users/me/sessions.ts) without re-decoding the token.
       (user as any).sid = jwt_payload.sid;
       // The realtime connect ticket inherits this token's expiry (see pages/api/websocket/ticket.ts).
       (user as any).accessTokenExpiresAt = jwt_payload.exp ? new Date(jwt_payload.exp * 1000) : undefined;
@@ -80,6 +102,8 @@ export async function verifyJwtPayload(
           aud: jwt_payload.aud,
         };
       }
+      // Per request, so a role or membership change applies on the next request.
+      await resolveRoleAdminPermissions(user);
       return done(null, user);
     } else {
       return done(null, false);

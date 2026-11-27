@@ -22,6 +22,7 @@ import {
   type UserCreditHistory,
 } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
+import { dailyNetWithWriteOffs, loadLedgerWriteOffs } from './ledgerWriteOffs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ADJUSTMENT_MARKERS = 200;
@@ -71,6 +72,7 @@ const AUTH_EVENT_SEVERITY: Partial<Record<UserAuthAuditEvent, AdminAuditSeverity
   refresh_recovery_capped: 'notice',
   trusted_device_revoked: 'notice',
   oauth_grant_revoked: 'notice',
+  email_change_confirmed: 'notice',
 };
 
 const humanize = (value: string): string => {
@@ -153,7 +155,7 @@ export const apiKeyAuditRowToEntry = (row: UserApiKeyAuditRow, subject: Activity
 // --- Merged keyset paging ---
 
 /** Same (occurredAt, _id) keyset as the AdminAuditLog list, on a store keyed by createdAt. */
-const securityCursorClauses = (cursor: AuditLogCursor | undefined): Record<string, unknown>[] =>
+export const createdAtCursorClauses = (cursor: AuditLogCursor | undefined): Record<string, unknown>[] =>
   cursor
     ? [
         { createdAt: { $lte: cursor.occurredAt } },
@@ -173,7 +175,7 @@ const compareNewestFirst = (a: AuditEntry, b: AuditEntry): number => {
   return a.id < b.id ? 1 : -1;
 };
 
-const buildActorDirectory = async (actorIds: string[]): Promise<ActorDirectory> => {
+export const buildActorDirectory = async (actorIds: string[]): Promise<ActorDirectory> => {
   const directory: ActorDirectory = new Map();
   await Promise.all(
     [...new Set(actorIds)].map(async id => {
@@ -193,7 +195,7 @@ const fetchSecurityEntries = async (
   subject: ActivitySubject,
   page: { limit: number; cursor?: AuditLogCursor }
 ): Promise<AuditEntry[]> => {
-  const cursorClauses = securityCursorClauses(page.cursor);
+  const cursorClauses = createdAtCursorClauses(page.cursor);
   const [authRows, apiKeyRows] = await Promise.all([
     UserAuthAuditLogModel.find({ $and: [{ userId: subject.id }, ...cursorClauses] })
       .sort({ createdAt: -1, _id: -1 })
@@ -309,10 +311,13 @@ export const getUserCreditHistory = async (
   const windowDays = USER_CREDIT_HISTORY_DAYS;
   const from = windowStart(now, windowDays);
 
-  const [dailyNet, adjustmentRows] = await Promise.all([
+  const [ledgerDailyNet, adjustmentRows, writeOffs] = await Promise.all([
     creditTransactionRepository.dailyNetCreditsForOwner(user.id, CreditHolderType.User, from, now),
     creditTransactionRepository.findAdminAdjustmentsForUser(user.id, from, now, MAX_ADJUSTMENT_MARKERS + 1),
+    loadLedgerWriteOffs(user.id),
   ]);
+  // Usage rows record the full cost of a capped turn; the written-off part never left the balance.
+  const dailyNet = dailyNetWithWriteOffs(ledgerDailyNet, writeOffs, from);
 
   const markerRows = adjustmentRows.slice(0, MAX_ADJUSTMENT_MARKERS);
   const directory = await buildActorDirectory(

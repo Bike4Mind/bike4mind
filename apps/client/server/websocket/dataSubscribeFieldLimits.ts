@@ -1,8 +1,17 @@
 import {
   CHAT_MESSAGE_WITHHELD_FIELDS,
+  ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+  ORGANIZATION_MEMBER_CONTACT_FIELDS,
+  ORGANIZATION_MEMBER_CREDIT_FIELDS,
   ORGANIZATION_OWNER_ONLY_FIELDS,
   ORGANIZATION_SECRET_FIELDS,
+  OWNER_ONLY_CHAT_MESSAGE_FIELDS,
   OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+  SERVER_OWNED_SESSION_FIELDS,
+  SERVER_OWNED_SESSION_ORIGIN_FIELDS,
+  USER_SECRET_FIELDS,
+  USER_SECRET_SUBFIELD_PATHS,
+  USER_SUBFIELD_REDACTED_FIELDS,
 } from '@bike4mind/common';
 
 /**
@@ -15,7 +24,8 @@ import {
  * next owner-only promptMeta field cannot close one transport and leave the other open.
  * This subscription's scope is broader than the sharing-based read check elsewhere (it admits
  * any isGlobalRead session via accessibleBy), so it is stripped at the query-projection level
- * here rather than trusting every future subscriber to redact it themselves. `isQuestOwner` skips
+ * here rather than trusting every future subscriber to redact it themselves. OWNER_ONLY_CHAT_MESSAGE_FIELDS
+ * (`pendingAction`) is dropped with those paths for a non-owner. `isQuestOwner` skips
  * the exclusion for the session's own owner: the client cache merges a WS quest update as a
  * top-level spread (react-query.ts), so an unconditional exclusion replaced the owner's own
  * cached returnValue with nothing the moment any live update landed, not just a sharee's.
@@ -27,13 +37,12 @@ import {
  * REST chat routes withhold too. No SPA code reads any of them, so the owner-cache concern above does
  * not apply.
  *
- * organizations: the subscription streams raw org documents, so it has to reproduce what
- * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
- * transports cannot drift. `stripeCustomerId` is dropped for everyone. `billingContact` is kept
- * only for a platform admin, NOT for an org owner as the REST serializer does: a Mongo projection
- * is per-query, not per-document, so an owner-keyed keep would also hand over the billing contact
- * of every co-member org the same subscription happens to match. An owner's own billing contact
- * still reaches them through the access-gated REST GET.
+ * organizations: the subscription streams raw org documents, so it reuses the field lists
+ * `toSafeOrganization` applies on the REST paths. A Mongo projection is per-query, not
+ * per-document, so it can only be stricter: billingContact is kept only for a platform admin; the
+ * administrator-only fields, member credit details and member emails are kept only for a platform admin, or an
+ * owner/manager whose query is pinned to their verified org. Every other subscriber, including a
+ * member who may edit the team profile, gets the member view.
  *
  * invites: the subscription matches both invites addressed to the caller and every invite on a
  * project the caller may share, so a raw document carries co-recipients' addresses and addresses
@@ -41,9 +50,27 @@ import {
  * (inviteManager.filterInviteRecipientsToSelf / toSharerInviteViews); a per-query projection cannot,
  * so `recipients` and `typedRecipients` are dropped for every non-admin and `token` for everyone.
  * Client subscribers treat an invite event as a cue to refetch through REST rather than reading it.
+ *
+ * sessions: REST strips SERVER_OWNED_SESSION_FIELDS and SERVER_OWNED_SESSION_ORIGIN_FIELDS (under
+ * `origin.`) for every viewer.
+ * A subscription may include both owned and shared sessions, so the query projection must
+ * exclude them for everyone, including the owner, to match the REST response shape.
+ *
+ * users: mirrors the REST self-view (redactUserSecretsForSelf). A projection can only exclude, so it
+ * withholds every USER_SECRET_FIELDS entry, and for the integration objects (USER_SUBFIELD_REDACTED_FIELDS)
+ * only their secret sub-paths, because the client reads their status from live pushes (the Atlassian
+ * reconnect toast). The dotted `signupGrant.blocked` withholds an admin's grant block without hiding the
+ * rest of signupGrant, which the credits UI reads.
  */
 /** Quest fields no session viewer should see, the owner included; see the quests note above. */
 const QUEST_SERVER_ONLY_FIELDS = CHAT_MESSAGE_WITHHELD_FIELDS;
+
+const SUBFIELD_REDACTED_USER_FIELDS: ReadonlySet<string> = new Set(USER_SUBFIELD_REDACTED_FIELDS);
+const USER_WITHHELD_PATHS = [
+  ...USER_SECRET_FIELDS.filter(field => !SUBFIELD_REDACTED_USER_FIELDS.has(field)),
+  ...USER_SECRET_SUBFIELD_PATHS,
+  'signupGrant.blocked',
+];
 
 /** Invite fields no subscriber may see, and those only a platform admin may; see the invites note above. */
 const INVITE_SECRET_FIELDS = ['token'] as const;
@@ -52,33 +79,62 @@ const INVITE_ADMIN_ONLY_FIELDS = ['recipients', 'typedRecipients'] as const;
 export type FieldLimitOptions = {
   /** Passed in rather than hardcoded so a collection rename can't silently drop the exclusion. */
   questCollectionName: string;
+  sessionCollectionName: string;
   organizationCollectionName: string;
   inviteCollectionName: string;
   /** The subscribed session belongs to the caller (see the quests note above). */
   isQuestOwner?: boolean;
-  /** Caller is a platform admin, the only viewer a per-query projection can safely privilege. */
+  /** Caller is a platform admin. */
   isPlatformAdmin?: boolean;
+  /** The query is pinned to a verified org owned or managed by the caller. */
+  isPrivilegedOrgSubscriber?: boolean;
 };
 
 export function resolveFieldLimits(
   collectionName: string,
   {
     questCollectionName,
+    sessionCollectionName,
     organizationCollectionName,
     inviteCollectionName,
     isQuestOwner = false,
     isPlatformAdmin = false,
+    isPrivilegedOrgSubscriber = false,
   }: FieldLimitOptions
 ): Record<string, boolean> | undefined {
   if (collectionName === 'users') {
-    return { password: false, stripeCustomerId: false, resetPasswordToken: false };
+    return Object.fromEntries(USER_WITHHELD_PATHS.map(path => [path, false]));
   }
   if (collectionName === questCollectionName) {
-    const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];
+    const excluded = [
+      ...(isQuestOwner ? [] : [...OWNER_ONLY_PROMPT_META_PROJECTION_PATHS, ...OWNER_ONLY_CHAT_MESSAGE_FIELDS]),
+      ...QUEST_SERVER_ONLY_FIELDS,
+    ];
     return Object.fromEntries(excluded.map(path => [path, false]));
   }
+  if (collectionName === sessionCollectionName) {
+    return Object.fromEntries(
+      [...SERVER_OWNED_SESSION_FIELDS, ...SERVER_OWNED_SESSION_ORIGIN_FIELDS.map(f => `origin.${f}`)].map(path => [
+        path,
+        false,
+      ])
+    );
+  }
   if (collectionName === organizationCollectionName) {
-    const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];
+    const excluded = [
+      ...ORGANIZATION_SECRET_FIELDS,
+      ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS),
+      // Mirrors toSafeOrganization's member view. A per-query projection cannot keep one row, so
+      // non-privileged subscribers lose the credit and contact fields on every row (the budget
+      // notice reads its own row over REST).
+      ...(isPlatformAdmin || isPrivilegedOrgSubscriber
+        ? []
+        : [
+            ...ORGANIZATION_ADMINISTRATOR_ONLY_FIELDS,
+            ...ORGANIZATION_MEMBER_CREDIT_FIELDS,
+            ...ORGANIZATION_MEMBER_CONTACT_FIELDS,
+          ]),
+    ];
     return Object.fromEntries(excluded.map(field => [field, false]));
   }
   if (collectionName === inviteCollectionName) {
@@ -103,8 +159,15 @@ export function findWithheldFilterPaths(filter: unknown, fieldLimits: Record<str
     .map(([path]) => path);
   if (!withheld.length) return [];
 
-  const touches = (path: string) =>
-    withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  const normalize = (path: string) =>
+    path
+      .split('.')
+      .filter(segment => !/^\d+$/.test(segment))
+      .join('.');
+  const touches = (key: string) => {
+    const path = normalize(key);
+    return withheld.some(field => field === path || field.startsWith(`${path}.`) || path.startsWith(`${field}.`));
+  };
   const found: string[] = [];
   const walk = (node: unknown) => {
     if (Array.isArray(node)) {

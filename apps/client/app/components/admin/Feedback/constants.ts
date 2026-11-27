@@ -1,28 +1,65 @@
-import { FEEDBACK_LIST_MAX_LIMIT, FeedbackSubject } from '@bike4mind/common';
+import { FEEDBACK_SUBJECTS, FeedbackStatus, FeedbackSubject, FeedbackType } from '@bike4mind/common';
+import type { AdminStatusTone } from '@client/app/utils/themes/admin';
+import { ADMIN_PAGE_SIZES } from '../shared/adminStyles';
 
 /**
- * Page sizes offered for the feedback list, passed explicitly rather than left to
- * PaginationControls' own defaults: that component is shared with other admin tabs, and a size
- * above FEEDBACK_LIST_MAX_LIMIT is rejected by GET /api/feedback outright. Deriving the top option
- * from the cap means the two cannot drift into a list that 4xxs on its largest page size.
+ * Page sizes offered for the feedback list: the DataTable footer's, its only pager. Read from the
+ * React-free adminStyles.ts because the router imports this file eagerly through feedbackTabSearch.ts.
+ * GET /api/feedback rejects a limit above FEEDBACK_LIST_MAX_LIMIT outright (constants.test.ts pins it).
  */
-export const FEEDBACK_PAGE_SIZE_OPTIONS = [10, 20, 50, FEEDBACK_LIST_MAX_LIMIT];
+export const FEEDBACK_PAGE_SIZE_OPTIONS: readonly number[] = ADMIN_PAGE_SIZES;
+
+export const FEEDBACK_DEFAULT_PAGE_SIZE = FEEDBACK_PAGE_SIZE_OPTIONS[0];
 
 /**
- * Sentinel for the subject filter's "no filter" entry. Not a FeedbackSubject, so it cannot collide
- * with a real one, and it exists as a menu entry rather than a placeholder so an operator who
- * picked a subject has a visible way back to all of them.
+ * Triage order: the status filter and each row's status select list statuses in it, and
+ * `feedbackStatus` is written in it.
  */
-export const FEEDBACK_SUBJECT_ANY = 'all';
+export const FEEDBACK_STATUS_ORDER = [FeedbackStatus.New, FeedbackStatus.InProgress, FeedbackStatus.Closed] as const;
 
-export type FeedbackSubjectOption = FeedbackSubject | typeof FEEDBACK_SUBJECT_ANY;
+/** Sentence-case labels; the stored values are bare tokens (`InProgress`). */
+export const FEEDBACK_STATUS_LABELS: Record<FeedbackStatus, string> = {
+  [FeedbackStatus.New]: 'New',
+  [FeedbackStatus.InProgress]: 'In progress',
+  [FeedbackStatus.Closed]: 'Closed',
+};
+
+/** Severity order: the type filter and its URL param list types in it. */
+export const FEEDBACK_TYPE_ORDER = [
+  FeedbackType.BUG,
+  FeedbackType.THUMBS_DOWN,
+  FeedbackType.FEEDBACK,
+  FeedbackType.THUMBS_UP,
+] as const;
+
+export const FEEDBACK_TYPE_LABELS: Record<FeedbackType, string> = {
+  [FeedbackType.BUG]: 'Bug',
+  [FeedbackType.THUMBS_DOWN]: 'Thumbs down',
+  [FeedbackType.FEEDBACK]: 'Feedback',
+  [FeedbackType.THUMBS_UP]: 'Thumbs up',
+};
+
+export const FEEDBACK_TYPE_TONES: Record<FeedbackType, AdminStatusTone> = {
+  [FeedbackType.BUG]: 'bad',
+  [FeedbackType.THUMBS_DOWN]: 'warn',
+  [FeedbackType.FEEDBACK]: 'neutral',
+  [FeedbackType.THUMBS_UP]: 'good',
+};
 
 /**
- * Translates the Select's value back into the filter. The sentinel and a null (Joy hands one back
- * when a Select is cleared) both mean no filter, which the server reads as every subject.
+ * The type a report is shown as. Reports from the help modal (and older ones) carry no type, and
+ * GET /api/feedback's `type=Feedback` filter matches them, so they read as Feedback here too.
  */
-export const toSubjectFilter = (option: FeedbackSubjectOption | null): FeedbackSubject | undefined =>
-  option && option !== FEEDBACK_SUBJECT_ANY ? option : undefined;
+export const feedbackTypeOf = (type: string | undefined): FeedbackType =>
+  FEEDBACK_TYPE_ORDER.find(known => known === type) ?? FeedbackType.FEEDBACK;
+
+/**
+ * Translates the subject filter chip's value back into the filter. Clearing the chip hands back
+ * undefined, which the server reads as every subject; a value that is not a subject means the same,
+ * so nothing the server does not know is ever sent as a filter.
+ */
+export const toSubjectFilter = (value: string | undefined): FeedbackSubject | undefined =>
+  FEEDBACK_SUBJECTS.find(subject => subject === value);
 
 /**
  * Operator-facing name for each subject, which is stored as a bare lowercase token. The wording

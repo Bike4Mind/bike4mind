@@ -23,10 +23,10 @@ describe('CacheKeys', () => {
         })
       ).toBe('model-metrics:v2:51d5aaf35280f540');
 
-      expect(CacheKeys.spend({})).toBe('admin-spend:v2:4f53cda18c2baa0c');
+      expect(CacheKeys.spend({})).toBe('admin-spend:v4:4f53cda18c2baa0c');
       expect(
         CacheKeys.spend({ dateFrom: '2026-01-01', dateTo: '2026-01-31', userFilter: 'u1', modelFilter: 'gpt' })
-      ).toBe('admin-spend:v2:2860ffe8a3ae5348');
+      ).toBe('admin-spend:v4:2860ffe8a3ae5348');
 
       expect(CacheKeys.eventMetrics({})).toBe('event-metrics:v1:4f53cda18c2baa0c');
       expect(
@@ -89,8 +89,7 @@ describe('CacheKeys', () => {
       // Versioning these would discard caches that were about to refresh anyway.
       expect(CacheKeys.userInvites('u1', 10, 2)).toBe('userInvites:u1:10:2');
       expect(CacheKeys.modelList('u1')).toBe('model-list:u1');
-      expect(CacheKeys.securityBehavioralSummary('u1')).toBe('security-behavioral-summary-v2:u1');
-      expect(CacheKeys.securityDashboardAiAssessment('prod', 'abc')).toBe('security-dashboard-ai-assessment:prod:abc');
+      expect(CacheKeys.userTags()).toBe('admin-user-tags');
       expect(CacheKeys.refineText('hello')).toMatch(/^refine-text:[0-9a-f]{16}$/);
     });
 

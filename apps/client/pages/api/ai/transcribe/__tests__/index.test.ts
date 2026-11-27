@@ -46,7 +46,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
     constructor(public input: unknown) {}
   },
 }));
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: (...a: unknown[]) => mocks.getOperationsModel(...a) },
   getEffectiveApiKeyByBackend: (...a: unknown[]) => mocks.getEffectiveApiKeyByBackend(...a),
 }));

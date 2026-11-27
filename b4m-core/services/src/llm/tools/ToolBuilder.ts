@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   CreditHolderType,
+  AiAccessRefusedError,
   IChatHistoryItemDocument,
   IMessage,
   IUserDocument,
   IOrganizationDocument,
-  IUsageEventInput,
+  IAttributedUsageEventInput,
+  IUsageEventRepository,
   UsageEventFeature,
   ModelInfo,
   materializePromptMetaSession,
@@ -14,13 +16,19 @@ import {
   usdToCreditsStochastic,
   type UsagePriceStamp,
 } from '@bike4mind/common';
-import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
+import type { ReadOrgModelPolicy, ThinkingVisibility } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
+import {
+  CUSTOM_MCP_DATA_NOTICE,
+  generateCustomMcpTools,
+  loadCustomMcpConnections,
+  type CustomMcpApprovalRequest,
+} from './customMcpTools';
 import { shouldLiveFetchTools, buildMcpToolCacheUpdate } from './mcpToolFetchCache';
 import { mergeRetrievalSummary } from './retrievalSummaryMerge';
 import {
@@ -30,7 +38,7 @@ import {
   stripCitationIndices,
 } from './citationNumbering';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateImageCredits, validateAudioCredits } from './base/utils';
+import { validateImageCredits } from './base/utils';
 import { estimateImageCredits } from '../../imageCost';
 import {
   toImageCostInput,
@@ -38,25 +46,30 @@ import {
   type ImageToolFinishData,
   type ImageToolName,
 } from './imageToolBilling';
-import { estimateAudioCredits, type AudioCostInput } from '../../audioCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
-import { buildSharedTools } from '../sharedToolBuilder';
+import { buildSharedTools, type ToolBuilderDeps } from '../sharedToolBuilder';
 import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 import { usageEventStatusForFinish } from '../earlyStopStamp';
+import type { ModelAdmission } from '../modelAdmission';
+import { executedModelFields } from '../shadowTier';
+import { aiAccessDeniedMessage } from '../../userService/accountState';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
-  quest: IChatHistoryItemDocument;
-  user: IUserDocument;
-  organization?: IOrganizationDocument | null;
+  quest: Pick<IChatHistoryItemDocument, 'id' | 'sessionId'>;
+  user: Pick<IUserDocument, 'id'>;
+  organization?: Pick<IOrganizationDocument, 'id'> | null;
   provider: string;
   model: string;
+  /** The substitute that ran instead of `model` (executedModelFields); costUsd prices it. */
+  executedProvider?: string;
+  executedModel?: string;
   costUsd: number;
   creditsCharged: number;
   units?: number;
@@ -69,12 +82,12 @@ export function buildToolUsageEvent(params: {
   /** Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model. */
   priceStamp?: UsagePriceStamp;
   /**
-   * Defaults to 'tool'. The audio tool passes the feature its direct endpoint
-   * writes (sound_effects, text_to_speech), so a track counts as a track
-   * whichever path made it - the Gears status reads these features to unlock its gears.
+   * Defaults to 'tool'. A tool whose output has a direct endpoint passes the feature that
+   * endpoint writes, so the output counts the same whichever path made it - the Gears status
+   * reads these features to unlock its gears.
    */
   feature?: UsageEventFeature;
-}): IUsageEventInput {
+}): IAttributedUsageEventInput {
   const { quest, user, organization } = params;
   return {
     requestId: quest.id,
@@ -85,6 +98,7 @@ export function buildToolUsageEvent(params: {
     feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
+    ...(params.executedModel ? { executedProvider: params.executedProvider, executedModel: params.executedModel } : {}),
     inputTokens: params.inputTokens ?? 0,
     outputTokens: params.outputTokens ?? 0,
     cachedInputTokens: params.cachedInputTokens ?? 0,
@@ -98,14 +112,21 @@ export function buildToolUsageEvent(params: {
   };
 }
 
-/** Fire-and-forget dual-write: a failed analytics record must never throw into billing. */
-export function recordToolUsageEvent(
-  db: IChatCompletionServiceOptions['db'],
+/**
+ * Dual-write that never rejects: a failed analytics record must never throw into billing. Callers
+ * may leave it unawaited; a Lambda that can freeze after returning awaits it.
+ */
+export async function recordToolUsageEvent(
+  db: { usageEvents?: Pick<IUsageEventRepository, 'record'> },
   logger: Logger,
   toolName: string,
-  event: IUsageEventInput
-): void {
-  db.usageEvents?.record(event).catch(err => logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err));
+  event: IAttributedUsageEventInput
+): Promise<void> {
+  try {
+    await db.usageEvents?.record(event);
+  } catch (err) {
+    logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err);
+  }
 }
 
 type SendStatusUpdate = (
@@ -127,6 +148,8 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Resolve current plan access lazily; failures must reach model admission. */
+  getEntitlements?: () => Promise<string[]>;
   /** How the turn was authenticated, forwarded to the tool context (see ToolContext.authOrigin). */
   authOrigin: ToolContext['authOrigin'];
   /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
@@ -158,6 +181,8 @@ export interface ToolBuilderConfig {
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   imageProcessorLambdaName?: string;
   getMcpClient: IChatCompletionServiceOptions['getMcpClient'];
+  customMcp?: IChatCompletionServiceOptions['customMcp'];
+  customMcpDeadline?: IChatCompletionServiceOptions['customMcpDeadline'];
   // State maps owned by ChatCompletionProcess. Passed by reference so mutations
   // inside tool callbacks (credit accounting, subagent telemetry) propagate back
   // without further synchronization.
@@ -184,8 +209,12 @@ export interface ToolBuilderConfig {
    * preamble while the tool executes. No-op when omitted.
    */
   onToolPreamble?: (preamble: string, toolName: string) => void;
+  /** The turn's model admission, forwarded to the delegation tools (see ToolBuilderDeps.modelAdmission). */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
   /** The `decide` tool's execution seam, forwarded to the tool context (see ToolContext.decide). */
   decide?: ToolContext['decide'];
+  /** The model a delegation's charge is recorded under when `id` ran in place of it (restricted tier). */
+  toLedgerModel?: (id: string) => ModelInfo | undefined;
 }
 
 // Short spoken preambles for tools whose latency would otherwise leave the
@@ -416,11 +445,19 @@ export function applyQuestStatusChanges(
 export interface BuildMcpToolsArgs {
   enableMCPServer: boolean;
   requestedMcpServers: string[] | undefined;
+  /** Custom connector slugs switched off in the composer (see ChatCompletionInvokeParamsSchema). */
+  disabledMcpConnections?: readonly string[];
+  /** Platform connector ids switched on in the composer; none when absent (see ChatCompletionInvokeParamsSchema). */
+  enabledPlatformMcpConnections?: readonly string[];
   defaultAdminSettings: Record<string, string>;
   userMessage: string;
   logger: Logger;
   processStartTime: number;
   quest: IChatHistoryItemDocument;
+  /** The turn's resolved `disableUserIntegrations`; withholds custom connector tools like built-in servers. */
+  disableUserIntegrations?: boolean;
+  /** Persists a custom-connector call that waits for a human Confirm; required to offer write tools. */
+  onPendingAction?: (request: CustomMcpApprovalRequest) => Promise<void>;
 }
 
 export interface BuildToolsArgs {
@@ -429,6 +466,10 @@ export interface BuildToolsArgs {
   offerOnlyNamedTools?: boolean;
   /** See `BuildSharedToolsOptions.sessionDisabledTools`. */
   sessionDisabledTools?: readonly string[];
+  /** See `BuildSharedToolsOptions.orgToolPolicy`. */
+  orgToolPolicy?: ReadOrgModelPolicy;
+  /** See `BuildSharedToolsOptions.contributedToolNames`. */
+  contributedToolNames?: ReadonlySet<string>;
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   quest: IChatHistoryItemDocument;
   saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>;
@@ -436,6 +477,8 @@ export interface BuildToolsArgs {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   config: { [key in LlmTools]?: any };
   model?: string;
+  /** See `ToolContext.servingModel`. */
+  servingModel?: { current: ModelInfo };
   organization?: IOrganizationDocument | null;
   precomputed?: {
     adminSettingsEnforceCredits: boolean;
@@ -443,10 +486,14 @@ export interface BuildToolsArgs {
   };
   /** See `ToolBuilderDeps.subagentModels`. */
   subagentModels?: ModelInfo[];
+  /** See `ToolBuilderDeps.substituteIdentity`. */
+  substituteIdentity?: ToolBuilderDeps['substituteIdentity'];
   agentOnlyMcpServers?: string[];
   apiKeyTable?: ApiKeyTable;
   getAbortSignal?: () => AbortSignal | undefined;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
   toolAvailability?: ToolAvailability;
@@ -457,6 +504,8 @@ export interface BuildToolsArgs {
 type ExtraContextMessage = NonNullable<z.infer<typeof QuestStartBodySchema>['extraContextMessages']>[number];
 
 export interface BuildToolPromptArgs {
+  /** True when custom-connector tools are among `mcpTools`; adds the connector-output-is-data notice. */
+  hasCustomMcpTools?: boolean;
   toolPromptId?: string;
   hasContentTransform: boolean;
   hasChessEngine: boolean;
@@ -496,10 +545,15 @@ export interface BuildToolPromptArgs {
    */
   agentStore?: ServerAgentStore;
   extraContextMessages: ExtraContextMessage[];
+  /** Tools sent deferred this turn; their guidance is returned in `deferredGuidance` instead of `guidance`. */
+  deferGuidanceFor?: ReadonlySet<string>;
 }
 
-// The tools whose onToolStart records a gate estimate (gateImageCredits, gateAudioCredits).
-const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image', 'audio_generation']);
+// The tools whose onToolStart records a gate estimate (gateImageCredits).
+const GATED_TOOL_NAMES = new Set(['image_generation', 'edit_image']);
+// The paid media tools billed by the host or by a job created mid-turn: onToolStart re-checks
+// account standing for these before the call.
+const ACCOUNT_CHECKED_TOOL_NAMES = new Set([...GATED_TOOL_NAMES, 'audio_generation']);
 // Reuse one async context store for the process; each tool invocation gets a unique token.
 const gatedToolInvocation = new AsyncLocalStorage<symbol>();
 
@@ -510,7 +564,14 @@ const gatedToolInvocation = new AsyncLocalStorage<symbol>();
  * session's conversation entities and the agent roster (source `toolContext`), and must sit
  * behind that prefix - see PER_CALLER_AUTHORED_SOURCES in systemPromptSources.ts.
  */
-export type ToolPromptMessages = { guidance: IMessage | null; context: IMessage | null };
+export type ToolPromptMessages = {
+  guidance: IMessage | null;
+  context: IMessage | null;
+  /** Guidance for tools named in `deferGuidanceFor`, held out of `guidance` to ride with the tool's addition. */
+  deferredGuidance: DeferredToolGuidance[];
+};
+
+export type DeferredToolGuidance = { tool: string; text: string };
 
 export class ToolBuilder {
   constructor(private readonly deps: ToolBuilderConfig) {}
@@ -518,12 +579,12 @@ export class ToolBuilder {
   /**
    * Reserve one tool call's credits for end-of-quest settlement. Appends to the
    * per-name queue in call order rather than overwriting, so a tool called more
-   * than once in a turn (e.g. a 10s then a 20s audio clip) settles as the sum of
+   * than once in a turn (e.g. two image renders) settles as the sum of
    * every call, not the count times the last call's cost. Fires exactly once per
-   * call: image/edit/audio via onToolStart/onToolFinish, delegate via onSubagentCredits.
+   * call: image/edit via onToolStart/onToolFinish, delegate via onSubagentCredits.
    *
-   * `model` is the model that actually incurs the cost (gpt-image-2, an audio vendor
-   * model, the subagent's chat model) - never the quest's own chat model. It feeds the
+   * `model` is the model that actually incurs the cost (gpt-image-2, the subagent's
+   * chat model) - never the quest's own chat model. It feeds the
    * aggregate ledger row's attribution; pass it wherever it is resolvable. A charge whose
    * model cannot be resolved still records UNATTRIBUTED_TOOL_CHARGE, so the row can never
    * look single-model while billing for a model nobody named.
@@ -540,13 +601,8 @@ export class ToolBuilder {
     // today. If it is ever reused for corrections or refunds, a negative entry would be
     // silently dropped here - widen this to `credits !== 0` at the same time.
     //
-    // NOTE this set is RESERVATION-scoped while the row's amount is SETTLEMENT-scoped
-    // (ChatCompletionProcess sums quest.promptMeta.functionCalls[].creditsUsed, which
-    // settleToolCallCredits distributes from these same queues). A reservation with no
-    // surviving function call drops out of the total but keeps its model here, so the two
-    // can disagree: the row can go blank over a model it did not end up billing. That
-    // errs toward saying nothing, never toward a wrong name, which is the direction this
-    // whole rule is built to fail in.
+    // NOTE this set and the ledger row's amount both come from the reservation queues
+    // (toolCreditsMap), so a model is named only for a charge that was actually billed.
     if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
@@ -599,89 +655,24 @@ export class ToolBuilder {
   }
 
   /**
-   * Up-front affordability gate for audio_generation (onToolStart): throws
-   * insufficient_credits before the paid provider call. Speech is gated on a conservative
-   * per-character estimate (the resolved model is not known until synthesis returns);
-   * sound effects on the duration. The reservation is deferred to settleAudioCredits so a
-   * failed generation is never billed. Exposed for unit-testing the audio credit branch.
+   * Re-reads the user before a paid media tool call so a suspension, ban or other AI-access
+   * block applied mid-turn refuses the call; the request-time `deps.user` snapshot cannot see
+   * it. Throws AiAccessRefusedError on a denial, which ends the turn. Exposed for unit-testing.
    */
-  gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
-    if (!enforceCredits || !this.deps.db.creditTransactions) return;
-    const { requiredCredits } = validateAudioCredits(
-      this.deps.user,
-      data,
-      this.deps.logger,
-      organization,
-      this.committedToolCredits()
-    );
-    this.recordGatedToolCredits('audio_generation', requiredCredits);
-  }
-
-  /**
-   * Reserve + record a delivered audio clip's credits (onToolFinish) and ride its path on
-   * quest.images. Reached only after generation succeeds. Speech settles on the ACTUAL
-   * resolved model + character count so the charge matches the direct /api/ai/tts endpoint
-   * exactly; sound effects settle on the duration. Does not persist the quest - the caller
-   * saves. Exposed for unit-testing the audio credit branch.
-   */
-  settleAudioCredits(
-    quest: IChatHistoryItemDocument,
-    data: {
-      kind: 'speech' | 'sound_effect';
-      provider: VoiceGenerationVendor | SoundGenerationVendor;
-      model?: string;
-      characters?: number;
-      durationSeconds?: number;
-      paths: string[];
-    },
-    enforceCredits: boolean,
-    organization?: IOrganizationDocument | null
-  ): void {
-    if (enforceCredits && !!this.deps.db.creditTransactions) {
-      const costInput: AudioCostInput =
-        data.kind === 'sound_effect'
-          ? {
-              kind: 'sound_effect',
-              provider: data.provider as SoundGenerationVendor,
-              durationSeconds: data.durationSeconds,
-            }
-          : {
-              kind: 'speech',
-              provider: data.provider as VoiceGenerationVendor,
-              model: data.model,
-              characters: data.characters ?? 0,
-            };
-      // The gate prices the round-up; the charge is the unbiased draw on the exact cost (may be 0).
-      const { usdCost, units } = estimateAudioCredits(costInput);
-      const creditsUsed = usdToCreditsStochastic(usdCost);
-      // Speech always resolves a real model id; a sound effect has none, so qualify it by
-      // provider (e.g. "elevenlabs-sound_effect") instead of the bare kind so per-model
-      // COGS analytics stays clean.
-      const billedModel = data.model ?? `${data.provider}-${data.kind}`;
-      this.deps.logger.info(`Credits used for tool audio_generation (${data.kind}): ${creditsUsed}`);
-      this.reserveToolCredits('audio_generation', creditsUsed, billedModel);
-      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
-      recordToolUsageEvent(
-        this.deps.db,
-        this.deps.logger,
-        'audio_generation',
-        buildToolUsageEvent({
-          quest,
-          user: this.deps.user,
-          organization,
-          provider: data.provider,
-          model: billedModel,
-          costUsd: usdCost,
-          creditsCharged: creditsUsed,
-          units,
-          feature: data.kind === 'sound_effect' ? 'sound_effects' : 'text_to_speech',
-        })
-      );
+  async assertToolAccountAllowed(toolName: string): Promise<void> {
+    let denial: string | null;
+    try {
+      const fresh = await this.deps.db.users.findById(this.deps.user.id);
+      denial = fresh ? aiAccessDeniedMessage(fresh) : 'User not found';
+    } catch (err) {
+      this.deps.logger.error(`[toolAccountCheck] account lookup failed before ${toolName}:`, err);
+      // Fail closed without passing DB error text through to the model.
+      throw new Error('Could not verify account status. Please try again.');
     }
-    if (!quest.images) quest.images = [];
-    data.paths.forEach(path => {
-      if (!quest.images?.includes(path)) quest.images?.push(path);
-    });
+    if (denial) {
+      this.deps.logger.warn(`[toolAccountCheck] refused ${toolName} for user ${this.deps.user.id}: ${denial}`);
+      throw new AiAccessRefusedError(denial);
+    }
   }
 
   /**
@@ -718,7 +709,7 @@ export class ToolBuilder {
 
   /**
    * Up-front affordability gate for image_generation/edit_image (onToolStart): throws
-   * insufficient_credits before the paid provider call. Like audio, the charge itself is
+   * insufficient_credits before the paid provider call. The charge itself is
    * deferred to settleImageCredits so a failed generation is never billed. No-op when
    * enforcement is off, the model is unknown, or the credit store is unavailable. Exposed for
    * unit-testing the credit branch.
@@ -808,23 +799,40 @@ export class ToolBuilder {
   async buildMcpTools({
     enableMCPServer,
     requestedMcpServers,
+    disabledMcpConnections,
+    enabledPlatformMcpConnections,
     defaultAdminSettings: _defaultAdminSettings,
     userMessage: _userMessage,
     logger,
     processStartTime,
     quest: _quest,
+    disableUserIntegrations,
+    onPendingAction,
   }: BuildMcpToolsArgs): Promise<{
     mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
     serverAgentConfig: ServerAgentConfig;
+    customMcpToolNames: Set<string>;
   }> {
     const mcpToolsStartTime = Date.now();
     const mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>> = {};
+    const customMcpToolNames = new Set<string>();
 
     if (!enableMCPServer) {
+      // Callable functions answer to their own setting, so they are offered with the MCP server off.
+      if (this.deps.customMcp?.listsWithoutMcpServer) {
+        await this.addCustomMcpTools(mcpToolsByServer, customMcpToolNames, {
+          disabledMcpConnections,
+          enabledPlatformMcpConnections,
+          logger,
+          disableUserIntegrations,
+          onPendingAction,
+          mcpServerOff: true,
+        });
+      }
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] MCP tools setup completed (0 tools) in ${Date.now() - mcpToolsStartTime}ms`
       );
-      return { mcpToolsByServer, serverAgentConfig: {} };
+      return { mcpToolsByServer, serverAgentConfig: {}, customMcpToolNames };
     }
 
     logger.info('🛠️ [MCP] Enabling MCP Servers');
@@ -900,6 +908,14 @@ export class ToolBuilder {
       }
     }
 
+    await this.addCustomMcpTools(mcpToolsByServer, customMcpToolNames, {
+      disabledMcpConnections,
+      enabledPlatformMcpConnections,
+      logger,
+      disableUserIntegrations,
+      onPendingAction,
+    });
+
     const totalTools = Object.values(mcpToolsByServer).reduce((sum, tools) => sum + tools.length, 0);
 
     // Extract selected repositories from GitHub MCP server metadata for agent prompt injection.
@@ -918,7 +934,63 @@ export class ToolBuilder {
       `⏱️ [${Date.now() - processStartTime}ms] MCP tools setup completed (${totalTools} tools) in ${Date.now() - mcpToolsStartTime}ms`
     );
 
-    return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername } };
+    return { mcpToolsByServer, serverAgentConfig: { selectedRepositories, githubUsername }, customMcpToolNames };
+  }
+
+  /**
+   * Custom connectors follow their own enabled switch, narrowed by the composer's opt-out list;
+   * a platform connector is listed only when the composer switched it on. A failure here drops
+   * custom tools only, never the built-ins.
+   */
+  private async addCustomMcpTools(
+    mcpToolsByServer: Record<string, Array<{ name: string } & ICompletionOptionTools>>,
+    customMcpToolNames: Set<string>,
+    {
+      disabledMcpConnections,
+      enabledPlatformMcpConnections,
+      logger,
+      disableUserIntegrations,
+      onPendingAction,
+      mcpServerOff,
+    }: Pick<
+      BuildMcpToolsArgs,
+      | 'disabledMcpConnections'
+      | 'enabledPlatformMcpConnections'
+      | 'logger'
+      | 'disableUserIntegrations'
+      | 'onPendingAction'
+    > & { mcpServerOff?: boolean }
+  ): Promise<void> {
+    const host = this.deps.customMcp;
+    if (!host || !onPendingAction || disableUserIntegrations) return;
+    try {
+      const userId = this.deps.user.id;
+      const switchedOff = new Set(disabledMcpConnections ?? []);
+      const platformConnectionIds = enabledPlatformMcpConnections ?? [];
+      const connections = await loadCustomMcpConnections(
+        host,
+        userId,
+        logger,
+        undefined,
+        { platformConnectionIds, headless: Boolean(this.deps.apiKeyId), mcpServerOff },
+        // Before the cap, so a switched-off connection never takes another's tool slots. The slug
+        // opt-out list is for the user's own connectors; a platform one is switched on by id.
+        connection => switchedOff.has(connection.slug) && !platformConnectionIds.includes(connection.connectionId)
+      );
+      for (const connection of connections) {
+        const tools = generateCustomMcpTools(connection, {
+          userId,
+          host,
+          requestApproval: onPendingAction,
+          platformConnectionIds,
+          deadline: this.deps.customMcpDeadline,
+        });
+        mcpToolsByServer[connection.slug] = tools;
+        tools.forEach(tool => customMcpToolNames.add(tool.name));
+      }
+    } catch (customError) {
+      logger.error('[MCP] Failed to load custom connector tools - continuing without them:', customError);
+    }
   }
 
   /**
@@ -934,6 +1006,8 @@ export class ToolBuilder {
     enabledTools = [],
     offerOnlyNamedTools,
     sessionDisabledTools,
+    orgToolPolicy,
+    contributedToolNames,
     mcpToolsByServer = {},
     quest,
     saveQuest,
@@ -943,13 +1017,16 @@ export class ToolBuilder {
     organization,
     precomputed,
     subagentModels,
+    substituteIdentity,
     agentOnlyMcpServers = [],
     apiKeyTable,
     getAbortSignal,
     thinking,
+    thinkingVisibility,
     agentStore,
     externalTools,
     toolAvailability,
+    servingModel,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     const tools = buildSharedTools(
       {
@@ -958,6 +1035,7 @@ export class ToolBuilder {
         logger: this.deps.logger,
         db: this.deps.db,
         entitlementKeys: this.deps.entitlementKeys,
+        getEntitlements: this.deps.getEntitlements,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
         attachedFileIds: this.deps.attachedFileIds,
@@ -972,17 +1050,22 @@ export class ToolBuilder {
         authOrigin: this.deps.authOrigin,
         apiKeyId: this.deps.apiKeyId,
         decide: this.deps.decide,
+        toLedgerModel: this.deps.toLedgerModel ? id => this.deps.toLedgerModel?.(id)?.id ?? id : undefined,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,
         imageProcessorLambdaName: this.deps.imageProcessorLambdaName,
         llm,
         model,
+        servingModel,
         precomputed,
         subagentModels,
+        substituteIdentity,
         apiKeyTable,
         thinking,
+        thinkingVisibility,
         agentStore,
+        modelAdmission: this.deps.modelAdmission,
       },
       {
         onStatusUpdate: async (changes, status) => {
@@ -998,6 +1081,9 @@ export class ToolBuilder {
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolStart: async (toolName: string, data: any) => {
+          // Before status/preamble and the credit gates, so a refused call records no estimate.
+          if (ACCOUNT_CHECKED_TOOL_NAMES.has(toolName)) await this.assertToolAccountAllowed(toolName);
+
           // Chat: surface a live, input-enriched status so the wait reads as
           // productive work instead of a dead spinner. Fire-and-forget and
           // immediate so each tool transition is visible as it happens.
@@ -1024,7 +1110,7 @@ export class ToolBuilder {
             }
           }
 
-          // video_generation and music_generation bill in their job's create step, not here.
+          // video_generation, music_generation and audio_generation bill in their job's create step, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} started`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
@@ -1036,11 +1122,6 @@ export class ToolBuilder {
               precomputed?.models ?? []
             );
           }
-
-          if (toolName === 'audio_generation') {
-            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            this.gateAudioCredits(data as AudioCostInput, enforceCredits, organization);
-          }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
@@ -1049,27 +1130,7 @@ export class ToolBuilder {
             quest.deepResearchState = data;
             await saveQuest(quest);
           }
-          if (toolName === 'audio_generation') {
-            // Settle audio billing HERE (not onToolStart) so only a delivered clip is charged:
-            // the tool's failure paths return before onFinish. Audio rides quest.images; the
-            // client splits by extension to render an inline player.
-            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
-            this.settleAudioCredits(
-              quest,
-              data as {
-                kind: 'speech' | 'sound_effect';
-                provider: VoiceGenerationVendor | SoundGenerationVendor;
-                model?: string;
-                characters?: number;
-                durationSeconds?: number;
-                paths: string[];
-              },
-              enforceCredits,
-              organization
-            );
-            await saveQuest(quest);
-          }
-          // Settle image billing HERE, like audio: a provider error returns before onFinish.
+          // Settle image billing HERE: a provider error returns before onFinish.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} finished`);
             const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
@@ -1144,7 +1205,8 @@ export class ToolBuilder {
               }
             : undefined,
         onSubagentCredits: (credits, meta) => {
-          this.reserveToolCredits('delegate_to_agent', credits, meta?.model);
+          const ledger = meta && this.deps.toLedgerModel?.(meta.model);
+          this.reserveToolCredits('delegate_to_agent', credits, ledger?.id ?? meta?.model);
           // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
           if (meta) {
             recordToolUsageEvent(
@@ -1155,8 +1217,12 @@ export class ToolBuilder {
                 quest,
                 user: this.deps.user,
                 organization,
-                provider: meta.provider,
-                model: meta.model,
+                provider: ledger?.backend ?? meta.provider,
+                model: ledger?.id ?? meta.model,
+                ...executedModelFields(ledger ?? { id: meta.model, backend: meta.provider }, {
+                  id: meta.model,
+                  backend: meta.provider,
+                }),
                 costUsd: meta.usdCost,
                 creditsCharged: credits,
                 inputTokens: meta.inputTokens,
@@ -1186,6 +1252,8 @@ export class ToolBuilder {
         enabledTools,
         offerOnlyNamedTools,
         sessionDisabledTools,
+        orgToolPolicy,
+        contributedToolNames,
         mcpToolsByServer,
         config,
         agentOnlyMcpServers,
@@ -1221,15 +1289,22 @@ export class ToolBuilder {
     knowledgeBaseGuidance,
     userTimezone,
     mcpTools,
+    hasCustomMcpTools,
     sessionId,
     message,
     logger,
     processStartTime,
     agentStore,
     extraContextMessages,
+    deferGuidanceFor,
   }: BuildToolPromptArgs): Promise<ToolPromptMessages> {
     const sections: string[] = [];
     const contextSections: string[] = [];
+    const deferredGuidance: DeferredToolGuidance[] = [];
+    const guidanceFor = (tool: string) => (text: string) => {
+      if (deferGuidanceFor?.has(tool)) deferredGuidance.push({ tool, text });
+      else sections.push(text);
+    };
 
     // 1. Tool prompt from DB (custom prompt attached to tool)
     if (toolPromptId) {
@@ -1251,7 +1326,7 @@ export class ToolBuilder {
 
     // 2. Blog publishing workflow instruction (if blog_draft tool is enabled)
     if (hasContentTransform) {
-      sections.push(`# MANDATORY BLOG WORKFLOW
+      guidanceFor('blog_draft')(`# MANDATORY BLOG WORKFLOW
 
 **CRITICAL RULE**: This workflow applies ONLY to BLOG posts - when the user explicitly asks to blog about something (e.g. "publish to my blog", "draft a blog post", "turn this into a blog post"). It does NOT apply to sharing or publishing an artifact/app/page to a public link - that is done with the artifact's own in-app Share action, NEVER with blog_draft. When (and only when) the user wants a blog post, you MUST use the blog_draft tool.
 
@@ -1281,7 +1356,7 @@ Otherwise: USE blog_draft TOOL FIRST!`);
 
     // 3. Chess engine workflow (if chess_engine tool is enabled)
     if (hasChessEngine) {
-      sections.push(`# MANDATORY CHESS WORKFLOW
+      guidanceFor('chess_engine')(`# MANDATORY CHESS WORKFLOW
 
 **CRITICAL**: You have the \`chess_engine\` tool. You MUST follow these rules for ALL chess interactions:
 
@@ -1333,7 +1408,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // it deliberately omits the time of day, so the model must call the tool for
     // anything clock-level.
     if (hasCurrentDateTime) {
-      sections.push(
+      guidanceFor('current_datetime')(
         `# CURRENT TIME\n\n` +
           `For the current time of day, or to timestamp an action at the moment it executes, ` +
           `call the \`current_datetime\` tool \u2014 never guess or invent the time.`
@@ -1350,7 +1425,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // date context tells the model what today is, but nothing otherwise tells it when its own
     // knowledge is too old to answer from.
     if (hasWebSearch && webSearchGuidance) {
-      sections.push(webSearchGuidance);
+      guidanceFor('web_search')(webSearchGuidance);
     }
 
     // 3d. Knowledge-base retrieval nudge. Same gate and same reason as 3c: the tool description
@@ -1363,7 +1438,7 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
     // prompt each one is defending against) - prompt-level rather than a second gate here, because
     // the tool stays callable on those turns and the model needs to know when NOT to call it.
     if (hasKnowledgeBase && knowledgeBaseGuidance) {
-      sections.push(knowledgeBaseGuidance);
+      guidanceFor('search_knowledge_base')(knowledgeBaseGuidance);
     }
 
     // 4. MCP integration guidance (if MCP tools are available)
@@ -1371,18 +1446,16 @@ Both calls happen in the same response — do NOT ask the user to repeat their m
       // Tool/server names come from user-configured MCP servers, so strip control
       // characters and cap length before interpolating into the system prompt.
       const sanitizeToolName = (name: string) => name.replace(/[\r\n\t]+/g, ' ').slice(0, 80);
-      const mcpIntegrations: Record<string, string[]> = {};
+      const mcpIntegrations = new Map<string, string[]>();
       mcpTools.forEach(tool => {
         const safeName = sanitizeToolName(tool.name);
-        const parts = safeName.split('_');
-        const prefix = parts[0];
-        if (!mcpIntegrations[prefix]) {
-          mcpIntegrations[prefix] = [];
-        }
-        mcpIntegrations[prefix].push(safeName);
+        const prefix = safeName.split(safeName.includes('__') ? '__' : '_')[0];
+        const integrationTools = mcpIntegrations.get(prefix) ?? [];
+        integrationTools.push(safeName);
+        mcpIntegrations.set(prefix, integrationTools);
       });
 
-      const integrationList = Object.entries(mcpIntegrations)
+      const integrationList = [...mcpIntegrations.entries()]
         .map(([integration, tools]) => {
           const displayName = integration;
           return `- **${displayName}**: ${tools.length} tools available (${tools.slice(0, 3).join(', ')}${tools.length > 3 ? '...' : ''})`;
@@ -1399,11 +1472,11 @@ ${integrationList}
 1. When the user asks about tasks related to these integrations, you MUST call the appropriate tool
 2. Do not respond that you cannot help - use the available tools to fulfill the request
 3. **Be concise when using tools** - do NOT repeat introductory phrases like "I'll help you with..." before each tool call. Simply execute the tools and present the results
-4. When making multiple tool calls, skip the preamble and just execute them efficiently`);
+4. When making multiple tool calls, skip the preamble and just execute them efficiently${hasCustomMcpTools ? `\n5. ${CUSTOM_MCP_DATA_NOTICE}` : ''}`);
 
       logger.info('🛠️ [MCP] Added integration guidance to tool prompt:', {
-        integrationCount: Object.keys(mcpIntegrations).length,
-        integrations: Object.keys(mcpIntegrations),
+        integrationCount: mcpIntegrations.size,
+        integrations: [...mcpIntegrations.keys()],
       });
     }
 
@@ -1462,6 +1535,6 @@ ${agentList}
 
     const toMessage = (parts: string[]): IMessage | null =>
       parts.length === 0 ? null : { role: 'system', content: parts.join('\n\n') };
-    return { guidance: toMessage(sections), context: toMessage(contextSections) };
+    return { guidance: toMessage(sections), context: toMessage(contextSections), deferredGuidance };
   }
 }

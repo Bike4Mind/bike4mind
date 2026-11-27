@@ -5,9 +5,9 @@ Run the open core of Bike4Mind on your own hardware - a laptop, a server, or you
 **The standard path, at a glance** (each step is a section below):
 
 1. Clone the repo and copy the env template.
-2. Generate the three security secrets and set your LLM provider key(s).
+2. Generate the six security secrets and set your LLM provider key(s).
 3. `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`
-4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The first account becomes the admin.
+4. Sign in at `http://localhost:3000` with a one-time code read from Mailpit at `http://localhost:8025`. The account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin (if it is unset, the first account to register with the emailed code does).
 5. Create an API key in the app and make your first API call with `curl`.
 
 ## Prerequisites
@@ -35,25 +35,76 @@ Copy the template and fill it in:
 cp .env.selfhost.example .env.selfhost
 ```
 
-**Generate the three security secrets** (each a fresh 32-byte hex string):
+**Generate the six security secrets** (each a fresh 32-byte hex string):
 
 ```bash
 openssl rand -hex 32   # -> JWT_SECRET
 openssl rand -hex 32   # -> SESSION_SECRET
 openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
+openssl rand -hex 32   # -> CHAT_COMPLETION_INTERNAL_SECRET
+openssl rand -hex 32   # -> INTERNAL_WS_SECRET
+openssl rand -hex 32   # -> INTERNAL_S3_WEBHOOK_SECRET
 ```
 
-> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
+Or replace every `change-me` value in one step:
 
-> **Rotating `JWT_SECRET`?** The rotation grace window (which briefly accepts tokens signed with the outgoing secret) stores that outgoing secret encrypted at rest, so it now depends on `SECRET_ENCRYPTION_KEY` being configured - and on `SECRET_ENCRYPTION_KEY_PREVIOUS` too if you are mid-way through an encryption-key rotation. With no encryption key set the outgoing secret is stored in plaintext (logged once) and the grace window still works; but if the encryption key is set at renew time and then changed without carrying the previous key, grace-window tokens fail to verify until they naturally expire.
+```bash
+for key in JWT_SECRET SESSION_SECRET SECRET_ENCRYPTION_KEY CHAT_COMPLETION_INTERNAL_SECRET INTERNAL_WS_SECRET INTERNAL_S3_WEBHOOK_SECRET; do
+  sed -i.bak "s|^$key=change-me.*|$key=$(openssl rand -hex 32)|" .env.selfhost
+done && rm -f .env.selfhost.bak
+```
+
+The app refuses to run with the template values: JWT signing and verification fail, the
+ChatCompletion service exits at startup, and the internal websocket, upload webhook and quest
+dispatch calls are rejected until each secret holds a generated value.
+
+> **Upgrading an existing install: a valid `SECRET_ENCRYPTION_KEY` is now required.** A new `validate-secrets` service checks the key before the app, worker, ChatCompletion and the other services start. A Compose install that never set a key (the template value `change-me-openssl-rand-hex-32`) **will not start after this upgrade** until you either set a valid key or opt out. Update the image and your checkout together: an older pinned `B4M_IMAGE` does not contain the check and `validate-secrets` fails with "Cannot find module".
+>
+> - **Evaluation only:** set `B4M_ALLOW_PLAINTEXT_SECRETS=true` in `.env.selfhost` and leave the template `SECRET_ENCRYPTION_KEY` value in place (do not blank it: the services exit when the variable is empty). The stack starts keyless, stored secrets stay in plaintext, every process logs a warning at boot, and admin System Health shows a warning.
+> - **Move to a key (recommended):**
+>   1. Generate one: `openssl rand -hex 32`. Back it up somewhere other than this host; losing it makes everything encrypted under it unreadable.
+>   2. Set it as `SECRET_ENCRYPTION_KEY` in `.env.selfhost`. The backfill below also needs a persistent `MEMORY_KEY_SECRET` (it wraps the per-user memory keys): if `.env.selfhost` has no non-empty value for it, generate one with `openssl rand -hex 32`, set it as `MEMORY_KEY_SECRET=...` (fill in an existing empty `MEMORY_KEY_SECRET=` line rather than adding a second one), and back it up next to the encryption key. Do not change it except by the rotation procedure in `docs/security/credential-storage.md`. Take a backup (see [Backup and restore](#backup-and-restore)), then recreate the services: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`. If you normally start optional services with `--profile` flags (for example `agent-executor` or `render`) or `COMPOSE_PROFILES`, add the same ones here and in the restart below.
+>   3. Encrypt the rows already stored in plaintext. Stop the writers (skip any that are not running):
+>
+>      ```bash
+>      docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app worker chatcompletion ws agentexecutor render-worker subscriber-fanout
+>      ```
+>
+>      Then, from the repo checkout (Node, then `pnpm install` and `pnpm core:build`, since the scripts import the built `@bike4mind/*` packages), export the values from `.env.selfhost` and run each command below. Use the same `MONGODB_URI` form as step 3 of [Rotating the encryption key](#rotating-the-encryption-key):
+>
+>      ```bash
+>      export SECRET_ENCRYPTION_KEY="$(grep '^SECRET_ENCRYPTION_KEY=' .env.selfhost | cut -d= -f2-)"
+>      export MEMORY_KEY_SECRET="$(grep '^MEMORY_KEY_SECRET=' .env.selfhost | cut -d= -f2-)"
+>      export MONGODB_URI='mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true'
+>      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/protect-stored-credentials.ts --maintenance-window
+>      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/encrypt-tokens-at-rest.ts
+>      pnpm --filter @bike4mind/scripts exec tsx --import ../../apps/client/server/chatCompletion/selfhostSstAlias.mjs migrate/encrypt-admin-settings-and-apikeys.ts
+>      ```
+>
+>      They cover, in order: API keys, security-question answers (hashed), per-user memory keys (wrapped under `MEMORY_KEY_SECRET`), MCP server secrets, Slack dev-workspace secrets, TOTP seeds and secret rotations; Atlassian, Google Drive, Slack user and blog tokens, webhook secrets and Slack bot tokens; sensitive admin settings and the remaining per-user provider API keys. Each command skips values that are already encrypted, so it is safe to repeat. Restart the stack afterwards with the `up -d` command from step 2 (with your `--profile` flags).
+>
+>      **Not covered:** sign-in provider tokens (`users.authProviders[]` and `users.oauthCredentials`). They are encrypted the next time each user signs in, and stay in plaintext until then.
+>   4. `migrate:reencrypt-stored-secrets` (below) is **not** a substitute: it only moves existing ciphertext from one key to another and leaves plaintext rows as they are.
+>
+> `SECRET_ENCRYPTION_KEY_PREVIOUS` must be empty, `not-configured`, or 64 hex characters. Anything else also blocks startup, even with the opt-out.
+
+> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database. If you must change it, follow [Rotating the encryption key](#rotating-the-encryption-key): set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key so reads fall back to it and old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable, then re-encrypt the stored values. Dropping the previous key before that finishes makes anything still encrypted under it unrecoverable.
+
+> **Rotating `JWT_SECRET`?** The rotation grace window (which briefly accepts tokens signed with the outgoing secret) stores that outgoing secret encrypted at rest, so it now depends on `SECRET_ENCRYPTION_KEY` being configured - and on `SECRET_ENCRYPTION_KEY_PREVIOUS` too if you are mid-way through an encryption-key rotation. With no encryption key set (only possible with `B4M_ALLOW_PLAINTEXT_SECRETS=true`) the outgoing secret is stored in plaintext (logged once) and the grace window still works; but if the encryption key is set at renew time and then changed without carrying the previous key, grace-window tokens fail to verify until they naturally expire.
 
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
-**Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the three secrets above.
+**Minimum required to boot:** the defaults in the template already point everything (MongoDB, MinIO object storage, ElasticMQ queues, Mailpit mail catcher) at the bundled services - you only need to set the six secrets above.
+
+**Choose the admin account** - set `B4M_BOOTSTRAP_ADMIN_EMAIL` to the email address you will sign in with, before you start the stack for the first time. That account becomes the admin on first sign-in. Sign in with the emailed one-time code the first time, not OAuth (for example GitHub): the bootstrap applies only to the email-code sign-in. If you leave it unset, the first account to register with the emailed code becomes the admin. A self-host deploy mails the code even when the address's domain has no MX record (for example `admin@example.com` read from Mailpit); blocked and disposable domains are still refused.
+
+```bash
+B4M_BOOTSTRAP_ADMIN_EMAIL=you@example.com
+```
 
 > **Serving on anything other than `http://localhost:3000`?** Set `APP_URL` to the origin your browser actually hits - a remapped `APP_HOST_PORT`, a LAN hostname, a tailnet name, or the public `https` origin of a reverse proxy in front of the app. `APP_URL` is the CSRF origin allow-list, and it fails closed: every state-changing request (saving settings, generating an API key, uploading) returns a 403, with a different message per cause. Unset, it is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected <your APP_URL>).` Reads keep working either way, which makes both look like a permissions bug rather than a config one.
 
-**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Settings > API Keys.
+**LLM keys** - set the ones you'll use; blank disables that provider. Only models for providers with a key appear in the model picker. You can also add or override keys per-user later, in the app under Profile menu -> More -> API Keys.
 
 ```bash
 ANTHROPIC_API_KEY=      # Claude
@@ -104,7 +155,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollam
 
 `--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, `worker`, MinIO, and its `mc` client - before starting; the pure-image backing services (Mongo, ElasticMQ, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
-> **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
+> **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`. The gateway serves its management API on a separate internal port (`ws:3002`), so "connection refused" to `ws:3002` in the app, worker or fanout logs means the `ws` gateway was not rebuilt.
 
 Confirm it came up, then follow the logs:
 
@@ -125,7 +176,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio cre
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
 ```
 
-For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
+For updates, record the current checkout commit with `git rev-parse HEAD`, take a [backup](#backup-and-restore), update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
 
 To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
@@ -161,7 +212,7 @@ MAIL_HOST=localhost                             # was mail (so sign-in codes rea
 # every *_QUEUE url: swap the `sqs` host for `localhost`, keep the path
 FAB_FILE_CHUNK_QUEUE=http://localhost:9324/000000000000/fabFileChunkQueue
 # ...the other *_QUEUE vars the same way
-# copy the rest verbatim from .env.selfhost: the three secrets, AWS creds, bucket names, LLM keys
+# copy the rest verbatim from .env.selfhost: the six secrets, AWS creds, bucket names, LLM keys
 ```
 
 Then start the app from the repo root:
@@ -184,15 +235,15 @@ Bike4Mind signs you in with a one-time code sent by email. In the self-host stac
 2. Open Mailpit at **`http://localhost:8025`** and read the code from the sign-in email.
 3. Enter the code and pick a username.
 
-**The first account created on a fresh install automatically becomes the admin** (no invite code needed). After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
+**On a fresh install, the account whose email matches `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes the admin** (no invite code needed). Set it before the first start. If it is unset, the first account to register with the emailed code becomes the admin instead. After that, invite-only registration applies - as admin you can issue invites or enable open registration in the admin settings.
 
-For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit.
+For production use, point the `MAIL_*` variables at a real SMTP provider instead of Mailpit. Self-host skips the hosted check that refuses a sign-in code for a domain with no MX record, so with a real provider a code sent to such an address is accepted at sign-in and then bounces at the relay.
 
 ## 5. Make your first API call
 
 Everything you can do in the UI is also available over the HTTP API, authenticated with a scoped API key.
 
-1. **Create an API key**: in the app, open **Settings > API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
+1. **Create an API key**: in the app, open **Profile menu -> More -> API Keys** and create a key with the `ai:chat` scope. The key (starting `b4m_`) is shown once - copy it.
 
 2. **Send a chat message**:
 
@@ -205,7 +256,7 @@ curl -X POST http://localhost:3000/api/chat \
 
 `wait: true` processes the message synchronously and returns the reply in the response; omit it to get a `sessionId`/`questId` back immediately and let processing continue in the background. The model defaults to the admin `DefaultAPIModel` setting; pass `"model": "..."` to pick any model from `/api/models` (only providers you configured a key for are available).
 
-The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
+The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Profile menu -> More -> API Keys.
 
 ### Structured tool output (`toolPayloads`)
 
@@ -493,7 +544,7 @@ There are two independent paths to an image, and they support different things:
 | The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only                                             |
 
 The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
-**Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
+**Profile menu -> More -> API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
 
 **Image edit is limited to Gemini and BFL here.** OpenAI's edit and image-to-image endpoints
 require the input image be re-encoded to PNG under a size cap, which the hosted stack does with
@@ -580,6 +631,10 @@ Self-host can embed and search your uploaded files fully offline, using a local 
 4. **Upload a file**, then watch its chunk/vector counts climb (the file card shows progress). Behind the scenes: MinIO notifies the app on upload -> the file is chunked -> chunks are embedded by the `worker` service.
 5. **Ask a knowledge-base question** in chat, or use file search - retrieval now runs against the local embeddings.
 
+### Verify the knowledge pipeline
+
+With the stack running, `B4M_API_KEY=b4m_... python3 scripts/verify_selfhost_chunk_pipeline.py` uploads a file and checks that it is chunked, embedded and found by search, that a file whose upload webhook was withheld is recovered by the rescue sweep, and that replaying a chunk message leaves the chunk count unchanged. It needs the admin settings **Enable Auto Chunk** and **Enable Data Lakes** on (Data Lakes is off by default; search only reaches data-lake files), and archives a throwaway `verify-*` lake each run. It asserts the default Mongo vector path (not OpenSearch); `--help` lists the prerequisites and the `--only` / `--timeout` flags.
+
 ### Choosing an embedder (quality vs hardware)
 
 `qwen3-embedding` leads retrieval benchmarks; the `0.6b` default fits any GPU or CPU. On a bigger card the `4b`/`8b` variants score higher. `nomic-embed-text` is the smallest, cheapest option. A self-host box often runs a chat model, an image model, and the embedder on ONE GPU, so size matters - see the embedder table in `.env.selfhost.example` for downloads, dimensions, and VRAM.
@@ -594,7 +649,7 @@ Notes:
 Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
 
 - `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-3-small` by default).
-- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
+- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Profile menu -> More -> API Keys**.
 
 Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.
 
@@ -625,7 +680,7 @@ This is a separate corpus from your uploaded files: the **Help** panel and the H
 | Half                                           | Built by                                          | Needs a key        |
 | ---------------------------------------------- | ------------------------------------------------- | ------------------ |
 | The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
-| The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
+| The embedding vectors (`help-embeddings.json` + `help-embeddings.bin`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
 
@@ -644,9 +699,20 @@ Re-run it whenever you edit the shipped docs. The failure is quieter than it sou
 
 Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
 
-**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Settings -> API Keys**) as well as at build time.
+**Upgrading from an older build:** the vectors used to live entirely in `help-embeddings.json`. An install that built them then and rebuilds without a key keeps serving keyword results until you re-run `help:vectorize`, which writes the new JSON + binary pair.
 
-This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` + `help-embeddings.bin` pair still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
+
+This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+
+### Help in any chat (the `system-help` data lake)
+
+Separately from the Help panel, the public help articles are mirrored into a data lake named `system-help`, so any chat can search them through the knowledge base. The `worker` keeps it in sync: it runs on startup and every 6 hours, using the help corpus built into the worker image and your **Default Embedding Model**.
+
+- **First run.** On an install where the lake has never existed, the worker creates it, owned by the oldest admin account. Until an admin exists, each run logs that it is waiting and does nothing. The lake owner's keys (or your instance-wide keys) pay for the embeddings.
+- **Steady state.** Re-runs are differential: an unchanged corpus writes nothing and embeds nothing. Rebuilding the image after a docs change re-embeds only the articles that changed.
+- **Missing embedding key.** If the Default Embedding Model's provider has no API key, the run fails and the worker logs `scheduled task "helpDatalakeIngest" failed` on startup and every 6 hours. Add the key or pick a local embedder under **Settings -> AI -> Default Embedding Model**.
+- **Turning it off.** Delete the `system-help` lake, and purge it if you want its files gone too. The worker records the first help lake it sees, so it never recreates one that was deleted or purged. On a fresh install, lake creation and this marker commit together in a Mongo transaction; an interrupted bootstrap can retry without losing the deletion safeguard. To turn it back on, run `help:ingest-datalake`.
 
 ## Background worker
 
@@ -654,7 +720,8 @@ The `worker` service is the self-host replacement for the hosted background infr
 
 - **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
-- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
+- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started;
+- **keeps the help lake in sync** - see [Help in any chat](#help-in-any-chat-the-system-help-data-lake).
 
 It comes up automatically with the stack. To watch it:
 
@@ -684,7 +751,7 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Profile menu -> More -> API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > AI > Models**, in the **Settings** section: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). The **Discovery** section of the same page shows the last run and what it found.
 
 ### Amazon Bedrock (optional)
 
@@ -772,8 +839,97 @@ python3 scripts/verify-compose-queue-durability.py
 
 The drill derives its broker image, configuration mount, and storage mounts from the actual `sqs` service. It uses random project names and loopback ports, starts no application or worker, and reads no `.env.selfhost`. Replacement renews anonymous volumes so a missing named-volume mount cannot accidentally pass. It proves that the same pending message ID and body survive replacement, then deletes that message and proves it stays absent after another replacement and its visibility timeout. A second project overrides only `messages-storage.enabled = false` and must lose its pending message after replacement. The script prints the UTC date, source revision, configuration hashes, image ID, commands, and outcomes, and removes only its disposable projects and volumes on exit. Run it again after changing the broker image or storage configuration.
 
+## Backup and restore
+
+`scripts/selfhost_backup.py` backs up the durable user state of the Compose stack while it is running, and restores it into a fresh project. Python 3 and Docker Compose are required; run it from the repository root with the same `-f`, `--env-file`, and `--profile` flags you use to run the stack.
+
+**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup whose archive checksum or per-bucket file counts do not match it. The counts come from the backup copy: they detect missing files, but do not verify object bytes or prove every source object was captured. After restoring, the tool re-counts each target bucket and fails if it differs from the manifest.
+
+**Requirements:**
+
+- Mongo and object storage must be the bundled `mongo` and `minio` services. The tool refuses an external `MONGODB_URI` or `AWS_ENDPOINT_URL_S3`; back those up with your provider's tooling.
+- The user in `MONGODB_URI` must hold the `root` role (or a role granting `anyAction` on `anyResource`, which `--oplogReplay` requires), because it takes a whole-instance `--oplog` dump and replays the oplog on restore. If the URI has credentials and no `authSource`, the database in its path is used as the auth database.
+- The `mongodump` and `mongorestore` run inside the `mongo` container. The URI is read from a 0600 temp file there, so the password is not in any process argv.
+
+**What is not backed up:**
+
+- `.env.selfhost`. Keep a copy somewhere separate, encrypted, and off the host. `SECRET_ENCRYPTION_KEY` (and `SECRET_ENCRYPTION_KEY_PREVIOUS` if set) encrypts admin settings, API keys, and OAuth tokens stored in Mongo; a restore without the original key cannot decrypt them.
+- `sqs-data`: restoring stale pending messages can replay old work. See [Queue storage and container replacement](#queue-storage-and-container-replacement).
+- `opensearch-data`: an optional, rebuildable index; the app falls back to a scan while it is rebuilt.
+- `ollama-data`, `imagegen-*` and other model volumes: re-pullable.
+- MinIO user metadata and object tags (only object bytes are mirrored; content types are re-derived from file extensions on restore) and bucket versions.
+
+### Back up
+
+```bash
+python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.selfhost \
+  backup --dest /srv/backups/b4m-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+`--dest` must be empty or absent and is created `0700`, owned by you. The archive is not encrypted: protect it like the database, and encrypt any off-host copy. If a backup fails, the tool names the failed step and the directory is incomplete: remove it before retrying.
+
+### Restore into a fresh project
+
+```bash
+python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.selfhost \
+  -p b4m-restored restore --from /srv/backups/b4m-20260101T000000Z
+```
+
+Before you restore:
+
+- Put the original `.env.selfhost` in place.
+- `-p b4m-restored` builds the `minio` and `createbuckets` images from source (they are named per project), which needs network access on a DR host. Build or tag them first if it is offline.
+- If the original stack is still running on this host, set `MONGO_HOST_PORT`, `MINIO_HOST_PORT` and `MINIO_CONSOLE_HOST_PORT` in `.env.selfhost` to free ports.
+- With MongoDB authentication, the fresh project's `mongo` needs the same root user and replica-set bootstrap as the original (and a healthcheck that authenticates) before you run restore. `scripts/verify-compose-backup-restore.py --auth` shows a working override.
+
+Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target that already holds data, in Mongo or in any bucket, unless you pass `--yes`.
+
+Then bring up the rest of the stack with the same `-p`.
+
+To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops every non-system database (`admin`, `config` and `local` are kept) and removes objects that are not in the backup, so everything written since is lost. It connects with the target's current `MONGODB_URI` credentials. Mongo users and roles are merged, not rolled back: users deleted since the backup are re-created with their old passwords, and users that exist keep their current credentials.
+
+### Recovery point and retention
+
+- **Recovery point:** Mongo is consistent as of the end of its dump; objects are a slightly later, non-atomic view. Use the manifest start time as a conservative recovery point, rather than its finish time. Database writes made during the object mirror are not included.
+- **Retention:** the tool does no scheduling or rotation. Assumed policy: run it daily from cron, keep 7 daily and 4 weekly copies, and copy each off the host. If you need a tighter recovery point, use a managed MongoDB with point-in-time recovery and an S3-compatible store with versioning.
+- **Alternative:** operators who already snapshot volumes can stop the stack and snapshot `mongo-data` and `minio-data` together. That copy is tied to the exact MongoDB and MinIO on-disk format and needs downtime.
+
+### Prove it restores
+
+```bash
+python3 scripts/verify-compose-backup-restore.py          # add --auth for a Mongo with a root user and keyFile
+```
+
+With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user, one 64 KiB file and one object in each of the seven buckets, keeps writing to Mongo so the dump has an oplog slice, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It also checks that a restore without `--yes` refuses a populated target and leaves it untouched. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
+
+## Rotating the encryption key
+
+`SECRET_ENCRYPTION_KEY` encrypts secrets stored in the database. Reads fall back to `SECRET_ENCRYPTION_KEY_PREVIOUS`, but a stored value is not re-encrypted when it is read, so a rotation is finished by a command that rewrites every stored value under the new key. Take a backup first (see [Backup and restore](#backup-and-restore)).
+
+1. In `.env.selfhost`, copy the current `SECRET_ENCRYPTION_KEY` value to `SECRET_ENCRYPTION_KEY_PREVIOUS` (it must be 64 hex characters; a malformed value stops the stack at startup), then set `SECRET_ENCRYPTION_KEY` to a new value (`openssl rand -hex 32`). If `HMAC_SIGNING_SECRET` is empty, signed links and hashed identifiers are keyed with `SECRET_ENCRYPTION_KEY`: to keep the ones issued so far valid, also set `HMAC_SIGNING_SECRET_PREVIOUS` to the old key and `HMAC_SIGNING_SECRET` to another new value.
+2. Recreate the services so they load the new values:
+
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
+   ```
+
+3. From the repo checkout on the host (Node and `pnpm install`), run the re-encrypt command against the published Mongo port. It reads the two keys and the database URI from the environment. Use the URI from `.env.selfhost` with the host changed to `localhost` and your published port, plus `directConnection=true`:
+
+   ```bash
+   export SECRET_ENCRYPTION_KEY="$(grep '^SECRET_ENCRYPTION_KEY=' .env.selfhost | cut -d= -f2-)"
+   export SECRET_ENCRYPTION_KEY_PREVIOUS="$(grep '^SECRET_ENCRYPTION_KEY_PREVIOUS=' .env.selfhost | cut -d= -f2-)"
+   export MONGODB_URI='mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true'
+   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --dry-run
+   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets
+   pnpm --filter @bike4mind/scripts migrate:reencrypt-stored-secrets --verify
+   ```
+
+   `--dry-run` writes nothing and reports what a run would rewrite. The output is counts per stored field; no value is printed. Exit code 0 means every stored value is under the new key, 1 means some values are unreadable or changed while the command ran (run it again), and 2 means a usage or connection error, or a database with nothing encrypted in it.
+4. Only after `--verify` exits 0, empty `SECRET_ENCRYPTION_KEY_PREVIOUS` in `.env.selfhost` and recreate the services again. Until then keep it set: anything still encrypted under the old key is unrecoverable without it.
+
 ## Troubleshooting
 
+- **`validate-secrets` exited 1 / the app never starts** - run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs validate-secrets`. It names the variable that failed: `SECRET_ENCRYPTION_KEY` must be 64 hexadecimal characters (`openssl rand -hex 32`), and `SECRET_ENCRYPTION_KEY_PREVIOUS` must be empty, `not-configured`, or 64 hex characters. For an evaluation install without a key (keep the template value and set the opt-out), see "Upgrading an existing install" under step 2. "Cannot find module" means the image predates the check: pull or rebuild it together with your checkout.
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
 - **`Error ... address already in use` / `failed to bind host port`** - another process on your host already owns one of the published ports (a local `mongod` on 27017 is the common one; also 3000, 9000, 9001, 9324, 9325, 8025). Override just the host side with the matching `*_HOST_PORT` var in `.env.selfhost` (e.g. `MONGO_HOST_PORT=27018`) - the services still reach each other over the compose network on their fixed internal ports, so nothing else needs to change.
 - **MongoDB crashes on first boot with `WT_PANIC` / `Too many open files`** - WiredTiger opens a file per collection and index and needs a high open-files limit; Docker's default (1024) is far below MongoDB's documented minimum. The bundled `mongo` service raises `nofile` to 64000 via `ulimits`. If you've customized the compose file or run mongo outside it, set that limit yourself, then remove only the half-initialized Mongo volume and restart. Do not use `down -v`: it also deletes `sqs-data` and every pending queue message (see "Queue storage and container replacement"). Naming the service (`down -v mongo`) is not a safe shortcut either, because Compose releases before v2.29 still remove every volume in the project. The steps below read the volume name from the `mongo` container, so they follow whatever `-p` or `COMPOSE_PROJECT_NAME` the stack uses; pass the same one here. If the first command prints nothing, there is no `mongo` container to read from: create one with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up --no-start mongo` and run the steps again.
@@ -802,8 +958,8 @@ The drill derives its broker image, configuration mount, and storage mounts from
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
 - **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
-- **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
-- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it configured permanently, or restore the original key. Rotation is not automated, so dropping the previous key makes anything still encrypted under it unrecoverable.
+- **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL` points at the gateway's browser port (3001) and `WEBSOCKET_MANAGEMENT_ENDPOINT` at its private management port (`http://ws:3002`, pinned in `compose.selfhost.yaml`). In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
+- **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key, or restore the original key. Keep the previous key set until the steps in [Rotating the encryption key](#rotating-the-encryption-key) finish: dropping it earlier makes anything still encrypted under it unrecoverable.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Image generation or image edit never completes (the quest stays "pending")** - both are queued to the `worker` service. Check `IMAGE_GENERATION_QUEUE` and `IMAGE_EDIT_QUEUE` are set in `.env.selfhost` (added after the initial release, so an upgraded install may be missing them), then confirm the worker picked them up: its boot line names every queue it polls, e.g. `[selfHostWorker] started: polling 6 queue(s) [researchEngineQueue, ..., imageGenerationQueue, imageEditQueue]`. An unset var is warned about by name and the consumer is skipped, leaving the rest of the worker running. Also make sure the queues exist in `elasticmq.conf` and that a provider key is configured (see "Image generation and image edit"). An OpenAI **edit** fails by design here - use Gemini or BFL.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
@@ -830,6 +986,14 @@ Confirm both registrations include the `put` event and webhook target. If one is
 
 The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
+To run that proof as one command, mint an API key (`b4m_live_...`) with the `notebooks:read` scope and run the history-import check. It uploads a small Claude-format export through the app's upload proxy, so MinIO's webhook starts the import exactly as a UI upload does. It then waits for the new import job to reach `completed` and reads the conversations back through `GET /api/v1/sessions` and `GET /api/v1/sessions/{id}/quests`. It passes only when the conversation count and every prompt and reply match the export:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-history-import
+```
+
+Set `BROKEN_EXPORT=bad-json` or `BROKEN_EXPORT=invalid-conversation` to upload a deliberately broken export; the check must then fail. `invalid-conversation` is the case a job status alone misses: the importer skips conversations that do not match the export schema and still marks the job `completed`. The check refuses to start while another import of the key owner is pending or processing, because the webhook drops a second upload. A timeout with no job means the upload landed but the webhook never reached the app; use the checks above. Optional: `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). Exit code 0 is pass, 1 is fail, 2 is bad configuration. Each passing run leaves two small conversations named after its run token in the key owner's history.
+
 ## Security notes
 
 The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional `opensearch` profile is enabled) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
@@ -838,7 +1002,7 @@ When you put the app behind a reverse proxy, forward the original `Host` header 
 
 Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
 
-Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
+Notebook exports, and the converted or zipped copies made when a curated notebook is downloaded, are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
 
 ### Browser downloads from a private object store
 
@@ -888,8 +1052,8 @@ Whichever path you choose, do the checklist first.
   ```
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
-- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
+- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`** (see [Backup and restore](#backup-and-restore)). It encrypts other secrets in the database and losing it makes that data unrecoverable. If you ever change it, follow [Rotating the encryption key](#rotating-the-encryption-key) and keep `SECRET_ENCRYPTION_KEY_PREVIOUS` set until its verify step passes.
 
 ### Read-only production configuration preflight
 
@@ -903,7 +1067,7 @@ python3 scripts/selfhost_production_preflight.py \
 
 The checks cover selected services: browser HTTPS/WSS URLs, missing/template secrets, encryption-key format, internal shared secrets, development mail catchers and SMTP settings, local Mongo auth flags and client credentials, local MinIO defaults, and non-loopback internal port publishes. External databases do not require a local Mongo service, but an active local Mongo is still checked. Non-root MinIO client accounts and SMTP relays without authentication are supported; their permissions and delivery are not tested. Custom Mongo entrypoints/config files and non-password local authentication require separate verification and fail this bounded check.
 
-The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth/restore not proven`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
+The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
 
 Run the checks' tests, including real Compose config/profile resolution against disposable example configuration, with:
 
@@ -1015,16 +1179,16 @@ Caddy provisions a Let's Encrypt certificate for `B4M_DOMAIN` on first start (th
 docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
 ```
 
-**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
+**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint and the session turns endpoint `/api/v1/turns` (both served by the `chatcompletion` container) stay internal. If you want the CLI or a third-party API client to reach your stack from outside, add this route **inside** the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (the commented sample at the bottom of the file), and change `CHAT_COMPLETION_PUBLIC_URL` to `https://chat.example.com` in `.env.selfhost`:
 
 ```caddyfile
-@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+@completions path /api/ai/v1/completions /api/v1/turns
 handle @completions {
 	reverse_proxy chatcompletion:8080
 }
 ```
 
-It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the paths 404 from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
+It must be a `handle` block, like the `/ws` route: a bare `reverse_proxy @completions` loses to the catch-all `handle`, and the path 404s from the app. Caddy reads the file only at startup, so recreate it afterwards (along with `app`, which reads `.env.selfhost`): `docker compose -f compose.selfhost.yaml -f compose.caddy.yaml --env-file .env.selfhost --profile proxy up -d --force-recreate caddy app`.
 
 **Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
 
@@ -1046,14 +1210,14 @@ Per-IP rate limits (sign-in codes, unauthenticated endpoints), the SSO failure l
 
 Behind a reverse proxy that peer is the proxy, so every visitor would share one rate-limit bucket. Tell the app how many proxies sit in front of it:
 
-| Setup | `TRUSTED_PROXY_HOPS` |
-| --- | --- |
-| No proxy (direct `:3000`) | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket |
-| Tailscale sidecar (Path A, including the Headscale variant) | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
-| Bundled Caddy (`compose.caddy.yaml`) | `1` - set for you |
-| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1` |
-| Kubernetes chart via `kubectl port-forward` | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front |
-| A CDN or load balancer in front of your proxy | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For` |
+| Setup                                                         | `TRUSTED_PROXY_HOPS`                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No proxy (direct `:3000`)                                     | unset (or `0`) - on Docker Desktop (macOS/Windows) published ports arrive from the Docker gateway, so every client still shares one bucket                                                                                                                                                                                                   |
+| Tailscale sidecar (Path A, including the Headscale variant)   | `1` - set for you by `compose.tailscale.yaml`, which also binds the app port to loopback; hops=1 trusts only the rightmost `X-Forwarded-For` entry, which `tailscale serve` (Go `httputil.ReverseProxy` in Rewrite mode) sets to the tailnet peer's address. This follows from serve's proxy design and has not been tested end to end here. |
+| Bundled Caddy (`compose.caddy.yaml`)                          | `1` - set for you                                                                                                                                                                                                                                                                                                                            |
+| Your own single proxy (nginx, Traefik, a cloud load balancer) | `1`                                                                                                                                                                                                                                                                                                                                          |
+| Kubernetes chart via `kubectl port-forward`                   | unset - every connection arrives from the pod's loopback, so users share one bucket; add `TRUSTED_PROXY_HOPS` under the chart's `config:` once you put an ingress in front                                                                                                                                                                   |
+| A CDN or load balancer in front of your proxy                 | `2`, and the inner proxy must append to (not replace) `X-Forwarded-For`                                                                                                                                                                                                                                                                      |
 
 With `N` hops the client IP is the `N`th `X-Forwarded-For` entry counted **from the right** - the one your outermost trusted proxy wrote - so anything a client prepends is ignored. Only `X-Forwarded-For` is read; every proxy you count must append to it. Caddy discards a client-sent `X-Forwarded-For` unless you configure its `trusted_proxies`, so a CDN in front of Caddy also needs `trusted_proxies` set in the Caddyfile. **Whenever `TRUSTED_PROXY_HOPS` is 1 or more, the app port must be reachable only through the proxy** (loopback-bound, as `compose.caddy.yaml` does, or firewalled): a client that reaches `:3000` directly supplies the whole `X-Forwarded-For` chain itself and can mint a new IP per request. Setting the value higher than your real proxy count lets clients spoof their IP the same way, and a value that is not a whole number stops the app from starting rather than guessing.
 
@@ -1104,6 +1268,14 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
+To verify the executor end to end, mint an API key (`b4m_live_...`) in the app with the `ai:generate` scope, or `ai:chat` plus `notebooks:write`, and run the check against your deployment. It starts an agent run, polls `GET /api/v1/agent-executions/{id}` for that execution ID, and passes only when the run reaches `completed` and its answer echoes a per-run token. A `failed` or `aborted` run fails the check and prints the run's `error`, even though a failed run also saves an error reply into the session:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-agent-run
+```
+
+It needs a working model provider credential (or local model) in `.env.selfhost`. Optional: `MODEL`, `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). `RUN_TIMEOUT_MS` bounds the whole check, including each request, and a failure after the run started prints its execution ID. Exit code 0 is pass, 1 is fail, 2 is bad configuration.
+
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 
 ### Daily credit-lot expiry
@@ -1120,6 +1292,24 @@ The worker records health snapshots for active data lakes at 06:00 UTC, using th
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
 
+### Integration health checks
+
+The worker probes Slack, GitHub and Atlassian reachability every five minutes with the same unauthenticated checks hosted deployments run, and stores each result in MongoDB for the admin Integration Health dashboard. It emits no CloudWatch metrics and does not probe at startup, so a fresh container waits one full interval. Stored checks become eligible for MongoDB TTL cleanup after 25 hours.
+
+An install with no outbound HTTPS to `slack.com`, `api.github.com` or `api.atlassian.com` records those integrations as unhealthy on every run. Three consecutive failures open that integration's platform-wide circuit breaker, which blocks its callers: Slack message sends and updates return without sending, and GitHub and Atlassian MCP requests are refused as unavailable. Those integrations cannot work without that egress anyway, so there is no opt-out switch.
+
+A successful probe taking more than five seconds is also recorded as unhealthy. Three consecutive slow probes can therefore open the same circuit breaker even while the provider still responds.
+
+Probes use global `fetch`. If proxy support is added to an integration client, the probes must use equivalent proxy routing so a failed direct connection does not mark a working proxied integration as unavailable.
+
+### Storage counter drift check
+
+Every hour the worker compares each user's and organization's `currentStorageSize` counter with the bytes of the files charged to that owner, using the same sweep hosted deployments run. Self-host always runs it as a dry run: drift is recorded in MongoDB, and no counter is ever rewritten. One pass walks every owner across successive hourly ticks, completing when the last owner is visited (about a day on a typical install), and resumes from a cursor persisted in MongoDB, so a restarted worker continues the pass instead of starting it again. It sends no CloudWatch metrics, and the Slack drift alert posts only if a Slack webhook resolves: the LiveOps or default channel webhook in admin settings, or `SLACK_WEBHOOK_URL`. There is no run at startup.
+
+### Drive lake re-sync poll
+
+Every hour the worker enqueues each connected Google Drive folder that is due onto the Drive lake ingest queue, the same path the manual Re-sync button uses, so connected folders stay in sync without a click. A folder is due once it has not been polled for 6 hours, and each run enqueues at most 200, the longest-waiting first. It runs only while both the `EnableDataLakes` and `EnableDataLakeDrivePoll` admin settings are on, and does nothing otherwise. A connection that has not been fully re-walked in 24 hours is re-walked in full; the rest sync incrementally. There is no run at startup, and Drive push notifications are not used.
+
 ### Daily telemetry retention
 
 The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
@@ -1134,7 +1324,10 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/selfHostWorker.dst.test.ts
 ```
+
+The last command covers the worker scheduler itself, not just this task. It switches the process to `America/New_York` at runtime and checks that daily UTC tasks keep their UTC slot across both transitions and across a restart, and that interval tasks restart their cadence from the moment the worker starts again.
 
 ## Daily API-key usage baselines
 
@@ -1192,7 +1385,7 @@ Focused verification:
 
 ```sh
 pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
-pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/services-core test src/dataLakeService/cleanupDeletedDataLake.test.ts
 pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
 pnpm --filter @bike4mind/workers test src/queueHandlers/dataLakeCleanup.test.ts
 # Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
@@ -1229,9 +1422,9 @@ Object storage is outside the Mongo transaction. A failed attempt without a rece
 
 The notebook queue uses broker redrive after three failed deliveries; the shared local event queue preserves five attempts before redrive. The latter retains failed messages for all enabled local application-event handlers; intentionally ignored notification/telemetry event types remain ignored. Replay only after resolving the cause, retaining the original job identity. Queue acceptance is not export completion. The endpoint retains its per-call required-acceptance policy described above.
 
-Verification includes the actual API body, both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
+Verification includes the notebook curation service the API route calls (`startNotebookCuration`), both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
 
-The live test invokes the API handler directly, not through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
+The live test calls that service directly, so route validation and the 401 stay with the route tests (`curate.e2e.test.ts`); it does not go through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
 
 ```sh
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/eventDispatch.test.ts src/selfhost/notebookCurationQueue.test.ts
@@ -1254,6 +1447,16 @@ Plain export artifacts use the requesting user, plan and export job ID as their 
 
 Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
 
+### Account data exports
+
+`ACCOUNT_DATA_EXPORT_QUEUE` and `ACCOUNT_DATA_EXPORT_QUEUE_DLQ` enable the self-service "download your data" export offered in Settings. The worker writes a zip under the FabFile bucket's `exports/` prefix, so the same one-day MinIO lifecycle rule that expires notebook exports removes it, and emails the user a link to `APP_URL/account-data-export/<id>`. That page asks the API for a five-minute download link and refuses exports older than 24 hours. Without the queue variables the request endpoint answers 500 and nothing is queued; outgoing email must be configured for the link to arrive.
+
+The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
+
+### Admin data subject erasure
+
+`ACCOUNT_ERASURE_QUEUE` and `ACCOUNT_ERASURE_QUEUE_DLQ` enable the admin data subject erasure, which runs the account purge for one user at once instead of waiting for the daily account deletion sweep. The consumer uses the same redrive admission, one-at-a-time receive and visibility renewal as account data exports.
+
 ## Kubernetes evaluation package
 
 For an independent package using the current application and worker entrypoints, see [the Kubernetes self-host guide](selfhost/kubernetes/README.md). It runs on portable Kubernetes, including EKS, with retained database/object/queue volumes and explicit image references. It is an evaluation deployment; complete workflow parity and production readiness remain separate validation work.
@@ -1275,7 +1478,8 @@ Covered shapes (inventory kind in brackets):
 - `sst.aws.Cron`, including shared Function `job` targets (`schedule`)
 - `sst.aws.Bus` `subscribe()` / `subscribeQueue()` (`event`)
 - bucket `notify()` notifications to a Function or queue (`notification`)
-- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`)
+- `aws.cloudwatch.EventRule` with its `aws.cloudwatch.EventTarget`s (`eventRule`); a target that is a
+  not-covered storage resource such as a log group delivers to no function
 - `aws.ses.ReceiptRule` (`sesRule`)
 - `aws.cloudwatch.LogSubscriptionFilter` (`logSubscription`)
 - `aws.sns.TopicSubscription` and `sst.aws.SnsTopic` `subscribe()` (`snsSubscription`)
@@ -1285,19 +1489,22 @@ Covered shapes (inventory kind in brackets):
 A Function that a covered trigger delivers to is inventoried under that trigger. A declaration
 built inside a named factory with a computed name (for example one log subscription per log
 group) is identified by its factory site; computed queue and schedule names fail, because
-local registrations are matched by that name.
+local registrations are matched by that name. The exception is the queue pairs packages declare
+in `b4mContributions.infraResources`: their constructors are listed by name expression in
+`DATA_NAMED_QUEUES` and skipped, since self-host does not provision contributed queues.
 
 Not covered: every other `sst.aws.*` / `aws.<ns>.*` constructor must be listed, with a one-line
 reason, in the `NOT_COVERED` constant in `packages/scripts/src/selfhostParityInventory.ts`
-(HTTP Functions, web/router/WebSocket surfaces, topics and buses whose subscriptions are
-covered, alarms, dashboards, IAM policies, deploy-time invocations, network and WAF plumbing,
+(HTTP Functions, web/router/WebSocket surfaces, CDN origin request policies, topics and buses whose subscriptions are
+covered, the request/response callable function runtime Lambda and its function-data bucket, alarms, dashboards, outbound SES metric destinations, IAM roles and policies, KMS keys and aliases, Secrets Manager secrets and
+their resource policies, log groups and their resource policies, deploy-time invocations, network and WAF plumbing,
 and infrastructure contributed by private overlays). A constructor that is neither covered nor
 listed fails the guard.
 
 Run the focused guard with:
 
 ```bash
-pnpm --filter @bike4mind/scripts exec vitest run src/selfhostParityInventory.test.ts
+pnpm --filter @bike4mind/scripts test:repo src/selfhostParityInventory.repo.test.ts
 ```
 
 A failing guard reports the declaration identity, current declaration/local fingerprint
@@ -1316,9 +1523,12 @@ resource/provider configuration and outcome proof remain separate. `pending` is 
 capability decision linked to a shared roadmap epic (one for schedules, one for every other
 kind), not a per-gap issue. A
 `pending` queue or schedule that a self-host file now registers under the hosted name is
-reported as `Gap now has local wiring - review`. The infrastructure records excluded as
-separate workflows still require the associated consumer's broker configuration and recovery
-proof.
+reported as `Gap now has local wiring - review`. `excluded` records carry a one-line reason
+that the guard requires. Dead-letter infrastructure is excluded as a separate workflow, but
+still requires the associated consumer's broker configuration and recovery proof. A schedule
+that only serves the hosted deployment (production analytics, hosted announcements, hosted
+cloud-account scans, hosted error triage) is excluded as not applicable to a portable
+deployment, and needs no local registration.
 
 A hosted handler whose source file is missing fails the guard by name and path. The only
 accepted absence is a handler generated from a private overlay into the gitignored

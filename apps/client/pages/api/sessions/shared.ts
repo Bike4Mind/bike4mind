@@ -1,4 +1,4 @@
-import { getSharedSessionsByUser } from '@server/managers/sessionManager';
+import { getSharedSessionsByUser } from '@bike4mind/server-utils/managers/sessionManager';
 import { redactSessionsForClient, sessionSearchSchema } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
@@ -38,7 +38,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         : { ...result, data: redactSessionsForClient(result.data) }
     );
   } catch (err) {
-    console.error(err);
+    req.logger.error('Failed to get shared sessions', { error: err });
     return res.status(400).json({ message: 'Failed to get sessions', error: err });
   }
 });

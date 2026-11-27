@@ -17,14 +17,14 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { storageOwnerTransferDb } from './storageOwnerTransferDb';
+import { storageOwnerTransferDb } from '@bike4mind/server-utils/files/storageOwnerTransferDb';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * A file's billed bytes follow its lake membership after create: adding it to an org lake moves them
  * onto the org, removing it from every org lake moves them back to the uploader. Drives the REAL
- * membership doors (built dist - run `pnpm --filter @bike4mind/services build` first) against a
+ * membership doors (built dist - run `pnpm --filter @bike4mind/services-core build` first) against a
  * replica set, inside a transaction like the routes.
  */
 

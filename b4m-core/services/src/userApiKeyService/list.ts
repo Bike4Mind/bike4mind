@@ -27,17 +27,18 @@ export const listUserApiKeys = async (
 };
 
 /**
- * List the API keys billed to an organization's credit pool. Used by the org
- * management surface so any org administrator - not just the minter - can see
+ * List the member-minted API keys billed to an organization's credit pool. Used by the
+ * personal key list so any org administrator - not just the minter - can see
  * the org's keys. Authorization (is the caller an administrator of this org?)
- * is the caller's responsibility.
+ * is the caller's responsibility. Org-owned keys (`orgOwned`) are left out: they are
+ * listed and managed only through pages/api/organizations/[id]/api-keys/*.
  */
 export const listOrganizationApiKeys = async (
   organizationId: string,
   adapters: ListUserApiKeysAdapters,
   options: ListUserApiKeysOptions = {}
 ): Promise<IUserApiKeyDocument[]> => {
-  const apiKeys = await adapters.db.userApiKeys.findByOrganizationId(organizationId);
+  const apiKeys = (await adapters.db.userApiKeys.findByOrganizationId(organizationId)).filter(key => !key.orgOwned);
 
   if (!options.includeDisabled) {
     return apiKeys.filter(key => key.status === 'active');

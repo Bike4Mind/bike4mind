@@ -4,7 +4,7 @@ import { Connection, realtimeConnectionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { closeConnection } from '@bike4mind/server-utils/websocket/closeConnection';
 import { assertRealtimeSessionActive } from '@server/websocket/realtimeSession';
-import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
+import { sendToConnection, withWebSocketContext } from '@bike4mind/server-utils/websocket/utils';
 import { verifyWsAccessTokenClaims } from '@server/websocket/verifyWsAccessToken';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { JsonWebTokenError } from 'jsonwebtoken';

@@ -1,29 +1,39 @@
 import { adminSettingsRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isTeamPlanPriceId } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import {
+  OrgSubscriptionSubscribeSchema,
+  StripeSubscriptionMetadataSchema,
+} from '@bike4mind/server-utils/lib/subscriptions/schema';
+import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
+import { createCustomer, CustomerType, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { USD_CHECKOUT_SESSION_PARAMS } from '@server/integrations/stripe/checkoutCurrency';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import { z } from 'zod';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { refuseBlockedAccount } from '@server/middlewares/refuseBlockedAccount';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 import { assertSeatsWithinPlan, getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { checkoutAcquisitionMetadata } from '@server/analytics/acquisition';
+import { checkoutAcquisitionMetadata } from '@bike4mind/server-utils/analytics/acquisition';
+import { firstPurchaseCardOptions } from '@server/integrations/stripe/threeDSecure';
+import { termsConsentSessionParams } from '@server/integrations/stripe/termsConsent';
+import { signupNetworkMetadata } from '@server/integrations/stripe/riskMetadata';
+import { readNetworkMeta } from '@server/auth/networkMeta';
+import { assertCheckoutAllowed } from '@server/billing/checkoutGate';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
+  .use(refuseBlockedAccount())
   .post<Request<{}, {}, z.infer<typeof OrgSubscriptionSubscribeSchema>>>(async (req, res) => {
     const { priceId, organizationId, quantity, organizationData, callbackUrl, attributionConsent, surface } =
       OrgSubscriptionSubscribeSchema.parse(req.body);
 
-    if (priceId !== ORGANIZATION_SUBSCRIPTION_PRICE_ID) {
+    if (!isTeamPlanPriceId(priceId)) {
       throw new BadRequestError('Invalid Organization Subscription Price ID');
     }
 
@@ -60,11 +70,10 @@ const handler = baseApi()
     // buying seats is at least as consequential as changing how many you already have.
     //
     // No id means "create a new org" (the organizationData branch), so there is no existing tenant
-    // to authorize against. The two are NOT mutually exclusive, though: the schema's refine requires
-    // only that at least one be present, and sending both gates the org here while the metadata
-    // block below still keys off organizationData (#3166). Pre-existing billing-attribution bug,
-    // not an authorization one; this gate does not widen it.
-    const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
+    // to authorize against. The schema requires exactly one organization selector.
+    const organization = organizationId ? await verifyOrgPermission(req.user, organizationId, 'manageBilling') : null;
+    // The buyer is the signed-in user, whichever org the plan is for.
+    await assertCheckoutAllowed(req.user, readNetworkMeta(req), req.logger, 'team_subscription');
 
     // Everything below keys off the CANONICAL id from the gated document, never the raw body
     // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could
@@ -84,7 +93,7 @@ const handler = baseApi()
         gatedOrganizationId
       );
 
-      // The price is pinned to ORGANIZATION_SUBSCRIPTION_PRICE_ID above, so for an org this is
+      // The price is pinned to the Team price (isTeamPlanPriceId) above, so for an org this is
       // "any non-terminal subscription"; keep the match so the guard reads the same for any price.
       const blockingSubscription = liveSubscriptions.find(subscription => subscription.priceId === priceId);
 
@@ -106,7 +115,9 @@ const handler = baseApi()
       // orphaned the winner's. The gate now reads the org one round trip earlier than the old
       // inline findById did, which widens that window, so the conditional update is what keeps it
       // closed. See attachOrgStripeCustomer for the full argument.
-      customerId = await attachOrgStripeCustomer(organization);
+      // The org's customer pays the invoices, so the buyer's signup network rides on it for
+      // Radar (`::customer:signup_is_datacenter::`); an existing customer is left as it is.
+      customerId = await attachOrgStripeCustomer(organization, signupNetworkMetadata(req.user));
 
       // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
       // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
@@ -116,6 +127,7 @@ const handler = baseApi()
         email: req.user.email!,
         name: organizationData?.name ?? req.user.email!,
         type: CustomerType.Organization,
+        metadata: signupNetworkMetadata(req.user),
       });
 
       customerId = customer.id;
@@ -125,21 +137,31 @@ const handler = baseApi()
       userId: req.user.id,
       stage: Config.STAGE,
       ownerType: SubscriptionOwnerType.Organization,
-      ...(organizationData
-        ? { newOrganizationName: organizationData.name }
-        : {
+      ...(organization
+        ? {
             // The gated document's canonical id, not the body string - this value becomes the
             // subscription row's `ownerId` via the invoice webhook, and the duplicate guard above
             // matches on it byte-for-byte.
             organizationId: gatedOrganizationId,
-          }),
+          }
+        : { newOrganizationName: organizationData?.name }),
     });
+
+    // The org's customer carries the charge history; the buyer's own account age drives the window.
+    const threeDSecureOptions = await firstPurchaseCardOptions(
+      { stripeCustomerId: customerId, accountCreatedAt: req.user.createdAt },
+      req.logger
+    );
+
+    const termsConsentParams = await termsConsentSessionParams(req.user.id);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       ...USD_CHECKOUT_SESSION_PARAMS,
       customer: customerId,
       payment_method_types: ['card'],
+      ...threeDSecureOptions,
+      ...termsConsentParams,
       line_items: [
         {
           price: priceId,

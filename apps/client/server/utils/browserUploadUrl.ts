@@ -33,11 +33,12 @@ export const resolveBrowserAppFileUploadUrl = (appFileId: string, directPresigne
  *
  * Unlike the two above there is no id to name, because there is no owning DB record - the key is
  * `<userId>/<source>/<timestamp>.zip`, chosen entirely server-side. That is deliberate and
- * load-bearing: server/s3/historyUploadComplete.ts parses the userId and source back OUT of the
- * key to decide whose import this is, so a client-supplied key would let a caller attribute an
- * import to another user. The proxy therefore takes only the source and recomputes the key from
- * the authenticated request; nothing about the destination is client-controlled. `size` is the
- * declared byte length the proxy holds the body to, as the hosted presign's signature does.
+ * load-bearing: packages/server-utils/src/s3/historyUploadComplete.ts parses the userId and
+ * source back OUT of the key to decide whose import this is, so a client-supplied key would let
+ * a caller attribute an import to another user. The proxy therefore takes only the source and
+ * recomputes the key from the authenticated request; nothing about the destination is
+ * client-controlled. `size` is the declared byte length the proxy holds the body to, as the
+ * hosted presign's signature does.
  */
 export const resolveBrowserHistoryImportUploadUrl = (
   source: string,

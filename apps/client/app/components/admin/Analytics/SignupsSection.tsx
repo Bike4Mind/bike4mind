@@ -1,0 +1,187 @@
+import { useMemo } from 'react';
+import { Box, Button, Stack, Typography, useTheme } from '@mui/joy';
+import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { AnalyticsOverview, SignupBucket } from '@client/app/utils/analyticsOverview';
+import type { AdminUsersFilter } from '@bike4mind/server-utils/app/utils/adminUsersFilter';
+import { SIGNUP_SIGNAL_LABELS, type SignupSignal } from '@bike4mind/server-utils/app/utils/signupSignals';
+import { DataTable, InlineBar, type DataColumn } from '../shared';
+import { signupStatusColors } from '../Signups/SignupChart';
+import { AnalyticsSection } from './AnalyticsSection';
+import { formatCount, formatDayLabel } from './analyticsFormat';
+
+const BUCKET_UNIT = { day: 'UTC days', week: 'ISO weeks (Monday, UTC)', month: 'UTC months' } as const;
+
+export type SignupWindowSelection = {
+  createdFrom: string;
+  createdTo: string;
+  verdict?: AdminUsersFilter['verdict'];
+};
+
+type Props = {
+  data: AnalyticsOverview | undefined;
+  loading: boolean;
+  error: boolean;
+  onRetry: () => void;
+  onShowDefaultRange?: () => void;
+  /** Opens the Users list for accounts created in [createdFrom, createdTo). */
+  onSelectWindow: (window: SignupWindowSelection) => void;
+};
+
+const signalLabel = (signal: string) => SIGNUP_SIGNAL_LABELS[signal as SignupSignal]?.label ?? signal;
+const toWindow = (bucket: SignupBucket) => ({
+  createdFrom: `${bucket.start}T00:00:00.000Z`,
+  createdTo: `${bucket.end}T00:00:00.000Z`,
+});
+
+export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRange, onSelectWindow }: Props) {
+  const theme = useTheme();
+  const admin = theme.palette.admin;
+  const colors = signupStatusColors(admin);
+  const bucket = data?.window.bucket ?? 'day';
+  const buckets = useMemo(() => data?.signups.buckets ?? [], [data]);
+  const rows = useMemo(() => buckets.map(b => ({ ...b, label: formatDayLabel(b.start, bucket) })), [buckets, bucket]);
+  const totals = data?.signups.totals ?? { legit: 0, suspected: 0 };
+  const signals = data?.signups.bySignal ?? [];
+  const maxSignal = Math.max(0, ...signals.map(row => row.count));
+  const empty = totals.legit + totals.suspected === 0;
+
+  const caption = `${formatCount(totals.legit)} real, ${formatCount(totals.suspected)} suspected. Bars are ${BUCKET_UNIT[bucket]}; click one to list its accounts.`;
+  const axisTick = { fontSize: 12, fill: admin.inkMuted };
+
+  // Bar entries carry the row they were drawn from, so the click resolves the bucket without tooltip state.
+  const selectBar = (entry: { payload?: { start?: string } }, verdict: NonNullable<AdminUsersFilter['verdict']>) => {
+    const picked = buckets.find(b => b.start === entry.payload?.start);
+    if (picked) onSelectWindow({ ...toWindow(picked), verdict });
+  };
+
+  const partialCell = (entry: SignupBucket, fill: string, verdict: NonNullable<AdminUsersFilter['verdict']>) => (
+    <Cell
+      key={entry.start}
+      data-testid={`analytics-signups-${verdict}-${entry.start}-bar`}
+      fill={fill}
+      fillOpacity={entry.partial ? 0.45 : 1}
+      stroke={entry.partial ? fill : admin.surface}
+      strokeDasharray={entry.partial ? '3 2' : undefined}
+    />
+  );
+
+  const chart = (
+    <Box
+      role="img"
+      aria-label={`Stacked bar chart of signups per bucket, real versus suspected. ${caption}`}
+      data-testid="analytics-signups-chart"
+      sx={{ cursor: 'pointer' }}
+    >
+      <ResponsiveContainer width="100%" height={260}>
+        <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap={1}>
+          <CartesianGrid vertical={false} stroke={admin.border} />
+          <XAxis dataKey="label" tick={axisTick} minTickGap={24} tickLine={false} />
+          <YAxis tick={axisTick} width={40} allowDecimals={false} axisLine={false} tickLine={false} />
+          <Tooltip
+            cursor={{ fill: admin.hover }}
+            contentStyle={{
+              background: admin.surface,
+              border: `1px solid ${admin.border}`,
+              borderRadius: 8,
+              color: admin.ink,
+              fontSize: 12,
+            }}
+            labelFormatter={label => `${label} (UTC)`}
+            formatter={(value, name) => [formatCount(value == null ? null : Number(value)), name]}
+          />
+          <Legend wrapperStyle={{ fontSize: 12, color: admin.inkSecondary }} />
+          <Bar
+            dataKey="legit"
+            name="Real"
+            stackId="signups"
+            fill={colors.likelyLegit}
+            isAnimationActive={false}
+            onClick={entry => selectBar(entry, 'legit')}
+          >
+            {rows.map(entry => partialCell(entry, colors.likelyLegit, 'legit'))}
+          </Bar>
+          <Bar
+            dataKey="suspected"
+            name="Suspected"
+            stackId="signups"
+            fill={colors.suspected}
+            isAnimationActive={false}
+            onClick={entry => selectBar(entry, 'suspected')}
+          >
+            {rows.map(entry => partialCell(entry, colors.suspected, 'suspected'))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Box>
+  );
+
+  const columns: DataColumn<SignupBucket>[] = [
+    {
+      id: 'start',
+      label: bucket === 'day' ? 'Day (UTC)' : bucket === 'week' ? 'Week from (UTC)' : 'Month from (UTC)',
+      render: row => (
+        <Button
+          size="sm"
+          variant="plain"
+          onClick={() => onSelectWindow(toWindow(row))}
+          data-testid={`analytics-signups-row-${row.start}-btn`}
+        >
+          {`${row.start}${row.partial ? ' (partial)' : ''}`}
+        </Button>
+      ),
+    },
+    { id: 'legit', label: 'Real', numeric: true, render: row => formatCount(row.legit) },
+    { id: 'suspected', label: 'Suspected', numeric: true, render: row => formatCount(row.suspected) },
+  ];
+  const table = (
+    <DataTable
+      rows={buckets}
+      columns={columns}
+      getRowId={row => row.start}
+      label="Signups per bucket"
+      onRetry={onRetry}
+      pagination={false}
+      maxHeight="320px"
+      testId="analytics-signups-table"
+    />
+  );
+
+  const footer =
+    signals.length > 0 ? (
+      <Stack gap={1} sx={{ mt: 2 }} data-testid="analytics-signup-signals">
+        <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
+          Signals in this range (an account can carry several)
+        </Typography>
+        {signals.map(row => (
+          <Stack key={row.signal} direction="row" alignItems="center" gap={1.5}>
+            <Typography level="body-sm" sx={{ color: 'admin.ink', flex: 1, minWidth: 0 }} noWrap>
+              {signalLabel(row.signal)}
+            </Typography>
+            <InlineBar value={row.count} max={maxSignal} />
+            <Typography
+              level="body-sm"
+              sx={{ color: 'admin.ink', minWidth: 48, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}
+            >
+              {formatCount(row.count)}
+            </Typography>
+          </Stack>
+        ))}
+      </Stack>
+    ) : null;
+
+  return (
+    <AnalyticsSection
+      title="Signups: real vs suspected"
+      caption={caption}
+      loading={loading}
+      error={error}
+      onRetry={onRetry}
+      empty={empty}
+      onShowDefaultRange={onShowDefaultRange}
+      chart={chart}
+      table={table}
+      footer={footer}
+      testId="analytics-signups"
+    />
+  );
+}

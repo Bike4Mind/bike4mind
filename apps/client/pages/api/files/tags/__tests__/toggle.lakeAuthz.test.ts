@@ -77,7 +77,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 // Stubbed so the actor's org-admin set is a test input rather than a Mongo read; the gate that
 // consumes it is the real one.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,

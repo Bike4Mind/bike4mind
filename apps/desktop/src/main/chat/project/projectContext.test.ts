@@ -65,9 +65,23 @@ describe('loadProjectContext instructions', () => {
     await writeFile(join(dir, 'CLAUDE.md'), 'project rules', 'utf8');
     const block = await loadProjectContext(dir, dir, userRoot);
     expect(block).toContain(join(userRoot, 'CLAUDE.md'));
-    expect(block).toContain(join(dir, 'CLAUDE.md'));
+    expect(block).toContain('--- end CLAUDE.md (CLAUDE.md in the working directory) ---');
     expect(block.indexOf('user rules')).toBeLessThan(block.indexOf('project rules'));
     expect(block).toContain('most general first');
+  });
+
+  it('renders the same block for two worktrees with the same files', async () => {
+    const left = await scratch();
+    const right = await scratch();
+    for (const worktree of [left, right]) {
+      await git(worktree, ['init', '--quiet']);
+      await writeFile(join(worktree, 'CLAUDE.md'), 'branch rules', 'utf8');
+      await writeFile(join(worktree, 'a.ts'), 'x', 'utf8');
+    }
+    const block = await loadProjectContext(left, dir, userRoot);
+    expect(block).toContain('a.ts');
+    expect(block).not.toContain(left);
+    expect(await loadProjectContext(right, dir, userRoot)).toBe(block);
   });
 
   it('gives a session with no working directory the user instructions and no tree', async () => {

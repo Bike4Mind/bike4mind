@@ -1,0 +1,193 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => ({
+  connectDB: vi.fn(),
+  findDeletionDueUserIds: vi.fn(),
+  countOverdueDeletionRequests: vi.fn(),
+  emitMetric: vi.fn(),
+  drainDeletionNotices: vi.fn(),
+  completeAccountDeletion: vi.fn(),
+  erasureRegistry: { scope: vi.fn(), audit: vi.fn() },
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  connectDB: h.connectDB,
+  userRepository: {
+    findDeletionDueUserIds: h.findDeletionDueUserIds,
+    countOverdueDeletionRequests: h.countOverdueDeletionRequests,
+  },
+}));
+vi.mock('@bike4mind/server-utils/dataSubject/erasureRegistry', () => ({ erasureRegistry: h.erasureRegistry }));
+vi.mock('@bike4mind/server-utils/users/completeAccountDeletion', () => ({
+  completeAccountDeletion: h.completeAccountDeletion,
+}));
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: h.emitMetric }));
+vi.mock('@bike4mind/server-utils/users/accountDeletionNotice', () => ({
+  drainDeletionNotices: h.drainDeletionNotices,
+}));
+vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://host/%STAGE%' } }));
+
+import { handler, runAccountDeletionSweep } from './accountDeletionSweep';
+
+const NOW = new Date('2026-11-04T05:00:00.000Z');
+const NO_NOTICES = { sent: 0, failed: 0, abandoned: 0 };
+const DAY = 24 * 60 * 60 * 1000;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+const sweep = () => runAccountDeletionSweep({ logger: logger as never, now: NOW });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  h.findDeletionDueUserIds.mockResolvedValue(['u1', 'u2', 'u3']);
+  h.completeAccountDeletion.mockResolvedValue({ deleted: true });
+  h.countOverdueDeletionRequests.mockResolvedValue(0);
+  h.drainDeletionNotices.mockResolvedValue(NO_NOTICES);
+});
+
+describe('runAccountDeletionSweep', () => {
+  it('lists the due accounts with a batch limit and completes each in order', async () => {
+    const result = await sweep();
+
+    expect(h.findDeletionDueUserIds).toHaveBeenCalledWith(NOW, 200);
+    expect(h.completeAccountDeletion.mock.calls.map(([id]) => id)).toEqual(['u1', 'u2', 'u3']);
+    expect(h.completeAccountDeletion).toHaveBeenCalledWith('u1', {
+      logger,
+      now: NOW,
+      erasureRegistry: h.erasureRegistry,
+    });
+    expect(result).toEqual({
+      deleted: 3,
+      not_due: 0,
+      not_found: 0,
+      busy: 0,
+      failed: 0,
+      overdue: 0,
+      notices: NO_NOTICES,
+    });
+  });
+
+  it('honours a custom batch size', async () => {
+    await runAccountDeletionSweep({ logger: logger as never, now: NOW, batchSize: 5 });
+    expect(h.findDeletionDueUserIds).toHaveBeenCalledWith(NOW, 5);
+  });
+
+  it('counts skipped accounts by reason', async () => {
+    h.completeAccountDeletion
+      .mockResolvedValueOnce({ deleted: false, reason: 'not_due' })
+      .mockResolvedValueOnce({ deleted: false, reason: 'not_found' });
+
+    await expect(sweep()).resolves.toEqual({
+      deleted: 1,
+      not_due: 1,
+      not_found: 1,
+      busy: 0,
+      failed: 0,
+      overdue: 0,
+      notices: NO_NOTICES,
+    });
+  });
+
+  it('counts an account held by a live purge or export as busy', async () => {
+    h.completeAccountDeletion.mockResolvedValueOnce({ deleted: false, reason: 'busy' });
+
+    await expect(sweep()).resolves.toEqual({
+      deleted: 2,
+      not_due: 0,
+      not_found: 0,
+      busy: 1,
+      failed: 0,
+      overdue: 0,
+      notices: NO_NOTICES,
+    });
+  });
+
+  it('keeps going past a failed account and reports it', async () => {
+    h.completeAccountDeletion.mockRejectedValueOnce(new Error('db down'));
+
+    const result = await sweep();
+
+    expect(h.completeAccountDeletion).toHaveBeenCalledTimes(3);
+    expect(result).toEqual({
+      deleted: 2,
+      not_due: 0,
+      not_found: 0,
+      busy: 0,
+      failed: 1,
+      overdue: 0,
+      notices: NO_NOTICES,
+    });
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('u1'), expect.any(Error));
+  });
+});
+
+describe('overdue deletion requests', () => {
+  const overdueMetric = (value: number) => [
+    'Lumina5/AccountDeletion',
+    'OverdueDeletionRequests',
+    value,
+    { Stage: 'test' },
+    expect.anything(),
+  ];
+
+  it('counts requests at least 25 days old and emits the count with only the Stage dimension', async () => {
+    h.countOverdueDeletionRequests.mockResolvedValue(1);
+
+    const result = await sweep();
+
+    expect(h.countOverdueDeletionRequests).toHaveBeenCalledWith(new Date(NOW.getTime() - 25 * DAY));
+    expect(h.emitMetric).toHaveBeenCalledWith(...overdueMetric(1));
+    expect(result.overdue).toBe(1);
+  });
+
+  it('emits zero when nothing is overdue, so the alarm sees a healthy datapoint', async () => {
+    await sweep();
+    expect(h.emitMetric).toHaveBeenCalledWith(...overdueMetric(0));
+  });
+
+  it('emits nothing when metrics are off (self-host)', async () => {
+    await runAccountDeletionSweep({ logger: logger as never, now: NOW, emitMetrics: false });
+    expect(h.emitMetric).not.toHaveBeenCalled();
+  });
+
+  it('emits before purging, so a run that then throws has still reported', async () => {
+    h.countOverdueDeletionRequests.mockResolvedValue(2);
+    h.findDeletionDueUserIds.mockRejectedValue(new Error('db down'));
+
+    await expect(sweep()).rejects.toThrow('db down');
+    expect(h.emitMetric).toHaveBeenCalledWith(...overdueMetric(2));
+  });
+});
+
+describe('deletion notice retries', () => {
+  it('drains pending notices before purging and reports the counts', async () => {
+    h.drainDeletionNotices.mockResolvedValue({ sent: 2, failed: 1, abandoned: 0 });
+
+    const result = await sweep();
+
+    expect(h.drainDeletionNotices).toHaveBeenCalledWith({ logger, now: NOW });
+    expect(result.notices).toEqual({ sent: 2, failed: 1, abandoned: 0 });
+    expect(h.drainDeletionNotices.mock.invocationCallOrder[0]).toBeLessThan(
+      h.completeAccountDeletion.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not fail the run when draining throws', async () => {
+    h.drainDeletionNotices.mockRejectedValue(new Error('db down'));
+
+    await expect(sweep()).resolves.toMatchObject({ deleted: 3, failed: 0, notices: NO_NOTICES });
+  });
+});
+
+describe('handler', () => {
+  it('connects to the stage database and returns the counts', async () => {
+    await expect(handler()).resolves.toMatchObject({ deleted: 3, failed: 0, overdue: 0, notices: NO_NOTICES });
+    expect(h.connectDB).toHaveBeenCalledWith('mongodb://host/test');
+  });
+
+  it('throws at the end when any account failed, after attempting every one, so the run is dead-lettered', async () => {
+    h.completeAccountDeletion.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(handler()).rejects.toThrow('1 account(s) failed to delete');
+    expect(h.completeAccountDeletion).toHaveBeenCalledTimes(3);
+  });
+});

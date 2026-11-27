@@ -15,8 +15,14 @@ import { ZodError } from 'zod';
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: any, res: any) => unknown),
   submitted: null as any,
+  options: null as unknown,
 }));
 
+vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
+  admitRequestCompletion: async () => ({ release: async () => {} }),
+}));
+
+vi.mock('@bike4mind/server-utils/auth/sideAppRefusal', () => ({ recordSideAppRefusal: vi.fn() }));
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     post: (fn: any) => {
@@ -24,16 +30,35 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      mockRefs.options = options;
+      return chain;
+    },
+  };
 });
 
-vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { ANTHROPIC_API_KEY: 'sk-test' } }));
+vi.mock('@server/billing/batchAnthropicKeys', () => ({
+  batchAnthropicKeys: async () => ['sk-test'],
+  firstKeyHolding: async (keys: string[], read: (key: string) => Promise<unknown>) => ({
+    key: keys[0],
+    value: await read(keys[0]),
+  }),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   transformBatchRepository: { create: vi.fn(async () => ({ id: 'batch-row' })) },
 }));
 
+vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', () => ({
+  createModelAdmission: async () => ({ assert: async () => {} }),
+  completionCeilingUsd: () => 0,
+  isCreditsEnforced: async () => false,
+  reserveCompletionCredits: async () => ({ hold: null, refund: async () => {} }),
+}));
+
 vi.mock('@bike4mind/llm-adapters', () => ({
+  getAvailableModels: async () => [],
   AnthropicBatchService: {
     fromApiKey: () => ({
       submitBatch: async (requests: any) => {
@@ -73,6 +98,22 @@ const splitRequest = {
     },
   ],
 };
+
+describe('POST /api/transforms/batch -- API key scope posture', () => {
+  it('declares ai:generate or admin and grandfathers legacy keys', () => {
+    expect(mockRefs.options).toMatchObject({ requiredScopes: ['ai:generate', 'admin:*'], grandfatherLegacyKeys: true });
+  });
+
+  it('refuses a key minted for a connected app and submits nothing', async () => {
+    mockRefs.submitted = null;
+    const { req, res } = post({ requests: [splitRequest] });
+    Object.assign(req, { apiKeyInfo: { scopes: ['ai:generate'], oauthExchangeClientId: 'client-1' } });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockRefs.submitted).toBeNull();
+  });
+});
 
 describe('POST /api/transforms/batch -- cache_control pass-through', () => {
   beforeEach(() => {

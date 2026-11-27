@@ -23,6 +23,7 @@
  */
 
 import mongoose from 'mongoose';
+import { Logger } from '@bike4mind/observability';
 
 /** A single aggregation-pipeline stage or $expr condition: an arbitrary BSON document. */
 type AggStage = Record<string, unknown>;
@@ -30,11 +31,12 @@ type AggStage = Record<string, unknown>;
 /**
  * Feature flag to enable DocumentDB compatibility mode
  * Made dynamic to support runtime environment variable changes (for testing)
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export const USE_DOCUMENTDB = () => process.env.USE_DOCUMENTDB_COMPATIBILITY === 'true';
 
 if (USE_DOCUMENTDB()) {
-  console.log('[DocumentDB Compatibility] Mode: ENABLED');
+  Logger.info('[DocumentDB Compatibility] Mode: ENABLED');
 }
 
 /**
@@ -53,6 +55,7 @@ if (USE_DOCUMENTDB()) {
  *   }
  * );
  * ```
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export async function executeFacetCompatible<T>(
   // any: boundary - callers pass inconsistently-typed pipelines/facet stages and consume
@@ -109,6 +112,7 @@ export async function executeFacetCompatible<T>(
  *   as: 'userData'
  * });
  * ```
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export function createCompatibleLookup(options: {
   from: string;
@@ -220,6 +224,7 @@ function extractFieldMatch(condition: AggStage): AggStage | null {
  * // Then sort by:
  * .sort({ fileNameLower: 1 })
  * ```
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export function addLowercaseField(schema: mongoose.Schema, options: { fields: string[] }): void {
   options.fields.forEach(field => {
@@ -257,6 +262,7 @@ export function addLowercaseField(schema: mongoose.Schema, options: { fields: st
 
 /**
  * Migration helper to add lowercase fields to existing documents
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export async function migrateLowercaseFields<T>(
   model: mongoose.Model<T>,
@@ -315,6 +321,7 @@ export async function migrateLowercaseFields<T>(
 
 /**
  * Applies DocumentDB-compatible sorting based on field configuration
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export function getCompatibleSort(
   sortField: string,
@@ -344,6 +351,7 @@ export function getCompatibleSort(
 
 /**
  * Helper function to convert an aggregation pipeline for DocumentDB compatibility
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 // any: boundary - accepts/returns pipelines that callers feed straight to model.aggregate()
 // (strict PipelineStage union) while building them as loose documents; see module header.
@@ -361,7 +369,7 @@ export function convertPipelineForDocumentDB(pipeline: any[]): any[] {
 
       if (stage.$facet) {
         // This should be handled by executeFacetCompatible instead
-        console.warn('Found $facet in pipeline. Consider using executeFacetCompatible instead.');
+        Logger.warn('Found $facet in pipeline. Consider using executeFacetCompatible instead.');
         return stage;
       }
 
@@ -500,6 +508,7 @@ function convertSingleExprCondition(condition: AggStage, letVars: AggStage = {})
  * }
  *
  * Into multiple $match stages that DocumentDB can handle
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 // any: boundary - a $lookup stage in/out, fed to/from model.aggregate() (strict PipelineStage
 // union) and inspected by callers via `.$lookup`; see module header.

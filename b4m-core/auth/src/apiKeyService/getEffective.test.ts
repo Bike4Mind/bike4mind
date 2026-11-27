@@ -1,5 +1,13 @@
 import { vi, describe, it, expect } from 'vitest';
-import { getEffectiveApiKey, getEffectiveLLMApiKeys, getSearxngUrl, getWebSearchProviderSetting } from './getEffective';
+import {
+  getEffectiveApiKey,
+  getEffectiveApiKeyWithSource,
+  getEffectiveLLMApiKeys,
+  getSearxngUrl,
+  getWebSearchProviderSetting,
+  sharedAdminKeyProviders,
+  userKeyProviders,
+} from './getEffective';
 import type { IAdminSettingsRepository, IApiKeyRepository, IApiKeyDocument } from '@bike4mind/common';
 import { ApiKeyType } from '@bike4mind/common';
 
@@ -143,6 +151,93 @@ describe('getEffectiveLLMApiKeys', () => {
     // The sentinel is intentionally surfaced to the caller (e.g. to show an "expired key"
     // warning in the UI) rather than silently swapping in the demo key.
     expect(result.openai).toBe('expired');
+  });
+
+  describe('userKeyProviders', () => {
+    const resolve = (userKeys: Partial<IApiKeyDocument>[], settings: Record<string, string | null>) =>
+      getEffectiveLLMApiKeys('user-123', {
+        db: { apiKeys: makeApiKeyRepo(userKeys), adminSettings: makeAdminSettingsRepo() },
+        getSettingsByNames: makeGetSettingsByNames(settings),
+      });
+
+    it('names only the providers resolved from the user own saved key, expired included', async () => {
+      const result = await resolve(
+        [
+          { type: ApiKeyType.anthropic, apiKey: 'sk-ant-user' },
+          { type: ApiKeyType.gemini, apiKey: 'g-old', expiresAt: new Date('2000-01-01') },
+        ],
+        { openaiDemoKey: 'sk-demo', anthropicDemoKey: 'sk-ant-demo' }
+      );
+      expect([...userKeyProviders(result)].sort()).toEqual(['anthropic', 'gemini']);
+    });
+
+    it('is empty for a table resolved from platform keys only', async () => {
+      const result = await resolve([], { anthropicDemoKey: 'sk-ant-demo' });
+      expect(userKeyProviders(result).size).toBe(0);
+    });
+
+    it('is empty for an object getEffectiveLLMApiKeys did not return', () => {
+      expect(userKeyProviders({ anthropic: 'sk-ant-user' }).size).toBe(0);
+    });
+  });
+
+  describe('sharedAdminKeyProviders', () => {
+    const resolve = (userKeys: Partial<IApiKeyDocument>[], settings: Record<string, string | null>) =>
+      getEffectiveLLMApiKeys('user-123', {
+        db: { apiKeys: makeApiKeyRepo(userKeys), adminSettings: makeAdminSettingsRepo() },
+        getSettingsByNames: makeGetSettingsByNames(settings),
+      });
+
+    it('marks a provider shared only when its key is the admin setting', async () => {
+      const result = await resolve([{ type: ApiKeyType.openai, apiKey: 'sk-user' }], {
+        openaiDemoKey: 'sk-demo',
+        anthropicDemoKey: 'sk-ant-demo',
+      });
+      expect(sharedAdminKeyProviders(result)).toEqual({ openai: false, anthropic: true });
+    });
+
+    it('does not mark an expired user key as shared', async () => {
+      const result = await resolve(
+        [{ type: ApiKeyType.anthropic, apiKey: 'sk-ant-old', expiresAt: new Date('2000-01-01') }],
+        { anthropicDemoKey: 'sk-ant-demo' }
+      );
+      expect(result.anthropic).toBe('expired');
+      expect(sharedAdminKeyProviders(result)).toEqual({ openai: false, anthropic: false });
+    });
+
+    it('does not mark a self-host env key as shared', async () => {
+      const saved = { self: process.env.B4M_SELF_HOST, key: process.env.ANTHROPIC_API_KEY };
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-env';
+      try {
+        const result = await resolve([], {});
+        expect(result.anthropic).toBe('sk-ant-env');
+        expect(sharedAdminKeyProviders(result)).toEqual({ openai: false, anthropic: false });
+      } finally {
+        if (saved.self === undefined) delete process.env.B4M_SELF_HOST;
+        else process.env.B4M_SELF_HOST = saved.self;
+        if (saved.key === undefined) delete process.env.ANTHROPIC_API_KEY;
+        else process.env.ANTHROPIC_API_KEY = saved.key;
+      }
+    });
+
+    it('leaves the returned key object free of extra fields', async () => {
+      const result = await resolve([], { openaiDemoKey: 'sk-demo' });
+      expect(Object.keys(result).sort()).toEqual([
+        'anthropic',
+        'bfl',
+        'deepseek',
+        'gemini',
+        'imageGen',
+        'kimi',
+        'ollama',
+        'openai',
+        'typesafe',
+        'voyageai',
+        'xai',
+      ]);
+      expect(sharedAdminKeyProviders({ ...result })).toBeUndefined();
+    });
   });
 
   it('enables ollama when EnableOllama is the string "true"', async () => {
@@ -461,5 +556,44 @@ describe('getEffectiveApiKey self-host env fallback', () => {
     await withEnv({ B4M_SELF_HOST: 'true' }, async () => {
       expect(await getEffectiveApiKey('user-1', { type: ApiKeyType.elevenlabs }, adapters())).toBeUndefined();
     });
+  });
+});
+
+describe('getEffectiveApiKeyWithSource', () => {
+  const adapters = (userKey: string | null, settings: Record<string, string | null> = {}) =>
+    ({
+      db: {
+        apiKeys: {
+          ...makeApiKeyRepo(),
+          findByUserIdAndType: vi.fn(async () => (userKey ? { type: ApiKeyType.elevenlabs, apiKey: userKey } : null)),
+        },
+        adminSettings: makeAdminSettingsRepoByName(settings),
+      },
+    }) as unknown as Parameters<typeof getEffectiveApiKeyWithSource>[2];
+
+  it("reports the user's own key as 'user', ahead of the platform key", async () => {
+    expect(
+      await getEffectiveApiKeyWithSource(
+        'user-1',
+        { type: ApiKeyType.elevenlabs },
+        adapters('el-user', { elevenLabsServerApiKey: 'el-platform' })
+      )
+    ).toEqual({ key: 'el-user', source: 'user' });
+  });
+
+  it("reports the admin setting key as 'platform'", async () => {
+    expect(
+      await getEffectiveApiKeyWithSource(
+        'user-1',
+        { type: ApiKeyType.elevenlabs },
+        adapters(null, { elevenLabsServerApiKey: 'el-platform' })
+      )
+    ).toEqual({ key: 'el-platform', source: 'platform' });
+  });
+
+  it('returns undefined when no key resolves', async () => {
+    expect(
+      await getEffectiveApiKeyWithSource('user-1', { type: ApiKeyType.elevenlabs }, adapters(null))
+    ).toBeUndefined();
   });
 });

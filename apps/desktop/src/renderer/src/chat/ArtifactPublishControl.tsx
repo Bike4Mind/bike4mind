@@ -101,7 +101,7 @@ function PublishedLink({ state }: { state: ChatArtifactPublish }) {
             {state.url}
           </Link>
           <Box>
-            <Button size="sm" variant="soft" color="neutral" onClick={copy} data-testid="artifact-publish-copy-btn">
+            <Button size="sm" variant="outlined" color="neutral" onClick={copy} data-testid="artifact-publish-copy-btn">
               {copied ? 'Copied' : 'Copy link'}
             </Button>
           </Box>
@@ -241,7 +241,7 @@ export function ArtifactPublishControl({ artifact }: { artifact: ChatArtifactVie
       <Stack direction="row" spacing={1} alignItems="center">
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           onClick={() => setOpen(true)}
           data-testid="artifact-publish-open-btn"
@@ -315,7 +315,7 @@ export function ArtifactPublishControl({ artifact }: { artifact: ChatArtifactVie
           </Button>
           <Button
             size="sm"
-            variant="plain"
+            variant="outlined"
             color="neutral"
             disabled={busy}
             onClick={() => setOpen(false)}

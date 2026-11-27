@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   revokeGitHubLakeConnection: vi.fn(),
 }));
 
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection', () => ({
   revokeGitHubLakeConnection: h.revokeGitHubLakeConnection,
 }));
 

@@ -171,7 +171,7 @@ async function decide(runId: string, run: LeanRun, deps: AlarmDeps): Promise<str
 
   return decideAlarm({
     key: { suite: run.suite, env: run.env, ...(run.tenant ? { tenant: run.tenant } : {}) },
-    runUrl: `${deps.appOrigin}/status/runs/${runId}`,
+    runUrl: `${deps.appOrigin}/admin/qa/runs/${runId}`,
     previous: previous ? { status: previous.status, failing: previousFailing } : null,
     current: { status: run.status, failing, ran: run.counts.ran, notStarted: run.counts.notStarted },
     priorNonPassing: leadingNonPassing(prior).count,

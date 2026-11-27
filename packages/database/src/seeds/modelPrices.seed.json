@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-20T08:56:18.099Z",
+  "generatedAt": "2026-11-24T11:44:51.940Z",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -217,6 +217,17 @@
       }
     },
     {
+      "modelId": "claude-sonnet-5-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000002,
+          "output": 0.00001,
+          "cache_read": 1.0000000000000001e-7
+        }
+      }
+    },
+    {
       "modelId": "deepseek-flash",
       "unit": "per_token",
       "pricing": {
@@ -410,6 +421,17 @@
       }
     },
     {
+      "modelId": "gemini-4-neon",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 0.000003,
+          "output": 0.000015,
+          "cache_read": 1.5e-7
+        }
+      }
+    },
+    {
       "modelId": "global.anthropic.claude-fable-5",
       "unit": "per_token",
       "pricing": {
@@ -426,7 +448,8 @@
         "1000000": {
           "input": 0.00001,
           "output": 0.00005,
-          "cache_read": 2.5e-7
+          "cache_read": 2.5e-7,
+          "cache_write": 0.0000125
         }
       }
     },
@@ -501,7 +524,8 @@
         "1000000": {
           "input": 0.000004,
           "output": 0.00002,
-          "cache_read": 2.0000000000000002e-7
+          "cache_read": 2.0000000000000002e-7,
+          "cache_write": 0.000005
         }
       }
     },
@@ -532,7 +556,8 @@
         "1000000": {
           "input": 0.000002,
           "output": 0.00001,
-          "cache_read": 1.0000000000000001e-7
+          "cache_read": 1.0000000000000001e-7,
+          "cache_write": 0.0000025
         }
       }
     },
@@ -1067,6 +1092,16 @@
           "input": 0.0000011,
           "output": 0.0000044,
           "cache_read": 2.75e-7
+        }
+      }
+    },
+    {
+      "modelId": "us.amazon.nova-pro-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "300000": {
+          "input": 8e-7,
+          "output": 0.0000032
         }
       }
     },

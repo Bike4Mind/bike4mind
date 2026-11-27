@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { IUser } from '../types/entities/UserTypes';
 import {
+  organizationRosterScope,
   toSafeUser,
   toSafeUsers,
   redactUserSecretsForSelf,
   USER_SECRET_FIELDS,
+  USER_SECRET_SUBFIELD_PATHS,
   USER_SUBFIELD_REDACTED_FIELDS,
 } from './toSafeUser';
 import {
@@ -130,6 +132,16 @@ describe('toSafeUser', () => {
     expectNoSecretValues(safe);
   });
 
+  it('org-member scope keeps isBanned but drops email (names-only roster)', () => {
+    const safe = toSafeUser({ ...fullUser, isBanned: true }, 'org-member');
+    expect(Object.keys(safe!).sort()).toEqual(
+      ['id', 'isBanned', 'isOnline', 'lastActiveAt', 'name', 'photoUrl', 'username'].sort()
+    );
+    expect(safe!.isBanned).toBe(true);
+    expect(safe!.name).toBe(fullUser.name);
+    expectNoSecretValues(safe);
+  });
+
   it('defaults to public scope', () => {
     expect('email' in toSafeUser(fullUser)!).toBe(false);
   });
@@ -152,6 +164,42 @@ describe('toSafeUser', () => {
 });
 
 describe('redactUserSecretsForSelf', () => {
+  it('withholds private grant assessments from self and public views', () => {
+    const user = {
+      ...fullUser,
+      signupGrantAssessment: {
+        band: 'review',
+        credits: 0,
+        score: 8,
+        reasons: ['datacenter'],
+        missing: [],
+        policyVersion: 'private',
+        status: 'evaluated',
+      },
+    } as IUser;
+    expect(redactUserSecretsForSelf(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(toSafeUser(user)).not.toHaveProperty('signupGrantAssessment');
+    expect(redactUserSecretsForSelf(user, { keepAdminOnly: ['signupGrantAssessment'] })).toHaveProperty(
+      'signupGrantAssessment'
+    );
+  });
+  it('keeps the signup grant for its holder but not an admin block on it', () => {
+    const grant = {
+      stage: 'signup',
+      signupCredits: 10,
+      unlockCredits: 40,
+      creditsReleased: 10,
+      nextCondition: 'verification',
+    };
+    const blocked = { ...fullUser, signupGrant: { ...grant, blocked: { at: new Date() } } } as IUser;
+    const out = redactUserSecretsForSelf(blocked) as { signupGrant: Record<string, unknown> };
+    expect(out.signupGrant).toEqual(grant);
+    expect(out.signupGrant).not.toHaveProperty('blocked');
+    const unblocked = redactUserSecretsForSelf({ ...fullUser, signupGrant: grant } as IUser) as {
+      signupGrant: unknown;
+    };
+    expect(unblocked.signupGrant).toEqual(grant);
+  });
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the
@@ -170,6 +218,20 @@ describe('redactUserSecretsForSelf', () => {
     ]) {
       expect(f in self).toBe(false);
     }
+  });
+
+  it('hides throttle and riskSignals from self views unless re-included via keepAdminOnly', () => {
+    const flagged = {
+      ...fullUser,
+      throttle: { tier: 'shadow', reason: 'r', source: 'admin', changedAt: new Date() },
+      riskSignals: [{ type: 'signup_honeypot', at: new Date() }],
+    } as unknown as IUser;
+    const self = redactUserSecretsForSelf(flagged)!;
+    expect('throttle' in self).toBe(false);
+    expect('riskSignals' in self).toBe(false);
+    const admin = redactUserSecretsForSelf(flagged, { keepAdminOnly: ['throttle', 'riskSignals'] })!;
+    expect(admin.throttle).toBeDefined();
+    expect(admin.riskSignals).toBeDefined();
   });
 
   it('keeps non-secret profile fields', () => {
@@ -274,6 +336,27 @@ describe('redactUserSecretsForSelf', () => {
     }
   });
 
+  // The signals and reasons say how the score is built, so the scored user must never see them.
+  it('never shows a user their own risk score, in any view', () => {
+    const scored = {
+      ...fullUser,
+      riskScore: { score: 70, signals: [], computedAt: new Date(), reviewState: 'pending' },
+    } as unknown as IUser;
+
+    expect('riskScore' in redactUserSecretsForSelf(scored)!).toBe(false);
+    expect('riskScore' in toSafeUser(scored, 'self')!).toBe(false);
+  });
+
+  it('drops a field no list classifies, without relying on the response schema', () => {
+    const self = redactUserSecretsForSelf({ ...fullUser, futureCredential: 'x' } as Partial<IUser>)!;
+    expect(self).not.toHaveProperty('futureCredential');
+  });
+
+  it("keeps toJSON()'s _id and id, drops __v", () => {
+    const self = redactUserSecretsForSelf({ _id: 'oid', id: 'oid', __v: 3 } as Partial<IUser>)!;
+    expect(self).toEqual({ _id: 'oid', id: 'oid' });
+  });
+
   it('drops every non-rebuilt USER_SECRET_FIELDS entry present on the input', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     const rebuilt = new Set<string>(USER_SUBFIELD_REDACTED_FIELDS);
@@ -288,7 +371,7 @@ describe('redactUserSecretsForSelf', () => {
 // output must satisfy the schema, so a schema that's too strict can't silently 500
 // a live endpoint.
 describe('toSafeUser <-> safeUserResponseSchema contract', () => {
-  it.each(['public', 'same-org', 'self'] as const)('%s scope output parses against the schema', scope => {
+  it.each(['public', 'same-org', 'org-member', 'self'] as const)('%s scope output parses against the schema', scope => {
     const safe = toSafeUser(fullUser, scope);
     expect(() => safeUserResponseSchema.parse(safe)).not.toThrow();
   });
@@ -444,13 +527,18 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       field: 'mfa',
       input: {
         totpEnabled: true,
+        passkeyEnabled: true,
         setupAt: new Date(),
         lastUsedAt: new Date(),
         totpSecret: 'x',
         backupCodes: ['x'],
+        pendingBackupCodes: 'x',
+        failedAttempts: 1,
+        lastFailedAttempt: new Date(),
+        lockedUntil: new Date(),
         futureField: 'x',
       },
-      allowed: ['totpEnabled', 'setupAt', 'lastUsedAt'],
+      allowed: ['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt'],
     },
     {
       field: 'googleDrive',
@@ -468,6 +556,8 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
         disconnectReason: null,
         accessToken: 'x',
         refreshToken: 'x',
+        expiresAt: new Date(),
+        pendingSelectionExpiresAt: new Date(),
         futureField: 'x',
       },
       allowed: ['siteName', 'resources', 'status', 'connectedAt', 'selectedResourceId', 'disconnectReason'],
@@ -488,6 +578,7 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
         disconnectReason: null,
         accessToken: 'x',
         botId: 'x',
+        owner: { type: 'user' },
         futureField: 'x',
       },
       allowed: [
@@ -565,6 +656,44 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
     }
   );
 
+  // The same drops, expressed as dotted paths for the users WebSocket projection, which cannot rebuild an object.
+  it.each(CASES)(
+    'USER_SECRET_SUBFIELD_PATHS lists exactly the $field subfields the rebuild drops',
+    ({ field, input, allowed }) => {
+      const dropped = Object.keys(input)
+        .filter(key => key !== 'futureField' && !allowed.includes(key))
+        .map(key => `${field}.${key}`);
+      const listed = USER_SECRET_SUBFIELD_PATHS.filter(path => path.startsWith(`${field}.`));
+      expect([...listed].sort()).toEqual(dropped.sort());
+    }
+  );
+
+  it('USER_SECRET_SUBFIELD_PATHS lists exactly the authProviders subfields the per-element rebuild drops', () => {
+    const provider = {
+      id: 'p1',
+      strategy: 'okta',
+      accessToken: 'x',
+      refreshToken: 'x',
+      samlNameId: 'x',
+      samlSessionIndex: 'x',
+      samlIdentityProviderId: 'x',
+      oktaIdentityProviderId: 'x',
+      encrypted: true,
+    };
+    const out = redactUserSecretsForSelf({ authProviders: [provider] } as never)!;
+    const kept = Object.keys((out.authProviders as Array<Record<string, unknown>>)[0]);
+    const dropped = Object.keys(provider)
+      .filter(key => !kept.includes(key))
+      .map(key => `authProviders.${key}`);
+    const listed = USER_SECRET_SUBFIELD_PATHS.filter(path => path.startsWith('authProviders.'));
+    expect([...listed].sort()).toEqual(dropped.sort());
+  });
+
+  it('every USER_SECRET_SUBFIELD_PATHS entry sits under a USER_SUBFIELD_REDACTED_FIELDS object', () => {
+    const rebuilt: readonly string[] = USER_SUBFIELD_REDACTED_FIELDS;
+    for (const path of USER_SECRET_SUBFIELD_PATHS) expect(rebuilt).toContain(path.split('.')[0]);
+  });
+
   // authProviders rebuilds an array, not an object, so it needs its own shape checks rather than a CASES entry.
   // The redactor's per-element rebuild is checked here; the schema's own strip is checked in the next test.
   it('authProviders array elements keep exactly id and strategy', () => {
@@ -632,5 +761,32 @@ describe('redactUserSecretsForSelf <-> selfUserResponseSchema contract', () => {
 
   it('strips a field IUser does not declare', () => {
     expect(selfUserResponseSchema.parse({ id: 'u1', notAUserField: 'x' })).toEqual({ id: 'u1' });
+  });
+});
+
+describe('organizationRosterScope', () => {
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'former-manager'],
+    users: [
+      { userId: 'manager1', permissions: ['read'] },
+      { userId: 'member2', permissions: ['read'] },
+    ],
+  };
+
+  it.each([
+    ['owner', { id: 'owner1' }],
+    ['current manager', { id: 'manager1' }],
+    ['site admin (staff)', { id: 'staff1', isAdmin: true }],
+  ])('gives the %s the full roster with emails', (_role, actor) => {
+    expect(organizationRosterScope(actor, org)).toBe('same-org');
+  });
+
+  it.each([
+    ['plain member', { id: 'member2' }],
+    ['stale manager without a users row', { id: 'former-manager' }],
+    ['non-admin user flagged isAdmin false', { id: 'member2', isAdmin: false }],
+  ])('gives a %s names only', (_role, actor) => {
+    expect(organizationRosterScope(actor, org)).toBe('org-member');
   });
 });

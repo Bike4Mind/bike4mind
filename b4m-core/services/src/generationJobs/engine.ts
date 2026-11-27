@@ -11,6 +11,7 @@ import type {
   CancelRequestOutcome,
   GenerationJobEngineDeps,
   GenerationJobHandler,
+  GenerationJobSubmitMode,
   GenerationJobStepContext,
   StepOutcome,
   StepResult,
@@ -18,9 +19,13 @@ import type {
 
 const isTerminal = (state: GenerationJobState) => TERMINAL_GENERATION_JOB_STATES.includes(state);
 
+const submitModeOf = (handler: GenerationJobHandler, job: IGenerationJobDocument): GenerationJobSubmitMode =>
+  typeof handler.submitMode === 'function' ? handler.submitMode(job) : handler.submitMode;
+
 // A sync submit always commits the job out of running, so a sync job leased while still running died mid-call.
 const isOrphanedSubmit = (job: IGenerationJobDocument, handler: GenerationJobHandler) =>
-  !!job.submitAttemptedAt && (job.state === 'pending' || (job.state === 'running' && handler.submitMode === 'sync'));
+  !!job.submitAttemptedAt &&
+  (job.state === 'pending' || (job.state === 'running' && submitModeOf(handler, job) === 'sync'));
 
 // SQS delayed delivery can land slightly early; dropping an on-time message would stall the job until the sweep.
 const EARLY_DELIVERY_GRACE_MS = 2000;
@@ -34,9 +39,46 @@ const FAILURE_CANCEL_BUDGET_MS = 10_000;
 export type StepOptions = {
   /** Lambda `getRemainingTimeInMillis()` at delivery; absent outside Lambda (inline dev path). */
   remainingMs?: number;
+  /**
+   * The most the step itself (provider call and store) may take, for an inline caller that must answer by its own
+   * deadline (runJobInline). Only ever narrows the budget the lease and `remainingMs` allow.
+   */
+  stepBudgetMs?: number;
 };
 
-const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
+const orphaned = (message: string, details: Pick<GenerationJobError, 'cutOffByStepDeadline'> = {}): StepResult => ({
+  next: 'failed',
+  error: { code: 'orphaned_submit', message, ...details },
+});
+
+const CANCELLATION_ERROR_NAMES = new Set(['AbortError', 'TimeoutError', 'CanceledError']);
+
+const isCancellationError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return CANCELLATION_ERROR_NAMES.has(error.name) || code === 'ERR_CANCELED' || code === 'ABORT_ERR';
+};
+
+// Our own step deadline fired (AbortSignal.timeout rejects with a TimeoutError) and the submit threw because of it,
+// either rethrowing the signal's reason or as the HTTP client's own cancellation (axios ERR_CANCELED).
+const isStepDeadlineAbort = (error: unknown, signal: AbortSignal): boolean => {
+  if (!signal.aborted) return false;
+  const reason: unknown = signal.reason;
+  if (!(reason instanceof Error) || reason.name !== 'TimeoutError') return false;
+  return error === reason || isCancellationError(error);
+};
+
+// Payloads name their provider as either `providerId` or `request.provider` (speech, sound effects).
+const providerOf = (job: IGenerationJobDocument): string | undefined => {
+  const payload: unknown = job.payload;
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  if ('providerId' in payload && typeof payload.providerId === 'string') return payload.providerId;
+  if ('request' in payload && typeof payload.request === 'object' && payload.request !== null) {
+    const request = payload.request;
+    if ('provider' in request && typeof request.provider === 'string') return request.provider;
+  }
+  return undefined;
+};
 
 const CANCELLED_BY_USER: GenerationJobCommit = {
   state: 'cancelled',
@@ -63,8 +105,8 @@ export class GenerationJobEngine {
     this.handlers = new Map(deps.handlers.map(handler => [handler.kind, handler as GenerationJobHandler]));
   }
 
-  async requestCancel(target: Pick<IGenerationJobDocument, 'id' | 'kind'>): Promise<CancelRequestOutcome> {
-    const options = { beforeSubmitOnly: this.handlerFor(target).submitMode === 'sync' };
+  async requestCancel(target: IGenerationJobDocument): Promise<CancelRequestOutcome> {
+    const options = { beforeSubmitOnly: submitModeOf(this.handlerFor(target), target) === 'sync' };
     const requested = await this.deps.repository.requestCancel(target.id, options);
     if (requested) return this.cancelRequested(requested);
     const job = await this.deps.repository.findById(target.id);
@@ -102,7 +144,10 @@ export class GenerationJobEngine {
   async step(jobId: string, options: StepOptions = {}): Promise<StepOutcome> {
     // The step must commit before both the lease and the invocation end, whichever is first.
     const stepBudgetMs = Math.floor(
-      Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS
+      Math.min(
+        Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS,
+        options.stepBudgetMs ?? Number.POSITIVE_INFINITY
+      )
     );
     // Thrown before leasing so SQS redelivers to a fresh invocation; an already-aborted submit would orphan the job.
     if (!(stepBudgetMs > 0)) throw new Error(`generation job step has no time budget (${stepBudgetMs}ms)`);
@@ -157,7 +202,16 @@ export class GenerationJobEngine {
       });
     }
 
-    if (job.state === 'pending') return this.submit(job, handler, lease, context);
+    if (job.state === 'pending') {
+      const denial = await this.deps.aiAccessDenial?.(job.requestedBy);
+      if (denial) {
+        return this.toTerminal(job, handler, lease, {
+          state: 'failed',
+          error: { code: 'account_blocked', message: denial },
+        });
+      }
+      return this.submit(job, handler, lease, context);
+    }
     const result = await this.runStep(job, handler, context);
     return this.apply(job, handler, lease, result, context);
   }
@@ -187,7 +241,7 @@ export class GenerationJobEngine {
     lease: Lease,
     context: GenerationJobStepContext
   ): Promise<StepOutcome> {
-    const markRunning = handler.submitMode === 'sync';
+    const markRunning = submitModeOf(handler, job) === 'sync';
     const attempted = await this.deps.repository.markSubmitAttempted(job.id, this.deps.now(), { markRunning });
     // A cancel that landed after this step's own check. The provider was never called, so nothing is billed.
     if (!attempted) return this.toTerminal(job, handler, lease, CANCELLED_BY_USER);
@@ -202,9 +256,20 @@ export class GenerationJobEngine {
     handler: GenerationJobHandler,
     context: GenerationJobStepContext
   ): Promise<StepResult> {
+    const startedAt = Date.now();
     try {
       return await handler.submit(job, context);
     } catch (error) {
+      if (isStepDeadlineAbort(error, context.signal)) {
+        // Still orphaned: the provider may have started (and billed) the call, so it must not be resubmitted.
+        this.deps.logger.warn('generation_job_submit_deadline', {
+          jobId: job.id,
+          kind: job.kind,
+          provider: providerOf(job),
+          elapsedMs: Date.now() - startedAt,
+        });
+        return orphaned('The provider submit was cut off by the step deadline', { cutOffByStepDeadline: true });
+      }
       this.deps.logger.error('generation_job_orphaned_submit', { jobId: job.id, kind: job.kind, error });
       return orphaned('The provider submit ended with an unknown outcome');
     }
@@ -325,6 +390,7 @@ export class GenerationJobEngine {
     await this.deps.repository.markTerminalHandled(job.id, this.deps.now());
     const released = lease ? await this.deps.repository.commit(job.id, {}, lease) : null;
     await this.safeNotify(released ?? job);
+    await this.safeOnTerminalHandled(released ?? job);
     return 'terminal';
   }
 
@@ -368,6 +434,15 @@ export class GenerationJobEngine {
         jobId: job.id,
         error,
       });
+    }
+  }
+
+  private async safeOnTerminalHandled(job: IGenerationJobDocument) {
+    if (!this.deps.onTerminalHandled) return;
+    try {
+      await this.deps.onTerminalHandled(job);
+    } catch (error) {
+      this.deps.logger.warn('generation job onTerminalHandled failed', { jobId: job.id, error });
     }
   }
 

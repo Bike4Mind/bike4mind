@@ -9,6 +9,7 @@ import {
 import { QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { createFeedbackOnServer } from '@client/app/utils/feedbackAPICalls';
+import { buildFeedbackClientContext } from '@client/app/utils/feedbackClientContext';
 
 export type FeedbackCommandArgs = {
   params: string;
@@ -119,6 +120,7 @@ export async function handleFeedbackCommand(args: FeedbackCommandArgs) {
       type: FeedbackType.FEEDBACK,
       status: FeedbackStatus.New,
       content,
+      clientContext: buildFeedbackClientContext(queryClient),
       ...(currentSession
         ? {
             sessionId: currentSession.id,

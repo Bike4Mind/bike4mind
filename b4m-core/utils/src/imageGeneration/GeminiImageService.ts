@@ -1,8 +1,61 @@
 import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
-import { GoogleGenAI, type GenerateImagesConfig, type GenerateImagesResponse, type Part } from '@google/genai';
+import {
+  GoogleGenAI,
+  type BlockedReason,
+  type FinishReason,
+  type GenerateContentResponse,
+  type GenerateImagesConfig,
+  type GenerateImagesResponse,
+  type Part,
+} from '@google/genai';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels, type ImageOutputFormat } from '@bike4mind/common';
-import { v4 as uuidv4 } from 'uuid';
+import { ImageModels, reduceAspectRatio, type ImageOutputFormat } from '@bike4mind/common';
+import {
+  ExpectedImageGenerationError,
+  ImageInputRejectedError,
+  ImageModerationBlockedError,
+} from './imageGenerationErrors';
+
+/**
+ * Finish reasons meaning Gemini withheld the output on policy grounds, rather than failing. String
+ * values (type-checked against the SDK enum) so tests that mock `@google/genai` can still load this.
+ */
+const POLICY_FINISH_REASONS: ReadonlySet<string> = new Set<`${FinishReason}`>([
+  'SAFETY',
+  'RECITATION',
+  'BLOCKLIST',
+  'PROHIBITED_CONTENT',
+  'SPII',
+  'IMAGE_SAFETY',
+  'IMAGE_PROHIBITED_CONTENT',
+  'IMAGE_RECITATION',
+]);
+const UNSPECIFIED_BLOCK_REASON: `${BlockedReason}` = 'BLOCKED_REASON_UNSPECIFIED';
+
+function geminiPolicyBlockedError(reason: string, requestId: string | undefined): ImageModerationBlockedError {
+  return new ImageModerationBlockedError(
+    `Your image request was blocked by Google Gemini's safety filters (${reason}). Please try rephrasing your prompt or switch to a different image model.`,
+    requestId || 'unknown',
+    'gemini',
+    reason
+  );
+}
+
+/**
+ * Gemini signals a policy block in the response, not as an API error: `promptFeedback.blockReason`
+ * when the prompt is refused, `finishReason` when the output is withheld. Either leaves no content
+ * parts, so this must run before the empty-response checks to tell the user why.
+ */
+function throwIfPolicyBlocked(response: GenerateContentResponse): void {
+  const blockReason = response.promptFeedback?.blockReason;
+  if (blockReason && blockReason !== UNSPECIFIED_BLOCK_REASON) {
+    throw geminiPolicyBlockedError(blockReason, response.responseId);
+  }
+  const finishReason = response.candidates?.[0]?.finishReason;
+  if (finishReason && POLICY_FINISH_REASONS.has(finishReason)) {
+    throw geminiPolicyBlockedError(finishReason, response.responseId);
+  }
+}
 
 export class GeminiImageService extends AIImageService {
   private genAI: GoogleGenAI;
@@ -27,26 +80,32 @@ export class GeminiImageService extends AIImageService {
       this.logger.log(`Gemini generated ${imageUrls.length} image(s) successfully`);
       return imageUrls;
     } catch (error) {
+      if (error instanceof ExpectedImageGenerationError) {
+        throw error;
+      }
       this.logger.error('Gemini image generation failed:', error);
 
       if (error instanceof Error) {
         // Provide helpful error messages for common Gemini issues
         if (error.message.includes('API_KEY') || error.message.includes('401')) {
           throw new Error(
-            `Gemini image generation failed: Invalid API key or unauthorized access. Please check your Gemini API key. Original error: ${error.message}`
+            `Gemini image generation failed: Invalid API key or unauthorized access. Please check your Gemini API key. Original error: ${error.message}`,
+            { cause: error }
           );
         }
         if (error.message.includes('RATE_LIMIT') || error.message.includes('quota') || error.message.includes('429')) {
           throw new Error(
-            `Gemini image generation failed: Rate limit or quota exceeded. Please try again later. Original error: ${error.message}`
+            `Gemini image generation failed: Rate limit or quota exceeded. Please try again later. Original error: ${error.message}`,
+            { cause: error }
           );
         }
         if (error.message.includes('SAFETY') || error.message.includes('blocked')) {
           throw new Error(
-            `Gemini image generation failed: Content was blocked by safety filters. Please try adjusting your prompt. Original error: ${error.message}`
+            `Gemini image generation failed: Content was blocked by safety filters. Please try adjusting your prompt. Original error: ${error.message}`,
+            { cause: error }
           );
         }
-        throw new Error(`Gemini image generation failed: ${error.message}`);
+        throw new Error(`Gemini image generation failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('Gemini image generation failed with unknown error');
@@ -54,47 +113,42 @@ export class GeminiImageService extends AIImageService {
   }
 
   private async generateSingleImage(prompt: string, options: AIImageGenerationOptions): Promise<string> {
-    try {
-      const config = this.buildGenerationConfig(options);
-      const model = (options.model as ImageModels) || ImageModels.GEMINI_2_5_FLASH_IMAGE;
+    const config = this.buildGenerationConfig(options);
+    const model = (options.model as ImageModels) || ImageModels.GEMINI_2_5_FLASH_IMAGE;
 
-      this.logger.log('[DEBUG] Gemini generation request:', {
+    this.logger.log('[DEBUG] Gemini generation request:', {
+      model,
+      prompt: prompt.substring(0, 100) + '...',
+      config,
+    });
+
+    let dataUrl: string | null = null;
+
+    try {
+      const response = await this.genAI.models.generateImages({
         model,
-        prompt: prompt.substring(0, 100) + '...',
+        prompt,
         config,
       });
 
-      let dataUrl: string | null = null;
-
-      try {
-        const response = await this.genAI.models.generateImages({
-          model,
-          prompt,
-          config,
-        });
-
-        dataUrl = this.extractImageFromGenerateImages(response, options);
-      } catch (error) {
-        if (!this.shouldFallbackToGenerateContent(error)) {
-          throw error;
-        }
-
-        this.logger.warn(
-          `[DEBUG] Falling back to generateContent for Gemini image generation due to unsupported generateImages call. ${error}`
-        );
-        dataUrl = await this.generateImageViaContent(prompt, model);
-      }
-
-      if (!dataUrl) {
-        throw new Error('No image data returned from Gemini');
-      }
-
-      this.logger.log('[DEBUG] Successfully generated Gemini image');
-      return dataUrl;
+      dataUrl = this.extractImageFromGenerateImages(response, options);
     } catch (error) {
-      this.logger.error('[DEBUG] Error generating single Gemini image:', error);
-      throw error;
+      if (!this.shouldFallbackToGenerateContent(error)) {
+        throw error;
+      }
+
+      this.logger.warn(
+        `[DEBUG] Falling back to generateContent for Gemini image generation due to unsupported generateImages call. ${error}`
+      );
+      dataUrl = await this.generateImageViaContent(prompt, model);
     }
+
+    if (!dataUrl) {
+      throw new Error('No image data returned from Gemini');
+    }
+
+    this.logger.log('[DEBUG] Successfully generated Gemini image');
+    return dataUrl;
   }
 
   private extractImageFromGenerateImages(
@@ -153,6 +207,7 @@ export class GeminiImageService extends AIImageService {
       config: { responseModalities: ['IMAGE', 'TEXT'] },
     });
 
+    throwIfPolicyBlocked(response);
     if (!response.candidates || response.candidates.length === 0) {
       throw new Error('No candidates returned from Gemini');
     }
@@ -167,7 +222,7 @@ export class GeminiImageService extends AIImageService {
     if (!imagePart?.inlineData?.data) {
       this.logger.error('[DEBUG] No image inline data in Gemini generateContent response.', candidate.content.parts);
       if (textMessage) {
-        throw new Error(textMessage);
+        throw new ImageInputRejectedError(textMessage, { provider: 'gemini', reason: 'text_only_response' });
       }
       throw new Error('No image data in Gemini response');
     }
@@ -237,23 +292,7 @@ export class GeminiImageService extends AIImageService {
       return undefined;
     }
 
-    const gcd = (a: number, b: number): number => {
-      while (b !== 0) {
-        const temp = b;
-        b = a % b;
-        a = temp;
-      }
-      return a;
-    };
-
-    const divisor = gcd(dimensions.width, dimensions.height);
-    if (divisor === 0) {
-      return undefined;
-    }
-    const widthRatio = Math.round(dimensions.width / divisor);
-    const heightRatio = Math.round(dimensions.height / divisor);
-
-    return `${widthRatio}:${heightRatio}`;
+    return reduceAspectRatio(dimensions.width, dimensions.height);
   }
 
   // 'webp' never actually arrives here: every dispatch site that reaches Gemini runs
@@ -315,6 +354,7 @@ export class GeminiImageService extends AIImageService {
         config: { responseModalities: ['IMAGE', 'TEXT'] },
       });
 
+      throwIfPolicyBlocked(response);
       if (!response.candidates || response.candidates.length === 0) {
         throw new Error('No candidates returned from Gemini');
       }
@@ -333,7 +373,7 @@ export class GeminiImageService extends AIImageService {
 
         if (textMessage) {
           // Return a clarification request instead of throwing an error
-          const clarificationId = uuidv4();
+          const clarificationId = crypto.randomUUID();
           this.logger.log('[DEBUG] Returning clarification request:', {
             clarificationId,
             questionPreview: textMessage.substring(0, 100) + '...',
@@ -358,10 +398,13 @@ export class GeminiImageService extends AIImageService {
       this.logger.log('Gemini image editing completed successfully');
       return { type: 'success', dataUrl };
     } catch (error) {
+      if (error instanceof ExpectedImageGenerationError) {
+        throw error;
+      }
       this.logger.error('Gemini image editing failed:', error);
 
       if (error instanceof Error) {
-        throw new Error(`Gemini image editing failed: ${error.message}`);
+        throw new Error(`Gemini image editing failed: ${error.message}`, { cause: error });
       }
 
       throw new Error('Gemini image editing failed with unknown error');

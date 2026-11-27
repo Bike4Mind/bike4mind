@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { OllamaBackend } from '@bike4mind/llm-adapters';
 import { adminSettingsRepository } from '@bike4mind/database';
 
-const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
+const handler = baseApi({ auth: 'jwtOnly' }).get(async (req: Request, res: Response) => {
   try {
     // ollamaBackend is isSensitive (stored encrypted at rest); read through the repository so
     // it is decrypted, not the raw model which would hand OllamaBackend the ciphertext.

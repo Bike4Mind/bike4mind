@@ -1,9 +1,10 @@
-import { IOrganization, toSafeOrganization } from '@bike4mind/common';
+import { IOrganizationDocument, toSafeOrganization } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { accessibleHomeOrg } from '@bike4mind/server-utils/utils/homeOrgPointer';
 
 /**
  * A user's active organization: read it (GET) or clear the pointer (DELETE).
@@ -26,8 +27,11 @@ const handler = baseApi()
             path: 'logo',
           },
         })
-        .select('organizationId');
-      const organization = (user?.organizationId as unknown as IOrganization) || null;
+        .select('organizationId groups isAdmin');
+      const organization = await accessibleHomeOrg(
+        user,
+        user?.organizationId as unknown as IOrganizationDocument | null | undefined
+      );
 
       // The caller may be a member (not owner) of their primary org, so strip billing
       // identifiers unless they own it or are an admin.

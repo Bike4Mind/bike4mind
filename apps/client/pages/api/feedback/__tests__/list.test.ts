@@ -15,9 +15,15 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
+const { mockRecordFeedbackRead } = vi.hoisted(() => ({ mockRecordFeedbackRead: vi.fn() }));
+
+vi.mock('@server/admin/ai/feedbackTriage', () => ({ triageFeedback: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/admin/ai/feedbackVisibility', () => ({ feedbackAiVisible: vi.fn().mockResolvedValue(false) }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
+    use: () => chain,
     get: (fn: unknown) => {
       mockRefs.getHandler = fn as (req: unknown, res: unknown) => unknown;
       return chain;
@@ -83,9 +89,11 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: vi.fn(),
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
-vi.mock('@server/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
+// The audit write pulls the admin audit chain; feedbackReadAudit.test.ts covers it.
+vi.mock('@server/utils/feedbackReadAudit', () => ({ recordFeedbackRead: mockRecordFeedbackRead }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postFeedbackToSlack: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { STAGE: 'production' } }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', async () => {
@@ -106,7 +114,7 @@ import { FEEDBACK_LIST_DEFAULT_LIMIT, FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind
 import { FEEDBACK_LIST_FIELDS } from '../index';
 
 /**
- * Built inline rather than imported from server/auth/ability.ts, which pulls an unresolvable
+ * Built inline rather than imported from packages/server-utils/src/auth/ability.ts, which pulls an unresolvable
  * `tldts` transitive dependency under this vitest setup. MUST STAY IN SYNC with the admin feedback
  * rules there: an unconditional read grant is what makes accessibleBy narrow to {}.
  */
@@ -153,6 +161,7 @@ describe('GET /api/feedback', () => {
     mockListDocs.mockReturnValue([]);
     mockCountDocuments.mockResolvedValue(0);
     mockDistinct.mockResolvedValue([]);
+    mockRecordFeedbackRead.mockResolvedValue(undefined);
     mockTextFind.mockReturnValue({ select: () => ({ lean: vi.fn().mockResolvedValue([]) }) });
   });
 
@@ -217,6 +226,8 @@ describe('GET /api/feedback', () => {
     expect(mockSelect).toHaveBeenCalledWith(FEEDBACK_LIST_FIELDS);
     const selected = mockSelect.mock.calls[0][0] as string;
     expect(selected).not.toContain('promptMeta');
+    // Named here rather than compared to the constant: dropping the field would blank the chips and CSV columns.
+    expect(selected.split(' ')).toContain('clientContext');
   });
 
   it('returns exactly items/total/page/limit, sourced from countDocuments', async () => {
@@ -264,6 +275,42 @@ describe('GET /api/feedback', () => {
     expect(res._getJSONData()).not.toHaveProperty('organizations');
   });
 
+  it('serves only the organization facet on facetsOnly, reading and auditing no rows', async () => {
+    mockDistinct.mockResolvedValue(['Beta', 'Acme']);
+
+    const { req, res } = buildRequest({ facetsOnly: 'true', page: '2', limit: '7' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ items: [], total: 0, page: 2, limit: 7, organizations: ['Acme', 'Beta'] });
+    expect(mockDistinct).toHaveBeenCalledTimes(1);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockCountDocuments).not.toHaveBeenCalled();
+    expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ownership filter on a nonadmin facets-only query', async () => {
+    mockDistinct.mockResolvedValue(['Own organization']);
+    const ability = ownAbility('user-1');
+    const { req, res } = buildRequest({ facetsOnly: 'true' }, ability);
+    await runHandler(req, res);
+    const readable = accessibleBy(ability, 'read').ofType(FeedbackModelMock);
+    expect(JSON.stringify(readable)).toContain('user-1');
+    expect(mockDistinct).toHaveBeenCalledWith('organization', readable);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockRecordFeedbackRead).not.toHaveBeenCalled();
+    expect(res._getJSONData().organizations).toEqual(['Own organization']);
+  });
+
+  it('reads rows as usual when facetsOnly is false', async () => {
+    const { req, res } = buildRequest({ facetsOnly: 'false' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(mockFind).toHaveBeenCalledTimes(1);
+    expect(mockRecordFeedbackRead).toHaveBeenCalledTimes(1);
+    expect(mockDistinct).not.toHaveBeenCalled();
+  });
+
   it('computes the organization facet over the accessible set, not the org-filtered set', async () => {
     const { req, res } = buildRequest({ organization: 'acme', includeOrganizations: 'true' }, adminAbility());
     await runHandler(req, res);
@@ -298,6 +345,110 @@ describe('GET /api/feedback', () => {
     expect(findFilter.$and).toContainEqual({ sessionId: 'session-1' });
     expect(findFilter.$and).toContainEqual({ subject: 'turn' });
     expect(findFilter.$and).toContainEqual({ userId: 'user-1' });
+  });
+
+  it('ANDs the type filter in as an $in over the picked types', async () => {
+    const { req, res } = buildRequest({ type: ['Bug', 'Thumbs Down'] }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Bug', 'Thumbs Down'] } });
+  });
+
+  it('lets the Feedback type also match reports that carry no type', async () => {
+    const { req, res } = buildRequest({ type: 'Feedback' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ type: { $in: ['Feedback', null] } });
+  });
+
+  it('ANDs a received window in as an exclusive lower bound on createdAt', async () => {
+    vi.useFakeTimers({ now: new Date('2026-11-11T12:00:00.000Z'), toFake: ['Date'] });
+    try {
+      const { req, res } = buildRequest({ received: '7d' }, adminAbility());
+      await runHandler(req, res);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ createdAt: { $gt: new Date('2026-11-04T12:00:00.000Z') } });
+  });
+
+  it('rejects an unknown received window with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest({ received: '90d' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('ANDs a custom created range in with both ends inclusive', async () => {
+    const { req, res } = buildRequest(
+      { createdFrom: '2026-11-01T07:00:00.000Z', createdTo: '2026-11-08T06:59:59.999Z' },
+      adminAbility()
+    );
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({
+      createdAt: { $gte: new Date('2026-11-01T07:00:00.000Z'), $lte: new Date('2026-11-08T06:59:59.999Z') },
+    });
+  });
+
+  it('accepts an open-ended created range', async () => {
+    const { req, res } = buildRequest({ createdFrom: '2026-11-01T07:00:00.000Z' }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ createdAt: { $gte: new Date('2026-11-01T07:00:00.000Z') } });
+  });
+
+  it('rejects a created range whose start is after its end with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest(
+      { createdFrom: '2026-11-08T00:00:00.000Z', createdTo: '2026-11-01T00:00:00.000Z' },
+      adminAbility()
+    );
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('rejects a created bound that is not an ISO instant with a 422', async () => {
+    const { req, res } = buildRequest({ createdFrom: '2026-11-01' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['true', true],
+    ['false', false],
+  ])('maps hasComment=%s to an equality on contentStored', async (hasComment, contentStored) => {
+    const { req, res } = buildRequest({ hasComment }, adminAbility());
+    await runHandler(req, res);
+
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ contentStored });
+  });
+
+  it('rejects a hasComment value other than true or false with a 422', async () => {
+    const { req, res } = buildRequest({ hasComment: 'yes' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+  });
+
+  it('rejects a type outside FeedbackType with a 422 before any query runs', async () => {
+    const { req, res } = buildRequest({ type: 'Spam' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
   });
 
   it('does NOT narrow to the caller without an explicit userId, even for an admin', async () => {
@@ -339,5 +490,37 @@ describe('GET /api/feedback', () => {
     const serialized = JSON.stringify(findFilter.$and);
     expect(serialized).toContain('match-1');
     expect(serialized).toContain('match-2');
+  });
+
+  describe('audit of staff reads', () => {
+    it('records the page it is about to serve, with the ids and the filters that produced it', async () => {
+      mockListDocs.mockReturnValue([
+        { id: 'f1', userId: 'reporter-1', toJSON: () => ({ id: 'f1' }) },
+        { id: 'f2', userId: 'reporter-2', toJSON: () => ({ id: 'f2' }) },
+      ]);
+
+      const { req, res } = buildRequest({ search: 'crash', page: '2', limit: '5' }, adminAbility());
+      await runHandler(req, res);
+
+      expect(mockRecordFeedbackRead).toHaveBeenCalledTimes(1);
+      const [auditedReq, reports, details] = mockRecordFeedbackRead.mock.calls[0];
+      expect(auditedReq).toBe(req);
+      expect(reports).toEqual([
+        { id: 'f1', userId: 'reporter-1' },
+        { id: 'f2', userId: 'reporter-2' },
+      ]);
+      expect(details).toMatchObject({ page: 2, limit: 5, search: 'crash' });
+    });
+
+    it('fails the request and serves no items when the audit write fails', async () => {
+      mockListDocs.mockReturnValue([{ id: 'f1', userId: 'reporter-1', toJSON: () => ({ id: 'f1' }) }]);
+      mockRecordFeedbackRead.mockRejectedValue(new Error('audit store down'));
+
+      const { req, res } = buildRequest({}, adminAbility());
+      await runHandler(req, res);
+
+      expect(res._getStatusCode()).toBe(500);
+      expect(res._getData()).not.toContain('f1');
+    });
   });
 });

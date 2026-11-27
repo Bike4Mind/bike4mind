@@ -7,7 +7,11 @@
  * environment here and none is hard-coded.
  */
 
-import { GitHubRateLimitedError, GitHubService, type GitHubOpenPullRequest } from '@server/services/githubService';
+import {
+  GitHubRateLimitedError,
+  GitHubService,
+  type GitHubOpenPullRequest,
+} from '@bike4mind/server-utils/services/githubService';
 import type { Logger } from '@bike4mind/observability';
 import type { ApprovalFetchResult, OpenPullRequestsPage, PullRequest, RateLimitedFailure } from '@bike4mind/services';
 

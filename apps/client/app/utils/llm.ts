@@ -12,6 +12,7 @@ import { QueryClient } from '@tanstack/react-query';
 import perfLogger from './performanceLogger';
 import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast, type Optimistic } from './react-query';
 import { useStreamingState } from '../hooks/useStreamingState';
+import { randomUuid } from '@bike4mind/common';
 
 function getErrorMessage(error: unknown): string {
   if (isAxiosError(error)) {
@@ -51,7 +52,7 @@ export function isOptimisticId(id: string | null | undefined): boolean {
 }
 
 export function createOptimisticSessionId(): string {
-  return `${OPTIMISTIC_PREFIX}session-${crypto.randomUUID()}`;
+  return `${OPTIMISTIC_PREFIX}session-${randomUuid()}`;
 }
 
 /**
@@ -413,12 +414,29 @@ export type ModelCatalog = {
   models: ModelInfo[];
   /** Retired/superseded ids a session may still be pinned to. See SupersededModelInfo. */
   supersededModels: SupersededModelInfo[];
+  /** Models the picker shows as locked (paid-only, or not allowed by the org); display only (see ModelInfo.access). */
+  lockedModels: ModelInfo[];
+  /** The model-list revision the server built this list under; see hooks/data/modelListRevision.ts. */
+  modelListRevision: string | null;
+  /** The server could not read the model catalog and sent its adapter-table fallback; refetched soon. */
+  catalogUnavailable: boolean;
 };
 
-export const getModelCatalog = async (): Promise<ModelCatalog> => {
+/** `organizationId`: the active account-switcher org, whose model policy the server applies. */
+export const getModelCatalog = async (organizationId?: string | null): Promise<ModelCatalog> => {
   try {
-    const response = await api.get('/api/models');
-    return { models: response.data.models, supersededModels: response.data.supersededModels ?? [] };
+    const response = organizationId
+      ? await api.get('/api/models', { params: { organizationId } })
+      : await api.get('/api/models');
+    const listed: ModelInfo[] = response.data.models;
+    return {
+      // Backstop: the server never sends a locked model in `models`.
+      models: listed.filter(model => !model.access?.locked),
+      supersededModels: response.data.supersededModels ?? [],
+      lockedModels: response.data.lockedModels ?? [],
+      modelListRevision: response.data.modelListRevision ?? null,
+      catalogUnavailable: response.data.catalogUnavailable === true,
+    };
   } catch (error: unknown) {
     const axiosError = error as AxiosError;
     perfLogger.log('[Client] Error fetching LLM models:', axiosError);
@@ -433,6 +451,8 @@ export type SendMessageOptions = {
   isImageEdit?: boolean;
   isVariation?: boolean;
   image?: string; // Image to be edited
+  /** The FabFile behind `image`, when the chat shows one; an edit reuses it when it is the caller's own. */
+  imageFileId?: string;
   /**
    * Correct-and-retry: the quest whose answer the user says was wrong. Unlike `isRetry`, which
    * re-runs the flagged quest in place, this sends a NEW turn carrying the user's correction and

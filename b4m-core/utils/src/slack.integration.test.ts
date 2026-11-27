@@ -154,6 +154,21 @@ describe('Slack Error Integration', () => {
       );
     });
 
+    it('scrubs credentials and emails from the line before it reaches the deduplicator', async () => {
+      const line = `2024-01-01T00:00:00.000Z\treq-1\tERROR\t${JSON.stringify({
+        severity: 'error',
+        message: 'login failed for jane@example.com with Bearer abc123tokenvalue',
+      })}`;
+      const event = createMockCloudWatchEvent([{ id: 'event-redact', timestamp: 1704067200000, message: line }]);
+
+      await notifyEventLogsToSlack({ event, stage: 'production', slackUrl: 'https://hooks.slack.com/test' });
+
+      expect(mockHandleErrorNotification).toHaveBeenCalledTimes(1);
+      const [message, , metadata] = mockHandleErrorNotification.mock.calls[0];
+      expect(message).toBe('login failed for ***@example.com with Bearer [REDACTED]');
+      expect(JSON.stringify(metadata)).not.toMatch(/jane@|abc123tokenvalue/);
+    });
+
     it('does not drop a parsed line whose payload has no message field', async () => {
       // The Fargate filter matches on `severity`, which can appear without a `message`; an
       // undefined message must fall back to the raw line rather than throw and drop the post.

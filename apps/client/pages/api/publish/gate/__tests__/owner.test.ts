@@ -30,7 +30,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n(),
+}));
 vi.mock('@server/middlewares/optionalAuth', () => ({ optionalAuth: (_r: unknown, _s: unknown, n: () => void) => n() }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
@@ -53,7 +55,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
   parsePublishPath: (...a: unknown[]) =>
     mocks.parse(...a) ?? { kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null },
 }));
-vi.mock('@server/services/publish/publishGateToken', () => ({
+vi.mock('@bike4mind/server-utils/services/publish/publishGateToken', () => ({
   setGateProofCookie: (...a: unknown[]) => mocks.setCookie(...a),
 }));
 
@@ -183,6 +185,20 @@ describe('POST /api/publish/gate/owner - who is admitted', () => {
     expect(res._getStatusCode()).toBe(204);
     expect(mocks.setCookie).toHaveBeenCalledWith(expect.anything(), 'pub1');
     expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
+  });
+
+  // shareTokenFilter excludes revoked and expired entries (pinned against real Mongo in
+  // PublishedArtifactModel.shareToken.test.ts), so an expired link resolves no row.
+  it('404s an expired share link, minting nothing', async () => {
+    mocks.parse.mockReturnValue({ kind: 'share', shareToken: 'tok123', assetPath: null });
+    mocks.lean.mockResolvedValue(null);
+
+    const { res, promise } = run({ path: '/a/tok123' }, { id: 'owner1' });
+    await promise;
+
+    expect(mocks.findOne.mock.calls[0][0]).toEqual({ __shareFilterFor: 'tok123', deletedAt: null });
+    expect(res._getStatusCode()).toBe(404);
+    expect(mocks.setCookie).not.toHaveBeenCalled();
   });
 });
 

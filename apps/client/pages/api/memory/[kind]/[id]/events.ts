@@ -7,7 +7,7 @@ import {
   type MemoryEventInput,
   type PrincipalKind,
 } from '@bike4mind/memory';
-import { appendMemoryEvent } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
+import { appendMemoryEvent, listPrincipalLedger } from '@bike4mind/server-utils/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@bike4mind/server-utils/memory/factCipher';
 
 // The kinds this endpoint accepts an append for. A deliberate subset of PrincipalKind: `lake` is
@@ -93,6 +93,24 @@ const handler = baseApi().post(async (req, res) => {
       .json({ error: 'This memory was erased while the request was in flight; nothing was written.' });
   }
   return res.status(201).json({ event: sealed });
+});
+
+handler.get(async (req, res) => {
+  const ownerUserId = req.user?.id;
+  if (!ownerUserId) return res.status(401).json({ error: 'Authentication required' });
+  // Default baseApi() auth stays because POST on this handler accepts API keys, so GET rejects them itself
+  // (same effect as auth: 'jwtOnly' on the sibling routes).
+  if (req.apiKeyInfo) return res.status(403).json({ error: 'A signed-in session is required to read the ledger.' });
+  if (req.query.kind !== 'user') return res.status(400).json({ error: 'Only user ledger exports are supported.' });
+  if (req.query.id !== ownerUserId) return res.status(403).json({ error: 'You can only read your own user ledger.' });
+  const events = await listPrincipalLedger({
+    ledger: memoryLedgerRepository,
+    keys: createKeyProvider(memoryPrincipalKeyRepository),
+    principal: { kind: 'user', id: ownerUserId },
+    ownerUserId,
+  });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ events });
 });
 
 export default handler;

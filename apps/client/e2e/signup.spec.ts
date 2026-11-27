@@ -1,5 +1,8 @@
 import { test, expect } from './fixtures';
+import { TIMEOUTS } from './constants';
 import { apiGetOtcCode } from './helpers/api';
+import { watchMfaSetup } from './helpers/mfa';
+import { getTestUsers } from './helpers/test-users';
 
 test.describe('Signup', () => {
   // The "Sign up" link + /register are gated on the global `allowOpenRegistration` setting.
@@ -78,10 +81,33 @@ test.describe('Signup', () => {
 
     await loginPage.fillInlineRegisterUsername(`inline-signup-${timestamp}`);
     await loginPage.acceptInlineRegisterPolicies();
-    await loginPage.submitInlineRegister();
+    const registered = page.waitForResponse(
+      r => r.url().includes('/api/otc/verify') && r.request().method() === 'POST' && r.ok()
+    );
+    const mfaSetup = watchMfaSetup(page);
+    await loginPage.submitInlineRegister({ waitForApp: false });
+    const body = (await (await registered).json()) as {
+      user?: { id: string };
+      userId?: string;
+      mfaSetupRequired?: boolean;
+    };
+    // A stage that enforces MFA sends the new account to setup before signing it in.
+    await mfaSetup.enrollIfAsked(body);
+    const userId = body.user?.id ?? body.userId;
+    await page.waitForURL(url => !url.pathname.includes('/login'), { timeout: TIMEOUTS.ACTION });
     await basePage.dismissModals();
 
     // Account created and signed in - we're off /login and into the app.
     await expect(page).not.toHaveURL(/.*login.*/);
+
+    // A normal UI signup must not be down-tiered. Only an admin read exposes `throttle`; the
+    // account's own session redacts it.
+    // Bot checks are skipped under E2E, so this only guards against tiering every new signup.
+    const apiUrl = process.env.API_URL || 'http://localhost:3000';
+    const res = await request.get(`${apiUrl}/api/users/${userId}`, {
+      headers: { Authorization: `Bearer ${getTestUsers().admin.accessToken}` },
+    });
+    expect(res.ok()).toBe(true);
+    expect((await res.json()).throttle).toBeUndefined();
   });
 });

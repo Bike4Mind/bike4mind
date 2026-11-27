@@ -1,20 +1,21 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { slackIdentityFilter } from '@bike4mind/common';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { verifySlackRequest } from '@server/integrations/slack/slackWebhookVerification';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { cleanupConfluencePageContent } from '@server/integrations/atlassian/confluenceAttachmentCleanup';
-import { WebClient } from '@slack/web-api';
-import { User, Quest, connectDB, sessionRepository } from '@bike4mind/database';
-import { SlackDevWorkspace } from '@bike4mind/database/infra';
-import { createSession } from '@server/managers/sessionManager';
+import { WebClient, type Block, type KnownBlock } from '@slack/web-api';
+import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { createSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
+import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { Config } from '@bike4mind/server-utils/utils/config';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
   JiraResource,
@@ -44,22 +45,28 @@ import {
   parseConfirmationButtonValue,
   type ViewSubmissionPayload,
   type ViewSubmissionResponse,
+  type GlobalShortcutPayload,
 } from '@bike4mind/slack';
 import { JIRA_DELETE_ATTACHMENT, CONFLUENCE_DELETE_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
 import {
   executePendingAction,
   cancelPendingActionOnQuest,
+  claimPendingAction,
   isPendingActionRequester,
   MCP_DISABLED_MESSAGE,
-} from '@server/utils/pendingActionExecutor';
+} from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { isFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
-import { decryptToken } from '@server/security/tokenEncryption';
-import { ImageModels, IUserDocument, McpServerName } from '@bike4mind/common';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
+import { ImageModels, IUserDocument, McpServerName, SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
+import { buildSlackInteractiveActionRegistry } from '@bike4mind/server-utils/integrations/slack/interactiveActionRegistry';
+import { coreSlackInteractiveActions } from '@bike4mind/server-utils/integrations/slack/coreInteractiveActions';
+import { SLACK_INTERACTIVE_RESERVED_ACTIONS } from '@bike4mind/server-utils/integrations/slack/interactiveReservedActions';
+import { premiumSlackInteractiveActions } from '@bike4mind/server-utils/premium-generated/premiumSlackInteractiveActions.generated';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -87,6 +94,7 @@ const SlackInteractivePayloadSchema = z.object({
     .object({
       ts: z.string(),
       thread_ts: z.string().optional(),
+      metadata: z.object({ event_type: z.string().optional() }).passthrough().optional(),
     })
     .optional(),
   actions: z
@@ -113,7 +121,7 @@ const SlackInteractivePayloadSchema = z.object({
       callback_id: z.string(),
       private_metadata: z.string().optional(),
       state: z.object({
-        values: z.record(z.string(), z.any()),
+        values: z.record(z.string(), z.unknown()),
       }),
     })
     .optional(),
@@ -133,19 +141,31 @@ async function getRawBody(req: NextApiRequest): Promise<string> {
   });
 }
 
-async function findUserBySlackId(slackUserId: string) {
-  const user = await User.findOne({
-    'slackSettings.slackUserId': slackUserId,
-    ...VERIFIED_SLACK_IDENTITY_FILTER,
-  });
+type SlackInteractivePayload = z.infer<typeof SlackInteractivePayloadSchema>;
+type SlackInteractiveResult = Record<string, unknown>;
+type AttachmentDownloadResult = {
+  content?: string | { text?: string }[];
+  error?: string;
+  filename?: string;
+};
+type SlackViewStateValues = Record<
+  string,
+  Record<string, { value?: string; selected_option?: { value: string } } | undefined> | undefined
+>;
+
+async function findUserBySlackId(slackUserId: string, slackTeamId: string | undefined) {
+  if (!slackTeamId) return null;
+  const user = await User.findOne(slackIdentityFilter(slackUserId, slackTeamId));
   return user;
 }
 
-async function updateUserSlackSettings(userId: string, slackSettings: any) {
+type SlackDbUser = NonNullable<Awaited<ReturnType<typeof findUserBySlackId>>>;
+
+async function updateUserSlackSettings(userId: string, slackSettings: IUserDocument['slackSettings']) {
   await User.findByIdAndUpdate(userId, { $set: { slackSettings } }, { new: true, upsert: false });
 }
 
-async function sendSlackResponse(responseUrl: string, message: any) {
+async function sendSlackResponse(responseUrl: string, message: unknown) {
   if (!responseUrl) return;
 
   try {
@@ -173,8 +193,8 @@ async function openAppHomeModal(
   triggerId: string,
   botToken: string,
   title: string,
-  blocks: any[]
-): Promise<{ success: boolean; error?: any }> {
+  blocks: (KnownBlock | Block)[]
+): Promise<{ success: boolean; error?: unknown }> {
   try {
     const client = new WebClient(botToken);
     await client.views.open({
@@ -401,24 +421,59 @@ async function handleScheduleMessageSubmission(
   }
 }
 
+const interactiveActionRegistry = buildSlackInteractiveActionRegistry(
+  coreSlackInteractiveActions,
+  premiumSlackInteractiveActions,
+  SLACK_INTERACTIVE_RESERVED_ACTIONS
+);
+let registryProblemsLogged = false;
+
+function logRegistryProblemsOnce() {
+  if (registryProblemsLogged) return;
+  registryProblemsLogged = true;
+  if (interactiveActionRegistry.problems.length > 0) {
+    Logger.error('[Slack Interactive] Left out contributed action handlers', {
+      problems: interactiveActionRegistry.problems,
+    });
+  }
+}
+
 // Handler for different interactive actions
 async function handleInteractiveAction(
-  payload: any,
-  botToken?: string,
-  prefetchedUser?: any,
-  appName?: string,
-  workspaceId?: string
-): Promise<any> {
+  payload: SlackInteractivePayload,
+  botToken: string | undefined,
+  prefetchedUser: SlackDbUser | null | undefined,
+  appName: string | undefined,
+  workspaceId: string | undefined,
+  deferredWork: Promise<void>[]
+): Promise<object> {
   const { type, user, actions, view, response_url, trigger_id } = payload;
+
+  // A message posted through POST /api/v1/slack/messages is caller-authored: it must never be able to
+  // trigger a bot action, whatever its blocks claim to be. The API refuses interactive blocks; this is
+  // the backstop if one ever reaches Slack.
+  if (payload.message?.metadata?.event_type === SLACK_API_POST_EVENT_TYPE) {
+    Logger.warn('[Slack Interactive] Refused an action on an API-posted message', {
+      actionId: actions?.[0]?.action_id,
+      userId: user?.id,
+    });
+    return {};
+  }
 
   // Handle view_submission (modal form submissions)
   if (type === 'view_submission' && view?.callback_id) {
-    return await handleViewSubmission(payload, botToken, workspaceId);
+    return await handleViewSubmission(payload as unknown as ViewSubmissionPayload, botToken, workspaceId);
   }
 
   // Handle global shortcuts (/ menu)
   if (type === 'shortcut') {
-    return await handleGlobalShortcut(payload, botToken, prefetchedUser, appName, workspaceId);
+    return await handleGlobalShortcut(
+      payload as unknown as GlobalShortcutPayload,
+      botToken,
+      prefetchedUser,
+      appName,
+      workspaceId
+    );
   }
 
   // Handle App Home actions first (these work even without linked account)
@@ -525,7 +580,7 @@ async function handleInteractiveAction(
 
     if (action.action_id === 'app_home_settings') {
       // Use prefetched user (queried in parallel with workspace lookup) to save time
-      const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id));
+      const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id, payload.team?.id));
 
       if (trigger_id && botToken) {
         const settingsBlocks = dbUser
@@ -575,7 +630,7 @@ async function handleInteractiveAction(
 
     // Handle org defaults and channel config actions (admin-only, require trigger_id for modals)
     if (action.action_id === 'org_defaults_edit') {
-      return await handleOrgDefaultsEdit(user.id, trigger_id, botToken);
+      return await handleOrgDefaultsEdit(user.id, payload.team?.id, trigger_id, botToken);
     }
 
     if (action.action_id === 'channel_config_add') {
@@ -596,25 +651,36 @@ async function handleInteractiveAction(
     }
   }
 
-  // Handle SRE approval actions (no linked account required - admin-only Slack action)
-  if (actions && actions.length > 0) {
-    const sreAction = actions[0];
-    if (sreAction.action_id === 'sre_approve_fix' || sreAction.action_id === 'sre_reject_fix') {
-      const { handleSreApprovalAction } = await import('@server/integrations/slack/sreSlackApproval');
-      const { response, deferred } = await handleSreApprovalAction(
-        sreAction.action_id,
-        sreAction.value,
-        user,
-        response_url
+  // Registered handlers run without a linked account and authorize the Slack user themselves.
+  const firstAction = actions?.[0];
+  const registeredHandler = firstAction ? interactiveActionRegistry.find(firstAction.action_id) : undefined;
+  if (firstAction && registeredHandler) {
+    const { response, deferred } = await registeredHandler.handle({
+      actionId: firstAction.action_id,
+      value: firstAction.value,
+      user,
+      teamId: payload.team?.id,
+      channelId: payload.channel?.id,
+      messageTs: payload.message?.ts,
+      responseUrl: response_url,
+      triggerId: trigger_id,
+      workspaceId,
+      botToken,
+      appName,
+    });
+    if (deferred) {
+      // The response is already sent by the time this is awaited, so a failure can only be logged.
+      deferredWork.push(
+        deferred.catch(error => {
+          Logger.error('[Slack Interactive] Deferred work failed', { actionId: firstAction.action_id, error });
+        })
       );
-      // Stash deferred work - will be awaited after res.json()
-      (payload as Record<string, unknown>).__sreDeferred = deferred;
-      return response;
     }
+    return response;
   }
 
   // Find the user in our system (required for other actions)
-  const dbUser = await findUserBySlackId(user.id);
+  const dbUser = await findUserBySlackId(user.id, payload.team?.id);
   if (!dbUser) {
     Logger.error('[Slack Interactive] User not found', { slackUserId: user.id });
     return {
@@ -726,7 +792,7 @@ async function handleInteractiveAction(
           userId: dbUser.id,
         });
         // view comes from the modal payload (block_actions inside a modal)
-        const viewMeta = (payload as any).view;
+        const viewMeta = payload.view;
         const viewId = viewMeta?.id;
         await handleAttachmentDeleteFromModal(dbUser, viewMeta?.private_metadata, viewId, botToken);
         return {};
@@ -795,15 +861,6 @@ async function handleInteractiveAction(
           };
         }
 
-        // URL-only buttons (sre_view_github_issue, sre_review_github_issue_fix_loop)
-        // Slack sends interaction payloads even for link buttons; just acknowledge.
-        if (
-          action.action_id.startsWith('sre_view_github_issue') ||
-          action.action_id.startsWith('sre_review_github_issue')
-        ) {
-          return {};
-        }
-
         Logger.error('[Slack Interactive] Unknown action_id', { actionId: action.action_id });
         return {
           text: '❓ Unknown action',
@@ -813,7 +870,7 @@ async function handleInteractiveAction(
   }
 
   if (view && view.callback_id === 'notebook_settings_modal') {
-    return await handleNotebookSettingsSubmission(dbUser, user.id, view.state.values);
+    return await handleNotebookSettingsSubmission(dbUser, user.id, view.state.values as SlackViewStateValues);
   }
 
   return {
@@ -825,7 +882,7 @@ async function handleInteractiveAction(
 /**
  * Handle App Home refresh button click
  */
-async function handleAppHomeRefresh(dbUser: any, slackUserId: string, botToken?: string, appName?: string) {
+async function handleAppHomeRefresh(dbUser: SlackDbUser, slackUserId: string, botToken?: string, appName?: string) {
   if (!botToken) {
     return {
       text: '❌ Unable to refresh - missing bot token',
@@ -887,7 +944,7 @@ async function handleAppHomeRefresh(dbUser: any, slackUserId: string, botToken?:
   }
 }
 
-async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUrl?: string, botToken?: string) {
+async function handleCreateNotebook(dbUser: SlackDbUser, slackUserId: string, responseUrl?: string, botToken?: string) {
   try {
     const notebookName = `Slack Chat - ${new Date().toLocaleDateString('en-US', {
       year: 'numeric',
@@ -901,7 +958,7 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
     const newSession = await createSession(
       dbUser.id,
       { name: notebookName, origin: { channel: 'slack' } },
-      ability as any,
+      ability as unknown as Parameters<typeof createSession>[2],
       {
         setLastNotebook: true,
       }
@@ -996,13 +1053,14 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
     // For interactive components, return the response directly (not via response_url)
     // Slack will display it immediately without duplication
     return responseMessage;
-  } catch (error: any) {
+  } catch (error) {
+    const { code, message } = error as { code?: number; message?: string };
     // DocumentDB doesn't support sparse unique indexes properly - it enforces uniqueness on
     // null slackMetadata, so a user can have only one notebook without it.
-    if (error.code === 11000 && error.message?.includes('slackMetadata')) {
+    if (code === 11000 && message?.includes('slackMetadata')) {
       Logger.warn('[Slack Interactive] DocumentDB sparse index limitation - user already has manual notebook', {
         userId: dbUser.id,
-        errorCode: error.code,
+        errorCode: code,
       });
 
       const errorResponse = {
@@ -1052,7 +1110,7 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
   }
 }
 
-async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebookId?: string) {
+async function handleSetDefaultNotebook(dbUser: SlackDbUser, slackUserId: string, notebookId?: string) {
   if (!notebookId) {
     return {
       text: '❌ No notebook ID provided',
@@ -1061,6 +1119,18 @@ async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebo
   }
 
   try {
+    // Same ownership rule as the settings route (users/[id]/slack-settings.ts): the default notebook is
+    // dereferenced later without a re-check, and the button value is whatever the message carried.
+    const notebook = isValidObjectId(notebookId)
+      ? await Session.findOne({ _id: notebookId, userId: dbUser.id, deletedAt: { $exists: false } }).select('_id')
+      : null;
+    if (!notebook) {
+      return {
+        text: '\u274C That notebook was not found in your account',
+        response_type: 'ephemeral',
+      };
+    }
+
     const slackSettings = dbUser.slackSettings || {};
     await updateUserSlackSettings(dbUser.id, {
       ...slackSettings,
@@ -1081,7 +1151,7 @@ async function handleSetDefaultNotebook(dbUser: any, slackUserId: string, notebo
   }
 }
 
-async function handleToggleAutoCreate(dbUser: any, slackUserId: string) {
+async function handleToggleAutoCreate(dbUser: SlackDbUser, slackUserId: string) {
   try {
     const slackSettings = dbUser.slackSettings || {};
     const newAutoCreate = !slackSettings.autoCreateNotebook;
@@ -1105,7 +1175,11 @@ async function handleToggleAutoCreate(dbUser: any, slackUserId: string) {
   }
 }
 
-async function handleNotebookSettingsSubmission(dbUser: any, slackUserId: string, values: any) {
+async function handleNotebookSettingsSubmission(
+  dbUser: SlackDbUser,
+  slackUserId: string,
+  values: SlackViewStateValues
+) {
   try {
     const notebookId = values.notebook_block?.notebook_input?.value;
     const autoCreate = values.auto_create_block?.auto_create_select?.selected_option?.value === 'true';
@@ -1217,8 +1291,15 @@ async function handleImageModelSelection(
   const { prompt } = pendingImgParams;
   const modelDisplayName = getImageModelDisplayName(modelId);
 
-  // Clear pendingAction (image generation request consumed)
-  await Quest.findByIdAndUpdate(questId, { $unset: { pendingAction: 1 } });
+  // A double click reads the same request; only the claim winner may queue a generation.
+  if (!pendingAction || !(await claimPendingAction(questId, pendingAction.ts, 'approved'))) {
+    logger.info('[IMAGE-GEN] Request already claimed', { questId });
+    return {
+      text: 'This image generation request was already handled.',
+      replace_original: false,
+      response_type: 'ephemeral',
+    };
+  }
 
   // Get workspace info from the quest's session to find the workspace
   const { slackDevWorkspaceRepository } = await import('@bike4mind/database');
@@ -1294,10 +1375,10 @@ const NOT_REQUESTER_RESPONSE = {
  * Handle confirm button click - execute the action from questId
  */
 async function handleConfirmAction(
-  dbUser: any,
+  dbUser: SlackDbUser,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number },
-  clickedDestination: { slackTeamId: string; channelId: string }
-): Promise<any> {
+  { slackTeamId, channelId }: { slackTeamId?: string; channelId?: string }
+): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-confirm' } });
 
   logger.info('[Slack Interactive] Processing confirm action', {
@@ -1323,6 +1404,8 @@ async function handleConfirmAction(
     };
   }
 
+  // A click without both ids cannot match the pending action's destination, so it is refused downstream.
+  const clickedDestination = slackTeamId && channelId ? { slackTeamId, channelId } : undefined;
   const result = await executePendingAction(questId, dbUser, logger, pendingActionTs, clickedDestination);
 
   return {
@@ -1336,9 +1419,9 @@ async function handleConfirmAction(
  * Handle cancel button click - clears pendingAction from the Quest
  */
 async function handleCancelAction(
-  dbUser: any,
+  dbUser: SlackDbUser,
   { questId, pendingActionTs }: { questId: string; pendingActionTs?: number }
-): Promise<any> {
+): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-cancel' } });
 
   if (!(await isPendingActionRequester(questId, dbUser.id))) {
@@ -1363,11 +1446,11 @@ async function handleCancelAction(
  * Downloads file from Jira/Confluence and uploads it directly to Slack
  */
 async function handleAttachmentDownload(
-  dbUser: any,
+  dbUser: SlackDbUser,
   buttonValue: string | undefined,
   botToken?: string,
   _responseUrl?: string
-): Promise<any> {
+): Promise<SlackInteractiveResult> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-download' } });
 
   if (!(await isFeatureEnabled('EnableMCPServer'))) {
@@ -1393,12 +1476,8 @@ async function handleAttachmentDownload(
 
   // Look up Quest to get attachment data
   const quest = await Quest.findById(questId);
-  // any: attachmentList is defined in the schema but not yet typed on the interface
-  const questAny = quest as any;
-  const attachmentEntry = questAny?.attachmentList?.attachments?.find(
-    (candidate: any) => candidate.id === attachmentId
-  );
-  if (!quest || !questAny?.attachmentList || !attachmentEntry) {
+  const attachmentEntry = quest?.attachmentList?.attachments?.find(candidate => candidate.id === attachmentId);
+  if (!quest || !quest.attachmentList || !attachmentEntry) {
     logger.error('[Slack Interactive] Quest or attachment not found', { questId, attachmentId });
     return {
       text: '❌ Attachment data expired. Please list attachments again.',
@@ -1406,7 +1485,7 @@ async function handleAttachmentDownload(
     };
   }
 
-  const { source } = questAny.attachmentList;
+  const { source } = quest.attachmentList;
   const { filename, emoji, sizeFormatted } = attachmentEntry;
   const sessionId = quest.sessionId;
 
@@ -1456,7 +1535,7 @@ async function handleAttachmentDownload(
     });
 
     // Download the attachment via MCP
-    const result = await invokeMcpHandler<any>({
+    const result = await invokeMcpHandler<unknown>({
       envVariables,
       name: 'atlassian',
       toolName,
@@ -1466,7 +1545,7 @@ async function handleAttachmentDownload(
     });
 
     // Parse result
-    let fileData: any = result;
+    let fileData: AttachmentDownloadResult = result as AttachmentDownloadResult;
     if (typeof result === 'string') {
       try {
         fileData = JSON.parse(result);
@@ -1476,15 +1555,16 @@ async function handleAttachmentDownload(
     }
 
     // Handle nested content structure from MCP
-    if (fileData?.content?.[0]?.text) {
+    const nestedText = Array.isArray(fileData?.content) ? fileData.content[0]?.text : undefined;
+    if (nestedText) {
       try {
-        fileData = JSON.parse(fileData.content[0].text);
+        fileData = JSON.parse(nestedText);
       } catch {
         fileData = { error: 'Failed to parse download result' };
       }
     }
 
-    if (fileData?.error || !fileData?.content) {
+    if (fileData?.error || !fileData?.content || typeof fileData.content !== 'string') {
       logger.error('[Slack Interactive] Attachment download failed', {
         error: fileData?.error,
         hasContent: !!fileData?.content,
@@ -1552,14 +1632,12 @@ async function openAttachmentDeleteModal(
   }
 
   const quest = await Quest.findById(questId);
-  // any: attachmentList is defined in the schema but not yet typed on the interface
-  const questAny = quest as any;
-  const att = questAny?.attachmentList?.attachments?.find((candidate: any) => candidate.id === attachmentId);
-  if (!quest || !questAny?.attachmentList || !att) {
+  const att = quest?.attachmentList?.attachments?.find(candidate => candidate.id === attachmentId);
+  if (!quest || !quest.attachmentList || !att) {
     return { text: '❌ Attachment data expired. Please list attachments again.', response_type: 'ephemeral' };
   }
 
-  const { source, pageId, pageTitle, issueKey } = questAny.attachmentList;
+  const { source, pageId, pageTitle, issueKey } = quest.attachmentList;
   const confluenceLabel = pageTitle ? `Confluence page "${pageTitle}"` : `Confluence page ${pageId || 'unknown'}`;
   const sourceContext = source === 'jira' ? `Jira ticket ${issueKey || 'unknown'}` : confluenceLabel;
 
@@ -1607,8 +1685,7 @@ async function openAttachmentDeleteModal(
  * Updates the modal to show progress, processes deletion, and refreshes the attachment list.
  */
 async function handleAttachmentDeleteFromModal(
-  // any: dbUser is IUserDocument from Mongoose
-  dbUser: any,
+  dbUser: SlackDbUser,
   privateMetadata: string | undefined,
   viewId: string | undefined,
   botToken?: string
@@ -1686,15 +1763,11 @@ async function handleAttachmentDeleteFromModal(
     try {
       const [questId, deletedAttachmentId] = buttonValue.split(':');
       const quest = await Quest.findById(questId);
-      // any: attachmentList is defined in the schema but not yet typed on the interface
-      const questAny = quest as any;
 
-      if (quest && questAny?.attachmentList?.attachments) {
+      if (quest?.attachmentList?.attachments) {
         // Remove the deleted attachment by id. The $pull is atomic so it does not overwrite a
         // concurrent removal of the same list (the web delete button prunes it the same way).
-        const remainingAttachments = questAny.attachmentList.attachments.filter(
-          (att: any) => att.id !== deletedAttachmentId
-        );
+        const remainingAttachments = quest.attachmentList.attachments.filter(att => att.id !== deletedAttachmentId);
         await Quest.updateOne(
           { _id: questId },
           { $pull: { 'attachmentList.attachments': { id: deletedAttachmentId } } }
@@ -1702,8 +1775,8 @@ async function handleAttachmentDeleteFromModal(
 
         if (remainingAttachments.length > 0) {
           // Rebuild attachment list blocks
-          const { source, issueKey, pageId } = questAny.attachmentList;
-          const attachmentInfos: AttachmentDownloadInfo[] = remainingAttachments.map((att: any) => ({
+          const { source, issueKey, pageId } = quest.attachmentList;
+          const attachmentInfos: AttachmentDownloadInfo[] = remainingAttachments.map(att => ({
             source,
             attachmentId: att.id,
             filename: att.filename,
@@ -1749,8 +1822,10 @@ async function handleAttachmentDeleteFromModal(
   }
 }
 
-// any: dbUser is IUserDocument from Mongoose, matching handleAttachmentDownload's signature
-async function handleAttachmentDelete(dbUser: any, buttonValue: string | undefined): Promise<Record<string, unknown>> {
+async function handleAttachmentDelete(
+  dbUser: SlackDbUser,
+  buttonValue: string | undefined
+): Promise<Record<string, unknown>> {
   const logger = new Logger({ metadata: { component: 'slack-interactive-attachment-delete' } });
 
   if (!(await isFeatureEnabled('EnableMCPServer'))) {
@@ -1890,7 +1965,13 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   }
 
   // Parse payload JSON to get team_id for workspace lookup
-  let parsedPayload: any;
+  let parsedPayload: {
+    team?: { id?: string };
+    api_app_id?: string;
+    actions?: { action_id?: string }[];
+    user?: { id?: string };
+    type?: string;
+  };
   try {
     parsedPayload = JSON.parse(payloadString);
   } catch (e) {
@@ -1913,42 +1994,35 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   // Start user lookup early for app_home_settings (parallelize with workspace lookup)
   // This helps stay within trigger_id's 3-second expiration window
   const userLookupPromise =
-    actionId === 'app_home_settings' && slackUserId ? findUserBySlackId(slackUserId) : Promise.resolve(null);
+    actionId === 'app_home_settings' && slackUserId ? findUserBySlackId(slackUserId, teamId) : Promise.resolve(null);
 
-  // Find workspace with all credentials in a single query for speed (trigger_id expires in 3s)
-  let workspace = null;
-
-  if (apiAppId) {
-    workspace = await SlackDevWorkspace.findOne({ slackAppId: apiAppId, isActive: true }).select(
-      '+slackClientId +slackClientSecret +slackOAuthSigningSecret +slackBotToken slackBotName'
-    );
-  }
-
-  // Fallback: find by team_id
-  if (!workspace && teamId) {
-    workspace = await SlackDevWorkspace.findOne({ slackTeamId: teamId, isActive: true }).select(
-      '+slackClientId +slackClientSecret +slackOAuthSigningSecret +slackBotToken slackBotName'
-    );
-  }
-
-  // Fallback to first active workspace if not found (dev mode only for testing)
-  if (!workspace && isDevelopment()) {
-    workspace = await SlackDevWorkspace.findOne({ isActive: true }).select(
-      '+slackClientId +slackClientSecret +slackOAuthSigningSecret +slackBotToken slackBotName'
-    );
-  }
+  const resolved = await resolveSlackInstallation(apiAppId, teamId);
 
   // Await user lookup that was started in parallel
   const prefetchedUser = await userLookupPromise;
 
-  if (!workspace) {
-    Logger.error('[Slack Interactive] No Slack workspace found', { teamId, apiAppId });
-    return res.status(500).json({
+  if (!resolved.ok) {
+    Logger.error('[Slack Interactive] No Slack installation found', { teamId, apiAppId, reason: resolved.reason });
+    return res.status(resolved.reason === 'not_found' || resolved.reason === 'missing_ids' ? 404 : 500).json({
       error: 'Slack workspace not configured. Please create a Slack app via the admin panel.',
     });
   }
 
-  const signingSecret = workspace.slackOAuthSigningSecret;
+  const installation = resolved.installation;
+  const workspace =
+    installation.kind === 'dev'
+      ? {
+          id: installation.workspace.id,
+          name: installation.workspace.name,
+          slackBotName: installation.workspaceWithCreds.slackBotName,
+        }
+      : {
+          id: installation.orgWorkspace.id,
+          name: installation.orgWorkspace.slackTeamName || installation.appWorkspace.name,
+          slackBotName: installation.appWorkspace.slackBotName,
+        };
+
+  const signingSecret = installation.signingSecret;
   if (!signingSecret) {
     Logger.error('[Slack Interactive] Signing secret not configured for workspace', {
       workspaceId: workspace.id,
@@ -2021,19 +2095,22 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
     });
 
     const appName = workspace.slackBotName || workspace.name;
-    const botToken = decryptToken(workspace.slackBotToken) ?? '';
+    const botToken = installation.botToken;
     Logger.info('[Slack Interactive] Calling handler', {
       hasBotToken: !!botToken,
       hasPrefetchedUser: !!prefetchedUser,
     });
 
     try {
+      const deferredWork: Promise<void>[] = [];
+      logRegistryProblemsOnce();
       const response = await handleInteractiveAction(
         validatedPayload.data,
         botToken,
         prefetchedUser,
         appName,
-        workspace.id
+        workspace.id,
+        deferredWork
       );
 
       auditLogger.success();
@@ -2043,7 +2120,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
       // Awaited (not fire-and-forget) so the promise completes before
       // the Lambda handler returns - prevents Lambda freeze from
       // orphaning the refresh.
-      if (isModelConfigChange(validatedPayload.data, response)) {
+      if (isModelConfigChange(validatedPayload.data, response as Record<string, unknown>)) {
         const slackUserId = validatedPayload.data.user?.id;
         const slackTeamId = validatedPayload.data.team?.id;
         if (slackUserId && slackTeamId && botToken) {
@@ -2055,11 +2132,10 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
         }
       }
 
-      // Post-response: await SRE deferred work (approval processing).
+      // Post-response: await work a handler deferred until after the acknowledgement.
       // Same pattern as refreshAppHomeForAdmin - prevents Lambda freeze from killing it.
-      const sreDeferred = (validatedPayload.data as Record<string, unknown>).__sreDeferred as Promise<void> | undefined;
-      if (sreDeferred) {
-        await sreDeferred;
+      for (const work of deferredWork) {
+        await work;
       }
     } catch (handlerError) {
       auditLogger.failure(handlerError instanceof Error ? handlerError.message : 'Handler error');
@@ -2080,4 +2156,4 @@ export const config = {
   },
 };
 
-export default handler;
+export default withRequestLogger(handler);

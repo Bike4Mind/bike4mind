@@ -42,7 +42,68 @@ function runHook(env: Record<string, string>, stdinPayload: unknown) {
   });
 }
 
-function startCaptureServer(): Promise<{ port: number; captured: { current?: CapturedRequest }; close: () => void }> {
+/** Preload that destroys stdin with EIO; a directory as stdin only errors on some platforms. */
+const STDIN_ERROR_PRELOAD =
+  "data:text/javascript,setTimeout(()=>process.stdin.destroy(Object.assign(new Error('EIO'),{code:'EIO'})),100)";
+
+/**
+ * Preload that fills the stderr pipe and queues a write that never lands, so the
+ * hook's own line cannot be flushed until someone reads. Paired with a parent
+ * that never drains.
+ */
+const STALLED_STDERR_PRELOAD = "data:text/javascript,process.stderr.write('x'.repeat(1<<20))";
+
+/**
+ * Spawns the hook with stderr captured. `injectStdinError` leaves stdin open and
+ * breaks it; `closedStderr` closes the read end so the child's writes hit EPIPE;
+ * `stalledStderr` leaves a full pipe undrained and kills the child if it has not
+ * exited on its own, so a hang fails the assertion instead of the test timeout.
+ */
+function runHookCapturing(
+  env: Record<string, string>,
+  opts: {
+    injectStdinError?: boolean;
+    closedStderr?: boolean;
+    stalledStderr?: boolean;
+    stdinPayload?: string;
+    preloads?: string[];
+  } = {}
+) {
+  return new Promise<{ code: number; stderr: string; stdout: string }>((resolve, reject) => {
+    const preloads = [
+      opts.injectStdinError ? STDIN_ERROR_PRELOAD : '',
+      opts.stalledStderr ? STALLED_STDERR_PRELOAD : '',
+      ...(opts.preloads ?? []).map(source => `data:text/javascript,${encodeURIComponent(source)}`),
+    ]
+      .filter(Boolean)
+      .flatMap(source => ['--import', source]);
+    const child = spawn(process.execPath, [...preloads, HOOK_PATH], {
+      env: { ...ambientHookEnv(), ...env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let stdout = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    if (opts.closedStderr) child.stderr.destroy();
+    else if (opts.stalledStderr) child.stderr.pause();
+    else child.stderr.on('data', c => (stderr += c));
+    const watchdog = setTimeout(() => child.kill('SIGKILL'), 4000);
+    child.on('error', reject);
+    child.on('close', code => {
+      clearTimeout(watchdog);
+      resolve({ code: code ?? -1, stderr, stdout });
+    });
+    if (!opts.injectStdinError) {
+      child.stdin.write(opts.stdinPayload ?? JSON.stringify(HOOK_INPUT));
+      child.stdin.end();
+    }
+  });
+}
+
+function startCaptureServer(
+  status = 201
+): Promise<{ port: number; captured: { current?: CapturedRequest }; close: () => void }> {
   const captured: { current?: CapturedRequest } = {};
   return new Promise(resolve => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -54,7 +115,7 @@ function startCaptureServer(): Promise<{ port: number; captured: { current?: Cap
           apiKey: req.headers['x-api-key'] as string | undefined,
           body: JSON.parse(Buffer.concat(chunks).toString() || '{}'),
         };
-        res.writeHead(201, { 'content-type': 'application/json' });
+        res.writeHead(status, { 'content-type': 'application/json' });
         res.end('{"event":{}}');
       });
     });
@@ -483,4 +544,258 @@ describe('bin/hearth-hook.mjs privacy contract', () => {
       close();
     }
   }, 15000);
+
+  describe('failure reporting', () => {
+    it('exits 0 on a stdin error, silent by default', async () => {
+      const { port, close } = await startCaptureServer();
+      try {
+        const { code, stderr } = await runHookCapturing(HOOK_ENV(port), { injectStdinError: true });
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('reports a stdin error once under B4M_HEARTH_DEBUG and still exits 0', async () => {
+      const { port, close } = await startCaptureServer();
+      try {
+        const { code, stderr } = await runHookCapturing(
+          { ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' },
+          { injectStdinError: true }
+        );
+        expect(code).toBe(0);
+        expect(stderr.trim().split('\n')).toEqual(['hearth-hook: stdin error: EIO']);
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('writes exactly one stderr line for a 401 under B4M_HEARTH_DEBUG, without the key', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' });
+        expect(code).toBe(0);
+        expect(stderr.trim().split('\n')).toHaveLength(1);
+        expect(stderr).toContain('401');
+        expect(stderr).not.toContain('test-key');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('stays silent on a non-2xx without the debug flag', async () => {
+      const { port, close } = await startCaptureServer(429);
+      try {
+        const { code, stderr } = await runHookCapturing(HOOK_ENV(port));
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('stays silent on a non-2xx with B4M_HEARTH_DEBUG=0', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '0' });
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('stays silent on a 2xx even with the debug flag', async () => {
+      const { port, close } = await startCaptureServer(201);
+      try {
+        const { code, stderr, stdout } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' });
+        expect(code).toBe(0);
+        expect(stderr).toBe('');
+        expect(stdout).toBe('');
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    // Port 1 needs no listener of ours and is never in use, so fetch rejects instead of answering.
+    it('reports a thrown fetch error once under B4M_HEARTH_DEBUG and still exits 0', async () => {
+      const { code, stderr } = await runHookCapturing({ ...HOOK_ENV(1), B4M_HEARTH_DEBUG: '1' });
+      expect(code).toBe(0);
+      expect(stderr.trim().split('\n')).toEqual([
+        expect.stringMatching(/^hearth-hook: POST \/api\/hearth\/events error: \w+$/),
+      ]);
+    }, 15000);
+
+    it.each([
+      ['ECONNREFUSED', 'ECONNREFUSED'],
+      [42, 'TypeError'],
+    ])('reports only a string fetch cause code (%s)', async (causeCode, diagnostic) => {
+      const { code, stderr } = await runHookCapturing(
+        { ...HOOK_ENV(1), B4M_HEARTH_DEBUG: '1' },
+        {
+          preloads: [
+            `globalThis.fetch = async () => {
+              throw new TypeError('fetch failed: private endpoint', { cause: { code: ${JSON.stringify(causeCode)} } });
+            };`,
+          ],
+        }
+      );
+      expect(code).toBe(0);
+      expect(stderr).toBe(`hearth-hook: POST /api/hearth/events error: ${diagnostic}\n`);
+    });
+
+    it('identifies malformed stdin as a payload failure and still exits 0', async () => {
+      const { code, stderr } = await runHookCapturing(
+        { ...HOOK_ENV(1), B4M_HEARTH_DEBUG: '1' },
+        { stdinPayload: 'this is not json{{{' }
+      );
+      expect(code).toBe(0);
+      expect(stderr).toBe('hearth-hook: stdin payload error: SyntaxError\n');
+    });
+
+    it('identifies an invalid API URL as a configuration failure and still exits 0', async () => {
+      const { code, stderr } = await runHookCapturing({
+        ...HOOK_ENV(1),
+        B4M_API_URL: 'not a URL',
+        B4M_HEARTH_DEBUG: '1',
+      });
+      expect(code).toBe(0);
+      expect(stderr).toBe('hearth-hook: configuration error: ERR_INVALID_URL\n');
+    });
+
+    it.each(['B4M_API_URL', 'B4M_API_KEY'])('reports a missing %s under debug without sending a request', async key => {
+      const { code, stderr, stdout } = await runHookCapturing(
+        { ...HOOK_ENV(1), [key]: '', B4M_HEARTH_DEBUG: '1' },
+        { preloads: ["globalThis.fetch = async () => { process.stdout.write('unexpected fetch'); };"] }
+      );
+      expect(code).toBe(0);
+      expect(stderr).toBe('hearth-hook: configuration error: missing B4M_API_URL or B4M_API_KEY\n');
+      expect(stdout).toBe('');
+    });
+
+    it.each(['B4M_API_URL', 'B4M_API_KEY'])('stays silent when %s is missing and debug is disabled', async key => {
+      const { code, stderr, stdout } = await runHookCapturing(
+        { ...HOOK_ENV(1), [key]: '', B4M_HEARTH_DEBUG: '0' },
+        { preloads: ["globalThis.fetch = async () => { process.stdout.write('unexpected fetch'); };"] }
+      );
+      expect(code).toBe(0);
+      expect(stderr).toBe('');
+      expect(stdout).toBe('');
+    });
+
+    it('waits for the stderr callback before exiting', async () => {
+      const { code, stdout } = await runHookCapturing(
+        { ...HOOK_ENV(1), B4M_HEARTH_DEBUG: '1' },
+        {
+          preloads: [
+            `setInterval(() => {}, 1000);
+            let flushed = false;
+            process.stderr.write = (_line, callback) => {
+              setTimeout(() => { flushed = true; callback(); }, 50);
+              return true;
+            };
+            globalThis.fetch = async () => ({ ok: false, status: 401 });
+            process.on('exit', () => process.stdout.write(flushed ? 'flushed' : 'dropped'));`,
+          ],
+        }
+      );
+      expect(code).toBe(0);
+      expect(stdout).toBe('flushed');
+    });
+
+    // Record configured budgets instead of racing CI scheduling against wall time.
+    it.each([false, true])('reserves diagnostic flush time inside the request budget (stalled=%s)', async stalled => {
+      const { code, stderr, stdout } = await runHookCapturing(
+        { ...HOOK_ENV(1), B4M_HEARTH_DEBUG: '1' },
+        {
+          preloads: [
+            String.raw`const originalSetTimeout = globalThis.setTimeout;
+            setInterval(() => {}, 1000);
+            AbortSignal.timeout = milliseconds => {
+              process.stdout.write('request:' + milliseconds + '\n');
+              const controller = new AbortController();
+              originalSetTimeout(() => controller.abort(new DOMException('timed out', 'TimeoutError')), milliseconds / 10);
+              return controller.signal;
+            };
+            globalThis.setTimeout = (callback, milliseconds, ...args) => {
+              process.stdout.write('flush:' + milliseconds + '\n');
+              return originalSetTimeout(callback, milliseconds / 10, ...args);
+            };
+            globalThis.fetch = async (_url, { signal }) => new Promise((_resolve, reject) => {
+              signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+            });
+            ${stalled ? 'process.stderr.write = () => false;' : ''}`,
+          ],
+        }
+      );
+      expect(code).toBe(0);
+      expect(stdout.trim().split('\n')).toEqual(['request:2750', 'flush:250']);
+      expect(stderr).toBe(stalled ? '' : 'hearth-hook: POST /api/hearth/events error: TimeoutError\n');
+    });
+
+    it.each(['', '0'])('keeps the full request budget when debug is disabled (%s)', async debugFlag => {
+      const { code, stderr, stdout } = await runHookCapturing(
+        { ...HOOK_ENV(1), B4M_HEARTH_DEBUG: debugFlag },
+        {
+          preloads: [
+            `AbortSignal.timeout = milliseconds => {
+              process.stdout.write('request:' + milliseconds);
+              return new AbortController().signal;
+            };
+            globalThis.fetch = async () => { throw new DOMException('timed out', 'TimeoutError'); };`,
+          ],
+        }
+      );
+      expect(code).toBe(0);
+      expect(stderr).toBe('');
+      expect(stdout).toBe('request:3000');
+    });
+
+    it('stays silent on a thrown fetch error without the debug flag', async () => {
+      const { code, stderr } = await runHookCapturing(HOOK_ENV(1));
+      expect(code).toBe(0);
+      expect(stderr).toBe('');
+    }, 15000);
+
+    it('exits 0 when a debug line is written to a closed stderr', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const { code } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' }, { closedStderr: true });
+        expect(code).toBe(0);
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    // The flush is awaited so the line survives, but it must never be the exit's
+    // slowest input: a full pipe with nobody reading would otherwise hold the
+    // session open for as long as the reader stays away.
+    it('exits promptly when the debug line cannot be flushed to a stalled stderr', async () => {
+      const { port, close } = await startCaptureServer(401);
+      try {
+        const started = Date.now();
+        const { code } = await runHookCapturing({ ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' }, { stalledStderr: true });
+        expect(code).toBe(0);
+        expect(Date.now() - started).toBeLessThan(2000);
+      } finally {
+        close();
+      }
+    }, 15000);
+
+    it('exits promptly on a stdin error when stderr is stalled', async () => {
+      const { port, close } = await startCaptureServer(201);
+      try {
+        const started = Date.now();
+        const { code } = await runHookCapturing(
+          { ...HOOK_ENV(port), B4M_HEARTH_DEBUG: '1' },
+          { injectStdinError: true, stalledStderr: true }
+        );
+        expect(code).toBe(0);
+        expect(Date.now() - started).toBeLessThan(2000);
+      } finally {
+        close();
+      }
+    }, 15000);
+  });
 });

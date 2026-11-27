@@ -1,12 +1,15 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 import type {
+  ISkillBundle,
   ISkillHonestSummary,
   ISkillListing,
   ISkillListingVersion,
   ISkillSnapshot,
   SkillListingReportReason,
   SkillListingVisibility,
+  SkillReviewStatus,
   SkillRiskTier,
 } from '@bike4mind/common';
 
@@ -24,6 +27,9 @@ export type MarketVersionView = {
   snapshot: ISkillSnapshot;
   honestSummary?: ISkillHonestSummary;
   riskTier?: SkillRiskTier;
+  /** The listing's author approved it themselves; no second reviewer. */
+  selfApproved?: boolean;
+  reviewStatus?: SkillReviewStatus;
   createdAt: string;
 };
 
@@ -50,7 +56,9 @@ export type ListingDetail = {
 
 export type MarketFilters = {
   q: string;
-  scope: '' | 'public' | 'org';
+  scope: '' | 'public' | 'org' | 'space';
+  /** Narrows scope 'space' to one Space; ignored for other scopes. */
+  spaceId?: string;
   tools: '' | 'with' | 'without';
   minRating: number;
   sort: 'relevance' | 'top' | 'imports' | 'new' | 'updated';
@@ -59,17 +67,23 @@ export type MarketFilters = {
 
 export type MyListing = MarketListing & { versions: ISkillListingVersion[] };
 
-export type MarketMe = { organizations: Array<{ id: string; name: string }>; isReviewer: boolean; isAdmin: boolean };
+export type MarketMe = {
+  organizations: Array<{ id: string; name: string }>;
+  spaces?: Array<{ id: string; name: string }>;
+  isReviewer: boolean;
+  isAdmin: boolean;
+};
 
 export type SubmitResult = { listing: MarketListing; version: ISkillListingVersion };
 
 const PAGE_SIZE = 24;
 
-export const useMarketMe = () =>
+export const useMarketMe = (opts?: { enabled?: boolean }) =>
   useQuery({
     queryKey: ['skill-market', 'me'],
     queryFn: async () => (await api.get<MarketMe>('/api/skills/market/me')).data,
     staleTime: 5 * 60 * 1000,
+    enabled: opts?.enabled,
   });
 
 export const useMarketListings = (filters: MarketFilters) =>
@@ -80,6 +94,7 @@ export const useMarketListings = (filters: MarketFilters) =>
       const params = new URLSearchParams({ page: String(pageParam), limit: String(PAGE_SIZE), sort: filters.sort });
       if (filters.q.trim()) params.set('q', filters.q.trim());
       if (filters.scope) params.set('scope', filters.scope);
+      if (filters.scope === 'space' && filters.spaceId) params.set('spaceId', filters.spaceId);
       if (filters.tools) params.set('tools', filters.tools);
       if (filters.minRating) params.set('minRating', String(filters.minRating));
       if (filters.tags.length) params.set('tags', filters.tags.join(','));
@@ -98,24 +113,24 @@ export const useRecommendedListings = (enabled = true) =>
     staleTime: 5 * 60 * 1000,
   });
 
-/** Detail by id, or by unlisted share token when `token` is given without an id. */
+/** Detail by id, or by unlisted share token when only `token` is given. */
 export const useListingDetail = (args: { id?: string; token?: string }) =>
   useQuery({
-    queryKey: ['skill-market', 'listing', args.id ?? null, args.token ?? null],
+    queryKey: ['skill-market', 'listing', args.id ?? null, args.id ? null : (args.token ?? null)],
     queryFn: async () => {
-      const url = args.id
-        ? `/api/skills/market/${args.id}${args.token ? `?token=${encodeURIComponent(args.token)}` : ''}`
-        : `/api/skills/market/by-token/${encodeURIComponent(args.token ?? '')}`;
-      return (await api.get<ListingDetail>(url)).data;
+      if (args.id) return (await api.get<ListingDetail>(`/api/skills/market/${args.id}`)).data;
+      const headers = { [SKILL_SHARE_TOKEN_HEADER]: args.token ?? '' };
+      return (await api.get<ListingDetail>('/api/skills/market/by-token', { headers })).data;
     },
     enabled: Boolean(args.id || args.token),
     retry: false,
   });
 
-export const useMyListings = () =>
+export const useMyListings = (opts?: { enabled?: boolean }) =>
   useQuery({
     queryKey: ['skill-market', 'mine'],
     queryFn: async () => (await api.get<{ data: MyListing[] }>('/api/skills/market/mine')).data.data,
+    enabled: opts?.enabled,
   });
 
 export type ReviewQueueFilter = 'pending' | 'audit' | 'reports' | 'legacy';
@@ -129,6 +144,8 @@ export type ReviewQueueVersionItem = {
 export type ReviewQueueReportItem = {
   listing: MarketListing;
   count: number;
+  /** Reports that count toward auto-hide. */
+  countingCount: number;
   reports: Array<{ reason: SkillListingReportReason; details?: string; createdAt: string }>;
 };
 export type LegacyGlobalSkill = {
@@ -189,6 +206,7 @@ export const usePublishSkill = () => {
       skillId: string;
       visibility: SkillListingVisibility;
       organizationId?: string;
+      spaceId?: string;
       tags: string[];
     }) => (await api.post<SubmitResult>('/api/skills/market/publish', input)).data,
     onSuccess: invalidate,
@@ -218,6 +236,16 @@ export const useWithdrawListing = () => {
   return useMutation({
     mutationFn: async (listingId: string) => {
       await api.delete(`/api/skills/market/${listingId}`);
+    },
+    onSuccess: invalidate,
+  });
+};
+
+export const useDeleteListing = () => {
+  const invalidate = useInvalidateMarket();
+  return useMutation({
+    mutationFn: async (listingId: string) => {
+      await api.delete(`/api/skills/market/${listingId}/permanent`);
     },
     onSuccess: invalidate,
   });
@@ -316,4 +344,54 @@ export const useReviewVersion = () => {
 export const conflictInfo = (error: unknown): { code?: string; suggestedName?: string } | null => {
   const res = (error as { response?: { status?: number; data?: { code?: string; suggestedName?: string } } })?.response;
   return res?.status === 409 ? (res.data ?? {}) : null;
+};
+
+/** An org's Claude Code skill bundles (pages/api/skills/market/bundles) and the listings they may hold. */
+export type SkillBundlesView = {
+  bundles: ISkillBundle[];
+  listings: { id: string; name: string; pluginName: string }[];
+  canEdit: boolean;
+};
+
+export type SkillBundleInput = { name: string; description: string; listingIds: string[] };
+
+/** Who owns a bundle set: an org (a bare id string stays accepted) or a Space. */
+export type SkillBundleOwner = { orgId: string } | { spaceId: string };
+
+const toBundleOwner = (owner: string | SkillBundleOwner): SkillBundleOwner =>
+  typeof owner === 'string' ? { orgId: owner } : owner;
+
+const bundlesKey = (owner: SkillBundleOwner) =>
+  'spaceId' in owner ? ['skill-market', 'bundles', 'space', owner.spaceId] : ['skill-market', 'bundles', owner.orgId];
+
+export const useSkillBundles = (ownerArg: string | SkillBundleOwner) => {
+  const owner = toBundleOwner(ownerArg);
+  return useQuery({
+    queryKey: bundlesKey(owner),
+    queryFn: async () => (await api.get<SkillBundlesView>('/api/skills/market/bundles', { params: owner })).data,
+  });
+};
+
+export const useSaveSkillBundle = (ownerArg: string | SkillBundleOwner) => {
+  const qc = useQueryClient();
+  const owner = toBundleOwner(ownerArg);
+  const ownerBody = 'spaceId' in owner ? { spaceId: owner.spaceId } : { organizationId: owner.orgId };
+  return useMutation({
+    mutationFn: async ({ id, ...input }: SkillBundleInput & { id?: string }) =>
+      id
+        ? (await api.put<ISkillBundle>(`/api/skills/market/bundles/${id}`, input)).data
+        : (await api.post<ISkillBundle>('/api/skills/market/bundles', { ...input, ...ownerBody })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(owner) }),
+  });
+};
+
+export const useDeleteSkillBundle = (ownerArg: string | SkillBundleOwner) => {
+  const qc = useQueryClient();
+  const owner = toBundleOwner(ownerArg);
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/api/skills/market/bundles/${id}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: bundlesKey(owner) }),
+  });
 };

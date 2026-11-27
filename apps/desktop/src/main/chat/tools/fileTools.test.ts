@@ -2,10 +2,19 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatMedia } from '@shared/chat';
 import { fileRead, globFiles, grepSearch } from './fileTools';
 import { PathAccessDenied } from './paths';
-import { MAX_FILE_READ_OUTPUT_CHARS, MAX_TOOL_OUTPUT_CHARS, outputCapFor, type ToolContext } from './types';
+import { MAX_TOOL_IMAGE_BYTES } from './toolImages';
+import {
+  MAX_FILE_READ_OUTPUT_CHARS,
+  MAX_TOOL_OUTPUT_CHARS,
+  outputCapFor,
+  type KeptImage,
+  type PreparedImage,
+  type ToolContext,
+} from './types';
 
 describe('file tools', () => {
   let root: string;
@@ -113,6 +122,170 @@ describe('file tools', () => {
       await expect(fileRead.run({ path: join(root, 'blob.dat') }, context)).resolves.toMatch(/binary file/);
     });
 
+    describe('images', () => {
+      const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
+      const gif = Buffer.concat([Buffer.from('GIF89a', 'latin1'), Buffer.alloc(32)]);
+
+      function imageContext(vision: boolean, prepared: PreparedImage | null) {
+        const shown: { bytes: Buffer; mimeType: string }[] = [];
+        const prepare = vi.fn((_bytes: Buffer, _type: string, _max: number) => prepared);
+        const reported: ToolContext = {
+          ...context,
+          images: { vision, prepare },
+          report: { image: (bytes: Buffer, mimeType: string) => shown.push({ bytes, mimeType }) } as never,
+        };
+        return { reported, shown, prepare };
+      }
+
+      const KEPT: ChatMedia = {
+        kind: 'image',
+        url: 'b4m-media://media/s1/00000000-0000-4000-8000-000000000000.png',
+        mimeType: 'image/png',
+        byteLength: 5,
+        caption: '',
+      };
+      const FITTED: PreparedImage = {
+        bytes: Buffer.from('small'),
+        mediaType: 'image/png',
+        width: 1568,
+        height: 980,
+        sourceWidth: 2880,
+        sourceHeight: 1800,
+      };
+
+      function keepingContext(vision: boolean, prepared: PreparedImage | null, kept: ChatMedia | null = KEPT) {
+        const shown: { bytes: Buffer; mimeType: string }[] = [];
+        const media: ChatMedia[] = [];
+        const prepare = vi.fn((_bytes: Buffer, _type: string, _max: number) => prepared);
+        const keep = vi.fn(async (_source: Buffer, _display: KeptImage, _caption: string) => kept ?? undefined);
+        const reported: ToolContext = {
+          ...context,
+          images: { vision, prepare, keep },
+          report: {
+            image: (bytes: Buffer, mimeType: string) => shown.push({ bytes, mimeType }),
+            media: (item: ChatMedia) => media.push(item),
+          } as never,
+        };
+        return { reported, shown, media, keep };
+      }
+
+      it('keeps the fitted image on the row for the user, keyed by the bytes it read', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, media, keep } = keepingContext(true, FITTED);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+
+        expect(media).toEqual([KEPT]);
+        expect(keep).toHaveBeenCalledTimes(1);
+        const [source, display, caption] = keep.mock.calls[0];
+        expect(source.equals(png)).toBe(true);
+        expect(display).toMatchObject({ bytes: FITTED.bytes, mediaType: 'image/png', width: 1568, height: 980 });
+        expect(caption).toBe(join(root, 'shot.png'));
+        expect(shown).toEqual([{ bytes: FITTED.bytes, mimeType: 'image/png' }]);
+        expect(result).toContain('shown to you at 1568x980');
+        expect(result).toContain('The user sees it in the chat');
+      });
+
+      it('still shows the user an image the model cannot read, and says only the user sees it', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, media } = keepingContext(false, FITTED);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+
+        expect(media).toEqual([KEPT]);
+        expect(shown).toEqual([]);
+        expect(result).toMatch(/not shown: the current model does not accept images/);
+        expect(result).toContain('The user sees it in the chat');
+      });
+
+      it('does not claim the user sees an image that could not be kept', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, media } = keepingContext(true, FITTED, null);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+
+        expect(media).toEqual([]);
+        expect(shown).toHaveLength(1);
+        expect(result).not.toContain('The user sees it');
+      });
+
+      it('keeps nothing for an image that does not decode', async () => {
+        await writeFile(join(root, 'broken.png'), png);
+        const { reported, media, keep } = keepingContext(true, null);
+        const result = await fileRead.run({ path: join(root, 'broken.png') }, reported);
+
+        expect(keep).not.toHaveBeenCalled();
+        expect(media).toEqual([]);
+        expect(result).toMatch(/not shown: it could not be decoded/);
+        expect(result).not.toContain('The user sees it');
+      });
+
+      it('shows the model a PNG, downscaled, and says what it was', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const small = Buffer.from('small');
+        const { reported, shown, prepare } = imageContext(true, {
+          bytes: small,
+          mediaType: 'image/jpeg',
+          width: 1568,
+          height: 980,
+          sourceWidth: 2880,
+          sourceHeight: 1800,
+        });
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+        expect(shown).toEqual([{ bytes: small, mimeType: 'image/jpeg' }]);
+        expect(prepare.mock.calls[0][2]).toBe(MAX_TOOL_IMAGE_BYTES);
+        expect(result).toContain('is a PNG image');
+        expect(result).toContain('2880x1800, shown to you at 1568x980');
+        expect(result).toContain('in this reply only');
+      });
+
+      it('knows an image by its bytes, not its name', async () => {
+        await writeFile(join(root, 'fake.png'), 'not an image at all');
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(root, 'fake.png') }, reported)).resolves.toBe('1\tnot an image at all');
+        expect(shown).toEqual([]);
+      });
+
+      it('says so instead of sending an image the model cannot read', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        const { reported, shown, prepare } = imageContext(false, null);
+        const result = await fileRead.run({ path: join(root, 'shot.png') }, reported);
+        expect(result).toMatch(/not shown: the current model does not accept images/);
+        expect(shown).toEqual([]);
+        expect(prepare).not.toHaveBeenCalled();
+      });
+
+      it('refuses a PNG that does not decode rather than send it', async () => {
+        await writeFile(join(root, 'broken.png'), png);
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(root, 'broken.png') }, reported)).resolves.toMatch(
+          /not shown: it could not be decoded/
+        );
+        expect(shown).toEqual([]);
+      });
+
+      it('sends a GIF the decoder cannot read as it is, while it fits', async () => {
+        await writeFile(join(root, 'spinner.gif'), gif);
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(root, 'spinner.gif') }, reported)).resolves.toMatch(/is a GIF image/);
+        expect(shown).toEqual([{ bytes: gif, mimeType: 'image/gif' }]);
+      });
+
+      it('describes an image in text outside a conversation', async () => {
+        await writeFile(join(root, 'shot.png'), png);
+        await expect(fileRead.run({ path: join(root, 'shot.png') }, context)).resolves.toMatch(
+          /is a PNG image .*not shown/
+        );
+      });
+
+      it('keeps the path check for an image', async () => {
+        const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
+        await writeFile(join(outside, 'shot.png'), png);
+        const { reported, shown } = imageContext(true, null);
+        await expect(fileRead.run({ path: join(outside, 'shot.png') }, reported)).rejects.toBeInstanceOf(
+          PathAccessDenied
+        );
+        expect(shown).toEqual([]);
+      });
+    });
+
     it('says when the offset is past the end', async () => {
       await expect(fileRead.run({ path: join(root, 'notes.md'), offset: 9 }, context)).resolves.toMatch(
         /has 3 lines; offset 9 is past the end/
@@ -166,6 +339,124 @@ describe('file tools', () => {
 
     it('lists the subfolders of a plain "*" with their file counts', async () => {
       await expect(globFiles.run({ pattern: '*' }, context)).resolves.toContain('Folders:\n  sub/ (1 file)');
+    });
+
+    it('finds a folder by name, with its file count, at any depth', async () => {
+      await mkdir(join(root, 'sub', 'inner'), { recursive: true });
+      await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
+      await writeFile(join(root, 'sub', 'inner', 'b.txt'), 'b', 'utf8');
+      const result = await globFiles.run({ pattern: '**/inner' }, context);
+      expect(result).toContain('Folders matching **/inner:\n  sub/inner/ (2 files)');
+      expect(result).not.toContain('No files matched');
+      await expect(globFiles.run({ pattern: 'sub' }, context)).resolves.toContain('  sub/ (3 files)');
+    });
+
+    it('does not list a folder that only holds a match deeper down', async () => {
+      await expect(globFiles.run({ pattern: '**/deep.txt' }, context)).resolves.not.toContain('Folders matching');
+    });
+
+    it('does not add a folder section to a plain "*"', async () => {
+      const result = await globFiles.run({ pattern: '*' }, context);
+      expect(result).toContain('Folders:\n  sub/ (1 file)');
+      expect(result).not.toContain('Folders matching');
+    });
+
+    it.each(['**', '**/*', 'src/**', 'src/**/*'])(
+      'keeps the file-only output for the match-all pattern %s',
+      async pattern => {
+        await mkdir(join(root, 'src', 'a'), { recursive: true });
+        await writeFile(join(root, 'src', 'a', 'x.ts'), 'x', 'utf8');
+        const result = await globFiles.run({ pattern }, context);
+        expect(result).toContain('x.ts');
+        expect(result).not.toContain('Folders matching');
+      }
+    );
+
+    it('does not open its header with a file count when only folders matched', async () => {
+      await mkdir(join(root, 'sub', 'inner'), { recursive: true });
+      await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
+      const result = await globFiles.run({ pattern: '**/inner' }, context);
+      expect(result.split('\n')[0]).not.toMatch(/^0 file/);
+      expect(result.split('\n')[0]).toContain('Only folders matched');
+    });
+
+    it('keeps the file-count header for a plain * when only folders exist', async () => {
+      const foldersOnly = await realpath(await mkdtemp(join(tmpdir(), 'b4m-folders-')));
+      await mkdir(join(foldersOnly, 'sub'), { recursive: true });
+      await writeFile(join(foldersOnly, 'sub', 'a.txt'), 'a', 'utf8');
+      const result = await globFiles.run({ pattern: '*' }, { ...context, roots: [foldersOnly] });
+      expect(result.split('\n')[0]).toMatch(/^0 file\(s\)/);
+      expect(result).toContain('Folders:');
+    });
+
+    it('finds a folder when the pattern ends in a slash', async () => {
+      await mkdir(join(root, 'sub', 'inner'), { recursive: true });
+      await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
+      await expect(globFiles.run({ pattern: '**/inner/' }, context)).resolves.toContain('  sub/inner/ (1 file)');
+    });
+
+    describe('a folder that exists but lists no files', () => {
+      it('says the folder exists instead of "No files matched"', async () => {
+        await mkdir(join(root, 'empty'), { recursive: true });
+        const result = await globFiles.run({ pattern: 'empty' }, context);
+        expect(result).toContain('empty is a folder');
+        expect(result).toContain('no listed files');
+        expect(result).not.toContain('No files matched');
+        await expect(globFiles.run({ pattern: 'empty/' }, context)).resolves.toContain('no listed files');
+      });
+
+      it('says so for a folder holding only ignored files', async () => {
+        execFileSync('git', ['init', '-q'], { cwd: root });
+        await writeFile(join(root, '.gitignore'), 'build/\n', 'utf8');
+        await mkdir(join(root, 'build'), { recursive: true });
+        await writeFile(join(root, 'build', 'out.js'), 'x', 'utf8');
+        await expect(globFiles.run({ pattern: 'build' }, context)).resolves.toContain('build is a folder');
+      });
+
+      it('says so for a dependency folder the walk skips', async () => {
+        await mkdir(join(root, 'node_modules', 'pkg'), { recursive: true });
+        await expect(globFiles.run({ pattern: 'node_modules' }, context)).resolves.toContain(
+          'node_modules is a folder'
+        );
+      });
+
+      it.skipIf(process.platform === 'win32')(
+        'does not report a folder reached through a link out of the base',
+        async () => {
+          const outside = await realpath(await mkdtemp(join(tmpdir(), 'b4m-outside-')));
+          await mkdir(join(outside, 'secret'));
+          await symlink(outside, join(root, 'link'));
+          await expect(globFiles.run({ pattern: 'link/secret' }, context)).resolves.toContain('No files matched');
+          await expect(globFiles.run({ pattern: 'link/nope' }, context)).resolves.toContain('No files matched');
+        }
+      );
+
+      it.skipIf(process.platform === 'win32')('reports a folder reached through a link inside the base', async () => {
+        await mkdir(join(root, 'real', 'inner'), { recursive: true });
+        await symlink(join(root, 'real'), join(root, 'alias'));
+        await expect(globFiles.run({ pattern: 'alias/inner' }, context)).resolves.toContain('is a folder');
+      });
+
+      it('does not stat outside the searched folder', async () => {
+        await expect(globFiles.run({ pattern: '..' }, context)).resolves.toContain('No files matched');
+        await mkdir(join(root, root), { recursive: true });
+        await expect(globFiles.run({ pattern: root }, context)).resolves.toContain('No files matched');
+      });
+
+      it('leaves a pattern with glob characters alone', async () => {
+        await mkdir(join(root, 'emp*'), { recursive: true });
+        await expect(globFiles.run({ pattern: 'emp*' }, context)).resolves.toContain('No files matched');
+      });
+    });
+
+    it('caps the folders it lists like it caps files', async () => {
+      for (let index = 0; index < 320; index++) {
+        await mkdir(join(root, 'many', `d${index}`), { recursive: true });
+        await writeFile(join(root, 'many', `d${index}`, 'f.txt'), 'x', 'utf8');
+      }
+      const result = await globFiles.run({ pattern: 'many/*' }, context);
+      expect(result.match(/^ {2}many\/d\d+\/ \(1 file\)$/gm)).toHaveLength(300);
+      expect(result).toContain('showing the first 300 folders');
     });
 
     it('suggests "**/" when a top-level pattern misses files that exist deeper', async () => {

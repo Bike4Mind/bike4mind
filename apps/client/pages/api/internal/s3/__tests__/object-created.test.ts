@@ -52,21 +52,23 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: <T>(fn: (session: unknown) => Promise<T>) => fn({}),
 }));
 vi.mock('@bike4mind/server-utils/s3/storageCharge', () => ({ chargeUploadedObject: chargeMock }));
-vi.mock('@server/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
-vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: recordRejectedBatchMock }));
-vi.mock('@server/s3/moderationScan', () => ({
+vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: admitMock }));
+vi.mock('@bike4mind/server-utils/s3/recordRejectedUploadBatch', () => ({
+  recordRejectedUploadBatch: recordRejectedBatchMock,
+}));
+vi.mock('@bike4mind/server-utils/s3/moderationScan', () => ({
   normalizeETag: (eTag?: string) => eTag?.replace(/^"|"$/g, '') || undefined,
   recordLandedObject: recordLandedMock,
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ getMetadata: getMetadataMock }),
 }));
-vi.mock('@server/s3/utils', () => ({
+vi.mock('@bike4mind/server-utils/s3/utils', () => ({
   decodeS3Key: (k: string) => decodeURIComponent(k.replace(/\+/g, ' ')),
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
 }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
-vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile', () => ({
   recomputeStatsForUploadedFile: recomputeUploadedMock,
 }));
 vi.mock('sst', () => ({
@@ -76,10 +78,12 @@ vi.mock('sst', () => ({
     historyImportBucket: { name: 'b4m-history-import' },
   },
 }));
-vi.mock('@server/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
-vi.mock('@server/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
-vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: moderateFilesMock }));
-vi.mock('@server/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
+vi.mock('@bike4mind/server-utils/s3/historyUploadComplete', () => ({ dispatch: historyDispatchMock }));
+vi.mock('@bike4mind/server-utils/s3/notebookImportComplete', () => ({ dispatch: notebookDispatchMock }));
+vi.mock('@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles', () => ({
+  moderateImportedKnowledgeFiles: moderateFilesMock,
+}));
+vi.mock('@bike4mind/server-utils/s3/knowledgeModerationDeps', () => ({ buildKnowledgeModerationDeps: buildDepsMock }));
 
 const handler = (await import('../object-created')).default as (req: Request, res: Response) => Promise<unknown>;
 
@@ -167,6 +171,14 @@ describe('POST /api/internal/s3/object-created', () => {
   it('rejects a request with a missing or wrong secret', async () => {
     const res = makeRes();
     await handler(makeReq('wrong', 'uploads/a.pdf'), res);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects every request while the webhook secret is the example placeholder', async () => {
+    process.env.INTERNAL_S3_WEBHOOK_SECRET = 'change-me-openssl-rand-hex-32';
+    const res = makeRes();
+    await handler(makeReq('change-me-openssl-rand-hex-32', 'uploads/a.pdf'), res);
     expect(res.status).toHaveBeenCalledWith(401);
     expect(sendToQueueMock).not.toHaveBeenCalled();
   });
@@ -352,7 +364,7 @@ describe('POST /api/internal/s3/object-created', () => {
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5, eTag: 'etag-b' }), makeRes());
     await vi.waitFor(() => expect(moderateFilesMock).toHaveBeenCalled());
 
-    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf', expect.anything());
     expect(recordLandedMock.mock.invocationCallOrder[0]).toBeLessThan(moderateFilesMock.mock.invocationCallOrder[0]);
   });
 
@@ -360,7 +372,7 @@ describe('POST /api/internal/s3/object-created', () => {
     getMetadataMock.mockResolvedValue({ size: 5, etag: '"etag-c"' });
     await handler(makeReq('secret-token', 'uploads/a.pdf', { size: 5 }), makeRes());
 
-    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf');
+    expect(recordLandedMock).toHaveBeenCalledWith('ff1', 'uploads/a.pdf', expect.anything());
   });
 
   it('retries before scanning or charging when current-version reconciliation fails', async () => {

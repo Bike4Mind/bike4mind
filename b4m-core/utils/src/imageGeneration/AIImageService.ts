@@ -4,12 +4,14 @@ import {
   OpenAIImageSize,
   type OpenAIImageBackground,
   type ImageOutputFormat,
+  type BflEditRegion,
 } from '@bike4mind/common';
 
 export interface AIImageGenerationOptions {
   width?: number;
   height?: number;
   n?: number;
+  /** Internal user id. Services that forward an end-user id send toProviderEndUserId(user), never the raw id. */
   user?: string;
   model?: string;
   safety_tolerance?: number;
@@ -60,6 +62,7 @@ export interface AIImageGenerationOptions {
 export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
   mask?: string | null;
   size?: OpenAIImageSize;
+  edit_regions?: BflEditRegion[];
   /**
    * gpt-image style-anchor images (URLs or data URLs), appended after the edit source in the
    * order given. Only OpenAIImageService.edit reads them; BFL and Gemini ignore them.

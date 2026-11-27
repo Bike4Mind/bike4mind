@@ -5,10 +5,11 @@
  * body, or path, so a credential can only ever describe its own owner.
  */
 
-import { getMeContract } from '@bike4mind/common';
+import { CreditHolderType, getMeContract, pendingCreditExpiries } from '@bike4mind/common';
+import { creditLotRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
-import { getRequestActiveSubscriptions } from '@server/entitlements/activeSubscriptions';
+import { getUserEntitlements, toEntitlementUser } from '@bike4mind/server-utils/entitlements/index';
+import { getRequestActiveSubscriptions } from '@bike4mind/server-utils/entitlements/activeSubscriptions';
 import { resolveCallerPlan } from '@server/me/resolveCallerPlan';
 
 const handler = nextRouteForContract(getMeContract, {
@@ -22,8 +23,15 @@ const handler = nextRouteForContract(getMeContract, {
   // active subscriptions, org seats included (they resolve the priceId through
   // different tables - see resolveCallerPlan), rather than two reads that could race apart.
   const active = await getRequestActiveSubscriptions(req);
-  const { tier, subscription } = resolveCallerPlan(active);
-  const entitlements = await getUserEntitlements(toEntitlementUser(user), active);
+  const { tier, subscription, personalMonthlyCreditAllowance } = resolveCallerPlan(active);
+  const [entitlements, lots] = await Promise.all([
+    getUserEntitlements(toEntitlementUser(user), active),
+    creditLotRepository.findByOwner(user.id, CreditHolderType.User),
+  ]);
+  const expiring = pendingCreditExpiries(lots, user.currentCredits).map(({ amount, expiresAt }) => ({
+    amount,
+    expires_at: expiresAt.toISOString(),
+  }));
 
   // User-specific payload behind CloudFront - never cacheable, anywhere.
   res.setHeader('Cache-Control', 'private, no-store');
@@ -32,7 +40,7 @@ const handler = nextRouteForContract(getMeContract, {
     name: user.name,
     tier,
     subscription,
-    credits: { balance: user.currentCredits },
+    credits: { balance: user.currentCredits, monthly_allowance: personalMonthlyCreditAllowance, expiring },
     entitlements,
   });
 });

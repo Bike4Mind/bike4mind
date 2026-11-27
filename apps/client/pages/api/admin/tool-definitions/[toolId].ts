@@ -1,7 +1,8 @@
 import { toolDefinitionOverrideRepository } from '@bike4mind/database';
-import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope, B4MLLMToolsList, MCP_PROVIDER_METADATA, SETTINGS_PAGE_READ } from '@bike4mind/common';
+import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { TOOL_MAPPING, TOOL_CATEGORIES } from '@client/app/utils/toolMapping';
 import { z } from 'zod';
 
@@ -17,6 +18,12 @@ const updateSchema = z.object({
     .max(500, 'Short description must not exceed 500 characters'),
   enabled: z.boolean().optional(),
 });
+
+const codeShortDescription = (description: string): string =>
+  description.length > 100 ? description.substring(0, 100) + '...' : description;
+
+const changedOnly = (changes: { field: string; before: unknown; after: unknown }[]) =>
+  changes.filter(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
 
 // Find tool in code
 function findCodeTool(toolId: string): { toolName: string; description: string; category: string } | null {
@@ -54,13 +61,12 @@ function findCodeTool(toolId: string): { toolName: string; description: string; 
   return null;
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: SETTINGS_PAGE_READ, PUT: 'settings:manage', DELETE: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { toolId } = req.query;
 
       if (!toolId || typeof toolId !== 'string') {
@@ -100,8 +106,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
           toolId,
           toolName: codeTool.toolName,
           description: codeTool.description,
-          shortDescription:
-            codeTool.description.length > 100 ? codeTool.description.substring(0, 100) + '...' : codeTool.description,
+          shortDescription: codeShortDescription(codeTool.description),
           category: codeTool.category,
           tags: [],
           parameters: { type: 'object' },
@@ -118,25 +123,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       throw new NotFoundError('Tool not found');
     } catch (error) {
-      console.error('Error fetching tool definition:', error);
+      req.logger.error('Error fetching tool definition', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to fetch tool definition' });
     }
   })
   .put(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { toolId } = req.query;
 
       if (!toolId || typeof toolId !== 'string') {
@@ -169,6 +167,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         if (!updated) {
           throw new NotFoundError('Failed to update tool definition');
         }
+
+        await recordAdminActionFromRequest(req, {
+          action: 'settings.tool_definition.override_updated',
+          target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
+          summary: `updated tool definition override ${toolId}`,
+          changes: changedOnly([
+            { field: 'description', before: existingOverride.description, after: description },
+            { field: 'shortDescription', before: existingOverride.shortDescription, after: shortDescription },
+            { field: 'enabled', before: existingOverride.enabled, after: enabled },
+          ]),
+        });
 
         return res.json({
           toolId: updated.toolId,
@@ -212,6 +221,17 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         lastUpdatedByName: req.user!.name || req.user!.email || 'Unknown',
       });
 
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.tool_definition.override_updated',
+        target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
+        summary: `created tool definition override ${toolId}`,
+        changes: changedOnly([
+          { field: 'description', before: codeTool.description, after: description },
+          { field: 'shortDescription', before: codeShortDescription(codeTool.description), after: shortDescription },
+          { field: 'enabled', before: true, after: enabled },
+        ]),
+      });
+
       return res.status(201).json({
         toolId: newOverride.toolId,
         toolName: newOverride.toolName,
@@ -233,25 +253,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         updatedAt: newOverride.updatedAt,
       });
     } catch (error) {
-      console.error('Error updating tool definition:', error);
+      req.logger.error('Error updating tool definition', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
       }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
-      }
       return res.status(500).json({ error: 'Failed to update tool definition' });
     }
   })
   .delete(async (req, res) => {
     try {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
-
       const { toolId } = req.query;
 
       if (!toolId || typeof toolId !== 'string') {
@@ -275,14 +288,18 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
       // Soft delete the override
       await toolDefinitionOverrideRepository.softDelete(toolId);
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.tool_definition.override_deleted',
+        target: { kind: 'settings', id: toolId, displayName: `${toolId} tool definition` },
+        summary: `deleted tool definition override ${toolId}`,
+      });
 
       // Return the code-only tool definition (what it reverts to)
       return res.json({
         toolId,
         toolName: codeTool.toolName,
         description: codeTool.description,
-        shortDescription:
-          codeTool.description.length > 100 ? codeTool.description.substring(0, 100) + '...' : codeTool.description,
+        shortDescription: codeShortDescription(codeTool.description),
         category: codeTool.category,
         tags: [],
         parameters: { type: 'object' },
@@ -297,15 +314,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
         message: 'Override deleted. Tool reverted to code defaults.',
       });
     } catch (error) {
-      console.error('Error deleting tool definition override:', error);
+      req.logger.error('Error deleting tool definition override', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
       if (error instanceof BadRequestError) {
         return res.status(400).json({ error: error.message });
-      }
-      if (error instanceof ForbiddenError) {
-        return res.status(403).json({ error: error.message });
       }
       return res.status(500).json({ error: 'Failed to delete tool definition override' });
     }

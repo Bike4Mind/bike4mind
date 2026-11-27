@@ -168,6 +168,8 @@ export function mergeAnthropicFacts({ models, lifecycle, pricing, at }: Anthropi
 const toPrice = (row: AnthropicPriceRow): DiscoveredPrice => ({
   inputPerMTok: row.inputPerMTok,
   outputPerMTok: row.outputPerMTok,
+  ...(row.cacheReadPerMTok !== undefined ? { cacheReadPerMTok: row.cacheReadPerMTok } : {}),
+  ...(row.cacheWritePerMTok !== undefined ? { cacheWritePerMTok: row.cacheWritePerMTok } : {}),
 });
 
 export function createAnthropicSource(): DiscoverySource {

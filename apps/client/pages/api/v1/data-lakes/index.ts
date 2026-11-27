@@ -16,10 +16,10 @@ import {
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { paginateById } from '@server/utils/cursorPagination';
-import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
+import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { loadRegistryLakeStats, toPublicDataLake } from '@server/dataLakes/toPublicDataLake';
 
 const CURSOR_SCOPE = 'v1.data-lakes';
@@ -56,7 +56,8 @@ const handler = nextRouteForContract(listDataLakesContract, {
     const data = await Promise.all(
       page.items.map(async lake => {
         const liveStats = await loadRegistryLakeStats(lake, { fabFiles: fabFileRepository, logger: req.logger });
-        return toPublicDataLake(documentsById.get(lake.id) ?? lake, liveStats);
+        // `canManage` is the list's own grant-aware flag (canManageLake over one batched grant read).
+        return toPublicDataLake(documentsById.get(lake.id) ?? lake, liveStats, lake.canManage === true);
       })
     );
 

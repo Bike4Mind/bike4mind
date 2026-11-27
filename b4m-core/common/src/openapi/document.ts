@@ -1,7 +1,7 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
-import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
-import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
+import { REQUIRED_SCOPES } from './security';
+import { API_KEY_RATE_LIMIT_DEFAULTS, PUBLIC_DOC_API_KEY_SCOPES } from '../types/entities/UserApiKeyTypes';
 import { API_KEY_RATE_LIMIT_HEADERS, API_KEY_RATE_LIMIT_HEADER_NAMES } from '../apiKeyRateLimitHeaders';
 
 // Importing these modules is what registers their schemas/paths against the
@@ -37,7 +37,8 @@ function servers() {
   ];
 }
 
-function infoDescription(): string {
+/** `scopes` is the Scopes list; a deployment spec widens it to what its own operations require. */
+export function infoDescription(scopes: readonly string[] = PUBLIC_DOC_API_KEY_SCOPES): string {
   return [
     'Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions ' +
       'that validate requests at runtime, so this spec cannot drift from the implementation - with ' +
@@ -54,7 +55,7 @@ function infoDescription(): string {
       'and async jobs.',
     '',
     'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
-      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Skills** and **Account**.',
+      '**Images**, **Audio**, **Videos**, **Music**, **Transcriptions**, **Sessions**, **Artifacts**, **Files**, **Projects**, **Agents**, **Data Lakes**, **Data Lake Research**, **Skills**, **Functions** and **Account**.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -62,8 +63,8 @@ function infoDescription(): string {
       '`Authorization: Bearer` header.',
     '',
     '## Scopes',
-    'API keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:',
-    ...ALL_API_KEY_SCOPES.map(s => `- \`${s}\``),
+    'API keys carry `resource:action` scopes. The documented scopes are:',
+    ...scopes.map(s => `- \`${s}\``),
     '',
     'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +
       "a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no " +
@@ -79,9 +80,10 @@ function infoDescription(): string {
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
       'that long before retrying. This includes `POST /api/ai/v1/completions`, which rate-limits before it ' +
       'opens its event stream. ' +
-      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/video-models`, ' +
-      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations` ' +
-      'and `/api/v1/music-generations`, and the poll endpoints listed under ' +
+      '`GET /api/v1/me`, `GET /api/v1/credits`, `GET /api/v1/models`, `GET /api/v1/image-models`, ' +
+      '`GET /api/v1/video-models`, ' +
+      '`GET /api/v1/music-models`, the `GET` list endpoints for `/api/v1/sessions`, `/api/v1/video-generations`, ' +
+      '`/api/v1/music-generations` and `/api/v1/image-jobs`, and the poll endpoints listed under ' +
       'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
       'limit applies. A request refused at the route scope gate (`403`) or for a bad key (`401`) never reaches ' +
       'the limiter and carries no rate-limit headers.',
@@ -111,7 +113,7 @@ function infoDescription(): string {
     '',
     '## Async jobs',
     'Work that is not provably fast is queued and polled rather than held open:',
-    '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
+    '- **Chat** (`POST /api/chat`) and the deprecated quest-based image routes (`POST /api/v1/image-generations`, ' +
       '`POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; ' +
       'chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for ' +
       'failure before reading results: a job that ends `done` with `type: "error"` failed (the reason is in ' +
@@ -121,13 +123,34 @@ function infoDescription(): string {
       'the reply is ready.',
     '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
       '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **Image generation and editing** (`POST /api/v1/image-jobs`) returns `202` with one job per image. ' +
+      'Poll `GET /api/v1/image-jobs/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Video generation** (`POST /api/v1/video-generations`) returns `202`. Poll ' +
       '`GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
     '- **Music generation** (`POST /api/v1/music-generations`) returns `202`. Poll ' +
       '`GET /api/v1/music-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
+    '- **Scene composition** (`POST /api/v1/scene-compositions`) returns `202`. Poll ' +
+      '`GET /api/v1/scene-compositions/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`.',
+    '- **Briefs** (`POST /api/v1/briefs`) return `202`. Poll ' +
+      '`GET /api/v1/briefs/{id}` until `status` is `ready` or `failed`.',
+    '- **Follow-up briefs** (`POST /api/v1/briefs/follow-ups`) return `202` too and are polled the same way, ' +
+      'at `GET /api/v1/briefs/{id}`.',
+    '- **Brief replies** (`POST /api/v1/briefs/{id}/decisions/{decisionId}/reply`) return `202` with the ' +
+      '`executionId` of the agent run your reply started. Poll `GET /api/v1/agent-executions/{id}` with it.',
+    '- **Research runs** (`POST /api/v1/data-lakes/{id}/research/runs`) return `202`. Poll ' +
+      '`GET /api/v1/data-lakes/{id}/research/runs/{run_id}` until `status` is `completed` or `failed`.',
+    '- **Delegations** (`POST /api/v1/delegations`) return `202`. Poll ' +
+      '`GET /api/v1/delegations/{id}` until `status` is `handled`, `needs_decision` or `failed`.',
+    '- **Function calls** (`POST /api/v1/functions/{id}/invoke` with `mode: "async"`) return `202` with a ' +
+      '`call_id`. Poll `GET /api/v1/functions/calls/{call_id}` until `status` is `finished`, then check ' +
+      '`outcome` before reading `output`. Results are kept 24 hours. ' +
+      '`POST /api/v1/functions/calls/{call_id}/cancel` cancels a call still `queued` or `running`.',
     '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
       '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
-    '- **Audio** endpoints are synchronous and return the result directly.',
+    '- **Audio** endpoints are synchronous and return the result directly. A text-to-speech ' +
+      '(`POST /api/ai/tts`) or sound-effect (`POST /api/ai/sound-effects`) clip that outlasts the request ' +
+      'answers `202` with its job resource instead; it cannot be polled yet, and unless `preview` was set the ' +
+      'clip is saved to the file browser when it finishes.',
     '- **Transcriptions** (`POST /api/v1/transcriptions`) are synchronous too: after the upload, one call ' +
       'returns the text. Long audio can outlast the request timeout and fail with a `504`; see that ' +
       'endpoint for the limit.',
@@ -370,7 +393,18 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Music',
       description: 'Song generation, queued with `202` and polled at `GET /api/v1/music-generations/{id}`.',
     },
-    { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    {
+      name: 'Scenes',
+      description:
+        'A video and a music track composed into one shareable clip, queued with `202` and polled at ' +
+        '`GET /api/v1/scene-compositions/{id}`.',
+    },
+    {
+      name: 'Images',
+      description:
+        'Image generation and editing, queued with `202` and polled at `GET /api/v1/image-jobs/{id}`. ' +
+        '`/api/v1/image-generations` and `/api/v1/image-edits` are deprecated.',
+    },
     {
       name: 'Transcriptions',
       description: 'Speech-to-text: upload an audio file, then transcribe it.',
@@ -397,6 +431,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         "to one, check each file's ingestion status, and run semantic search over a single lake.",
     },
     {
+      name: 'Data Lake Research',
+      description:
+        "Saved research configs, on-demand and scheduled runs, the proposal review queue they fill, and the lake's configuration history. Reading and changing these needs manage rights on the lake.",
+    },
+    {
       name: 'Projects',
       description:
         'Workspaces that group sessions and files: list and read the projects you can reach, and create new ones.',
@@ -408,7 +447,23 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     },
     {
       name: 'Skills',
-      description: "Your organization's approved Skill Market listings, served as a Claude Code plugin marketplace.",
+      description:
+        "Create, update and read your own skills from a SKILL.md, and the Skill Market: your organization's approved listings, served as a Claude Code plugin marketplace.",
+    },
+    {
+      name: 'Functions',
+      description:
+        'Your live functions: Python artifacts saved as functions and promoted after their tests passed on the server. List and read them, and call one to get its output with a stamp of what it ran on.',
+    },
+    {
+      name: 'Slack',
+      description:
+        'Post status messages and thread replies to Slack channels through the Bike4Mind bot, without holding a Slack token.',
+    },
+    {
+      name: 'Tools',
+      description:
+        'Built-in tools for your own agent loop: web search, reading a web page, and the current weather, each returned as text a model can read.',
     },
   ];
 

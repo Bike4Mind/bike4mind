@@ -19,6 +19,7 @@ const envNumber = (name: string, raw: string | undefined, fallback: number): num
   if (raw === undefined || raw === '') return fallback;
   const parsed = Number(raw);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
   console.warn(`[pricing] Ignoring invalid ${name}="${raw}"; using default ${fallback}`);
   return fallback;
 };
@@ -71,6 +72,7 @@ const USD_TO_CREDITS_RATE = envNumber(
 export const CREDITS_PER_USD_COST = (() => {
   const derived = Math.round(PRICE_MARGIN / USD_TO_CREDITS_RATE);
   if (Number.isFinite(derived) && derived >= 1) return derived;
+  // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
   console.warn(`[pricing] Env-configured margin/rate derive ${derived} credits per USD cost; using defaults`);
   return Math.round(DEFAULT_PRICE_MARGIN / DEFAULT_USD_TO_CREDITS_RATE);
 })();
@@ -95,6 +97,20 @@ export const MIN_PRICE_PER_CREDIT_USD = (() => {
 
 /** USD price per credit for display, without float noise (0.0006, not 0.0006000000000000001). */
 export const formatUsdPerCredit = (usd: number): string => `$${Number(usd.toPrecision(6))}`;
+
+/** What a credit amount would sell for at MIN_PRICE_PER_CREDIT_USD, the rate credit packs are priced at. */
+export const creditsToUsdAtFloor = (credits: number): number => credits * MIN_PRICE_PER_CREDIT_USD;
+
+/** USD amount for display ($6.00). A nonzero amount under a cent keeps up to six decimal places ($0.0006) rather than rounding to $0.00. */
+export const formatUsdAmount = (usd: number): string => {
+  const subCent = usd !== 0 && Math.abs(usd) < 0.01;
+  return usd.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: subCent ? 6 : 2,
+  });
+};
 
 /** True when a per-credit price is below MIN_PRICE_PER_CREDIT_USD (ignoring float noise) or is not finite. */
 export const isPricePerCreditBelowFloor = (usd: number): boolean =>
@@ -140,6 +156,7 @@ const cryptoUniform = (): number => {
   }
   if (!warnedNonCryptoRng) {
     warnedNonCryptoRng = true;
+    // eslint-disable-next-line no-console -- shared with the browser bundle, which cannot take a server logger
     console.warn('[pricing] globalThis.crypto unavailable; billing rounding falls back to Math.random');
   }
   return Math.random();
@@ -211,20 +228,16 @@ export const usdToCreditsExpected = (usd: number, rate: number = CREDITS_PER_USD
  * UNDER-RESERVATION IS ACCEPTED, NOT PREVENTED. A turn that emits more than this
  * settles as a shortfall debit at reconciliation, which is already a supported path
  * (provider-basis settlement could always exceed a hold priced on the local
- * estimate). The two sites clamp the shortfall differently: chat's
- * computeSettlementDelta (services/llm/ChatCompletionProcess.ts) floors the debit at
- * the balance snapshot taken at its OWN admission and reports the remainder as
- * writtenOffCredits; cliCompletions.ts does an unclamped $inc on success and only
- * logs an ALERT if it lands negative. Neither is a non-negativity guarantee: the
- * chat snapshot predates any sibling turn's spend (see that function's own "best
- * effort" note), and when the shortfall still fits the stale snapshot the debit
- * applies in full - writtenOffCredits 0, and no BILLING_SHORTFALL_CLAMP log - so a
- * concurrent holder can land negative there too. Either way the resulting balance
- * fails the *next* turn's own admission gate - but that bound is per turn, not per
- * holder: turns admitted concurrently are each checked against the balance at their
- * own admission and settle against a snapshot that predates their siblings' spend,
- * so a holder running turns in parallel can be shorted once per in-flight turn, not
- * once total.
+ * estimate). The two LLM-turn settlement sites apply it with one atomic $inc (other
+ * features settle their own way, e.g. creditHold caps the charge at the hold). cliCompletions.ts
+ * never clamps; chat (services/llm/ChatCompletionProcess.ts, computeHolderSettlement)
+ * charges a personal account in full and floors only an organization at its balance
+ * snapshot, reporting the rest as writtenOffCredits (#1238: an org balance is a hard
+ * stop). So a personal turn that costs more than its hold plus the remaining balance
+ * leaves the holder in debt, exact even when turns settle concurrently, and the
+ * negative balance fails every later admission hold until a top-up clears it. What
+ * this does NOT bound is the overshoot of turns already in flight: each concurrently
+ * admitted turn can still run past its hold before any of them settles.
  */
 export const PREFLIGHT_RESERVATION_OUTPUT_TOKENS = 16_384;
 

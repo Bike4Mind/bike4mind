@@ -3,14 +3,15 @@ import { IBaseRepository } from './BaseTypes';
 
 export interface ICacheDocument extends IMongoDocument {
   key: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  result: any;
+  result: unknown;
   expiresAt: Date;
 }
 
 export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
   findByKey(key: string): Promise<ICacheDocument | null>;
   deleteByKey(key: string): Promise<void>;
+  /** Atomically delete a key and return the document it held, or null when none existed. */
+  deleteByKeyAndReturn(key: string): Promise<ICacheDocument | null>;
   createOrUpdate(data: Omit<ICacheDocument, 'id' | 'updatedAt' | 'createdAt'>): Promise<ICacheDocument>;
   /**
    * Atomically increment a counter stored in cache
@@ -43,6 +44,19 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
     ttlMs: number
   ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
   /**
+   * Exact inverse of `tryAddWithinLimitFixedWindow` within the live window: subtracts `amount`,
+   * never below 0, and is a no-op when the window doc is absent or already expired. Pass the
+   * `expiresAt` the grant returned to pin the release to that window: one that has since rolled
+   * over (different expiry) is then left alone. `outsideTransaction` keeps the call out of any
+   * ambient transaction (see CacheModel).
+   */
+  releaseFromFixedWindow(
+    key: string,
+    amount: number,
+    expiresAt?: Date,
+    opts?: { outsideTransaction?: boolean }
+  ): Promise<void>;
+  /**
    * `tryIncrementWithinLimitFixedWindow` generalized to add `amount` per call instead of 1.
    * Same FIXED-WINDOW semantics and expiry handling. The add is all-or-nothing: if
    * count + amount would exceed `limit`, nothing is applied and success is false.
@@ -54,7 +68,8 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
     key: string,
     amount: number,
     limit: number,
-    ttlMs: number
+    ttlMs: number,
+    opts?: { outsideTransaction?: boolean }
   ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
   /**
    * Atomically decrement a counter (used for rollback)
@@ -122,4 +137,14 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
    *   false when the condition was not met.
    */
   casDeleteDedup(key: string, ownerField: string, ownerValue: string): Promise<boolean>;
+  /**
+   * Take one of `limit` concurrency slots under `key` for `holderId`, as a lease that lapses after
+   * `leaseMs` - a distributed semaphore whose crashed holders cannot leak a slot forever. Expired
+   * leases are pruned in the same atomic update, so they never count against the limit.
+   *
+   * @returns true when this holder now holds a slot; false when all `limit` slots are live.
+   */
+  tryAcquireLease(key: string, holderId: string, limit: number, leaseMs: number): Promise<boolean>;
+  /** Give back `holderId`'s slot under `key`. A no-op when the lease already lapsed or was never held. */
+  releaseLease(key: string, holderId: string): Promise<void>;
 }

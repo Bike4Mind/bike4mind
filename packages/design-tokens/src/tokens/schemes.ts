@@ -1,0 +1,225 @@
+import type { SemanticColorScheme } from '../schema';
+import {
+  brand,
+  gray,
+  green,
+  blue,
+  red,
+  orange,
+  cyan,
+  brandAlpha,
+  grayAlpha,
+  greenAlpha,
+  redAlpha,
+  orangeAlpha,
+  tealAlpha,
+  unique,
+} from './primitives';
+
+// Semantic color schemes, seeded 1:1 from the web theme. Each mode defines
+// exactly the tokens the design specifies - nothing more - because emitters
+// emit only defined keys and platform defaults cover the rest. Adding a key
+// here IS a design change; the web parity test will show it.
+
+export const darkScheme: SemanticColorScheme = {
+  // Matches the outlined-border stroke so dividers and borders share one color.
+  divider: gray[800],
+  // Every text token clears 4.5:1 on body, surface, panel and the tinted row
+  // and reply grounds (apps/client/app/utils/themes/contrast.test.ts measures
+  // it). primary50/primary70 keep their names but no longer their alphas: 50%
+  // read at 4.3:1, and 60% falls to 4.0:1 on the reply bubble.
+  text: {
+    navLinks: cyan[300],
+    icon: brandAlpha[100][50],
+    primary: brand[100],
+    primary50: brandAlpha[100][70],
+    primary70: brandAlpha[100][80],
+    secondary: brandAlpha[100][80],
+    tertiary: brandAlpha[100][70],
+  },
+  border: {
+    light: brandAlpha[100][15],
+    solid: gray[800],
+    input: gray[800],
+    muted: grayAlpha[150][20],
+    soft: brandAlpha[100][8],
+  },
+  background: {
+    sidebarItem: grayAlpha[775][30],
+    body: gray[900],
+    scrollbar: brand[600],
+    scrollbarTrack: gray[900],
+    surface: gray[900],
+    surface2: gray[850],
+    panel: gray[850],
+    panel2: gray[850],
+  },
+  accent: {
+    subtleBackground: gray[850],
+    subtleActiveBackground: brand[700],
+    subtleHoverBackground: grayAlpha[775][70],
+    subtleHoverText: unique.softHoverColor,
+    solidDisabledBackground: gray[650],
+    solidDisabledText: unique.solidDisabledColor,
+    subtleText: gray[200],
+  },
+  success: {
+    solidBackground: green[900],
+    outlinedText: green[375],
+    outlinedBorder: green[375],
+    main: gray[200],
+    subtleBackground: greenAlpha[375][15],
+    subtleHoverBackground: greenAlpha[375][22],
+    subtleActiveBackground: greenAlpha[375][28],
+    subtleText: green[375],
+  },
+  danger: {
+    solidBackground: red[600],
+    solidHoverBackground: red[700],
+    solidActiveBackground: red[700],
+    outlinedText: red[400],
+    outlinedBorder: red[400],
+    subtleBackground: redAlpha[400][15],
+    subtleHoverBackground: redAlpha[400][22],
+    subtleActiveBackground: redAlpha[400][28],
+    subtleText: red[375],
+    main: red[400],
+  },
+  warning: {
+    solidBackground: orange[450],
+    solidText: '#000000',
+    solidHoverBackground: orange[350],
+    subtleBackground: orangeAlpha[450][15],
+    subtleHoverBackground: orangeAlpha[450][22],
+    subtleActiveBackground: orangeAlpha[450][28],
+    subtleText: orange[450],
+    outlinedText: orange[450],
+    outlinedBorder: orange[450],
+  },
+  feedback: {
+    background: gray[850],
+    border: `1px solid ${gray[800]}`,
+    bug: red[500],
+    feedback: blue[500],
+    positive: green[600],
+    thumbsDown: orange[300],
+  },
+  neutral: {
+    solidBackground: gray[850],
+    solidText: gray[200],
+    subtleText: gray[200],
+    // Single source of truth for every outlined+neutral component border:
+    // the design's "stroke" token.
+    outlinedBorder: gray[800],
+    outlinedHoverBackground: grayAlpha[775][70],
+    plainActiveBackground: brand[700],
+  },
+  promptEnhancement: {
+    background: brandAlpha[800][20],
+    backgroundHover: brandAlpha[800][10],
+    border: brandAlpha[800][20],
+    iconColor: brand[100],
+    textColor: brand[100],
+    chipBackground: gray[800],
+    chipColor: brand[100],
+    chipBorder: gray[800],
+    enhancedPromptBackground: tealAlpha.custom[5],
+    enhancedPromptBorder: brandAlpha[800][25],
+  },
+};
+
+export const lightScheme: SemanticColorScheme = {
+  // As in dark: each text token clears 4.5:1 on every ground it sits on; at
+  // 50-70% brand[400] measured 2.2-3.4:1. icon is non-text, needs only 3:1.
+  text: {
+    navLinks: brand[600],
+    icon: brandAlpha[400][70],
+    primary: brand[400],
+    primary50: brandAlpha[400][90],
+    primary70: brandAlpha[400][95],
+    secondary: brandAlpha[400][95],
+    tertiary: brandAlpha[400][90],
+  },
+  border: {
+    light: gray[150],
+    solid: gray[150],
+    input: brand[100],
+    muted: grayAlpha[150][20],
+    soft: brandAlpha[100][50],
+  },
+  divider: gray[200],
+  background: {
+    // Platform palette reference, resolved by the consuming theme.
+    sidebarItem: 'neutral.200',
+    body: gray[10],
+    scrollbar: unique.scrollbar,
+    scrollbarTrack: gray[50],
+    surface: gray[50],
+    surface2: gray[50],
+    panel: gray[10],
+    panel2: gray[0],
+  },
+  accent: {
+    solidBackground: blue[600],
+    solidText: gray[0],
+    subtleBackground: gray[0],
+    subtleActiveBackground: brand[100],
+    subtleActiveText: brand[700],
+    subtleHoverBackground: brandAlpha[100][30],
+    subtleHoverText: brand[700],
+    subtleText: brand[600],
+  },
+  success: {
+    solidBackground: green[800],
+    outlinedText: brand[600],
+    main: brand[600],
+  },
+  danger: {
+    solidBackground: red[600],
+    solidHoverBackground: red[700],
+    solidActiveBackground: red[700],
+    outlinedText: red[600],
+    outlinedBorder: red[600],
+    subtleBackground: red[250],
+    subtleText: red[600],
+    main: red[600],
+  },
+  warning: {
+    solidBackground: orange[450],
+    solidText: '#000000',
+    solidHoverBackground: orange[350],
+    subtleBackground: orangeAlpha[450][22],
+    subtleHoverBackground: orangeAlpha[450][22],
+    subtleActiveBackground: orangeAlpha[450][28],
+    subtleText: orange[450],
+    outlinedText: orange[450],
+    outlinedBorder: orange[450],
+  },
+  neutral: {
+    solidBackground: gray[0],
+    solidBorder: `2px solid ${brand[600]} !important`,
+    solidText: brand[600],
+    subtleText: brand[600],
+    plainActiveBackground: brand[100],
+  },
+  feedback: {
+    background: gray[50],
+    border: `1px solid ${gray[200]}`,
+    bug: red[500],
+    feedback: blue[500],
+    positive: green[600],
+    thumbsDown: orange[300],
+  },
+  promptEnhancement: {
+    background: unique.lightBlueOverlay,
+    backgroundHover: brandAlpha[100][20],
+    border: brand[100],
+    iconColor: brand[600],
+    textColor: brand[600],
+    chipBackground: brandAlpha[100][50],
+    chipColor: brand[600],
+    chipBorder: gray[150],
+    enhancedPromptBackground: brandAlpha[100][12],
+    enhancedPromptBorder: gray[150],
+  },
+};

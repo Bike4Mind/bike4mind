@@ -3,6 +3,7 @@ import {
   PartialExcept,
   StreamedChatCompletionAction,
   StreamedRapidReplyAction,
+  CHAT_MESSAGE_WITHHELD_FIELDS,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { ClientMessageSender } from '@bike4mind/utils';
@@ -18,8 +19,11 @@ interface StatusUpdateOptions {
   skipPayloadOptimization?: boolean;
 }
 
+/** The one ClientMessageSender method the turn's frame paths call; lets a host inject its own sink. */
+export type ClientFrameSender = Pick<ClientMessageSender, 'sendToClient'>;
+
 export class StatusManager {
-  private clientMessageSender: ClientMessageSender;
+  private clientMessageSender: ClientFrameSender;
   private logger: Logger;
   private wsHttpsUrl: string;
   private userId: string;
@@ -30,7 +34,7 @@ export class StatusManager {
   // Track last sent payload to avoid redundant updates
   private lastSentPayload: string | null = null;
 
-  constructor(clientMessageSender: ClientMessageSender, logger: Logger, wsHttpsUrl: string, userId: string) {
+  constructor(clientMessageSender: ClientFrameSender, logger: Logger, wsHttpsUrl: string, userId: string) {
     this.clientMessageSender = clientMessageSender;
     this.logger = logger;
     this.wsHttpsUrl = wsHttpsUrl;
@@ -192,9 +196,15 @@ export class StatusManager {
       this.logger.error('Quest payload validation failed but continuing with fallback values');
     }
 
+    // New quests can still carry select:false fields in memory. The full-payload
+    // completion/recovery path must enforce the same boundary as REST and subscriptions.
+    const publicQuestPayload = { ...questPayload };
+    // Record view: a withheld field may be retired from the typed payload yet still stored on old quests.
+    for (const field of CHAT_MESSAGE_WITHHELD_FIELDS) delete (publicQuestPayload as Record<string, unknown>)[field];
+
     return {
       action: 'streamed_chat_completion',
-      quest: questPayload,
+      quest: publicQuestPayload,
       statusMessage: status ?? '',
     };
   }
@@ -221,7 +231,7 @@ export class StatusManager {
     researchData: {
       configurationId: string;
       streamedTexts: string[];
-      completionInfo?: any;
+      completionInfo?: { inputTokens: number; outputTokens: number };
     }
   ): Promise<void> {
     try {

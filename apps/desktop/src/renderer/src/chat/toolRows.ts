@@ -1,5 +1,7 @@
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
+import { own } from '@shared/ownKeys';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
+import { MODEL_REQUEST_REFUSED } from '@shared/orchestration';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { WEB_FETCH_TOOL_NAME, hostOf } from '@shared/webSearch';
 
@@ -60,6 +62,18 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Updated the plan ${n} times`,
     active: 'Updating the plan...',
   },
+  TaskCreate: {
+    didAlone: 'Added to the plan',
+    toAlone: 'add to the plan',
+    many: n => `Added ${n} plan items`,
+    active: 'Updating the plan...',
+  },
+  TaskUpdate: {
+    didAlone: 'Updated the plan',
+    toAlone: 'update the plan',
+    many: n => `Updated the plan ${n} times`,
+    active: 'Updating the plan...',
+  },
   ask_user: {
     did: 'Asked:',
     didAlone: 'Asked a question',
@@ -75,6 +89,15 @@ const PHRASES: Record<string, ToolPhrases> = {
     toAlone: 'get a folder',
     many: n => `Asked for ${n} folders`,
     active: 'Asking for a folder...',
+  },
+  // A successful call names the PR through its label; these cover a refusal and the running row.
+  set_session_pull_request: {
+    did: "Set the session's PR to",
+    didAlone: "Changed the session's PR",
+    to: "set the session's PR to",
+    toAlone: "change the session's PR",
+    many: n => `Changed the session's PR ${n} times`,
+    active: "Changing the session's PR...",
   },
   mcp_list_servers: {
     didAlone: 'Listed MCP servers',
@@ -207,8 +230,8 @@ const PHRASES: Record<string, ToolPhrases> = {
     active: 'Generating a sound effect...',
   },
   session_list: {
-    didAlone: 'Listed the sessions in this project',
-    toAlone: 'list the sessions in this project',
+    didAlone: 'Listed sessions',
+    toAlone: 'list sessions',
     many: n => `Listed the sessions ${n} times`,
     active: 'Listing sessions...',
   },
@@ -247,6 +270,12 @@ const PHRASES: Record<string, ToolPhrases> = {
     toAlone: 'archive a session',
     many: n => `Archived ${n} sessions`,
     active: 'Archiving a session...',
+  },
+  session_rename: {
+    didAlone: 'Renamed a session',
+    toAlone: 'rename a session',
+    many: n => `Renamed ${n} sessions`,
+    active: 'Renaming a session...',
   },
   session_delete: {
     didAlone: 'Deleted a session',
@@ -306,6 +335,14 @@ const PHRASES: Record<string, ToolPhrases> = {
     many: n => `Changed browser tabs ${n} times`,
     active: 'Switching tabs...',
   },
+  screen_capture: {
+    did: 'Captured',
+    didAlone: 'Listed open windows',
+    to: 'capture',
+    toAlone: 'list open windows',
+    many: n => `Captured the screen ${n} times`,
+    active: 'Capturing the screen...',
+  },
   browser_scroll: {
     did: 'Scrolled to',
     didAlone: 'Scrolled the page',
@@ -338,7 +375,7 @@ function unknownPhrases(name: string): ToolPhrases {
 }
 
 function phrasesFor(name: string): ToolPhrases {
-  return PHRASES[name] ?? unknownPhrases(name);
+  return own(PHRASES, name) ?? unknownPhrases(name);
 }
 
 /**
@@ -352,6 +389,7 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   glob_files: ['pattern', 'path'],
   explore: ['question'],
   web_search: ['query'],
+  screen_capture: ['target'],
   // The title if it was given one, never the seed prompt: that is a paragraph, and a row
   // showing its first 56 characters names the task less well than "Started a session" does.
   session_spawn: ['title'],
@@ -363,6 +401,7 @@ const ARGUMENT_PRIORITY: Record<string, readonly string[]> = {
   mcp_set_server_enabled: ['server'],
   mcp_reconnect_server: ['server'],
   mcp_remove_server: ['server'],
+  set_session_pull_request: ['pull_request'],
 };
 
 /**
@@ -392,7 +431,7 @@ export function summarizeInput(call: ChatToolCall): string {
   }
   // The host, not the URL: what was read is the site, and a query string is not a name.
   if (call.name === WEB_FETCH_TOOL_NAME && typeof input.url === 'string') return hostOf(input.url) || input.url;
-  const keys = [...(ARGUMENT_PRIORITY[call.name] ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
+  const keys = [...(own(ARGUMENT_PRIORITY, call.name) ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
   for (const key of keys) {
     const value = input[key];
     if (typeof value !== 'string' || value.length === 0) continue;
@@ -432,6 +471,11 @@ export function shortenArgument(text: string): string {
 export function toolRowLabel(call: ChatToolCall): string {
   const phrases = phrasesFor(call.name);
   const argument = shortenArgument(summarizeInput(call));
+
+  if (isModelRequestRefusal(call)) {
+    const requested = call.input.requested_model_id;
+    return `Not started: model ${typeof requested === 'string' ? shortenArgument(requested) : 'request'} is not allowed`;
+  }
 
   if (call.status === 'error' || call.status === 'denied') {
     const attempt = phrases.to && argument ? `${phrases.to} ${argument}` : phrases.toAlone;
@@ -474,6 +518,19 @@ export function toolRowLabel(call: ChatToolCall): string {
   return phrases.did && argument ? `${phrases.did} ${argument}` : phrases.didAlone;
 }
 
+/**
+ * A spawn refused only because the agent asked for a model the user has not allowed. Nothing
+ * started and the agent is told to retry without it, so the row is muted rather than a failure.
+ */
+export function isModelRequestRefusal(call: ChatToolCall): boolean {
+  return call.name === 'session_spawn' && call.status === 'error' && !!call.error?.startsWith(MODEL_REQUEST_REFUSED);
+}
+
+/** The status a row is drawn with; see isModelRequestRefusal. */
+export function displayStatus(call: ChatToolCall): ChatToolStatus {
+  return isModelRequestRefusal(call) ? 'done' : call.status;
+}
+
 /** Lines added and removed by the writes in a group, once there has been at least one. */
 export interface DiffTotals {
   added: number;
@@ -514,7 +571,7 @@ const STATUS_RANK: Record<ChatToolStatus, number> = {
 
 function groupStatus(calls: readonly ChatToolCall[]): ChatToolStatus {
   return calls.reduce<ChatToolStatus>(
-    (worst, call) => (STATUS_RANK[call.status] > STATUS_RANK[worst] ? call.status : worst),
+    (worst, call) => (STATUS_RANK[displayStatus(call)] > STATUS_RANK[worst] ? displayStatus(call) : worst),
     'done'
   );
 }
@@ -543,11 +600,13 @@ function toSegments(calls: readonly ChatToolCall[]): ToolSegment[] {
 
   for (const call of calls) {
     const open = segments[segments.length - 1];
+    const previous = open?.calls[open.calls.length - 1];
     const mergeable =
       open !== undefined &&
+      previous !== undefined &&
       open.name === call.name &&
-      sharesAClause(call) &&
-      sharesAClause(open.calls[open.calls.length - 1]);
+      ((sharesAClause(call) && sharesAClause(previous)) ||
+        (isModelRequestRefusal(call) && isModelRequestRefusal(previous)));
 
     if (mergeable) open.calls.push(call);
     else segments.push({ name: call.name, calls: [call] });
@@ -558,6 +617,12 @@ function toSegments(calls: readonly ChatToolCall[]): ToolSegment[] {
 
 function segmentLabel(segment: ToolSegment): string {
   if (segment.calls.length === 1) return toolRowLabel(segment.calls[0]);
+  if (isModelRequestRefusal(segment.calls[0])) {
+    const asked = new Set(segment.calls.map(call => call.input.requested_model_id));
+    return asked.size === 1
+      ? `${toolRowLabel(segment.calls[0])} (${segment.calls.length} requests)`
+      : `Not started: ${segment.calls.length} model requests were not allowed`;
+  }
   return phrasesFor(segment.name).many(segment.calls.length);
 }
 

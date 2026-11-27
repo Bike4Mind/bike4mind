@@ -13,6 +13,9 @@ import {
   type AudioGenerationToolCall,
   type AuthOrigin,
   AuthOriginSchema,
+  type PromptMeta,
+  CONFIDENCE_GATE_MODES,
+  type ConfidenceGateMode,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -77,6 +80,28 @@ export interface IPendingGate {
   confidence: number;
   reason: string;
   requestedAt: Date;
+}
+
+/**
+ * The finished result a completion-time `block` pause holds back (see `low_confidence_completion`
+ * in agentExecutor). The executor's per-invocation state (images, side effects, retrieval) is gone
+ * by the time the user answers, so `gate_response: stop` finalizes from this snapshot to persist
+ * the same result a normal completion would. Cleared with `pendingGate`.
+ */
+export interface IPendingCompletion {
+  answer?: string;
+  /** `answer` plus any DAG child artifact blocks, as written to the Quest. */
+  replyText: string;
+  totalTokens: number;
+  totalIterations: number;
+  reachedMaxIterations: boolean;
+  /** Whether the answer landed below the iteration ceiling, so Continue has room to reconsider it. */
+  canReconsider: boolean;
+  lowConfidence: { confidence: number; reason: string };
+  generatedImages: string[];
+  finishReason?: string;
+  allSideEffects: { type: string; payload: unknown }[];
+  retrievalSummary?: PromptMeta['retrieval'];
 }
 
 // --- Confidence Telemetry ---
@@ -246,7 +271,6 @@ export interface IAgentExecution {
    * - `agentExecute.handleStart` (WS client dispatch) writes `cmd.questId`, which is actually the
    *   sessionId (a back-ref hack from the client - see that file's own comment refusing to fall
    *   back to it for the Lambda payload).
-   * - `questmaster/v5/runQuestNode.ts` writes the REAL Quest id here instead.
    * - Subagent and DAG children inherit whichever value their parent carried.
    *
    * Because the meaning depends on the creator, no consumer can safely interpret it. Use
@@ -340,14 +364,21 @@ export interface IAgentExecution {
   enableArtifacts?: boolean;
   /**
    * The orchestration profile's deniedTools, persisted when the profile is resolved (new
-   * executions; the surface-scoped optimizer profile re-resolves every invocation and does
-   * not need this copy). Continuations re-read it because the profile itself does not
+   * executions). Continuations re-read it because a pinned profile itself does not
    * survive a Lambda handoff - `startPayload.agentId` is gone on a resume, so a persisted
    * agent's denials would otherwise evaporate from the first permission card or handoff.
    * Same durability pattern as `enableLattice` above. Distinct from `deniedTools` below,
    * which is the per-execution user-approval denial list.
    */
   profileDeniedTools?: string[];
+  /** Whether the start payload pinned an agent; absent on executions predating this marker. */
+  profileIsPinned?: boolean;
+  /**
+   * Confidence-gate settings resolved on the first invocation (agent -> admin defaults -> built-in).
+   * Continuations re-read them because the resolved profile does not survive a Lambda handoff.
+   * Absent on executions predating this field.
+   */
+  confidenceGate?: { threshold: number; mode: ConfidenceGateMode; selfReport: boolean };
   /**
    * The toolbelt names the first invocation resolved (profile + payload, ambient Smart Tools
    * included, denials already subtracted). Continuations replay this instead of recomputing,
@@ -366,12 +397,20 @@ export interface IAgentExecution {
    * forwarded to ToolContext.apiKeyId so a tool-driven lake write is audited under the key.
    */
   apiKeyId?: string;
+  /** Connected app of the exchange key that started the run; absent for every other caller. */
+  oauthClientId?: string;
   /**
    * How the request that started the run was authenticated, forwarded to ToolContext.authOrigin and
    * inherited by child and DAG-node runs. Optional only for runs started before the field existed;
-   * read it through `executionTurnAuth` (apps/client/server/auth/turnAuth.ts), which fails those closed.
+   * read it through `executionTurnAuth` (packages/server-utils/src/auth/turnAuth.ts), which fails those closed.
    */
   authOrigin?: AuthOrigin;
+  /**
+   * The key that started the run lacks the admin scope, so the executor withholds the owner's admin
+   * role on the user it reloads (see withholdAdminRole). Inherited by child and DAG-node runs.
+   * Absent means not withheld, matching QuestStartBodySchema.adminRoleWithheld.
+   */
+  adminRoleWithheld?: boolean;
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -435,6 +474,9 @@ export interface IAgentExecution {
    */
   pendingGate?: IPendingGate;
 
+  /** Set alongside `pendingGate` only when the pause holds a finished answer. */
+  pendingCompletion?: IPendingCompletion;
+
   /**
    * Confidence-gate telemetry (issue #56 M1.1). Accumulated every iteration the
    * gate evaluates; backs the fire-rate metrics surfaced in the admin tab.
@@ -442,6 +484,28 @@ export interface IAgentExecution {
    * caller sets at create time - the schema default guarantees it at runtime.
    */
   confidenceTelemetry?: IConfidenceTelemetry;
+
+  /**
+   * Consecutive gate-evaluated iterations below the confidence threshold. The gate
+   * pauses on a streak, not one weak iteration, and the streak has to outlive the
+   * Lambda that started it, so it lives here rather than in executor memory. Advanced
+   * by `recordIterationConfidence`, reset by `setPendingGate`. Optional because docs
+   * written before it existed lack it; `$inc` treats the missing field as 0.
+   */
+  lowConfidenceStreak?: number;
+
+  /**
+   * Confidence of the most recent gate-evaluated iteration, written with `lowConfidenceStreak` by
+   * `recordIterationConfidence`. A final-answer iteration runs no tools and so is never evaluated;
+   * this is the score the answer was built on. Absent until the gate first evaluates an iteration.
+   */
+  lastConfidence?: number;
+
+  /**
+   * Admin-only scripted per-iteration gate confidence; semantics are documented on
+   * `confidence_overrides` in `AgentExecutionStartRequestSchema` (@bike4mind/common).
+   */
+  confidenceOverrides?: number[];
 
   /**
    * Durable optimizer plan ledger (#680). Present only on opti agent runs; rehydrated each
@@ -757,10 +821,24 @@ const AgentExecutionSchema = new mongoose.Schema(
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
+    profileIsPinned: { type: Boolean },
+    confidenceGate: {
+      type: new mongoose.Schema(
+        {
+          threshold: { type: Number, required: true, min: 0, max: 1 },
+          mode: { type: String, enum: CONFIDENCE_GATE_MODES, required: true },
+          selfReport: { type: Boolean, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     resolvedEnabledTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
     apiKeyId: { type: String },
+    oauthClientId: { type: String },
     authOrigin: { type: String, enum: AuthOriginSchema.options },
+    adminRoleWithheld: { type: Boolean },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
@@ -805,11 +883,16 @@ const AgentExecutionSchema = new mongoose.Schema(
 
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
+    pendingCompletion: { type: mongoose.Schema.Types.Mixed, required: false },
 
     // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
+    lowConfidenceStreak: { type: Number, default: 0 },
+    lastConfidence: { type: Number },
+    // `default: undefined` so a normal run carries no field rather than an empty script.
+    confidenceOverrides: { type: [Number], default: undefined },
     // Opti-only; no default so non-opti executions don't carry an empty ledger.
     optiPlanState: { type: OptiPlanStateSchema, required: false },
 
@@ -881,6 +964,12 @@ AgentExecutionSchema.index({ userId: 1, status: 1, parentExecutionId: 1, isBackg
 AgentExecutionSchema.index({ spawnedByExecutionId: 1, status: 1 }); // Abort cascade to background children
 AgentExecutionSchema.index({ parentExecutionId: 1, dagNodeId: 1 }); // Sibling lookup during DAG completion handler
 AgentExecutionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90-day TTL - preserves billing/audit data
+// Per-app run outcome counts. Partial, so it holds only exchange-key runs.
+// Pre-built by 20261115120000_ensure-side-app-attribution-indexes.
+AgentExecutionSchema.index(
+  { oauthClientId: 1, createdAt: -1 },
+  { name: 'oauthClient_createdAt', partialFilterExpression: { oauthClientId: { $exists: true } } }
+);
 
 // --- List filters & summary projection (history viewer) ---
 
@@ -1074,6 +1163,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
     });
     return result?.toObject() ?? null;
+  }
+
+  /** The model of the user's most recent run in a session, to continue that conversation on. */
+  async findLatestModelBySessionId(sessionId: string, userId: string): Promise<string | null> {
+    const latest = await this.model
+      .findOne({ sessionId, userId })
+      .sort({ createdAt: -1 })
+      .select('model')
+      .lean<{ model?: string }>();
+    return latest?.model ?? null;
   }
 
   async findChildExecutions(parentExecutionId: string): Promise<IAgentExecution[]> {
@@ -1466,10 +1565,21 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { connectionId } });
   }
 
-  /** Written once when the orchestration profile resolves; continuations re-read it
+  /** Written atomically with profile provenance when the orchestration profile resolves; continuations re-read it
    *  (see IAgentExecution.profileDeniedTools). */
-  async persistProfileDeniedTools(id: string, profileDeniedTools: string[]): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { profileDeniedTools } });
+  async persistProfileDeniedTools(id: string, profileDeniedTools: string[], profileIsPinned?: boolean): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { profileDeniedTools, ...(profileIsPinned !== undefined ? { profileIsPinned } : {}) } }
+    );
+  }
+
+  /** Written on the first invocation; continuations re-read it (see IAgentExecution.confidenceGate). */
+  async persistConfidenceGate(
+    id: string,
+    confidenceGate: NonNullable<IAgentExecution['confidenceGate']>
+  ): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { confidenceGate } });
   }
 
   /** Written once on the first invocation; continuations re-read it
@@ -1510,6 +1620,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       status: 'awaiting_permission' | 'paused';
       pendingPermission?: IPendingPermission;
       pendingGate?: IPendingGate;
+      pendingCompletion?: IPendingCompletion;
+      checkpoint?: unknown;
     }
   ): Promise<boolean> {
     const result = await this.model.updateOne(
@@ -1655,11 +1767,26 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * check and this call. Without the filter, we would write `status: 'paused'`
    * over a doc that's already logically aborted. Caller checks the return and
    * bails when `false`.
+   *
+   * A mid-run pause resets `lowConfidenceStreak`: the pause consumes the streak, so after resume
+   * the run must build a fresh one before it can pause again. A completion-time pause (`held`) keeps
+   * it, so a reconsidered answer that gathers no better evidence is flagged again, and writes the
+   * final checkpoint with the result so both reflect the same end-of-run state.
    */
-  async setPendingGate(id: string, pendingGate: IPendingGate): Promise<boolean> {
+  async setPendingGate(
+    id: string,
+    pendingGate: IPendingGate,
+    held?: { completion: IPendingCompletion; checkpoint: unknown }
+  ): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, abortedAt: { $exists: false } },
-      { $set: { pendingGate, status: 'paused' } }
+      {
+        $set: {
+          pendingGate,
+          status: 'paused',
+          ...(held ? { pendingCompletion: held.completion, checkpoint: held.checkpoint } : { lowConfidenceStreak: 0 }),
+        },
+      }
     );
     return result.modifiedCount > 0;
   }
@@ -1668,12 +1795,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Clear the gate marker. Caller is responsible for any subsequent status
    * transition (continuing -> re-invoke Lambda, completed -> markComplete).
    * Mirrors the `clearWaitingOnChild` `abortedAt`-not-exists guard so a
-   * concurrent abort doesn't get resurrected.
+   * concurrent abort doesn't get resurrected. `checkpoint`, when given, is written in the
+   * same update so a resumed run never reads a checkpoint older than the gate decision.
+   *
+   * Also CAS-guarded on a live gate: `timestamps: true` bumps `updatedAt` on every write, so
+   * without the `pendingGate` filter a repeated or racing response would still report a
+   * modification and act on the same pause twice.
    */
-  async clearPendingGate(id: string): Promise<boolean> {
+  async clearPendingGate(id: string, opts?: { checkpoint?: unknown; keepCompletion?: boolean }): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, abortedAt: { $exists: false } },
-      { $unset: { pendingGate: '' } }
+      { _id: id, status: 'paused', pendingGate: { $exists: true }, abortedAt: { $exists: false } },
+      {
+        $unset: opts?.keepCompletion ? { pendingGate: '' } : { pendingGate: '', pendingCompletion: '' },
+        ...(opts?.checkpoint !== undefined && { $set: { checkpoint: opts.checkpoint } }),
+      }
     );
     return result.modifiedCount > 0;
   }
@@ -1685,18 +1820,36 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Called for every iteration the gate evaluates - including ones that
    * complete in the same turn or clear the threshold - so `evaluatedCount` is
    * the honest denominator for the gate's fire rate.
+   *
+   * Also advances `lowConfidenceStreak` in the same write: incremented when
+   * `belowThreshold`, reset to 0 otherwise. Returns the updated streak, which is
+   * what the gate decides on (0 if the doc is gone).
+   *
+   * `recordTelemetry: false` advances only the streak: a scripted score
+   * (`confidenceOverrides`) must still drive the gate but stay out of the counters.
    */
-  async recordIterationConfidence(id: string, confidence: number): Promise<void> {
-    await this.model.updateOne(
+  async recordIterationConfidence(
+    id: string,
+    confidence: number,
+    { belowThreshold, recordTelemetry = true }: { belowThreshold: boolean; recordTelemetry?: boolean }
+  ): Promise<number> {
+    const inc: Record<string, number> = {
+      ...(recordTelemetry
+        ? { 'confidenceTelemetry.evaluatedCount': 1, 'confidenceTelemetry.confidenceSum': confidence }
+        : {}),
+      ...(belowThreshold ? { lowConfidenceStreak: 1 } : {}),
+    };
+    const updated = await this.model.findOneAndUpdate(
       { _id: id },
       {
-        $inc: {
-          'confidenceTelemetry.evaluatedCount': 1,
-          'confidenceTelemetry.confidenceSum': confidence,
-        },
-        $min: { 'confidenceTelemetry.minConfidence': confidence },
-      }
+        // Mongo rejects an empty `$inc`, which a scripted above-threshold score would otherwise send.
+        ...(Object.keys(inc).length > 0 ? { $inc: inc } : {}),
+        ...(recordTelemetry ? { $min: { 'confidenceTelemetry.minConfidence': confidence } } : {}),
+        $set: { lastConfidence: confidence, ...(belowThreshold ? {} : { lowConfidenceStreak: 0 }) },
+      },
+      { new: true, projection: { lowConfidenceStreak: 1 } }
     );
+    return updated?.lowConfidenceStreak ?? 0;
   }
 
   /**
@@ -1726,6 +1879,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           result,
           completedAt: new Date(),
         },
+        $unset: { pendingCompletion: '' },
       }
     );
   }
@@ -1744,6 +1898,26 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         },
       }
     );
+  }
+
+  /**
+   * `markFailed` that skips a terminal execution, so a late or repeated write cannot overwrite a
+   * finished run or its original error. Returns whether it wrote.
+   */
+  async markFailedIfActive(id: string, error: Parameters<AgentExecutionRepository['markFailed']>[1]): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES } },
+      {
+        $set: {
+          status: 'failed',
+          // `error.message` is required and runValidators rejects '' (e.g. `new Error()`), which would leave the run active.
+          error: { ...error, message: error.message || 'Unknown error' },
+          completedAt: new Date(),
+        },
+      },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
   }
 
   async markAborted(id: string, partialResult?: unknown): Promise<void> {
@@ -1957,6 +2131,43 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return { items, nextCursor };
   }
 
+  /**
+   * `createdAt` of the earliest run, in the same set `findByUserIdPaginated` lists, that was created in
+   * `[createdFrom, completedSince)` but finished at or after `completedSince`: a run that straddles a brief
+   * window's start. Null when there is none.
+   */
+  async findEarliestStraddlingRunCreatedAt(
+    userId: string,
+    completedSince: Date,
+    createdFrom: Date
+  ): Promise<Date | null> {
+    const doc = await this.model
+      .findOne(
+        {
+          userId,
+          $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
+          createdAt: { $gte: createdFrom, $lt: completedSince },
+          completedAt: { $gte: completedSince },
+        },
+        { createdAt: 1 }
+      )
+      .sort({ createdAt: 1 })
+      .lean<{ createdAt: Date }>()
+      .exec();
+    return doc?.createdAt ?? null;
+  }
+
+  /** Top-level runs that finished in `[start, end)`: the ones whose completion push a busy block held. */
+  async countRunsFinishedBetween(userId: string, start: Date, end: Date): Promise<number> {
+    return this.model
+      .countDocuments({
+        userId,
+        $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
+        completedAt: { $gte: start, $lt: end },
+      })
+      .exec();
+  }
+
   // --- DAG decomposition (coordinate_task) ---
 
   /**
@@ -2091,7 +2302,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
 // --- Model & Export ---
 
-const AgentExecutionModel =
+export const AgentExecutionModel =
   (mongoose.models['AgentExecution'] as unknown as mongoose.Model<IAgentExecution>) ||
   mongoose.model<IAgentExecution>('AgentExecution', AgentExecutionSchema);
 

@@ -96,7 +96,9 @@ export class ModelPriceRepository extends BaseRepository<IModelPriceDocument> im
         `ModelPrice.append rejected ${parsed.modelId}: all-zero pricing would settle calls free (mark the model freeToRun instead)`
       );
     }
-    return this.create(parsed as IModelPriceDocument);
+    // Not this.create(): its plain toObject() leaves pricing a Map, which res.json() writes as {}.
+    const created = await this.model.create(parsed as IModelPriceDocument);
+    return created.toObject({ virtuals: true, flattenMaps: true }) as IModelPriceDocument;
   }
 
   async rowsInForce(at: Date = new Date()): Promise<IModelPrice[]> {

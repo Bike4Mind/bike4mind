@@ -33,7 +33,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import { B4MLLMToolsList } from '@bike4mind/common';
+import { B4MLLMToolsList, randomUuid } from '@bike4mind/common';
 
 import { AgentOrchestration, ThoroughnessLevel } from '../../types/agentForm';
 import { THOROUGHNESS_OPTIONS, TOOLS_REQUIRING_APPROVAL } from '../../constants/agentForm';
@@ -65,11 +65,6 @@ interface OrchestrationSectionProps {
 const PICKABLE_TOOLS: string[] = B4MLLMToolsList.filter(t => t in TOOL_MAPPING).sort();
 
 const ITERATION_BOUNDS = { min: 1, max: 100 } as const;
-
-const newVariableId = (): string =>
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `var-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const OrchestrationSection: React.FC<OrchestrationSectionProps> = ({ value, onChange, readOnly = false }) => {
   const [expanded, setExpanded] = useState(false);
@@ -110,7 +105,7 @@ const OrchestrationSection: React.FC<OrchestrationSectionProps> = ({ value, onCh
 
   const handleAddVariable = useCallback(() => {
     update({
-      defaultVariables: [...value.defaultVariables, { id: newVariableId(), key: '', value: '' }],
+      defaultVariables: [...value.defaultVariables, { id: randomUuid(), key: '', value: '' }],
     });
   }, [update, value.defaultVariables]);
 

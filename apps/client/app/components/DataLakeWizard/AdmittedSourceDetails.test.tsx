@@ -48,6 +48,33 @@ describe('AdmittedSourceDetails', () => {
     liveFile = undefined;
   });
 
+  it('names the rule instead of an approver when the file was added automatically', () => {
+    renderDetails(
+      admitted({
+        sourceMetadata: {
+          sourceUrl: 'https://oceanweekly.example/tides',
+          runId: 'run-7',
+          query: 'tidal forces',
+          autoAdmittedByConfigId: 'cfg-1',
+          autoAdmittedByConfigName: 'Weekly sweep',
+          trustedDomain: 'oceanweekly.example',
+          approvedAt: '2026-09-24T10:00:00.000Z',
+        },
+      })
+    );
+
+    const rule = screen.getByTestId('datalake-admitted-source-rule').textContent ?? '';
+    expect(rule).toContain('Added automatically from trusted site oceanweekly.example');
+    expect(rule).toContain('research configuration "Weekly sweep"');
+    expect(screen.queryByTestId('datalake-admitted-source-approver')).not.toBeInTheDocument();
+  });
+
+  it('still shows the approver for a manually approved file', () => {
+    renderDetails(admitted());
+    expect(screen.queryByTestId('datalake-admitted-source-rule')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-admitted-source-approver')).toBeInTheDocument();
+  });
+
   it('shows the source link, run, approver and processing state of an admitted file', () => {
     renderDetails(admitted({ chunkCount: 12, embeddedChunkCount: 12, chunkEmbeddingModelStampedAt: new Date() }));
 

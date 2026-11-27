@@ -94,10 +94,7 @@ function mintArtifactId(type: string, identifier: string): string {
   // writes one artifact at a time and so has no batch index to record there. It stays an INTEGER,
   // and the id stays five segments, because `generateCompleteArtifactId` (the sibling minter)
   // records a real integer index in that position - the two have to agree on what every position
-  // holds, not just where it sits. The by-id route also has a fallback matching a short
-  // `artifact_{type}_{identifier}` request against `^<request>_\d+_\d+$`, which assumes the same
-  // thing, though it is unreachable today: `artifactService.get` throws on a miss instead of
-  // returning the null it tests for.
+  // holds, not just where it sits.
   const discriminator = Math.floor(Math.random() * 1e12);
   return `artifact_${idSegment(type, 'generated')}_${identifier}_${Date.now()}_${discriminator}`;
 }
@@ -117,7 +114,7 @@ function mintArtifactId(type: string, identifier: string): string {
  * That makes it match the reply's `identifier` attribute only when the two happen to agree; use
  * `remintArtifactId` when an id for the same artifact already exists and the attribute is known.
  *
- * `apps/client/app/utils/artifactParser.ts` exports `generateCompleteArtifactId`, which mints the
+ * `packages/server-utils/src/app/utils/artifactParser.ts` exports `generateCompleteArtifactId`, which mints the
  * same shape for artifacts parsed out of a reply and does record a real batch index there. The two
  * are a known fork - see `persistAgentArtifacts.ts` for why they are not interchangeable - but the
  * shape has to stay in sync across both, and the identifier segment is the one the client compares.
@@ -248,12 +245,13 @@ export function canTransitionStatus(currentStatus: ArtifactStatuses, newStatus: 
 }
 
 // Metadata helpers
-export function mergeArtifactMetadata<T extends Record<string, any>>(existing: T, updates: Partial<T>): T {
+export function mergeArtifactMetadata<T extends object>(existing: T, updates: Partial<T>): T {
+  const { dependencies, settings } = updates as { dependencies?: unknown[]; settings?: object };
   return {
     ...existing,
     ...updates,
-    ...(updates.dependencies && { dependencies: [...(updates.dependencies as any[])] }),
-    ...(updates.settings && { settings: { ...existing.settings, ...updates.settings } }),
+    ...(dependencies && { dependencies: [...dependencies] }),
+    ...(settings && { settings: { ...(existing as { settings?: object }).settings, ...settings } }),
   };
 }
 

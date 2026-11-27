@@ -19,9 +19,9 @@ import {
 } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { toMemberAccessContext } from '@server/dataLakes/toAccessContext';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
+import { toMemberAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
 import { loadRegistryLakeStats, toPublicDataLake } from '@server/dataLakes/toPublicDataLake';
 
 const handler = nextRouteForContract(getDataLakeContract, {
@@ -36,7 +36,7 @@ const handler = nextRouteForContract(getDataLakeContract, {
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(req.validatedParams.id, ctx, {
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(req.validatedParams.id, ctx, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -45,7 +45,7 @@ const handler = nextRouteForContract(getDataLakeContract, {
       logger: req.logger,
     });
     const liveStats = await loadRegistryLakeStats(lake, { fabFiles: fabFileRepository, logger: req.logger });
-    return res.json(toPublicDataLake(lake, liveStats));
+    return res.json(toPublicDataLake(lake, liveStats, dataLakeService.canManageLake(lake, ctx, grants)));
   });
 
 export const config = {

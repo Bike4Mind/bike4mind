@@ -8,8 +8,18 @@ import { CreditHolderType, type CreditHoldRecord } from '@bike4mind/common';
  *
  * expiresAt is never a TTL index. Only settledAt expires: those rows describe completed money movement.
  */
+/** The completion run budget a hold also claimed (CompletionRunModel claimBudget). */
+export type PendingCreditHoldRunClaim = { runId: string; credits: number };
+
 export type PendingCreditHold = CreditHoldRecord & {
   id: string;
+  /** Released together with the hold: by settlement, refund or the expired-hold sweep. */
+  runClaim?: PendingCreditHoldRunClaim;
+  /**
+   * Names the one piece of work the hold pays for (an image generation's id), so a redelivered queue
+   * message finds the hold its first delivery took instead of taking another. Cleared on settlement.
+   */
+  holdKey?: string;
   featureLabel: string;
   expiresAt: Date;
   settledAt?: Date;
@@ -34,11 +44,31 @@ const PendingCreditHoldSchema = new Schema<PendingCreditHoldDocument>(
     expiresAt: { type: Date, required: true },
     settledAt: { type: Date },
     settledCredits: { type: Number },
+    runClaim: {
+      type: new Schema<PendingCreditHoldRunClaim>(
+        { runId: { type: String, required: true }, credits: { type: Number, required: true } },
+        { _id: false }
+      ),
+      required: false,
+    },
+    holdKey: { type: String },
   },
   { timestamps: true }
 );
 
 PendingCreditHoldSchema.index({ expiresAt: 1 });
+// Serves findOutstandingForUser (the new-account spend cap). Built by the
+// 20260921236900_ensure-pending-credit-hold-user-index migration.
+PendingCreditHoldSchema.index({ userId: 1, createdAt: -1 });
+// Serves the admin billing overview's outstanding holds per owner (an organization has no userId to
+// filter on). Built by the 20260921239997_ensure-pending-credit-hold-owner-index migration.
+PendingCreditHoldSchema.index({ ownerId: 1, ownerType: 1, settledAt: 1 });
+// One outstanding hold per key; rows without a key are not indexed. Built by the
+// 20261123163611_ensure-pending-credit-hold-key-index migration.
+PendingCreditHoldSchema.index(
+  { holdKey: 1 },
+  { unique: true, partialFilterExpression: { holdKey: { $exists: true } } }
+);
 // Only completed settlements have this field: TTL never deletes an outstanding hold.
 PendingCreditHoldSchema.index({ settledAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 
@@ -54,14 +84,28 @@ const toPendingCreditHold = (doc: PendingCreditHoldDocument): PendingCreditHold 
   balanceAfterHold: doc.balanceAfterHold,
   featureLabel: doc.featureLabel,
   expiresAt: doc.expiresAt,
+  ...(doc.runClaim ? { runClaim: { runId: doc.runClaim.runId, credits: doc.runClaim.credits } } : {}),
+  ...(doc.holdKey ? { holdKey: doc.holdKey } : {}),
   ...(doc.settledAt ? { settledAt: doc.settledAt, settledCredits: doc.settledCredits } : {}),
 });
 
 export class PendingCreditHoldRepository {
   constructor(private readonly model: PendingCreditHoldModel) {}
 
-  async record(hold: CreditHoldRecord, featureLabel: string, expiresAt: Date): Promise<PendingCreditHold> {
-    const doc = await this.model.create({ ...hold, featureLabel, expiresAt });
+  async record(
+    hold: CreditHoldRecord,
+    featureLabel: string,
+    expiresAt: Date,
+    runClaim?: PendingCreditHoldRunClaim,
+    holdKey?: string
+  ): Promise<PendingCreditHold> {
+    const doc = await this.model.create({
+      ...hold,
+      featureLabel,
+      expiresAt,
+      ...(runClaim && { runClaim }),
+      ...(holdKey && { holdKey }),
+    });
     return toPendingCreditHold(doc.toObject());
   }
 
@@ -69,9 +113,41 @@ export class PendingCreditHoldRepository {
   async markSettled(id: string, settledCredits: number): Promise<boolean> {
     const result = await this.model.updateOne(
       { _id: id, settledAt: { $exists: false } },
-      { $set: { settledAt: new Date(), settledCredits } }
+      { $set: { settledAt: new Date(), settledCredits }, $unset: { holdKey: 1 } },
+      { runValidators: true }
     );
     return result.modifiedCount === 1;
+  }
+
+  /**
+   * markSettled that also resolves to the hold as stored, or null once it has settled or been released.
+   * Its `runClaim` counts every committed top-up, even one whose acknowledgement the caller never saw.
+   */
+  async markSettledAndRead(id: string, settledCredits: number): Promise<PendingCreditHold | null> {
+    const doc = await this.model
+      .findOneAndUpdate(
+        { _id: id, settledAt: { $exists: false } },
+        { $set: { settledAt: new Date(), settledCredits }, $unset: { holdKey: 1 } },
+        { new: true, runValidators: true }
+      )
+      .lean<PendingCreditHoldDocument>();
+    return doc ? toPendingCreditHold(doc) : null;
+  }
+
+  /** Grows an outstanding hold's run claim; false once the hold has settled or been released. */
+  async addRunClaimCredits(id: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, settledAt: { $exists: false }, runClaim: { $exists: true } },
+      { $inc: { 'runClaim.credits': credits } },
+      { runValidators: true }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /** The unsettled hold taken under `holdKey`, if any. */
+  async findOutstandingByKey(holdKey: string): Promise<PendingCreditHold | null> {
+    const doc = await this.model.findOne({ holdKey, settledAt: { $exists: false } }).lean<PendingCreditHoldDocument>();
+    return doc ? toPendingCreditHold(doc) : null;
   }
 
   /** Reconciles a committed settlement whose transaction acknowledgement was lost. */
@@ -94,6 +170,20 @@ export class PendingCreditHoldRepository {
       .findOneAndDelete({ _id: id, expiresAt: { $lte: now }, settledAt: { $exists: false } })
       .lean<PendingCreditHoldDocument>();
     return doc ? toPendingCreditHold(doc) : null;
+  }
+
+  /** The user's own (not org-billed) holds created since `since` that have not settled yet. */
+  async findOutstandingForUser(userId: string, since: Date): Promise<Array<{ at: Date; credits: number }>> {
+    const docs = await this.model
+      .find({
+        userId,
+        ownerType: CreditHolderType.User,
+        createdAt: { $gte: since },
+        settledAt: { $exists: false },
+      })
+      .select({ reservedCredits: 1, createdAt: 1 })
+      .lean<Array<{ reservedCredits: number; createdAt: Date }>>();
+    return docs.map(doc => ({ at: doc.createdAt, credits: doc.reservedCredits }));
   }
 
   /** Oldest first, so a backlog drains in expiry order over successive sweeps. */

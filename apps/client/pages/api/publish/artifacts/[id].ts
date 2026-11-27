@@ -1,4 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
+import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, liveShareTokens } from '@bike4mind/database';
@@ -8,8 +10,10 @@ import {
   EMBED_ORIGINS_MAX,
   PublishTagsSchema,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
+  loadLiveOwner,
   resolveVisibility,
   invalidatePublishCdn,
   restrictDuplicatePublications,
@@ -17,10 +21,11 @@ import {
   validateEmbedOrigins,
 } from '@server/services/publish';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
+import { deletePublishThumbnails } from '@bike4mind/server-utils/utils/publishThumbnails';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
- *   GET    -> full record (owner/admin, or anyone if public)
+ *   GET    -> management metadata (owner/admin) or public display fields
  *   PATCH  -> update title/description/visibility/commentPolicy (owner/admin)
  *   DELETE -> soft-delete / archive (owner/admin)
  */
@@ -105,13 +110,19 @@ function toPublicArtifact(artifact: Record<string, unknown>): Record<string, unk
   return out;
 }
 
-const handler = baseApi()
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+})
   .get(async (req, res) => {
     const publicId = String(req.query.id);
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
+    // The thumbnail record goes too: thumbnails reach only the owner, and only as the signed
+    // link on GET /api/publish/artifacts?mine=true, never as a stored key on a manager/admin read.
+    // Content snapshots are served through the viewer path, not the management metadata read.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareTokens.token')
+      .select('-shareTokens.token -thumbnail -accessGate.passphraseHash -citables -renderedBody')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -130,9 +141,23 @@ const handler = baseApi()
     if (artifact.visibility === 'public' && artifact.accessGate && !isManager) {
       return res.status(404).json({ error: 'Artifact not found' });
     }
-    // Owner/admin get the full record (the manage modal needs it); any other viewer
-    // of an ungated public artifact gets only the public display DTO.
-    return res.status(200).json({ artifact: isManager ? artifact : toPublicArtifact(artifact) });
+    // Nothing is served to other viewers on behalf of a deleted, banned or suspended account -
+    // the same plain 404 as the gate above, matching the serve route.
+    if (!isManager && !(await loadLiveOwner(artifact.ownerId))) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    // Owner/admin keep the metadata needed by the manage modal; other viewers
+    // of an ungated public artifact get only the public display DTO.
+    if (!isManager) return res.status(200).json({ artifact: toPublicArtifact(artifact) });
+    const managed = { ...artifact };
+    delete managed.citables;
+    delete managed.renderedBody;
+    if (managed.accessGate && typeof managed.accessGate === 'object') {
+      const gate = { ...managed.accessGate } as Record<string, unknown>;
+      delete gate.passphraseHash;
+      managed.accessGate = gate;
+    }
+    return res.status(200).json({ artifact: managed });
   })
   .patch(async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
@@ -159,7 +184,11 @@ const handler = baseApi()
     // "Open public" = cacheable, anonymous, ungated. Adding a gate to a public
     // artifact leaves `visibility` alone but must still purge the CDN, so track
     // the gate in the before/after comparison, not just the visibility level.
-    const wasOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+    const wasPublic = artifact.visibility === 'public';
+    const wasOpenPublic = wasPublic && !artifact.accessGate;
+    const gateKindBefore = artifact.accessGate?.kind ?? null;
+    const domainsBefore = artifact.accessGate?.kind === 'domain' ? [...(artifact.accessGate.allowedDomains ?? [])] : [];
+    const embedOriginsBefore = [...(artifact.embedOrigins ?? [])];
     if (parsed.data.visibility !== undefined) {
       // Validate the requested visibility against the artifact's scope-tier policy
       // (same rules as publish) so PATCH can't set a tier-invalid visibility.
@@ -168,6 +197,7 @@ const handler = baseApi()
         return res.status(400).json({ error: viz.error, code: viz.code });
       }
       artifact.visibility = parsed.data.visibility;
+      if (artifact.visibility === 'public') await assertPublicationPublicLink(artifact);
     }
     if (parsed.data.accessGate !== undefined) {
       if (parsed.data.accessGate === null) {
@@ -218,8 +248,9 @@ const handler = baseApi()
     // act on. Unscoped, a stored inconsistency holds title/description/tags hostage.
     const touchesGateSurface = parsed.data.accessGate !== undefined || parsed.data.visibility !== undefined;
     // Reads the ARRAY, not the legacy scalar (#3255 step 3): with several links per artifact
-    // the enforcing surface is "at least one LIVE link", and liveShareTokens() still folds in
-    // a pre-backfill scalar-only link.
+    // the enforcing surface is "at least one LIVE link" (not revoked, not expired), and
+    // liveShareTokens() still folds in a pre-backfill scalar-only link. When the last link
+    // expires, this refuses gate/visibility edits until the gate is cleared or made public.
     if (
       touchesGateSurface &&
       artifact.accessGate &&
@@ -269,6 +300,23 @@ const handler = baseApi()
       // Absent (undefined) when empty so the field stays off the document.
       artifact.embedOrigins = check.value.length > 0 ? check.value : undefined;
     }
+    // Checked on the resulting state so a restricted owner can narrow a page but not widen it.
+    // A gate change counts wherever the gate is still served: public, or via a live share link.
+    const gateKindAfter = artifact.accessGate?.kind ?? null;
+    // Any gate-kind change counts as loosening, even domain to passphrase, so the check stays conservative.
+    const gateLoosened =
+      parsed.data.accessGate !== undefined &&
+      gateKindBefore !== null &&
+      (artifact.visibility === 'public' || liveShareTokens(artifact).length > 0) &&
+      (gateKindAfter !== gateKindBefore ||
+        (gateKindAfter === 'domain' &&
+          (artifact.accessGate?.allowedDomains ?? []).some(domain => !domainsBefore.includes(domain))));
+    const widensExposure =
+      (artifact.visibility === 'public' && !wasPublic) ||
+      gateLoosened ||
+      (!!artifact.discoverable && !discoverableBefore) ||
+      (artifact.embedOrigins ?? []).some(origin => !embedOriginsBefore.includes(origin));
+    if (widensExposure) await assertOutboundActionAllowed(req.user, req);
     await artifact.save();
 
     // Any change that alters the CACHED public response must purge the CDN, or the
@@ -299,6 +347,8 @@ const handler = baseApi()
     // Defense in depth: the hash is select:false, but this doc was loaded in this
     // request's write path - never echo it.
     if (json.accessGate && 'passphraseHash' in json.accessGate) delete json.accessGate.passphraseHash;
+    // Same rule as the GET: the stored thumbnail record never leaves the server.
+    delete json.thumbnail;
     return res.status(200).json({ artifact: json });
   })
   .delete(async (req, res) => {
@@ -316,6 +366,8 @@ const handler = baseApi()
     if (wasPublic) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
+    // softDelete dropped the owner-only thumbnail record; drop its objects too. Never throws.
+    await deletePublishThumbnails([publicId], req.logger);
     return res.status(200).json({ ok: true });
   });
 

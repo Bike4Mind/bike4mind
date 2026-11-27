@@ -55,6 +55,13 @@ describe('ReplyMarkdown', () => {
       expect(render('```\nplain\n```')).toContain('data-language="text"');
     });
 
+    it('draws an empty fence as an empty block, not the word undefined', () => {
+      const html = render('```\n```\n\n```ts\n```');
+      expect(html.match(/data-testid="chat-markdown-code-block"/g)).toHaveLength(2);
+      expect(html).toContain('data-language="ts"');
+      expect(html).not.toContain('undefined');
+    });
+
     it('keeps inline code inline', () => {
       const html = render('Run `pnpm test` first.');
       expect(html).toContain('data-testid="chat-markdown-inline-code"');
@@ -138,6 +145,27 @@ describe('ReplyMarkdown', () => {
       const html = render('[docs](https://example.com/a)');
       expect(html).toContain('data-testid="chat-markdown-link"');
       expect(html).toContain('href="https://example.com/a"');
+    });
+
+    it('renders a bare url as a link, without the punctuation after it', () => {
+      const html = render('Read https://example.com/a. Then go.');
+      expect(html).toContain('data-testid="chat-markdown-link"');
+      expect(html).toContain('href="https://example.com/a"');
+    });
+
+    it('draws a path as its text alone, with no provider to check it', () => {
+      const html = render('Saved `reports/run.webm` and src/a.ts.').replace(/<style[\s\S]*?<\/style>/, '');
+      expect(html).not.toContain('chat-markdown-file-link');
+      expect(html).not.toContain('<span');
+      expect(html).toContain('reports/run.webm');
+      expect(html).toContain('src/a.ts.');
+    });
+
+    it('does not let a reply mark its own text as a file path', () => {
+      // The stylesheet names the attribute in a selector, so only the drawn markup is checked.
+      const html = render('<span data-file-path="/etc/passwd">x</span>').replace(/<style[\s\S]*?<\/style>/, '');
+      expect(html).not.toContain('data-file-path');
+      expect(html).not.toContain('/etc/passwd');
     });
 
     it('does not give a link a target, which would ask Electron for a window', () => {

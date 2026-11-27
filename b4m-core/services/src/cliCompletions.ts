@@ -9,11 +9,20 @@ import {
   getTurnsCost,
   buildUsagePriceStamp,
   type TurnUsage,
+  DEFAULT_PROMPT_CACHE_TTL,
+  type PromptCacheTtl,
+  resolvePromptCacheTtl,
+  sumOneHourCacheWrites,
+  withRequestTtlWrites,
+  oneHourWritesOf,
   pricingTierForTokens,
   publishesCacheReadRate,
   PUBLISHED_CACHE_READ_BACKENDS,
   CreditHolderType,
   ICreditHolder,
+  ISpendFreezeRepository,
+  type ApiKeyBillingOwnerType,
+  ICreditHolderFlooredDebit,
   ICreditHolderMethods,
   IAdminSettingsRepository,
   IApiKeyRepository,
@@ -23,17 +32,34 @@ import {
   IUsageEventRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  type IUserDocument,
   normalizeMultimodalMessages,
   BadRequestError,
+  EmptyConversationError,
+  hasReadableConversationMessage,
   HTTPError,
+  UnauthorizedError,
   type CompletionSource,
   UNKNOWN_MODEL_ERROR_CODE,
+  MAX_MODEL_ID_LENGTH,
   DEGENERATE_FINISH_REASON,
   estimateStreamedOutputTokens,
   completionsSupportsToolSearch,
+  supportsAssistantPrefill,
+  ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE,
   isClaudeModelId,
   type CreditHoldRecord,
   type ICacheStrategy,
+  type ThinkingVisibility,
+  createReasoningWithholder,
+  reasoningChannelOf,
+  type ReasoningWithholder,
+  providerSummarizesReasoning,
+  withholdsReasoning,
+  type ICacheRepository,
+  type CompletionRunAttribution,
+  isOrgServiceAccountOf,
+  readOrgModelPolicy,
 } from '@bike4mind/common';
 import {
   usdToCredits,
@@ -44,12 +70,15 @@ import {
   getSettingsByNames,
   DEFAULT_OUTPUT_MAX_TOKENS,
   isSafetyRefusalError,
+  TooManyRequestsError,
 } from '@bike4mind/utils';
 import {
   buildApiKeyTable,
   getLlmByModel,
   getAvailableModels,
+  geminiThinkingOutputCap,
   reasonsWithinOutputBudget,
+  usesGeminiThinkingOutputCap,
   RUNTIME_DISCOVERED_BACKENDS,
   resolveOutputMaxTokens,
   type ICompletionOptions,
@@ -57,24 +86,87 @@ import {
   isModelProviderConfigured,
   isAdaptiveThinkingByDefault,
 } from '@bike4mind/llm-adapters';
+import { sentBelowReasoningFloor } from '@bike4mind/llm-adapters/model-sizing';
 import { WORKFLOW_REMINDER_MARKER } from '@bike4mind/agents';
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { assertSpendNotFrozen } from './spendFreezeService/assertSpendNotFrozen';
+import { spendFreezeSubjectForHold } from './spendFreezeService/spendFreezeSubjectForHold';
+import { notifyOrgEvent } from './organizationService/orgEventObserver';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
+import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
+import type { LimitEventRecord } from './llm/ChatCompletionFeatures';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
-import { prepareWireTools } from './cliCompletionsToolSearch';
+import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
+import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
+import {
+  executedModelFields,
+  recordShadowTokenUsage,
+  reserveShadowTokenBudget,
+  resolveShadowRouting,
+} from './llm/shadowTier';
+import { hasAssistantPrefill, prepareWireTools } from './cliCompletionsToolSearch';
 import { withOllamaThinkingDefault } from './llm/ollamaThinkingDefault';
+import { conservativeRoundInputUsd } from './llm/chatCreditCap';
+import {
+  MIN_AFFORDABLE_OUTPUT_TOKENS,
+  affordableRoundBudget,
+  capRoundOutput,
+  gateEveryRound,
+  roundCreditRange,
+  type RoundBudget,
+} from './completionCreditBudget';
+import { fallbackThinkingVisibility } from './thinkingVisibility';
+
+/**
+ * Asks to claim part of a run's budget alongside a hold: `wantedCredits` is what the first round can
+ * cost at its full output budget, `minimumCredits` what even a short answer costs.
+ */
+export type CompletionRunBudgetClaim = { runId: string; wantedCredits: number; minimumCredits: number };
 
 /** Persistence boundary: implementations commit each callback and its hold transition atomically. */
 export type CompletionCreditHolds = {
-  reserve(hold: Omit<CreditHoldRecord, 'balanceAfterHold'>, debit: () => Promise<ICreditHolder>): Promise<void>;
+  /**
+   * Debits the hold, and claims run budget when `runClaim` names a budgeted run. Resolves to the credits
+   * claimed, which cap everything the completion may charge; undefined when the run has no budget. Throws
+   * a 422 (`run_budget_exhausted`) when the run cannot spare `minimumCredits`, before anything is debited.
+   */
+  reserve(
+    hold: Omit<CreditHoldRecord, 'balanceAfterHold'>,
+    debit: () => Promise<ICreditHolder>,
+    runClaim?: CompletionRunBudgetClaim
+  ): Promise<number | undefined>;
   refund(refund: () => Promise<void>): Promise<boolean>;
-  settle(chargedCredits: number, settle: () => Promise<void>): Promise<boolean>;
+  /**
+   * `settle` returns the credits its ledger row recorded: at most `chargedCredits`, less when the
+   * floored debit found a concurrent spend had drained the balance. A run claim is released against it,
+   * and `settle` is told the stored claim it released (undefined when the hold made none).
+   */
+  settle(chargedCredits: number, settle: (released: { runClaimCredits?: number }) => Promise<number>): Promise<boolean>;
+  /**
+   * Grows this completion's run claim before a tool round, by up to `wantedCredits` and at least
+   * `minimumCredits`. Resolves to the credits added: 0 when the run cannot spare them or the hold made
+   * no run claim. Never throws on exhaustion; the round gate then ends the loop.
+   */
+  topUpRunClaim?(claim: { wantedCredits: number; minimumCredits: number }): Promise<number>;
+};
+
+/** How a completion's credit settlement ended, reported once through `onSettled`. */
+export type CompletionSettlement = {
+  /** The id the ledger row and usage event carry. */
+  requestId: string;
+  /** True only when the ledger row was written and its transaction committed. */
+  committed: boolean;
+  /** What the ledger recorded; can be below the computed cost when the balance capped it. 0 unless committed. */
+  creditsCharged: number;
+  /** The provider cost the credits were priced from (the terminal content event's `credits.usdCost`). */
+  usdCost?: number;
 };
 
 export interface CompletionParams {
+  evaluation?: NonNullable<ICompletionOptions['_internal']>['evaluation'];
   userId: string;
   model: string;
   messages: IMessage[];
@@ -102,6 +194,8 @@ export interface CompletionParams {
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
     /** See the `thinking` field of CompletionRequestSchema. */
     thinking?: { enabled: boolean; budget_tokens?: number };
+    /** See the `cacheTtl` field of CompletionRequestSchema. */
+    cacheTtl?: import('@bike4mind/common').PromptCacheTtl;
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -141,7 +235,18 @@ export interface CompletionParams {
      * accumulated on the key via incrementSpend for spend-cap enforcement.
      */
     userApiKeys?: IUserApiKeyRepository;
+    /** Required: backs the daily token cap and per-minute limit, which are skipped when absent. */
+    cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
+    /** Records each credit refusal for the admin user timeline; must not throw (see ChatCompletionFeatures). */
+    recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
+    /** Required so every completion surface wires the freeze check. */
+    spendFreezes: Pick<ISpendFreezeRepository, 'findActiveForSubject'>;
   };
+  /**
+   * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
+   * authenticating API key does not grant. The org-membership check reads the stored role.
+   */
+  scopeActor?: <U extends { isAdmin?: boolean }>(actor: U) => U;
   /**
    * API key information if authenticated via API key
    * Used for credit transaction tracking and audit logging
@@ -158,8 +263,36 @@ export interface CompletionParams {
    * Requires `db.organizations`.
    */
   billingOrganizationId?: string;
+  /**
+   * Model policy of an organization that governs the turn without paying for it (an org-owned embed agent
+   * serving an identified end user, who is billed personally). Ignored when `billingOrganizationId` is set.
+   */
+  governingOrgModelPolicy?: unknown;
+  /**
+   * Whether the authenticating key bills its owner or an organization. No longer read by the spend freeze check,
+   * which keeps the acting user for every key.
+   */
+  apiKeyBillingOwnerType?: ApiKeyBillingOwnerType;
+  /** The caller already ran assertSpendNotFrozen for this request (ahead of its own cap checks); skips the second lookup. */
+  spendFreezeChecked?: boolean;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
+  /**
+   * The caller's conversation id (desktop chat session, CLI session), as the client sent it.
+   * Recorded on the completion_api_usage ledger row so spend can be traced back to a conversation.
+   * Untrusted, display-only: never used for authorization or lookups.
+   */
+  sessionId?: string;
+  /**
+   * The run this completion belongs to, already verified by the caller as created by this user and
+   * billing owner. Recorded on the ledger row (`metadata.run`) and the usage event; never charged.
+   */
+  run?: CompletionRunAttribution;
+  /**
+   * Opaque identifier the provider receives instead of the hash of `userId`: set for a platform key's
+   * end user (toPlatformEndUserProviderId). `userId` still owns billing and every other check.
+   */
+  providerEndUserId?: string;
   /**
    * Where this completion request originated. Recorded on the credit
    * transaction (and analytics event) so reports can break down usage by
@@ -185,18 +318,60 @@ export interface CompletionParams {
    * A throw from it refunds the hold.
    */
   onReady?: () => void | Promise<void>;
+  /**
+   * Called once after settlement, before the function returns or rethrows an abort. Not called when
+   * the completion failed before settlement or credits were not enforced. A throw is logged and
+   * swallowed.
+   */
+  onSettled?: (settlement: CompletionSettlement) => void;
+  /** Entitlement resolver for model admission; omitted means tag-only access. */
+  getEntitlements?: (user: IUserDocument) => Promise<string[]>;
+  /** Resolved on the reloaded caller; omitted means `raw`. A failed resolution withholds. */
+  getThinkingVisibility?: (user: IUserDocument) => Promise<ThinkingVisibility>;
+}
+
+const MAX_LEDGER_TOOL_NAMES = 20;
+const MAX_LEDGER_TOOL_NAME_LENGTH = 64;
+
+/** Caps the tool names a ledger row carries: tool names are caller-supplied on the wire path. */
+export function boundedToolNames(names: Iterable<string>): string[] {
+  return [...names].slice(0, MAX_LEDGER_TOOL_NAMES).map(name => name.slice(0, MAX_LEDGER_TOOL_NAME_LENGTH));
+}
+
+/**
+ * Pre-flight tokens for one image, whatever its byte size. Providers bill an image by its pixel
+ * dimensions after their own downscale, not by its encoding: about 1.6K tokens at Anthropic's
+ * standard resolution and under 5K at the largest high-resolution size, with OpenAI's high
+ * detail below that. Sized at that ceiling so the hold stays conservative.
+ */
+export const IMAGE_INPUT_TOKEN_ESTIMATE = 5_000;
+
+// Every dialect normalizeMultimodalMessages accepts; a tool result can nest them too.
+const IMAGE_PART_TYPES: ReadonlySet<unknown> = new Set(['image', 'image_url', 'input_image']);
+
+function isImagePart(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && IMAGE_PART_TYPES.has((value as { type?: unknown }).type);
 }
 
 /**
  * Estimate input tokens from messages. Conservative pre-flight estimate at
  * 2.5 chars/token (code, JSON, and non-English tokenize less efficiently).
+ * Images count IMAGE_INPUT_TOKEN_ESTIMATE each: their base64 read as text would
+ * price a 1 MB screenshot at about 400K tokens.
  */
-function estimateInputTokens(messages: IMessage[]): number {
+export function estimateInputTokens(messages: IMessage[]): number {
+  let imageCount = 0;
+  const withoutImageBytes = (_key: string, value: unknown) => {
+    if (!isImagePart(value)) return value;
+    imageCount++;
+    return null;
+  };
   const totalChars = messages.reduce((sum, msg) => {
-    const contentLength = typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length;
+    const contentLength =
+      typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content, withoutImageBytes).length;
     return sum + contentLength;
   }, 0);
-  return Math.ceil(totalChars / 2.5);
+  return Math.ceil(totalChars / 2.5) + imageCount * IMAGE_INPUT_TOKEN_ESTIMATE;
 }
 
 /**
@@ -206,7 +381,7 @@ function estimateInputTokens(messages: IMessage[]): number {
  * the tool is sent in full. Decided here rather than trusting prepareWireTools to have stripped
  * the flag, because `serverTools` never pass through it.
  */
-function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: boolean): number {
+export function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured = false): number {
   const totalChars = tools.reduce(
     (sum, tool) =>
       deferralHonoured && tool.toolSchema.defer_loading === true ? sum : sum + JSON.stringify(tool.toolSchema).length,
@@ -222,8 +397,8 @@ function estimateToolTokens(tools: ICompletionOptionTools[], deferralHonoured: b
  * (those calling `splitCacheInclusiveInput`); the Gemini and xAI adapters forward them only for a
  * model that publishes cache_read, the same condition this path checks. Ollama publishes no
  * cache_read. Claude is not listed: buildClaudeCacheStrategy sets its cache_control, and the hold
- * below discounts it only on Anthropic and only for client-sent `cache` flags, so server-set
- * caching never lowers a hold.
+ * below discounts a Claude read only on Anthropic and only for `cache` flags (client-sent, or the
+ * first-round breakpoints withFirstRoundCacheBreakpoints adds, which only raise the hold).
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
@@ -235,7 +410,7 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
 
 /**
  * Claude prompt caching, set here so no CLI or Desktop release is needed. Mirrors the strategy web
- * chat builds in ChatCompletionProcess (system prompt, tools, history, 5m TTL); the Anthropic
+ * chat builds in ChatCompletionProcess (system prompt, tools, history, one TTL for all); the Anthropic
  * caching adapter places the breakpoints and budgets them around any client-sent `cache: true`
  * flags. Other backends cache server-side without a flag or ignore the strategy.
  *
@@ -247,7 +422,8 @@ function buildClaudeCacheStrategy(
   modelInfo: ModelInfo | undefined,
   messages: IMessage[],
   hasTools: boolean,
-  source: CompletionSource
+  source: CompletionSource,
+  cacheTtl: PromptCacheTtl
 ): ICacheStrategy | undefined {
   const isClaude =
     modelInfo?.backend === ModelBackend.Anthropic ||
@@ -268,8 +444,27 @@ function buildClaudeCacheStrategy(
     cacheTools: hasTools,
     cacheConversationHistory: reusablePrefix,
     ...(endsWithReminder ? { historyCacheExcludeTrailingCount: 1 } : {}),
-    cacheTTL: '5m',
+    cacheTTL: cacheTtl,
   };
+}
+
+/**
+ * A first round's messages with the breakpoints the server's Claude cache strategy will place
+ * (system prompt, history anchor; see AnthropicCachingAdapter) marked as if the client had flagged
+ * them, so the hold prices that round's cache write. Only for a round with no assistant message:
+ * nothing is cached yet, so every breakpoint can only write. Later rounds keep pricing the client's
+ * own flags, and the per-round cap prices a cache miss on any round.
+ */
+function withFirstRoundCacheBreakpoints(messages: IMessage[], strategy: ICacheStrategy | undefined): IMessage[] {
+  if (!strategy?.enableCaching || messages.some(m => m.role === 'assistant')) return messages;
+  // Must stay in sync with the history-anchor rule in AnthropicCachingAdapter, or the hold under-prices the write.
+  let anchorIndex = strategy.cacheConversationHistory
+    ? messages.length - 1 - (strategy.historyCacheExcludeTrailingCount ?? 0)
+    : -1;
+  while (anchorIndex >= 0 && messages[anchorIndex].role === 'system') anchorIndex--;
+  return messages.map((m, index) =>
+    index === anchorIndex || (strategy.cacheSystemPrompt && m.role === 'system') ? { ...m, cache: true } : m
+  );
 }
 
 // Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
@@ -290,9 +485,11 @@ const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
  * last assistant message included); the rest is plain input. Auto-caching backends read the
  * system messages that precede the last assistant message (they preserve message order, so a later
  * one is new content) and the conversation up to the message before the last assistant, and bill
- * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
- * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
- * actual usage.
+ * the rest plain. A conversation with no assistant message yet has nothing cached: an auto-caching
+ * backend bills it plain, and on Anthropic every breakpoint writes its whole prefix (the hoisted system
+ * messages included), so that prefix is held at cache_write and the tail plain. If the provider misses
+ * (cache TTL lapsed) the real cost is higher; settlement charges actual usage, and the per-round cap
+ * (conservativeRoundInputUsd) prices that miss so it cannot overdraw.
  *
  * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
  * client-claimed or lapsed cache cannot shrink the hold below it.
@@ -305,10 +502,13 @@ function estimateReservationUsd(
   messages: IMessage[],
   estimatedInputTokens: number,
   estimatedOutputTokens: number,
-  estimatedToolTokens: number
+  estimatedToolTokens: number,
+  cacheTtl: PromptCacheTtl = DEFAULT_PROMPT_CACHE_TTL
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
-  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
+  const hasAssistant = messages.some(m => m.role === 'assistant');
+  // A first-round Claude on Bedrock is held plain; the per-round cap prices its cache write.
+  if (!hasAssistant && modelInfo.backend !== ModelBackend.Anthropic) return uncachedUsd;
 
   const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
   const conversation = messages.filter(m => m.role !== 'system');
@@ -338,13 +538,15 @@ function estimateReservationUsd(
 
   let readTokens = 0;
   let writeTokens = 0;
-  // Priced plain: tool schemas are not flagged for caching on this path, so no discount is assumed.
+  // Priced plain: tool schemas carry no flag here, so no discount is assumed. On a first round the
+  // server's cacheTools writes them, so the hold runs ~0.25x of tool tokens short; the cap covers it.
   let plainTokens = estimatedToolTokens;
   let conversationIndex = 0;
   messages.forEach((m, index) => {
     const tokens = estimateInputTokens([m]);
     if (m.role === 'system') {
-      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      if (hoistsSystem && !hasAssistant) writeTokens += tokens;
+      else if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
       else plainTokens += tokens;
       return;
     }
@@ -356,7 +558,15 @@ function estimateReservationUsd(
 
   const tieredModel =
     tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
-  const cachedInputUsd = getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
+  const cachedInputUsd = getTextModelCost(
+    tieredModel,
+    plainTokens,
+    0,
+    readTokens,
+    writeTokens,
+    undefined,
+    oneHourWritesOf(writeTokens, undefined, cacheTtl)
+  );
   const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
   const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);
   return Math.max(cachedInputUsd, CACHED_INPUT_RESERVATION_FLOOR * uncachedInputUsd) + outputUsd;
@@ -388,18 +598,67 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
   return OPENAI_BARE_MODEL_ALIASES.get(modelId) ?? modelId;
 }
 
+async function resolveCallerThinkingVisibility(
+  params: Pick<CompletionParams, 'getThinkingVisibility' | 'userId' | 'db'>,
+  actor: IUserDocument | null,
+  logger: Logger | undefined
+): Promise<ThinkingVisibility> {
+  if (!params.getThinkingVisibility) return 'raw';
+  try {
+    if (actor) return await params.getThinkingVisibility(actor);
+  } catch (error) {
+    logger?.warn?.('[cliCompletions] thinking visibility resolution failed; using the free level', {
+      userId: params.userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return fallbackThinkingVisibility({ adminSettings: params.db.adminSettings });
+}
+
 /**
- * Shared LLM completion logic for the SSE, WebSocket and embed completion routes.
+ * One frame with the caller-withheld reasoning removed. Anthropic thinking blocks ride client-tool
+ * frames so the caller can echo them unchanged on the next turn, which the provider requires; they
+ * are kept when the provider returns them summarized and dropped when they would carry the raw trace.
+ */
+export function withholdReasoningFromFrame(
+  withholder: ReasoningWithholder,
+  text: (string | null | undefined)[],
+  info: CompletionInfo | undefined,
+  model: string
+): { text: (string | null | undefined)[]; info: CompletionInfo | undefined } {
+  const visibleText = text.map(entry => (entry ? withholder.visible(entry, info?.channel) : entry));
+  if (!info?.thinking || providerSummarizesReasoning(model)) return { text: visibleText, info };
+  const { thinking: _withheld, ...rest } = info;
+  return { text: visibleText, info: rest };
+}
+
+/**
+ * Shared LLM completion logic for the SSE and embed completion routes.
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
   const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
+  if (params.model.length > MAX_MODEL_ID_LENGTH) {
+    throw new BadRequestError(
+      `Model id exceeds ${MAX_MODEL_ID_LENGTH} characters. List the models you can call with GET /api/v1/models.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
   const model = resolveOpenAiBareModelAlias(params.model);
   // Callers write multimodal parts in whichever dialect their SDK speaks and the wire
   // schema accepts any of them (z.array(z.any())). Canonicalize once, here, so the
   // token estimate below and every backend translator read the same shape.
   const messages = normalizeMultimodalMessages(params.messages);
   const source: CompletionSource = params.source ?? 'api';
+  // One id per request: the usage event and the credit transaction share it so the admin ledger can
+  // point at the usage record.
+  const requestId = params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`;
+  // The caller's session id lives under run, not top-level: top-level UsageEvent.sessionId is an ownership-probe input.
+  const runLineage = params.run && { ...params.run, sessionId: params.sessionId };
   const completionStartTime = Date.now();
+
+  if (!hasReadableConversationMessage(messages)) {
+    throw new EmptyConversationError();
+  }
 
   // Fail-closed before any credit reservation: wire tools (client-executed, executeTools
   // false) and server tools (executeTools true) imply opposite loop semantics - silently
@@ -437,10 +696,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
     // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
     // so without this arm such a key would fail on its very first call, not merely after someone
-    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
+    // left. The org's own service account (an org-owned key's holder) is likewise never on the
+    // roster. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
     if (!isCurrentOrgMember(organization, userId)) {
       const actor = await db.users.findById(userId);
-      if (!actor?.isAdmin) {
+      if (!actor?.isAdmin && !isOrgServiceAccountOf(actor, organization.id)) {
         logger?.warn?.('[CLI_CREDITS] API key minter is no longer a member of the billing organization', {
           userId,
           organizationId: organization.id,
@@ -454,7 +714,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const billToOrg = organization !== null;
   const holderId = billToOrg ? organization!.id : userId;
   const holderType = billToOrg ? CreditHolderType.Organization : CreditHolderType.User;
-  const holderMethods: ICreditHolderMethods = billToOrg ? db.organizations! : db.users;
+  const holderMethods: ICreditHolderMethods & ICreditHolderFlooredDebit = billToOrg ? db.organizations! : db.users;
   const fetchHolder = (): Promise<ICreditHolder | null> =>
     billToOrg ? db.organizations!.findById(holderId) : db.users.findById(holderId);
 
@@ -463,22 +723,115 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   let failedListings: readonly ModelBackend[] = [];
   const models = await getAvailableModels(apiKeys, { onFailedListings: failed => (failedListings = failed) });
-  const modelInfo = models.find(m => m.id === (model as ChatModels));
+  const requestedModelInfo = models.find(m => m.id === (model as ChatModels));
   const catalogued = CHAT_MODELS.includes(model as ChatModels);
 
   // Catalogued but never runnable; unlike provider_not_configured, retrying cannot help.
-  if (modelInfo?.disabled) {
-    const reason = modelInfo.disabledReason ? `: ${modelInfo.disabledReason}` : '';
+  if (requestedModelInfo?.disabled) {
+    const reason = requestedModelInfo.disabledReason ? `: ${requestedModelInfo.disabledReason}` : '';
     throw new BadRequestError(
       `Model '${params.model}' is currently unavailable${reason}. List the models you can call with GET /api/v1/models.`,
       { errorCode: UNKNOWN_MODEL_ERROR_CODE }
     );
   }
 
+  // Modality is a property of the model, not its backend: an image/video model routed
+  // through a chat backend cannot be served by this text endpoint.
+  if (requestedModelInfo && requestedModelInfo.type !== 'text') {
+    throw new BadRequestError(
+      `Model '${params.model}' (type: ${requestedModelInfo.type}) cannot be used for text completions.`,
+      { errorCode: UNKNOWN_MODEL_ERROR_CODE }
+    );
+  }
+
+  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
+  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
+  const enforceCredits = getSettingsValue('enforceCredits', settings);
+
+  const [storedActor, modelConfigs, freeTierAllowedModels] = await Promise.all([
+    db.users.findById(userId),
+    loadModelConfigurations(db.adminSettings),
+    loadFreeTierAllowedModels(db.adminSettings),
+  ]);
+  // Fail closed: an admission over no user would skip the account-state gate it exists to apply.
+  if (!storedActor) throw new UnauthorizedError('User not found');
+  const actor = params.scopeActor ? params.scopeActor(storedActor) : storedActor;
+  const orgModelPolicy = readOrgModelPolicy(organization ? organization.modelPolicy : params.governingOrgModelPolicy);
+  await createModelAdmission({
+    user: actor,
+    configs: modelConfigs,
+    getEntitlements: params.getEntitlements ? () => params.getEntitlements!(actor) : undefined,
+    models,
+    enforceCredits: Boolean(enforceCredits),
+    freeTierAllowedModels,
+    orgModelPolicy,
+  }).assert(model);
+
+  // After the access gate and before every cap and hold, and whether or not credits are enforced.
+  if (!params.spendFreezeChecked) {
+    await assertSpendNotFrozen(
+      spendFreezeSubjectForHold({
+        userId,
+        organizationId: params.billingOrganizationId ?? null,
+        apiKeyId: apiKeyInfo?.keyId,
+      }),
+      { db: { spendFreezes: db.spendFreezes } }
+    );
+  }
+
+  if (requestedModelInfo && !supportsAssistantPrefill(requestedModelInfo) && hasAssistantPrefill(messages)) {
+    throw new BadRequestError(
+      `Model '${params.model}' does not support assistant message prefill. End the conversation with a user message.`,
+      { errorCode: ASSISTANT_PREFILL_UNSUPPORTED_ERROR_CODE }
+    );
+  }
+
+  // Restricted tier: backend, sizing and pricing use the substitute; caller-visible ids stay requested.
+  // The stored user, not the scoped actor: a key scope that withholds admin must not shadow an admin.
+  const { settings: shadowSettings, modelInfo: shadowModelInfo } = await resolveShadowRouting({
+    user: storedActor,
+    requested: requestedModelInfo,
+    models,
+    adminSettings: db.adminSettings,
+    orgModelPolicy,
+    logger,
+  });
+  // External completion routes skip the per-user rpm middleware, so the restricted-tier rpm is enforced here.
+  if (shadowSettings && db.cache && shadowSettings.requestsPerMin > 0) {
+    const { success, expiresAt } = await db.cache.tryIncrementWithinLimitFixedWindow(
+      `rate-limit:${userId}:external-completions`,
+      shadowSettings.requestsPerMin,
+      60_000
+    );
+    if (!success) {
+      const retryAfter = Math.max(1, Math.ceil(Math.max(0, expiresAt.getTime() - Date.now()) / 1000));
+      throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfter} seconds.`, { retryAfter });
+    }
+  }
+  const modelInfo = shadowModelInfo ?? requestedModelInfo;
+  const evaluationFamilyAllowed =
+    modelInfo?.backend === ModelBackend.OpenAI
+      ? !modelInfo.adapterFamily || ['openai-chat', 'openai-responses'].includes(modelInfo.adapterFamily)
+      : modelInfo?.backend === ModelBackend.Anthropic &&
+        (!modelInfo.adapterFamily || modelInfo.adapterFamily === 'anthropic-messages');
+  if (params.evaluation && (shadowModelInfo || !evaluationFamilyAllowed || params.serverTools?.length)) {
+    throw new BadRequestError(
+      'Evaluation requires exact audited provider routing without server-side client tool execution.'
+    );
+  }
+  // Credits are priced on the requested model; cost and token sizing stay on the one that runs.
+  const chargedModelInfo = shadowModelInfo ? requestedModelInfo : modelInfo;
+  const runModel = shadowModelInfo ? shadowModelInfo.id : model;
+  const withholdReasoning = withholdsReasoning(await resolveCallerThinkingVisibility(params, actor, logger), runModel);
+  const reasoningChannel = reasoningChannelOf(modelInfo ?? { id: runModel });
+  // Reasoning the caller may not see is not requested at all when the provider would return it raw.
+  const suppressThinking = withholdReasoning && reasoningChannel !== 'never' && !providerSummarizesReasoning(runModel);
+
   const llm = getLlmByModel(apiKeys, {
     modelInfo,
     logger: logger ?? new Logger(),
     endUserId: userId,
+    providerEndUserId: params.providerEndUserId,
   });
 
   if (!llm) {
@@ -508,7 +861,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     throw unknownModel;
   }
 
-  llm.currentModel = model;
+  llm.currentModel = runModel;
 
   // Default-on with env-var kill switch. Set B4M_FEATURE_RESPONSE_FORMAT=false
   // to disable in an emergency without a redeploy.
@@ -556,29 +909,51 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Gated on can_think as ChatCompletionProcess gates it: Ollama 400s a non-thinking model
   // asked to think. budget_tokens only sizes legacy thinking; adaptive models take an effort.
+  // DeepSeek reasons unless told not to, so withheld reasoning would still be billed.
   const thinking = withOllamaThinkingDefault(
-    options?.thinking?.enabled && modelInfo?.can_think
-      ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
-      : undefined,
+    suppressThinking && modelInfo?.backend === ModelBackend.DeepSeek
+      ? { enabled: false, budget_tokens: 0 }
+      : options?.thinking?.enabled && modelInfo?.can_think && !suppressThinking
+        ? { enabled: true, budget_tokens: options.thinking.budget_tokens ?? 16000 }
+        : undefined,
     modelInfo
   );
+  const reasoningShortfall =
+    modelInfo &&
+    sentBelowReasoningFloor({
+      requested: options?.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+      thinking,
+    });
+  if (reasoningShortfall) {
+    // Honored as set; logged so an empty reply at max_tokens can be traced to the caller's budget.
+    logger?.info?.('[cliCompletions] max_tokens below reasoning floor', { model, ...reasoningShortfall });
+  }
 
   const requestTools = useServerTools ? params.serverTools! : (promotedTools ?? []);
-  const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source);
+  const cacheTtl = resolvePromptCacheTtl({ model: modelInfo, chatTtl: options?.cacheTtl });
+  const cacheStrategy = buildClaudeCacheStrategy(modelInfo, messages, requestTools.length > 0, source, cacheTtl);
 
   // This path has no complexity classifier and clients rarely send an effort, so an adaptive Claude
   // that thinks unasked would run every request at the provider default (high on Opus 5). Any
   // explicit effort or thinking value from the client wins.
-  const reasoningEffort =
-    options?.reasoningEffort ??
-    (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(model, modelInfo)
-      ? 'medium'
-      : undefined);
+  const reasoningEffort = suppressThinking
+    ? undefined
+    : (options?.reasoningEffort ??
+      (options?.thinking === undefined && modelInfo && isAdaptiveThinkingByDefault(runModel, modelInfo)
+        ? 'medium'
+        : undefined));
+  const explicitReasoning =
+    !suppressThinking && (options?.reasoningEffort !== undefined || options?.thinking?.enabled === true);
 
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
+    // No fallback loop here, so a refusal reaches the caller as finish_reason 'refusal'.
+    settleRefusal: true,
     tools: requestTools,
     ...(cacheStrategy ? { cacheStrategy } : {}),
     ...(wireTools.providerTools.length > 0 ? { providerTools: wireTools.providerTools } : {}),
@@ -588,8 +963,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(explicitReasoning ? { explicitReasoning } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(shadowModelInfo ? { modelIdentityId: model, modelDisplayName: requestedModelInfo?.name } : {}),
   };
 
   if (options?.response_format) {
@@ -598,10 +975,50 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
-  // Credit enforcement: Fail-fast if model info is missing.
-  // skipCache: this flag gates money and the serving process may outlive the admin's write to it.
-  const settings = await getSettingsMap(db, { names: ['enforceCredits'], skipCache: true });
-  const enforceCredits = getSettingsValue('enforceCredits', settings);
+  if (params.evaluation) {
+    completionOptions._internal = { ...completionOptions._internal, evaluation: params.evaluation };
+  }
+
+  const recordRefusal = async (reason: string, required: number, available?: number): Promise<void> => {
+    try {
+      await db.recordLimitEvent({
+        userId,
+        kind: 'insufficient_credits',
+        model: chargedModelInfo?.id ?? model,
+        details: {
+          reason,
+          requiredCredits: Math.ceil(required),
+          ...(available === undefined ? {} : { availableCredits: Math.floor(available) }),
+        },
+      });
+    } catch (error) {
+      logger?.warn?.('[USER_LIMIT_EVENT] failed to record', { reason, error });
+    }
+  };
+
+  const outOfCreditsError = (available: number, required: number) =>
+    new InsufficientCreditsError(
+      billToOrg
+        ? `Your organization does not have enough credits. It has ${available} credits, but this request requires approximately ${required}. Please contact your organization administrator to add more credits.`
+        : `Insufficient credits. You have ${available} credits, but this request requires approximately ${required} credits. ` +
+            `Try using a smaller model or reducing the prompt size.`,
+      'insufficient_credits'
+    );
+
+  // Restricted-tier daily token cap; refused like an empty balance.
+  if (
+    shadowSettings &&
+    db.cache &&
+    !(await reserveShadowTokenBudget(storedActor!, shadowSettings.dailyTokenCap, { cache: db.cache }))
+  ) {
+    const required = chargedModelInfo
+      ? usdToCredits(getTextModelCost(chargedModelInfo, estimateInputTokens(messages), maxTokens)) || 1
+      : 1;
+    await recordRefusal('restricted_tier_token_cap', required);
+    throw outOfCreditsError(0, required);
+  }
+
+  // Credit enforcement: Fail-fast if model info is missing
 
   if (enforceCredits) {
     if (!modelInfo) {
@@ -614,6 +1031,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Atomic credit reservation: Reserve estimated credits BEFORE execution
   // This prevents race conditions where concurrent requests pass the check
   let reservedCredits = 0;
+  // Prices a round's input at the dearest rate the provider can bill it (a cold cache writes the whole
+  // prefix) and returns the output budget `availableCredits` can pay for on top of it; see
+  // completionCreditBudget. Set only when credits are enforced.
+  let roundBudgetFor: ((roundMessages: IMessage[], availableCredits: number) => RoundBudget) | null = null;
+  // The run budget this completion claimed; undefined outside a budgeted run.
+  let runCredits: number | undefined;
+  const withinRunClaim = (availableCredits: number, spentCredits: number) =>
+    runCredits === undefined ? availableCredits : Math.min(availableCredits, runCredits - spentCredits);
+  // Grows the run claim to what a tool round can cost; set only in a budgeted run whose holds can top up.
+  let topUpRunClaim: ((roundMessages: IMessage[], spentCredits: number) => Promise<void>) | null = null;
+  const refundReservation = async () => {
+    const refund = async () => {
+      await holderMethods.incrementCredits(holderId, reservedCredits);
+    };
+    if (params.creditHolds) await params.creditHolds.refund(refund);
+    else await refund();
+  };
 
   if (enforceCredits && modelInfo) {
     // Estimate cost from the input message length plus a realistic output size. The basis is
@@ -639,11 +1073,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
     );
     const estimatedUsdCost = estimateReservationUsd(
-      modelInfo,
-      messages,
+      chargedModelInfo!,
+      withFirstRoundCacheBreakpoints(messages, cacheStrategy),
       estimatedInputTokens,
       estimatedOutputTokens,
-      estimatedToolTokens
+      estimatedToolTokens,
+      cacheTtl
     );
     reservedCredits = usdToCredits(estimatedUsdCost);
 
@@ -667,12 +1102,42 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // Still not an upper bound on the turn: it prices one round at the uncached input
     // rate, so a multi-round tool loop or a cache-write turn can settle above it.
     if (billToOrg) {
-      const capCheckCredits = usdToCredits(getTextModelCost(modelInfo, estimatedInputTokens, maxTokens));
+      const capCheckCredits = usdToCredits(getTextModelCost(chargedModelInfo!, estimatedInputTokens, maxTokens));
       if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
+        await recordRefusal('member_cap', capCheckCredits);
+        await notifyOrgEvent({ type: 'member_cap_check', organizationId: organization!.id, userId, refused: true });
         throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
       }
     }
 
+    const minimumOutputTokens = Math.min(MIN_AFFORDABLE_OUTPUT_TOKENS, maxTokens);
+    const toolSearch = completionsSupportsToolSearch(modelInfo);
+    // Priced at what the adapter sends, as completionMeter holds: a Gemini thinking model gets its thinking
+    // reserve on top of maxTokens, and a claim sized to maxTokens alone would clamp that reserve away.
+    // Resolved on first use, which only a budgeted run reaches.
+    let claimOutputTokens: number | undefined;
+    const roundClaimCredits = (inputTokens: number) => {
+      claimOutputTokens ??= usesGeminiThinkingOutputCap(modelInfo)
+        ? geminiThinkingOutputCap(modelInfo, maxTokens).maxOutputTokens
+        : maxTokens;
+      return toRunClaimCredits(
+        roundCreditRange({
+          modelInfo: chargedModelInfo!,
+          inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
+          inputTokens,
+          minimumOutputTokens,
+          maximumOutputTokens: claimOutputTokens,
+        })
+      );
+    };
+    // A run budget claim is the most the first round can cost, priced like the cap below, so a run's
+    // concurrent completions can never together be admitted past its budget. Tool rounds top it up.
+    const runClaim: CompletionRunBudgetClaim | undefined = runLineage && {
+      runId: runLineage.runId,
+      ...roundClaimCredits(estimatedInputTokens),
+    };
+
+    let balanceAfterHold = 0;
     const debit = async (): Promise<ICreditHolder> => {
       // Atomically reserve credits using incrementCredits with negative value
       const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
@@ -681,22 +1146,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Rollback the reservation immediately
         await holderMethods.incrementCredits(holderId, reservedCredits);
         const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
-        throw new InsufficientCreditsError(
-          billToOrg
-            ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
-            : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
-                `Try using a smaller model or reducing the prompt size.`,
-          'insufficient_credits'
-        );
+        await recordRefusal('balance', reservedCredits, actualBalance);
+        throw outOfCreditsError(actualBalance, reservedCredits);
       }
 
       logger?.debug?.(
         `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
       );
+      balanceAfterHold = holderAfterReservation.currentCredits;
       return holderAfterReservation;
     };
     if (params.creditHolds) {
-      await params.creditHolds.reserve(
+      runCredits = await params.creditHolds.reserve(
         {
           ownerId: holderId,
           ownerType: holderType,
@@ -704,11 +1165,66 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           organizationId: billToOrg ? holderId : null,
           reservedCredits,
         },
-        debit
+        debit,
+        runClaim
       );
     } else {
       await debit();
     }
+    const creditHolds = params.creditHolds;
+    if (runCredits !== undefined && creditHolds?.topUpRunClaim) {
+      // A tool round re-sends the whole conversation, so the claim left over from earlier rounds rarely covers it.
+      topUpRunClaim = async (roundMessages, spentCredits) => {
+        const range = roundClaimCredits(estimateInputTokens(roundMessages) + estimatedToolTokens);
+        const claimedCredits = runCredits ?? 0;
+        const headroom = claimedCredits - spentCredits;
+        const wantedCredits = Math.max(0, range.wantedCredits - headroom);
+        if (wantedCredits === 0) return;
+        const addedCredits = await creditHolds.topUpRunClaim!({
+          wantedCredits,
+          minimumCredits: Math.max(0, range.minimumCredits - headroom),
+        });
+        runCredits = claimedCredits + addedCredits;
+      };
+    }
+
+    // The hold above is a realistic estimate, not a bound: an answer may run to maxTokens (or past
+    // it, where an adapter raises the budget for thinking). Cap the round at what this holder can
+    // actually pay - its remaining balance plus its own hold - and, in a budgeted run, at its run
+    // claim, so settlement does not overdraw and a run overruns its budget only by an estimate miss.
+    roundBudgetFor = (roundMessages, availableCredits) => {
+      const toolTokens = estimateToolTokens(completionOptions.tools ?? [], toolSearch);
+      const inputTokens = estimateInputTokens(roundMessages) + toolTokens;
+      return affordableRoundBudget({
+        modelInfo: chargedModelInfo!,
+        // Not estimateReservationUsd: the hold assumes a warm cache; see the cap note above.
+        inputUsd: conservativeRoundInputUsd(chargedModelInfo!, inputTokens, cacheTtl),
+        inputTokens,
+        availableCredits,
+        minimumOutputTokens,
+      });
+    };
+    const firstRound = roundBudgetFor(messages, withinRunClaim(balanceAfterHold + reservedCredits, 0));
+    if (!firstRound.affordable) {
+      await refundReservation();
+      const available = balanceAfterHold + reservedCredits;
+      await recordRefusal('balance', firstRound.minimumCredits, available);
+      throw new InsufficientCreditsError(
+        billToOrg
+          ? `Your organization does not have enough credits. It has ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits}. Please contact your organization administrator to add more credits.`
+          : `Insufficient credits. You have ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits} credits. ` +
+              `Try using a smaller model or reducing the prompt size.`,
+        'insufficient_credits'
+      );
+    }
+    if (firstRound.outputTokens < maxTokens) {
+      logger?.info?.('[CLI_CREDITS] Output budget lowered to what the balance or run claim can pay for', {
+        model,
+        maxTokens,
+        affordableOutputTokens: firstRound.outputTokens,
+      });
+    }
+    Object.assign(completionOptions, capRoundOutput(completionOptions, firstRound.outputTokens));
   }
 
   // Track tokens across callback invocations for credit calculation.
@@ -726,6 +1242,12 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Undefined until an adapter reports the 1-hour split; then every write was at the request's TTL.
+  let reportedCacheWrite1hTokens: number | undefined;
+  const finalCacheWrite1hTokens = (): number =>
+    finalTurnUsage?.length
+      ? sumOneHourCacheWrites(finalTurnUsage)
+      : oneHourWritesOf(finalCacheCreationTokens, reportedCacheWrite1hTokens, cacheTtl);
   // Per-request breakdown of the same totals, from adapters that report it; prices each request on
   // its own long-context tier. Same assign-not-add contract.
   let finalTurnUsage: TurnUsage[] | undefined;
@@ -738,6 +1260,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let finalStopReason: string | undefined;
   // Every char streamed to the caller, for pricing a first call that was cut short (see below).
   let streamedOutputChars = 0;
+  // Distinct tool names the model called on this request, for the ledger row.
+  const toolNamesUsed = new Set<string>();
 
   const settledUsdCost = (pricedModel: ModelInfo): number =>
     finalTurnUsage?.length
@@ -748,7 +1272,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           finalOutputTokens,
           finalCacheReadTokens,
           finalCacheCreationTokens,
-          finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens
+          finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+          finalCacheWrite1hTokens()
         );
 
   // Provenance of the rates settledUsdCost applied: the same turns, else the same tier basis.
@@ -756,20 +1281,33 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     buildUsagePriceStamp(pricedModel, {
       turns: finalTurnUsage,
       tierBasisTokens: finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens,
+      cacheWrite1hTokens: finalCacheWrite1hTokens(),
     });
 
+  const reasoningWithholder = withholdReasoning ? createReasoningWithholder(reasoningChannel) : null;
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
-    if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
-    if (info?.turnUsage?.length) finalTurnUsage = info.turnUsage;
+    if (info?.cacheCreationInputTokens) {
+      finalCacheCreationTokens = info.cacheCreationInputTokens;
+      if (info.cacheWrite1hInputTokens !== undefined) reportedCacheWrite1hTokens = info.cacheWrite1hInputTokens;
+    }
+    if (info?.turnUsage?.length) finalTurnUsage = withRequestTtlWrites(info.turnUsage, cacheTtl);
     // Latched only alongside outputTokens so the pair always comes from the same frame.
     // Compared against undefined (not truthiness) so a reported outputTokens: 0 - an empty or
     // fully-filtered reply - still latches its count instead of dropping it.
     if (info?.outputTokens !== undefined && info.reasoningTokens !== undefined)
       finalReasoningTokens = info.reasoningTokens;
     if (info?.stopReason) finalStopReason = info.stopReason;
+    // Strings only: these feed the ledger row written inside settlement, so a malformed entry
+    // must never be able to throw there and veto the billing write.
+    const startedName: unknown = info?.toolStarted?.name;
+    if (typeof startedName === 'string' && startedName) toolNamesUsed.add(startedName);
+    for (const tool of info?.toolsUsed ?? []) {
+      const toolName: unknown = tool?.name;
+      if (typeof toolName === 'string' && toolName) toolNamesUsed.add(toolName);
+    }
     // Tool-artifact frames carry a tool's own output for a renderer, not the model's, so they are not
     // output the provider bills on this call.
     if (info?.channel !== 'tool-artifact') {
@@ -789,6 +1327,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // only frame with `credits`, so a client reading credits sees exactly one number, and it is
     // the one the ledger charged. A provisional round-up here (usdToCredits, minimum 1) used to
     // precede a stochastic settlement of 0 on cheap calls, which read as a double charge.
+    if (reasoningWithholder) {
+      const withheld = withholdReasoningFromFrame(reasoningWithholder, text, info, runModel);
+      await onChunk(withheld.text, withheld.info);
+      return;
+    }
     await onChunk(text, info);
   };
 
@@ -796,21 +1339,74 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // spent what it streamed: it settles below like an abort the adapter resolves on, and is rethrown
   // once settled. Any other failure refunds the reservation here.
   let abortError: unknown;
+  // A server-tools completion runs its tool rounds inside the adapter, each re-sending the grown
+  // conversation; the first round was capped above, every later one is capped here against what
+  // is left once the rounds so far are paid for. A round that cannot afford a short answer ends
+  // the turn instead of overdrawing.
+  let stoppedForCredits = false;
+  // Adapters carry earlier rounds' usage forward in `_internal.accum*` and report it only on the
+  // terminal round, so the gate adopts it from there: that prices the spend so far, and bills the
+  // rounds already run when the gate ends the turn before any terminal report. Never lowers a total
+  // a callback already reported.
+  const adoptAccumulatedUsage = (internal: ICompletionOptions['_internal']) => {
+    const turns = internal?.accumTurnUsage;
+    if (turns?.length) {
+      if (turns.length <= (finalTurnUsage?.length ?? 0)) return;
+      finalTurnUsage = turns;
+      // Turns are split cache-exclusive; Gemini's raw accumInputTokens includes cache reads.
+      finalInputTokens = turns.reduce((sum, turn) => sum + turn.inputTokens, 0);
+      finalOutputTokens = turns.reduce((sum, turn) => sum + turn.outputTokens, 0);
+      finalCacheReadTokens = turns.reduce((sum, turn) => sum + (turn.cacheReadInputTokens ?? 0), 0);
+      finalCacheCreationTokens = turns.reduce((sum, turn) => sum + (turn.cacheCreationInputTokens ?? 0), 0);
+      return;
+    }
+    finalInputTokens = Math.max(finalInputTokens, internal?.accumInputTokens ?? 0);
+    finalOutputTokens = Math.max(finalOutputTokens, internal?.accumOutputTokens ?? 0);
+    finalCacheReadTokens = Math.max(finalCacheReadTokens, internal?.accumCacheReadTokens ?? 0);
+    finalCacheCreationTokens = Math.max(finalCacheCreationTokens, internal?.accumCacheWriteTokens ?? 0);
+  };
+  const roundBudget = roundBudgetFor;
+  const completionLlm =
+    useServerTools && roundBudget
+      ? gateEveryRound(llm, async (roundMessages, roundOptions, round) => {
+          if (round === 0) return roundOptions;
+          adoptAccumulatedUsage(roundOptions._internal);
+          const spentCredits = usdToCredits(settledUsdCost(chargedModelInfo!));
+          await topUpRunClaim?.(roundMessages, spentCredits);
+          const balance = (await fetchHolder())?.currentCredits ?? 0;
+          const budget = roundBudget(
+            roundMessages,
+            withinRunClaim(balance + reservedCredits - spentCredits, spentCredits)
+          );
+          if (!budget.affordable) {
+            stoppedForCredits = true;
+            logger?.info?.('[CLI_CREDITS] Tool loop stopped: the balance or run budget cannot pay for another round', {
+              model,
+              round,
+              spentCredits,
+              requiredCredits: budget.minimumCredits,
+              runCredits,
+            });
+            return null;
+          }
+          return capRoundOutput(roundOptions, budget.outputTokens);
+        })
+      : llm;
   try {
-    await params.onReady?.();
-    await llm.complete(model, messages, completionOptions, wrappedOnChunk);
+    if (!params.evaluation) await params.onReady?.();
+    await completionLlm.complete(runModel, messages, completionOptions, wrappedOnChunk);
+    if (stoppedForCredits) finalStopReason = 'max_tokens';
+    const heldText = reasoningWithholder?.flush();
+    if (heldText) await onChunk([heldText]);
   } catch (error) {
+    await params.evaluation?.unknown();
     if (params.abortSignal?.aborted && streamedOutputChars > 0) {
       abortError = error;
     } else {
       // If completion fails, refund the reserved credits to whichever pool paid
       if (reservedCredits > 0) {
         logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-        const refund = async () => {
-          await holderMethods.incrementCredits(holderId, reservedCredits);
-        };
-        if (params.creditHolds) await params.creditHolds.refund(refund);
-        else await refund();
+        await refundReservation();
       }
       // The success-path settlement/metering below is now unreachable, so an
       // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
@@ -824,21 +1420,40 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       // this path has no fallback loop, so the refused call is the whole request.
       const isRefusal = error instanceof Error && isSafetyRefusalError(error);
       const recordsUsage = enforceCredits || params.alwaysRecordUsage;
-      if (
+      const timeoutUsage = timedOutUsageOf(error);
+      if (modelInfo && recordsUsage && timeoutUsage) {
+        db.usageEvents
+          ?.record({
+            requestId,
+            userId,
+            ownerId: holderId,
+            ownerType: holderType,
+            run: runLineage,
+            feature: 'completion_api',
+            source,
+            apiKeyId: apiKeyInfo?.keyId,
+            ...timedOutAttemptUsageFields(modelInfo, timeoutUsage),
+            model,
+            latencyMs: Date.now() - completionStartTime,
+          })
+          .catch(err => logger?.warn?.('Failed to record timed-out usage event', err));
+      } else if (
         modelInfo &&
         ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
       ) {
         db.usageEvents
           ?.record({
-            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+            requestId,
             userId,
             ownerId: holderId,
             ownerType: holderType,
+            run: runLineage,
             feature: 'completion_api',
             source,
             apiKeyId: apiKeyInfo?.keyId,
-            provider: modelInfo.backend,
+            provider: requestedModelInfo!.backend,
             model,
+            ...executedModelFields(requestedModelInfo!, shadowModelInfo),
             inputTokens: finalInputTokens,
             outputTokens: finalOutputTokens,
             cachedInputTokens: finalCacheReadTokens,
@@ -870,7 +1485,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     streamedOutputChars > 0 &&
     (params.abortSignal?.aborted || finalStopReason === DEGENERATE_FINISH_REASON)
   ) {
-    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, model);
+    finalOutputTokens = estimateStreamedOutputTokens(streamedOutputChars, runModel);
     if (finalTurnUsage?.length) {
       finalTurnUsage = [...finalTurnUsage.slice(0, -1), { ...finalTurnUsage.at(-1)!, outputTokens: finalOutputTokens }];
     }
@@ -884,11 +1499,33 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Final settlement: one stochastic draw, shared by the client-facing final
   // event and the ledger adjustment below so display always equals charge.
   let finalUsdCost = 0;
+  let chargedUsdCost = 0;
   let finalCredits = 0;
+
+  if (shadowSettings && db.cache) {
+    await recordShadowTokenUsage(
+      storedActor!,
+      finalInputTokens + finalCacheReadTokens + finalCacheCreationTokens + finalOutputTokens,
+      { cache: db.cache }
+    );
+  }
 
   if (modelInfo) {
     finalUsdCost = settledUsdCost(modelInfo);
-    finalCredits = usdToCreditsStochastic(finalUsdCost);
+    chargedUsdCost = settledUsdCost(chargedModelInfo!);
+    finalCredits = usdToCreditsStochastic(chargedUsdCost);
+    logLlmUsageSettled({
+      backend: modelInfo.backend,
+      model: modelInfo.id,
+      inputTokens: finalInputTokens,
+      outputTokens: finalOutputTokens,
+      cacheReadTokens: finalCacheReadTokens,
+      cacheWriteTokens: finalCacheCreationTokens,
+      usd: finalUsdCost,
+      source,
+      userId: storedActor?.id,
+      accountCreatedAt: storedActor?.createdAt,
+    });
 
     logger?.info?.(
       `[CLI_CREDITS] Sending final credits to client: ${finalCredits} credits (${finalInputTokens} input + ${finalOutputTokens} output tokens` +
@@ -906,8 +1543,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         ...(finalReasoningTokens !== undefined ? { reasoningTokens: finalReasoningTokens } : {}),
         cacheReadInputTokens: finalCacheReadTokens || undefined,
         cacheCreationInputTokens: finalCacheCreationTokens || undefined,
+        cacheWrite1hInputTokens: finalCacheWrite1hTokens() || undefined,
         creditsUsed: finalCredits,
-        usdCost: finalUsdCost,
+        usdCost: chargedUsdCost,
         stopReason: finalStopReason,
       });
   } else {
@@ -922,13 +1560,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const recordUsageEvent = (creditsCharged: number) => {
     db.usageEvents
       ?.record({
-        requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+        requestId,
         userId,
         ownerId: holderId,
         ownerType: holderType,
+        run: runLineage,
         feature: 'completion_api',
-        provider: modelInfo!.backend,
+        provider: requestedModelInfo!.backend,
         model,
+        ...executedModelFields(requestedModelInfo!, shadowModelInfo),
         // Denormalized origin, kept in lockstep with this call's ledger write
         // (subtractCredits above). apiKeyId is present for API-key auth, undefined for JWT.
         source,
@@ -951,17 +1591,37 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   };
 
   let settlementCommitted = false;
+  // What settlement takes from the holder: the actual cost, unless that exceeds the hold plus the
+  // remaining balance.
+  let chargedCredits = finalCredits;
 
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
+      // Never take the balance below zero. With every round capped at what the holder can pay, a
+      // cost past the hold plus the balance is an estimate miss (a tokenizer under-count, a lapsed
+      // prompt cache) or a concurrent spend; it goes uncollected and loud rather than overdrawing.
+      // This read sizes the hold receipt; the floored debit in settle() is what enforces the floor
+      // against a spend landing after it.
+      if (finalCredits > reservedCredits) {
+        const balance = (await fetchHolder())?.currentCredits ?? 0;
+        chargedCredits = Math.min(finalCredits, reservedCredits + Math.max(0, balance));
+      }
+      // A budgeted run's claim does not cap the charge. Every round was capped at the claim, so a cost
+      // past it is an estimate miss; it is charged to the balance like any other, and settlement commits
+      // it to the run, which then refuses later claims. A run overruns by at most one miss per completion.
+
       let ledgerWritten = false;
-      const settle = async () => {
+      // settle() can be retried, so each attempt starts from the cap rather than a previous attempt's charge.
+      const cappedCredits = chargedCredits;
+      let storedRunClaimCredits: number | undefined;
+      const settle = async (released: { runClaimCredits?: number } = {}) => {
+        storedRunClaimCredits = released.runClaimCredits;
         // Reuse the settlement values computed above - recomputing would draw a
         // second stochastic rounding and desync the charge from what the client saw.
         const usdCost = finalUsdCost;
-        const actualCredits = finalCredits;
-        const creditDifference = reservedCredits - actualCredits;
+        let actualCredits = cappedCredits;
+        let creditDifference = reservedCredits - actualCredits;
 
         logger?.info?.(
           `[CLI_CREDITS] Actual usage: ${actualCredits} credits for ${finalInputTokens} input + ${finalOutputTokens} output tokens. ` +
@@ -971,55 +1631,19 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Track the final holder (user or org) state for the transaction record
         let holderAfterAdjustment: ICreditHolder | null = null;
 
-        // Adjust the difference between reserved and actual against the paying pool
-        if (creditDifference !== 0) {
-          // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
-          if (creditDifference < 0) {
-            // Under-reservation: we need to charge more credits
-            // Check if this will cause negative balance
-            const currentHolder = await fetchHolder();
-            const currentBalance = currentHolder?.currentCredits ?? 0;
-            const projectedBalance = currentBalance + creditDifference;
-
-            if (projectedBalance < 0) {
-              logger?.warn?.(
-                '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
-                {
-                  userId,
-                  holderId,
-                  holderType,
-                  currentBalance,
-                  adjustment: creditDifference,
-                  projectedBalance,
-                  reserved: reservedCredits,
-                  actual: actualCredits,
-                }
-              );
-              // Proceed with adjustment but track the shortfall in transaction metadata
-            }
-          }
-
+        if (creditDifference > 0) {
           holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
-          logger?.debug?.(
-            `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
-              `New balance: ${holderAfterAdjustment?.currentCredits}`
-          );
-
-          // Check for negative balance (should be rare with atomic reservation)
-          if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
-            logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
-              userId,
-              holderId,
-              holderType,
-              balance: holderAfterAdjustment.currentCredits,
-              reserved: reservedCredits,
-              actual: actualCredits,
-            });
-          }
         } else {
-          // No adjustment needed, fetch current state for transaction record
+          if (creditDifference < 0) {
+            // Floored and atomic: a concurrent completion can spend the balance between the read above
+            // and this write, and the floor must hold against it, so only what is left gets taken.
+            const debited = await holderMethods.decrementCreditsFloored(holderId, -creditDifference);
+            actualCredits = reservedCredits + debited;
+            creditDifference = -debited;
+          }
           holderAfterAdjustment = await fetchHolder();
         }
+        chargedCredits = actualCredits;
 
         // Create transaction record with ACTUAL usage (not estimated/reserved)
         // Skip balance update since we already adjusted atomically above
@@ -1036,11 +1660,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
             // the positional $inc in updateUserDetails cannot create the row it positions on, so without
             // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
-            // pays the extra read/write when the row is actually absent.
+            // pays the extra read/write when the row is actually absent. The org's service account is
+            // not a member and gets no row (deductCreditsWithOrgSupport does the same), so the $inc
+            // below is a no-op for it.
             const member = organization!.userDetails?.find(u => u.id === userId);
             if (!member) {
               const actingUser = await db.users.findById(userId);
-              if (actingUser) {
+              if (actingUser && !isOrgServiceAccountOf(actingUser, holderId)) {
                 await db.organizations!.ensureUserDetails(holderId, {
                   id: userId,
                   email: actingUser.email ?? actingUser.username,
@@ -1053,6 +1679,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               creditsDelta: actualCredits,
               lastCreditUsedAt: new Date(),
             });
+            await notifyOrgEvent({ type: 'member_cap_check', organizationId: holderId, userId });
           }
 
           Logger.globalInstance.debug('Credit usage:', actualCredits);
@@ -1071,8 +1698,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               description,
               model: model as ChatModels,
               apiKeyId: apiKeyInfo?.keyId, // Optional - present for API key auth, undefined for JWT
+              sessionId: params.sessionId,
               inputTokens: finalInputTokens,
               outputTokens: finalOutputTokens,
+              cacheReadTokens: finalCacheReadTokens,
+              cacheWriteTokens: finalCacheCreationTokens,
               source,
               metadata: {
                 // Include API key info if present
@@ -1080,12 +1710,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                   apiKeyName: apiKeyInfo.keyName,
                 }),
                 authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+                requestId,
                 // For org-billed keys, keep the acting user for attribution even
                 // though the credits leave the org pool.
                 ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),
                 usdCost,
                 reservedCredits,
                 creditDifference,
+                ...(toolNamesUsed.size > 0 && { toolNames: boundedToolNames(toolNamesUsed) }),
+                ...(runLineage && { run: runLineage }),
               },
             },
             {
@@ -1098,13 +1731,40 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
           ledgerWritten = true;
         }
+        return actualCredits;
       };
       const settled = params.creditHolds
-        ? await params.creditHolds.settle(finalCredits, settle)
+        ? await params.creditHolds.settle(chargedCredits, settle)
         : (await settle(), true);
       settlementCommitted = settled && ledgerWritten;
+      // The stored claim, not `runCredits`, which undercounts a top-up whose acknowledgement was lost.
+      const claimedCredits = storedRunClaimCredits ?? runCredits;
+      if (settlementCommitted && claimedCredits !== undefined && chargedCredits > claimedCredits) {
+        logger?.warn?.('[CLI_CREDITS] Completion cost more than its run budget claim - charged past the run budget', {
+          userId,
+          holderId,
+          model,
+          runId: runLineage?.runId,
+          claimed: claimedCredits,
+          charged: chargedCredits,
+          overrunCredits: chargedCredits - claimedCredits,
+        });
+      }
+      if (chargedCredits < finalCredits) {
+        // Message text is matched by the overdraft metric filter in infra/llmSpend.ts.
+        logger?.error?.('[CLI_CREDITS] ALERT: Completion cost more than the balance could pay - charged down to zero', {
+          userId,
+          holderId,
+          holderType,
+          model,
+          reserved: reservedCredits,
+          actual: finalCredits,
+          charged: chargedCredits,
+          uncollectedCredits: finalCredits - chargedCredits,
+        });
+      }
       // Emit analytics only after the transaction containing the ledger has committed.
-      if (settlementCommitted) recordUsageEvent(finalCredits);
+      if (settlementCommitted) recordUsageEvent(chargedCredits);
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
       logger?.error?.('[CLI_CREDITS] CRITICAL: Failed to adjust credits - requires manual reconciliation', {
@@ -1119,6 +1779,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     }
   }
 
+  // Outside the settlement try, so a throwing callback cannot read as a failed ledger adjustment.
+  // Guarded so a throwing callback cannot skip the embed metering and per-key spend below.
+  if (enforceCredits && modelInfo) {
+    try {
+      params.onSettled?.({
+        requestId,
+        committed: settlementCommitted,
+        creditsCharged: settlementCommitted ? chargedCredits : 0,
+        usdCost: chargedUsdCost,
+      });
+    } catch (error) {
+      logger?.warn?.('[CLI_CREDITS] onSettled callback threw', {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   // Embed metering fallback: the embed path must record org usage even when the
   // settlement block above did not (enforceCredits off - the normal embed case - or
   // the rare enforced run whose settlement threw before recording). Guarded by
@@ -1130,7 +1808,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
     const charged = params.creditHolds ? settlementCommitted : enforceCredits;
-    recordUsageEvent(charged ? finalCredits : 0);
+    recordUsageEvent(charged ? chargedCredits : 0);
   }
 
   // A model missing from the catalog computes no cost, so per-key spend cannot
@@ -1159,4 +1837,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
   // Settled and metered above; the caller still sees the abort it caused.
   if (abortError !== undefined) throw abortError;
+}
+
+/** Credits are whole numbers on the run's counter; a claim never asks for less than its own minimum. */
+function toRunClaimCredits(range: { minimumCredits: number; maximumCredits: number }) {
+  const minimumCredits = Math.max(1, range.minimumCredits);
+  return { minimumCredits, wantedCredits: Math.max(minimumCredits, range.maximumCredits) };
 }

@@ -12,24 +12,24 @@ describe('questLaunchIntent', () => {
   });
 
   it('returns the recorded intent', () => {
-    const intent = { goal: 'Build a birdhouse', autoSubmit: true, enableQuestMaster: true };
+    const intent = { goal: 'Build a birdhouse', autoSubmit: true };
     setQuestLaunchIntent(intent);
 
     expect(consumeQuestLaunchIntent()).toEqual(intent);
   });
 
   it('consumes exactly once - second read returns null', () => {
-    setQuestLaunchIntent({ goal: 'Plan a trip', autoSubmit: true, enableQuestMaster: false });
+    setQuestLaunchIntent({ goal: 'Plan a trip', autoSubmit: true });
 
     expect(consumeQuestLaunchIntent()).not.toBeNull();
     expect(consumeQuestLaunchIntent()).toBeNull();
   });
 
   it('a newer intent replaces an unconsumed one', () => {
-    setQuestLaunchIntent({ goal: 'first', autoSubmit: true, enableQuestMaster: false });
-    setQuestLaunchIntent({ goal: 'second', autoSubmit: false, enableQuestMaster: true });
+    setQuestLaunchIntent({ goal: 'first', autoSubmit: true });
+    setQuestLaunchIntent({ goal: 'second', autoSubmit: false });
 
-    expect(consumeQuestLaunchIntent()).toEqual({ goal: 'second', autoSubmit: false, enableQuestMaster: true });
+    expect(consumeQuestLaunchIntent()).toEqual({ goal: 'second', autoSubmit: false });
   });
 
   describe('trusted launch flag', () => {

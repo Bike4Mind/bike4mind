@@ -12,6 +12,7 @@ const CLAUDE_CATALOGUE: Array<[ChatModels, number]> = [
   [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, 1],
   [ChatModels.CLAUDE_5_SONNET, 1.5],
   [ChatModels.CLAUDE_5_SONNET_BEDROCK, 1.5],
+  [ChatModels.CLAUDE_5_5_SONNET, 1.5],
   [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 1.5],
   [ChatModels.CLAUDE_4_8_OPUS, 1.5],
   [ChatModels.CLAUDE_4_8_OPUS_BEDROCK, 1.5],
@@ -59,7 +60,7 @@ describe('tokenEstimateMultiplier', () => {
     expect(claudeIds.filter(modelId => !catalogued.has(modelId))).toEqual([]);
   });
 
-  it.each(['claude-sonnet-5-5', 'global.anthropic.claude-sonnet-5-5'])(
+  it.each(['claude-sonnet-5-6', 'global.anthropic.claude-sonnet-5-6'])(
     'carries the newest factor forward to an uncatalogued release (%s)',
     modelId => {
       expect(tokenEstimateMultiplier(modelId)).toBe(1.5);

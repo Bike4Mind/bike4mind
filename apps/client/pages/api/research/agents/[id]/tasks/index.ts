@@ -8,7 +8,9 @@ import {
   researchDataRepository,
   taskScheduleRepository,
 } from '@bike4mind/database';
-import { researchTaskJobs } from '@server/utils/researchTasks';
+import { researchTaskJobs } from '@bike4mind/server-utils/utils/researchTasks';
+import { assertOwnerCanAfford } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
+import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { ResearchTaskType, ResearchTaskExecutionType } from '@bike4mind/common';
 import * as z from 'zod';
 
@@ -59,6 +61,11 @@ const handler = baseApi({ auth: true })
     asyncHandler(async (req, res) => {
       const { id } = idParamSchema.parse(req.query);
       const body = taskCreateBodySchema.parse(req.body);
+      if (body.executionType === ResearchTaskExecutionType.ON_DEMAND) {
+        await admitRequestCompletion(req, { holdSlot: false });
+      }
+      // The task's LLM calls are billed per call in the research worker; refuse before enqueueing.
+      await assertOwnerCanAfford(req.user);
       const result = await researchTaskService.create(
         req.user as any,
         { ...body, researchAgentId: id },

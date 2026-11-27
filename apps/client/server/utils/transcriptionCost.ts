@@ -52,11 +52,13 @@ export async function assertTranscriptionCredits(userId: string, estimatedCredit
 }
 
 // The holding twin of assertTranscriptionCredits, run right before the provider call. Transcription
-// has no organization pool, so the reservation bills the user.
+// has no organization pool, so the reservation bills the user; the authenticating key only joins the
+// spend-freeze subject, so freezing that key stops the call.
 export async function holdTranscriptionCredits(
   user: IUserDocument,
   estimatedCredits: number,
-  logger: ILogger
+  logger: ILogger,
+  apiKeyId?: string
 ): Promise<PreflightCreditHold> {
   try {
     return await holdPreflightCredits({
@@ -64,6 +66,7 @@ export async function holdTranscriptionCredits(
       requiredCredits: estimatedCredits,
       featureLabel: 'transcription',
       billingOrganizationId: null,
+      ...(apiKeyId ? { spendFreezeApiKey: { keyId: apiKeyId } } : {}),
     });
   } catch (error) {
     if (error instanceof InsufficientCreditsPreflightError) throw new BadRequestError(error.message);

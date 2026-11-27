@@ -102,7 +102,9 @@
     "no_subscription": "Немає підписки",
     "x_members": "{{count}} учасників",
     "x_credits": "{{count}} кредитів",
-    "owner": "Власник"
+    "roles": {
+      "owner": "Власник"
+    }
   },
   "session": {
     "typeYourMessage": "Введіть ваше повідомлення тут",

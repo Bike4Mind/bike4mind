@@ -5,7 +5,7 @@ import { IResearchTask, ResearchTaskStatus, ResearchTaskType } from '@bike4mind/
 import TaskListItem from './TaskListItem';
 import FilterBar from './FilterBar';
 import SearchInput from './SearchInput';
-import { Add } from '@mui/icons-material';
+import Add from '@mui/icons-material/Add';
 import ResearchTaskFormModal from './FormModal';
 
 interface ResearchTaskListProps {

@@ -121,7 +121,7 @@ export function DirectoryRequestCard({
       <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
         <Button
           size="sm"
-          variant="plain"
+          variant="outlined"
           color="neutral"
           disabled={answered}
           onClick={() => answer(false)}

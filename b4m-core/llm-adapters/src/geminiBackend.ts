@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   Content,
   GenerateContentConfig,
@@ -9,11 +10,12 @@ import {
   Tool,
 } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
+  EmptyConversationError,
   ChatModels,
   estimateStreamedOutputTokens,
   ImageModels,
@@ -35,21 +37,20 @@ import {
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { appendCacheInclusiveTurn, splitCacheInclusiveInput } from './cacheInclusiveUsage';
-import pick from 'lodash/pick.js';
-import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
-import { usableTokenCount } from './thinkingParams';
+import { geminiThinkingOutputCap } from './thinkingParams';
 import { withAbortListener } from './withAbortListener';
+import { isHeadersTimeoutError, isTransportError, retryTransportErrors } from './transportRetry';
 import { DispatchModel } from './dispatchModel';
 import { normalizeGeminiFinishReason } from './stopReason';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
 
-// Headroom for thinking tokens, which count against maxOutputTokens.
-const GEMINI_THINKING_RESERVE_TOKENS = 16_000;
-
-// Matches gemini-3-pro-preview, gemini-3.1-pro-preview, gemini-3.5-flash, but not a future gemini-30 family.
-const isGemini3 = (modelId: string) => /^gemini-3(\D|$)/.test(modelId);
+// Gemini 3 and 4 require a thought_signature on replayed function calls and take thinkingLevel.
+// A new major opts in here deliberately once its request shape is confirmed.
+// Matches gemini-3-pro-preview, gemini-3.5-flash, gemini-4-neon, but not a future gemini-30/40 family.
+const isGemini3Or4 = (modelId: string) => /^gemini-[34](\D|$)/.test(modelId);
 
 type ToolCall = {
   id: string;
@@ -136,7 +137,7 @@ export class GeminiBackend implements ICompletionBackend {
       this.logger.warn('[Gemini] Missing thought_signature for tool call:', { toolName });
     }
 
-    const toolId = uuidv4();
+    const toolId = crypto.randomUUID();
     toolCalls.push({
       id: toolId,
       name: toolName,
@@ -175,6 +176,30 @@ export class GeminiBackend implements ICompletionBackend {
         trainingCutoff: '2025-05-01',
         description:
           "Google's Gemini 2.5 Flash image generation and editing model (Nano Banana). Supports text-to-image, image editing with natural language, multi-image composition, and character consistency.",
+      },
+      // Gemini 4
+      {
+        id: ChatModels.GEMINI_4_NEON,
+        type: 'text',
+        name: 'Gemini 4 Neon',
+        backend: ModelBackend.Gemini,
+        contextWindow: 1048576, // 1M context window, shared by input, thinking and output
+        supportsImageVariation: false,
+        max_tokens: 65536, // Max synchronous output tokens
+        can_stream: true,
+        can_think: true,
+        pricing: {
+          // Flat rate at every context length; implicit caching only (no cachedContents).
+          // @see https://ai.google.dev/gemini-api/docs/pricing
+          1048576: { input: 3 / 1000000, output: 15 / 1000000, cache_read: 0.15 / 1000000 }, // $3/1M input, $15/1M output
+        },
+        supportsVision: true,
+        supportsTools: true,
+        logoFile: 'Google_logo.png',
+        rank: 3,
+        releaseDate: '2026-11-18',
+        description:
+          "Google's Gemini 4 Neon, a thinking model for agentic and coding work with text, image, audio, video and PDF input.",
       },
       // Gemini 3.5
       {
@@ -601,6 +626,7 @@ export class GeminiBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = modelName;
     // A catalog-only id (one model discovery promoted) is absent from the literal list,
     // so fall back to the record getLlmByModel handed over.
@@ -666,10 +692,21 @@ export class GeminiBackend implements ICompletionBackend {
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
 
     const systemMessages = messagesWithFormat.filter(message => message.role === 'system');
-    const systemInstruction = systemMessages.map(message => message.content).join('\n');
+    const callerSystemText = systemMessages.map(message => message.content).join('\n');
+    // Without the identity tool, the line tells the model which model it is.
+    // Empty text plus no reminder still leaves `systemInstruction: undefined` below.
+    const systemInstruction = shouldOmitIdentityReminder(options)
+      ? callerSystemText
+      : appendIdentityReminder(
+          callerSystemText,
+          buildIdentityReminder(options.modelIdentityId ?? modelName, options.modelDisplayName)
+        );
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
     const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
+    if (contents.length === 0) {
+      throw new EmptyConversationError();
+    }
     const generationConfig = this.getGenerationConfig(modelInfo, options);
 
     // Zero or one tools; if one, then all the functionDefinitions are there, up to the
@@ -679,14 +716,14 @@ export class GeminiBackend implements ICompletionBackend {
       : ([
           {
             functionDeclarations: options.tools!.map(tool => {
-              const params = pick(tool.toolSchema.parameters, 'type', 'properties', 'required');
+              const params = tool.toolSchema.parameters;
               return {
                 name: tool.toolSchema.name,
                 description: tool.toolSchema.description,
                 parameters: {
-                  ...params,
                   type: params.type.toUpperCase(), // "object" -> "OBJECT"
                   properties: params.properties ? this.sanitizeProperties(params.properties) : params.properties,
+                  ...('required' in params && { required: params.required }),
                 },
               };
             }),
@@ -739,10 +776,14 @@ export class GeminiBackend implements ICompletionBackend {
       try {
         // @google/genai ignores a signal that is already aborted, so the request would still go out.
         if (options.abortSignal?.aborted) throw new Error('Request aborted');
-        const result = await this._api.models.generateContentStream({
-          ...request,
-          config: { ...request.config, abortSignal: options.abortSignal },
-        });
+        const result = await retryTransportErrors(
+          () =>
+            this._api.models.generateContentStream({
+              ...request,
+              config: { ...request.config, abortSignal: options.abortSignal },
+            }),
+          { logger: this.logger, label: 'GeminiBackend', abortSignal: options.abortSignal }
+        );
 
         let lastChunk: any = null;
         for await (const chunk of result) {
@@ -971,7 +1012,10 @@ export class GeminiBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
-                this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                this.logger[toolFailureLogLevel(outcome.error)](
+                  `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+                  outcome.error
+                );
                 // Strip too - matches the success path above (openaiBackend does the same for
                 // its error branch) so an error message can't carry echoable artifact markup.
                 const errorContent = JSON.stringify({
@@ -1094,15 +1138,52 @@ export class GeminiBackend implements ICompletionBackend {
         // withAbortListener guarantees the listener is removed even if the
         // request throws - removing it only on the success path leaked one
         // listener per failed call on a reused signal.
-        const result = await withAbortListener(options.abortSignal, abortListener, () =>
-          this._api.models.generateContent(request)
-        );
-        const r = result;
+        // The SDK drops error response headers, so only retry transport failures without an HTTP response.
+        const r = retrySignal
+          ? await retryAbortAware(
+              () => {
+                // The SDK retains a listener, so give each attempt a short-lived signal.
+                const attempt = new AbortController();
+                return withAbortListener(
+                  retrySignal,
+                  () => attempt.abort(retrySignal.reason),
+                  () => {
+                    retrySignal.throwIfAborted();
+                    return this._api.models.generateContent({
+                      ...request,
+                      config: { ...request.config, abortSignal: attempt.signal },
+                    });
+                  }
+                );
+              },
+              retrySignal,
+              { isRetryable: error => isTransportError(error) && !isHeadersTimeoutError(error) }
+            )
+          : await withAbortListener(options.abortSignal, abortListener, () =>
+              retryTransportErrors(() => this._api.models.generateContent(request), {
+                logger: this.logger,
+                label: 'GeminiBackend',
+                abortSignal: options.abortSignal,
+              })
+            );
 
-        // Check if aborted during request
-        if (options.abortSignal?.aborted) {
-          throw new Error('Request aborted');
+        if (retrySignal?.aborted) {
+          const usage = r.usageMetadata;
+          const hasUsage = [
+            usage?.promptTokenCount,
+            usage?.candidatesTokenCount,
+            usage?.thoughtsTokenCount,
+            usage?.cachedContentTokenCount,
+          ].some(count => typeof count === 'number');
+          if (hasUsage) setTurnUsage(usage);
+          const stopReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
+          await reportUsageOnAbort(
+            retrySignal,
+            callback,
+            hasUsage ? { ...usageSoFar(), ...(stopReason ? { stopReason } : {}) } : undefined
+          );
         }
+        if (options.abortSignal?.aborted) throw new Error('Request aborted');
 
         // Extract cache stats if caching is enabled (Gemini caching is automatic)
         const cacheStrategy = options.cacheStrategy;
@@ -1124,13 +1205,13 @@ export class GeminiBackend implements ICompletionBackend {
               textParts.push(part.text);
               if (!part.thought) streamedRoundText += part.text;
             }
-            if (part.functionCall) {
+            if (!retrySignal && part.functionCall) {
               this.registerToolCall(part.functionCall, part, toolCalls, toolsUsed);
             }
-            if (part.function_call) {
+            if (!retrySignal && part.function_call) {
               this.registerToolCall(part.function_call, part, toolCalls, toolsUsed);
             }
-            if (part.name && part.args && !part.text) {
+            if (!retrySignal && part.name && part.args && !part.text) {
               this.registerToolCall({ name: part.name, args: part.args }, part, toolCalls, toolsUsed);
             }
           });
@@ -1148,7 +1229,9 @@ export class GeminiBackend implements ICompletionBackend {
           ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
           ...(finishReason ? { stopReason: finishReason } : {}),
         });
+        retrySignal?.throwIfAborted();
       } catch (error) {
+        retrySignal?.throwIfAborted();
         // Check if error is due to abort signal
         if (options.abortSignal?.aborted || (error as Error).message.includes('aborted')) {
           throw new Error('Request aborted');
@@ -1268,7 +1351,10 @@ export class GeminiBackend implements ICompletionBackend {
             } as IMessage);
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-            this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            this.logger[toolFailureLogLevel(outcome.error)](
+              `[Gemini] Error executing tool ${outcome.toolCall.name}:`,
+              outcome.error
+            );
             // Strip too - matches the success path above (openaiBackend does the same for its
             // error branch) so an error message can't carry echoable artifact markup.
             const errorContent = JSON.stringify({
@@ -1379,6 +1465,7 @@ export class GeminiBackend implements ICompletionBackend {
         };
 
         if (typeof message.content === 'string') {
+          if (!message.content.trim()) return null;
           return {
             role: mapRole(message.role),
             parts: [{ text: message.content }],
@@ -1394,9 +1481,11 @@ export class GeminiBackend implements ICompletionBackend {
         const hasToolUse = Array.isArray(message.content) && message.content.some(item => item.type === 'tool_use');
 
         if (!hasToolUse && message.content?.[0].type === 'text') {
+          const text = (message.content[0] as MessageContentText).text;
+          if (!text.trim()) return null;
           return {
             role: mapRole(message.role),
-            parts: [{ text: (message.content?.[0] as MessageContentText).text }],
+            parts: [{ text }],
           };
         }
 
@@ -1463,7 +1552,7 @@ export class GeminiBackend implements ICompletionBackend {
           // former so the guard cannot silently swallow a block this same completion chain just
           // generated.
           const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
-          if (isReplayed && isGemini3(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+          if (isReplayed && isGemini3Or4(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
@@ -1632,6 +1721,18 @@ export class GeminiBackend implements ICompletionBackend {
     model: ModelInfo,
     options: Partial<ICompletionOptions>
   ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
+    const config = this.getUncappedGenerationConfig(model, options);
+    // The thinking reserve sits on top of the caller's cap; a billing ceiling bounds the sum.
+    const ceiling = options.outputTokenCeiling;
+    return ceiling !== undefined && (config.maxOutputTokens ?? Infinity) > ceiling
+      ? { ...config, maxOutputTokens: ceiling }
+      : config;
+  }
+
+  private getUncappedGenerationConfig(
+    model: ModelInfo,
+    options: Partial<ICompletionOptions>
+  ): Pick<GenerateContentConfig, 'temperature' | 'maxOutputTokens' | 'thinkingConfig'> {
     const callerCap = options.maxTokens ?? 8192;
     if (!model.can_think) {
       return {
@@ -1640,15 +1741,12 @@ export class GeminiBackend implements ICompletionBackend {
       };
     }
     // Temperature stays at Google's default 1.0; Gemini 3 loops or degrades below it.
-    const wanted = callerCap + GEMINI_THINKING_RESERVE_TOKENS;
-    // Assumes no live can_think row has max_tokens below the reserve: it would get its catalog cap and no thinking bound.
-    const ceiling = (model.maxOutputTokensDerived ? undefined : usableTokenCount(model.max_tokens)) ?? Infinity;
-    const maxOutputTokens = Math.min(ceiling, wanted);
-    if (wanted >= ceiling) return { maxOutputTokens };
+    const { maxOutputTokens, callerCapBinds } = geminiThinkingOutputCap(model, callerCap);
+    if (!callerCapBinds) return { maxOutputTokens };
     // Bound thinking only when the caller's cap binds; otherwise keep Google's default.
     // Only 3.x and 4.x take thinkingLevel; the -latest aliases track Google's newest 3.x Flash / Flash-Lite.
     // Other ids get the cap alone.
-    return isGemini3(model.id) || /^gemini-(4(\D|$)|flash(-lite)?-latest$)/.test(model.id)
+    return isGemini3Or4(model.id) || /^gemini-flash(-lite)?-latest$/.test(model.id)
       ? { maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
       : { maxOutputTokens };
   }

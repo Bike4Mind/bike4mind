@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
-import { IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 import { removeSessions } from './removeSessions';
 
 type Grant = { userId: string; permissions: Permission[]; projectId?: string };
@@ -13,17 +13,34 @@ describe('projectService - removeSessions (narrowed writes)', () => {
 
   let db: {
     users: { findById: Mock };
-    projects: { shareable: { findAccessibleById: Mock }; update: Mock };
-    sessions: { shareable: { findAllAccessibleByIds: Mock }; update: Mock };
+    projects: { shareable: { findAccessibleById: Mock }; update: Mock; findParticipatingReferencing: Mock };
+    sessions: {
+      shareable: { findAllAccessibleByIds: Mock; updateUserShares: Mock };
+      findAllByIds: Mock;
+      update: Mock;
+      updateGuarded: Mock;
+    };
   };
-  let project: { id: string; userId: string; sessionIds: string[] };
+  let project: {
+    id: string;
+    userId: string;
+    sessionIds: string[];
+    fileIds: string[];
+    systemPrompts: { fileId: string }[];
+  };
   let sessions: { id: string; userId: string; users: Grant[] }[];
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    project = { id: PROJECT_ID, userId: OWNER_ID, sessionIds: [SESSION_A, SESSION_B, SESSION_KEPT] };
+    project = {
+      id: PROJECT_ID,
+      userId: OWNER_ID,
+      sessionIds: [SESSION_A, SESSION_B, SESSION_KEPT],
+      fileIds: [],
+      systemPrompts: [],
+    };
     sessions = [
       {
         id: SESSION_A,
@@ -45,10 +62,13 @@ describe('projectService - removeSessions (narrowed writes)', () => {
       projects: {
         shareable: { findAccessibleById: vi.fn(async () => project) },
         update: vi.fn(async () => project),
+        findParticipatingReferencing: vi.fn(async () => []),
       },
       sessions: {
-        shareable: { findAllAccessibleByIds: vi.fn(async () => sessions) },
+        shareable: { findAllAccessibleByIds: vi.fn(async () => sessions), updateUserShares: vi.fn() },
+        findAllByIds: vi.fn(async () => []),
         update: vi.fn(async () => undefined),
+        updateGuarded: vi.fn(async (change: { id: string; users: Grant[] }) => change),
       },
     };
   });
@@ -57,7 +77,19 @@ describe('projectService - removeSessions (narrowed writes)', () => {
     vi.useRealTimers();
   });
 
-  it('writes narrowed per-session and project partials', async () => {
+  it('rejects with a ForbiddenError when a non-owner removes a session they do not own', async () => {
+    project.userId = 'someone-else';
+    sessions[0].userId = 'someone-else';
+
+    await expect(
+      removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_A, SESSION_B] }, {
+        db,
+      } as unknown as Parameters<typeof removeSessions>[2])
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.sessions.shareable.updateUserShares).not.toHaveBeenCalled();
+  });
+
+  it('drops the project grants from each session and writes a narrowed project partial', async () => {
     await removeSessions(
       OWNER_ID,
       { projectId: PROJECT_ID, sessionIds: [SESSION_A, SESSION_B] },
@@ -65,18 +97,139 @@ describe('projectService - removeSessions (narrowed writes)', () => {
       { db } as unknown as Parameters<typeof removeSessions>[2]
     );
 
-    expect(db.sessions.update).toHaveBeenCalledTimes(2);
-    expect(db.sessions.update.mock.calls[0][0]).toStrictEqual({
-      id: SESSION_A,
-      users: [{ userId: 'member-2', permissions: [Permission.read], projectId: 'other-project' }],
-    });
-    expect(db.sessions.update.mock.calls[1][0]).toStrictEqual({ id: SESSION_B, users: [] });
+    expect(db.sessions.update).not.toHaveBeenCalled();
+    expect(db.sessions.updateGuarded.mock.calls).toStrictEqual([
+      [
+        { id: SESSION_A, users: [{ userId: 'member-2', permissions: [Permission.read], projectId: 'other-project' }] },
+        { includeDeleted: true },
+      ],
+      [{ id: SESSION_B, users: [] }, { includeDeleted: true }],
+    ]);
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
       sessionIds: [SESSION_KEPT],
+      fileIds: [],
+      systemPrompts: [],
       updatedAt: new Date('2026-01-01T00:00:00Z'),
     });
+  });
+
+  const callRemove = (userId: string, sessionIds: string[]) =>
+    removeSessions(userId, { projectId: PROJECT_ID, sessionIds }, { db } as unknown as Parameters<
+      typeof removeSessions
+    >[2]);
+
+  it('answers NotFoundError for an unknown user or an inaccessible project', async () => {
+    db.users.findById.mockResolvedValueOnce(null);
+    await expect(callRemove(OWNER_ID, [SESSION_A])).rejects.toBeInstanceOf(NotFoundError);
+
+    db.projects.shareable.findAccessibleById.mockResolvedValueOnce(null);
+    await expect(callRemove(OWNER_ID, [SESSION_A])).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it('answers ForbiddenError when a non-owner removes a session they do not own', async () => {
+    await expect(callRemove('member-1', [SESSION_A])).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner clear a held id that no longer resolves, such as a deleted session', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+
+    const { removedIds } = await removeSessions(
+      OWNER_ID,
+      { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] },
+      { db }
+    );
+
+    expect(removedIds).toEqual([SESSION_KEPT]);
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [SESSION_A, SESSION_B] }));
+  });
+
+  it('refuses the owner a held id whose session still exists but is unreadable, so no grant is left behind', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+    db.sessions.findAllByIds.mockResolvedValueOnce([{ id: SESSION_KEPT }]);
+
+    await expect(
+      removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] }, { db })
+    ).rejects.toThrow('Some sessions are not accessible');
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a held id that no longer resolves for a member who is not the owner', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+
+    await expect(
+      removeSessions('member-1', { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] }, { db })
+    ).rejects.toThrow('Some sessions are not accessible');
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('reports no removed ids when the session is not in the project', async () => {
+    project.sessionIds = [SESSION_KEPT];
+
+    const { removedIds } = await removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_A] }, { db });
+
+    expect(removedIds).toEqual([]);
+  });
+
+  it('revokes the project grants on a soft-deleted held session as well as clearing its id', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+    db.sessions.findAllByIds.mockResolvedValueOnce([
+      {
+        id: SESSION_KEPT,
+        userId: OWNER_ID,
+        deletedAt: new Date(),
+        users: [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }],
+      },
+    ]);
+
+    const { removedIds } = await removeSessions(
+      OWNER_ID,
+      { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] },
+      { db }
+    );
+
+    expect(removedIds).toEqual([SESSION_KEPT]);
+    expect(db.sessions.findAllByIds).toHaveBeenCalledWith([SESSION_KEPT], { includeDeleted: true });
+    expect(db.sessions.updateGuarded).toHaveBeenCalledWith({ id: SESSION_KEPT, users: [] }, { includeDeleted: true });
+  });
+
+  it('clears a hard-deleted held session id without any revoke', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+
+    await removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_KEPT] }, { db });
+
+    expect(db.sessions.shareable.updateUserShares).not.toHaveBeenCalled();
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ sessionIds: [SESSION_A, SESSION_B] }));
+  });
+
+  it('refuses a non-owner a legacy non-ObjectId entry listed in the project', async () => {
+    project.sessionIds = ['legacy-entry'];
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([]);
+
+    await expect(callRemove('member-1', ['legacy-entry'])).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('still lets a non-owner remove a readable session they own', async () => {
+    db.sessions.shareable.findAllAccessibleByIds.mockResolvedValueOnce([
+      { id: SESSION_A, userId: 'member-1', users: [] },
+    ]);
+
+    const { removedIds } = await callRemove('member-1', [SESSION_A]);
+
+    expect(removedIds).toEqual([SESSION_A]);
+    expect(db.projects.update).toHaveBeenCalled();
+  });
+
+  it('does not write the project when nothing is removed', async () => {
+    project.sessionIds = [SESSION_KEPT];
+
+    await removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_A] }, { db });
+
+    expect(db.projects.update).not.toHaveBeenCalled();
+    expect(db.sessions.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 });

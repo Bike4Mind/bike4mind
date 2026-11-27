@@ -1,7 +1,12 @@
+import { recordVerifiedView } from '@server/services/publish/recordVerifiedView';
+import {
+  currentPublishedIndexKey,
+  downloadPublishedIndex,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import type { Request, Response, NextFunction } from 'express';
 import { marked } from 'marked';
 import type { Types } from 'mongoose';
@@ -21,7 +26,10 @@ import {
   prepareShareMeta,
   recordGatedView,
   renderBundleLoaderShell,
+  renderNotFoundPage,
   renderSandboxedBundle,
+  encodeBundlePath,
+  isBundlePagePath,
   stripToText,
   type PublishUser,
   type SandboxAsset,
@@ -29,11 +37,22 @@ import {
 import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
-import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
-import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { HASH_BRIDGE_JS } from '@bike4mind/server-utils/services/publish/fragmentNav';
+import {
+  BUFFERED_FILE_MAX_BYTES,
+  SIGNED_LINK_TTL_SECONDS,
+  bufferedContentType,
+  isRedirectedFetchDest,
+  mediaLinkTtlSeconds,
+  inlineTypeFor,
+  isSafeSignedOrigin,
+  isStreamedFile,
+  signedResponseFor,
+} from '@bike4mind/server-utils/services/publish/signedFiles';
+import { gateProofSecondsLeft, requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
-import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
+import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
 import { displayReplyTitleFromLine, replyFirstLine } from '@server/services/publish/plainTitle';
 import {
   buildBundleScriptSrc,
@@ -45,7 +64,7 @@ import {
   isAppWrapperHost,
   isUsercontentHost,
   VIEWER_SANDBOX,
-} from '@server/services/publish/viewerSecurity';
+} from '@bike4mind/server-utils/services/publish/viewerSecurity';
 import {
   buildShareFooterHtml,
   pickSharedByName,
@@ -58,6 +77,7 @@ import {
   stripSignupGateHtml,
 } from '@client/app/utils/shareFooter';
 import { getOpenSignupStarterCredits } from '@server/utils/starterCredits';
+import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -89,9 +109,10 @@ import {
   parseArtifactsWithFallback,
   type ParsedArtifact,
   type ArtifactParseResult,
-} from '@client/app/utils/artifactParser';
+} from '@bike4mind/server-utils/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
-import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { getBrandName } from '@client/config/general';
+import { publishedAuthorShareLink, publishMarketingUrl, type ShareLinkVia } from '@server/referrals/shareLink';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
 /**
@@ -128,6 +149,19 @@ function replyBodyForExport(artifact: PublishedArtifactLean): string {
  * (fetched here, credentialed) so the opaque origin never makes a gated request,
  * while public bundles load assets back through this same route via an injected
  * `<base>`. Individual assets are still served with a strict `script-src 'none'`.
+ *
+ * Multi-page bundles: a bundle's other `.html` files (`/p/.../{slug}/guide/intro.html`)
+ * are rendered exactly like the index - wrapper page, sandboxed srcdoc, same gate and
+ * proof cookie - and never served as documents on the app origin. Every other asset is an
+ * inert attachment, and `?download=1` forces that for a page too. Same-bundle links inside
+ * the frame navigate at top level through the wrapper's hash bridge (see fragmentNav.ts),
+ * so the proof cookie rides along and file downloads are not swallowed by the sandbox.
+ *
+ * Media and documents (see signedFiles.ts): after the gate, video/audio/PDF - and any file
+ * a viewer navigates to or asks to download - are answered with a 302 to a short-lived
+ * signed storage URL whose Content-Type is pinned from the extension, so the bytes come
+ * from storage with Range support rather than through one buffered Lambda response. Gated
+ * renders point their media elements at such URLs directly.
  *
  * Auth: baseApi({ auth: false }) so anonymous viewers can read public artifacts.
  * Two optional shims populate req.user for gated views: an Authorization: Bearer
@@ -235,6 +269,11 @@ const ASSET_CSP = [
   withAppHost("frame-ancestors 'self'"),
 ].join('; ');
 
+// Images that miss a gated render's inline budget fall back to a signed storage URL. Without a
+// browser signing origin that fallback is gone and they are dropped instead, which still beats
+// losing the stylesheet.
+const isSignableImage = (path: string) => !!inlineTypeFor(path)?.startsWith('image/');
+
 // Share links are served same-origin, sandboxed, and must never be cached: no-store
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
@@ -255,6 +294,29 @@ const NOINDEX_META = '<meta name="robots" content="noindex,nofollow">';
 // Referrer-Policy header, so meta and header always agree.
 const NO_REFERRER_META = '<meta name="referrer" content="no-referrer">';
 
+// The not-found answer for a link that resolves to nothing. A browser navigation gets a
+// readable page instead of a bare JSON body; every other caller keeps the JSON. Unknown,
+// revoked and lapsed share tokens all land here, so both forms must stay identical across
+// those cases (no enumeration signal).
+function sendLinkNotFound(req: Request, res: Response) {
+  res.setHeader('Vary', 'Accept');
+  // Neither form may be stored by an edge cache that does not key on Accept: a cached JSON
+  // 404 would otherwise be handed to the next browser navigation of the same link.
+  res.setHeader('Cache-Control', 'no-store');
+  if (!String(req.headers.accept ?? '').includes('text/html')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+  );
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  return res.status(404).send(renderNotFoundPage());
+}
+
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Cache keys may omit Host; denials must not be reused on another artifact's origin either.
   if (isUsercontentHost(req.headers.host) || req.query.__uc === '1') {
@@ -272,7 +334,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   const resolved = parsePublishPath(segments);
   if (!resolved) {
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
 
   // No-sign-in share link (`/a/<shareToken>`). Possession of the token IS the read
@@ -283,6 +345,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const isShare = resolved.kind === 'share';
   const shareToken = resolved.kind === 'share' ? resolved.shareToken : '';
   const shareAssetPath = resolved.kind === 'share' ? resolved.assetPath : null;
+  // Bundle file sub-path, via `/p/...` or `/a/<token>/...`. A page (`.html`) renders through
+  // the wrapper like the index unless the viewer asked to download it.
+  const requestedAssetPath = resolved.kind === 'bundle' || resolved.kind === 'share' ? resolved.assetPath : null;
+  const isSubPage = !!requestedAssetPath && isBundlePagePath(requestedAssetPath) && req.query.download !== '1';
 
   // Rate-limit share links before touching the DB (throttled requests never query).
   // The shim rejects (via next(err)) once the bucket is full; map that to a 429 with
@@ -328,7 +394,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   let artifact: PublishedArtifactLean | null = null;
   if (resolved.kind === 'share') {
     // Shared filter, not a hand-rolled one: findByShareToken cannot be used here (it needs a
-    // lean read), but the rollout tolerance and revocation semantics must not diverge from it.
+    // lean read), but its index use and revocation semantics must not diverge from it.
     artifact = await PublishedArtifact.findOne({
       deletedAt: null,
       ...shareTokenFilter(resolved.shareToken),
@@ -350,7 +416,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (!artifact) {
     // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
     // distinguish a revoked/never-existed token from a private artifact.
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
   if (
     isIsolated &&
@@ -363,8 +429,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // purgeUserPublishedArtifacts; also supplies the "Shared by" name for the viewer page.
   const owner = await loadLiveOwner(artifact.ownerId);
   if (!owner) {
-    return res.status(404).json({ error: 'Not found' });
+    return sendLinkNotFound(req, res);
   }
+
+  const storage = getPublishedArtifactsStorage();
+  const signFile = makeFileSigner(storage, artifact, req);
 
   // A `public` artifact with an access gate must NOT serve like open-public:
   // no CDN caching, no isolated public origin, and bundles inline their assets
@@ -465,11 +534,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // satisfy a passphrase gate, so the loader would dead-end at "sign in".
     // Applies to /p AND /a navigations; assets, ?raw=1 and ?format=raw hard-fail.
     const wantsPassphrasePrompt =
-      access.reason === 'passphrase' &&
-      !isRaw &&
-      !isFormatRaw &&
-      !(resolved.kind === 'bundle' && resolved.assetPath) &&
-      !(isShare && shareAssetPath);
+      access.reason === 'passphrase' && !isRaw && !isFormatRaw && (!requestedAssetPath || isSubPage);
     if (wantsPassphrasePrompt) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       // The passphrase prompt is the one page with a CREDENTIAL input, so it must
@@ -509,23 +574,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // export request would dead-end on an HTML shell delivered as a download. Hard-fail
     // instead. (The passphrase prompt above is different: it reloads the SAME url on
     // success, so a gated export URL genuinely unlocks through it.)
-    const isShareAsset = isShare && !!shareAssetPath;
-    const wantsLoaderShell =
-      !isRaw &&
-      !isFormatRaw &&
-      !rawExport &&
-      !req.user &&
-      !isShareAsset &&
-      (resolved.kind === 'bundle' ? !resolved.assetPath : true);
+    // A sub-page is a navigation like the index, so it recovers through the same shell.
+    const wantsLoaderShell = !isRaw && !isFormatRaw && !rawExport && !req.user && (!requestedAssetPath || isSubPage);
     if (wantsLoaderShell) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Content-Security-Policy', buildWrapperCsp(req));
+      res.setHeader('Content-Security-Policy', buildWrapperCsp(req, '', [], await signFile.origin()));
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // Static shell - intentionally carries no artifact data (title/id), so an anonymous
       // viewer of a gated bundle learns nothing; the real title appears only once the
       // authenticated ?raw=1 srcdoc renders.
-      return res.status(200).send(renderBundleLoaderShell());
+      return res.status(200).send(renderBundleLoaderShell(await signFile.origin()));
     }
     return res.status(access.status).json({ error: access.error });
   }
@@ -735,26 +794,60 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   }
 
   // -- Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. --
-  const storage = getPublishedArtifactsStorage();
 
   // Asset sub-path for a bundle, whether reached via `/p/...` or a `/a/<token>/...`
   // share link. Share bundles use the <base> asset model, so their assets re-enter
   // HERE carrying the token and are authorized by the same checkShareGrant above.
   const assetPath = resolved.kind === 'bundle' ? resolved.assetPath : shareAssetPath;
-  if (assetPath) {
+  if (assetPath && !isSubPage) {
     const fileEntry = artifact.manifest.find(f => f.path === assetPath);
     if (!fileEntry) {
       return res.status(404).json({ error: 'Asset not in artifact manifest' });
     }
+    const wantsDownload = req.query.download === '1';
+    // One URL answers with a redirect or with bytes depending on how it was requested.
+    res.setHeader('Vary', 'Sec-Fetch-Dest, Sec-Fetch-Mode');
+    // `?sign=1`: the loader shell's Bearer-authorized request for a signed link it can open
+    // at top level (a plain navigation there carries no credential). Gate already passed.
+    if (req.query.sign === '1') {
+      const url = await signFile(assetPath, wantsDownload, SIGNED_LINK_TTL_SECONDS);
+      res.setHeader('Cache-Control', 'private, no-store');
+      return url ? res.status(200).json({ url }) : res.status(404).json({ error: 'Not found' });
+    }
+    // Storage serves a file (Range, any size, byte-exact) when it is a download, too large to
+    // buffer, or loaded by a media element, a frame or a top-level navigation. Everything else
+    // keeps the buffered same-origin path below: subresources such as CSS, and script loads
+    // (`fetch`/XHR, a `crossorigin` media element), which arrive with an empty or missing
+    // Sec-Fetch-Dest or in CORS mode. A redirect would break those, because the isolated
+    // origin's CSP has `connect-src 'self'` and the bucket's CORS does not list it.
+    if (
+      wantsDownload ||
+      (fileEntry.size ?? 0) > BUFFERED_FILE_MAX_BYTES ||
+      (isRedirectedFetchDest(req.headers['sec-fetch-dest']) && req.headers['sec-fetch-mode'] !== 'cors')
+    ) {
+      const url = await signFile(assetPath, wantsDownload, SIGNED_LINK_TTL_SECONDS);
+      if (url) {
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Location', url);
+        return res.status(302).end();
+      }
+    }
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
-      res.setHeader('Content-Type', fileEntry.mimeType);
+      const buf = await (assetPath === 'index.html'
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(`${artifact.storageKeyPrefix}${assetPath}`));
+      // The edge adapter text-converts any body whose type it does not list as binary.
+      res.setHeader('Content-Type', bufferedContentType(fileEntry.mimeType));
       // Publishers control MIME metadata; every asset navigation must download, even with an unknown type.
       res.setHeader('Content-Disposition', 'attachment');
       res.setHeader('Content-Length', String(buf.length));
+      // `?download=1` on a page is never cached: a cache that ignores the query string would
+      // otherwise hand this attachment out in place of the page (same reasoning as `?export=`).
+      const forcedDownload = req.query.download === '1' && isBundlePagePath(assetPath);
       res.setHeader(
         'Cache-Control',
-        isShare || isIsolated ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility)
+        isShare || isIsolated || forcedDownload ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility)
       );
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // SECURITY: assets are served same-origin and validateBundle only vets
@@ -776,18 +869,31 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // missing (defensive - older rows may lack sha256Index). Comparing against this
   // prevents misclassifying ?v=<latest> as older and reading a non-existent
   // versions/<latest>.html (latest bytes live at index.html).
+  //
+  // A sub-page is the bundle file being rendered in place of index.html. Only the index is
+  // versioned, so `?v` is ignored for it, like for every other asset.
+  const pagePath = isSubPage && assetPath ? assetPath : 'index.html';
+  if (isSubPage && !artifact.manifest.some(f => f.path === pagePath)) {
+    return res.status(404).json({ error: 'Asset not in artifact manifest' });
+  }
   const versionsList = artifact.versions ?? [];
   const currentSha = artifact.sha256Index ?? versionsList[versionsList.length - 1]?.sha256Index;
-  const requestedVersion = typeof req.query.v === 'string' ? req.query.v : '';
+  const requestedVersion = !isSubPage && typeof req.query.v === 'string' ? req.query.v : '';
   const isKnownOlderVersion =
     !!requestedVersion && requestedVersion !== currentSha && versionsList.some(v => v.sha256Index === requestedVersion);
   const indexKey = isKnownOlderVersion
     ? `${artifact.storageKeyPrefix}versions/${requestedVersion}.html`
-    : `${artifact.storageKeyPrefix}index.html`;
+    : pagePath === 'index.html'
+      ? currentPublishedIndexKey(artifact)
+      : `${artifact.storageKeyPrefix}${pagePath}`;
 
   let indexHtml: string;
   try {
-    indexHtml = (await storage.download(indexKey)).toString('utf-8');
+    indexHtml = (
+      await (pagePath === 'index.html' && !isKnownOlderVersion
+        ? downloadPublishedIndex(artifact, storage)
+        : storage.download(indexKey))
+    ).toString('utf-8');
   } catch {
     return res.status(isKnownOlderVersion ? 404 : 500).json({
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
@@ -846,13 +952,15 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // app host, so a saved bundle that used one needs network to render fully.
   if (exportFormat) {
     const collected = await collectInlineAssets({
-      manifest: artifact.manifest,
+      // Pages are separate documents, never inlined. A download has no route to fetch a signed
+      // link through either, so media is inlined like any other file while it fits the budget.
+      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
     });
     const skipped = [...collected.oversized, ...collected.failed];
     if (skipped.length) {
       // No silent truncation - the download is missing bytes, so say which.
-      console.warn(`[publish] export ${artifact.publicId} dropped ${skipped.length} asset(s):`, skipped);
+      req.logger.warn('Publish export dropped assets', { publicId: artifact.publicId, skippedCount: skipped.length });
       res.setHeader('X-Publish-Dropped-Assets', String(skipped.length));
       res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(skipped, 1024));
     }
@@ -863,6 +971,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       visibility: effectiveVisibility,
       assetMode: 'inline',
       assets: collected.assets,
+      pagePath,
     });
     bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
       gateView: gateViewAudit,
@@ -877,14 +986,35 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Share links use the <base> asset model (assets self-authorize via the token), so
   // they never inline - only gated `/p` bundles pre-fetch + inline their assets here.
   let inlineAssets: Map<string, SandboxAsset> | undefined;
+  let signedAssets: Map<string, string> | undefined;
   let droppedAssets: string[] = [];
   if (isShare ? !!artifact.accessGate : !isOpenPublic) {
+    // The opaque frame's own requests carry no cookie, so media is pointed straight at
+    // signed storage URLs minted here, after the gate.
+    const signed = new Map<string, string>();
+    // Baked into the page, so these must outlive it - but never the proof behind the render.
+    const mediaTtl = mediaLinkTtlSeconds(passphraseVerified ? gateProofSecondsLeft(req, artifact.publicId) : null);
+    for (const path of artifact.manifest.map(f => f.path).filter(isStreamedFile)) {
+      const url = await signFile(path, false, mediaTtl);
+      if (url) signed.set(path, url);
+    }
     const collected = await collectInlineAssets({
-      manifest: artifact.manifest,
+      // Pages are navigated to, never inlined, and signed media needs no bytes, so neither
+      // spends the inline budget. Media that got no link (no browser signing origin) is
+      // inlined as on the buffered path, while it fits.
+      manifest: artifact.manifest.filter(f => !isBundlePagePath(f.path) && !signed.has(f.path)),
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
+      // index.html ships inside a double-quoted srcdoc attribute: `&` and `"` grow (see renderBundleWrapper)
+      reservedBytes: Buffer.byteLength(indexHtml.replace(/&/g, '&amp;').replace(/"/g, '&quot;')),
+      hasFallback: isSignableImage,
     });
     inlineAssets = collected.assets;
-    droppedAssets = [...collected.oversized, ...collected.failed];
+    for (const path of collected.oversized.filter(isSignableImage)) {
+      const url = await signFile(path, false, mediaTtl);
+      if (url) signed.set(path, url);
+    }
+    signedAssets = signed;
+    droppedAssets = [...collected.oversized.filter(path => !signed.has(path)), ...collected.failed];
   }
 
   const { srcdoc: baseSrcdoc } = renderSandboxedBundle({
@@ -895,11 +1025,22 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     visibility: effectiveVisibility,
     assetMode: isShare ? (artifact.accessGate ? 'inline' : 'base') : undefined,
     assets: inlineAssets,
+    signedAssets,
+    pagePath,
     // Same-page fragment links must scroll in place, not re-navigate the sandboxed
     // iframe (an opaque-origin navigation drops the SameSite proof cookie and
     // dead-ends a gated bundle at its prompt shell). Both the canonical /p path and
     // the path this render is reached at (share token / isolated alias) count.
-    pagePaths: [urlBase, canonicalPath],
+    // A sub-page answers to its own path; `/index.html` is also the bundle root itself.
+    pagePaths: isSubPage
+      ? [
+          `${urlBase}/${encodeBundlePath(pagePath)}`,
+          `${canonicalPath}/${encodeBundlePath(pagePath)}`,
+          ...(pagePath === 'index.html' ? [urlBase, canonicalPath] : []),
+        ]
+      : [urlBase, canonicalPath],
+    // The isolated origin has no parent bridge; its frame navigates its own origin natively.
+    routeBundleLinks: !isIsolated,
   });
 
   // Comment-pin bridge: when comments are enabled, inject a tiny trusted script INTO the
@@ -908,7 +1049,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // pin-drop click inside the iframe and postMessages the coords up to the wrapper widget,
   // and renders existing pin markers inside the bundle doc (scroll-correct). It exchanges
   // only non-sensitive UI data with the parent; it cannot read the app token (opaque origin).
-  const commentsEnabled = !!artifact.commentPolicy && artifact.commentPolicy !== 'none';
+  // Pins are anchored to the index document, so a sub-page carries neither pins nor overlay.
+  const commentsEnabled = !isSubPage && !!artifact.commentPolicy && artifact.commentPolicy !== 'none';
   const pinnedSrcdoc = commentsEnabled ? injectPinBridge(baseSrcdoc) : baseSrcdoc;
   // A signed-in viewer is served this same gated render (no Bearer on a navigation, and the
   // page is shared-cached), so the wrapper widget asks the frame to drop the gate for them.
@@ -917,10 +1059,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   if (droppedAssets.length) {
     // No silent truncation - surface skipped assets to operators and reviewers, both the
     // count and the names (truncated to keep the header well under typical 8KB limits).
-    console.warn(
-      `[publish] bundle ${artifact.publicId} dropped ${droppedAssets.length} oversized/failed asset(s):`,
-      droppedAssets
-    );
+    req.logger.warn('Publish bundle dropped assets', {
+      publicId: artifact.publicId,
+      droppedCount: droppedAssets.length,
+    });
     res.setHeader('X-Publish-Dropped-Assets', String(droppedAssets.length));
     res.setHeader('X-Publish-Dropped-Asset-Names', truncateHeaderList(droppedAssets, 1024));
   }
@@ -973,7 +1115,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       return res.status(404).json({ error: 'Not found' });
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req, embedGrants));
+    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req, embedGrants, await signFile.origin()));
     // The CDN cache need not key on Host; never reuse one artifact's origin response on another.
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -995,7 +1137,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // (403-ing) host. SERVER_DOMAIN unset (local/dev/forks) -> artifactHost empty -> same fallback.
   const useIsolatedEmbed = !!artifactHost && isAppWrapperHost(req.headers.host);
   const isolatedSrc = useIsolatedEmbed
-    ? `https://${artifactHost}${isolatedPath}${requestedVersion ? `?v=${encodeURIComponent(requestedVersion)}` : ''}`
+    ? `https://${artifactHost}${isolatedPath}${isSubPage ? `/${encodeBundlePath(pagePath)}` : ''}${
+        requestedVersion ? `?v=${encodeURIComponent(requestedVersion)}` : ''
+      }`
     : '';
   // OPEN-public shares emit full server-rendered meta + a noscript body + a link to
   // the raw plain-text variant so unfurlers, LLM URL fetchers, and non-JS crawlers see
@@ -1008,8 +1152,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // title card for a non-discoverable artifact - unfurlers read OG tags and ignore
   // robots directives, while search crawlers honor the noindex above. Owners who opt
   // out of discovery are opting out of the index, not out of link previews.
+  // A sub-page is not the canonical document, so it carries none of this (its canonical
+  // link would name the index while describing a different page).
   const shareMeta =
-    !isShare && isOpenPublic
+    !isShare && isOpenPublic && !isSubPage
       ? prepareShareMeta({
           title: plainTitle(artifact.title || SHARED_FALLBACK_TITLE, artifact),
           description: artifact.description,
@@ -1019,23 +1165,29 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
-  // site with UTM attribution when configured, else a branded fallback. The embed
-  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
-  // the app root (the viewer is already on the canonical page). The bar only renders
-  // for an own-tab open-public artifact.
-  const marketing = (medium: string) =>
-    WEBSITE_URL
-      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
-      : '';
-  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
-  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host). The author's share
+  // link comes first: it lands on the same tagged marketing page (signup when none is
+  // configured), and a signup that follows credits the author (server/referrals/shareLink.ts).
+  // Without one, the marketing site with UTM attribution when configured, else a branded
+  // fallback. The embed pill falls back to the artifact's canonical page; the own-tab bar
+  // falls back to the app root (the viewer is already on the canonical page). The bar only
+  // renders for an own-tab open-public artifact.
+  const leadVia: ShareLinkVia | null = isEmbed ? 'embed-badge' : isOpenPublic ? 'share-bar' : null;
+  const authorLink = leadVia ? await publishedAuthorShareLink(artifact.ownerId, owner, leadVia) : null;
+  const marketing = (via: ShareLinkVia) => publishMarketingUrl(via) ?? '';
+  const pillHref = isEmbed ? authorLink || marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? authorLink || marketing('share-bar') || `${docOrigin}/` : '';
   // "Save as HTML" on the wrapper - see `exportSelfAuthorizes`. Dropped in embed mode,
   // which is chrome-less by design.
   const exportHtmlHref =
     !isEmbed && exportSelfAuthorizes ? exportHref(isShare ? shareBase : canonicalPath, 'html') : '';
+  // A sub-page wrapper drops the comment overlay (pins belong to the index) and the version
+  // switcher (only the index is versioned).
+  const wrapperArtifact: PublishedArtifactLean = isSubPage
+    ? { ...artifact, commentPolicy: 'none', versions: [] }
+    : artifact;
   const wrapperPage = renderBundleWrapper(
-    artifact,
+    wrapperArtifact,
     srcdoc,
     requestedVersion,
     isolatedSrc,
@@ -1054,7 +1206,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
+  res.setHeader(
+    'Content-Security-Policy',
+    buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants, await signFile.origin())
+  );
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
@@ -1152,9 +1307,9 @@ function renderBundleWrapper(
   // Emitted for every non-embed render, not just commented ones: it also binds "Save as
   // PDF" (the mount node above stays conditional, and the widget no-ops without it).
   // `data-b4m-count-view` asks the widget to report a signed-in viewer to /api/publish/view,
-  // which this navigation cannot identify. Only until one external view lands: the Published
+  // which this navigation cannot identify. Only until one verified view lands: the Published
   // gear needs just one, and each report costs the viewer a refresh-token exchange.
-  const countView = (artifact.externalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
+  const countView = (artifact.verifiedExternalViewCount ?? 0) === 0 ? ' data-b4m-count-view' : '';
   const widgetScript = embed ? '' : `\n<script src="/api/publish/widget"${countView} defer></script>`;
   // Abuse-report affordance: a plain anchor floats over the iframe. It is a
   // top-level navigation (not blocked by the wrapper's script-src/form-action CSP) to
@@ -1328,7 +1483,7 @@ function embedGrantsSuffix(embedOrigins: string[]): string {
   return embedOrigins.length ? ` ${embedOrigins.join(' ')}` : '';
 }
 
-function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = []): string {
+function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = [], signedOrigin = ''): string {
   const appHost = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
   const appHostSrc = appHost ? ` ${appHost}` : '';
   const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
@@ -1341,8 +1496,8 @@ function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = []): stri
     "default-src 'none'",
     `script-src 'unsafe-inline' 'self' ${blessedScriptSrc}`,
     `style-src 'unsafe-inline' 'self'${appHostSrc} https://fonts.googleapis.com`,
-    `img-src 'self' data:${appHostSrc}`,
-    `media-src 'self' data:${appHostSrc}`,
+    `img-src 'self' data:${appHostSrc}${signedOrigin ? ` ${signedOrigin}` : ''}`,
+    `media-src 'self' data:${appHostSrc}${signedOrigin ? ` ${signedOrigin}` : ''}`,
     `font-src 'self' data:${appHostSrc} https://fonts.gstatic.com`,
     "connect-src 'self'",
     "base-uri 'self'",
@@ -1351,7 +1506,13 @@ function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = []): stri
   ].join('; ');
 }
 
-function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: string[] = []): string {
+function buildWrapperCsp(
+  req: Request,
+  artifactHost?: string,
+  embedOrigins: string[] = [],
+  /** Storage origin of signed file links (see signedFiles.ts); the srcdoc inherits this CSP. */
+  signedOrigin = ''
+): string {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
   // Approach B: the wrapper embeds the bundle via a cross-origin iframe to the artifact's
   // isolated host, so frame-src must permit it. Only the exact per-artifact host is added.
@@ -1378,8 +1539,8 @@ function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: stri
     frameSrc,
     `script-src ${scriptSrc}`,
     `style-src 'unsafe-inline' ${docOrigin}${appHostSrc} https://fonts.googleapis.com`,
-    `img-src data: ${docOrigin}${appHostSrc}`,
-    `media-src data: ${docOrigin}${appHostSrc}`,
+    `img-src data: ${docOrigin}${appHostSrc}${signedOrigin ? ` ${signedOrigin}` : ''}`,
+    `media-src data: ${docOrigin}${appHostSrc}${signedOrigin ? ` ${signedOrigin}` : ''}`,
     `font-src data: ${docOrigin}${appHostSrc} https://fonts.gstatic.com`,
     `connect-src ${docOrigin}${appHostSrc}`,
     `base-uri ${docOrigin}${appHostSrc}`,
@@ -1440,7 +1601,8 @@ interface PublishedArtifactLean {
   discoverable?: boolean;
   ownerId: string;
   storageKeyPrefix: string;
-  manifest: Array<{ path: string; mimeType: string }>;
+  indexObjectPath?: string | null;
+  manifest: Array<{ path: string; mimeType: string; size?: number }>;
   renderedBody?: string;
   /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
    *  even after the source Quest changes or is deleted. Reply source only. */
@@ -1448,11 +1610,12 @@ interface PublishedArtifactLean {
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   /** Legacy single share link; still the source of truth during the rollout. */
   shareToken?: string | null;
-  /** Every share link ever minted. Only the entry that served THIS request is counted. */
+  /** The stored share links (live plus retained revoked ones). Only the entry that served THIS request is counted. */
   shareTokens?: PublishedArtifactShareToken[];
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
   externalViewCount?: number;
+  verifiedExternalViewCount?: number;
 }
 
 // -- Helpers -----------------------------------------------------------------
@@ -1489,28 +1652,13 @@ function cacheControlFor(visibility: PublishVisibility): string {
 const CRAWLER_UA_RE =
   /slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|skypeuripreview|googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot|bot\b|crawler|spider|preview/i;
 
-/**
- * Best-effort, non-authoritative view counters. Never blocks the response.
- *
- * `viewCount` counts everything. `externalViewCount` feeds the Published gear
- * ("someone else saw your page") and MUST resist self-granting: a top-level
- * browser navigation to /p/... carries no Authorization header, so the serve
- * route cannot tell the owner apart from a stranger on an anonymous request -
- * counting anonymous views as external let every publisher pay themselves the
- * 5,000-credit reward by opening their own freshly-published link (verified
- * gate-bypass, PR #390 review). So externalViewCount increments ONLY for an
- * AUTHENTICATED, non-owner, non-crawler viewer - a request that actually
- * carries a credential we can attribute to a different user. Domain-gated
- * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
- * purely-anonymous public views no longer count, and stronger proof-of-human
- * is tracked as strategy P1 (b4m-strategy#93).
- *
- * A browser navigation never carries that credential on an open-public page or an open share
- * link, so for bundles the wrapper widget reports a signed-in viewer separately through
- * /api/publish/view (see `data-b4m-count-view` in renderBundleWrapper).
+/** Record view analytics and verified reward evidence after page admission.
+ * Writes are best-effort so analytics failures do not interrupt serving a page.
+ * Bundle browser navigations also report their authenticated view via /api/publish/view.
+ * Anonymous views never count as external: without a credential the owner cannot be told apart.
  */
 function bumpViewCount(
-  artifact: { publicId: string; ownerId: string },
+  artifact: { publicId: string; ownerId: string; verifiedExternalViewCount?: number },
   viewer: { id?: string } | undefined,
   userAgent?: string,
   opts: {
@@ -1527,8 +1675,7 @@ function bumpViewCount(
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
-  const countsAsExternal = isAuthed && !isOwner && !isCrawler;
-  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+  const signedInOther = isAuthed && !isOwner && !isCrawler;
   // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
   // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
   // Anonymous-inclusive and crawler-excluded; owner-excluded only when the owner is
@@ -1537,8 +1684,13 @@ function bumpViewCount(
   // for externalViewCount, where it was a credit-reward bypass): a per-link count is a
   // vanity/diagnostic number that grants nothing.
   const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
-  void (
-    countsAsShareView
+  void (async () => {
+    const countsAsExternal =
+      signedInOther &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [String(viewer!.id)]).catch(() => false));
+    if (countsAsExternal) void recordVerifiedView(artifact, String(viewer!.id), true).catch(() => undefined);
+    const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
+    await (countsAsShareView
       ? PublishedArtifact.updateOne(
           { publicId: artifact.publicId },
           {
@@ -1547,8 +1699,8 @@ function bumpViewCount(
           },
           { arrayFilters: [{ 'entry._id': shareTokenEntryId }] }
         )
-      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc })
-  ).catch(() => undefined);
+      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }));
+  })().catch(() => undefined);
   // Audit non-owner authenticated gate views only: the point is who OTHER than the
   // owner reached a gated artifact, and the owner bypasses their own gate anyway.
   if (gateView && viewer?.id && !isOwner) {
@@ -2042,6 +2194,54 @@ const PIN_BRIDGE_JS = String.raw`(function(){
 function injectPinBridge(srcdoc: string): string {
   const tag = `<script>${PIN_BRIDGE_JS}</script>`;
   return /<\/body>/i.test(srcdoc) ? srcdoc.replace(/<\/body>/i, `${tag}</body>`) : srcdoc + tag;
+}
+
+type FileSigner = ((path: string, wantsDownload: boolean, ttlSeconds: number) => Promise<string | null>) & {
+  /** Origin of this deployment's signed links, '' when signing is unavailable or unsafe. */
+  origin: () => Promise<string>;
+};
+
+/**
+ * Signs bundle files for this request (see signedFiles.ts). Returns null instead of a URL
+ * whenever the storage cannot sign for browsers (e.g. a server-only endpoint), its signing
+ * origin is an app-controlled host, or a link lands anywhere but that one origin - callers
+ * then fall back to the buffered path. The origin comes from the storage's own config, so
+ * a CSP naming it admits exactly the bucket.
+ */
+function makeFileSigner(
+  storage: ReturnType<typeof getPublishedArtifactsStorage>,
+  page: { storageKeyPrefix: string; indexObjectPath?: string | null },
+  req: Request
+): FileSigner {
+  const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
+  let origin: Promise<string> | undefined;
+  const originOnce = (): Promise<string> =>
+    (origin ??= (async () => {
+      if (typeof storage.browserSigningOrigin !== 'function') return '';
+      try {
+        const found = await storage.browserSigningOrigin();
+        return found && isSafeSignedOrigin(found, docOrigin) ? found : '';
+      } catch {
+        return '';
+      }
+    })());
+  const signer = (async (path: string, wantsDownload: boolean, ttlSeconds: number) => {
+    const allowed = await originOnce();
+    if (!allowed) return null;
+    try {
+      const key = path === 'index.html' ? currentPublishedIndexKey(page) : `${page.storageKeyPrefix}${path}`;
+      const url = await storage.getSignedUrl(key, 'get', {
+        audience: 'browser',
+        expiresIn: ttlSeconds,
+        ...signedResponseFor(path, wantsDownload),
+      });
+      return new URL(url).origin === allowed ? url : null;
+    } catch {
+      return null;
+    }
+  }) as FileSigner;
+  signer.origin = originOnce;
+  return signer;
 }
 
 function buildAnnotateOverlayHtml(artifact: PublishedArtifactLean): string {

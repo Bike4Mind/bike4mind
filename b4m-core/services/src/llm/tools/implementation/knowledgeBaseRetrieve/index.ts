@@ -86,7 +86,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           );
         }
 
-        context.logger.log('📖 Knowledge Retrieve: params', { file_id, tags, query, max_chars: charBudget });
+        context.logger.log('Knowledge Retrieve: params', {
+          file_id,
+          tags,
+          queryLength: query?.length ?? 0,
+          max_chars: charBudget,
+        });
 
         if (!file_id && !tags?.length && !query) {
           return 'Error: You must provide at least one of file_id, tags, or query.';
@@ -100,7 +105,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             promptMeta: {
               retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
             },
-          } as any);
+          });
           return 'Knowledge base retrieval is not available at this time.';
         }
 
@@ -113,7 +118,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             promptMeta: {
               retrieval: { attempted: true, outcome: 'failed', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
             },
-          } as any);
+          });
           return 'Knowledge base retrieval is not available at this time (chunk reader unavailable).';
         }
 
@@ -140,7 +145,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 dataLakeTags: [],
               },
             },
-          } as any);
+          });
           return file_id ? notFoundMsg(file_id) : 'No documents found matching your request in your knowledge base.';
         }
 
@@ -178,7 +183,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 promptMeta: {
                   retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
                 },
-              } as any);
+              });
               return notFoundMsg(file_id);
             }
 
@@ -200,7 +205,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                       dataLakeTags: [],
                     },
                   },
-                } as any);
+                });
                 return notFoundMsg(file_id);
               }
               const scopedFile = await context.db.fabfiles.findById(file_id);
@@ -265,7 +270,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 promptMeta: {
                   retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
                 },
-              } as any);
+              });
               return notFoundMsg(file_id);
             }
           }
@@ -348,7 +353,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 promptMeta: {
                   retrieval: { attempted: true, outcome: 'ok', surfaces: ['knowledgeBaseRetrieve'], dataLakeTags: [] },
                 },
-              } as any);
+              });
               return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
@@ -489,7 +494,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   dataLakeTags: [],
                 },
               },
-            } as any);
+            });
             // A file already inlined into this turn's prompt (attached but still chunking) has its
             // content in front of the model regardless of this zero-chunk result - say so explicitly
             // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
@@ -666,7 +671,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   dataLakeTags: [],
                 },
               },
-            } as any,
+            },
             'Knowledge base content retrieved'
           );
           context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
@@ -717,7 +722,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 dataLakeTags: [],
               },
             },
-          } as any);
+          });
           if (malformedFileId) return notFoundMsg(file_id);
           return 'An error occurred while retrieving document content. Please try again.';
         }

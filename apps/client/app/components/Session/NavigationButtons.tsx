@@ -7,7 +7,7 @@ import type { NavigationIntent } from '@bike4mind/common';
 
 interface NavigationButtonsProps {
   navigationIntents: NavigationIntent[];
-  /** Buttons placed ahead of the navigation ones in the same row (the reply's numbered choices). */
+  /** A block placed above the navigation row, under the same rule (the reply's numbered choices). */
   leading?: ReactNode;
   label?: string;
 }
@@ -41,32 +41,36 @@ const NavigationButtons: FC<NavigationButtonsProps> = ({
         borderColor: 'divider',
       }}
     >
-      {/* display: block because Joy renders body-xs as a span, and a margin on an
-          inline element is ignored - the gap below was coming from the line box. */}
-      <Typography level="body-xs" sx={{ display: 'block', mb: '8px', color: 'text.primary', fontWeight: 600 }}>
-        {label}
-      </Typography>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap role="group" aria-label="Suggested next steps">
-        {leading}
-        {visibleIntents.map(intent => (
-          // The app's secondary action, at the same metrics as the ones in a brief
-          // card: a suggestion is not the reply's own call to action.
-          <Tooltip key={intent.viewId} title={intent.reason} placement="top" arrow>
-            <Button
-              variant="outlined"
-              color="neutral"
-              size="sm"
-              onClick={() => execute(intent)}
-              data-testid={`nav-btn-${intent.viewId}`}
-              // The app's surface ground, not the reply bubble's: the buttons are
-              // chrome the answer carries, so they sit on the app's own colour.
-              sx={{ ...compactButtonSx, backgroundColor: 'background.surface' }}
-            >
-              {intent.label}
-            </Button>
-          </Tooltip>
-        ))}
-      </Stack>
+      {leading}
+      {visibleIntents.length > 0 && (
+        <Box sx={leading ? { mt: '16px' } : undefined}>
+          {/* display: block because Joy renders body-xs as a span, and a margin on an
+              inline element is ignored - the gap below was coming from the line box. */}
+          <Typography level="body-xs" sx={{ display: 'block', mb: '8px', color: 'text.primary', fontWeight: 600 }}>
+            {label}
+          </Typography>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap role="group" aria-label="Suggested next steps">
+            {visibleIntents.map(intent => (
+              // The app's secondary action, at the same metrics as the ones in a brief
+              // card: a suggestion is not the reply's own call to action.
+              <Tooltip key={intent.viewId} title={intent.reason} placement="top" arrow>
+                <Button
+                  variant="outlined"
+                  color="neutral"
+                  size="sm"
+                  onClick={() => execute(intent)}
+                  data-testid={`nav-btn-${intent.viewId}`}
+                  // The app's surface ground, not the reply bubble's: the buttons are
+                  // chrome the answer carries, so they sit on the app's own colour.
+                  sx={{ ...compactButtonSx, backgroundColor: 'background.surface' }}
+                >
+                  {intent.label}
+                </Button>
+              </Tooltip>
+            ))}
+          </Stack>
+        </Box>
+      )}
     </Box>
   );
 };

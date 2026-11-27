@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { questRepository } from '@bike4mind/database';
 import {
   AdminSupportAccessAction,
@@ -33,55 +33,57 @@ const PaginationSchema = z.object({
   sort: z.enum(['asc', 'desc']).prefault('asc'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  const ctx = await authorizeSupportRead(req);
-  const { page, limit, sort } = PaginationSchema.parse(req.query);
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { GET: 'support:read' } }).get(
+  async (req, res) => {
+    const ctx = await authorizeSupportRead(req);
+    const { page, limit, sort } = PaginationSchema.parse(req.query);
 
-  const { data, hasMore } = await questRepository.findPageBySessionId(ctx.session.id, { page, limit, sort });
+    const { data, hasMore } = await questRepository.findPageBySessionId(ctx.session.id, { page, limit, sort });
 
-  // Awaited before responding: an unauditable support read is not served. The page
-  // AND the conversation-derived fields actually disclosed are recorded, so the
-  // trail is a faithful account of what was read rather than just that a read
-  // happened.
-  await recordSupportRead(ctx, AdminSupportAccessAction.SessionQuestsRead, {
-    page,
-    limit,
-    sort,
-    returned: data.length,
-    hasMore,
-    disclosedSummary: Boolean(ctx.session.summary),
-    disclosedContextSummary: Boolean(ctx.session.contextSummary),
-    disclosedConversationContext: Boolean(ctx.session.conversationContext),
-  });
+    // Awaited before responding: an unauditable support read is not served. The page
+    // AND the conversation-derived fields actually disclosed are recorded, so the
+    // trail is a faithful account of what was read rather than just that a read
+    // happened.
+    await recordSupportRead(ctx, AdminSupportAccessAction.SessionQuestsRead, {
+      page,
+      limit,
+      sort,
+      returned: data.length,
+      hasMore,
+      disclosedSummary: Boolean(ctx.session.summary),
+      disclosedContextSummary: Boolean(ctx.session.contextSummary),
+      disclosedConversationContext: Boolean(ctx.session.conversationContext),
+    });
 
-  const quests: IAdminSupportQuest[] = data.map(quest => ({
-    id: quest.id,
-    timestamp: quest.timestamp,
-    type: quest.type,
-    status: quest.status,
-    errorCode: quest.errorCode,
-    prompt: quest.prompt,
-    reply: quest.reply,
-    replies: quest.replies,
-    fabFileIds: quest.fabFileIds,
-    images: quest.images,
-    model: quest.promptMeta?.model?.name,
-    creditsUsed: quest.creditsUsed,
-  }));
+    const quests: IAdminSupportQuest[] = data.map(quest => ({
+      id: quest.id,
+      timestamp: quest.timestamp,
+      type: quest.type,
+      status: quest.status,
+      errorCode: quest.errorCode,
+      prompt: quest.prompt,
+      reply: quest.reply,
+      replies: quest.replies,
+      fabFileIds: quest.fabFileIds,
+      images: quest.images,
+      model: quest.promptMeta?.model?.name,
+      creditsUsed: quest.creditsUsed,
+    }));
 
-  const response: IAdminSupportQuestsResponse = {
-    sessionId: ctx.session.id,
-    page,
-    limit,
-    hasMore,
-    quests,
-    sessionContext: {
-      summary: ctx.session.summary,
-      contextSummary: ctx.session.contextSummary,
-      conversationContext: ctx.session.conversationContext,
-    },
-  };
-  return res.json(response);
-});
+    const response: IAdminSupportQuestsResponse = {
+      sessionId: ctx.session.id,
+      page,
+      limit,
+      hasMore,
+      quests,
+      sessionContext: {
+        summary: ctx.session.summary,
+        contextSummary: ctx.session.contextSummary,
+        conversationContext: ctx.session.conversationContext,
+      },
+    };
+    return res.json(response);
+  }
+);
 
 export default handler;

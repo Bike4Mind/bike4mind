@@ -96,6 +96,7 @@ export const revokeAccess = async (
   // admin, the principal whose action ended the access.
   const purged = await purgeOrgMembershipArtifacts(userId, organization, { userId: user.id }, adapters);
   organization.adminUserIds = purged.adminUserIds;
+  organization.billingManagerUserIds = purged.billingManagerUserIds;
 
   await adapters.db.organizations.removeMember(organization.id, userId);
 
@@ -105,9 +106,9 @@ export const revokeAccess = async (
   // acceptOrganization/addMember. We hold only the removed user's id here, so fetch them to compare.
   // Idempotent under a withTransaction retry (a re-run recomputes the same set-to-null).
   const removed = await adapters.db.users.findById(userId);
-  if (removed?.organizationId?.toString() === id) {
+  if (removed?.organizationId?.toString() === organization.id) {
     await adapters.db.users.update({ id: userId, organizationId: null });
   }
 
-  return organization;
+  return { organization, revokedOrgBilledApiKeyIds: purged.revokedOrgBilledApiKeyIds };
 };

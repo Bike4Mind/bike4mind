@@ -9,6 +9,7 @@ import * as tagService from '../tagService';
 import { mockResearchTask } from '../__tests__/utils/testUtils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { getLinksFromHtml } from '../lib/cheerio';
+import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 
 vi.mock('../lib/turndown', () => ({
   htmlToMarkdown: vi.fn().mockImplementation(html => html),
@@ -18,6 +19,9 @@ vi.mock('../lib/turndown', () => ({
 vi.mock('../lib/cheerio', () => ({
   getLinksFromHtml: vi.fn().mockReturnValue([]),
 }));
+
+vi.mock('../llm/tools/implementation/deepResearch', () => ({ performDeepResearch: vi.fn() }));
+vi.mock('../apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn(async () => ({ openai: 'sk-platform-test' })) }));
 
 vi.mock('../fabFileService', () => ({ createFabFile: vi.fn() }));
 vi.mock('../taskSchedulerService', () => ({ create: vi.fn() }));
@@ -110,6 +114,7 @@ describe('researchTaskService - process', () => {
       findByUrlAndUserIdAndOrganizationId: vi.fn().mockResolvedValue(null),
       findByUrlAndUserId: vi.fn().mockResolvedValue(null),
       existsByUrlAndResearchTaskId: vi.fn().mockResolvedValue(false),
+      update: vi.fn(),
     };
     mockFileTagRepo = {
       findByIdAndUserId: vi.fn(),
@@ -172,6 +177,29 @@ describe('researchTaskService - process', () => {
       content: '# Scraped Title\nTest content', // Always use markdown content
       fileSize: Buffer.byteLength('# Scraped Title\nTest content', 'utf8'),
     }));
+  });
+
+  it('keeps the metered worker backend for deep research instead of passing replacement provider keys', async () => {
+    const task = mockResearchTask({
+      id: 'deep-task',
+      type: ResearchTaskType.DEEP_RESEARCH,
+      description: 'Research bicycles',
+    });
+    mockResearchTaskRepo.findByIdAndUserId.mockResolvedValue(task);
+    mockResearchTaskRepo.findById.mockResolvedValue(task);
+    mockLLM.currentModel = 'metered-operations-model';
+    vi.mocked(performDeepResearch).mockResolvedValue({
+      success: true,
+      data: { findings: [], finalAnalysisPrompt: '', completedSteps: 1, totalSteps: 1 },
+    });
+
+    await process(mockUser, { id: task.id }, adapters);
+
+    expect(performDeepResearch).toHaveBeenCalledOnce();
+    const [context, , config] = vi.mocked(performDeepResearch).mock.calls[0];
+    expect(context.llm).toBe(mockLLM);
+    expect(config?.model).toBe('metered-operations-model');
+    expect(config).not.toHaveProperty('apiKeys');
   });
 
   it('should process a scrape research task successfully', async () => {
@@ -1036,6 +1064,28 @@ describe('researchTaskService - process', () => {
         taskId,
         'Storage limit reached: kept the previous copy of https://example.com'
       );
+    });
+
+    it('creates a fresh file and relinks the research data when the linked file has another owner', async () => {
+      const taskId = 'test-task-id';
+      const mockTask = mockResearchTask({ id: taskId, urls: ['https://example.com'], canDiscoverLinks: false });
+      (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+      (mockResearchTaskRepo.findById as Mock).mockResolvedValue(mockTask);
+      (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '# Test Content', metadata: {} });
+      vi.mocked(findOrUpdateExistingResearchData).mockResolvedValue({
+        file: null,
+        researchData: { id: 'legacy-research-data-id' },
+        storageLimitReached: false,
+      });
+      (fabFilesService.createFabFile as Mock).mockResolvedValue({ id: 'fresh-file-id', fileName: 'fresh.md' });
+
+      await process(mockUser, { id: taskId }, adapters);
+
+      expect(fabFilesService.createFabFile).toHaveBeenCalledWith(mockUser.id, expect.anything(), expect.anything());
+      expect(mockResearchDataRepo.update).toHaveBeenCalledWith({
+        id: 'legacy-research-data-id',
+        fabFileId: 'fresh-file-id',
+      });
     });
 
     it('clears the previous run warnings when a run starts', async () => {

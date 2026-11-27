@@ -6,7 +6,11 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
-import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
+import {
+  fileContentUrl,
+  signFabFileGet,
+  type FabFileSignOptions,
+} from '@bike4mind/server-utils/files/browserFileSigner';
 
 /**
  * The files attached to one quest, with a fresh signed `fileUrl` on each serveable file. Shared by
@@ -14,8 +18,9 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
  * the DB and storage wiring cannot drift; the public route projects the result through toPublicFile.
  *
  * Throws NotFoundError for a quest that does not exist, or whose session the caller cannot see.
+ * `browser` hands out the stable app URL (browserFileSigner.ts) instead of a raw S3 link.
  */
-export async function listQuestFiles(userId: string, questId: string) {
+export async function listQuestFiles(userId: string, questId: string, { browser = false }: { browser?: boolean } = {}) {
   return fabFilesService.listFabFilesByQuest(
     userId,
     { questId },
@@ -28,9 +33,9 @@ export async function listQuestFiles(userId: string, questId: string) {
         adminSettings: adminSettingsRepository,
       },
       storage: {
-        ...(process.env.S3_PRESIGN_ENDPOINT?.trim() && { signedUrlCache: 'bypass' as const }),
-        generateSignedUrl: async (path: string, expireInSeconds: number) =>
-          getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds, audience: 'browser' }),
+        generateSignedUrl: async (path: string, expireInSeconds: number, options?: FabFileSignOptions) =>
+          signFabFileGet(path, expireInSeconds, options),
+        ...(browser && { contentUrl: fileContentUrl }),
       },
     }
   );

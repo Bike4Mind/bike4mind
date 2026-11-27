@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
 import { determineSessionOperations } from '@bike4mind/server-utils/utils/sessionOperations';
-import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
+import { createChatHistoryWrites, createSessionWrites } from '@bike4mind/server-utils/s3/notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -21,7 +21,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * Drives the REAL service through the REAL write adapters against a real database, because the
  * defect lived in the adapter, not in the service.
  *
- * Run `pnpm --filter @bike4mind/services build` (or `pnpm turbo:core:build`) first. This imports
+ * Run `pnpm --filter @bike4mind/services-core build` (or `pnpm turbo:core:build`) first. This imports
  * the service from the built dist, not from src, so a stale dist reports green against whatever
  * was last compiled - on exactly the service this file exists to guard. CI builds core fresh, so
  * the hazard is local only.
@@ -113,6 +113,7 @@ function makeService(attachmentAdapters: Partial<Record<string, unknown>> = {}) 
     createArtifact: async () => null,
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },
+    findOwnedMediaKeys: async (keys: string[]) => new Set(keys),
     userRepository: { findById: async () => ({ id: USER }) },
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {

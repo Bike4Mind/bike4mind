@@ -12,7 +12,7 @@ interface RefuseInviteAdapters {
   db: {
     invites: {
       findByIdAndPendingEmail: (id: string, email: string) => Promise<IInvite>;
-      update(data: Partial<IInvite>): Promise<unknown>;
+      refusePendingRecipient: (id: string, email: string) => Promise<IInvite | null>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument>;
@@ -38,12 +38,6 @@ export const refuseInvite = async (
     throw new UnprocessableEntityError('Invite has expired');
   }
 
-  if (invite.recipients) {
-    invite.recipients.pending = invite.recipients.pending?.filter(p => p !== user.email);
-    invite.recipients.refused.push(user.email);
-    invite.remaining -= 1;
-    await db.invites.update({ id: invite.id, recipients: invite.recipients, remaining: invite.remaining });
-  }
-
-  return invite;
+  if (!invite.recipients) return invite;
+  return (await db.invites.refusePendingRecipient(invite.id, user.email)) ?? invite;
 };

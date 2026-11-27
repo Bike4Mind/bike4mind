@@ -1,5 +1,4 @@
 import { z } from 'zod';
-
 import {
   actorKindSchema,
   hearthEventKindSchema,
@@ -9,13 +8,19 @@ import {
 } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { TurnTimingSchema } from './turnTiming';
+import { StudioJobCompletionSchema } from './studioJobCompleted';
+import { SessionHandoffAction } from './sessionHandoff';
+import { LOW_CONFIDENCE_COMPLETION_MODES } from './settings';
 import { supportedChatModels } from '../models';
-import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
+import { shareableDocumentSchema, QUEST_OUTCOME_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
-import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
+import {
+  GENERATION_JOB_KINDS,
+  GENERATION_JOB_STATES,
+  QUEST_GENERATION_JOB_KINDS,
+} from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
-import { CompletionProviderBlockEventSchema, CompletionToolSchema, ResponseFormatSchema } from './cliCompletions';
 
 // Schemas for actions sent over the WebSocket connection.
 
@@ -44,6 +49,8 @@ export const DataSubscribeRequestAction = z.object({
   // z.looseObject({}).
   fields: z.record(z.string(), z.union([z.boolean(), z.number()])),
   fetchInitialData: z.boolean().prefault(true).optional(),
+  /** Single-org signal listeners may require snapshot delivery after registration; not a snapshot-consistency guarantee. */
+  initialDataAfterSubscribe: z.boolean().optional(),
   clientId: z.string().optional(),
 });
 export type IDataSubscribeRequestAction = z.infer<typeof DataSubscribeRequestAction>;
@@ -81,34 +88,6 @@ export const VoiceSessionSendTranscriptAction = z.object({
   timestamp: z.coerce.date().optional(),
 });
 export type IVoiceSessionSendTranscriptAction = z.infer<typeof VoiceSessionSendTranscriptAction>;
-
-/**
- * CLI Completion request over WebSocket (bypasses CloudFront 20s timeout)
- */
-export const CliCompletionRequestAction = z.object({
-  action: z.literal('cli_completion_request'),
-  accessToken: z.string(),
-  requestId: z.uuid(),
-  model: z.string(),
-  messages: z.array(
-    z.object({
-      role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([z.string(), z.array(z.unknown())]),
-      // per-message cache flag (Anthropic only - silently ignored elsewhere)
-      cache: z.boolean().optional(),
-    })
-  ),
-  options: z
-    .object({
-      temperature: z.number().optional(),
-      maxTokens: z.number().optional(),
-      stream: z.boolean().optional(),
-      tools: z.array(CompletionToolSchema).optional(),
-      response_format: ResponseFormatSchema.optional(),
-    })
-    .optional(),
-});
-export type ICliCompletionRequestAction = z.infer<typeof CliCompletionRequestAction>;
 
 /**
  * CLI Tool execution request over WebSocket
@@ -365,11 +344,19 @@ export const GenerationJobUpdatedAction = z.object({
     progress: z.number().min(0).max(1).optional(),
     error: z.object({ code: z.string(), message: z.string() }).optional(),
     output: z
-      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number() })
+      // durationSeconds: absent for an image.
+      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number().optional() })
       .optional(),
   }),
 });
 export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
+
+/** Relays a studio.job.completed event to the requester's open sessions (apps/workers/src/events/studioJobCompleted.ts). */
+export const StudioJobCompletedAction = z.object({
+  action: z.literal('studio_job_completed'),
+  completion: StudioJobCompletionSchema,
+});
+export type IStudioJobCompletedAction = z.infer<typeof StudioJobCompletedAction>;
 
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
@@ -384,15 +371,15 @@ export const StreamedChatCompletionAction = z.object({
       images: z.array(z.string()).optional(),
       videos: z.array(z.string()).optional(),
       videoJobIds: z.array(z.string()).optional(),
-      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+      generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(QUEST_GENERATION_JOB_KINDS) })).optional(),
       // Derived from CHAT_HISTORY_ITEM_TYPES so the WebSocket payload cannot publish a
       // narrower quest-type vocabulary than the REST surfaces (schemas/chat.ts) do.
       type: z.enum(CHAT_HISTORY_ITEM_TYPES),
       status: z.enum(['stopped', 'running', 'done']).optional(),
       // Machine-readable classifier for `type: 'error'` quests so the client can render a
       // targeted error state (e.g. the inline "Add Credits" CTA) rather than raw `reply` text.
-      // Values derive from QUEST_ERROR_CODES so this enum can't drift from the TS union.
-      errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+      // Values derive from QUEST_OUTCOME_ERROR_CODES so this enum can't drift from the TS union.
+      errorCode: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
       questMasterReply: z.string().nullable().optional(),
       questMasterPlanId: z.string().optional(),
       creditsUsed: z.number().optional(),
@@ -506,6 +493,11 @@ export const InvalidateQueryAction = z.object({
   queryKey: z.array(z.unknown()),
 });
 
+export const AccountDataExportReadyAction = z.object({
+  action: z.literal('account_data_export_ready'),
+  exportJobId: z.uuid(),
+});
+
 /**
  * Temporary ws action until the collection/document subscription feature lands.
  */
@@ -598,55 +590,6 @@ export const VoiceCreditsExhaustedAction = z.object({
 export type IVoiceCreditsExhaustedAction = z.infer<typeof VoiceCreditsExhaustedAction>;
 
 /**
- * CLI Completion chunk sent from server over WebSocket
- * Mirrors SSEContentEvent shape for minimal server-side changes
- */
-export const CliCompletionChunkAction = z.object({
-  action: z.literal('cli_completion_chunk'),
-  requestId: z.string(),
-  chunk: z.union([
-    z.object({
-      type: z.enum(['content', 'tool_use']),
-      text: z.string(),
-      toolStarted: z.object({ name: z.string(), id: z.string().optional() }).optional(),
-      tools: z.array(z.unknown()).optional(),
-      usage: z
-        .object({
-          inputTokens: z.number().optional(),
-          outputTokens: z.number().optional(),
-        })
-        .optional(),
-      thinking: z.array(z.unknown()).optional(),
-    }),
-    CompletionProviderBlockEventSchema,
-  ]),
-});
-export type ICliCompletionChunkAction = z.infer<typeof CliCompletionChunkAction>;
-
-/**
- * CLI Completion stream finished successfully
- */
-export const CliCompletionDoneAction = z.object({
-  action: z.literal('cli_completion_done'),
-  requestId: z.string(),
-});
-export type ICliCompletionDoneAction = z.infer<typeof CliCompletionDoneAction>;
-
-/**
- * CLI Completion stream error
- */
-export const CliCompletionErrorAction = z.object({
-  action: z.literal('cli_completion_error'),
-  requestId: z.string(),
-  error: z.string(),
-  /** Seconds until the caller's rate-limit window reopens; present only on a rate-limit refusal. */
-  retryAfter: z.number().optional(),
-  /** Machine-readable reason on a request the caller must fix (a 4xx), e.g. `tool_search_unsupported`. */
-  errorCode: z.string().optional(),
-});
-export type ICliCompletionErrorAction = z.infer<typeof CliCompletionErrorAction>;
-
-/**
  * CLI Tool execution response over WebSocket
  */
 export const CliToolResponseAction = z.object({
@@ -655,6 +598,8 @@ export const CliToolResponseAction = z.object({
   success: z.boolean(),
   content: z.unknown().optional(),
   error: z.string().optional(),
+  /** Billing classifier on a failure, e.g. `insufficient_credits`. */
+  errorCode: z.string().optional(),
 });
 export type ICliToolResponseAction = z.infer<typeof CliToolResponseAction>;
 
@@ -1273,6 +1218,7 @@ export const AgentStepSchema = z.object({
         .optional(),
       confidence: z.number().optional(),
       confidenceSource: z.enum(['deterministic', 'llm_self_report', 'heuristic', 'default']).optional(),
+      confidenceReason: z.string().optional(),
     })
     .optional(),
 });
@@ -1338,7 +1284,7 @@ export const AgentProgressAction = z.object({
   // Jobs a tool just started, or a write preview awaiting confirmation, so the client can render
   // their cards on the run's quest mid-run. questId is only set together with generationJobs or pendingAction.
   questId: z.string().optional(),
-  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(GENERATION_JOB_KINDS) })).optional(),
+  generationJobs: z.array(z.object({ id: z.string(), kind: z.enum(QUEST_GENERATION_JOB_KINDS) })).optional(),
   pendingAction: z.object({ tool: z.string(), params: z.record(z.string(), z.unknown()), ts: z.number() }).optional(),
 });
 
@@ -1484,8 +1430,23 @@ export const ConfidenceGateAction = z.object({
   iteration: z.number(),
   /** 0..1, the agent's reported confidence for the paused iteration. */
   confidence: z.number(),
-  /** Pre-formatted server copy, e.g. "Iteration confidence 42% below threshold 60%". */
+  /** Pre-formatted server copy, e.g. "2 iterations in a row below the 60% confidence threshold (latest 42%)". */
   reason: z.string(),
+});
+
+/**
+ * A final answer reached on low confidence. Distinct from `confidence_gate`: that event pauses a
+ * run mid-flight, this one reports a run that already has its answer. `annotate` keeps the answer
+ * and completes; `block` also pauses the run for review (the answer stays in the checkpoint).
+ */
+export const LowConfidenceCompletionAction = z.object({
+  action: z.literal('low_confidence_completion'),
+  executionId: z.string(),
+  /** 0..1, the confidence of the last gate-evaluated iteration before the answer. */
+  confidence: z.number(),
+  /** Pre-formatted server copy, e.g. "Answered after an iteration below the 60% confidence threshold (latest 42%)". */
+  reason: z.string(),
+  mode: z.enum(LOW_CONFIDENCE_COMPLETION_MODES).exclude(['off']),
 });
 
 /**
@@ -1604,7 +1565,6 @@ export const MessageDataToServer = z.discriminatedUnion('action', [
   ReauthConnectionAction,
   VoiceSessionSendTranscriptAction,
   VoiceSessionEndedAction,
-  CliCompletionRequestAction,
   CliToolRequestAction,
   KeepCommandRequestAction,
   KeepCommandResponseAction,
@@ -1625,7 +1585,9 @@ export const OptiHashiRunUpdatedAction = z.object({
 export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedAction>;
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
+  SessionHandoffAction,
   GenerationJobUpdatedAction,
+  StudioJobCompletedAction,
   DataSubscriptionUpdateAction,
   DataSubscribeErrorAction,
   ResubscribeRequiredAction,
@@ -1638,6 +1600,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   StreamedChatCompletionAction,
   StreamedRapidReplyAction,
   InvalidateQueryAction,
+  AccountDataExportReadyAction,
   UpdateResearchTaskStatusAction,
   ImportHistoryJobProgressUpdateAction,
   ResearchModeStreamAction,
@@ -1653,9 +1616,6 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   PiHistoryErrorAction,
   SessionCreatedAction,
   VoiceCreditsExhaustedAction,
-  CliCompletionChunkAction,
-  CliCompletionDoneAction,
-  CliCompletionErrorAction,
   CliToolResponseAction,
   KeepCommandAction,
   KeepCommandResultAction,
@@ -1687,6 +1647,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   SubagentProgressAction,
   PermissionRequestAction,
   ConfidenceGateAction,
+  LowConfidenceCompletionAction,
   ReconnectResultAction,
 ]);
 export type IMessageDataToClient = z.infer<typeof MessageDataToClient>;

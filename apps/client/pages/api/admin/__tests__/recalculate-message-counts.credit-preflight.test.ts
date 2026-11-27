@@ -8,6 +8,8 @@ const { mockAssertCredits, mockCount, mockCountTaggable, mockPublishStart } = vi
   mockPublishStart: vi.fn(),
 }));
 
+const { mockAudit } = vi.hoisted(() => ({ mockAudit: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({ recordAdminActionFromRequest: mockAudit }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const chain: Record<string, unknown> = {};
@@ -22,8 +24,8 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/database/auth', () => ({
   sessionRepository: { count: mockCount, countTaggableNotebooks: mockCountTaggable },
 }));
-vi.mock('@server/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
-vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
+vi.mock('@bike4mind/server-utils/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
 }));
 
@@ -45,7 +47,12 @@ const ungroomedField = (call: unknown[]) => {
 const run = async (body: Record<string, unknown>) => {
   const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-    { user: { id: 'admin-1', isAdmin: true }, query: {}, body, logger: undefined },
+    {
+      user: { id: 'admin-1', isAdmin: true },
+      query: {},
+      body,
+      logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+    },
     res
   );
   return res;
@@ -65,6 +72,21 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     mockCountTaggable.mockResolvedValue(UNGROOMED_PER_OPERATION);
     mockAssertCredits.mockResolvedValue(undefined);
     mockPublishStart.mockResolvedValue(undefined);
+    mockAudit.mockResolvedValue(null);
+  });
+
+  it('audits a real run after the job is published but not a dry run', async () => {
+    await run({ operations: ['messageCount'], dryRun: true });
+    expect(mockAudit).not.toHaveBeenCalled();
+
+    await run({ operations: ['messageCount'] });
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toMatchObject({
+      action: 'ops.spider_job.started',
+      target: { kind: 'system', id: 'spider-job' },
+      details: { totalNotebooks: TOTAL_NOTEBOOKS, operations: ['messageCount'] },
+    });
+    expect(mockPublishStart.mock.invocationCallOrder[1]).toBeLessThan(mockAudit.mock.invocationCallOrder[0]);
   });
 
   // The batch is what makes the spider the largest operational spend on the platform: a check
@@ -175,7 +197,12 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
 
     const res = { json: vi.fn(), status: vi.fn().mockReturnThis() };
     const thrown = await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { user: { id: 'admin-1', isAdmin: true }, query: {}, body: { operations: ['summarize'] }, logger: undefined },
+      {
+        user: { id: 'admin-1', isAdmin: true },
+        query: {},
+        body: { operations: ['summarize'] },
+        logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+      },
       res
     ).catch((err: unknown) => err);
 

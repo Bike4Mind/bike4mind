@@ -2,8 +2,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { PROJECTS_WRITE_SCOPES } from '@server/projects/projectScopes';
 import { fabFileRepository, projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-import { logEvent } from '@server/utils/analyticsLog';
-import { ProjectEvents, IProjectDocument } from '@bike4mind/common';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { respond } from '@server/utils/respond';
+import { ProjectEvents, IProjectDocument, removeNonExistentFilesResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
 const RequestSchema = z.object({
@@ -60,14 +61,12 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async 
 
       results.push(updatedProject);
     } catch (error) {
-      console.error('Error processing project %s: %s', project.id, error);
+      req.logger.error('Error processing project', { projectId: project.id, error });
       // don't let one failing project abort the batch
     }
   }
 
-  return res.status(200).json({
-    updatedProjects: results,
-  });
+  return respond(res, removeNonExistentFilesResponseSchema, { updatedProjects: results });
 });
 
 export default handler;

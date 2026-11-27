@@ -59,4 +59,27 @@ describe('buildRecentGeneratedImagesNote', () => {
     expect(text).toContain('call edit_image');
     expect(text).toContain('call video_generation');
   });
+
+  describe('image job outputs', () => {
+    const imageJobFiles = [{ fileId: 'a'.repeat(24), prompt: 'a blue kite' }];
+
+    it('lists them by file id even with no generated keys, naming the file-id field of each tool', () => {
+      const [note] = buildRecentGeneratedImagesNote(ownerInput({ images: [], imageJobFiles }));
+      expect(note.content).toContain(`- ${'a'.repeat(24)} - from: "a blue kite"`);
+      expect(note.content).toContain('edit_image with `image` set to its file id');
+      expect(note.content).toContain('video_generation with `inputImageFileId`');
+      expect(note.content).not.toContain('inputGeneratedImageKey');
+    });
+
+    it('keeps the generated-key entries beside them', () => {
+      const [note] = buildRecentGeneratedImagesNote(ownerInput({ imageJobFiles }));
+      expect(note.content).toContain(`- ${images[0].key} - from: "a red bicycle"`);
+      expect(note.content).toContain('inputGeneratedImageKey');
+      expect(note.content).toContain('inputImageFileId');
+    });
+
+    it('stays empty for a share recipient', () => {
+      expect(buildRecentGeneratedImagesNote(ownerInput({ images: [], imageJobFiles, callerId: 'sharee' }))).toEqual([]);
+    });
+  });
 });

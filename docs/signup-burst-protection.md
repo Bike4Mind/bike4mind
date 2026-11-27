@@ -1,0 +1,157 @@
+# Signup burst protection
+
+## Account risk review and AI access
+
+Accounts whose signup risk score reaches the review threshold enter **Admin > Risk review**, as do
+accounts whose signup credits the signup grant risk policy holds in its review band (marked
+**Credits held**). While a review is pending, AI requests are refused with an account-review message, including
+free models and requests made with API keys. Sign-in and access to existing data remain available;
+users can contact support to request a review. Existing pending reviews also receive this hold.
+
+**Approve** lifts the signup review hold and pays any held signup credits. A separate manual AI restriction or account suspension
+still applies. **Undo** restores the pending review and AI hold but keeps the paid credits. Rescoring updates the score and
+signals but never clears a pending hold or overturns an approval. To deny access to the account
+as a whole, use **Suspend** in the review queue.
+
+This hold is independent of the domain and signup-credit controls below. It does not deduct
+credits or turn a credit-only domain hold into an account suspension. If an approved user still
+cannot use AI, check for a manual AI restriction, suspension, and normal plan and credit limits.
+
+## Domain holds
+
+Admins can enable **Auto-hold Signup Bursts** in Admin > Settings > Users.
+The default is off. **Signup Burst Threshold** defaults to 5 verified signups
+and **Signup Burst Window (hours)** defaults to 6 (maximum 168).
+
+Detection groups verified signups by registrable email domain, including private
+public suffixes, and requires generated local parts as well as the volume threshold.
+The newest 1,000 observations per domain bound each evaluation; reported counts
+refer to that analyzed sample. It recognizes shared alphabetic prefixes with hexadecimal counters and increasing
+hexadecimal suffixes that climb across at least 80% of the generated addresses, so unrelated
+addresses may interrupt the counter cohort but a short run among ID-style addresses does not count,
+with rotating short subdomains included in the review reason.
+Ordinary employee names and volume alone do not trigger a hold. Observations begin
+when detection is enabled; historical users are not reclassified as fresh signups.
+Shared-MX and cross-domain infrastructure correlation are outside this detector.
+
+A held domain can still register, but its pending flat free-credit grants and
+staged signup tranches are withheld. Activity, organization-invite and admin
+unlocks also wait for domain release, before consuming eligibility evidence.
+Already granted balances are never deducted. The manual
+`blockedEmailDomains` setting remains independent and continues to reject regular
+registration. Public mailbox providers, configured synthetic email domains, and
+enabled organization signup-rule domains are exempt from automatic holds.
+
+Review domains in **Admin > Signup Domain Holds**. Both decisions only change free
+signup credits; neither suspends or blocks an account. **Confirm** keeps grants held
+and future signups from the domain get no free credits; it can still be released.
+**Release** permanently exempts that domain from automatic re-holding and retries
+up to 100 verified pending grants. Use **Retry pending grants** if grants remain
+or a credit write failed. Each retry advances past the previous batch; after the
+last batch, another retry starts a fresh pass over failures. A staged account's
+pending signup tranche resumes without granting its remaining unlock entitlement;
+later unlocks still require their normal validators. Manual email blocks still take precedence. The queue
+retains decisions and the admin identity/time of each review; observations expire
+after seven days. A domain's original cohort and five sample emails are retained
+with its review record.
+
+The queue opens on **Pending** (holds still waiting for a decision); **Blocked**,
+**Released** and **All** sit beside it with their counts, and a **Reason** filter
+narrows by hold family. Review rows are never deleted: a released row is what keeps
+its domain exempt and a blocked row is what keeps withholding credits. Settled
+holds decided more than **Signup Domain Holds: Show Settled Holds For (days)**
+ago (default 90) are only hidden from the lists; **Include older settled holds**
+shows them again.
+
+Each newly created hold attempts one Slack notification through
+`SlackSecurityAlertsWebhookUrl`. An empty security URL disables these alerts;
+signup samples never fall back to a general webhook.
+The webhook request times out after three seconds. Configure `APP_URL` for an absolute link to the queue. If delivery fails or no
+webhook is configured, the hold remains effective and the server logs a delivery
+error; notification delivery is not automatically retried. Inspect the queue
+and server logs when detection is enabled but no alert arrives.
+
+Core service consumers can supply `db.signupProtection` with a
+`SignupProtectionRepository` and an optional `notifyHold` callback. The client
+runtime and credit recovery scripts wire the database repository into the shared
+flat-grant and staged-release boundaries. Recovery scripts use `mode: 'enforce'` to check existing holds
+without replaying signup observations or creating holds without notifications. External service consumers without that adapter retain their
+existing behavior.
+
+### Automated triage
+
+The `signupDomainHoldTriage` job (`apps/workers/src/cron/signupDomainHoldTriage.ts`, every 10 minutes) confirms
+`disposable-aggregate` holds while **Auto-Confirm Disposable-List Domain Holds** is on (default on). It only ever
+confirms, which keeps credits held; it never releases. Each confirmation writes a strict
+`signup_domain_hold.auto_confirmed` Admin Audit Log entry with a system actor in the same transaction, and the row
+shows "Auto-confirmed by the disposable list rule". An admin can still **Release** it, which clears the automated
+marker. Other reasons are left for an admin. Admin Confirm and Release write strict
+`signup_domain_hold.confirmed` / `signup_domain_hold.released` entries, and a Release that overrides an automated
+confirmation names the policy it overrode.
+
+After the rule, the same job runs the advisory assessment of pending `young-domain` holds
+(`apps/workers/src/security/signupDomainHoldAssessment`) while **Advisory Assessment of Young-Domain Holds** is on
+(default off). For each hold without a current verdict it asks one Decisions question (`abuse`, `legitimate` or
+`insufficient_evidence`) over a summary of counts and flags only: domain age, mail provider class, whether
+`https://<domain>/` answers with real content and whether that page describes a temporary or disposable mail
+service (both derived in code; the page itself is never sent), signup count and timing, and how many distinct networks,
+ASNs and countries the accounts came from. No email, IP, domain name or site text reaches the model. An `abuse` verdict
+at or above `minConfirmConfidence` (default 0.9) confirms the hold exactly like the rule (strict system audit entry,
+"Auto-confirmed by the advisory assessment").
+
+A `legitimate` verdict releases the hold only when **Auto-release legitimate holds** is on (default off), the
+confidence is at or above `minReleaseConfidence` (default 0.95), and every code guard passes: the site has real
+content and no disposable-mail wording, mail runs on Google Workspace or Microsoft, every summarized signup has known
+network data and none came from a datacenter, and the domain has between 1 and `maxAutoReleaseSignups` (default 2)
+verified accounts still waiting, read live. The summary the guards and the model judge covers the hold's cohort plus
+every account waiting on the domain when the facts are gathered, so a later signup on a held domain is judged with it.
+The waiting accounts are read again just before the release, and an account that joined after the facts were gathered
+keeps the hold pending for an admin. The release adds the accounts it pays to the hold's cohort and pays only those.
+An account that verifies in the moment between that last read and the status change is not covered by the release: it
+stays held and is picked up when the domain is held or decided again (an accepted window, as it never receives credits
+it was not judged for). At most `maxAutoReleasesPerDay` holds (default 5) are released per 24 hours, a window
+opened by the first release, and a release an admin decided first does not use up a slot; the rest wait for an
+admin. Unlike an admin release, an automated release does not exempt the domain for good: the accounts it judged are
+paid, and every other account on the domain stays watched. A later account that would trip a domain-intelligence hold
+(the domain is still young, for example), however long after signup it verified, re-holds it with that reason, so the next
+signups are not paid until the hold is decided again; the domain also stays under burst detection whatever
+**Auto-hold Signup Bursts** says, and a burst re-holds it with the detector's reason (which starts
+`Verified signup burst with generated local parts`). Either re-hold drops the old verdict. An admin can overrule an
+automated release: Confirm blocks the domain (credits already paid stay paid), and Release takes the release over,
+making the exemption permanent like any admin release. A release writes a strict `signup_domain_hold.auto_released` system audit entry in the same
+transaction as the status change, then pays out the held credits within the daily free-grant budget (an admin
+Release bypasses that budget); grants the budget or a payout error leaves pending can be retried from the tab with
+**Retry pending grants**, which on an auto-released row pays only the judged accounts, within the same budget, and
+keeps the automated decision. Recovery scripts in `mode: 'enforce'` likewise pay only those judged accounts and leave
+the rest of a watched domain held.
+
+Every other outcome, including refusals and provider failures, leaves the hold pending with the verdict shown on the
+row; failures retry up to three times, an hour apart, and a domain gets at most three provider calls a day whatever was
+stored. An overloaded or unconfigured provider, a spent budget or a reached call cap ends the run without storing
+anything; a hold whose facts take over 20 seconds to gather is stored as a failed attempt (`summary timeout`). Each judged hold is also recorded
+on the Detections page under the `signupDomainHold` detector so verdicts can be graded; verdicts that would not have
+confirmed are listed there but left out of precision, and the abuse assessment never re-judges them. Calls use the platform key under their own budget, call cap
+and concurrency (**Model and Limits**: no model and a zero budget by default, so nothing is called until an operator
+sets both). Admin Confirm and Release keep the stored verdict as history.
+
+Last, the job rechecks pending `young-domain` holds (`apps/workers/src/cron/signupDomainAgeRecheck.ts`). A hold is
+created once and never re-evaluated at signup, so the job reads the domain's registration date from the cached RDAP
+intel (at most 50 lookups a run; a lookup with no date retries after a day), stores it on the row, and stamps
+`domainAgedAt` once the domain is at least **Hold Signups From Domains Younger Than (days)** old. The row then reads
+"Domain now past the young-domain age". It never releases: an admin release exempts the domain for good, so that call
+stays with an admin.
+
+## Disposable lists and domain intelligence
+
+A daily job (`apps/workers/src/cron/disposableDomainRefresh.ts`) refreshes four upstream disposable-domain lists into MongoDB: the curated `disposable-email-domains/disposable-email-domains` list, `7c/fakefilter`, the UserCheck `tompec/disposable-email-domains` list (`tompec`), and the `disposable/disposable-email-domains` aggregate. A source that fails, returns nothing, or shrinks below half of its last good size keeps its previous entries. Per-source counts, last success and last error appear in **Admin > Signup Domain Holds**; the `disposableDomainRefreshFailures` alarm fires after two failing days. If an upstream genuinely shrinks by half, the floor refuses it every day; delete that source's `disposabledomainsources` document to accept the next snapshot.
+
+- **Rejected** at registration (and withheld on OAuth signup and email change) under **Block Disposable Emails**: the admin `blockedEmailDomains` list, the bundled package list (`disposable-domains`, the npm build of the tompec list), the curated list, fakefilter and tompec. Organization and internal staff domains are never rejected on a refreshed-list hit, since those lists change without review. Every refusal logs a `disposable-email-refused` line with the matching sources and emits `Lumina5/DisposableDomains` `SignupRefusals` with a `Source` dimension (`admin`, `static`, or a list name), so a false positive is traceable to its list.
+- **Held** for review (account created, free credits pending) when **Hold Risky Signup Domains** is on (default on):
+  - `disposable-aggregate`: the domain is only on the aggregate list, which also scrapes and so carries more false positives.
+  - `young-domain`: RDAP reports a registration younger than **Hold Signups From Domains Younger Than (days)** (default 30; 0 turns it off).
+  - `burner-mx`: the domain's MX host belongs to a rejected provider.
+  - `disposable-list`: a rejected-tier domain reached the hold step because **Block Disposable Emails** is off.
+
+Shared commodity mail hosting (Cloudflare Email Routing, Google Workspace) is recorded as a flag and never held on its own; `domainRiskFacts` exposes the flags for a signup risk score. Forwarding/relay services are not ingested: `PRIVACY_RELAY_DOMAINS` in `b4m-core/services/src/userService/disposableEmail.ts` (33mail, SimpleLogin, addy.io, Firefox Relay, DuckDuckGo, Apple) is dropped from every refreshed list and from the bundled list.
+
+RDAP and MX lookups run once per registrable domain, in parallel within **Domain Lookup Timeout (ms)** (default 2000). Results are cached for seven days, failures for an hour (a cold start can spend most of the budget fetching the RDAP bootstrap). A timeout, a registry without RDAP, a rate limit or a DNS error logs a warning and lets the signup through. Domain-intelligence holds share the review queue, Slack alert and Release flow above, apply only to fresh signups, and do not depend on **Auto-hold Signup Bursts**. Mailbox providers, synthetic, organization and internal staff (`NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS`) domains are exempt.

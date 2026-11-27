@@ -4,7 +4,14 @@ import Chip from '@mui/joy/Chip';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { runningTasksLabel, splitTasks, taskElapsedMs, taskTitle } from './backgroundTasks';
+import {
+  runningTasksLabel,
+  splitTasks,
+  taskElapsedMs,
+  taskStatusLabel,
+  taskTitle,
+  useSecondTick,
+} from './backgroundTasks';
 import { ChevronIcon, CloseIcon, ExpandIcon, StopIcon, TrashIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 import { formatElapsed } from './statusLine';
@@ -19,35 +26,6 @@ import type { BackgroundProcessView } from './useBackgroundProcesses';
  */
 export const TASK_PANEL_WIDTH = 300;
 export const TASK_PANEL_WIDE_WIDTH = 480;
-
-/**
- * A clock for the elapsed column, and nothing else.
- *
- * Deliberately scoped to this component: the same per-second `setState` hung off the shell
- * would re-render the whole transcript once a second, and a very long thread is exactly the
- * case that has to stay cheap. It also idles when nothing is running, so a panel left open on
- * a list of finished tasks costs nothing at all - and the panel only mounts while it is open,
- * so a closed panel has no timer to idle.
- */
-function useSecondTick(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-
-  return now;
-}
-
-function statusLabel(entry: BackgroundProcessView): string {
-  if (entry.status === 'killed') return 'stopped';
-  if (entry.status === 'failed') return 'failed';
-  if (entry.exitCode !== null && entry.exitCode !== undefined) return `exit ${entry.exitCode}`;
-  return entry.signal ?? 'exited';
-}
 
 /** A log pane that follows the tail, unless the user has scrolled up to read something. */
 function OutputTail({ text }: { text: string }) {
@@ -107,7 +85,7 @@ function TaskCard({
 }) {
   const [open, setOpen] = useState(false);
   const running = entry.status === 'running';
-  const fields = [running ? 'Bash' : statusLabel(entry), formatElapsed(taskElapsedMs(entry, now))];
+  const fields = [running ? 'Bash' : taskStatusLabel(entry), formatElapsed(taskElapsedMs(entry, now))];
 
   return (
     <Box

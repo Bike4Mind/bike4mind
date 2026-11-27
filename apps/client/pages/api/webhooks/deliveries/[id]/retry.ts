@@ -20,7 +20,6 @@ import { cacheRepository } from '@bike4mind/database';
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';
-import { v4 as uuidv4 } from 'uuid';
 import { Logger } from '@bike4mind/observability';
 
 // Rate limit: 20 retry requests per minute per user
@@ -123,7 +122,7 @@ const handler = baseApi().post(
       });
     }
 
-    const newDeliveryId = uuidv4();
+    const newDeliveryId = crypto.randomUUID();
     const message = {
       eventId: delivery.deliveryId, // Keep original delivery ID as event ID for tracking
       deliveryId: newDeliveryId,
@@ -135,7 +134,7 @@ const handler = baseApi().post(
       eventType: delivery.eventType,
       repository: delivery.repository,
       attempt: 1, // Fresh start
-      correlationId: delivery.correlationId || uuidv4(),
+      correlationId: delivery.correlationId || crypto.randomUUID(),
     };
 
     const sqsClient = new SQSClient({

@@ -1,8 +1,16 @@
+import {
+  type BoundEmbeddingModel,
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
 import { withEventContext } from '@workers/utils/eventContext';
-import { LLMEvents } from '@server/utils/eventBus';
+import { LLMEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+
 import {
   ChatModels,
   MEMENTO_EMBEDDING_ID,
@@ -11,14 +19,15 @@ import {
   MementoTier,
   MementoType,
 } from '@bike4mind/common';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService, mementoService } from '@bike4mind/services';
 import { MementoEvaluationService } from '@bike4mind/services/llm';
-import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
+import { isMementosV2Enabled, writeFactToLedger } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
+import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 
 const { findMostSimilarMemento } = mementoService;
-
-type EmbeddingService = ReturnType<EmbeddingFactory['createEmbeddingService']>;
 
 export const handler = withEventContext(async (event, logger) => {
   // The crypto-shred fence for the V2 write, captured HERE rather than at the write. Everything
@@ -66,6 +75,23 @@ export const handler = withEventContext(async (event, logger) => {
     { logger }
   );
 
+  // Extraction runs on the chat turn's model, not the operations model, so that is the model whose
+  // price can waive a zero-balance refusal.
+  const resolveModelInfo = async () => {
+    const modelInfo = (await getAvailableModels(apiKeyTable)).find(candidate => candidate.id === model);
+    if (!modelInfo) throw new Error(`Memento model "${model}" is not available`);
+    return modelInfo;
+  };
+  if (
+    !(await payerCanFundSessionOperation({
+      payerId: userId,
+      operation: 'memento extraction',
+      resolveModelInfo,
+      logger,
+    }))
+  )
+    return;
+
   // STEP 1: Evaluate the prompt into distinct facts. The fact-style extraction prompt is a V2 change:
   // with V2 off the extraction uses the original prompt, so a flag-off V1 user's mementos are unchanged.
   const mementoEvaluator = new MementoEvaluationService(logger);
@@ -75,6 +101,17 @@ export const handler = withEventContext(async (event, logger) => {
     prompt,
     endUserId: userId,
     factStyle: writeV2,
+    onUsage: ({ modelInfo, completionInfo, startTime }) =>
+      recordSessionOperationalUsage({
+        operation: 'memento',
+        userId,
+        sessionId,
+        modelId: model,
+        modelInfo,
+        completionInfo,
+        startTime,
+        logger,
+      }),
   });
 
   if (!evaluations || evaluations.length === 0) {
@@ -112,16 +149,16 @@ export const handler = withEventContext(async (event, logger) => {
   // independent of the admin `defaultEmbeddingModel` that governs V1/FAB. A missing key degrades to a
   // vector-less ledger write (the fact stays lexically recallable and the re-embed backfill vectorizes
   // it later) rather than dropping the fact.
-  let v2EmbeddingService: EmbeddingService | null = null;
+  let v2BoundEmbeddingModel: BoundEmbeddingModel | null = null;
   if (writeV2) {
-    const v2Provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-    const { config: v2Config, missing: v2KeyMissing } = resolveEmbeddingConfig(v2Provider, apiKeyTable);
+    const v2Provider = embeddingBackendForModel(MEMENTO_EMBEDDING_MODEL);
+    const { config: v2Config, missing: v2KeyMissing } = resolveEmbeddingCredentials(v2Provider, apiKeyTable);
     if (v2KeyMissing) {
       logger.warn(
         `No ${v2Provider} API key for the V2 ledger embedding (${MEMENTO_EMBEDDING_MODEL}); writing facts WITHOUT a vector. They stay lexically recallable, and the re-embed backfill will vectorize them once a key is present.`
       );
     } else {
-      v2EmbeddingService = new EmbeddingFactory(v2Config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
+      v2BoundEmbeddingModel = bindEmbeddingModel(buildEmbeddingRegistry(v2Config), MEMENTO_EMBEDDING_MODEL);
     }
   }
 
@@ -141,13 +178,13 @@ export const handler = withEventContext(async (event, logger) => {
   let updatedCount = 0;
 
   for (const evaluation of evaluations) {
-    console.debug('Processing evaluation', { importance: evaluation.importance });
+    logger.debug('Processing evaluation', { importance: evaluation.importance });
 
     // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
     // against its own ledger, in the 3-small space. It does not wait on, or read, anything V1 does below.
     if (writeV2) {
-      const v2Embedding = v2EmbeddingService
-        ? toMementoVector(await v2EmbeddingService.generateEmbedding(evaluation.summary))
+      const v2Embedding = v2BoundEmbeddingModel
+        ? toMementoVector(await embedOne(v2BoundEmbeddingModel, evaluation.summary))
         : undefined;
       await writeToLedger(evaluation.summary, v2Embedding);
     }
@@ -176,7 +213,7 @@ export const handler = withEventContext(async (event, logger) => {
 
       // STEP 5: Handle similar personal information - update existing memento
       if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
-        console.info('Similar personal information found, updating existing memento', {
+        logger.info('Similar personal information found, updating existing memento', {
           existingMementoId: mostSimilarMemento.id,
           similarity: highestSimilarity.toFixed(3),
         });
@@ -201,7 +238,7 @@ export const handler = withEventContext(async (event, logger) => {
           }
         );
 
-        console.info('Successfully updated existing memento with new information', {
+        logger.info('Successfully updated existing memento with new information', {
           mementoId: mostSimilarMemento.id,
           newWeight,
         });
@@ -210,7 +247,7 @@ export const handler = withEventContext(async (event, logger) => {
         continue;
       }
 
-      console.debug(
+      logger.debug(
         `No similar personal information found (highest similarity: ${highestSimilarity.toFixed(3)}), creating new memento`
       );
     }

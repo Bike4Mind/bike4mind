@@ -30,10 +30,17 @@ vi.mock('@server/middlewares/baseApi', () => {
 const cancelInviteById = vi.hoisted(() => vi.fn());
 const authorizeByInviteType = vi.hoisted(() => vi.fn());
 const resolveRedeemableInvite = vi.hoisted(() => vi.fn());
+const resolveAddressedInvite = vi.hoisted(() => vi.fn());
+const flags = vi.hoisted(() => ({ spaces: true }));
+vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
+  isFeatureEnabled: vi.fn(async (name: string) => (name === 'EnableSpaces' ? flags.spaces : false)),
+}));
 vi.mock('@bike4mind/services', () => ({
-  sharingService: { cancelInviteById, authorizeByInviteType, resolveRedeemableInvite },
+  sharingService: { cancelInviteById, authorizeByInviteType, resolveRedeemableInvite, resolveAddressedInvite },
 }));
 vi.mock('@bike4mind/database', () => ({
+  spaceRepository: {},
+  adminSettingsRepository: {},
   Invite: { findById: vi.fn() },
   inviteRepository: {},
   fabFileRepository: {},
@@ -57,7 +64,32 @@ const VALID_INVITE_ID = '507f1f77bcf86cd799439011';
 const INVITE_TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
 
 describe('DELETE /api/invites/[id]', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    flags.spaces = true;
+  });
+
+  it('answers 404 for a Space invite with EnableSpaces off, without cancelling it', async () => {
+    flags.spaces = false;
+    resolveAddressedInvite.mockResolvedValue({ id: '507f1f77bcf86cd799439021', type: 'Space' });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd799439021' } });
+    Object.assign(req, { user: { id: 'u1' } });
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'Invite not found',
+    });
+    expect(cancelInviteById).not.toHaveBeenCalled();
+  });
+
+  it('cancels a Space invite as before with EnableSpaces on', async () => {
+    cancelInviteById.mockResolvedValue({ id: '507f1f77bcf86cd799439021', remaining: 0 });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd799439021' } });
+    Object.assign(req, { user: { id: 'u1' } });
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(resolveAddressedInvite).not.toHaveBeenCalled();
+    expect(cancelInviteById).toHaveBeenCalledOnce();
+  });
 
   it('delegates to cancelInviteById with the invite id and returns the result', async () => {
     cancelInviteById.mockResolvedValue({ id: '507f1f77bcf86cd799439021', remaining: 0 });

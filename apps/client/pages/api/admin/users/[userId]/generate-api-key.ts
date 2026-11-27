@@ -8,14 +8,33 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi, requireAdminPermission } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { logEventSafe } from '@server/utils/analyticsLog';
+import { logEventSafe } from '@bike4mind/server-utils/utils/analyticsLog';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
-import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
-import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import {
+  ApiKeyScope,
+  UserApiKeyEvents,
+  assertCanActOnAdminTarget,
+  isBuiltInApiKeyScope,
+  isFullAdmin,
+} from '@bike4mind/common';
+import {
+  ADMIN_ONLY_API_KEY_SCOPES,
+  USER_API_KEY_SCOPE_VALUES,
+  isAdminProvisionedApiKeyScope,
+  isApiKeyScopeOffered,
+  isKnownApiKeyScope,
+} from '@bike4mind/server-utils/app/constants/apiKeyScopes';
+import { toEntitlementUser } from '@bike4mind/server-utils/entitlements/index';
+import { resolveApiKeyScopeAccessForUser } from '@server/entitlements/apiKeyScopeAccess';
+import {
+  parseAdminActionReason,
+  readAdminActionReason,
+  recordAdminActionFromRequest,
+} from '@bike4mind/server-utils/utils/adminAudit';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
 // admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
@@ -51,6 +70,8 @@ interface CreateApiKeyBody {
   };
   /** Lake ids to bind this key to for the manage-but-not-member session admission. Admin-only. */
   preauthorizedLakeIds?: string[];
+  /** Audit reason. Required when any scope is admin-provisioned, optional otherwise. */
+  reason?: unknown;
 }
 
 /**
@@ -158,16 +179,15 @@ async function screenPreauthorizedLakeIds(
 /**
  * POST /api/admin/users/[userId]/generate-api-key
  *
- * Admin-only endpoint to generate an API key on behalf of any user.
+ * Admin endpoint (keys:revoke plus users:impersonate) to generate an API key on behalf of any user.
  * Useful for creating service account keys without logging in as the target user.
  */
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'keys:revoke' } })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+      // The key is a working credential for the target, so minting also needs the impersonation grant.
+      requireAdminPermission(req, 'users:impersonate');
 
       const { userId } = req.query as RequestQuery;
 
@@ -179,6 +199,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (!targetUser) {
         throw new BadRequestError('User not found');
       }
+      assertCanActOnAdminTarget(req.user, targetUser, 'create API keys for');
       // Canonical target id for everything below, NOT the `userId` URL segment: findById casts to
       // ObjectId and resolves the user under any hex casing, but every field this id is compared
       // against afterwards is a `type: String` matched by byte equality - the key's own `userId`,
@@ -196,7 +217,14 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       const adminLabel = `${JSON.stringify(req.user.username)} (${req.user.id})`;
       const targetLabel = `${JSON.stringify(targetUser.username)} (${targetUserId})`;
 
-      const { name, scopes, expiresAt, rateLimit, preauthorizedLakeIds } = req.body as CreateApiKeyBody;
+      const {
+        name,
+        scopes,
+        expiresAt,
+        rateLimit,
+        preauthorizedLakeIds,
+        reason: rawReason,
+      } = req.body as CreateApiKeyBody;
 
       // Reject any scope outside the mintable allowlist, including admin:* and cc-bridge:connect.
       const requestedScopes = Array.isArray(scopes) ? scopes : [];
@@ -208,6 +236,34 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
       if (requestedScopes.includes(ApiKeyScope.RELEASE_NOTES_WRITE) && !targetUser.isAdmin) {
         throw new BadRequestError(`${ApiKeyScope.RELEASE_NOTES_WRITE} needs a target user who is a platform admin`);
       }
+
+      // A contributed scope is only ever minted for a holder of its requiredEntitlement, so the
+      // target must hold it. Built-in product scopes stay admin-grantable without that check.
+      const contributedScopes = requestedScopes.filter(s => !isBuiltInApiKeyScope(s));
+      if (contributedScopes.length > 0) {
+        const targetAccess = await resolveApiKeyScopeAccessForUser(toEntitlementUser(targetUser));
+        const unentitled = contributedScopes.filter(s => !isApiKeyScopeOffered(s, targetAccess));
+        if (unentitled.length > 0) {
+          throw new ForbiddenError(`Scope not available on the target account: ${unentitled.join(', ')}`);
+        }
+      }
+
+      // An admin-provisioned scope reaches past the owner's data, so only a full admin may mint it.
+      if (requestedScopes.some(isAdminProvisionedApiKeyScope) && !isFullAdmin(req.user)) {
+        throw new ForbiddenError('Only full administrators can create API keys with admin-provisioned scopes');
+      }
+
+      if (
+        requestedScopes.includes(ApiKeyScope.AI_END_USER_ID) &&
+        !requestedScopes.some(scope => scope === ApiKeyScope.AI_CHAT || scope === ApiKeyScope.AI_GENERATE)
+      ) {
+        throw new BadRequestError('ai:end-user-id only applies to a key that holds ai:chat or ai:generate');
+      }
+
+      // Its audit entry must say why. Self-service-only keys keep the reason optional.
+      const reason = requestedScopes.some(isAdminProvisionedApiKeyScope)
+        ? parseAdminActionReason(rawReason)
+        : readAdminActionReason(rawReason);
 
       const lakeBinding = await screenPreauthorizedLakeIds(preauthorizedLakeIds, targetUserId, {
         logger: req.logger,
@@ -237,8 +293,39 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
             userApiKeys: userApiKeyRepository,
             agents: agentRepository,
           },
+          isKnownScope: isKnownApiKeyScope,
+          // An admin minting for the user has already vouched for the account.
+          trust: { status: 'exempt' },
         }
       );
+
+      // Not in a transaction: createIfUnderCap's cap check must see concurrent inserts, which a
+      // snapshot would hide. The raw key only ever leaves in this response, so a key whose audit
+      // write failed is revoked unseen and the request fails.
+      try {
+        await recordAdminActionFromRequest(req, {
+          action: 'user.api_key.generated',
+          target: { kind: 'user', id: targetUserId, displayName: targetUser.email ?? targetUser.username },
+          summary: `generated API key ${newApiKey.keyPrefix} for user`,
+          reason,
+          details: {
+            keyId: newApiKey.id,
+            keyPrefix: newApiKey.keyPrefix,
+            name: newApiKey.name,
+            scopes: newApiKey.scopes,
+            expiresAt: newApiKey.expiresAt?.toISOString(),
+            preauthorizedLakeIds: lakeBinding,
+          },
+        });
+      } catch (error) {
+        // Surface the audit failure even if the revoke also fails; the log names the key left live.
+        await userApiKeyRepository
+          .revokeIfNotDisabled(newApiKey.id, req.user.impersonatedBy ?? req.user.id, 'admin audit write failed')
+          .catch((revokeError: unknown) => {
+            req.logger.error('Failed to revoke unaudited API key', { keyId: newApiKey.id, revokeError });
+          });
+        throw error;
+      }
 
       // Attributed to the target user, since the key is theirs - but the acting admin is recorded
       // alongside (createdBy*), so the event is not readable as a self-service mint by that user.

@@ -13,6 +13,21 @@ import { ImageViewer } from './ImageViewer';
  */
 const IMAGE_MAX_HEIGHT = 420;
 
+/** A thumbnail inside a tool row's body, which sits among result text rather than standing alone. */
+const THUMBNAIL_MAX_HEIGHT = 240;
+
+type MediaVariant = 'full' | 'thumbnail';
+
+/**
+ * A box sized from the stored dimensions, so a thumbnail that has not loaded yet already holds
+ * its place and a long thread does not jump as images arrive.
+ */
+function reservedBox(item: ChatMedia, maxHeight: number): { width: number; aspectRatio: string } | null {
+  if (!item.width || !item.height) return null;
+  const height = Math.min(maxHeight, item.height);
+  return { width: Math.round((height * item.width) / item.height), aspectRatio: `${item.width} / ${item.height}` };
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -40,7 +55,15 @@ function Caption({ item }: { item: ChatMedia }) {
  */
 type MediaNameHint = Extract<ChatImageRef, { source: 'media' }>['nameHint'];
 
-function MediaItem({ item, nameHint }: { item: ChatMedia; nameHint?: MediaNameHint }) {
+function MediaItem({
+  item,
+  nameHint,
+  variant = 'full',
+}: {
+  item: ChatMedia;
+  nameHint?: MediaNameHint;
+  variant?: MediaVariant;
+}) {
   const [failed, setFailed] = useState(false);
   const [viewing, setViewing] = useState(false);
   const imageRef = useMemo<ChatImageRef | null>(
@@ -60,8 +83,11 @@ function MediaItem({ item, nameHint }: { item: ChatMedia; nameHint?: MediaNameHi
   }
 
   if (item.kind === 'image') {
+    const thumbnail = variant === 'thumbnail';
+    const maxHeight = thumbnail ? THUMBNAIL_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
+    const box = thumbnail ? reservedBox(item, maxHeight) : null;
     return (
-      <Box data-testid="chat-media-image">
+      <Box data-testid={thumbnail ? 'chat-media-thumbnail' : 'chat-media-image'}>
         <Box
           component="button"
           type="button"
@@ -75,18 +101,22 @@ function MediaItem({ item, nameHint }: { item: ChatMedia; nameHint?: MediaNameHi
             component="img"
             src={item.url}
             alt={item.caption}
+            loading={thumbnail ? 'lazy' : undefined}
+            decoding="async"
             onError={() => setFailed(true)}
             sx={{
               display: 'block',
               maxWidth: '100%',
-              maxHeight: IMAGE_MAX_HEIGHT,
+              maxHeight,
+              ...(box ? { width: box.width, height: 'auto', aspectRatio: box.aspectRatio } : {}),
               borderRadius: 'sm',
               border: '1px solid',
               borderColor: 'divider',
+              bgcolor: thumbnail ? 'background.level1' : undefined,
             }}
           />
         </Box>
-        <Caption item={item} />
+        {!thumbnail && <Caption item={item} />}
         <ImageViewer src={item.url} alt={item.caption} open={viewing} onClose={() => setViewing(false)} />
       </Box>
     );
@@ -109,13 +139,24 @@ function MediaItem({ item, nameHint }: { item: ChatMedia; nameHint?: MediaNameHi
   );
 }
 
-/** `nameHint` names a saved copy: 'screenshot' for the browser's captures. */
-export function MediaAttachments({ media, nameHint }: { media: ChatMedia[]; nameHint?: MediaNameHint }) {
+/**
+ * `nameHint` names a saved copy: 'screenshot' for the browser's captures. 'thumbnail' is for
+ * media drawn inside a tool row's body, where the row's own argument line already names it.
+ */
+export function MediaAttachments({
+  media,
+  nameHint,
+  variant,
+}: {
+  media: ChatMedia[];
+  nameHint?: MediaNameHint;
+  variant?: MediaVariant;
+}) {
   if (media.length === 0) return null;
   return (
-    <Stack spacing={1} sx={{ mt: 1 }} data-testid="chat-media-list">
+    <Stack spacing={1} sx={{ mt: variant === 'thumbnail' ? 0.5 : 1 }} data-testid="chat-media-list">
       {media.map(item => (
-        <MediaItem key={item.url} item={item} nameHint={nameHint} />
+        <MediaItem key={item.url} item={item} nameHint={nameHint} variant={variant} />
       ))}
     </Stack>
   );

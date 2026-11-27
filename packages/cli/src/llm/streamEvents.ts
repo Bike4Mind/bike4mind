@@ -3,12 +3,9 @@ import { z } from 'zod';
 /**
  * Unified streaming event protocol for CLI LLM backends.
  *
- * Both transports - `ServerLlmBackend` (SSE) and `WebSocketLlmBackend`
- * (HTTP POST + WebSocket frames) - decode their wire payloads into this single
- * typed union, then feed it to `StreamAccumulator`. This collapses the two
- * previously-duplicated, loosely-typed chunk shapes (`SSEEvent` in
- * ServerLlmBackend, the inline `chunk` type in WebSocketLlmBackend) into one
- * source of truth, and replaces the unchecked `as SSEEvent` cast on
+ * A transport (`ServerLlmBackend` over SSE) decodes its wire payloads into this
+ * single typed union, then feeds it to `StreamAccumulator`. The union is the one
+ * source of truth for the chunk shape, and replaces an unchecked cast on
  * server-provided data with a runtime-validated parse at the boundary.
  *
  * The vocabulary mirrors what the backends emit today (`content` / `tool_use` /

@@ -2,8 +2,8 @@ import { defineConfig } from 'tsdown';
 import { cpSync, readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { collectGraphSpecifiers, findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
-import type { ModuleGraph } from './src/verifyBundleExternals.ts';
+import { collectChunkImports, findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
+import type { EmittedBundle } from './src/verifyBundleExternals.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,9 +15,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * dependency of the CLI - otherwise the published binary dies at startup with
  * ERR_MODULE_NOT_FOUND once npm installs only the declared closure.
  *
- * Walks rolldown's module graph (external imports keep their bare-specifier id;
- * internal modules are absolute paths) rather than pattern-matching emitted
- * source, and validates against packages/cli/package.json's declared deps rather
+ * Reads the imports rolldown records on each emitted chunk (see collectChunkImports)
+ * rather than the pre-tree-shake module graph, which still names imports the output
+ * dropped, and validates against packages/cli/package.json's declared deps rather
  * than whatever happens to be resolvable on the build machine (a hoisted-but-
  * undeclared transitive dep would otherwise pass). Fails the build, not the user.
  */
@@ -25,10 +25,8 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
   return {
     name: 'verify-bundle-externals',
     // generateBundle (an output hook) rather than buildEnd: tsdown only invokes
-    // user plugins' output hooks, and generateBundle's PluginContext still
-    // exposes the full module graph via getModuleIds()/getModuleInfo().
-    generateBundle() {
-      const ctx = this as unknown as ModuleGraph;
+    // user plugins' output hooks, and only the output knows what survived tree-shaking.
+    generateBundle(_outputOptions: unknown, bundle: EmittedBundle) {
       const pkg = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8')) as {
         dependencies?: Record<string, string>;
         optionalDependencies?: Record<string, string>;
@@ -38,15 +36,14 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
         ...Object.keys(pkg.optionalDependencies ?? {}),
       ]);
 
-      const specifiers = collectGraphSpecifiers(ctx);
+      const specifiers = collectChunkImports(bundle);
 
-      // Fail loud if the graph walk found nothing: the guard would silently pass
-      // (and stop guarding) if rolldown's plugin-context shape ever drifts and the
-      // `this as ModuleGraph` cast starts resolving to an empty/incompatible object.
+      // Fail loud if the chunks name no imports at all: the guard would silently pass
+      // (and stop guarding) if rolldown's output chunk shape ever drifts.
       if (specifiers.size === 0) {
         throw new Error(
-          'tsdown: verify-bundle-externals found an empty module graph - the ' +
-            'generateBundle PluginContext API may have changed. The guard is not running.'
+          'tsdown: verify-bundle-externals found no imports on the emitted chunks - the ' +
+            'generateBundle output chunk API may have changed. The guard is not running.'
         );
       }
 
@@ -65,36 +62,64 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
   };
 }
 
+const curatedUrl = process.env.B4M_CURATED_MANIFEST_URL ?? '';
+const curatedDevKeys = process.env.B4M_CURATED_DEV_KEYS === '1';
+
+/** Records the curated values this build baked in, for packages/scripts `curated:check-build` to gate a publish on. */
+function curatedBuildInfoPlugin() {
+  return {
+    name: 'curated-build-info',
+    generateBundle() {
+      const info = JSON.stringify({ devKeys: curatedDevKeys, manifestUrl: curatedUrl });
+      (this as unknown as { emitFile(file: object): void }).emitFile({
+        type: 'asset',
+        fileName: 'curated-build.json',
+        source: `${info}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   entry: [
     'src/index.tsx',
     'src/commands/mcpCommand.ts',
     'src/commands/pluginCommand.ts',
     'src/commands/skillsCommand.ts',
+    'src/commands/modelsCommand.ts',
     'src/commands/updateCommand.ts',
     'src/commands/doctorCommand.ts',
+    'src/commands/mirrorCommand.ts',
     'src/commands/headlessCommand.ts',
     'src/commands/acpCommand.ts',
     'src/commands/apiCommand.ts',
     'src/commands/envCommand.ts',
+    'src/commands/hostCommand.ts',
   ],
   format: ['esm'],
   target: 'node24',
   platform: 'node',
   clean: true,
-  plugins: [verifyBundleExternalsPlugin(__dirname)],
+  // Externals are imported only for their bindings: drop unused ones rather than keep a bare `import "x"`
+  // (loaded at startup, must be installed). Not 'no-external', which also overrides local sideEffects: false.
+  treeshake: { moduleSideEffects: [{ external: true, sideEffects: false }] },
+  plugins: [verifyBundleExternalsPlugin(__dirname), curatedBuildInfoPlugin()],
   banner: {
     js: '#!/usr/bin/env node',
   },
   // Brand defaults baked into the published binary at build time - NO brand
   // fallback in source (open-core invariant): a fresh clone
   // ships empty, so the upstream literal never enters a fork's bundle. The hosted
-  // publish injects these from repo variables in the build step (release.yaml /
-  // snapshot-publish.yaml); a fork sets B4M_DEFAULT_API_URL / B4M_CREDITS_URL when
+  // publish injects these from repo variables in the build step (release.yaml);
+  // a fork sets B4M_DEFAULT_API_URL / B4M_CREDITS_URL when
   // building to publish under its own brand.
   env: {
     B4M_DEFAULT_API_URL: process.env.B4M_DEFAULT_API_URL ?? '',
     B4M_CREDITS_URL: process.env.B4M_CREDITS_URL ?? '',
+    // The signed curated models list: empty URL means the bundled list only; the test keys need the flag in the
+    // shell (never `.env`), and curated:check-build refuses a publish that has them.
+    B4M_CURATED_MANIFEST_URL: curatedUrl,
+    B4M_CURATED_DEV_KEYS: curatedDevKeys ? '1' : '',
   },
   // Keep all npm packages external (will be installed via package.json dependencies)
   // Bundle @bike4mind/* workspace packages into the CLI

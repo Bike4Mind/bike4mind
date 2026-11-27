@@ -111,11 +111,11 @@ describe('SkillMarket', () => {
     });
 
     const byToken = await market.listing({ token: 'a/b' });
-    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token/a%2Fb', undefined);
+    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token', { headers: { 'x-share-token': 'a/b' } });
     expect(byToken.detail).toMatchObject({ canImport: true, version: { id: 'v2' }, myImport: null });
 
     await market.listing({ id: 'l1', token: 'tok' });
-    expect(get).toHaveBeenLastCalledWith('/api/skills/market/l1', { params: { token: 'tok' } });
+    expect(get).toHaveBeenLastCalledWith('/api/skills/market/by-token', { headers: { 'x-share-token': 'tok' } });
   });
 
   it('offers an update with a diff and the tool change when the imported copy is behind', async () => {
@@ -151,6 +151,33 @@ describe('SkillMarket', () => {
       locallyModified: true,
     });
     expect(detail?.update?.diff).toMatchObject({ added: 1, removed: 1 });
+  });
+
+  it('counts a change to the Claude Code tools as a tool change', async () => {
+    get.mockImplementation(async (url: string) =>
+      url === '/api/skills/s1'
+        ? {
+            data: {
+              id: 's1',
+              body: 'line one\nline two',
+              claudeCodeAllowedTools: ['Read'],
+              importedFrom: { versionId: 'v1' },
+            },
+          }
+        : {
+            data: {
+              listing: listing(),
+              version: version({
+                snapshot: { name: 'x', description: 'd', body: 'line one\nline two', claudeCodeAllowedTools: ['Bash'] },
+              }),
+              myImport: { version: 1, skill: { id: 's1', name: 'x' } },
+            },
+          }
+    );
+
+    const { detail } = await market.listing({ id: 'l1' });
+    expect(detail?.version?.snapshot.claudeCodeAllowedTools).toEqual(['Bash']);
+    expect(detail?.update).toMatchObject({ toolsAdded: ['Bash'], toolsRemoved: ['Read'] });
   });
 
   it('offers no update when the copy is already on the current version', async () => {
@@ -356,11 +383,52 @@ describe('SkillMarket', () => {
       expect(Object.keys(body).sort()).toEqual([
         'argumentHint',
         'body',
+        'claudeCodeAllowedTools',
+        'claudeCodeModel',
         'description',
         'disableModelInvocation',
+        'files',
         'name',
       ]);
       expect(catalog.invalidateAccount).toHaveBeenCalled();
+    });
+
+    it('sends the SKILL.md allowed-tools as claudeCodeAllowedTools, on create and update', async () => {
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      const claudeCodeAllowedTools = ['Bash(git:*)', 'Read'];
+      await market.saveSkill({ fields: { ...FIELDS, claudeCodeAllowedTools }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ claudeCodeAllowedTools }));
+      expect(post.mock.calls[0][1]).not.toHaveProperty('allowedTools');
+
+      get
+        .mockResolvedValueOnce({ data: { id: 's1', userId: 'me', claudeCodeAllowedTools } })
+        .mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeAllowedTools: [] }));
+    });
+
+    it('sends the SKILL.md model as claudeCodeModel, and an empty string to clear it on update', async () => {
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      await market.saveSkill({ fields: { ...FIELDS, claudeCodeModel: 'haiku' }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ claudeCodeModel: 'haiku' }));
+
+      get.mockResolvedValueOnce({ data: { id: 's1', userId: 'me' } }).mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: FIELDS, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ claudeCodeModel: '' }));
+    });
+
+    it('sends each supporting file with its path and content, on create and update', async () => {
+      const files = [{ path: 'scripts/run.sh', content: '#!/bin/sh\necho hi\n' }];
+      get.mockResolvedValueOnce({ data: { data: [] } });
+      post.mockResolvedValueOnce({ data: { id: 's1' } });
+      await market.saveSkill({ fields: { ...FIELDS, files }, mode: 'create' });
+      expect(post).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ files }));
+
+      get.mockResolvedValueOnce({ data: { id: 's1', userId: 'me' } }).mockResolvedValueOnce(mineBody([]));
+      await market.saveSkill({ fields: { ...FIELDS, files }, mode: 'update', targetSkillId: 's1' });
+      expect(put).toHaveBeenCalledWith('/api/skills/s1', expect.objectContaining({ files }));
     });
 
     it.each([undefined, '', '<topic>'])('sends the argument hint on create: %s', async argumentHint => {

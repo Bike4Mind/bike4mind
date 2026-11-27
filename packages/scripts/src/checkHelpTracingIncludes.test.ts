@@ -8,7 +8,7 @@ import path from 'node:path';
  * concerns: the help content roots, the generated help search artifacts (see ARTIFACT_ROUTES
  * below) and the isolated-vm sandbox prebuild. Most of what it declares fails SILENTLY when lost.
  * The two exceptions are the public content root and help-index.json, both of which the container
- * build's check-standalone-tree.mjs requires; the admin root, help-embeddings.json and the
+ * build's check-standalone-tree.mjs requires; the admin root, help-embeddings.json/.bin and the
  * prebuild have no guard at all.
  *
  * The content roots are the reason this file exists. Both of their server readers
@@ -42,6 +42,7 @@ const ADMIN_GLOB = './app/generated/help-content-admin/**/*';
 
 const INDEX_ENTRY = './app/generated/help-index.json';
 const EMBEDDINGS_ENTRY = './app/generated/help-embeddings.json';
+const EMBEDDINGS_VECTORS_ENTRY = './app/generated/help-embeddings.bin';
 
 /** The routes that read help content off disk at request time. Both need BOTH roots. */
 const HELP_ROUTES = ['/api/help/content', '/api/help/chat'];
@@ -51,12 +52,12 @@ const HELP_ROUTES = ['/api/help/content', '/api/help/chat'];
  * these DO trace themselves: every read site is a path.join(process.cwd(), '<literal>'), which
  * the tracer folds to a concrete file. The declaration is what stops that being load-bearing -
  * it is a tracer implementation detail, not a documented contract, so an upgrade that stopped
- * folding it would take help-embeddings.json silently (nothing guards it) and help-index.json
+ * folding it would take help-embeddings.json/.bin silently (nothing guards it) and help-index.json
  * only as far as the container build's check-standalone-tree.mjs.
  */
 const ARTIFACT_ROUTES: ReadonlyArray<[route: string, entries: string[]]> = [
   ['/api/help', [INDEX_ENTRY]],
-  ['/api/help/chat', [INDEX_ENTRY, EMBEDDINGS_ENTRY]],
+  ['/api/help/chat', [INDEX_ENTRY, EMBEDDINGS_ENTRY, EMBEDDINGS_VECTORS_ENTRY]],
 ];
 
 /**
@@ -75,6 +76,7 @@ const ARTIFACT_READERS: ReadonlyArray<[file: string, literal: string]> = [
   ['apps/client/pages/api/help/index.ts', 'app/generated/help-index.json'],
   ['apps/client/server/help/retrieval.ts', 'app/generated/help-index.json'],
   ['apps/client/server/help/retrieval.ts', 'app/generated/help-embeddings.json'],
+  ['apps/client/server/help/retrieval.ts', 'app/generated/help-embeddings.bin'],
 ];
 
 /** Every route that can construct a REPL sandbox; each needs the isolated-vm prebuild. */

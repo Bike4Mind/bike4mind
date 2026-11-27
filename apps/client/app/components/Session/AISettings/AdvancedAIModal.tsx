@@ -22,24 +22,22 @@ import {
   Option,
   Divider,
 } from '@mui/joy';
-import {
-  Close as CloseIcon,
-  Check as CheckIcon,
-  RestartAlt as RestartAltIcon,
-  KeyboardArrowDown as KeyboardArrowDownIcon,
-  ArrowBack as ArrowBackIcon,
-} from '@mui/icons-material';
+import CloseIcon from '@mui/icons-material/Close';
+import CheckIcon from '@mui/icons-material/Check';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { Theme } from '@mui/joy/styles';
 import { useTheme } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import {
   B4MLLMTools,
   BFL_SAFETY_TOLERANCE,
-  ChatModels,
   FIXED_TEMPERATURE_MODELS,
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
   isBflImageModel,
+  isClaudeModelId,
   supportsPromptUpsampling,
   ModelBackend,
   ModelInfo,
@@ -49,10 +47,11 @@ import {
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
-  REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
   isKontextModel as isKontextImageModel,
+  ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
 } from '@bike4mind/common';
+import { reasonsWithinOutputBudget, sentMaxTokensFor } from '@bike4mind/llm-adapters/model-sizing';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
 import { useLLM, LLMContextProps } from '@client/app/contexts/LLMContext';
@@ -82,6 +81,7 @@ import {
   buildModelSelectionPatch,
   ChipVariant,
   computeDefaultMaxTokens,
+  formatTokenBudget,
   getModelPriceTier,
   getModelSpeedFromStats,
   getModelSpeedTooltip,
@@ -98,22 +98,27 @@ import { MobileTopBar } from '@client/app/components/MobileTopBar';
 import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
+import { thinkingForSend } from '@client/app/utils/thinkingPayload';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import {
   ASPECT_RATIO_INERT_NOTE,
+  OUTPUT_FORMAT_INERT_NOTE,
   ignoresAspectRatio,
+  ignoresOutputFormat,
+  ignoresSeed,
   ignoresUpsamplingAndSeed,
+  seedInertNote,
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
+import { reasoningEffortOptionsFor, type ReasoningEffortOption } from './reasoningEffortOptions';
 import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
-import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
 
 /**
@@ -315,37 +320,30 @@ const SAFETY_TOLERANCE_OPTIONS = Array.from(
   }
 );
 
-const BASE_REASONING_EFFORT_OPTIONS: { value: UserReasoningEffort; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'low', label: 'Low (Fast)' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High (Best)' },
-];
-
-const XHIGH_OPTION = { value: 'xhigh' as UserReasoningEffort, label: 'Extra High (Best)' };
-
-const GPT5_2_MODEL_IDS: ReadonlySet<string> = new Set([ChatModels.GPT5_2, ChatModels.GPT5_2_CHAT_LATEST]);
-
 const ReasoningEffortSelector: React.FC<{
   model: ModelName;
   mode: 'dark' | 'light';
-}> = ({ model, mode }) => {
-  const isGPT52 = GPT5_2_MODEL_IDS.has(model);
-  const options = isGPT52
-    ? [...BASE_REASONING_EFFORT_OPTIONS.map(o => (o.value === 'high' ? { ...o, label: 'High' } : o)), XHIGH_OPTION]
-    : BASE_REASONING_EFFORT_OPTIONS;
+  options: ReasoningEffortOption[];
+  readOnly: boolean;
+}> = ({ model, mode, options, readOnly }) => {
   const { currentUser, setCurrentUser } = useUser();
   const currentValue: UserReasoningEffort = currentUser?.preferredReasoningEffort ?? 'auto';
+  const offersCurrent = options.some(o => o.value === currentValue);
 
-  // Reset to 'auto' if current value is 'xhigh' but model doesn't support it
+  // The preference is shared by every model, so a level this one does not offer goes back to 'auto'.
+  // Not while previewing: that would rewrite the active model's setting from a model that is not running.
   useEffect(() => {
-    if (currentValue === 'xhigh' && !isGPT52 && currentUser) {
-      api
-        .put(`/api/users/${currentUser.id}/update`, { preferredReasoningEffort: 'auto' })
-        .then(response => setCurrentUser(response.data))
-        .catch(err => console.error('Failed to reset reasoning effort:', err));
-    }
-  }, [model]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (offersCurrent || readOnly || !currentUser) return;
+    const resetPreference = async () => {
+      try {
+        const response = await api.put(`/api/users/${currentUser.id}/update`, { preferredReasoningEffort: 'auto' });
+        setCurrentUser(response.data);
+      } catch (error) {
+        console.error('Failed to reset reasoning effort:', error);
+      }
+    };
+    void resetPreference();
+  }, [currentUser, model, offersCurrent, readOnly, setCurrentUser]);
 
   const handleChange = async (_: unknown, newValue: UserReasoningEffort | null) => {
     if (!currentUser || newValue === null) return;
@@ -360,21 +358,30 @@ const ReasoningEffortSelector: React.FC<{
   };
 
   return (
-    <SettingsRow label="Reasoning Effort" tooltip={FIELD_TOOLTIPS.reasoningEffort}>
-      <Select
-        value={currentValue}
-        onChange={handleChange}
-        indicator={<KeyboardArrowDownIcon />}
-        sx={settingsSelectSx(mode || 'light')}
-        slotProps={SETTINGS_SELECT_SLOT_PROPS}
-      >
-        {options.map(opt => (
-          <Option key={opt.value} value={opt.value}>
-            {opt.label}
-          </Option>
-        ))}
-      </Select>
-    </SettingsRow>
+    <Stack spacing={0.75}>
+      <SettingsRow label="Reasoning Effort" tooltip={FIELD_TOOLTIPS.reasoningEffort}>
+        <Select
+          data-testid="reasoning-effort-select"
+          value={currentValue}
+          onChange={handleChange}
+          indicator={<KeyboardArrowDownIcon />}
+          sx={settingsSelectSx(mode || 'light')}
+          slotProps={SETTINGS_SELECT_SLOT_PROPS}
+        >
+          {options.map(opt => (
+            <Option key={opt.value} value={opt.value}>
+              {opt.label}
+            </Option>
+          ))}
+        </Select>
+      </SettingsRow>
+      {isClaudeModelId(model) && (
+        <Typography level="body-xs" textColor="text.secondary" data-testid="reasoning-effort-thinking-precedence">
+          Explicit effort overrides Thinking. Auto follows Thinking and model defaults.
+          {options.some(option => option.value === 'none') ? ' None turns reasoning off.' : ''}
+        </Typography>
+      )}
+    </Stack>
   );
 };
 
@@ -417,8 +424,6 @@ interface SelectedModelDetailsProps {
   setLiveAI: (enabled: boolean) => void;
   stream: boolean;
   setStream: (enabled: boolean) => void;
-  isQuestMasterFeatureEnabled: boolean;
-  isQuestMasterEnabled: boolean;
   voiceOver: boolean;
   imageSettings: ImageSettingItem[];
   prompt_upsampling: boolean;
@@ -508,14 +513,16 @@ const ResetButton: React.FC<{
   const resetScope = isImageModel(model)
     ? 'temperature and every image setting, including the seed'
     : 'temperature, output tokens, response history and spoken words';
-  const resetExclusions = REASONING_SUPPORTED_MODELS.has(model)
-    ? 'Tools and reasoning effort are not affected.'
-    : 'Tools are not affected.';
+  const resetExclusions =
+    reasoningEffortOptionsFor(model, modelInfo).length > 0
+      ? 'Tools and reasoning effort are not affected.'
+      : 'Tools are not affected.';
   const tooltip = `Resets ${resetScope} to this model's defaults. ${resetExclusions}`;
 
   return (
     <Tooltip title={tooltip}>
       <IconButton
+        data-testid="advanced-settings-reset-btn"
         size="sm"
         variant="outlined"
         onClick={handleReset}
@@ -566,9 +573,6 @@ const formatTrainingCutoff = (cutoff: string): string => {
 // Larger than the model list's 24px: this screen has the room, and they are the only
 // indicators on it rather than competing with a card's own controls.
 const INDICATOR_SIZE = 32;
-
-// Space thousands separators, matching the Context total these two numbers split.
-const formatTokenCount = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
 
 /**
  * Floor for the output-token slider. Replaces `max(1024, min(2048, ctx / 4))`, whose other two
@@ -648,8 +652,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   setLiveAI,
   stream,
   setStream,
-  isQuestMasterFeatureEnabled,
-  isQuestMasterEnabled,
   voiceOver,
   imageSettings,
   prompt_upsampling,
@@ -658,6 +660,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   commonInputStyles,
   mode,
 }) => {
+  const thinking = useLLM(s => s.thinking);
   if (!modelInfo) return null;
 
   // Provider and capability notices, rendered as one stacked block below the description.
@@ -699,6 +702,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the input remainder negative). Show the default that selecting it would apply instead - that
   // is genuinely what you get, since buildModelSelectionPatch recomputes it on every switch.
   const outputTokens = readOnly ? computeDefaultMaxTokens(modelInfo) : (max_tokens ?? 4096);
+  const reasoningEffortOptions = reasoningEffortOptionsFor(model, modelInfo);
   // A derived ceiling states nothing about the model (see computeDefaultMaxTokens), so the
   // slider's range must not fall back below the default it just rendered above - that would
   // put the read-out outside its own track and snap the budget back down on the first drag.
@@ -713,6 +717,15 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the bounds would invert outright, which MUI leaves undefined. The read-out and the sentence below
   // still state the budget, so nothing is lost by omitting the track.
   const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
+  // A model that reasons inside this budget can spend all of it before writing a reply, and the
+  // server sends the value as set (resolveOutputMaxTokens), so warn below the floor it would give an
+  // unset budget. Measured on what is sent, as the server's sentBelowReasoningFloor telemetry is: with
+  // thinking on, the Anthropic adapters already raise it to the floor (sentMaxTokensFor).
+  const reasoningFloor = Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, outputCeiling);
+  const isBelowReasoningFloor =
+    !readOnly &&
+    reasonsWithinOutputBudget(modelInfo) &&
+    sentMaxTokensFor(modelInfo, thinkingForSend(thinking, modelInfo), outputTokens) < reasoningFloor;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps
@@ -749,30 +762,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 variant="outlined"
                 sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
               />
-            ),
-          },
-        ]
-      : []),
-    ...(isQuestMasterFeatureEnabled
-      ? [
-          {
-            key: 'quest-master',
-            label: 'Quest Master',
-            // Wraps the control alone. Around the whole pair it fired from the label too and centred
-            // itself across both, which read as belonging to neither. The native `title` came off the
-            // checkbox with it - it duplicated this one.
-            control: (
-              <Tooltip title="Enable Quest Master">
-                <Checkbox
-                  checked={isQuestMasterEnabled}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setLLM({ isQuestMasterEnabled: e.target.checked })
-                  }
-                  color="success"
-                  variant="outlined"
-                  sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
-                />
-              </Tooltip>
             ),
           },
         ]
@@ -1045,11 +1034,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   data-testid="token-allocation-output"
                 >
                   <Box component="span" sx={{ color: readOnly ? 'text.tertiary' : brand[800], fontWeight: 'bold' }}>
-                    {formatTokenCount(outputTokens)}
+                    {formatTokenBudget(outputTokens)}
                   </Box>
                   <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
                     {' / '}
-                    {formatTokenCount(outputCeiling)}
+                    {formatTokenBudget(outputCeiling)}
                   </Box>
                 </Typography>
               </Box>
@@ -1107,9 +1096,20 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   mt: isOutputAdjustable ? '-12px' : 0,
                 }}
               >
-                Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
-                {formatTokenCount(inputTokens)} for input.
+                Reserved from the {formatTokenBudget(contextWindow)} token context window, leaving{' '}
+                {formatTokenBudget(inputTokens)} for input.
               </Typography>
+              {isBelowReasoningFloor && (
+                <Typography
+                  level="body-sm"
+                  color="warning"
+                  data-testid="token-allocation-reasoning-floor-warning"
+                  sx={{ fontSize: '12px', lineHeight: 1.4 }}
+                >
+                  Values below {formatTokenBudget(reasoningFloor)} can leave reasoning models with no room to answer,
+                  because the reasoning can use the whole budget.
+                </Typography>
+              )}
             </Box>
           )}
 
@@ -1202,8 +1202,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               </SettingsRow>
             )}
 
-            {/* Reasoning Effort - only for reasoning-capable models */}
-            {REASONING_SUPPORTED_MODELS.has(model) && <ReasoningEffortSelector model={model} mode={mode} />}
+            {reasoningEffortOptions.length > 0 && (
+              <ReasoningEffortSelector model={model} mode={mode} options={reasoningEffortOptions} readOnly={readOnly} />
+            )}
           </Box>
         </Box>
 
@@ -1591,7 +1592,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     size,
     quality,
     style,
-    isQuestMasterEnabled,
     safety_tolerance,
     prompt_upsampling,
     seed,
@@ -1608,7 +1608,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       s.size,
       s.quality,
       s.style,
-      s.isQuestMasterEnabled,
       s.safety_tolerance,
       s.prompt_upsampling,
       s.seed,
@@ -1626,9 +1625,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const safeTopP = top_p ?? 1;
   const safePromptUpsampling = prompt_upsampling ?? false;
   const safeSafetyTolerance = safety_tolerance ?? 0;
-
-  const { isFeatureEnabled } = useFeatureEnabled();
-  const isQuestMasterFeatureEnabled = isFeatureEnabled('enableQuestMaster');
 
   const { data: modelInfoRepo } = useModelInfo();
   const modelInfo = useMemo(() => {
@@ -1775,8 +1771,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'input' as const,
         value: seed?.toString() ?? '',
         onChange: (value: number | null) => setLLM({ seed: value }),
-        tooltip: withInertNote(FIELD_TOOLTIPS.imageSeed, ignoresUpsamplingAndSeed(shownModel)),
-        disabled: ignoresUpsamplingAndSeed(shownModel),
+        tooltip: withInertNote(FIELD_TOOLTIPS.imageSeed, ignoresSeed(shownModel), seedInertNote(shownModel)),
+        disabled: ignoresSeed(shownModel),
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
@@ -1841,6 +1837,12 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: (output_format ?? 'png') as 'jpeg' | 'png',
         onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
+        tooltip: withInertNote(
+          FIELD_TOOLTIPS.imageOutputFormat,
+          ignoresOutputFormat(shownModel),
+          OUTPUT_FORMAT_INERT_NOTE
+        ),
+        disabled: ignoresOutputFormat(shownModel),
         options: [
           { value: 'jpeg', label: 'JPEG' },
           { value: 'png', label: 'PNG' },
@@ -2320,8 +2322,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 setLiveAI={setLiveAI}
                 stream={stream}
                 setStream={setStream}
-                isQuestMasterFeatureEnabled={isQuestMasterFeatureEnabled}
-                isQuestMasterEnabled={isQuestMasterEnabled}
                 voiceOver={voiceOver}
                 imageSettings={imageSettings}
                 prompt_upsampling={safePromptUpsampling}

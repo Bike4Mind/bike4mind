@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { getTrustedHeaderClientIp } from '@bike4mind/server-utils/utils/trustedClientIpHeaders';
 import { baseApi } from '@server/middlewares/baseApi';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
-import { setGateProofCookie } from '@server/services/publish/publishGateToken';
+import { setGateProofCookie } from '@bike4mind/server-utils/services/publish/publishGateToken';
 import { checkLock, recordFailure, clear } from '@server/services/publish/passphraseLockout';
 import { loadLiveOwner } from '@server/services/publish/loadLiveOwner';
 
@@ -43,7 +43,11 @@ const handler = baseApi({ auth: false })
   .post(async (req, res) => {
     const parsed = BodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid request' });
+      // Issue paths and codes only, never the zod `input`, so a rejected passphrase is not echoed back.
+      return res.status(400).json({
+        error: 'Invalid request',
+        details: parsed.error.issues.map(({ code, path, message }) => ({ code, path, message })),
+      });
     }
     const segments = segmentsFromViewerPathname(parsed.data.path);
     const resolved = segments ? parsePublishPath(segments) : null;

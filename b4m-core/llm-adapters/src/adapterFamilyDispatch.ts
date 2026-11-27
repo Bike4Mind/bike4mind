@@ -1,10 +1,11 @@
 import type { AdapterFamily } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { AnthropicBackend } from './anthropicBackend';
+import { ANTHROPIC_FEDERATED_KEY, AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
 import type { ICompletionBackend } from './backend';
 import type { ApiKeyTable } from './backendGate';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
+import ConverseBedrockBackend from './bedrockBackend/converse';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
 import LlamaBedrockBackend from './bedrockBackend/llama';
@@ -16,8 +17,9 @@ import { DeepSeekBackend } from './deepseekBackend';
 import { KimiBackend } from './kimiBackend';
 import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
-import { OpenAIBackend } from './openaiBackend';
+import { OPENAI_FEDERATED_KEY, OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
+import { providerCredentialSpec } from './providerAuth';
 
 /**
  * A record named an adapter family this build has no constructor for. Thrown
@@ -44,10 +46,12 @@ export interface AdapterFamilyDispatchContext {
   logger: Logger;
   /** Opaque, non-PII end-user id forwarded to the direct-provider backends. */
   providerEndUserId?: string;
+  /** Anthropic semaphore fairness bucket; defaults to providerEndUserId. See AnthropicBackend. */
+  tenantKey?: string;
 }
 
 /** An expired key is a configuration error, not an absent credential. */
-function keyOrThrow(value: string | null | undefined, providerLabel: string): string | null {
+function keyOrThrow<Key extends string | symbol | null | undefined>(value: Key, providerLabel: string): Key | null {
   if (value === 'expired') throw new Error(`${providerLabel} API key is expired`);
   return value ?? null;
 }
@@ -61,14 +65,14 @@ function keyOrThrow(value: string | null | undefined, providerLabel: string): st
  * with DISPATCHABLE_ADAPTER_FAMILIES in ./mergeCatalog.ts: the merge promises a
  * catalog-only record in a dispatchable family reaches a real backend, and this
  * is the function that has to keep that promise. Also MUST STAY IN SYNC WITH
- * completionsForwardsNativeTools in @bike4mind/common (claudeToolCapabilities.ts),
- * which restates which family reaches the Anthropic adapter.
+ * servedByDirectAnthropic and servedByClaudeAdapter in @bike4mind/common (claudeToolCapabilities.ts),
+ * which restate which family reaches each Claude adapter.
  */
 export function backendForAdapterFamily(
   family: AdapterFamily,
   ctx: AdapterFamilyDispatchContext
 ): ICompletionBackend | null {
-  const { apiKeyTable, logger, providerEndUserId } = ctx;
+  const { apiKeyTable, logger, providerEndUserId, tenantKey } = ctx;
 
   switch (family) {
     case 'openai-chat':
@@ -76,11 +80,24 @@ export function backendForAdapterFamily(
       // One constructor, two transports: which endpoint a turn uses is the
       // dispatch profile's toolTransport, not a separate backend.
       const key = keyOrThrow(apiKeyTable.openai, 'OpenAI');
-      return key ? new OpenAIBackend(key, logger, providerEndUserId) : null;
+      return key
+        ? new OpenAIBackend(
+            providerCredentialSpec(apiKeyTable, 'openai', key, OPENAI_FEDERATED_KEY),
+            logger,
+            providerEndUserId
+          )
+        : null;
     }
     case 'anthropic-messages': {
       const key = keyOrThrow(apiKeyTable.anthropic, 'Anthropic');
-      return key ? new AnthropicBackend(key, logger, providerEndUserId) : null;
+      return key
+        ? new AnthropicBackend(
+            providerCredentialSpec(apiKeyTable, 'anthropic', key, ANTHROPIC_FEDERATED_KEY),
+            logger,
+            providerEndUserId,
+            tenantKey
+          )
+        : null;
     }
     case 'gemini': {
       const key = keyOrThrow(apiKeyTable.gemini, 'Gemini');
@@ -122,6 +139,8 @@ export function backendForAdapterFamily(
       return new JurassicTwoBedrockBackend();
     case 'bedrock-titan':
       return new TitanBedrockBackend();
+    case 'bedrock-converse':
+      return new ConverseBedrockBackend();
     case 'aws':
       return new AWSBackend();
     // VoyageAI has no completion backend at all: embeddings go through their own

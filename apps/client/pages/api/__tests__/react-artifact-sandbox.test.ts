@@ -34,8 +34,8 @@ function makeRes(): Captured {
   return { res, headers, getStatus: () => statusCode, getBody: () => body };
 }
 
-function makeReq(method: 'GET' | 'HEAD' | 'POST'): NextApiRequest {
-  return { method } as unknown as NextApiRequest;
+function makeReq(method: 'GET' | 'HEAD' | 'POST', headers: Record<string, string> = {}): NextApiRequest {
+  return { method, headers } as unknown as NextApiRequest;
 }
 
 describe('GET /api/react-artifact-sandbox', () => {
@@ -107,10 +107,32 @@ describe('GET /api/react-artifact-sandbox', () => {
     expect(csp).toMatch(/script-src [^;]*'unsafe-eval'/);
   });
 
+  it('keeps the CDN script hosts it loads from in its own script-src', () => {
+    const { res, headers } = makeRes();
+    handler(makeReq('GET'), res);
+    const csp = headers['Content-Security-Policy'];
+    expect(csp).toMatch(/script-src [^;]*https:\/\/unpkg\.com/);
+    expect(csp).toMatch(/script-src [^;]*https:\/\/cdn\.tailwindcss\.com/);
+  });
+
   it('sets connect-src none so artifact content cannot exfiltrate', () => {
     const { res, headers } = makeRes();
     handler(makeReq('GET'), res);
     expect(headers['Content-Security-Policy']).toContain("connect-src 'none'");
+  });
+
+  it('limits images to data:, blob: and the app origin, and stylesheets to Google Fonts', () => {
+    const { res, headers } = makeRes();
+    handler(makeReq('GET', { host: 'localhost:3000' }), res);
+    const directives = Object.fromEntries(
+      headers['Content-Security-Policy'].split(';').map((directive: string) => {
+        const [name, ...sources] = directive.trim().split(/\s+/);
+        return [name, sources];
+      })
+    );
+    expect(directives['img-src']).toEqual(['data:', 'blob:', 'http://localhost:3000']);
+    expect(directives['media-src']).toEqual(['blob:', 'data:', 'http://localhost:3000']);
+    expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com']);
   });
 
   it('sets object-src none and frame-src none', () => {

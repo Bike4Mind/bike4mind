@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 /**
@@ -13,13 +13,19 @@ initializeSlackPackage();
  */
 
 import { Logger } from '@bike4mind/observability';
-import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
-import { organizationRepository } from '@bike4mind/database/infra';
+import {
+  organizationRepository,
+  orgSlackWorkspaceRepository,
+  slackChannelConfigRepository,
+  SlackFeedbackChannel,
+} from '@bike4mind/database/infra';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getSystemSlackAppCredentials, verifyOrgSlackConnectStateToken } from '@bike4mind/slack';
-import { consumeStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { consumeStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { recordAdminActionForActor } from '@bike4mind/server-utils/utils/adminAudit';
+import { recordOrganizationAuditEventSafe } from '@bike4mind/server-utils/utils/organizationAudit';
 import { randomUUID } from 'crypto';
 import type { Response } from 'express';
 
@@ -88,7 +94,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return sendClientRedirect(res, '/organizations?slack_error=invalid_state');
   }
 
-  const { organizationId, userId } = stateResult.payload;
+  const { organizationId, userId, workspaceId } = stateResult.payload;
   auditLogger.setUserId(userId);
   const orgRedirectBase = `/organizations/${organizationId}`;
 
@@ -100,8 +106,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       return sendClientRedirect(res, '/organizations?slack_error=org_not_found');
     }
 
-    // Get system app credentials for token exchange
-    const appCredentials = await getSystemSlackAppCredentials();
+    // Credentials of the app the flow started with (signed into the state)
+    const appCredentials = await getSystemSlackAppCredentials(workspaceId);
     if (!appCredentials) {
       auditLogger.failure('no_app_configured');
       return sendClientRedirect(res, `${orgRedirectBase}?tab=integrations&slack_error=no_app_configured`);
@@ -177,6 +183,34 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
     // Check if org already has a workspace connected
     const existingForOrg = await orgSlackWorkspaceRepository.findByOrganizationId(organizationId);
+
+    await SlackFeedbackChannel.updateMany({ $or: [{ organizationId }, { slackTeamId }] }, { $set: { enabled: false } });
+
+    // API posting opt-ins are only ever this organization's own: drop any granted under another
+    // connection of this workspace, and all of a workspace this organization is moving away from.
+    const clearedChannelIds = await slackChannelConfigRepository.clearApiPostingBySlackTeamId(
+      slackTeamId,
+      organizationId
+    );
+    if (existingForOrg && existingForOrg.slackTeamId !== slackTeamId) {
+      clearedChannelIds.push(
+        ...(await slackChannelConfigRepository.clearApiPostingBySlackTeamId(existingForOrg.slackTeamId))
+      );
+    }
+    if (clearedChannelIds.length > 0) {
+      await recordAdminActionForActor(
+        req,
+        { kind: 'user', scope: 'organization', userId, name: userId, wasAdmin: false },
+        {
+          action: 'org.slack_channel_api_posting.updated',
+          target: { kind: 'organization', id: organizationId, displayName: org.name },
+          summary: `disabled Slack API posting for ${clearedChannelIds.length} channel(s) on workspace connect`,
+          changes: [{ field: 'apiPostEnabled', before: true, after: false }],
+          details: { slackTeamId, channelIds: clearedChannelIds },
+        }
+      );
+    }
+
     if (existingForOrg) {
       // Update existing record (reconnect scenario)
       await orgSlackWorkspaceRepository.update({
@@ -208,6 +242,17 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     }
 
     auditLogger.setWorkspaceId(slackTeamId);
+    await recordOrganizationAuditEventSafe({ organizationId, actorUserId: userId, action: 'connector.connected' });
+    await recordAdminActionForActor(
+      req,
+      { kind: 'user', scope: 'organization', userId, name: userId, wasAdmin: false },
+      {
+        action: 'org.slack.connected',
+        target: { kind: 'organization', id: organizationId, displayName: org.name },
+        summary: `connected Slack workspace ${slackTeamName ?? slackTeamId}`,
+        details: { slackTeamId },
+      }
+    );
     auditLogger.success({ slackTeamId, slackTeamName, organizationId });
 
     return sendClientRedirect(res, `${orgRedirectBase}?tab=integrations&slack_connected=true`);

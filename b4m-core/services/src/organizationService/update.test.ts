@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import { update } from './update';
-import { IOrganizationDocument, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
+import { ForbiddenError, IOrganizationDocument, IUserDocument, MAX_STORAGE_LIMIT_MB } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('organizationService - update', () => {
@@ -45,14 +45,22 @@ describe('organizationService - update', () => {
     mockAdapters = {
       db: {
         organizations: {
-          shareable: {
-            findUpdateAccessById: vi.fn().mockResolvedValue(existingOrganization),
-          },
           update: vi.fn().mockResolvedValue(undefined),
+          setStorageLimitOverride: vi.fn(async (_id: string, storageLimit: number | null) => ({
+            ...existingOrganization,
+            storageLimit,
+            storageLimitOverride: storageLimit,
+          })),
           findById: vi.fn().mockResolvedValue(existingOrganization),
         },
       },
     };
+  });
+
+  it('persists redactPushContent for the owner', async () => {
+    await update(mockRegularUser as IUserDocument, { id: 'org1', redactPushContent: true }, mockAdapters);
+
+    expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', redactPushContent: true });
   });
 
   it('should update an organization with provided values when user is admin', async () => {
@@ -99,7 +107,7 @@ describe('organizationService - update', () => {
   });
 
   it('should throw NotFoundError when organization is not found', async () => {
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(null);
+    mockAdapters.db.organizations.findById.mockResolvedValue(null);
 
     await expect(update(mockRegularUser as IUserDocument, { id: 'nonexistent-org' }, mockAdapters)).rejects.toThrow(
       NotFoundError
@@ -159,8 +167,7 @@ describe('organizationService - update', () => {
     expect(persisted).not.toHaveProperty('currentCredits');
   });
 
-  // Regression: findUpdateAccessById returns a HYDRATED Mongoose doc (unlike
-  // findAccessibleById, which returns toJSON()). Spreading a hydrated doc copies
+  // Regression: findById can return a HYDRATED Mongoose doc. Spreading a hydrated doc copies
   // `_doc`/`$__` and nests the real fields, corrupting the shape AND defeating the
   // response-boundary strip (top-level stripeCustomerId/userId would be undefined).
   // update() must normalize to a plain object first. A plain-object mock cannot
@@ -180,7 +187,7 @@ describe('organizationService - update', () => {
       stripeCustomerId: 'cus_SECRET',
       billingContact: 'b@a.com',
     });
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(hydrated);
+    mockAdapters.db.organizations.findById.mockResolvedValue(hydrated);
 
     const result = (await update(mockRegularUser as IUserDocument, { id: 'org1', name: 'Acme2' }, mockAdapters)) as any;
 
@@ -220,7 +227,6 @@ describe('organizationService - update', () => {
     // Regression: `?? undefined` left the old cap in place because BSON drops undefined from
     // `$set`, so a "set null" PUT silently no-oped. The cleared cap MUST persist as null.
     const cappedOrg = { ...existingOrganization, maxCreditsPerMember: 5 };
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(cappedOrg);
     mockAdapters.db.organizations.findById.mockResolvedValue(cappedOrg);
 
     const result = await update(
@@ -237,7 +243,7 @@ describe('organizationService - update', () => {
 
   it('ignores a per-member cap change from a non-admin', async () => {
     const cappedOrg = { ...existingOrganization, maxCreditsPerMember: 5 };
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(cappedOrg);
+    mockAdapters.db.organizations.findById.mockResolvedValue(cappedOrg);
 
     const result = await update(
       mockRegularUser as IUserDocument,
@@ -252,7 +258,8 @@ describe('organizationService - update', () => {
     const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: 0.5 }, mockAdapters);
 
     expect(result.storageLimit).toBe(0.5);
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1', storageLimit: 0.5 });
+    expect(mockAdapters.db.organizations.setStorageLimitOverride).toHaveBeenCalledWith('org1', 0.5);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1' });
   });
 
   it.each([-1, MAX_STORAGE_LIMIT_MB + 1])('rejects an out-of-range storage limit (%d)', async storageLimit => {
@@ -260,20 +267,19 @@ describe('organizationService - update', () => {
     expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
   });
 
-  it('clears the storage limit to null so the org falls back to the default', async () => {
+  it('clears the override so the repository resolves the current plan or default atomically', async () => {
     const limitedOrg = { ...existingOrganization, storageLimit: 50 };
     mockAdapters.db.organizations.findById.mockResolvedValue(limitedOrg);
 
     const result = await update(mockAdminUser as IUserDocument, { id: 'org1', storageLimit: null }, mockAdapters);
 
     expect(result.storageLimit).toBeNull();
-    const persisted = mockAdapters.db.organizations.update.mock.calls[0][0];
-    expect(persisted.storageLimit).toBeNull();
+    expect(mockAdapters.db.organizations.setStorageLimitOverride).toHaveBeenCalledWith('org1', null);
   });
 
   it('ignores a storage limit change from a non-admin manager', async () => {
     const limitedOrg = { ...existingOrganization, managerId: 'user1', storageLimit: 50 };
-    mockAdapters.db.organizations.shareable.findUpdateAccessById.mockResolvedValue(limitedOrg);
+    mockAdapters.db.organizations.findById.mockResolvedValue(limitedOrg);
 
     const result = await update(
       mockRegularUser as IUserDocument,
@@ -282,6 +288,7 @@ describe('organizationService - update', () => {
     );
 
     expect(result.storageLimit).toBe(50);
+    expect(mockAdapters.db.organizations.setStorageLimitOverride).not.toHaveBeenCalled();
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({ id: 'org1' });
   });
 
@@ -315,5 +322,91 @@ describe('organizationService - update', () => {
       billingContact: 'regular@example.com',
     });
     expect(persisted).not.toHaveProperty('currentCredits');
+  });
+
+  describe('billingContact write gate', () => {
+    const run = (actor: Partial<IUserDocument>) =>
+      update(actor as IUserDocument, { id: 'org1', billingContact: 'new@example.com' }, mockAdapters);
+    const persisted = () => mockAdapters.db.organizations.update.mock.calls[0][0];
+
+    it('lets the owner change it', async () => {
+      await run(mockRegularUser);
+      expect(persisted().billingContact).toBe('new@example.com');
+    });
+
+    it('lets a platform admin change it', async () => {
+      await run(mockAdminUser);
+      expect(persisted().billingContact).toBe('new@example.com');
+    });
+
+    it('denies a manager', async () => {
+      const org = {
+        ...existingOrganization,
+        adminUserIds: ['mgr1'],
+        users: [{ userId: 'mgr1', permissions: ['read'] }],
+      };
+      mockAdapters.db.organizations.findById.mockResolvedValue(org);
+      await run({ id: 'mgr1', isAdmin: false });
+      expect(persisted()).not.toHaveProperty('billingContact');
+    });
+  });
+
+  describe('team role gate', () => {
+    const policy = { allowPublicLinks: false, allowExternalSharing: false, allowedDomains: [] };
+    const manager = { id: 'manager1', isAdmin: false } as IUserDocument;
+    const editor = { id: 'editor1', isAdmin: false } as IUserDocument;
+    const orgWithRoles = {
+      ...existingOrganization,
+      adminUserIds: ['manager1', 'lapsed1'],
+      users: [
+        { userId: 'manager1', permissions: ['read'] },
+        { userId: 'editor1', permissions: ['read', 'update', 'share'] },
+      ],
+    };
+
+    beforeEach(() => {
+      mockAdapters.db.organizations.findById.mockResolvedValue(orgWithRoles);
+    });
+
+    it('lets a manager change the system prompt and sharing policy together', async () => {
+      await update(manager, { id: 'org1', sharingPolicy: policy, systemPrompt: 'changed' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({
+        id: 'org1',
+        sharingPolicy: policy,
+        systemPrompt: 'changed',
+      });
+    });
+
+    it('ignores a billing contact sent by a manager', async () => {
+      await update(manager, { id: 'org1', name: 'Renamed', billingContact: 'other@example.com' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({ id: 'org1', name: 'Renamed' });
+    });
+
+    it('refuses a member holding update on the sharing ACL who is not owner or manager', async () => {
+      await expect(
+        update(editor, { id: 'org1', systemPrompt: 'changed', billingContact: 'other@example.com' }, mockAdapters)
+      ).rejects.toThrow(ForbiddenError);
+      expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 to a stale manager without a roster row and to a stranger', async () => {
+      for (const caller of [{ id: 'lapsed1' }, { id: 'stranger' }]) {
+        await expect(
+          update({ ...caller, isAdmin: false } as IUserDocument, { id: 'org1', name: 'x' }, mockAdapters)
+        ).rejects.toThrow(NotFoundError);
+      }
+      expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the platform-admin bypass', async () => {
+      await update(mockAdminUser as IUserDocument, { id: 'org1', billingContact: 'ops@example.com' }, mockAdapters);
+
+      expect(mockAdapters.db.organizations.update.mock.calls[0][0]).toEqual({
+        id: 'org1',
+        billingContact: 'ops@example.com',
+      });
+    });
   });
 });

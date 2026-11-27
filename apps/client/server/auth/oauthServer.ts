@@ -8,58 +8,131 @@
 
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { requireEnv } from '@bike4mind/common';
+import { isUnconfiguredSecret, requireEnv } from '@bike4mind/common';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import { oauthClientRepository, oauthAuthorizationCodeRepository, IOAuthClientDocument } from '@bike4mind/database';
+import {
+  oauthClientRepository,
+  oauthAuthorizationCodeRepository,
+  systemSecretRepository,
+  IOAuthClientDocument,
+} from '@bike4mind/database';
+import { decryptStoredSecret, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { PKCE_CODE_VERIFIER_RE, PKCE_S256_CHALLENGE_RE } from './pkce';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'oauthServer' } });
 
 // ─── RSA key pair (RS256) ─────────────────────────────────────────────────────
-// In production set OAUTH_RSA_PRIVATE_KEY=<base64-encoded PEM private key>
-// In development an ephemeral key pair is generated automatically.
+// A stage that sets OAUTH_RSA_PRIVATE_KEY (base64-encoded PEM) signs with it. A stage without one
+// (previews, local) generates a key pair once and shares it through the encrypted SystemSecret
+// store, so every server instance signs with, and publishes in its JWKS, the same key. A per-instance
+// key would make a token verify only when the verifier's JWKS fetch hit the instance that signed it.
 
-let _privateKey: string | null = null;
-let _publicKey: string | null = null;
-let _keyId: string | null = null;
+/** SystemSecret row holding the generated key. Distinct from the OAUTH_RSA_PRIVATE_KEY env secret. */
+export const GENERATED_SIGNING_KEY_SECRET_NAME = 'OAUTH_GENERATED_RSA_PRIVATE_KEY';
 
-function getKeyPair(): { privateKey: string; publicKey: string } {
-  if (_privateKey && _publicKey) return { privateKey: _privateKey, publicKey: _publicKey };
+type SigningKey = {
+  privateKey: string;
+  publicKey: string;
+  keyId: string;
+  /** True for the stopgap key of an instance that could not reach the shared store. */
+  instanceLocal: boolean;
+};
 
-  const envKey =
-    Config.OAUTH_RSA_PRIVATE_KEY && Config.OAUTH_RSA_PRIVATE_KEY !== 'not-configured'
-      ? Config.OAUTH_RSA_PRIVATE_KEY
-      : undefined;
+let sharedKey: SigningKey | null = null;
+let sharedKeyLoad: Promise<SigningKey> | null = null;
+let instanceFallbackKey: SigningKey | null = null;
+let storeRetryAfter = 0;
 
+/** After a failed store load, how long an instance keeps its stopgap key before trying again (ms). */
+const STORE_RETRY_BACKOFF_MS = 60_000;
+
+function toSigningKey(privateKeyPem: string, instanceLocal = false): SigningKey {
+  const publicKey = crypto
+    .createPublicKey(crypto.createPrivateKey(privateKeyPem))
+    .export({ type: 'spki', format: 'pem' }) as string;
+  // Derive kid from public key fingerprint so Cognito auto-detects key rotation
+  const keyId = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
+  return { privateKey: privateKeyPem, publicKey, keyId, instanceLocal };
+}
+
+function generatePrivateKeyPem(): string {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  return privateKey;
+}
+
+/**
+ * Reads the stage's generated key, creating it on first use. The `$setOnInsert` upsert makes
+ * concurrent cold starts converge on whichever key was stored first.
+ */
+async function loadOrCreateSharedPrivateKey(): Promise<string> {
+  const existing = await systemSecretRepository.findBySecretName(GENERATED_SIGNING_KEY_SECRET_NAME);
+  if (existing) return decryptStoredSecret(existing.encryptedValue);
+
+  const encryptedValue = encryptToken(generatePrivateKeyPem());
+  if (!encryptedValue) throw new Error('Generated OAuth signing key encrypted to an empty value');
+  const stored = await systemSecretRepository.upsertSecret(GENERATED_SIGNING_KEY_SECRET_NAME, {
+    encryptedValue,
+    category: 'oauth',
+    source: 'auto_generated',
+    isOverridable: false,
+    description: 'Auto-generated OAuth/OIDC ID token signing key, used when OAUTH_RSA_PRIVATE_KEY is not set',
+  });
+  logger.warn(
+    'OAUTH_RSA_PRIVATE_KEY not set - using a generated RSA key pair shared through the database. Set this secret before going to production.'
+  );
+  return decryptStoredSecret(stored.encryptedValue);
+}
+
+function configuredPrivateKey(): string | undefined {
+  const envKey = Config.OAUTH_RSA_PRIVATE_KEY;
+  return envKey && !isUnconfiguredSecret(envKey) ? Buffer.from(envKey, 'base64').toString('utf8') : undefined;
+}
+
+async function getSigningKey(): Promise<SigningKey> {
+  if (sharedKey) return sharedKey;
+
+  const envKey = configuredPrivateKey();
   if (envKey) {
-    _privateKey = Buffer.from(envKey, 'base64').toString('utf8');
-    const keyObject = crypto.createPrivateKey(_privateKey);
-    _publicKey = crypto.createPublicKey(keyObject).export({ type: 'spki', format: 'pem' }) as string;
-  } else {
-    const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-      modulusLength: 2048,
-      publicKeyEncoding: { type: 'spki', format: 'pem' },
-      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    });
-    _privateKey = privateKey;
-    _publicKey = publicKey;
-    console.warn(
-      '[OAuthServer] OAUTH_RSA_PRIVATE_KEY not set — generated ephemeral RSA key pair. Set this secret before going to production.'
-    );
+    sharedKey = toSigningKey(envKey);
+    return sharedKey;
   }
 
-  // Derive kid from public key fingerprint so Cognito auto-detects key rotation
-  _keyId = crypto.createHash('sha256').update(_publicKey!).digest('hex').slice(0, 16);
+  // A failing store (no encryption key, an undecryptable row) would otherwise cost a key
+  // generation and an error log on every OAuth call.
+  if (instanceFallbackKey && Date.now() < storeRetryAfter) return instanceFallbackKey;
 
-  return { privateKey: _privateKey!, publicKey: _publicKey! };
+  // One store round trip per instance, however many requests arrive while it is in flight.
+  sharedKeyLoad ??= loadOrCreateSharedPrivateKey()
+    .then(privateKey => (sharedKey = toSigningKey(privateKey)))
+    .catch((error: unknown) => {
+      // Keep signing with an instance-local key rather than fail the request; only a stored key
+      // is cached for good, so the store is retried once the backoff passes.
+      sharedKeyLoad = null;
+      storeRetryAfter = Date.now() + STORE_RETRY_BACKOFF_MS;
+      logger.error('Could not load the shared OAuth signing key; using an instance-local key', { error });
+      instanceFallbackKey ??= toSigningKey(generatePrivateKeyPem(), true);
+      return instanceFallbackKey;
+    });
+  return sharedKeyLoad;
 }
 
 // ─── JWKS ─────────────────────────────────────────────────────────────────────
 
-export function getJwks() {
-  const { publicKey } = getKeyPair();
+/**
+ * The JWKS to publish, and whether a cache may keep it. An instance-local stopgap key must not be
+ * cached, since no other instance signs with it.
+ */
+export async function getJwks() {
+  const { publicKey, keyId, instanceLocal } = await getSigningKey();
   const keyObject = crypto.createPublicKey(publicKey);
   const jwk = keyObject.export({ format: 'jwk' }) as crypto.JsonWebKey;
 
-  return {
+  const jwks = {
     keys: [
       {
         kty: jwk.kty,
@@ -67,10 +140,11 @@ export function getJwks() {
         e: jwk.e,
         use: 'sig',
         alg: 'RS256',
-        kid: _keyId!,
+        kid: keyId,
       },
     ],
   };
+  return { jwks, cacheable: !instanceLocal };
 }
 
 // ─── PKCE ─────────────────────────────────────────────────────────────────────
@@ -144,7 +218,7 @@ export function releasedIdentityClaims(opts: { scopes: string[]; scopeLimited: b
   };
 }
 
-export function generateIdToken(params: {
+export async function generateIdToken(params: {
   userId: string;
   email: string;
   name: string;
@@ -155,8 +229,8 @@ export function generateIdToken(params: {
   // the full claim set. See releasedIdentityClaims.
   scopeLimited: boolean;
   nonce?: string;
-}): string {
-  const { privateKey } = getKeyPair();
+}): Promise<string> {
+  const { privateKey, keyId } = await getSigningKey();
   const issuer = requireEnv('APP_URL', process.env.APP_URL);
   const now = Math.floor(Date.now() / 1000);
 
@@ -181,8 +255,36 @@ export function generateIdToken(params: {
 
   return jwt.sign(payload, privateKey, {
     algorithm: 'RS256',
-    keyid: _keyId!,
+    keyid: keyId,
   } as jwt.SignOptions);
+}
+
+/**
+ * Verifies an `id_token_hint` (OIDC RP-Initiated Logout 1.0, section 2): our own RS256 signature,
+ * our issuer and, when the RP sent one, `aud == clientId`. Without a client_id the audience names
+ * the client. Expiry is ignored, as the spec allows, since an RP commonly signs out long after its
+ * id_token expired. Returns the subject and client, or null for any failure.
+ */
+export async function verifyIdTokenHint(
+  idTokenHint: string,
+  clientId?: string
+): Promise<{ sub: string; clientId: string } | null> {
+  const { publicKey } = await getSigningKey();
+  try {
+    // Never a string payload: the issuer check rejects one.
+    const { sub, aud } = jwt.verify(idTokenHint, publicKey, {
+      algorithms: ['RS256'],
+      issuer: requireEnv('APP_URL', process.env.APP_URL),
+      ...(clientId !== undefined ? { audience: clientId } : {}),
+      ignoreExpiration: true,
+    }) as jwt.JwtPayload;
+    const audience = clientId ?? aud;
+    return typeof sub === 'string' && sub && typeof audience === 'string' && audience
+      ? { sub, clientId: audience }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Client validation ────────────────────────────────────────────────────────
@@ -216,6 +318,7 @@ export function getOidcDiscovery() {
     token_endpoint: `${issuer}/api/oauth/token`,
     userinfo_endpoint: `${issuer}/api/oauth/userinfo`,
     jwks_uri: `${issuer}/api/oauth/jwks`,
+    end_session_endpoint: `${issuer}/oauth/logout`,
     response_types_supported: ['code'],
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],

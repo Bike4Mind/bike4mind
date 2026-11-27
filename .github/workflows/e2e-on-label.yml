@@ -1,191 +1,28 @@
-name: E2E Tests (on label)
+name: E2E Tests (preview rerun)
 
 on:
-  pull_request:
-    types: [labeled]
-
-env:
-  NODE_VERSION: '24'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number with a verifiable deployed preview'
+        type: string
+        required: true
 
 jobs:
-  e2e:
-    # Same-repo head only: a fork PR has no preview env and no E2E secret. Skip on forks
-    # (label is maintainer-added). No AWS credentials here: the dev role's OIDC trust
-    # rejects the pull_request subject, and preview runs never `sst shell` anyway.
-    if: github.event.label.name == 'run-e2e' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: E2E Tests
-    timeout-minutes: 20
-    continue-on-error: true
-    concurrency:
-      group: e2e-label-${{ github.event.number }}
-      cancel-in-progress: true
+  preview:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
-
+      actions: write
     steps:
-      - name: Resolve configuration
-        id: config
+      - uses: actions/github-script@v8
         env:
-          PR_NUMBER: ${{ github.event.number }}
-          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
-        run: |
-          STAGE="pr${PR_NUMBER}"
-          API_URL="https://app.${STAGE}.${PREVIEW_SERVER_DOMAIN}"
-          echo "stage=$STAGE" >> $GITHUB_OUTPUT
-          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
-          echo "Stage: $STAGE"
-          echo "API URL: $API_URL"
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --recursive
-
-      - name: Build core packages
-        run: pnpm core:build
-
-      - name: Install Playwright Chromium
-        working-directory: apps/client
-        run: npx playwright install chromium --with-deps
-
-      - name: Wait for deployment to be healthy
-        env:
-          TARGET_URL: ${{ steps.config.outputs.api_url }}
-        run: |
-          echo "Waiting for $TARGET_URL to be healthy..."
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
-            if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ] || [ "$STATUS" = "307" ]; then
-              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
-              exit 0
-            fi
-            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
-            sleep 10
-          done
-          echo "Deployment did not become healthy within 300s"
-          exit 1
-
-      - name: Run E2E tests
-        id: e2e
-        env:
-          API_URL: ${{ steps.config.outputs.api_url }}
-          # Preview stacks live in a SEPARATE AWS account the dev role can't `sst shell`
-          # into, so inject E2E_CLEANUP_SECRET (the only SST value the suite needs) directly
-          # from this repo secret. It must match the stable value the deployer seeds onto
-          # every stage (bike4mind-deployer _tier-deploy.yml).
-          E2E_CLEANUP_SECRET: ${{ secrets.E2E_CLEANUP_SECRET }}
-          AI_LATENCY_RUN: 'false'
-          PW_WORKERS: '1'
-          CI: 'true'
-        run: |
-          set -o pipefail
-          # An unset secret means the suite cannot start at all. Report that as a labeled
-          # skip rather than `exit 1`: a red job here is indistinguishable from a real test
-          # failure, so the PR comment below would tell a reviewer e2e broke when nothing
-          # ever ran. That comment branches on `preview_skipped` ahead of pass/fail for the same
-          # reason - a skip must never render as either.
-          if [ -z "${E2E_CLEANUP_SECRET:-}" ]; then
-            echo "::warning::preview e2e unavailable: E2E_CLEANUP_SECRET repo secret is not configured; skipping (0 tests run)"
-            echo "preview_skipped=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
-
-      - name: Upload Playwright report
-        # Nothing to upload on a skip; without this the upload emits a "No files were
-        # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: playwright-report-${{ steps.config.outputs.stage }}-label
-          path: apps/client/playwright-report/
-          retention-days: 7
-
-      - name: Comment PR with E2E results
-        if: always()
-        uses: actions/github-script@v8
+          PR_NUMBER: ${{ inputs.pr_number }}
         with:
           script: |
-            const fs = require('fs');
-            let output = '';
-            try {
-              output = fs.readFileSync('apps/client/playwright-output.txt', 'utf8');
-            } catch { }
-
-            const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
-
-            // Three states, not two: a run that could not start is neither. Checked first,
-            // because a skip exits 0 and would otherwise report as a green "Passed" on a PR
-            // where zero tests ran.
-            const skipped = '${{ steps.e2e.outputs.preview_skipped }}' === 'true';
-            const passed = '${{ steps.e2e.outcome }}' === 'success';
-            const icon = skipped ? '⏭️' : passed ? '✅' : '❌';
-            const status = skipped ? 'Skipped' : passed ? 'Passed' : 'Failed';
-            const summary = skipped
-              ? 'Preview e2e is unavailable: the `E2E_CLEANUP_SECRET` repo secret is not configured, so no tests ran.'
-              : (summaryMatch ? summaryMatch[0].trim() : 'See report for details');
-            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            // The report upload is gated off on a skip, so offering a download would point at
-            // an artifact list with no Playwright report in it. Link the run itself instead -
-            // that is where the ::warning:: naming the missing secret actually is.
-            const reportLine = skipped
-              ? `**Run:** [View workflow run](${runUrl})`
-              : `**Report:** [Download from artifacts](${runUrl})`;
-
-            const body = `${icon} **E2E Tests ${status}**
-
-            **Results:** ${summary}
-            **Preview:** \`${process.env.API_URL}\`
-            ${reportLine}
-
-            <sub>Tested against preview deployment for PR #${context.issue.number} (triggered by run-e2e label)</sub>`;
-
-            const { data: comments } = await github.rest.issues.listComments({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+            if (!/^[1-9][0-9]*$/.test(process.env.PR_NUMBER)) throw new Error('Invalid PR number');
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo, workflow_id: 'e2e-core.yml', ref: 'main',
+              inputs: { pr_number: process.env.PR_NUMBER },
             });
-            const existing = comments.find(c => c.body.includes('**E2E Tests'));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                comment_id: existing.id,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body,
-              });
-            }
-        env:
-          API_URL: ${{ steps.config.outputs.api_url }}

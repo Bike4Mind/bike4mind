@@ -64,7 +64,10 @@ const makeInvoke = () => {
       getSettingsValue: vi.fn().mockResolvedValue('text-embedding-3-small'),
       findOne: vi.fn().mockResolvedValue({ settingValue: [] }),
       findBySettingNames: vi.fn().mockResolvedValue([]),
-      findAll: vi.fn().mockResolvedValue([]),
+      // The fake model must pass admission before this test can exercise the retry write.
+      findAll: vi
+        .fn()
+        .mockResolvedValue([{ settingName: 'freeTierAllowedModels', settingValue: JSON.stringify(['test-model']) }]),
     },
   };
 

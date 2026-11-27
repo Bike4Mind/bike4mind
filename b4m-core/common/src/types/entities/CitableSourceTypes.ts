@@ -106,6 +106,8 @@ export interface CitableSource {
     chunkId?: string;
     relevanceScore?: number;
     fullContext?: string; // For text-based sources (RAG, web search)
+    /** Set by web_search when `url` is a redirect: the destination host or platform name to label it with. */
+    displayHost?: string;
     /**
      * Primary image for the source, same as `images[0]`. Set by web_search whenever the provider
      * supplied one - NOT a signal that the user asked for a visual answer, and not currently read

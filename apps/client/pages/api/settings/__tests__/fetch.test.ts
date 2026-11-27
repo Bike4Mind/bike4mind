@@ -1,11 +1,17 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Keep @bike4mind/common real so we assert against the actual settingsMap default; mock only
 // the infra + middleware seams. AdminSettings.find(...).lean() returns whatever we stage below.
 let stored: Array<Record<string, unknown>> = [];
+let lastFilter: { settingName: { $in: string[] } } | undefined;
 vi.mock('@bike4mind/database/infra', () => ({
-  AdminSettings: { find: () => ({ lean: () => Promise.resolve(stored) }) },
+  AdminSettings: {
+    find: (filter: typeof lastFilter) => {
+      lastFilter = filter;
+      return { lean: () => Promise.resolve(stored) };
+    },
+  },
 }));
 // `enc:` marks ciphertext so a test can prove the mask is derived from decrypted plaintext.
 // A non-`enc:` value passes through, matching decryptAtRest's plaintext-coexistence contract.
@@ -20,14 +26,54 @@ vi.mock('@server/utils/publicSettingsArtifact', () => ({
 }));
 
 import handler from '../fetch';
-import { SENSITIVE_SETTING_MASK, settingsMap } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  SENSITIVE_SETTING_MASK,
+  allSettingDefinitions,
+  settingsMap,
+  userReadableSettingKeys,
+} from '@bike4mind/common';
 
-const runHandler = async () => {
+const runHandler = async (user: object = { isAdmin: true }, apiKeyInfo?: { scopes: string[] }) => {
   const json = vi.fn((x: unknown) => x);
-  const req = { user: { isAdmin: true }, logger: { info: vi.fn(), error: vi.fn() } };
+  const req = { user, apiKeyInfo, logger: { info: vi.fn(), error: vi.fn() } };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
   return json.mock.calls[0][0] as Array<{ settingName: string; settingValue: unknown }>;
 };
+
+describe('settings/fetch catalog by caller', () => {
+  const fullCatalog = allSettingDefinitions().map(s => s.key);
+
+  it.each([
+    ['a full admin', { isAdmin: true }, fullCatalog],
+    ['a settings:manage delegate', { isAdmin: false, adminPermissions: ['settings:manage'] }, fullCatalog],
+    ['a delegate without settings:manage', { isAdmin: false, adminPermissions: ['support:read'] }, null],
+    ['a non-admin', { isAdmin: false }, null],
+  ])('queries the right keys for %s', async (_label, user, expected) => {
+    stored = [];
+    await runHandler(user);
+    expect(lastFilter?.settingName.$in).toEqual(expected ?? userReadableSettingKeys());
+  });
+});
+
+describe('settings/fetch API key catalog scope', () => {
+  it.each([
+    ['full admin', { isAdmin: true }, true],
+    ['settings delegate', { isAdmin: false, adminPermissions: ['settings:manage'] }, true],
+    ['other delegate', { isAdmin: false, adminPermissions: ['support:read'] }, false],
+    ['non-admin', { isAdmin: false }, false],
+  ])('requires ADMIN scope as well as settings:manage for a %s', async (_label, user, hasSettingsPermission) => {
+    stored = [];
+    for (const scopes of [[], [ApiKeyScope.AI_CHAT], [ApiKeyScope.ADMIN]]) {
+      await runHandler(user, { scopes });
+      const expected =
+        hasSettingsPermission && scopes.includes(ApiKeyScope.ADMIN)
+          ? allSettingDefinitions().map(setting => setting.key)
+          : userReadableSettingKeys();
+      expect(lastFilter?.settingName.$in).toEqual(expected);
+    }
+  });
+});
 
 describe('settings/fetch defaultEmbeddingModel server-resolved default', () => {
   beforeEach(() => {
@@ -90,9 +136,48 @@ describe('settings/fetch sensitive value redaction', () => {
     expect(result.find(s => s.settingName === 'enforceMFA')?.settingValue).toBe('true');
   });
 
+  it('returns a non-sensitive value exactly as stored, never decrypting it', async () => {
+    stored = [{ settingName: 'enforceMFA', settingValue: 'enc:sk-ant-api03-real' }];
+    const result = await runHandler();
+    expect(result.find(s => s.settingName === 'enforceMFA')?.settingValue).toBe('enc:sk-ant-api03-real');
+  });
+
   it('reports an unconfigured sensitive setting as empty, not as a mask', async () => {
     stored = [{ settingName: 'anthropicDemoKey', settingValue: '' }];
     const result = await runHandler();
     expect(result.find(s => s.settingName === 'anthropicDemoKey')?.settingValue).toBe('');
+  });
+});
+
+describe('settings/fetch enforceCredits hosted lock', () => {
+  beforeEach(() => {
+    stored = [];
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reports true on a hosted deployment even when false is stored', async () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    stored = [{ settingName: 'enforceCredits', settingValue: false }];
+    const result = await runHandler();
+    const entry = result.filter(s => s.settingName === 'enforceCredits');
+    expect(entry).toHaveLength(1);
+    expect(entry[0].settingValue).toBe(true);
+  });
+
+  it('does not add an entry on a hosted deployment when none is stored', async () => {
+    vi.stubEnv('B4M_SELF_HOST', undefined);
+    const result = await runHandler();
+    expect(result.some(s => s.settingName === 'enforceCredits')).toBe(false);
+  });
+
+  it('passes a stored false through unchanged on a self-host deployment', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    stored = [{ settingName: 'enforceCredits', settingValue: false }];
+    const result = await runHandler();
+    expect(result.find(s => s.settingName === 'enforceCredits')?.settingValue).toBe(false);
   });
 });

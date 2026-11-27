@@ -6,20 +6,27 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 
-import { SubscriptionMetadata, SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
-import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
+import {
+  SubscriptionMetadata,
+  SubscriptionOwnerType,
+  SubscriptionSource,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
+import { acquisitionFromStripeMetadata } from '@bike4mind/server-utils/analytics/acquisition';
 
 import { Logger } from '@bike4mind/observability';
 import Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { resolveSubscriptionSource } from '@server/services/organizationService';
-import { sendToClient } from '@server/websocket/utils';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { resolveSubscriptionSource } from '@bike4mind/server-utils/services/organizationService';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
-import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
+import { findSubscriptionPlan } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
+import { resolveSubscriptionCycleCredits } from '@bike4mind/server-utils/lib/userSubscriptions/cycleCredits';
 import { organizationService, creditService } from '@bike4mind/services';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { CreditHolderType, IOrganizationDocument, dayjs } from '@bike4mind/common';
 import { Resource } from 'sst';
+import { applyPlanStorageLimit } from './applyPlanStorageLimit';
 
 /**
  * Add credits to an organization and record a credit transaction.
@@ -127,12 +134,6 @@ export const handleOrganizationSubscriptionInvoice = async (
 
   const customerId = typeof invoice.customer === 'string' ? invoice.customer : invoice.customer.id;
 
-  const user = await userRepository.findById(metadata.userId);
-  if (!user) {
-    logger.debug(`No user found for ID: ${metadata.userId}`);
-    return;
-  }
-
   const [item] = subscription.items.data;
   const subscriptionQuantity = item.quantity ?? 1;
   const periodStart = item.current_period_start;
@@ -203,6 +204,13 @@ export const handleOrganizationSubscriptionInvoice = async (
               `Organization for customer ${customerId} already exists (${existingOrganization.id}); not creating another`
             );
           } else {
+            // Only a new team needs the purchaser: metadata.userId is the owner at checkout time and can
+            // name a user who no longer owns (or exists after) an ownership transfer.
+            const user = await userRepository.findById(metadata.userId);
+            if (!user) {
+              logger.debug(`No user found for ID: ${metadata.userId}`);
+              return;
+            }
             organization = await organizationService.create(
               user,
               {
@@ -272,6 +280,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            ...stripeMirrorFields(subscription),
           });
           if (!flipped) {
             logger.warn(
@@ -307,6 +316,7 @@ export const handleOrganizationSubscriptionInvoice = async (
             periodEndsAt: dayjs.unix(periodEnd).toDate(),
             canceledAt: null,
             quantity: subscriptionQuantity,
+            ...stripeMirrorFields(subscription),
             // Recorded at checkout (pages/api/organizations/subscriptions/subscribe.ts).
             ...(acquisition && { acquisition }),
           });
@@ -459,6 +469,20 @@ export const handleOrganizationSubscriptionInvoice = async (
   // sendToClient calls Connection.find() which, with transactionAsyncLocalStorage enabled,
   // would pick up the transaction session if called inside withTransaction.
   const org = organization as IOrganizationDocument | null;
+  // Only the persisted owner may receive storage, including after a duplicate checkout was refused.
+  try {
+    const storedSubscription = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
+    if (storedSubscription?.ownerType === SubscriptionOwnerType.Organization) {
+      await applyPlanStorageLimit(subscription, storedSubscription.ownerId, logger, SubscriptionOwnerType.Organization);
+    }
+  } catch (error) {
+    logger.error(`Failed to resolve storage owner for subscription ${subscription.id}`, { error });
+    try {
+      await emitMetric('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, { reason: 'owner_lookup_failed' });
+    } catch (metricError) {
+      logger.warn(`Failed to emit storage owner lookup metric for subscription ${subscription.id}`, { metricError });
+    }
+  }
   if (org?.users?.length) {
     promises.push(
       ...org.users.map(user =>
@@ -480,6 +504,19 @@ export const handleOrganizationSubscriptionInvoice = async (
       queryKey: ['organizations'],
     })
   );
+
+  if (org?.userId && String(org.userId) !== String(metadata.userId)) {
+    promises.push(
+      sendToClient(org.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['subscriptions'],
+      }),
+      sendToClient(org.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['organizations'],
+      })
+    );
+  }
 
   await Promise.all(promises);
 };
@@ -513,7 +550,7 @@ export const handleUserSubscriptionInvoice = async (
   }
 
   const [item] = subscription.items.data;
-  const planDetail = SUBSCRIPTION_PLANS.find(plan => plan.priceId === item.price.id);
+  const planDetail = findSubscriptionPlan(item.price.id);
 
   if (!planDetail) {
     // A miss here means a PAID invoice grants no subscription and no credits, so it must
@@ -564,6 +601,7 @@ export const handleUserSubscriptionInvoice = async (
           periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
           canceledAt: null,
           quantity: 1, // Always 1 for user subscriptions
+          ...stripeMirrorFields(subscription),
           // Recorded at checkout (pages/api/subscriptions/subscribe.ts); absent when the browser
           // carried no campaign touch.
           ...(acquisition && { acquisition }),
@@ -623,8 +661,15 @@ export const handleUserSubscriptionInvoice = async (
           break;
         }
 
-        // Add credits for subscription renewal or update
-        credits = planDetail.credits;
+        const persistedSubscription = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
+        const cycleCredits = resolveSubscriptionCycleCredits(
+          planDetail.credits,
+          persistedSubscription?.customCreditsPerCycle
+        );
+        if (cycleCredits === null) {
+          throw new Error(`Invalid cycle credits for subscription ${subscription.id}`);
+        }
+        credits = cycleCredits;
         try {
           await creditService.addCredits(
             {
@@ -659,6 +704,12 @@ export const handleUserSubscriptionInvoice = async (
       }
     }
   });
+
+  // The row created above is what customerSubscriptionUpdated checks ownership against, so its
+  // checkout-time update event can arrive first and skip the limit.
+  if (invoice.billing_reason === 'subscription_create') {
+    await applyPlanStorageLimit(subscription, user.id, logger);
+  }
 
   await sendToClient(metadata.userId, Resource.websocket.managementEndpoint, {
     action: 'invalidate_query',

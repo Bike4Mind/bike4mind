@@ -18,6 +18,9 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+// Legacy stored metadata can contain malformed values for fields added to the typed schema later.
+const unvalidatedStoredMetadata = (metadata: Record<string, unknown>): CitableSource['metadata'] => metadata;
+
 const baseCitable: CitableSource = {
   id: 'https://example.com/doc',
   type: 'web_url',
@@ -48,6 +51,60 @@ describe('CitableSources truncation badge', () => {
   it('does not show the badge when truncation metadata is absent', () => {
     renderWith({ sourceSystem: 'web_fetch', contentLength: 10000 });
     expect(screen.queryByTestId('citable-truncated-badge')).not.toBeInTheDocument();
+  });
+});
+
+describe('CitableSources host label', () => {
+  const redirectUrl = 'https://www.google.com/goto?url=CAESbQHEIkXX';
+
+  const renderRedirect = (metadata: CitableSource['metadata']) =>
+    render(
+      <TestWrapper>
+        <CitableSources citables={[{ ...baseCitable, id: redirectUrl, url: redirectUrl, metadata }]} />
+      </TestWrapper>
+    );
+
+  it('labels a redirect URL with the destination host from metadata.displayHost', () => {
+    renderRedirect({ sourceSystem: 'web_search', displayHost: 'www.massive.com' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('massive.com');
+  });
+
+  it('falls back to the URL host when metadata.displayHost is absent', () => {
+    renderRedirect({ sourceSystem: 'web_search' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
+  });
+
+  it('labels a redirect URL with a platform name and shows no favicon for it', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'Reddit' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Reddit');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('shows no favicon for a dotted platform name that is not a valid host', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'Medium.com Blog' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Medium.com Blog');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('shows no favicon for a platform name containing userinfo', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'foo@bar.com' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('foo@bar.com');
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('shows a favicon for a bare hostname', () => {
+    const { container } = renderRedirect({ sourceSystem: 'web_search', displayHost: 'example.com' });
+    expect(container.querySelector('img')).not.toBeNull();
+  });
+
+  it('only strips a leading www. from the label', () => {
+    renderRedirect({ sourceSystem: 'web_search', displayHost: 'Thewww.Blog' });
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('Thewww.Blog');
+  });
+
+  it('ignores a displayHost that is not a string', () => {
+    renderRedirect({ sourceSystem: 'web_search', displayHost: 42 } as unknown as CitableSource['metadata']);
+    expect(screen.getByTestId('citable-source-host-label')).toHaveTextContent('google.com');
   });
 });
 
@@ -123,7 +180,7 @@ describe('CitableSources cited-passage anchor', () => {
   });
 
   it('hands an internal chip to onInternalCitationClick instead of navigating or writing the anchor', () => {
-    const onInternalCitationClick = vi.fn(() => true);
+    const onInternalCitationClick = vi.fn<(source: CitableSource) => boolean>(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onInternalCitationClick }}>
@@ -167,7 +224,7 @@ describe('CitableSources cited-passage anchor', () => {
 
   it('lets onCitationClick win over onInternalCitationClick for an internal chip', () => {
     const onCitationClick = vi.fn();
-    const onInternalCitationClick = vi.fn(() => true);
+    const onInternalCitationClick = vi.fn<(source: CitableSource) => boolean>(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onCitationClick, onInternalCitationClick }}>
@@ -183,7 +240,7 @@ describe('CitableSources cited-passage anchor', () => {
   });
 
   it('leaves an external chip as a plain link when only onInternalCitationClick is provided', () => {
-    const onInternalCitationClick = vi.fn(() => true);
+    const onInternalCitationClick = vi.fn<(source: CitableSource) => boolean>(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onInternalCitationClick }}>
@@ -213,7 +270,10 @@ describe('CitableSources conflict badge', () => {
     title,
     url: `/opti?mode=datalake&article=${id}`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(conflictsWith === undefined ? {} : { conflictsWith }),
+    }),
   });
 
   const renderChips = (citables: CitableSource[]) =>
@@ -330,7 +390,10 @@ describe('CitableSources badge tooltip placement', () => {
     title,
     url: `/opti?mode=datalake&article=${id}`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(conflictsWith === undefined ? {} : { conflictsWith }),
+    }),
   });
 
   const renderChips = (citables: CitableSource[], reply?: string) =>
@@ -512,7 +575,10 @@ describe('conflictPlacementOf', () => {
     type: 'document',
     title: `${id}.md`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(conflictsWith === undefined ? {} : { conflictsWith }),
+    }),
   });
 
   it('opens bottom only when the chip above is a partner and the one below is not', () => {
@@ -552,7 +618,10 @@ describe('CitableSources origin label', () => {
     title: `${id}.md`,
     url: `/opti?mode=datalake&article=${id}`,
     status: 'complete',
-    metadata: { sourceSystem: 'knowledge_base', ...(sourceOrigin === undefined ? {} : { sourceOrigin }) },
+    metadata: unvalidatedStoredMetadata({
+      sourceSystem: 'knowledge_base',
+      ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
+    }),
   });
 
   const labelsOf = (citables: CitableSource[]) => {

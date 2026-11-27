@@ -6,6 +6,7 @@ import { ConfigStore } from '../../../storage/ConfigStore.js';
 import { PermissionManager } from '../../../utils/PermissionManager.js';
 import { ToolCatalog } from '../toolCatalog.js';
 import { applyPromptResponse, canRunWithoutPrompt, persistToolTrust } from './permissionDecision.js';
+import { __resetHostAllowlistCacheForTests } from './hostAllowlist.js';
 
 describe('persistToolTrust (folder-trust gate)', () => {
   let base: string;
@@ -62,7 +63,13 @@ describe('persistToolTrust (folder-trust gate)', () => {
 });
 
 describe('canRunWithoutPrompt', () => {
-  const base = { toolName: 'file_read', forcePrompt: false, isSandboxed: false, interactionMode: 'normal' as const };
+  const base = {
+    toolName: 'file_read',
+    isMcpTool: false,
+    forcePrompt: false,
+    isSandboxed: false,
+    interactionMode: 'normal' as const,
+  };
 
   it('runs a tool that needs no permission', () => {
     const permissionManager = new PermissionManager(new ToolCatalog());
@@ -101,6 +108,49 @@ describe('canRunWithoutPrompt', () => {
   });
 });
 
+describe('canRunWithoutPrompt with a host allowlist (claude --allowedTools)', () => {
+  const original = process.env.B4M_ALLOWED_TOOLS;
+  const base = { isMcpTool: false, forcePrompt: false, isSandboxed: false, interactionMode: 'normal' as const };
+
+  beforeEach(() => {
+    process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['mcp__host__*']);
+    __resetHostAllowlistCacheForTests();
+  });
+  afterEach(() => {
+    if (original === undefined) delete process.env.B4M_ALLOWED_TOOLS;
+    else process.env.B4M_ALLOWED_TOOLS = original;
+    __resetHostAllowlistCacheForTests();
+  });
+
+  it('runs an MCP tool the claude-form pattern names, without a prompt', () => {
+    const permissionManager = new PermissionManager(new ToolCatalog());
+    expect(canRunWithoutPrompt({ ...base, toolName: 'host__read_self', isMcpTool: true, permissionManager })).toBe(
+      true
+    );
+  });
+
+  it('still prompts for a built-in and for another server', () => {
+    const permissionManager = new PermissionManager(new ToolCatalog());
+    expect(canRunWithoutPrompt({ ...base, toolName: 'bash_execute', permissionManager })).toBe(false);
+    expect(canRunWithoutPrompt({ ...base, toolName: 'github__create_issue', isMcpTool: true, permissionManager })).toBe(
+      false
+    );
+  });
+
+  it('a forced prompt still wins over the allowlist', () => {
+    const permissionManager = new PermissionManager(new ToolCatalog());
+    expect(
+      canRunWithoutPrompt({
+        ...base,
+        toolName: 'host__read_self',
+        isMcpTool: true,
+        forcePrompt: true,
+        permissionManager,
+      })
+    ).toBe(false);
+  });
+});
+
 describe('applyPromptResponse', () => {
   it('throws on deny', async () => {
     const permissionManager = new PermissionManager(new ToolCatalog());
@@ -121,5 +171,23 @@ describe('applyPromptResponse', () => {
     expect(permissionManager.needsPermission('file_read')).toBe(true);
     await applyPromptResponse('file_read', {}, 'allow-always', permissionManager, configStore);
     expect(configStore.trustTool).toHaveBeenCalledWith('file_read');
+  });
+
+  it('on allow-always, prints a failed save and still allows the tool for the session', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const permissionManager = new PermissionManager(new ToolCatalog());
+    const configStore = {
+      getProjectConfigDir: () => null,
+      trustTool: vi.fn().mockRejectedValue(new Error('Could not save settings: config.json failed validation')),
+    };
+
+    await expect(
+      applyPromptResponse('file_read', {}, 'allow-always', permissionManager, configStore)
+    ).resolves.toBeUndefined();
+
+    expect(warn).toHaveBeenCalledWith(
+      'Trusted file_read for this session only; could not save it: Could not save settings: config.json failed validation'
+    );
+    expect(permissionManager.needsPermission('file_read')).toBe(false);
   });
 });

@@ -9,8 +9,10 @@ import {
   LAKE_CONFIG_CHANGE_FIELDS,
   LAKE_CONFIG_CHANGE_PRINCIPAL_KINDS,
   LAKE_CONFIG_CHANGE_VALUE_KINDS,
+  LAKE_CONFIG_EVENT_TARGET_KINDS,
   LAKE_CONFIG_FINGERPRINTED_FIELDS,
   LAKE_CONFIG_MAX_CHANGES,
+  LAKE_CONFIG_MAX_LEVER_CHANGES,
   LAKE_CONFIG_TEXT_HASH_CHARS,
   LAKE_CONFIG_VALUE_MAX_CHARS,
   LAKE_MANAGE_RUNGS,
@@ -71,6 +73,25 @@ const LakeConfigFieldChangeSchema = new Schema(
   { _id: false }
 );
 
+const LakeConfigEventTargetSchema = new Schema(
+  {
+    kind: { type: String, enum: LAKE_CONFIG_EVENT_TARGET_KINDS, required: true },
+    id: { type: String, required: true },
+  },
+  { _id: false, id: false }
+);
+
+// `before`/`after` are Mixed for the same reason as the field changes: a lever is a string, number,
+// boolean, list or null. Feed addresses arrive already redacted; see ILakeConfigLeverChange.
+const LakeConfigLeverChangeSchema = new Schema(
+  {
+    lever: { type: String, required: true },
+    before: { type: Schema.Types.Mixed },
+    after: { type: Schema.Types.Mixed },
+  },
+  { _id: false }
+);
+
 /**
  * The never-a-second-copy-of-the-prompt property, enforced HERE rather than left resting on one
  * caller. `diffLakeConfig` is careful, but it is not the only thing that can ever write to this
@@ -107,6 +128,11 @@ const LakeConfigChangeEventSchema = new Schema<ILakeConfigChangeEventDocument>(
     manageRung: { type: String, enum: LAKE_MANAGE_RUNGS, required: true },
     action: { type: String, enum: LAKE_CONFIG_CHANGE_ACTIONS, required: true },
     changes: { type: [LakeConfigFieldChangeSchema], default: [] },
+    // Absent, not empty, on rows that carry none: old rows and non-research actions.
+    target: { type: LakeConfigEventTargetSchema },
+    leverChanges: { type: [LakeConfigLeverChangeSchema], default: undefined },
+    admittedFabFileId: { type: String },
+    undoesEventId: { type: String },
     // Computed at write time from the floor-clamped retention. `immutable` blocks the ordinary
     // updateOne/updateMany/findOneAndUpdate paths (Mongoose strips immutable fields from a query
     // update's cast unless the caller passes `overwriteImmutable: true`) - a backstop against an
@@ -164,6 +190,7 @@ class LakeConfigChangeEventRepository
     const retentionDays = resolveLakeConfigAuditRetentionDays(input.retentionDays);
 
     const created = await this.eventModel.create({
+      ...(input.eventId ? { _id: input.eventId } : {}),
       principalKind: input.principalKind,
       principalId: input.principalId,
       onBehalfOfUserId: input.onBehalfOfUserId,
@@ -172,6 +199,10 @@ class LakeConfigChangeEventRepository
       manageRung: input.manageRung,
       action: input.action,
       changes: input.changes.slice(0, LAKE_CONFIG_MAX_CHANGES),
+      target: input.target,
+      leverChanges: input.leverChanges?.slice(0, LAKE_CONFIG_MAX_LEVER_CHANGES),
+      admittedFabFileId: input.admittedFabFileId,
+      undoesEventId: input.undoesEventId,
       expiresAt: lakeConfigExpiresAt(now, retentionDays),
     });
     return created.toJSON() as unknown as ILakeConfigChangeEventDocument;

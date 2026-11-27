@@ -1,0 +1,136 @@
+import { PushNotificationEventSchema, type PushNotificationEvent } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
+import { isPushDeliveryConfigured } from './pushDelivery';
+import { NotificationEvents } from './eventBus';
+
+export { isPushDeliveryConfigured };
+
+/**
+ * Publish-side helpers for `notification.push` (delivered by apps/workers/src/events/sendPush.ts).
+ * Every publisher sits on a terminal seam of some other piece of work, so nothing here may throw.
+ * Each publisher also checks isPushDeliveryConfigured() before any lookup it makes for the event, so a
+ * deployment without APNs credentials spends no database read and no EventBridge call on push.
+ */
+
+/**
+ * The web app's notebook route (`/notebooks/$id`), which first-party clients also resolve. Absolute
+ * when APP_URL is set; otherwise path-only, and sendPush resolves it against its own APP_URL.
+ */
+export function sessionDeepLink(sessionId: string): string {
+  return appPathDeepLink(`/notebooks/${encodeURIComponent(sessionId)}`);
+}
+
+/** An app-relative path (e.g. a Studio page) as a deep link, resolved the same way as sessionDeepLink. */
+export function appPathDeepLink(path: string): string {
+  const base = (process.env.APP_URL ?? '').replace(/\/+$/, '');
+  return base ? `${base}${path}` : path;
+}
+
+export function appRootDeepLink(): string {
+  return (process.env.APP_URL ?? '').replace(/\/+$/, '') || '/';
+}
+
+/** Validates and publishes; a failure is logged at warn and swallowed. A no-op while push is unconfigured. */
+export async function publishPushNotification(
+  event: PushNotificationEvent,
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
+  if (!isPushDeliveryConfigured()) return;
+  try {
+    await NotificationEvents.Push.publish(PushNotificationEventSchema.parse(event));
+  } catch (error) {
+    logger.warn('[Push] failed to publish push notification', {
+      category: event.category,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * The clearing push for an approval that was handled (approved, denied or lapsed) on any surface. It
+ * reuses the original push's collapse id (`approval:<questId>`), so it replaces the delivered
+ * notification on the lock screen instead of leaving buttons that can only fail.
+ */
+export async function publishApprovalResolvedPush(
+  target: { userId: string; sessionId: string; questId: string; pendingActionTs: number },
+  outcome: NonNullable<PushNotificationEvent['approvalResolved']>,
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
+  await publishPushNotification(
+    {
+      userId: target.userId,
+      category: 'approval_needed',
+      title: 'Approval handled',
+      body: 'This request has been handled.',
+      deepLink: sessionDeepLink(target.sessionId),
+      collapseId: `approval:${target.questId}`,
+      questId: target.questId,
+      sessionId: target.sessionId,
+      pendingActionTs: target.pendingActionTs,
+      approvalResolved: outcome,
+    },
+    logger
+  );
+}
+
+/** The Connection row fields that decide whether a socket means "the user is watching". */
+export type WatchedConnectionRow = {
+  source?: string;
+  apiKeyId?: string | null;
+  authExpiresAt?: Date | string | null;
+};
+
+export type ConnectionLookup = { findByUserId(userId: string): Promise<WatchedConnectionRow[]> };
+
+/**
+ * Whether a Connection row is a browser session that is still being kept alive. CLI sockets and
+ * API-key sockets never render quest results, so they do not count. Nothing heartbeats a row mid-
+ * session, so freshness comes from authExpiresAt: a web client moves it forward through
+ * reauth_connection before its access token lapses, so a row past it is a socket nobody is keeping
+ * alive (left for realtimeConnectionSweep to end). A row without it predates the field and is stale.
+ */
+export function isWatchingConnection(row: WatchedConnectionRow, now: Date = new Date()): boolean {
+  if (row.source !== 'web' || row.apiKeyId) return false;
+  if (!row.authExpiresAt) return false;
+  return new Date(row.authExpiresAt).getTime() > now.getTime();
+}
+
+/**
+ * Whether the user has a live browser connection (isWatchingConnection) among the rows
+ * ClientMessageSender (b4m-core/utils/src/ws/ClientMessageSender.ts) finds. A user who is watching
+ * sees the result live, so quest-shaped work (chat, image generation) skips the push.
+ * Fails toward pushing: an unreadable connection table must not silence notifications.
+ */
+export async function hasLiveConnection(
+  userId: string,
+  connections: ConnectionLookup,
+  logger: Pick<Logger, 'warn'>,
+  now: Date = new Date()
+): Promise<boolean> {
+  try {
+    return (await connections.findByUserId(userId)).some(row => isWatchingConnection(row, now));
+  } catch (error) {
+    logger.warn('[Push] connection lookup failed; treating the user as offline', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/** First `max` characters with an ellipsis, for titles and bodies built from user-named things. */
+export function truncateForPush(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 3).trimEnd()}...`;
+}
+
+const GENERATION_PUSH_BODY_MAX_CHARS = 160;
+
+/** The body of a generation_ready push: the prompt, whitespace collapsed and truncated, else the fallback text. */
+export function generationPushBody(prompt: string | undefined, fallback: string): string {
+  const collapsed = prompt?.replace(/\s+/g, ' ').trim();
+  return collapsed ? truncateForPush(collapsed, GENERATION_PUSH_BODY_MAX_CHARS) : fallback;
+}
+
+/** The brief route (`/briefs/$id`), which first-party clients resolve to the brief view. */
+export function briefDeepLink(briefId: string): string {
+  return appPathDeepLink(`/briefs/${encodeURIComponent(briefId)}`);
+}

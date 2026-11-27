@@ -17,7 +17,7 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   resolveOutputMaxTokens: vi.fn(
     ({ requested, fallback }: { requested?: number; fallback: number }) => requested ?? fallback
   ),
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', type: 'text', backend: 'anthropic' }]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model: unknown, messages: Array<Record<string, any>>, _options: unknown, onChunk: any) => {
@@ -44,6 +44,7 @@ import { executeCompletion } from './cliCompletions';
 const db = {
   adminSettings: {} as any,
   apiKeys: {} as any,
+  spendFreezes: { findActiveForSubject: async () => null },
   creditTransactions: {} as any,
   users: {
     incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100 }),

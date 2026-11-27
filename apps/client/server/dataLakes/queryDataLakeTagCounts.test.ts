@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', async () => {
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
 
 import { DATA_LAKES } from '@bike4mind/common';
-import { queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from './index';
+import { queryDataLakeTagCounts, queryScopedDataLakeTagCounts } from '@bike4mind/server-utils/dataLakes/index';
 
 const req = { user: { id: 'viewer-9', groups: ['group-a'], tags: ['Opti'] } } as any;
 

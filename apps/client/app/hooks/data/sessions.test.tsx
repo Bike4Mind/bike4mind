@@ -14,7 +14,9 @@ import {
   useForkSession,
   useSnipSession,
   useOwnSessionCount,
+  useSubscribeToSession,
 } from './sessions';
+import { useSubscribeCollection } from '@client/app/utils/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { ISessionDocument } from '@bike4mind/common';
@@ -39,6 +41,11 @@ vi.mock('@client/app/utils/sessionsAPICalls', async () => {
 // useGetOwnSessions gates on currentUser; provide a stable signed-in user.
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1' } }),
+}));
+
+vi.mock('@client/app/utils/react-query', async () => ({
+  ...(await vi.importActual<object>('@client/app/utils/react-query')),
+  useSubscribeCollection: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -203,6 +210,42 @@ describe('useGetOwnSessions refetchOnMount trim', () => {
     });
     // refetchOnMount only governs refetch of EXISTING data - the cold fetch runs once.
     expect(getSessionsFromServer).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useGetOwnSessions paging', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('asks for the next page by the keyset cursor the server minted', async () => {
+    vi.mocked(getSessionsFromServer)
+      .mockResolvedValueOnce({ data: [{ id: 's1' } as ISessionDocument], hasMore: true, nextCursor: 'cursor-1' })
+      .mockResolvedValueOnce({ data: [{ id: 's2' } as ISessionDocument], hasMore: false, nextCursor: null });
+    const { result } = renderOwnWith();
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+
+    await result.current.fetchNextPage();
+
+    await waitFor(() => expect(getSessionsFromServer).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(getSessionsFromServer).mock.calls[0][1]).toMatchObject({ pagination: { page: 1 } });
+    expect(vi.mocked(getSessionsFromServer).mock.calls[0][1]?.cursor).toBeUndefined();
+    expect(vi.mocked(getSessionsFromServer).mock.calls[1][1]).toMatchObject({
+      pagination: { page: 2 },
+      cursor: 'cursor-1',
+    });
+  });
+
+  it('falls back to the page number when the server mints no cursor', async () => {
+    vi.mocked(getSessionsFromServer)
+      .mockResolvedValueOnce({ data: [{ id: 's1' } as ISessionDocument], hasMore: true })
+      .mockResolvedValueOnce({ data: [], hasMore: false });
+    const { result } = renderOwnWith();
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+
+    await result.current.fetchNextPage();
+
+    await waitFor(() => expect(getSessionsFromServer).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(getSessionsFromServer).mock.calls[1][1]).toMatchObject({ pagination: { page: 2 } });
+    expect(vi.mocked(getSessionsFromServer).mock.calls[1][1]?.cursor).toBeUndefined();
   });
 });
 
@@ -635,5 +678,30 @@ describe('useOwnSessionCount', () => {
     ).not.toThrow();
     expect(result.current.data).toBe(3);
     get.mockRestore();
+  });
+});
+
+describe('useSubscribeToSession', () => {
+  const renderSubscribe = (sessionId: string | null) => {
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return renderHook(() => useSubscribeToSession(sessionId), { wrapper });
+  };
+
+  beforeEach(() => {
+    vi.mocked(useSubscribeCollection).mockClear();
+  });
+
+  it('does not subscribe while the session id is a temporary optimistic id', () => {
+    renderSubscribe('optimistic-session-abc');
+    expect(useSubscribeCollection).toHaveBeenCalledWith('sessionmodels', null, expect.any(Function));
+  });
+
+  it('subscribes by _id once the session id is real', () => {
+    const id = 'a'.repeat(24);
+    renderSubscribe(id);
+    expect(useSubscribeCollection).toHaveBeenCalledWith('sessionmodels', { _id: id }, expect.any(Function));
   });
 });

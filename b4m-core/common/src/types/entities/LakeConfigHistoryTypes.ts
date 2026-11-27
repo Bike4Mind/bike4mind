@@ -1,11 +1,14 @@
 import type {
+  ILakeConfigEventTarget,
   ILakeConfigFingerprintChange,
+  ILakeConfigLeverChange,
   ILakeConfigLiteralChange,
   ILakeConfigTextFingerprint,
   LakeConfigChangeAction,
   LakeConfigChangePrincipalKind,
 } from './LakeConfigChangeEventTypes';
 import type { LakeManageRung } from './LakeConfigChangeEventTypes';
+import type { LakeMembershipChangeOrigin } from './LakeMembershipChangeEventTypes';
 
 // -- Lake Config History View ----------------------------------------------------------------
 //
@@ -59,15 +62,9 @@ export interface LakeConfigHistoryFingerprintChange extends Omit<
  */
 export type LakeConfigHistoryFieldChange = ILakeConfigLiteralChange | LakeConfigHistoryFingerprintChange;
 
-/**
- * One recorded config change, ready to render. Deliberately NOT aggregated per principal: a read is
- * an interchangeable repetition worth collapsing into a count, whereas each config change is a
- * distinct before -> after hop, and folding several into one row would destroy the chain an owner
- * reads the history FOR ("who moved it back?"). The access view (#1672) is expected to aggregate,
- * which is why this one states the choice explicitly.
- */
-export interface LakeConfigHistoryEntry {
-  /** The event's own id - a stable React key, and the handle a future per-event drill-in would use. */
+/** Fields every History row has, whichever stream it came from. */
+interface LakeConfigHistoryEntryBase {
+  /** The event's own id - a stable React key, and the handle a per-event action (undo) uses. */
   eventId: string;
   changedAt: Date;
   principalKind: LakeConfigChangePrincipalKind;
@@ -78,18 +75,68 @@ export interface LakeConfigHistoryEntry {
   principalName?: string;
   onBehalfOfUserId?: string;
   onBehalfOfName?: string;
+  /** The entity the row is about. Absent on old rows and on lake-level changes. */
+  target?: ILakeConfigEventTarget;
+  /** This row reverses that event. */
+  undoesEventId?: string;
+  /** Whether Undo applies: a supported action with the structured fields it needs, not yet undone. */
+  undoable?: boolean;
+  /** True once the event has been undone, whether or not the row that undid it is in this window. */
+  undone?: boolean;
+  /** The row that undid this one, when it is in the window. */
+  undoneByEventId?: string;
+  /** Why a row has no Undo button, when the reason is something the reader can act on. */
+  undoNote?: string;
+}
+
+/**
+ * One recorded config change, ready to render. Deliberately NOT aggregated per principal: a read is
+ * an interchangeable repetition worth collapsing into a count, whereas each config change is a
+ * distinct before -> after hop, and folding several into one row would destroy the chain an owner
+ * reads the history FOR ("who moved it back?"). The access view (#1672) is expected to aggregate,
+ * which is why this one states the choice explicitly.
+ */
+export interface LakeConfigHistoryConfigEntry extends LakeConfigHistoryEntryBase {
+  kind: 'config';
   /** Which rung authorized the write - the field that makes a platform-admin edit visible AS SUCH. */
   manageRung: LakeManageRung;
   action: LakeConfigChangeAction;
   /** Only the fields that moved, in the producer's order. Never empty on a persisted event.
    *  Hash-free by type - see `LakeConfigHistoryFingerprint`. */
   changes: LakeConfigHistoryFieldChange[];
+  /** Structured lever moves, with a feed address in its redacted form. Absent on old rows. */
+  leverChanges?: ILakeConfigLeverChange[];
+  /** The file an approve or auto-approve admitted. */
+  admittedFabFileId?: string;
 }
+
+export const LAKE_CONFIG_HISTORY_FILE_ACTIONS = ['file-added', 'file-removed'] as const;
+export type LakeConfigHistoryFileAction = (typeof LAKE_CONFIG_HISTORY_FILE_ACTIONS)[number];
+
+/**
+ * A file joining or leaving the lake, merged in from the membership log at read time. It has no
+ * manage rung and no prose `changes`: the membership log records neither.
+ */
+export interface LakeConfigHistoryFileEntry extends LakeConfigHistoryEntryBase {
+  kind: 'file';
+  action: LakeConfigHistoryFileAction;
+  target: ILakeConfigEventTarget;
+  /**
+   * The file's current name, present only while the file exists AND is still a member of the lake
+   * (or is owned by the reader). Absent otherwise, where a reader falls back to the id.
+   */
+  fileName?: string;
+  origin: LakeMembershipChangeOrigin;
+  /** This row is a side effect of that event, so it has no Undo of its own. */
+  causedByEventId?: string;
+}
+
+export type LakeConfigHistoryEntry = LakeConfigHistoryConfigEntry | LakeConfigHistoryFileEntry;
 
 export interface LakeConfigHistoryView {
   lakeId: string;
   lakeName: string;
-  /** Newest first, matching `listByLake`'s own sort. */
+  /** Newest first across both streams, config events and file membership changes. */
   entries: LakeConfigHistoryEntry[];
   /**
    * True when the read hit its cap, so `entries` is a WINDOW rather than the whole history. A
@@ -114,4 +161,12 @@ export interface LakeConfigHistoryView {
    * incomplete.
    */
   userNames: Record<string, string>;
+}
+
+/** What the undo route returns: the History row the undo wrote, plus anything the reader should know. */
+export interface LakeConfigUndoResult {
+  /** The undo's own History row, or null when that best-effort write did not persist. */
+  entry: LakeConfigHistoryEntry | null;
+  /** Consequences of the undo, in words (for example a schedule put on hold). */
+  notes: string[];
 }

@@ -19,7 +19,7 @@ const { getSlackDeps, getSlackDb, invoke, findQuestById } = vi.hoisted(() => ({
   findQuestById: vi.fn(),
 }));
 vi.mock('./di/registry', () => ({ getSlackDeps, getSlackDb, configureSlackPackage: vi.fn() }));
-vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
+vi.mock('@bike4mind/services-core/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: function MockChatCompletionInvoke() {
     return { invoke, db: { quests: { findById: findQuestById } } };
   },
@@ -150,5 +150,29 @@ describe('triggerAIResponseWithContext', () => {
     const result = await makeHandler().triggerAIResponseWithContext('session-1', 'hi', '');
 
     expect(result).toBe('Sorry, I encountered an error processing your request.');
+  });
+});
+
+describe('triggerAIResponseWithContext context placement', () => {
+  it('sends channel history as a per-turn message and keeps it out of the system prompt', async () => {
+    invoke.mockResolvedValue(null);
+
+    await makeHandler().triggerAIResponseWithContext(
+      'session-1',
+      'hi',
+      'SYSTEM RULES',
+      undefined,
+      [],
+      undefined,
+      false,
+      [],
+      'HISTORY'
+    );
+
+    const extra = invoke.mock.calls[0][0].body.extraContextMessages;
+    expect(extra).toEqual([
+      { role: 'system', content: 'SYSTEM RULES' },
+      { role: 'system', content: 'HISTORY', perTurn: true },
+    ]);
   });
 });

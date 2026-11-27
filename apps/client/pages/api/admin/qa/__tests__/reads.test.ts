@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 const { reads } = vi.hoisted(() => ({
@@ -8,11 +8,32 @@ const { reads } = vi.hoisted(() => ({
     listQaRuns: vi.fn(),
     getQaRunDetail: vi.fn(),
     getQaTestHistory: vi.fn(),
+    getQaSummary: vi.fn(),
   },
 }));
 
-// baseApi is stubbed (no auth chain), so ensureAdmin in each route is what is under test.
-vi.mock('@server/middlewares/baseApi', () => import('@server/qa/testing/baseApiStub'));
+// baseApi is stubbed (no auth chain) but runs the .use() middlewares, so the real adminApi gate is under test.
+vi.mock('@server/middlewares/baseApi', async () => {
+  const { default: errorHandler } = await import('@server/middlewares/errorHandler');
+  type Step = (req: unknown, res: unknown, next: () => void) => unknown;
+  return {
+    baseApi: () => {
+      const gates: Step[] = [];
+      const chain = {
+        use: (gate: Step) => (gates.push(gate), chain),
+        get: (handler: Step) => async (req: never, res: never) => {
+          try {
+            for (const gate of gates) await gate(req, res, () => undefined);
+            await handler(req, res, () => undefined);
+          } catch (error) {
+            errorHandler(error as Error, req, res);
+          }
+        },
+      };
+      return chain;
+    },
+  };
+});
 vi.mock('@server/qa/reads', () => reads);
 vi.mock('@server/qa/storage', () => ({ qaMediaStorage: () => ({ exists: vi.fn(), signedGetUrl: vi.fn() }) }));
 vi.mock('@server/qa/reportToken', () => ({ signQaReportToken: (id: string) => `tok-${id}` }));
@@ -22,6 +43,7 @@ import overview from '../overview';
 import runs from '../runs/index';
 import runDetail from '../runs/[id]';
 import tests from '../tests';
+import summary from '../summary';
 
 type Route = (req: unknown, res: unknown) => Promise<void>;
 const ADMIN = { id: 'admin1', isAdmin: true };
@@ -38,24 +60,63 @@ beforeEach(() => {
   for (const fn of Object.values(reads)) fn.mockReset().mockResolvedValue({ ok: true });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('admin QA read routes', () => {
   it('403s a non-admin on every route', async () => {
-    for (const route of [facets, overview, runs, runDetail, tests]) {
+    for (const route of [facets, overview, runs, runDetail, tests, summary]) {
       const query = { product: 'product-a', id: 'a'.repeat(24), testKey: 'k' };
-      expect((await call(route, query, { id: 'u', isAdmin: false })).status).toBe(403);
+      const response = await call(route, query, { id: 'u', isAdmin: false });
+      expect(response.status).toBe(403);
+      expect(JSON.stringify(response.json)).toMatch(/missing permission/i);
     }
     for (const fn of Object.values(reads)) expect(fn).not.toHaveBeenCalled();
   });
 
   it('passes parsed filters to the overview', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-14T12:00:00.000Z'));
     const { status } = await call(overview, { product: 'product-a', env: 'staging', range: '30d' });
     expect(status).toBe(200);
     expect(reads.getQaOverview).toHaveBeenCalledWith({
       product: 'product-a',
       env: 'staging',
       branch: 'main',
-      rangeDays: 30,
+      from: new Date('2026-10-15T12:00:00.000Z'),
+      to: new Date('2026-11-14T12:00:00.000Z'),
     });
+  });
+
+  it('forwards explicit maximum local-day bounds across fallback instead of the legacy range', async () => {
+    const from = '2024-11-02T04:00:00.000Z';
+    const to = '2025-11-03T05:00:00.000Z';
+    expect((await call(overview, { product: 'product-a', from, to, range: '30d' })).status).toBe(200);
+    expect(reads.getQaOverview).toHaveBeenCalledWith({
+      product: 'product-a',
+      branch: 'main',
+      from: new Date(from),
+      to: new Date(to),
+    });
+  });
+
+  it('passes summary filters without a product, with the picker from/to', async () => {
+    const from = '2026-11-01T00:00:00.000Z';
+    const to = '2026-11-08T00:00:00.000Z';
+    const { status } = await call(summary, { env: 'staging', from, to, range: '30d' });
+    expect(status).toBe(200);
+    expect(reads.getQaSummary).toHaveBeenCalledWith({
+      env: 'staging',
+      branch: 'main',
+      from: new Date(from),
+      to: new Date(to),
+    });
+  });
+
+  it('422s a summary range wider than the cap', async () => {
+    const res = await call(summary, { from: '2025-01-01T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' });
+    expect(res.status).toBe(422);
   });
 
   it('422s the overview without a product', async () => {

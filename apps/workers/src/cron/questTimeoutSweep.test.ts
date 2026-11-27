@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
+vi.mock('@bike4mind/server-utils/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: (...args: unknown[]) => mockDispatchQuestCallback(...args),
   redispatchStaleQuestCallback: (...args: unknown[]) => mockRedispatchStaleQuestCallback(...args),
   GENERATION_CALLBACK_STALE_DISPATCH_MS: 6 * 60 * 60 * 1000,
@@ -130,7 +130,7 @@ describe('questTimeoutSweep cron', () => {
     await handler();
 
     // The Slack error channel is fed only by ERROR-level lines (infra/logMonitor.ts);
-    // a warn-level recovery is invisible to LiveOps triage. The message is the shared
+    // a warn-level recovery is invisible to LiveOps. The message is the shared
     // recovery constant so the same filter catches every settle site.
     expect(mockLogger.error).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
       questId: 'q-1',

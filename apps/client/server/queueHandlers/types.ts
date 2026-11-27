@@ -1,23 +1,11 @@
 import {
   ChatCompletionCreateInputSchema,
   DashboardParamsSchema,
-  OpenAIImageGenerationInput,
   PromptMetaZodSchema,
   b4mLLMTools,
   ResearchModeParamsSchema,
 } from '@bike4mind/common';
 import { z } from 'zod';
-
-export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
-  sessionId: z.string(),
-  questId: z.string(),
-  userId: z.string(),
-  prompt: z.string(),
-  width: z.number().optional(),
-  height: z.number().optional(),
-  aspect_ratio: z.string().optional(),
-});
-export type ImageGenerationBody = z.infer<typeof ImageGenerationBodySchema>;
 
 export const QuestStartBodySchema = z.object({
   userId: z.string(),
@@ -30,7 +18,6 @@ export const QuestStartBodySchema = z.object({
   fabFileIds: z.array(z.string()),
   params: ChatCompletionCreateInputSchema,
   dashboardParams: DashboardParamsSchema.optional(),
-  enableQuestMaster: z.boolean().optional(),
   enableMementos: z.boolean().optional(),
   enableArtifacts: z.boolean().optional(),
   promptMeta: PromptMetaZodSchema,

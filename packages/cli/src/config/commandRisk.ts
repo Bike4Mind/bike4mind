@@ -200,7 +200,7 @@ const WRAPPERS_WITH_POSITIONAL = new Set(['timeout', 'chroot', 'flock']);
  * - As a pipeline sink for fetch-and-execute (`curl ... | sh`).
  * - As `-c`/`-e` wrappers whose code argument must be recursively classified.
  */
-const INTERPRETERS = new Set([
+export const INTERPRETERS = new Set([
   'sh',
   'bash',
   'zsh',
@@ -242,7 +242,7 @@ const FETCH_SINK_PROGRAMS = new Set([...INTERPRETERS, ...SOURCE_BUILTINS]);
 const ESCALATORS_WITH_COMMAND_FLAG = new Set(['su', 'runuser']);
 
 /** Programs that fetch content over the network (the source half of fetch-and-execute). */
-const NETWORK_FETCHERS = new Set(['curl', 'wget', 'fetch', 'aria2c', 'lwp-download']);
+export const NETWORK_FETCHERS = new Set(['curl', 'wget', 'fetch', 'aria2c', 'lwp-download']);
 
 /**
  * Programs that are destructive regardless of their arguments (raw disk / filesystem
@@ -389,6 +389,184 @@ function isOperator(token: ShellToken): token is { op: string } {
   return typeof token === 'object' && token !== null && 'op' in token;
 }
 
+export function isComment(token: ShellToken): boolean {
+  return typeof token === 'object' && token !== null && 'comment' in token;
+}
+
+const SHELL_METACHARACTERS = new Set([';', '&', '|', '(', ')', '<', '>']);
+const BASH_BLANKS = new Set([' ', '\t', '\n']);
+const OPAQUE_SHELL_KEYWORDS = new Set([
+  'if',
+  'then',
+  'elif',
+  'else',
+  'fi',
+  'for',
+  'while',
+  'until',
+  'do',
+  'done',
+  'case',
+  'esac',
+  'function',
+  'select',
+  'coproc',
+  'time',
+  '!',
+  '{',
+  '}',
+  '[[',
+  ']]',
+]);
+/** Stands in for a command substitution; its code is classified on its own. */
+const SUBSTITUTION_PLACEHOLDER = '__cmdsub__';
+
+/** A command rewritten for shell-quote, plus the code of every command substitution in it. */
+export type ShellScan = { text: string; substitutions: string[] };
+
+/**
+ * Rewrite a bash command so shell-quote tokenizes it the way bash does. Unquoted newlines become
+ * `;`, bash comments are dropped, a mid-word `#` and whitespace bash does not split on are
+ * escaped, heredocs require approval, and each `$(...)` or backquote substitution (quoted or
+ * not) is replaced by a placeholder word and returned
+ * separately for classification.
+ */
+export function scanShellCommand(command: string): ShellScan {
+  const substitutions: string[] = [];
+  const { text } = scanCode(command, 0, null, substitutions);
+  return { text, substitutions };
+}
+
+/** Scan unquoted shell code from `start` until `stop` closes it, or to the end of input. */
+function scanCode(
+  src: string,
+  start: number,
+  stop: ')' | '`' | null,
+  substitutions: string[]
+): { text: string; end: number } {
+  let out = '';
+  let wordStart = true;
+  let parenDepth = 0;
+  let caseDepth = 0;
+  let index = start;
+  for (; index < src.length; index += 1) {
+    const character = src[index];
+    if (character === stop && (stop === '`' || (parenDepth === 0 && caseDepth === 0))) {
+      return { text: out, end: index };
+    }
+    if (wordStart && /^case[\s;]/.test(src.slice(index, index + 5))) caseDepth += 1;
+    if (wordStart && caseDepth > 0 && /^esac(?:[\s;)&|]|$)/.test(src.slice(index, index + 5))) caseDepth -= 1;
+
+    if (character === "'") {
+      const close = src.indexOf("'", index + 1);
+      const end = close < 0 ? src.length - 1 : close;
+      out += src.slice(index, end + 1);
+      index = end;
+      wordStart = false;
+      continue;
+    }
+    if (character === '$' && src[index + 1] === "'") {
+      let end = index + 2;
+      while (end < src.length && src[end] !== "'") end += src[end] === '\\' ? 2 : 1;
+      out += src.slice(index, end + 1);
+      index = end;
+      wordStart = false;
+      continue;
+    }
+    if ((character === '$' && src[index + 1] === '(') || character === '`') {
+      index = scanSubstitution(src, index, substitutions);
+      out += SUBSTITUTION_PLACEHOLDER;
+      wordStart = false;
+      continue;
+    }
+    if (character === '"') {
+      const quoted = scanDoubleQuoted(src, index + 1, substitutions);
+      out += `"${quoted.text}"`;
+      index = quoted.end;
+      wordStart = false;
+      continue;
+    }
+    if (character === '\\') {
+      if (src[index + 1] === '\n') {
+        index += 1;
+        continue;
+      }
+      out += character + (src[index + 1] ?? '');
+      index += 1;
+      wordStart = false;
+      continue;
+    }
+    if (character === '#') {
+      if (wordStart) {
+        while (index + 1 < src.length && src[index + 1] !== '\n') index += 1;
+        continue;
+      }
+      out += '\\#';
+      continue;
+    }
+    if (character === '\n') {
+      out += ';';
+      wordStart = true;
+      continue;
+    }
+    if (character === '<' && src[index + 1] === '<' && src[index + 2] !== '<') {
+      throw new Error('Heredoc syntax requires approval');
+    }
+    if (character === '<' && src.startsWith('<<<', index)) {
+      out += '<<<';
+      index += 2;
+      wordStart = true;
+      continue;
+    }
+    if (BASH_BLANKS.has(character) || SHELL_METACHARACTERS.has(character)) {
+      if (character === '(') parenDepth += 1;
+      if (character === ')' && parenDepth > 0) parenDepth -= 1;
+      out += character;
+      wordStart = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      out += `\\${character}`;
+      wordStart = false;
+      continue;
+    }
+    out += character;
+    wordStart = false;
+  }
+  return { text: out, end: index };
+}
+
+/** Record the code of the substitution opening at `index`; returns the index of its closer. */
+function scanSubstitution(src: string, index: number, substitutions: string[]): number {
+  const backquote = src[index] === '`';
+  const codeStart = index + (backquote ? 1 : 2);
+  // Substitutions nested in this one are found when its own code is classified.
+  const { end } = scanCode(src, codeStart, backquote ? '`' : ')', []);
+  const code = src.slice(codeStart, end);
+  if (backquote && /\\[`$\\]/.test(code)) throw new Error('Unsupported escaped backquote substitution');
+  substitutions.push(code);
+  return end;
+}
+
+/** Scan a double-quoted string body from `start`; returns its text and the closing quote index. */
+function scanDoubleQuoted(src: string, start: number, substitutions: string[]): { text: string; end: number } {
+  let text = '';
+  let index = start;
+  for (; index < src.length && src[index] !== '"'; index += 1) {
+    const character = src[index];
+    if (character === '\\') {
+      text += character + (src[index + 1] ?? '');
+      index += 1;
+    } else if ((character === '$' && src[index + 1] === '(') || character === '`') {
+      index = scanSubstitution(src, index, substitutions);
+      text += SUBSTITUTION_PLACEHOLDER;
+    } else {
+      text += character;
+    }
+  }
+  return { text, end: index };
+}
+
 function asString(token: ShellToken): string | null {
   if (typeof token === 'string') return token;
   // shell-quote emits globs as { op: 'glob', pattern }. Keep the pattern so
@@ -510,6 +688,22 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
   if (inner.length === 0) return level;
 
   const prog = programName(inner[0]);
+  if (ENV_ASSIGNMENT.test(inner[0]) || OPAQUE_SHELL_KEYWORDS.has(prog)) {
+    reasons.push('shell context requires approval');
+    return 'high';
+  }
+  if (prog.includes(SUBSTITUTION_PLACEHOLDER)) {
+    reasons.push('computed program requires approval');
+    return 'high';
+  }
+
+  if (
+    (DESTINATION_WRITERS.has(prog) || OPERAND_WRITERS.has(prog) || prog === 'dd') &&
+    inner.slice(1).some(arg => arg.includes(SUBSTITUTION_PLACEHOLDER))
+  ) {
+    reasons.push('computed writer arguments require approval');
+    return 'high';
+  }
 
   // Interpreter with inline code (`sh -c "..."`, `python -c "..."`): the code
   // string is the real command - recurse into it. `-e` is only inline code for
@@ -524,6 +718,10 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
     if (codeCandidates.length > 0) {
       reasons.push(`inline code executed via '${prog}'`);
       for (const code of codeCandidates) {
+        if (code.includes(SUBSTITUTION_PLACEHOLDER)) {
+          reasons.push('computed interpreter code requires approval');
+          return 'high';
+        }
         const nested = classifyAtDepth(code, depth + 1);
         reasons.push(...nested.reasons);
         level = maxLevel(level, nested.level);
@@ -535,6 +733,10 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
   // `eval <string...>`: the remaining arguments form a command string.
   if (prog === 'eval' && inner.length > 1) {
     reasons.push("dynamic evaluation via 'eval'");
+    if (inner.slice(1).some(arg => arg.includes(SUBSTITUTION_PLACEHOLDER))) {
+      reasons.push('computed eval code requires approval');
+      return 'high';
+    }
     const nested = classifyAtDepth(inner.slice(1).join(' '), depth + 1);
     reasons.push(...nested.reasons);
     return maxLevel(level, nested.level);
@@ -554,6 +756,12 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
     return maxLevel(level, 'high');
   }
 
+  const gitDirWrite = gitDirectoryWriteTarget(prog, inner.slice(1));
+  if (gitDirWrite) {
+    reasons.push(`'${prog}' writes to a protected or unresolved path`);
+    return maxLevel(level, 'high');
+  }
+
   // `rm`: high when recursive/forced or aimed at a catastrophic target; otherwise a plain mutation.
   if (prog === 'rm') {
     const flags = inner.slice(1).filter(arg => arg.startsWith('-'));
@@ -570,6 +778,11 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
     return maxLevel(level, 'medium');
   }
 
+  if (prog === 'git' && setsProgramRunningGitConfig(inner.slice(1))) {
+    reasons.push('git config naming a program git runs');
+    return maxLevel(level, 'high');
+  }
+
   // Recursive ownership/permission changes are destructive (can brick a tree).
   if (
     (prog === 'chmod' || prog === 'chown' || prog === 'chgrp') &&
@@ -580,6 +793,122 @@ function classifySimpleCommand(args: string[], reasons: string[], depth: number)
   }
 
   return level;
+}
+
+/** Programs whose last operand is the path they write. */
+const DESTINATION_WRITERS = new Set(['cp', 'install', 'ln', 'rsync', 'scp']);
+/** Programs that may write or remove any path operand. */
+const OPERAND_WRITERS = new Set([
+  'mv',
+  'tee',
+  'touch',
+  'truncate',
+  'sed',
+  'chmod',
+  'chown',
+  'chgrp',
+  'patch',
+  'rm',
+  'unlink',
+]);
+
+function gitDirectoryWriteTarget(prog: string, args: string[]): boolean {
+  const operands = args.filter(arg => !arg.startsWith('-'));
+  if (DESTINATION_WRITERS.has(prog)) {
+    const targets = args.flatMap((arg, index) => {
+      if (arg === '-t' || arg === '--target-directory') return args[index + 1] ?? [];
+      if (arg.startsWith('--target-directory=')) return arg.slice('--target-directory='.length);
+      if (/^-t./.test(arg)) return arg.slice(2);
+      return [];
+    });
+    targets.push(operands[operands.length - 1] ?? '');
+    return targets.some(isProtectedOrUnresolvedPath);
+  }
+  if (OPERAND_WRITERS.has(prog)) return operands.some(isProtectedOrUnresolvedPath);
+  if (prog === 'dd') return args.some(arg => arg.startsWith('of=') && isProtectedOrUnresolvedPath(arg.slice(3)));
+  return false;
+}
+
+/** Config keys whose value is a program, script or hook location git runs. */
+const PROGRAM_GIT_CONFIG_KEY =
+  /^(core\.(hookspath|fsmonitor|sshcommand|pager|editor|askpass|gitproxy)|sequence\.editor|diff\.external|gpg(\.[^.]+)?\.program|credential(\..+)?\.helper|alias\..+|(diff|merge|filter|difftool|mergetool)\..+\.(command|cmd|textconv|driver|clean|smudge|process)|.+\.sshcommand|uploadpack\.packobjectshook|include(if\..+)?\.path)$/i;
+
+const GIT_GLOBAL_VALUE_OPTIONS = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--super-prefix',
+  '--config-env',
+  '--attr-source',
+]);
+const GIT_CONFIG_READ_OPTIONS = new Set([
+  '--get',
+  '--get-all',
+  '--get-regexp',
+  '--get-urlmatch',
+  '--get-color',
+  '--get-colorbool',
+  '--list',
+  '-l',
+]);
+
+const GIT_CONFIG_VALUE_OPTIONS = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
+
+/** `git -c <key>=<value>` or a `git config` write whose key names a program git runs. */
+function setsProgramRunningGitConfig(args: string[]): boolean {
+  if (args.some(arg => arg.includes(SUBSTITUTION_PLACEHOLDER))) return true;
+  const programKey = (key: string) => key.includes(SUBSTITUTION_PLACEHOLDER) || PROGRAM_GIT_CONFIG_KEY.test(key);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const configValue =
+      arg === '-c' || arg === '--config-env'
+        ? args[index + 1]
+        : arg.startsWith('-c') && arg.length > 2
+          ? arg.slice(2)
+          : arg.startsWith('--config-env=')
+            ? arg.slice('--config-env='.length)
+            : undefined;
+    if (configValue !== undefined && programKey(configValue.split('=')[0])) return true;
+    if (GIT_GLOBAL_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    if (arg !== 'config') return false;
+    const words: string[] = [];
+    let options = true;
+    let readOnly = false;
+    let unset = false;
+    for (let cursor = index + 1; cursor < args.length; cursor += 1) {
+      const word = args[cursor];
+      if (options && word === '--') {
+        options = false;
+        continue;
+      }
+      if (options && GIT_CONFIG_READ_OPTIONS.has(word)) {
+        readOnly = true;
+        continue;
+      }
+      if (options && (word === '--unset' || word === '--unset-all')) {
+        unset = true;
+        continue;
+      }
+      if (options && GIT_CONFIG_VALUE_OPTIONS.has(word)) {
+        cursor += 1;
+        continue;
+      }
+      if (options && word.startsWith('-')) continue;
+      words.push(word);
+    }
+    if (readOnly || words[0] === 'get' || words[0] === 'list') return false;
+    const keyIndex = words[0] === 'set' || words[0] === 'unset' ? 1 : 0;
+    const key = words[keyIndex];
+    const writes = unset || words[0] === 'unset' || words.length > keyIndex + 1;
+    return writes && key !== undefined && programKey(key);
+  }
+  return false;
 }
 
 /**
@@ -635,11 +964,17 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
     return { level: 'high', reasons: ['fork bomb pattern'] };
   }
 
+  let scan: ShellScan;
   let tokens: ShellToken[];
   try {
-    tokens = shellParse(trimmed);
+    scan = scanShellCommand(trimmed);
+    tokens = shellParse(scan.text, () => SUBSTITUTION_PLACEHOLDER);
   } catch {
     return { level: 'high', reasons: ['command could not be parsed (fail closed)'] };
+  }
+
+  if (tokens.some(isComment)) {
+    return { level: 'high', reasons: ['command text could not be fully analyzed (fail closed)'] };
   }
 
   if (tokens.length === 0) {
@@ -650,16 +985,29 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
   const reasons: string[] = [];
   let level: CommandRiskLevel = 'low';
 
+  for (const code of scan.substitutions) {
+    const nested = classifyAtDepth(code, depth + 1);
+    reasons.push(...nested.reasons);
+    level = maxLevel(level, maxLevel(nested.level, 'unclassified'));
+  }
+
   // Split into simple-command segments on control operators, recording each
   // segment's leading program and the operator that follows it (so a fetcher and
   // an interpreter can be checked for membership in the SAME pipeline).
   const segmentProgs: string[] = [];
   const joinerAfter: string[] = [];
+  const segmentComputedInputs: boolean[] = [];
   let current: string[] = [];
   let currentHerestrings: string[] = [];
   let pendingHerestring = false;
+  let pendingRedirectOperand = false;
+  let currentRedirectInput = false;
 
   const flushSegment = (joiner: string) => {
+    if (pendingRedirectOperand || pendingHerestring) {
+      reasons.push('incomplete redirection requires approval');
+      level = 'high';
+    }
     if (current.length > 0) {
       const localReasons: string[] = [];
       let segmentLevel = classifySimpleCommand(current, localReasons, depth);
@@ -670,6 +1018,11 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
       if (currentHerestrings.length > 0 && (INTERPRETERS.has(lead) || SOURCE_BUILTINS.has(lead))) {
         for (const code of currentHerestrings) {
           localReasons.push(`inline code executed via '${lead} <<<'`);
+          if (code.includes(SUBSTITUTION_PLACEHOLDER)) {
+            localReasons.push('computed interpreter input requires approval');
+            segmentLevel = 'high';
+            continue;
+          }
           const nested = classifyAtDepth(code, depth + 1);
           localReasons.push(...nested.reasons);
           segmentLevel = maxLevel(segmentLevel, nested.level);
@@ -678,17 +1031,29 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
       level = maxLevel(level, segmentLevel);
       reasons.push(...localReasons);
       segmentProgs.push(lead);
+      segmentComputedInputs.push(
+        current.some(arg => arg.includes(SUBSTITUTION_PLACEHOLDER)) ||
+          currentHerestrings.length > 0 ||
+          currentRedirectInput
+      );
       joinerAfter.push(joiner);
     }
     current = [];
     currentHerestrings = [];
     pendingHerestring = false;
+    pendingRedirectOperand = false;
+    currentRedirectInput = false;
   };
 
   for (const token of tokens) {
     if (isOperator(token)) {
       const op = token.op;
       if (op === '<<<') {
+        level = maxLevel(level, 'unclassified');
+        if (/^\d+$/.test(current[current.length - 1] ?? '')) {
+          reasons.push('ambiguous file descriptor requires approval');
+          level = 'high';
+        }
         // The next string token is the herestring body, not a command argument.
         pendingHerestring = true;
         continue;
@@ -697,12 +1062,26 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
         flushSegment(op);
         continue;
       }
+      if (WRITE_REDIRECT_OPS.has(op) || op === '<' || op === '<&' || op === '>&') {
+        if (op === '<' || op === '<&' || op === '<>') currentRedirectInput = true;
+        level = maxLevel(level, 'unclassified');
+        if (/^\d+$/.test(current[current.length - 1] ?? '')) {
+          reasons.push('ambiguous file descriptor requires approval');
+          level = 'high';
+        }
+        pendingRedirectOperand = true;
+        continue;
+      }
       // Non-segmenting operators (redirections, subshell parens) don't start a new
       // simple command. Block-device redirection targets are checked separately.
       continue;
     }
     const str = asString(token);
     if (str !== null) {
+      if (pendingRedirectOperand) {
+        pendingRedirectOperand = false;
+        continue;
+      }
       if (pendingHerestring) {
         currentHerestrings.push(str);
         pendingHerestring = false;
@@ -720,9 +1099,18 @@ function classifyAtDepth(command: string, depth: number): CommandRiskAssessment 
     level = maxLevel(level, 'high');
   }
 
-  // Redirection to a raw block device anywhere in the command.
-  if (writesToBlockDevice(tokens)) {
+  if (groupFeedsInterpreter(segmentProgs, joinerAfter, index => segmentComputedInputs[index] === true)) {
+    reasons.push('pipeline script input requires approval');
+    level = 'high';
+  }
+
+  const redirected = writeRedirectTargets(tokens);
+  if (redirected.some(target => BLOCK_DEVICE_RE.test(target))) {
     reasons.push('write redirected to a raw block device');
+    level = maxLevel(level, 'high');
+  }
+  if (redirected.some(isProtectedOrUnresolvedPath)) {
+    reasons.push('write redirected to a protected or unresolved path');
     level = maxLevel(level, 'high');
   }
 
@@ -743,16 +1131,21 @@ const FETCH_EXEC_CONNECTORS = new Set(['|', '|&', '<(', '>(']);
  * pipe or a process-substitution boundary.
  */
 function isFetchAndExecute(progs: string[], joinerAfter: string[]): boolean {
+  return groupFeedsInterpreter(progs, joinerAfter, index => NETWORK_FETCHERS.has(progs[index]));
+}
+
+function groupFeedsInterpreter(progs: string[], joinerAfter: string[], isSource: (index: number) => boolean): boolean {
   let start = 0;
   while (start < progs.length) {
     let end = start;
-    while (end < progs.length - 1 && FETCH_EXEC_CONNECTORS.has(joinerAfter[end])) {
-      end += 1;
+    while (end < progs.length - 1 && FETCH_EXEC_CONNECTORS.has(joinerAfter[end])) end += 1;
+    let source = false;
+    let sink = false;
+    for (let index = start; index <= end; index += 1) {
+      source ||= isSource(index);
+      sink ||= FETCH_SINK_PROGRAMS.has(progs[index]);
     }
-    const pipeline = progs.slice(start, end + 1);
-    const hasFetcher = pipeline.some(prog => NETWORK_FETCHERS.has(prog));
-    const hasSink = pipeline.some(prog => FETCH_SINK_PROGRAMS.has(prog));
-    if (hasFetcher && hasSink) return true;
+    if (source && sink) return true;
     start = end + 1;
   }
   return false;
@@ -777,7 +1170,8 @@ const BLOCK_DEVICE_RE =
 // split them into `>`/`>>` plus a neighbour, which the plain `>`/`>>` match caught.
 const WRITE_REDIRECT_OPS = new Set(['>', '>>', '>|', '&>', '&>>', '<>']);
 
-function writesToBlockDevice(tokens: ShellToken[]): boolean {
+function writeRedirectTargets(tokens: ShellToken[]): string[] {
+  const targets: string[] = [];
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (isOperator(token) && WRITE_REDIRECT_OPS.has(token.op)) {
@@ -787,10 +1181,16 @@ function writesToBlockDevice(tokens: ShellToken[]): boolean {
       const following = tokens[targetIndex];
       if (isOperator(following) && following.op === '|') targetIndex += 1;
       const target = asString(tokens[targetIndex]);
-      if (target && BLOCK_DEVICE_RE.test(target)) {
-        return true;
-      }
+      if (target) targets.push(target);
     }
   }
-  return false;
+  return targets;
 }
+
+/** A path with a `.git` segment, compared the way case-insensitive filesystems and Windows do. */
+export function isGitDirectoryPath(target: string): boolean {
+  return target.split(/[\\/]/).some(segment => segment.replace(/[. ]+$/, '').toLowerCase() === '.git');
+}
+
+const isProtectedOrUnresolvedPath = (target: string): boolean =>
+  isGitDirectoryPath(target) || target.includes(SUBSTITUTION_PLACEHOLDER);

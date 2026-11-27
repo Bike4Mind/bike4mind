@@ -102,7 +102,9 @@
     "no_subscription": "無訂閱",
     "x_members": "{{count}} 名成員",
     "x_credits": "{{count}} 個點數",
-    "owner": "擁有者"
+    "roles": {
+      "owner": "擁有者"
+    }
   },
   "session": {
     "typeYourMessage": "在這裡輸入您的訊息",

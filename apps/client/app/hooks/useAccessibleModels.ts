@@ -1,13 +1,13 @@
 import { useCallback, useMemo } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useLockedModels, useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useLLMModelConfigurationsWithDefaults } from '@client/app/hooks/data/llmModelConfig';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 // Single source of truth: pure, browser-safe (no AWS SDK), unit-tested in
 // @bike4mind/common. Access is any-of: admin OR (allowedUserTags intersect
 // userTags) OR (allowedEntitlements intersect entitlementKeys); empty keys
 // means tag-only.
-import { isModelAccessible, isModelDeprecated } from '@bike4mind/common';
+import { isModelAccessible, isModelDeprecated, PAID_PLAN_ENTITLEMENT_KEY } from '@bike4mind/common';
 
 /**
  * Hook that returns only the models that the current user can access
@@ -18,13 +18,17 @@ export function useAccessibleModels() {
   const {
     data: modelInfos,
     isPending: isModelInfosPending,
-    isError: isModelsError,
+    isError: isModelInfosError,
     refetch: refetchModelInfos,
   } = useModelInfo();
-  const { data: modelConfigs, isLoading: isConfigsLoading } = useLLMModelConfigurationsWithDefaults(
-    modelInfos,
-    isModelInfosPending
-  );
+  const {
+    data: modelConfigs,
+    isLoading: isConfigsLoading,
+    error: configurationsError,
+    refetch: refetchConfigurations,
+  } = useLLMModelConfigurationsWithDefaults(modelInfos, isModelInfosPending);
+  const { data: lockedInfos, isPending: isLockedInfosPending } = useLockedModels();
+  const { data: lockedConfigs } = useLLMModelConfigurationsWithDefaults(lockedInfos, isLockedInfosPending);
   // Resolved entitlement keys (subscription- + tag-derived). Gates
   // entitlement-scoped models so a tag-less subscriber still gets accessible
   // models (and an enabled send button). A failed/empty fetch yields [] and
@@ -48,6 +52,18 @@ export function useAccessibleModels() {
 
     return modelConfigs.filter(model => isModelAccessible(model, userTags, isAdmin, entitlementKeys));
   }, [modelConfigs, userTags, isAdmin, entitlementKeys]);
+
+  // Locked (paid-only) models honor the same admin config, evaluated as if the user held the paid
+  // plan, so a model an admin disabled, tag-restricted or gated on another entitlement is not
+  // advertised behind an Upgrade CTA that would not unlock it. Returns the original ModelInfo entries.
+  const lockedModels = useMemo(() => {
+    if (!lockedInfos || lockedConfigs.length === 0) return [];
+    const paidKeys = [...entitlementKeys, PAID_PLAN_ENTITLEMENT_KEY];
+    const allowedIds = new Set(
+      lockedConfigs.filter(config => isModelAccessible(config, userTags, isAdmin, paidKeys)).map(config => config.id)
+    );
+    return lockedInfos.filter(info => allowedIds.has(info.id));
+  }, [lockedInfos, lockedConfigs, userTags, isAdmin, entitlementKeys]);
 
   // Type-specific lists feed the model pickers, so they also drop retired models
   // (deprecationDate reached). The raw `accessibleModels` is intentionally left
@@ -75,6 +91,7 @@ export function useAccessibleModels() {
     accessibleImageModels,
     accessibleSpeechModels,
     accessibleVideoModels,
+    lockedModels,
     // Gate loading on the presence of the user object, not on `tags`. A user
     // can legitimately have no tags (`tags: null` or `[]` - e.g. admin-created
     // without tags), and empty/absent tags are handled by isModelAccessible as
@@ -82,12 +99,14 @@ export function useAccessibleModels() {
     // on "Loading AI models..." forever. Once `currentUser` is set we resolve;
     // while it's still null (not yet hydrated) we keep loading.
     isLoading: isConfigsLoading || !currentUser,
-    // Distinguishes a failed /api/models fetch (retryable) from a user with no model access.
-    isModelsError,
+    // A failed catalog or access read is retryable, not an account with no model access.
+    isModelsError: isModelInfosError || Boolean(configurationsError),
     // Until the first entitlements fetch settles, models gated by entitlement (including the
     // universal 'base' key) are missing from accessibleModels, so the list is a partial one.
     isEntitlementsLoading,
-    refetchModels: refetchModelInfos,
+    refetchModels: useCallback(async () => {
+      await Promise.all([refetchModelInfos(), refetchConfigurations()]);
+    }, [refetchModelInfos, refetchConfigurations]),
     userTags,
     isAdmin,
     isModelAccessible: useCallback(

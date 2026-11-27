@@ -31,11 +31,32 @@ export interface PublishedArtifactAccessGate {
   allowedDomains?: string[];
 }
 
+/**
+ * Owner-only screenshot of a bundle's current version, rendered off the request path by the
+ * publish-thumbnail worker (apps/workers/src/queueHandlers/publishThumbnail.ts). `key` lives in
+ * the private published-artifacts bucket under PUBLISH_THUMBNAIL_PREFIX and is only ever handed
+ * out as a short-lived presigned GET on the owner's own management listing - never on a serve,
+ * share or meta surface. Declared host-side only, like accessGate.
+ */
+export interface PublishedArtifactThumbnail {
+  key: string;
+  /** sha256Index of the index.html the image depicts; stale once it differs from the artifact's. */
+  versionId: string;
+  renderedAt: Date;
+}
+
 export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 'createdAt' | 'updatedAt'>, Document {
   id: string; // required by IMongoDocument (Mongoose's Document.id is optional)
   createdAt: Date;
   updatedAt: Date;
   accessGate?: PublishedArtifactAccessGate | null;
+  thumbnail?: PublishedArtifactThumbnail | null;
+  /** Current index payload relative to storageKeyPrefix; missing on legacy canonical writes. */
+  indexObjectPath?: string | null;
+  /** Set only by the v1 publish endpoint, to the artifact id it published; absent on every other page. Backs the
+   *  one-live-page-per-artifact unique index, which the web flow (several slugs per artifact) must stay outside of. */
+  v1ArtifactId?: string | null;
+  verifiedExternalViewCount?: number;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -64,6 +85,8 @@ const VersionMetaSubSchema = new Schema(
     publishedBy: { type: String, required: true },
     size: { type: SizeSubSchema, required: true },
     sha256Index: { type: String, required: true },
+    /** See ArtifactVersionMetaSchema in @bike4mind/common: archived index.html bytes, quota-counted. */
+    indexBytes: { type: Number, min: 0 },
   },
   { _id: false }
 );
@@ -76,6 +99,15 @@ const AccessGateSubSchema = new Schema(
     // opts in explicitly with .select('+accessGate.passphraseHash').
     passphraseHash: { type: String, default: null, select: false },
     allowedDomains: { type: [String], default: undefined },
+  },
+  { _id: false }
+);
+
+const ThumbnailSubSchema = new Schema(
+  {
+    key: { type: String, required: true },
+    versionId: { type: String, required: true },
+    renderedAt: { type: Date, required: true },
   },
   { _id: false }
 );
@@ -97,6 +129,8 @@ const ShareTokenSubSchema = new Schema({
   createdAt: { type: Date, default: Date.now },
   /** Non-null once revoked; the entry stays so the token cannot be re-minted. */
   revokedAt: { type: Date, default: null },
+  /** Null (or absent on entries written before expiry existed) means the link never expires. */
+  expiresAt: { type: Date, default: null },
   viewCount: { type: Number, default: 0, min: 0 },
   lastViewedAt: { type: Date, default: null },
 });
@@ -108,6 +142,8 @@ const SourceSubSchema = new Schema(
     sessionId: { type: String },
     messageId: { type: String },
     fabFileId: { type: String },
+    // Multi-file React publishes only; see PublishSourceSchema in @bike4mind/common.
+    reactSiblings: { type: [String], default: undefined },
   },
   { _id: false }
 );
@@ -136,9 +172,11 @@ const PublishedArtifactSchema = new Schema(
     },
     gatedToGroupId: { type: String },
 
-    /** Every share link ever minted for this artifact, revoked ones included (an entry is
-     *  retained after revocation so its token can never be re-minted and its view count
-     *  survives). Live links are the `revokedAt: null` entries - see `liveShareTokens()`.
+    /** The share links minted for this artifact, revoked ones included (a revoked entry is
+     *  retained so its token stays claimed and its view count survives). The share-token route
+     *  caps the array, pruning the oldest dead entries on each mint; live entries are never
+     *  pruned. Live links are the `revokedAt: null` entries whose `expiresAt` is null or in the
+     *  future - see `liveShareTokens()`.
      *  Each entry's `_id` is the opaque handle the owner UI revokes by, so unlike the other
      *  subdocuments here this schema keeps its `_id`.
      *
@@ -183,6 +221,8 @@ const PublishedArtifactSchema = new Schema(
     source: { type: SourceSubSchema, required: true },
 
     storageKeyPrefix: { type: String, default: '' },
+    indexObjectPath: { type: String, default: null },
+    v1ArtifactId: { type: String },
     size: { type: SizeSubSchema, required: true, default: () => ({ totalBytes: 0, fileCount: 0 }) },
     sha256Index: { type: String },
     manifest: { type: [ArtifactFileSubSchema], default: [] },
@@ -201,10 +241,13 @@ const PublishedArtifactSchema = new Schema(
      *  restore. Each entry's bytes are archived at `{storageKeyPrefix}versions/
      *  {sha256Index}.html`. Enables walking across versions + restore-to-any. */
     versions: { type: [VersionMetaSubSchema], default: [] },
+    /** See PublishedArtifactThumbnail. Absent until the first render lands. */
+    thumbnail: { type: ThumbnailSubSchema, default: undefined },
     viewCount: { type: Number, default: 0, min: 0 },
-    /** Views by anyone OTHER than the signed-in owner (anonymous counts as
-     *  external). Feeds the Published gear and social proof; best-effort. */
+    /** Authenticated non-owner views for analytics. */
     externalViewCount: { type: Number, default: 0, min: 0 },
+    /** Verified non-owner views recorded after page admission; used for gear rewards. */
+    verifiedExternalViewCount: { type: Number, default: 0, min: 0 },
 
     /** Concurrency lock for AI revise - set while a revision is in flight,
      *  cleared when it finishes (or expires). Prevents two concurrent revisions
@@ -276,6 +319,12 @@ PublishedArtifactSchema.index({ 'source.fabFileId': 1 }); // fabfile lookups
 // update-existing-vs-new choice. Scoped by owner so the lookup matches the
 // caller's own publication of that artifact.
 PublishedArtifactSchema.index({ 'source.artifactId': 1, ownerId: 1, deletedAt: 1 });
+// One live page per artifact and owner for pages the v1 publish API creates. Keyed on the marker, not on
+// `source.artifactId`, because the web flow legitimately publishes one artifact under several slugs.
+PublishedArtifactSchema.index(
+  { ownerId: 1, v1ArtifactId: 1 },
+  { unique: true, partialFilterExpression: { v1ArtifactId: { $type: 'string' }, deletedAt: null } }
+);
 PublishedArtifactSchema.index({ publishedAt: -1 }); // recency
 PublishedArtifactSchema.index({ moderationStatus: 1, reportCount: -1 }); // admin moderation queue
 PublishedArtifactSchema.index({ tier: 1, scopeId: 1, deletedAt: 1 }); // org-scope quota aggregation
@@ -294,6 +343,9 @@ PublishedArtifactSchema.virtual('isDeleted').get(function () {
 PublishedArtifactSchema.methods.softDelete = function (deletedBy?: string) {
   this.deletedAt = new Date();
   if (deletedBy) this.deletedBy = deletedBy;
+  // The caller deletes the thumbnail objects (deletePublishThumbnails in packages/server-utils);
+  // dropping the record too means a later restore shows the generated cover, not a missing image.
+  this.thumbnail = undefined;
   return this.save();
 };
 
@@ -309,6 +361,7 @@ export interface PublishedArtifactShareToken {
   token?: string;
   createdAt?: Date;
   revokedAt?: Date | null;
+  expiresAt?: Date | null;
   viewCount?: number;
   lastViewedAt?: Date | null;
 }
@@ -325,13 +378,26 @@ export interface ShareTokenBearing {
  * handlers and `findByShareToken` below all build their query from here, so the revocation
  * semantics cannot drift between them.
  *
- * The `$elemMatch` is load-bearing: token and `revokedAt: null` must be pinned to the SAME
- * entry, or a revoked link would resolve on the strength of a still-live sibling.
+ * The `$elemMatch` is load-bearing: token and the liveness clauses must be pinned to the SAME
+ * entry, or a revoked or expired link would resolve on the strength of a still-live sibling.
  *
  * Callers still add their own `deletedAt: null`, since this is only the token half.
  */
 export function shareTokenFilter(shareToken: string): Record<string, unknown> {
-  return { shareTokens: { $elemMatch: { token: shareToken, revokedAt: null } } };
+  return {
+    // Repeats the partial filter of the `shareTokens.token` index: the planner only uses a partial
+    // index when the query implies its filter, and neither the `$elemMatch` nor a bare equality does.
+    'shareTokens.token': { $type: 'string', $eq: shareToken },
+    shareTokens: { $elemMatch: { token: shareToken, ...liveShareTokenMatch() } },
+  };
+}
+
+/**
+ * The `$elemMatch` clauses that make one `shareTokens` entry live: not revoked and not expired.
+ * Must stay in sync with `liveShareTokens()`. `expiresAt: null` also matches a missing field.
+ */
+export function liveShareTokenMatch(now: Date = new Date()): Record<string, unknown> {
+  return { revokedAt: null, $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] };
 }
 
 /**
@@ -340,17 +406,46 @@ export function shareTokenFilter(shareToken: string): Record<string, unknown> {
  * Newest LAST is the array's own append order and callers depend on it: the route's single-link
  * response fields all derive from the last element.
  */
-export function liveShareTokens(artifact: ShareTokenBearing): PublishedArtifactShareToken[] {
-  return (artifact.shareTokens ?? []).filter(entry => !!entry?.token && !entry.revokedAt);
+export function liveShareTokens(artifact: ShareTokenBearing, now: Date = new Date()): PublishedArtifactShareToken[] {
+  return (artifact.shareTokens ?? []).filter(
+    entry => !!entry?.token && !entry.revokedAt && (!entry.expiresAt || entry.expiresAt > now)
+  );
 }
 
-export const PublishedArtifact =
+export const PublishedArtifact: Model<IPublishedArtifactDocument> =
   (mongoose.models.PublishedArtifact as mongoose.Model<IPublishedArtifactDocument>) ||
   model<IPublishedArtifactDocument>('PublishedArtifact', PublishedArtifactSchema);
+
+/**
+ * Store a rendered thumbnail, but only while `thumbnail.versionId` is still the artifact's current
+ * version: a render that finishes after a newer publish (or a delete) must not overwrite the
+ * record. Returns null when nothing matched - the caller then owns the orphaned object - and
+ * otherwise the key of the thumbnail this one replaced, if any, so the caller can delete it.
+ */
+export async function recordPublishedArtifactThumbnail(
+  publicId: string,
+  thumbnail: PublishedArtifactThumbnail
+): Promise<{ replacedKey: string | null } | null> {
+  const before = await PublishedArtifact.findOneAndUpdate(
+    { publicId, deletedAt: null, sha256Index: thumbnail.versionId },
+    { $set: { thumbnail } },
+    { new: false, projection: { thumbnail: 1 } }
+  ).lean<{ thumbnail?: PublishedArtifactThumbnail | null } | null>();
+  if (!before) return null;
+  const replacedKey = before.thumbnail?.key;
+  return { replacedKey: replacedKey && replacedKey !== thumbnail.key ? replacedKey : null };
+}
 
 export class PublishedArtifactRepository extends BaseRepository<IPublishedArtifactDocument> {
   constructor(model: Model<IPublishedArtifactDocument>) {
     super(model);
+  }
+
+  /** Live artifacts awaiting a moderation decision: the admin list's `status=reported` view. */
+  async countReported(options: { limit?: number } = {}): Promise<number> {
+    return this.model
+      .countDocuments({ moderationStatus: 'reported', deletedAt: null }, { limit: options.limit })
+      .exec();
   }
 
   async findByPublicId(publicId: string) {

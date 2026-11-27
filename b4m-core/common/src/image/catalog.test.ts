@@ -1,0 +1,176 @@
+import { describe, expect, it } from 'vitest';
+import { IMAGE_MODELS, ImageModels } from '../models';
+import { getImageModelCapabilities } from '../utils/imageCapabilities';
+import {
+  isFlux2ImageModel,
+  isFlux3ImageModel,
+  isGeminiImageModel,
+  isKontextModel,
+  rejectsTransparentBackground,
+  supportsImageEditEndpoint,
+  takesBflInputImageList,
+} from '../utils/modelHelpers';
+import { MODEL_TIERS } from '../generation/modelRanking';
+import { MAX_BFL_EDIT_REGIONS } from '../llm';
+import { getImageModelCatalogEntry, supportsTransparentBackgroundByCatalog } from './catalog';
+import { validateImageRequest, type ImageCapabilityRequest } from './validate';
+
+// The catalog is declared separately from the predicate-derived block GET /api/models advertises, which is
+// what the request path enforces today. These pin every fact the two share so neither drifts alone.
+describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
+  const entry = getImageModelCatalogEntry(model);
+  const { generate, edit } = entry.modes;
+  const advertised = getImageModelCapabilities(model);
+
+  it('sizes the model the way the request path does', () => {
+    // Gemini is advertised as aspect-ratio sized, but its generateContent path sends no imageConfig.
+    if (isGeminiImageModel(model)) {
+      expect(entry.sizing).toEqual({ kind: 'fixed' });
+      expect(advertised.sizing).toEqual({ kind: 'aspectRatio' });
+      return;
+    }
+    expect(entry.sizing).toEqual(advertised.sizing);
+  });
+
+  it('agrees with the advertised params', () => {
+    expect(entry.transparentBackground).toBe(advertised.supports.transparentBackground);
+    expect(entry.seed).toBe(advertised.supports.seed);
+    expect(entry.qualities).toEqual(advertised.supports.qualities);
+    expect(generate === undefined).toBe(advertised.supports.requiresInputImage);
+    expect((generate ?? edit)?.maxOutputs).toBe(advertised.supports.maxImages);
+    // referenceImageFabFileIds ride with an edit_source on gpt-image and with the generate inputs on FLUX.2 and FLUX 3.
+    // FLUX.1's lone image_prompt is the workbench image, which is not counted as a reference image.
+    const anchorMode = takesBflInputImageList(model) ? generate : edit;
+    expect(anchorMode?.inputs.reference?.max ?? 0).toBe(advertised.supports.maxReferenceImages);
+  });
+
+  it('offers edit exactly where an edit dispatcher (the edit path or the Kontext transform) serves it', () => {
+    expect(edit !== undefined).toBe(supportsImageEditEndpoint(model) || isKontextModel(model));
+  });
+
+  it('takes an edit_source in edit and never in generate', () => {
+    if (edit) expect(edit.inputs.edit_source).toEqual({ max: 1 });
+    expect(generate?.inputs.edit_source).toBeUndefined();
+    expect(generate?.inputs.mask).toBeUndefined();
+  });
+
+  it('renders one image per edit, as every edit provider does', () => {
+    if (edit) expect(edit.maxOutputs).toBe(1);
+  });
+
+  it('declares aspect ratios exactly when its sizing takes one', () => {
+    const takesRatio =
+      entry.sizing.kind === 'aspectRatio' || (entry.sizing.kind === 'inputImage' && entry.sizing.aspectRatio);
+    const declaresRatio = [generate, edit].some(mode => mode?.aspectRatios);
+    expect(declaresRatio).toBe(takesRatio);
+  });
+
+  it('accepts its own default request', () => {
+    const defaultSize = 'defaultSize' in entry.sizing ? entry.sizing.defaultSize : undefined;
+    const request: ImageCapabilityRequest = generate
+      ? { mode: 'generate', size: defaultSize, count: 1 }
+      : {
+          mode: 'edit',
+          inputs: [{ role: 'edit_source' }, ...(edit?.inputs.mask?.required ? [{ role: 'mask' as const }] : [])],
+          count: 1,
+        };
+    expect(validateImageRequest(request, entry)).toMatchObject({ ok: true });
+  });
+});
+
+describe('gemini image-to-image', () => {
+  it('accepts one input image rendered n times on the chat generate path', () => {
+    const request: ImageCapabilityRequest = { mode: 'generate', inputs: [{ role: 'reference' }], count: 2 };
+    for (const model of IMAGE_MODELS.filter(model => isGeminiImageModel(model))) {
+      expect(validateImageRequest(request, getImageModelCatalogEntry(model))).toMatchObject({ ok: true });
+    }
+  });
+});
+
+describe('transparent background', () => {
+  it('is declared unsupported on every model gpt-image-2 rejects, and supported on the 2.5 models', () => {
+    const rejecting = IMAGE_MODELS.filter(model => rejectsTransparentBackground(model));
+    expect(rejecting).toContain(ImageModels.GPT_IMAGE_2);
+    for (const model of rejecting) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
+    expect(getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2_5_FLARE).transparentBackground).toBe(true);
+  });
+
+  it('derives supportsTransparentBackgroundByCatalog from the catalog for every model', () => {
+    for (const model of IMAGE_MODELS) {
+      expect(supportsTransparentBackgroundByCatalog(model)).toBe(
+        getImageModelCatalogEntry(model).transparentBackground
+      );
+    }
+    expect(supportsTransparentBackgroundByCatalog('not-a-model')).toBe(false);
+  });
+});
+
+const FLUX2_MODELS = IMAGE_MODELS.filter(isFlux2ImageModel);
+
+describe('FLUX.2 edit mode', () => {
+  it('covers at least one model', () => {
+    expect(FLUX2_MODELS.length).toBeGreaterThan(0);
+  });
+
+  it.each(FLUX2_MODELS)('%s edits with no mask and one fewer reference than it generates with', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.inputs.edit_source).toEqual({ max: 1 });
+    expect(edit?.inputs.mask).toBeUndefined();
+    expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
+  });
+});
+
+const FLUX3_MODELS = IMAGE_MODELS.filter(isFlux3ImageModel);
+
+describe('FLUX 3 edit mode', () => {
+  it('covers at least one model', () => {
+    expect(FLUX3_MODELS.length).toBeGreaterThan(0);
+  });
+
+  it.each(FLUX3_MODELS)('%s edits with no mask and one fewer reference than it generates with', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.inputs.edit_source).toEqual({ max: 1 });
+    expect(edit?.inputs.mask).toBeUndefined();
+    expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
+  });
+});
+
+// rankImageModels orders by these, so a model without them would rank by accident.
+describe('IMAGE_MODEL_CATALOG standing', () => {
+  it.each(IMAGE_MODELS)('declares a tier, a real release date and a preview flag for %s', model => {
+    const { tier, releasedAt, preview } = getImageModelCatalogEntry(model);
+    expect(MODEL_TIERS).toContain(tier);
+    expect(releasedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(new Date(`${releasedAt}T00:00:00Z`).toISOString().slice(0, 10)).toBe(releasedAt);
+    expect(typeof preview).toBe('boolean');
+  });
+
+  it.each(IMAGE_MODELS)('marks %s preview exactly when its provider id says so', model => {
+    expect(getImageModelCatalogEntry(model).preview).toBe(model.endsWith('-preview'));
+  });
+});
+
+describe('FLUX 3 edit regions', () => {
+  it.each(FLUX3_MODELS)('%s takes up to MAX_BFL_EDIT_REGIONS regions when editing, none when generating', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.editRegions).toEqual({ max: MAX_BFL_EDIT_REGIONS });
+    expect(generate?.editRegions).toBeUndefined();
+  });
+});
+
+describe('job-only model catalog entries', () => {
+  it('resolves the test model to the free test provider in both modes', () => {
+    const entry = getImageModelCatalogEntry('test-image');
+    expect(entry.provider).toBe('test');
+    expect(entry.modes.generate?.maxOutputs).toBe(1);
+    expect(entry.modes.edit?.inputs.edit_source).toEqual({ max: 1 });
+  });
+
+  it('resolves every local-image checkpoint to one dimensions-sized, generate-only entry', () => {
+    const entry = getImageModelCatalogEntry('local-image/sdxl');
+    expect(entry.provider).toBe('local');
+    expect(entry.sizing.kind).toBe('dimensions');
+    expect(entry.modes.edit).toBeUndefined();
+    expect(getImageModelCatalogEntry('local-image/other')).toBe(entry);
+  });
+});

@@ -83,6 +83,8 @@ export interface IDeviceAuthorizationRepository extends IBaseRepository<IDeviceA
   findByUserCode(userCode: string): Promise<IDeviceAuthorizationDocument | null>;
   findByDeviceCode(deviceCode: string): Promise<IDeviceAuthorizationDocument | null>;
   countPendingAndUnexpired(): Promise<number>;
+  claimApproved(id: string): Promise<IDeviceAuthorizationDocument | null>;
+  recordPollIfDue(id: string, minIntervalMs: number): Promise<IDeviceAuthorizationDocument | null>;
 }
 
 // Repository Implementation
@@ -118,6 +120,28 @@ class DeviceAuthorizationRepository
 
   countPendingAndUnexpired(): Promise<number> {
     return this.count({ status: 'pending', expiresAt: { $gt: new Date() } });
+  }
+
+  /** Atomically flip approved -> consumed; returns the updated doc, or null if not (or no longer) approved. */
+  claimApproved(id: string): Promise<IDeviceAuthorizationDocument | null> {
+    return this.model
+      .findOneAndUpdate({ _id: id, status: 'approved' }, { $set: { status: 'consumed' } }, { new: true })
+      .exec();
+  }
+
+  /** Atomically record a poll if at least minIntervalMs has passed since the last one; null means too soon. */
+  recordPollIfDue(id: string, minIntervalMs: number): Promise<IDeviceAuthorizationDocument | null> {
+    const now = new Date();
+    return this.model
+      .findOneAndUpdate(
+        {
+          _id: id,
+          $or: [{ lastPolledAt: null }, { lastPolledAt: { $lte: new Date(now.getTime() - minIntervalMs) } }],
+        },
+        { $set: { lastPolledAt: now }, $inc: { pollCount: 1 } },
+        { new: true }
+      )
+      .exec();
   }
 }
 

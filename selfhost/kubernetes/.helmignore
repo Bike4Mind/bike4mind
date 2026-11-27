@@ -5,3 +5,5 @@ tests/
 .env
 runtime.env
 *.local.yaml
+backup.py
+verify-backup-restore.py

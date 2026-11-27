@@ -14,7 +14,7 @@ describe('editFileTool access control', () => {
   const FILE = {
     fileName: 'a.txt',
     mimeType: 'text/plain',
-    fileUrl: 'https://files.example/a.txt',
+    filePath: 'a.txt',
     moderationStatus: 'clean',
   };
 
@@ -32,6 +32,7 @@ describe('editFileTool access control', () => {
       userId: 'owner-1',
       user: {},
       logger,
+      storage: { getSignedUrl: vi.fn(async () => 'https://files.example/a.txt') },
       db: { fabfiles },
       llm: { complete: vi.fn(async (_m, _msgs, _o, cb) => cb(['edited'], undefined)) },
       statusUpdate: vi.fn(),

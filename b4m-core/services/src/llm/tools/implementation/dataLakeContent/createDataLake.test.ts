@@ -8,7 +8,7 @@ vi.mock('../../../../dataLakeService/createDataLake', () => ({
 
 import { createDataLakeTool } from './createDataLake';
 import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPrefixCollision';
-import { NOT_AVAILABLE_MESSAGE, DATA_LAKES_DISABLED_MESSAGE } from './adapters';
+import { NOT_AVAILABLE_MESSAGE, DATA_LAKES_DISABLED_MESSAGE, LAKE_PLAN_REQUIRED_TOOL_MESSAGE } from './adapters';
 import type { ToolContext } from '../../base/types';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -19,28 +19,36 @@ function makeContext({
   enabled = true,
   withAdapters = true,
   apiKeyId,
+  requirePaidPlan = false,
+  user = { id: 'u1' },
 }: {
   organizationId?: string;
   memberOf?: string[];
   enabled?: boolean;
   withAdapters?: boolean;
   apiKeyId?: string;
+  requirePaidPlan?: boolean;
+  user?: Record<string, unknown>;
 } = {}): ToolContext {
   return {
     userId: 'u1',
-    user: { id: 'u1' },
+    user,
     organizationId,
     apiKeyId,
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     db: {
-      dataLakes: withAdapters ? { create: vi.fn() } : {},
+      dataLakes: withAdapters ? { create: vi.fn(), countCountedCreatedBy: vi.fn().mockResolvedValue(0) } : {},
       dataLakeAccessGrants: withAdapters ? { upsertGrant: vi.fn() } : {},
       organizations: {
         findMembershipOrgIds: vi.fn().mockResolvedValue(memberOf),
         findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
       },
-      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(enabled) },
+      adminSettings: {
+        getSettingsValue: vi.fn(async (key: string) => (key === 'dataLakeRequirePaidPlan' ? requirePaidPlan : enabled)),
+        findBySettingNames: vi.fn().mockResolvedValue([]),
+        findAll: vi.fn().mockResolvedValue([]),
+      },
     },
   } as unknown as ToolContext;
 }
@@ -203,5 +211,24 @@ describe('create_data_lake', () => {
   it('refuses when data lakes are disabled', async () => {
     await expect(run(makeContext({ enabled: false }), { name: 'Research' })).resolves.toBe(DATA_LAKES_DISABLED_MESSAGE);
     expect(createDataLakeMock).not.toHaveBeenCalled();
+  });
+
+  it('sends a caller without paid standing to the manager when the plan gate is on', async () => {
+    await expect(run(makeContext({ requirePaidPlan: true }), { name: 'Research' })).resolves.toBe(
+      LAKE_PLAN_REQUIRED_TOOL_MESSAGE
+    );
+    expect(createDataLakeMock).not.toHaveBeenCalled();
+  });
+
+  it('still creates for a credit buyer, an admin or a developer with the plan gate on', async () => {
+    createDataLakeMock.mockResolvedValue({ id: 'l1', name: 'Research' });
+    for (const user of [
+      { id: 'u1', lastCreditsPurchasedAt: new Date() },
+      { id: 'u1', isAdmin: true },
+      { id: 'u1', tags: ['developer'] },
+    ]) {
+      await expect(run(makeContext({ requirePaidPlan: true, user }), { name: 'Research' })).resolves.toMatch(/Created/);
+    }
+    expect(createDataLakeMock).toHaveBeenCalledTimes(3);
   });
 });

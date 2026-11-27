@@ -1,3 +1,4 @@
+import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
 import {
   ARTIFACT_REMOVED_PLACEHOLDER,
   ChatModels,
@@ -11,12 +12,19 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import {
+  HiddenReasoningOnlyEmptyError,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
+} from './llmEmptyTurnErrors';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { replayableText } from './replayPreToolText';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   declaredArtifactType,
@@ -35,7 +43,14 @@ import {
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { kimiReasoningParams, kimiSamplingParams, kimiToolChoice } from './kimiParams';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
+import {
+  appendIdentityReminderToMessages,
+  buildIdentityReminder,
+  shouldOmitIdentityReminder,
+} from './identityReminder';
 import { normalizeOpenAIFinishReason } from './stopReason';
+
+type ToolRoundResult = { tool: IChoiceEndToolUse['tool']; result: string };
 
 /**
  * Moonshot AI's Kimi models, served from their OpenAI-compatible endpoint.
@@ -61,7 +76,7 @@ export class KimiBackend implements ICompletionBackend {
     if (!apiKey) {
       throw new Error('Moonshot API key is required');
     }
-    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl });
+    this._api = new OpenAI({ apiKey, baseURL: this._baseUrl, fetchOptions: providerFetchOptions() });
     this.logger = logger ?? new Logger();
   }
 
@@ -203,6 +218,7 @@ export class KimiBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options);
     this.currentModel = model;
 
     const toolCallCount = options._internal?.toolCallCount ?? 0;
@@ -242,7 +258,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const parameters: ChatCompletionCreateParams = {
       model,
-      messages: this.formatMessages(messages),
+      messages: this.formatMessages(messages, model, options),
     };
 
     Object.assign(parameters, {
@@ -305,16 +321,34 @@ export class KimiBackend implements ICompletionBackend {
     // the adapter exists to read `usage.cached_tokens` back out.
     const cacheStrategy = options.cacheStrategy;
 
-    const response = await this._api.chat.completions.create(parameters, { signal: options.abortSignal });
+    const create = () =>
+      this._api.chat.completions.create(parameters, {
+        signal: options.abortSignal,
+        ...(retrySignal ? { maxRetries: 0 } : {}),
+      });
+    const response = retrySignal ? await retryAbortAware(create, retrySignal) : await create();
     let inputTokens = 0;
     let outputTokens = 0;
 
     if (!(response instanceof Stream)) {
+      if (retrySignal?.aborted) {
+        const usage = response.usage;
+        const turnUsage = usage
+          ? appendCacheInclusiveTurn(
+              undefined,
+              usage.prompt_tokens,
+              cachedTokensFromUsage(usage as unknown as Record<string, unknown>),
+              usage.completion_tokens
+            )
+          : undefined;
+        await reportUsageOnAbort(retrySignal, callback, turnUsage ? { ...turnUsage[0], turnUsage } : undefined);
+      }
       const streamedText: string[] = [];
       // The empty guard keys on prose produced, not on streamedText: the monologue
       // is wrapped into streamedText too, so a guard keyed there cannot tell a
       // budget-exhausted reasoning turn from an answered one.
       let sawProse = false;
+      let sawReasoning = false;
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from the Moonshot API');
@@ -332,8 +366,9 @@ export class KimiBackend implements ICompletionBackend {
         // hypothetical for Kimi - the k2.7-code ids cannot turn thinking off, and
         // they are the agentic models most likely to call something.
         const reasoningContent = (c.message as any).reasoning_content as string | undefined;
+        if (reasoningContent) sawReasoning = true;
 
-        if (c.message.tool_calls && c.message.tool_calls.length > 0) {
+        if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           for (const toolCall of c.message.tool_calls) {
             if (toolCall.type !== 'function') continue;
             if (toolCall.function.arguments) {
@@ -418,6 +453,7 @@ export class KimiBackend implements ICompletionBackend {
             const inheritedArtifactGuard = options._internal?.artifactGuard;
             let artifactGuard = inheritedArtifactGuard;
 
+            const roundResults: ToolRoundResult[] = [];
             for (const outcome of outcomes) {
               if (outcome.ok) {
                 // For tools that return artifacts (like recharts), stream the result directly -
@@ -436,26 +472,30 @@ export class KimiBackend implements ICompletionBackend {
                 );
                 const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
-                this.pushToolMessages(
-                  messages,
-                  { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
-                );
+                roundResults.push({
+                  tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+                  result: resultStr,
+                });
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
                 const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+                  toolName: outcome.name,
+                  error: errorMessage,
+                });
                 const observation = stripToolArtifactMarkup(
                   `Error processing ${outcome.name} tool: ${errorMessage}`,
                   ARTIFACT_REMOVED_PLACEHOLDER
                 );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
-                this.pushToolMessages(
-                  messages,
-                  { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  observation
-                );
+                roundResults.push({
+                  tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+                  result: observation,
+                });
               }
             }
+            this.pushToolRound(messages, roundResults, reasoningContent);
 
             const roundText = c.message.content || '';
             const requestedToolNames = c.message.tool_calls.flatMap(toolCall =>
@@ -533,6 +573,8 @@ export class KimiBackend implements ICompletionBackend {
                 response.usage?.completion_tokens || 0
               ),
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+              // Agent loops replay this through pushToolMessages(thinkingBlocks[0]).
+              ...(reasoningContent ? { thinking: [reasoningContent] } : {}),
             });
             return;
           }
@@ -552,11 +594,16 @@ export class KimiBackend implements ICompletionBackend {
       // bedrockBackend/base.ts; the direct path needs its own.
       if (!sawProse && toolsUsed.length === 0) {
         const finish = response.choices[0]?.finish_reason;
-        throw new Error(
-          finish === 'length'
-            ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-            : `Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`
-        );
+        if (finish === 'length') throw new OutputBudgetExhaustedError('Moonshot', model);
+        // Not the capped round (tools stripped at maxToolCalls), whose empty is deterministic.
+        if (sawReasoning && finish !== undefined && toolCallCount < maxToolCalls) {
+          throw new HiddenReasoningOnlyEmptyError(
+            'Moonshot',
+            model,
+            `Moonshot returned only reasoning for ${model}, with no displayed text and no tool call (finish_reason: ${finish}).`
+          );
+        }
+        throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${finish ?? 'unknown'}).`);
       }
 
       let cacheStats: CacheUsageStats | undefined;
@@ -582,6 +629,7 @@ export class KimiBackend implements ICompletionBackend {
         ...(nativeFormat ? { responseFormatMode: 'native' as const } : {}),
         ...(finishReason ? { stopReason: finishReason } : {}),
       });
+      retrySignal?.throwIfAborted();
       return;
     }
 
@@ -595,6 +643,8 @@ export class KimiBackend implements ICompletionBackend {
     let sawProse = false;
     // Answer text only (not reasoning), for shouldEndTurnAfterTools.
     let streamedRoundText = '';
+    // Raw (unescaped) monologue, replayed on the tool-call message - see pushToolRound.
+    let streamedReasoning = '';
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -615,6 +665,7 @@ export class KimiBackend implements ICompletionBackend {
         // Ungated, for the same reason as the non-streaming path: reasoning arrives
         // by default on every current Kimi and is billed either way.
         if (deltaReasoning) {
+          streamedReasoning += deltaReasoning;
           const escapedReasoning = reasoningEscaper.push(deltaReasoning);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
@@ -683,11 +734,21 @@ export class KimiBackend implements ICompletionBackend {
     // cause is a reasoning model that spent its whole budget thinking; without this
     // the stream returns silently with zero callbacks and the chat hangs.
     if (!sawProse && func.length === 0 && toolsUsed.length === 0) {
-      throw new Error(
-        streamFinishReason === 'length'
-          ? `Moonshot returned no content for ${model}: the output budget was exhausted before any answer was produced (finish_reason: length). Raise maxTokens or lower the reasoning effort.`
-          : `Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`
-      );
+      if (streamFinishReason === 'length') throw new OutputBudgetExhaustedError('Moonshot', model);
+      // An aborted stream also ends with no finish reason; that is a stop, not a dropped stream to retry.
+      if (streamFinishReason === undefined && !options.abortSignal?.aborted) {
+        throw new StreamEndedWithoutFinishError('Moonshot', model);
+      }
+      // A finished turn only (an aborted one has no finish reason), and not the capped round (tools
+      // stripped at maxToolCalls), whose empty is deterministic.
+      if (streamedReasoning && streamFinishReason !== undefined && toolCallCount < maxToolCalls) {
+        throw new HiddenReasoningOnlyEmptyError(
+          'Moonshot',
+          model,
+          `Moonshot returned only reasoning for ${model}, with no displayed text and no tool call (finish_reason: ${streamFinishReason}).`
+        );
+      }
+      throw new Error(`Moonshot returned no content for ${model} (finish_reason: ${streamFinishReason ?? 'unknown'}).`);
     }
 
     let cacheStats: CacheUsageStats | undefined;
@@ -788,6 +849,7 @@ export class KimiBackend implements ICompletionBackend {
         const inheritedArtifactGuard = options._internal?.artifactGuard;
         let artifactGuard = inheritedArtifactGuard;
 
+        const roundResults: ToolRoundResult[] = [];
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // For tools that return artifacts (like recharts), stream the result directly -
@@ -806,26 +868,30 @@ export class KimiBackend implements ICompletionBackend {
             );
             const resultStr = stripUnstreamedToolResult(outcome.name, outcome.result.toString(), emitted);
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
-            this.pushToolMessages(
-              messages,
-              { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              resultStr
-            );
+            roundResults.push({
+              tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+              result: resultStr,
+            });
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+            this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+              toolName: outcome.name,
+              error: errorMessage,
+            });
             const observation = stripToolArtifactMarkup(
               `Error processing ${outcome.name} tool: ${errorMessage}`,
               ARTIFACT_REMOVED_PLACEHOLDER
             );
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
-            this.pushToolMessages(
-              messages,
-              { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              observation
-            );
+            roundResults.push({
+              tool: { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
+              result: observation,
+            });
           }
         }
+        this.pushToolRound(messages, roundResults, streamedReasoning || undefined, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
@@ -877,13 +943,26 @@ export class KimiBackend implements ICompletionBackend {
           outputTokens: accumOutputTokens + outputTokens,
           turnUsage: appendCacheInclusiveTurn(accumTurnUsage, inputTokens, cachedTokensFromStream, outputTokens),
           toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+          ...(streamedReasoning ? { thinking: [streamedReasoning] } : {}),
         });
       }
     }
   }
 
-  private formatMessages(messages: IMessage[]): OpenAI.ChatCompletionMessageParam[] {
-    return convertMessagesToOpenAIFormat(messages) as OpenAI.ChatCompletionMessageParam[];
+  private formatMessages(
+    messages: IMessage[],
+    model: string,
+    options: Partial<ICompletionOptions>
+  ): OpenAI.ChatCompletionMessageParam[] {
+    return convertMessagesToOpenAIFormat(
+      shouldOmitIdentityReminder(options)
+        ? messages
+        : appendIdentityReminderToMessages(
+            messages,
+            buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+          ),
+      { preserveReasoningContent: true }
+    ) as OpenAI.ChatCompletionMessageParam[];
   }
 
   formatTools(tools: ICompletionOptionTools[] = []) {
@@ -893,29 +972,53 @@ export class KimiBackend implements ICompletionBackend {
     }));
   }
 
-  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, _thinkingBlocks?: unknown[]) {
-    messages.push({
-      content: null,
-      role: 'assistant',
-      tool_calls: [
-        {
-          id: tool.id,
-          type: 'function',
-          function: {
-            name: tool.name,
-            arguments: tool.parameters,
-          },
-        },
-      ],
-    } as unknown as IMessage);
+  /** `thinkingBlocks` carries the turn's `reasoning_content` as a single string entry. */
+  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, thinkingBlocks?: unknown[]) {
+    const reasoningContent = typeof thinkingBlocks?.[0] === 'string' ? thinkingBlocks[0] : undefined;
+    this.pushToolRound(messages, [{ tool, result }], reasoningContent);
+  }
+
+  /**
+   * Replays one round as a single assistant message carrying every parallel
+   * `tool_calls` entry plus the round's `reasoning_content`, then one `tool`
+   * message per result. Moonshot's thinking guide requires the monologue to be
+   * passed back inside a tool-call loop (K3 and K3.1 Pro reject the history
+   * without it), and splitting a parallel round into one assistant message per
+   * call would leave every message after the first without it. Mirrors
+   * DeepSeekBackend; formatMessages opts into the converter's
+   * `preserveReasoningContent` so the field survives formatting.
+   */
+  private pushToolRound(
+    messages: IMessage[],
+    round: ToolRoundResult[],
+    reasoningContent: string | undefined,
+    assistantText?: string
+  ) {
+    if (round.length === 0) return;
 
     messages.push({
-      role: 'tool',
-      content: JSON.stringify({ result }),
-      tool_call_id: tool.id,
-      // Moonshot's tool-call guide shows `name` on the result message alongside
-      // tool_call_id, unlike OpenAI where the id alone suffices.
-      name: tool.name,
+      content: replayableText(assistantText) ?? null,
+      role: 'assistant',
+      ...(reasoningContent ? { reasoning_content: reasoningContent } : {}),
+      tool_calls: round.map(({ tool }) => ({
+        id: tool.id,
+        type: 'function',
+        function: {
+          name: tool.name,
+          arguments: tool.parameters,
+        },
+      })),
     } as unknown as IMessage);
+
+    for (const { tool, result } of round) {
+      messages.push({
+        role: 'tool',
+        content: JSON.stringify({ result }),
+        tool_call_id: tool.id,
+        // Moonshot's tool-call guide shows `name` on the result message alongside
+        // tool_call_id, unlike OpenAI where the id alone suffices.
+        name: tool.name,
+      } as unknown as IMessage);
+    }
   }
 }

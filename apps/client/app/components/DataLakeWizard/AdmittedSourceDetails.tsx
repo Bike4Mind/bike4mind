@@ -72,7 +72,7 @@ function Row({ label, children, testId }: { label: string; children: ReactNode; 
 
 /**
  * Provenance for a file admitted from an approved acquisition proposal: the source, the research
- * run that found it, who approved it, and how far processing has got. Everything shown here is
+ * run that found it, who approved it (or the rule that added it), and how far processing has got. Everything shown here is
  * stamped server-side at admission (`approveDataLakeProposal`); renders nothing for other files.
  */
 export default function AdmittedSourceDetails({ file }: { file: IFabFileDocument }) {
@@ -94,6 +94,8 @@ export default function AdmittedSourceDetails({ file }: { file: IFabFileDocument
   const query = asString(meta.query);
   const approver = asString(meta.approvedByName) ?? asString(meta.approvedByUserId);
   const approvedAt = formatDate(meta.approvedAt);
+  const ruleConfig = asString(meta.autoAdmittedByConfigName) ?? asString(meta.autoAdmittedByConfigId);
+  const trustedSite = asString(meta.trustedDomain);
 
   return (
     <Box
@@ -118,7 +120,14 @@ export default function AdmittedSourceDetails({ file }: { file: IFabFileDocument
           {runId ? `(run ${runId})` : null}
         </Row>
       )}
-      {approver && (
+      {ruleConfig && (
+        <Row label="Added by rule" testId="datalake-admitted-source-rule">
+          {trustedSite ? `Added automatically from trusted site ${trustedSite}` : 'Added automatically'}
+          {` by research configuration "${ruleConfig}"`}
+          {approvedAt ? ` on ${approvedAt}` : null}
+        </Row>
+      )}
+      {approver && !ruleConfig && (
         <Row label="Approved by" testId="datalake-admitted-source-approver">
           {approver}
           {approvedAt ? ` on ${approvedAt}` : null}

@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
-import { Alert, Box, Button, LinearProgress, Stack, Typography } from '@mui/joy';
+import { Alert, Box, Button, Stack } from '@mui/joy';
+import { AdminPageHeader, EmptyState, ErrorState, LoadingState } from '@client/app/components/admin/shared';
+import { ADMIN_REGION_GAP, adminSurface } from '@client/app/components/admin/shared/adminStyles';
 import { useIntegrationHealthDashboard } from './hooks/useIntegrationHealthDashboard';
 import { useCircuitBreakerOverride } from './hooks/useCircuitBreakerOverride';
 import { ControlPanel } from './components/ControlPanel';
 import { IntegrationCard } from './components/IntegrationCard';
 import { exportDashboardCsv } from './utils/csvExport';
-import type { IntegrationName, TimeRange } from './types';
+import { useIntegrationHealthSearchParams } from './hooks/useIntegrationHealthSearchParams';
+import type { IntegrationName } from './types';
 
 const AdminIntegrationHealthTab: React.FC = () => {
-  const [timeRange, setTimeRange] = useState<TimeRange>('24h');
-  const [expandedIntegration, setExpandedIntegration] = useState<IntegrationName | null>(null);
+  const { timeRange, expandedIntegration, patch } = useIntegrationHealthSearchParams();
   const [exportError, setExportError] = useState<string | null>(null);
 
   const { data, isLoading, isRefetching, isError, error, runProbes, isRunningProbes, probeError, forceRefresh } =
@@ -17,7 +19,7 @@ const AdminIntegrationHealthTab: React.FC = () => {
   const { setOverride, isUpdating, updatingIntegration } = useCircuitBreakerOverride();
 
   const handleToggle = (name: IntegrationName) => {
-    setExpandedIntegration(prev => (prev === name ? null : name));
+    patch({ expandedIntegration: expandedIntegration === name ? null : name });
   };
 
   const handleExport = () => {
@@ -26,61 +28,121 @@ const AdminIntegrationHealthTab: React.FC = () => {
       exportDashboardCsv(data);
       setExportError(null);
     } catch {
-      setExportError('Failed to export CSV. Please try again.');
+      setExportError('The CSV could not be exported. Try again.');
     }
   };
 
+  const hasData = !!data && data.integrations.length > 0;
+
+  const runProbesButton = (testId: string) => (
+    <Button size="sm" onClick={() => runProbes(undefined)} loading={isRunningProbes} data-testid={testId}>
+      Run probes
+    </Button>
+  );
+
+  let body: React.ReactNode;
   if (isLoading) {
-    return (
-      <Box sx={{ p: 6 }}>
-        <LinearProgress />
-        <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
-          Loading integration health data...
-        </Typography>
+    body = <LoadingState label="Loading integration health" />;
+  } else if (isError) {
+    body = (
+      <Box data-testid="integration-health-error-state">
+        <ErrorState
+          message={`Integration health failed to load: ${error?.message || 'unknown error'}`}
+          onRetry={forceRefresh}
+          retrying={isRefetching}
+        />
       </Box>
     );
-  }
-
-  if (isError) {
-    return (
-      <Box sx={{ p: 6 }} data-testid="integration-health-error-state">
-        <Alert color="danger" variant="soft" sx={{ mb: 2 }}>
-          Failed to load integration health data: {error?.message || 'Unknown error'}
-        </Alert>
-        <Button variant="outlined" color="neutral" onClick={forceRefresh}>
-          Retry
-        </Button>
+  } else if (!hasData) {
+    body = (
+      <Box data-testid="integration-health-empty-state">
+        <EmptyState
+          title="No integration health data yet"
+          description="Run the probes to check each integration."
+          action={runProbesButton('integration-health-empty-run-probes-btn')}
+        />
       </Box>
     );
-  }
-
-  if (!data || data.integrations.length === 0) {
-    return (
-      <Box sx={{ p: 6, textAlign: 'center' }} data-testid="integration-health-empty-state">
-        <Typography level="h4" color="neutral">
-          No integration health data yet
-        </Typography>
-        <Typography level="body-sm" color="neutral" sx={{ mt: 1 }}>
-          Health check probes will populate this dashboard. Click &quot;Run Probes&quot; to start.
-        </Typography>
-      </Box>
+  } else {
+    body = (
+      <>
+        <ControlPanel
+          timeRange={timeRange}
+          onTimeRangeChange={range => patch({ timeRange: range })}
+          isRefetching={isRefetching}
+          data={data}
+        />
+        {/* One surface for the list: rows are divided by hairlines, not stacked as separate cards. */}
+        <Box
+          data-testid="integration-health-list"
+          sx={{
+            ...adminSurface,
+            border: '1px solid',
+            borderColor: 'admin.border',
+            borderRadius: 'lg',
+            overflow: 'hidden',
+            '& > * + *': { borderTop: '1px solid', borderColor: 'admin.border' },
+          }}
+        >
+          {data.integrations.map(entry => (
+            <IntegrationCard
+              key={entry.name}
+              entry={entry}
+              isExpanded={expandedIntegration === entry.name}
+              onToggle={() => handleToggle(entry.name)}
+              inMemoryBreakers={data.inMemoryBreakerStates}
+              onOverride={(integration, mode, reason) => setOverride({ integration, mode, reason })}
+              isUpdatingOverride={isUpdating && updatingIntegration === entry.name}
+            />
+          ))}
+        </Box>
+      </>
     );
   }
 
   return (
-    <Box sx={{ p: { xs: 2, md: 6 } }}>
+    <Stack gap={ADMIN_REGION_GAP}>
+      <AdminPageHeader
+        title="Integrations"
+        description="Probe results, circuit breakers and rate limits for Slack, GitHub, Jira and Confluence."
+        actions={
+          <>
+            {/* On the empty page the EmptyState carries the one Run probes button. */}
+            {(hasData || isLoading || isError) && runProbesButton('integration-health-run-probes-btn')}
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={forceRefresh}
+              loading={isRefetching}
+              data-testid="integration-health-refresh-btn"
+            >
+              Refresh
+            </Button>
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={handleExport}
+              disabled={!hasData}
+              data-testid="integration-health-export-btn"
+            >
+              Export CSV
+            </Button>
+          </>
+        }
+      />
       {probeError && (
-        <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="probe-error-alert">
-          Probe failed: {probeError.message || 'Unknown error'}
+        <Alert color="warning" variant="soft" data-testid="probe-error-alert">
+          Probe failed: {probeError.message || 'unknown error'}
         </Alert>
       )}
       {exportError && (
         <Alert
           color="warning"
           variant="soft"
-          sx={{ mb: 2 }}
           endDecorator={
-            <Button size="sm" variant="plain" color="warning" onClick={() => setExportError(null)}>
+            <Button size="sm" variant="plain" color="neutral" onClick={() => setExportError(null)}>
               Dismiss
             </Button>
           }
@@ -88,31 +150,8 @@ const AdminIntegrationHealthTab: React.FC = () => {
           {exportError}
         </Alert>
       )}
-      <ControlPanel
-        timeRange={timeRange}
-        onTimeRangeChange={setTimeRange}
-        onRunProbes={() => runProbes(undefined)}
-        onRefresh={forceRefresh}
-        onExportCsv={handleExport}
-        isRunningProbes={isRunningProbes}
-        isRefetching={isRefetching}
-        data={data}
-      />
-
-      <Stack spacing={2}>
-        {data.integrations.map(entry => (
-          <IntegrationCard
-            key={entry.name}
-            entry={entry}
-            isExpanded={expandedIntegration === entry.name}
-            onToggle={() => handleToggle(entry.name)}
-            inMemoryBreakers={data.inMemoryBreakerStates}
-            onOverride={(integration, mode, reason) => setOverride({ integration, mode, reason })}
-            isUpdatingOverride={isUpdating && updatingIntegration === entry.name}
-          />
-        ))}
-      </Stack>
-    </Box>
+      {body}
+    </Stack>
   );
 };
 

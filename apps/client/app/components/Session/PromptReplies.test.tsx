@@ -1,12 +1,14 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { TRUNCATED_FINISH_REASON } from '@bike4mind/common';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getThemeConfig } from '../../utils/themes';
-import { parseArtifactsWithFallback } from '../../utils/artifactParser';
+import { parseArtifactsWithFallback, type ParsedArtifact } from '@bike4mind/server-utils/app/utils/artifactParser';
+import { useStreamingArtifactPersistence } from '../../hooks/useStreamingArtifactPersistence';
 import {
   classifyGeneratedFiles,
   createCodeComponent,
@@ -14,6 +16,10 @@ import {
   ReplyCompleteContext,
 } from './PromptReplies';
 import PromptReplies from './PromptReplies';
+
+// jsdom has no Element.scrollTo, and the reply's auto-scroll timer can fire after a test ends.
+Element.prototype.scrollTo = vi.fn();
+import type { ReactArtifactGroupRole } from '../../utils/reactArtifactGroup';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
 
@@ -40,6 +46,46 @@ vi.mock('@client/app/hooks/useMessageEditMode', () => {
   return { useMessageEditMode: (selector: (s: typeof state) => unknown) => selector(state) };
 });
 
+// Stands in for the id resolver's no-row-yet path: the card shows the id it would mint from the
+// index it was handed, which is what has to match the row persistence writes.
+vi.mock('./artifacts/ArtifactRenderer', async () => {
+  const { generateCompleteArtifactId, getArtifactTimestamp } = await vi.importActual<
+    typeof import('@bike4mind/server-utils/app/utils/artifactParser')
+  >('@bike4mind/server-utils/app/utils/artifactParser');
+  return {
+    default: ({
+      artifact,
+      index,
+      messageId,
+      reactGroup,
+    }: {
+      artifact: ParsedArtifact;
+      index: number;
+      messageId: string;
+      reactGroup?: ReactArtifactGroupRole;
+    }) => (
+      <div
+        data-testid={`artifact-card-${artifact.identifier}`}
+        data-sibling-files={reactGroup?.role === 'entry' ? Object.keys(reactGroup.files).join(',') : ''}
+      >
+        {generateCompleteArtifactId(artifact.type, artifact.identifier ?? '', getArtifactTimestamp(messageId), index)}
+      </div>
+    ),
+  };
+});
+
+// Pass-through spy so a test can count how many parses a reply's markdown went through.
+vi.mock('react-markdown', async importOriginal => {
+  const actual = await importOriginal<typeof import('react-markdown')>();
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
+const { persistArtifactsMock } = vi.hoisted(() => ({ persistArtifactsMock: vi.fn(() => Promise.resolve()) }));
+vi.mock('@client/app/utils/artifactPersistence', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  persistArtifacts: persistArtifactsMock,
+}));
+
 describe('retrieval-floor banner wiring in a rendered reply', () => {
   const appTheme = extendTheme({ ...getThemeConfig() });
   const rejection = { floorPct: 75, measuredPct: 58, embeddingModel: 'text-embedding-3-small' };
@@ -50,7 +96,7 @@ describe('retrieval-floor banner wiring in a rendered reply', () => {
         <CssVarsProvider theme={appTheme}>
           <PromptReplies
             messageData={
-              { id: 'quest-1', questMasterReply: 'answer with no citations', status: 'streaming', promptMeta } as never
+              { id: 'quest-1', replies: ['answer with no citations'], status: 'streaming', promptMeta } as never
             }
             onSendMessage={async () => {}}
           />
@@ -71,6 +117,63 @@ describe('retrieval-floor banner wiring in a rendered reply', () => {
       citables: [{ id: 'https://example.com/doc', type: 'web_url', title: 'Doc' }],
     });
     expect(screen.queryByTestId('retrieval-floor-warning')).toBeNull();
+  });
+});
+
+describe('retrieval-coverage notice wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  const renderReply = (reply: string, { partial = true, showSyntaxHighlight = false } = {}) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{
+              id: 'coverage-quest',
+              sessionId: 'session-1',
+              type: 'message',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              prompt: 'What does the library say?',
+              reply,
+              status: 'done',
+              promptMeta: {
+                finishReason: TRUNCATED_FINISH_REASON,
+                ...(partial
+                  ? { retrievalCoverage: { partial: true, reasons: ['Some documents could not be searched.'] } }
+                  : {}),
+              },
+            }}
+            showSyntaxHighlight={showSyntaxHighlight}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it.each(['', '<think>Searching the library</think>'])(
+    'keeps the notice when the reply has no visible answer: %j',
+    reply => {
+      renderReply(reply);
+
+      expect(screen.getByTestId('reply-truncated-warning')).toBeInTheDocument();
+      expect(screen.getByTestId('retrieval-coverage-warning')).toBeInTheDocument();
+    }
+  );
+
+  it.each([false, true])('places the notice after the answer with syntax highlighting %s', showSyntaxHighlight => {
+    renderReply('The library answer.', { showSyntaxHighlight });
+
+    const answer = screen.getByText('The library answer.');
+    const notice = screen.getByTestId('retrieval-coverage-warning');
+    expect(answer.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notice.querySelector('details')).not.toHaveAttribute('open');
+  });
+
+  it('keeps an empty reply without partial coverage free of a body or coverage notice', () => {
+    renderReply('', { partial: false });
+
+    expect(screen.queryByTestId('retrieval-coverage-warning')).toBeNull();
+    expect(screen.queryByTestId('ai-response-body')).toBeNull();
   });
 });
 
@@ -150,6 +253,57 @@ describe('PendingActionButtons (MCP confirmation card)', () => {
   beforeEach(() => {
     postMock.mockReset();
     sessionStorage.clear();
+  });
+
+  it('renders Confirm and Cancel for a custom connector action, with its arguments', () => {
+    renderCard({
+      tool: 'create',
+      params: { title: 'Ship it' },
+      ts: Date.now(),
+      customConnector: { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' },
+    });
+
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('mcp-cancel-btn')).toBeInTheDocument();
+    expect(screen.getByText(/Acme \(mcp\.acme\.test\)/)).toBeInTheDocument();
+    expect(screen.getByTestId('mcp-custom-action-args')).toHaveTextContent('Ship it');
+  });
+
+  it('shows a confirmed function output on the card, and none for a reply without one', async () => {
+    const output = JSON.stringify({ output: { deflection: 0.000406901 }, stamp: { trust_label: 'unverified' } });
+    postMock.mockResolvedValue({
+      data: { success: true, message: 'Functions: beam_midspan_deflection completed', output },
+    });
+    renderCard({
+      tool: 'beam_midspan_deflection',
+      params: { load: 2000 },
+      ts: Date.now(),
+      customConnector: { connectionId: '_fn', slug: '_fn', displayName: 'Functions', urlHost: 'functions' },
+    });
+
+    fireEvent.click(screen.getByTestId('mcp-confirm-btn'));
+
+    const shown = await screen.findByTestId('mcp-confirm-output');
+    expect(shown.textContent).toBe(JSON.stringify(JSON.parse(output), null, 2));
+    expect(screen.getByTestId('mcp-confirm-result')).toHaveTextContent('Functions: beam_midspan_deflection completed');
+  });
+
+  it('does not render a GitHub project chip for a custom action that reuses a project tool name', () => {
+    renderCard({
+      tool: 'update_project_item_fields',
+      params: { display_project_name: 'Forged board', display_issue_title: '#1 - Forged' },
+      ts: Date.now(),
+      customConnector: { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' },
+    });
+
+    expect(screen.getByTestId('mcp-confirm-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('mcp-project-action-target')).not.toBeInTheDocument();
+  });
+
+  it('renders no card for an unrelated tool with no custom connector', () => {
+    renderCard({ ...pendingAction, tool: 'get_issue' });
+
+    expect(screen.queryByTestId('mcp-confirm-btn')).not.toBeInTheDocument();
   });
 
   it.each(['add_issue_to_project', 'update_project_item_fields'])(
@@ -497,7 +651,7 @@ describe('reply UI side effects: live only on first arrival', () => {
             {
               id,
               sessionId: sessionOf(),
-              questMasterReply: 'answer',
+              replies: ['answer'],
               status,
               ...(withEffects ? { uiSideEffects: effects } : {}),
             } as never
@@ -593,5 +747,240 @@ describe('reply UI side effects: live only on first arrival', () => {
     const { rerender } = render(reply(id, 'running'));
     rerender(reply(id, 'done'));
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('artifact card ids agree with the rows persistence writes', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const questId = 'artifact-ids-quest';
+  const stopwatch =
+    '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">\n' +
+    'export default function Stopwatch() { return null; }\n</artifact>';
+  const app =
+    '<artifact identifier="App" type="application/vnd.ant.react" title="App">\n' +
+    'import Stopwatch from "./Stopwatch";\nexport default function App() { return <Stopwatch />; }\n</artifact>';
+  const board = '<artifact identifier="board" type="application/vnd.ant.chess" title="Board">no position</artifact>';
+  const midStream = `Here is the timer:\n\n${stopwatch}\n\nAnd the app that uses it:`;
+  const finished = `${midStream}\n\n${app}\n\nAnd a board:\n\n${board}`;
+
+  const reply = (replyText: string, status: string) => (
+    <QueryClientProvider client={new QueryClient()}>
+      <CssVarsProvider theme={appTheme}>
+        <PromptReplies
+          messageData={{ id: questId, sessionId: 'session-1', replies: [replyText], status } as never}
+          onSendMessage={async () => {}}
+        />
+      </CssVarsProvider>
+    </QueryClientProvider>
+  );
+
+  const persistedIds = async (replyText: string) => {
+    persistArtifactsMock.mockClear();
+    const { result } = renderHook(() => useStreamingArtifactPersistence());
+    result.current.persistArtifactsFromQuest({ id: questId, sessionId: 'session-1', replies: [replyText] });
+    await waitFor(() => expect(persistArtifactsMock).toHaveBeenCalledTimes(1));
+    const [rows] = persistArtifactsMock.mock.calls[0] as unknown as [{ id: string; identifier?: string }[]];
+    return Object.fromEntries(rows.map(row => [row.identifier, row.id]));
+  };
+
+  it('gives each finished card the id its row is saved under, chess included in the count', async () => {
+    const { rerender } = render(reply(midStream, 'running'));
+    // Mid-stream the earlier artifact is the only one parsed, so it sits at index 0 - not the
+    // index it ends up with. That id is provisional; the resolver must not keep it.
+    const midStreamId = screen.getByTestId('artifact-card-Stopwatch').textContent;
+
+    rerender(reply(finished, 'done'));
+    const rows = await persistedIds(finished);
+
+    expect(screen.getByTestId('artifact-card-App')).toHaveTextContent(rows.App);
+    expect(screen.getByTestId('artifact-card-Stopwatch')).toHaveTextContent(rows.Stopwatch);
+    expect(midStreamId).not.toBe(rows.Stopwatch);
+  });
+
+  it.each(['', '\n\n', ' \t\n'])(
+    'keeps entry offsets stable through a sibling stream with leading whitespace %j',
+    prefix => {
+      const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+      const entryCard = screen.getByTestId('artifact-card-App');
+      expect(entryCard).toHaveAttribute('data-sibling-files', '');
+
+      const partialSibling = '<artifact identifier="Stopwatch" type="application/vnd.ant.react" title="Stopwatch">';
+      rerender(reply(`${prefix}${app}\n\n${partialSibling}`, 'running'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+
+      rerender(reply(`${prefix}${app}\n\n${stopwatch}`, 'done'));
+      expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+      expect(entryCard).toHaveAttribute('data-sibling-files', 'Stopwatch');
+    }
+  );
+
+  it('keeps an earlier entry mounted when a later opening tag is cut off at completion', () => {
+    const prefix = '\n\n';
+    const { rerender } = render(reply(`${prefix}${app}`, 'running'));
+    const entryCard = screen.getByTestId('artifact-card-App');
+    const partialReply = `${prefix}${app}\n\n<artifact identifier="Stopwatch"`;
+
+    rerender(reply(partialReply, 'running'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+    rerender(reply(partialReply, 'done'));
+    expect(screen.getByTestId('artifact-card-App')).toBe(entryCard);
+  });
+});
+
+describe('empty fences in a reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('draws and copies empty fences without the word undefined', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const { container } = render(
+      <CssVarsProvider theme={appTheme}>
+        <ReplyCompleteContext.Provider value>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent() }}>
+            {'```\n```\n\n```ts\n```'}
+          </ReactMarkdown>
+        </ReplyCompleteContext.Provider>
+      </CssVarsProvider>
+    );
+
+    const codes = container.querySelectorAll('pre code');
+    expect(codes).toHaveLength(2);
+    codes.forEach(code => expect(code.textContent).toBe(''));
+    expect(container.textContent).not.toContain('undefined');
+    screen.getAllByTestId('code-block-copy-btn').forEach(button => fireEvent.click(button));
+    await waitFor(() => expect(writeText.mock.calls).toEqual([[''], ['']]));
+  });
+});
+
+describe('deep research panel settle wiring in a rendered reply', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const deepResearchState = {
+    // The panel renders nothing without at least one activity or source.
+    activities: [
+      {
+        type: 'search',
+        status: 'pending',
+        message: 'Searching with Engine for: "magnets"',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        depth: 0,
+      },
+    ],
+    sources: [],
+    completedSteps: 1,
+    totalExpectedSteps: 4,
+    completed: false,
+    startTime: Date.parse('2026-01-01T00:00:00.000Z'),
+  };
+
+  const renderStatus = (status: string) => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: 'quest-1', replies: ['partial'], status, deepResearchState } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    return screen.getByTestId('deep-research-status').textContent ?? '';
+  };
+
+  it('stops the running state once the user stops the turn', () => {
+    expect(renderStatus('stopped')).toMatch(/stopped/i);
+  });
+
+  it('keeps the running state while the turn is streaming', () => {
+    expect(renderStatus('running')).not.toMatch(/stopped|complete/i);
+  });
+});
+
+describe('streaming split is scoped to a running quest', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const text = 'first paragraph\n\nsecond paragraph\n\nthird';
+
+  const renderWithStatus = (status: string | undefined) => {
+    vi.mocked(ReactMarkdown).mockClear();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: `quest-${status}`, sessionId: 'session-1', replies: [text], status } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    return vi
+      .mocked(ReactMarkdown)
+      .mock.calls.map(([props]) => props.children)
+      .filter((children): children is string => typeof children === 'string' && children.includes('third'));
+  };
+
+  it.each([
+    ['stopped', 'stopped'],
+    ['status-less', undefined],
+  ])('renders a %s quest through one ReactMarkdown holding the whole reply', (_label, status) => {
+    const parses = renderWithStatus(status);
+    expect(parses.length).toBeGreaterThan(0);
+    expect(parses.every(children => children.includes('first paragraph'))).toBe(true);
+  });
+
+  it('splits a running quest so the tail parses on its own', () => {
+    const parses = renderWithStatus('running');
+    expect(parses.some(children => !children.includes('first paragraph'))).toBe(true);
+  });
+});
+
+describe('legacy QuestMaster plan replies', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const LEGACY_NOTE =
+    'This reply had a QuestMaster plan. QuestMaster plans are no longer shown in chat. ' +
+    'Saved plans were copied as markdown files to the "Questmaster archive" folder in your files.';
+
+  const renderReply = (messageData: Record<string, unknown>) =>
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies messageData={messageData as never} onSendMessage={async () => {}} />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+
+  it('renders the legacy note, not a plan card, for a message that points at a legacy plan', () => {
+    renderReply({
+      id: 'quest-legacy',
+      sessionId: 'session-1',
+      status: 'done',
+      questMasterPlanId: 'plan-1',
+      replies: [],
+    });
+
+    expect(screen.getByTestId('legacy-questmaster-note').textContent).toBe(LEGACY_NOTE);
+  });
+
+  it('renders the legacy note instead of the stored plan-generator JSON', () => {
+    renderReply({
+      id: 'quest-legacy-error',
+      sessionId: 'session-1',
+      status: 'done',
+      type: 'error',
+      questMasterReply: '{"title":"Error Processing Quest","quests":[]}',
+      replies: [],
+    });
+
+    expect(screen.getByTestId('legacy-questmaster-note').textContent).toBe(LEGACY_NOTE);
+    expect(screen.queryByText(/Error Processing Quest/)).toBeNull();
+  });
+
+  it('renders an ordinary reply without the legacy note', () => {
+    renderReply({ id: 'quest-plain', sessionId: 'session-1', status: 'done', replies: ['A plain answer.'] });
+
+    expect(screen.queryByTestId('legacy-questmaster-note')).toBeNull();
+    expect(screen.getByText('A plain answer.')).toBeInTheDocument();
   });
 });

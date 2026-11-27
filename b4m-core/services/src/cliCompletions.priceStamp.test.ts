@@ -25,6 +25,12 @@ const emitted: { info: CompletionInfo; fail?: boolean; model: typeof literalMode
   model: literalModel,
 };
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -67,6 +73,7 @@ function buildDb() {
       findById: vi.fn().mockResolvedValue(user),
     },
     usageEvents: { record: vi.fn<IUsageEventRepository['record']>().mockResolvedValue(null) },
+    spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
   };
 }
 

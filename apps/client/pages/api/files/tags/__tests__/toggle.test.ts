@@ -80,7 +80,7 @@ vi.mock('@bike4mind/database', () => ({
 // The route resolves its actor via toAccessContext so the gate sees `administeredOrgIds`; stub it
 // so the real one's entitlement + org-admin Mongo reads stay out of this unit test. The behavioural
 // coverage of the org-admin rung reaching the gate lives in toggle.lakeAuthz.test.ts.
-vi.mock('@server/dataLakes/toAccessContext', () => ({
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({
   toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
     userId: req.user.id,
     isAdmin: !!req.user.isAdmin,

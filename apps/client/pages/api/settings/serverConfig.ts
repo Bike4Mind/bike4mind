@@ -9,8 +9,11 @@ import {
   type ToolAvailability,
 } from '@bike4mind/services/llm/toolAvailability';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { stageHiddenSettingKeys } from '@bike4mind/common';
+import { PRODUCTION_STAGES } from '@bike4mind/infra';
 import { resolveEffectiveEmbeddingModel } from '@bike4mind/server-utils/embeddings/effectiveEmbeddingModel';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { isTurnstileSecretConfigured } from '@bike4mind/server-utils/utils/turnstile';
 import { Resource } from 'sst';
 import { resolveWhatsNewUpstreamOrigin } from '@server/utils/deploymentMediaOrigins';
 
@@ -20,13 +23,6 @@ type LLMApiKeyTable = Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApi
 
 export type ServerConfig = {
   websocketUrl: string;
-  /**
-   * CLI HTTP->WS completions endpoint on the ChatCompletion service: the CLI POSTs the
-   * request payload here and receives the stream over its WebSocket connection. A relative
-   * path on hosted deploys (CloudFront routes it under the app domain); an absolute URL
-   * built from CHAT_COMPLETION_PUBLIC_URL on self-host / local dev.
-   */
-  wsCompletionUrl: string;
   /**
    * Optional direct URL for SSE completions. Empty in hosted deploys, where completions are
    * served by the always-on ChatCompletion service under the app domain: the CLI falls back to
@@ -60,6 +56,10 @@ export type ServerConfig = {
    * and nothing to fall back to). Clients must treat that as "unknown" and not as a model name.
    */
   effectiveEmbeddingModel: string;
+  /** False when no Turnstile secret is provisioned, so the admin toggle is a no-op. Boolean only; never the secret. */
+  turnstileSecretConfigured: boolean;
+  /** Setting keys the admin settings list hides on this stage. Display only; never enforced on write. */
+  hiddenAdminSettingKeys: string[];
 };
 
 // Get Admin Settings - requires authentication
@@ -92,15 +92,6 @@ const handler = baseApi({ auth: true }).get(
 
     const config: ServerConfig = {
       websocketUrl: Resource.websocket.url,
-      // CLI HTTP->WS completions, served by the ChatCompletion service (it replaced the
-      // CliWsCompletionHandler Lambda). Resolution mirrors sseCompletionsUrl below, except a
-      // relative path is advertised on hosted (the CLI resolves it against its API base URL):
-      // CloudFront routes it to the service, and the route 202s immediately, so the origin
-      // read timeout that forced the old Lambda onto a direct function URL doesn't apply.
-      // Self-host / local dev advertise the service's published origin instead.
-      wsCompletionUrl: process.env.CHAT_COMPLETION_PUBLIC_URL
-        ? `${process.env.CHAT_COMPLETION_PUBLIC_URL.replace(/\/+$/, '')}/api/ai/v1/ws-completions`
-        : '/api/ai/v1/ws-completions',
       // Hosted: served by the ChatCompletion service via CloudFront at /api/ai/v1/completions,
       // so there is no direct URL to advertise (empty -> the CLI uses that same-origin path).
       // Self-host: nothing routes that path on the app origin, so advertise the service's
@@ -119,6 +110,8 @@ const handler = baseApi({ auth: true }).get(
       whatsNewUpstreamOrigin: resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL),
       toolAvailability,
       effectiveEmbeddingModel,
+      turnstileSecretConfigured: isTurnstileSecretConfigured(Config.TURNSTILE_SECRET_KEY),
+      hiddenAdminSettingKeys: stageHiddenSettingKeys(PRODUCTION_STAGES.includes(Config.STAGE)),
     };
 
     return res.json(config);

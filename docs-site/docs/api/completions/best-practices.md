@@ -19,7 +19,7 @@ Production deployment guidance for the B4M Completions API, covering security, p
 const apiKey = 'b4m_live_xxxxxxxxxxxx'; // Exposed to users!
 
 fetch('https://app.bike4mind.com/api/ai/v1/completions', {
-  headers: { 'X-API-Key': apiKey }
+  headers: { 'Authorization': `Bearer ${apiKey}` }
 });
 ```
 
@@ -28,10 +28,14 @@ fetch('https://app.bike4mind.com/api/ai/v1/completions', {
 ```javascript
 // Frontend code
 fetch('/api/my-completion-proxy', {
-  headers: { 'Authorization': `Bearer ${userJWT}` }
+  method: 'POST',
+  headers: { 'Authorization': `Bearer ${userJWT}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'claude-sonnet-5', messages })
 });
 
 // Backend code (Node.js/Express)
+import { Readable } from 'node:stream';
+
 app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   // Validate user has permission
   if (!req.user.canUseAI) {
@@ -42,14 +46,19 @@ app.post('/api/my-completion-proxy', authenticateUser, async (req, res) => {
   const response = await fetch('https://app.bike4mind.com/api/ai/v1/completions', {
     method: 'POST',
     headers: {
-      'X-API-Key': process.env.B4M_API_KEY, // Safe on server
+      'Authorization': `Bearer ${process.env.B4M_API_KEY}`, // Safe on server
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(req.body)
   });
 
   // Stream response back to client
-  response.body.pipe(res);
+  res.status(response.status);
+  res.setHeader('Content-Type', response.headers.get('content-type') ?? 'text/event-stream');
+  if (response.headers.has('Retry-After')) {
+    res.setHeader('Retry-After', response.headers.get('Retry-After'));
+  }
+  Readable.fromWeb(response.body).pipe(res);
 });
 ```
 
@@ -89,11 +98,7 @@ docker run -e B4M_API_KEY=b4m_live_xxx myapp
 
 ### Use Separate Keys per Environment
 
-```
-Production:  b4m_live_production_xxx
-Staging:     b4m_test_staging_xxx
-Development: b4m_test_dev_xxx
-```
+Create one key per environment and name it for that environment (for example "production", "staging", "development"), and keep each in that environment's secret store.
 
 **Benefits:**
 - Limit blast radius of compromises
@@ -104,25 +109,15 @@ Development: b4m_test_dev_xxx
 
 ## Rate Limit Management
 
-### Monitor Rate Limits Proactively
+### Read the Headers on a 429
 
-Check rate limit headers on every response:
+The streaming completions endpoint sends the `X-RateLimit-*` headers (per-minute and per-day limit, remaining and reset, reset as Unix epoch seconds) only on an API-key `429`. Successful responses do not carry them, so you cannot track remaining quota from them. On a `429`, wait the `Retry-After` seconds before retrying:
 
 ```javascript
-function checkRateLimits(headers) {
-  const minuteRemaining = parseInt(headers.get('x-ratelimit-remaining-minute') || '0');
-  const minuteLimit = parseInt(headers.get('x-ratelimit-limit-minute') || '60');
-  const minuteUsage = ((minuteLimit - minuteRemaining) / minuteLimit) * 100;
-
-  if (minuteUsage > 80) {
-    console.warn(`Rate limit warning: ${minuteUsage.toFixed(0)}% of minute quota used`);
-  }
-
-  // Alert if approaching daily limit
-  const dayRemaining = parseInt(headers.get('x-ratelimit-remaining-day') || '0');
-  if (dayRemaining < 100) {
-    console.warn(`Daily limit warning: ${dayRemaining} requests remaining`);
-  }
+if (response.status === 429) {
+  const retryAfter = Number(response.headers.get('Retry-After')) || 1;
+  console.warn(`Rate limited; day remaining: ${response.headers.get('X-RateLimit-Remaining-Day')}`);
+  await sleep(retryAfter * 1000);
 }
 ```
 
@@ -159,7 +154,7 @@ class RateLimiter {
   }
 }
 
-const limiter = new RateLimiter(60);
+const limiter = new RateLimiter(requestsPerMinute); // your key's per-minute limit
 
 async function makeRequest() {
   await limiter.waitForSlot();
@@ -202,7 +197,7 @@ class RequestQueue {
 const queue = new RequestQueue(5); // Max 5 concurrent requests
 
 async function makeQueuedRequest(messages) {
-  return queue.add(() => client.complete('claude-3-5-sonnet', messages));
+  return queue.add(() => client.complete('claude-sonnet-5', messages));
 }
 ```
 
@@ -212,44 +207,18 @@ async function makeQueuedRequest(messages) {
 
 ### Choose Appropriate Models
 
-Balance cost vs quality for your use case:
+Smaller models cost fewer credits than larger ones. Call `GET /api/v1/models` for the model ids available to you.
 
-| Model | Cost | Best For |
-|-------|------|----------|
-| `gpt-3.5-turbo` | $ | Simple Q&A, classification, quick responses |
-| `claude-3-5-sonnet` | $$ | Balanced quality and cost, general use |
-| `gpt-4` | $$$ | Complex reasoning, critical accuracy |
-| `claude-3-opus` | $$$$ | Most capable, highest quality |
-
-**Example strategy:**
-
-```javascript
-function selectModel(taskComplexity) {
-  switch (taskComplexity) {
-    case 'simple':
-      return 'gpt-3.5-turbo';
-    case 'moderate':
-      return 'claude-3-5-sonnet';
-    case 'complex':
-      return 'gpt-4';
-    case 'critical':
-      return 'claude-3-opus';
-    default:
-      return 'claude-3-5-sonnet';
-  }
-}
-```
-
-### Set Reasonable maxTokens
+### Set Reasonable max_tokens
 
 Avoid over-reserving credits:
 
 ```javascript
 // Bad: Unlimited or very high limits
-{ maxTokens: 100000 }
+{ max_tokens: 100000 }
 
 // Good: Appropriate for task
-const maxTokens = {
+const tokenLimits = {
   shortAnswer: 500,
   codeGeneration: 2000,
   essay: 4000,
@@ -332,7 +301,7 @@ function handleEvent(event) {
 
     case 'error':
       // Handle error
-      handleError(event.message);
+      handleError(event.code, event.message, event.requestId);
       break;
 
     default:
@@ -345,45 +314,7 @@ function handleEvent(event) {
 
 ### Implement Exponential Backoff
 
-Retry transient errors with backoff:
-
-```javascript
-async function fetchWithBackoff(url, options, maxRetries = 3) {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const response = await fetch(url, options);
-
-      if (response.ok) return response;
-
-      // Rate limited - wait and retry
-      if (response.status === 429) {
-        const retryAfter = parseInt(response.headers.get('Retry-After') || '60');
-        console.log(`Rate limited. Waiting ${retryAfter}s...`);
-        await sleep(retryAfter * 1000);
-        continue;
-      }
-
-      // Server error - exponential backoff
-      if (response.status >= 500) {
-        const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-        console.log(`Server error. Retrying in ${delay}ms...`);
-        await sleep(delay);
-        continue;
-      }
-
-      // Other errors - don't retry
-      throw new Error(`HTTP ${response.status}`);
-
-    } catch (error) {
-      if (attempt === maxRetries - 1) throw error;
-    }
-  }
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-```
+Retry only transient failures, honor `Retry-After` on a 429, and never retry 400, 401, 403, 413 or 422. The retry table is in [Errors](./errors.md), and a ready-made helper is in the [JavaScript](./examples/javascript.md#retry-helper) and [Python](./examples/python.md#retry-helper) examples.
 
 ### Log Errors Properly
 
@@ -553,7 +484,7 @@ async function deduplicatedRequest(key, fetchFn) {
 // Usage
 const response = await deduplicatedRequest(
   `completion:${JSON.stringify(messages)}`,
-  () => client.complete('claude-3-5-sonnet', messages)
+  () => client.complete('claude-sonnet-5', messages)
 );
 ```
 
@@ -620,7 +551,7 @@ Before deploying to production, ensure:
 ### Cost Management
 - [ ] Credit usage monitoring set up
 - [ ] Appropriate models selected
-- [ ] maxTokens limits configured
+- [ ] `max_tokens` limits configured
 - [ ] Response caching implemented (if applicable)
 - [ ] Budget alerts configured
 
@@ -738,7 +669,7 @@ const metrics = new MetricsCollector();
 
 ## Next Steps
 
-- **[API Reference](/api/completions/reference)** - Review complete API spec
-- **[Error Handling](/api/completions/errors)** - Handle errors properly
-- **[Code Examples](/api/completions/examples/javascript)** - See implementations
-- **[Authentication](/api/completions/authentication)** - Secure API keys
+- **[API Reference](./reference.md)** - Review complete API spec
+- **[Error Handling](./errors.md)** - Handle errors properly
+- **[Code Examples](./examples/javascript.md)** - See implementations
+- **[Authentication](./authentication.md)** - Secure API keys

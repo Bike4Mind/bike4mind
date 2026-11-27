@@ -1,4 +1,4 @@
-import { APP_NAME, WEBSITE_URL } from '@bike4mind/common';
+import { APP_NAME, UrlBlockedError, WEBSITE_URL } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
 import type { Cheerio, CheerioAPI } from 'cheerio';
@@ -45,11 +45,14 @@ const URL_FETCH_TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 5;
 
 /**
- * Hard ceiling on a fetched body. A SAFETY NET against an unbounded response, not a policy limit -
- * `createFabFile` still enforces the `MaxFileSize` admin setting afterwards. Set generously (the
- * same 50MB as the Slack attachment ceiling) so it can never refuse something the app would accept;
- * without it axios defaults to `maxContentLength: -1`, i.e. buffer whatever the server sends, and
- * `@datalake add <link>` takes URLs from anyone who can type in a Slack channel.
+ * Hard ceiling on a fetched body. A SAFETY NET against an unbounded response, not a policy limit.
+ * It caps the raw response; every non-PDF body is stored as extracted text, which is usually
+ * smaller but not always (an undecodable byte becomes a 3-byte U+FFFD). On the URL-import path
+ * `createFabFile` then enforces the `MaxFileSize` admin setting on the stored size (lake research
+ * and chat link fetches have no such check). That setting has no maximum, so above 50MB a raw body
+ * is refused here even when the setting allows it. Without it axios defaults to
+ * `maxContentLength: -1`, i.e. buffer whatever the server sends, and `@datalake add <link>` takes
+ * URLs from anyone who can type in a Slack channel.
  */
 const URL_MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
 
@@ -772,7 +775,7 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       // This blocks requests to internal networks, cloud metadata endpoints, etc.
       const ssrfValidation = await validateUrlForFetch(currentUrl);
       if (!ssrfValidation.valid) {
-        throw new Error(`URL blocked for security reasons: ${ssrfValidation.error}`);
+        throw new UrlBlockedError(`URL blocked for security reasons: ${ssrfValidation.error}`);
       }
 
       const remainingMs = deadline - Date.now();

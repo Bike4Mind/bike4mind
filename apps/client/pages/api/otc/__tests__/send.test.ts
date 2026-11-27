@@ -19,9 +19,28 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next?.(),
 }));
-vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } } }));
+const turnstileActions = vi.hoisted(() => [] as string[]);
+const turnstileGate = vi.hoisted(() => vi.fn((_req: unknown, _res: unknown, next: () => void) => next()));
+const mockCheckTurnstileToken = vi.hoisted(() => vi.fn());
+vi.mock('@server/middlewares/requireTurnstile', () => ({
+  requireTurnstile: (action: string) => {
+    turnstileActions.push(action);
+    return turnstileGate;
+  },
+  checkTurnstileToken: (...a: unknown[]) => mockCheckTurnstileToken(...a),
+}));
+const stepUpPolicy = vi.hoisted(() => ({ active: false, failClosed: false, siteKey: '', secret: '' }));
+vi.mock('@server/utils/auth/turnstile', () => ({ getTurnstileStepUpPolicy: async () => ({ ...stepUpPolicy }) }));
+const mockRecipientRefusal = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/otcRecipient', () => ({
+  otcRecipientRefusal: (...a: unknown[]) => mockRecipientRefusal(...a),
+}));
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
+  EmailEvents: { Send: { publish: vi.fn(() => Promise.resolve()) } },
+}));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', () => ({ getLogoUrl: () => undefined }));
-vi.mock('jsonwebtoken', () => ({ default: { sign: () => 'signed-pending-token' } }));
+const mockJwtSign = vi.hoisted(() => vi.fn((_payload: Record<string, unknown>) => 'signed-pending-token'));
+vi.mock('jsonwebtoken', () => ({ default: { sign: mockJwtSign } }));
 
 const mockIsE2EEnabled = vi.fn();
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
@@ -60,18 +79,39 @@ const cache = vi.hoisted(() => {
   };
 });
 const mockTryIncrement = vi.fn();
+const mockClaimDedup = vi.fn();
+const mockVerifiedTokenId = vi.fn();
+const dedup = new Map<string, Record<string, unknown>>();
+const mockFindByEmail = vi.fn();
 vi.mock('@bike4mind/database', () => ({
+  adminSettingsRepository: { findAll: async () => [], findBySettingNames: async () => [] },
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: (...a: any[]) => mockTryIncrement(...a),
     tryAddWithinLimitFixedWindow: (key: string) => cache.peek(key),
     deleteByKey: async (key: string) => cache.counts.delete(key),
     decrementCounter: (key: string) => cache.decrement(key),
+    claimDedup: (...a: unknown[]) => mockClaimDedup(...a),
   },
+  userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a) },
   pendingOtcTokenRepository: {
     tryReserveSlot: (...a: any[]) => mockTryReserveSlot(...a),
     confirmReservation: (...a: any[]) => mockConfirmReservation(...a),
     releaseReservation: (...a: any[]) => mockReleaseReservation(...a),
   },
+}));
+
+const settingsValues = vi.hoisted(
+  () => ({ signupBotChecksEnabled: true, signupMinSubmitMs: 1500 }) as Record<string, unknown>
+);
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: (key: string) => settingsValues[key],
+}));
+const mockEvaluateSignals = vi.fn();
+vi.mock('@server/utils/signupBotChecks', () => ({
+  evaluateSignupSignals: (...a: unknown[]) => mockEvaluateSignals(...a),
+  verifiedSignupFormTokenId: (...a: unknown[]) => mockVerifiedTokenId(...a),
 }));
 
 const mockSendOTC = vi.fn();
@@ -80,20 +120,31 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import handler from '@pages/api/otc/send';
+import { getSettingsMap } from '@bike4mind/utils';
 import { OTC_LIMITS, otcEmailKey } from '@server/utils/otcLimits';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 const EMAIL = 'someone@example.com';
 
 function makeReqRes(email: string = EMAIL, ip = '81.2.69.160') {
   const { req, res } = createMocks({ method: 'POST', headers: { 'x-real-ip': ip } });
-  (req as any).body = { email };
-  return { req, res };
+  return { req: Object.assign(req, { body: { email }, logger: { info: vi.fn(), warn: vi.fn() } }), res };
 }
 
 const resetCache = () => {
+  mockRecipientRefusal.mockResolvedValue(undefined);
+  mockFindByEmail.mockResolvedValue(null);
+  Object.assign(stepUpPolicy, { active: false, siteKey: '', secret: '' });
   cache.counts.clear();
   cache.state.blindPeek = false;
+  dedup.clear();
+  mockVerifiedTokenId.mockReset().mockReturnValue(undefined);
+  mockClaimDedup.mockReset().mockImplementation(async (key: string, data: Record<string, unknown>) => {
+    if (dedup.has(key)) return { claimed: false, existingData: dedup.get(key) };
+    dedup.set(key, data);
+    return { claimed: true };
+  });
   mockTryIncrement.mockImplementation(cache.tryIncrement);
 };
 
@@ -111,6 +162,11 @@ describe('/api/otc/send limiter wiring', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
+  });
+
+  it('gates the route on the otc-send Turnstile challenge before any limiter runs', () => {
+    expect(turnstileActions).toEqual(['otc-send']);
+    expect(wiring.uses[1]).toBe(turnstileGate);
   });
 
   it('counts every request against the per-IP and distinct-email-per-IP limits, but not the per-email ones', async () => {
@@ -179,6 +235,27 @@ describe('/api/otc/send per-email budget', () => {
       otcHash: 'code-hash',
       code: '123456',
     });
+  });
+
+  it.each([true, false])('signs server challenge proof (%s) rather than trusting the body', async verified => {
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    const { req, res } = makeReqRes();
+    Object.assign(req.body, { challengeVerified: !verified });
+    recordTurnstileVerification(req, verified);
+    mockSendOTC.mockImplementationOnce(
+      async (
+        _input: unknown,
+        adapters: {
+          signPendingToken: (payload: Record<string, unknown>) => string;
+        }
+      ) => ({ pendingToken: adapters.signPendingToken({ email: EMAIL }) })
+    );
+    await handler(req, res);
+    expect(mockJwtSign).toHaveBeenCalledWith(
+      { email: EMAIL, challengeVerified: verified ? true : null },
+      'test-secret',
+      { algorithm: 'HS256' }
+    );
   });
 
   async function post(email: string, ip: string) {
@@ -329,12 +406,78 @@ describe('/api/otc/send', () => {
     vi.clearAllMocks();
     resetCache();
     mockIsE2EEnabled.mockReturnValue(false);
+    settingsValues.signupBotChecksEnabled = true;
+    mockEvaluateSignals.mockReturnValue([]);
     mockSendOTC.mockResolvedValue({
       pendingToken: 'pending-token',
       nonce: 'real-nonce',
       otcHash: 'code-hash',
       code: '123456',
     });
+  });
+
+  const dispatchThroughMailer = () => {
+    mockSendOTC.mockImplementation(
+      async (
+        _params: unknown,
+        adapters: { mailer: { sendOTCEmail: (email: string, code: string) => Promise<void> } }
+      ) => {
+        await adapters.mailer.sendOTCEmail(EMAIL, '123456');
+        return { pendingToken: 'pending-token', nonce: 'real-nonce', otcHash: 'code-hash' };
+      }
+    );
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+    mockConfirmReservation.mockResolvedValue(true);
+  };
+
+  it('logs one code dispatch only after the email event is accepted', async () => {
+    dispatchThroughMailer();
+    const { req, res } = makeReqRes();
+    vi.mocked(EmailEvents.Send.publish).mockImplementationOnce(async () => {
+      expect(req.logger.info).not.toHaveBeenCalled();
+    });
+
+    await handler(req, res);
+
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(EmailEvents.Send.publish).toHaveBeenCalledWith(expect.objectContaining({ category: 'otc' }));
+    expect(req.logger.info).toHaveBeenCalledExactlyOnceWith('otc-code-dispatched');
+  });
+
+  it('does not log a dispatch when email publication rejects', async () => {
+    dispatchThroughMailer();
+    vi.mocked(EmailEvents.Send.publish).mockRejectedValueOnce(new Error('email unavailable'));
+    const { req, res } = makeReqRes();
+
+    await expect(handler(req, res)).rejects.toThrow('email unavailable');
+
+    expect(req.logger.info).not.toHaveBeenCalled();
+  });
+
+  it('counts a dispatched email even when token confirmation later loses the race', async () => {
+    dispatchThroughMailer();
+    mockConfirmReservation.mockResolvedValueOnce(false);
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(429);
+    expect(req.logger.info).toHaveBeenCalledExactlyOnceWith('otc-code-dispatched');
+  });
+
+  it('does not count an invalid request as a dispatch', async () => {
+    const { req, res } = makeReqRes('invalid');
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(req.logger.info).not.toHaveBeenCalled();
+  });
+
+  it('does not count a cooldown refusal as a dispatch', async () => {
+    mockTryReserveSlot.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 12 });
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(429);
+    expect(req.logger.info).not.toHaveBeenCalled();
   });
 
   it('passes cooldownMs 0 to tryReserveSlot when E2E is enabled, and the prod cooldown otherwise', async () => {
@@ -390,7 +533,7 @@ describe('/api/otc/send', () => {
 
     await handler(req, res);
 
-    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined);
+    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined, []);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ pendingToken: 'pending-token' });
   });
@@ -404,6 +547,354 @@ describe('/api/otc/send', () => {
 
     await handler(req, res);
 
-    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', '123456');
+    expect(mockConfirmReservation).toHaveBeenCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', '123456', []);
+  });
+
+  describe('signup signals', () => {
+    const send = async (body: Record<string, unknown> = {}, email = EMAIL) => {
+      mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+      mockConfirmReservation.mockResolvedValue(true);
+      const { req, res } = makeReqRes(email);
+      req.body = { email, ...body };
+      await handler(req, res);
+      return res;
+    };
+
+    it('stores each evaluated signal with the code and responds exactly as for a clean submission', async () => {
+      const clean = await send();
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+
+      for (const signal of ['signup_honeypot', 'signup_too_fast', 'signup_token_missing', 'signup_token_invalid']) {
+        mockConfirmReservation.mockClear();
+        mockEvaluateSignals.mockReturnValue([signal]);
+        const flagged = await send({ formToken: 't', formExtra: 'x' });
+        expect(mockConfirmReservation.mock.calls[0][5]).toEqual([signal]);
+        expect(flagged._getStatusCode()).toBe(clean._getStatusCode());
+        expect(flagged._getJSONData()).toEqual(clean._getJSONData());
+      }
+    });
+
+    it('never puts signals in the returned pending token', async () => {
+      const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+      mockSendOTC.mockImplementation((params, adapters) => userService.sendOTC(params, adapters));
+      mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      const res = await send({ formToken: 't', formExtra: 'x' });
+      expect(res._getJSONData()).toEqual({ pendingToken: 'signed-pending-token' });
+      expect(mockJwtSign.mock.calls.at(-1)?.[0]).toHaveProperty('jti');
+      expect(mockJwtSign.mock.calls.at(-1)?.[0]).not.toHaveProperty('rs');
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual(['signup_honeypot']);
+    });
+
+    it('forwards the body fields and the min-submit setting to the evaluator', async () => {
+      settingsValues.signupMinSubmitMs = 2000;
+      await send({ formToken: 'tok', formExtra: 'bait' });
+      expect(mockEvaluateSignals).toHaveBeenCalledWith(
+        expect.objectContaining({ formToken: 'tok', formExtra: 'bait', minSubmitMs: 2000 })
+      );
+      settingsValues.signupMinSubmitMs = 1500;
+    });
+
+    it('records nothing when the kill switch is off', async () => {
+      settingsValues.signupBotChecksEnabled = false;
+      mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      mockVerifiedTokenId.mockReturnValue({ jti: 'j1', expMs: Date.now() + 3_600_000 });
+      await send();
+      expect(mockEvaluateSignals).not.toHaveBeenCalled();
+      expect(mockClaimDedup).not.toHaveBeenCalled();
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+    });
+
+    it.each([
+      [
+        'settings read',
+        () =>
+          // Keyed on the bot-check read: other callers of getSettingsMap run before it and must not consume the failure.
+          vi.mocked(getSettingsMap).mockImplementation(async (_adapters, query) => {
+            if (query?.names?.includes('signupBotChecksEnabled')) throw new Error('db down');
+            return {};
+          }),
+      ],
+      [
+        'evaluator',
+        () =>
+          mockEvaluateSignals.mockImplementationOnce(() => {
+            throw new Error('boom');
+          }),
+      ],
+    ])('fails open when the %s throws: 200, token issued, no signals, warning logged', async (_name, arrange) => {
+      const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+      mockSendOTC.mockImplementation((params, adapters) => userService.sendOTC(params, adapters));
+      arrange();
+      mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+      mockConfirmReservation.mockResolvedValue(true);
+      const { req, res } = makeReqRes();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ pendingToken: 'signed-pending-token' });
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+      expect(req.logger.warn).toHaveBeenCalled();
+    });
+
+    describe('form token reuse', () => {
+      const OTHER = 'other@example.com';
+      const tokenId = (jti: string) => ({ jti, expMs: Date.now() + 3_600_000 });
+      const storedSignals = () => mockConfirmReservation.mock.calls.map(c => c[5]);
+
+      // The fail-open cases above leave a throwing settings read and an unconsumed evaluator throw behind.
+      beforeEach(() => {
+        vi.mocked(getSettingsMap).mockImplementation(async () => ({}));
+        mockEvaluateSignals.mockReset().mockReturnValue([]);
+      });
+
+      it('flags a form token reused for a different email, with an unchanged response', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        const first = await send({ formToken: 't' });
+        const second = await send({ formToken: 't' }, OTHER);
+        expect(storedSignals()).toEqual([[], ['signup_token_reused']]);
+        expect(second._getStatusCode()).toBe(first._getStatusCode());
+        expect(second._getJSONData()).toEqual(first._getJSONData());
+      });
+
+      it('adds the reuse signal next to the other signals', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+        await send({ formToken: 't' });
+        await send({ formToken: 't' }, OTHER);
+        expect(storedSignals()).toEqual([['signup_honeypot'], ['signup_honeypot', 'signup_token_reused']]);
+      });
+
+      it('does not flag the same token resent for the same email, however it is cased', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        await send({ formToken: 't' });
+        await send({ formToken: 't' });
+        await send({ formToken: 't' }, ' SomeOne@Example.com ');
+        expect(storedSignals()).toEqual([[], [], []]);
+      });
+
+      it('does not flag two tokens used for two emails', async () => {
+        mockVerifiedTokenId.mockReturnValueOnce(tokenId('j1')).mockReturnValueOnce(tokenId('j2'));
+        await send({ formToken: 't1' });
+        await send({ formToken: 't2' }, OTHER);
+        expect(storedSignals()).toEqual([[], []]);
+      });
+
+      it('claims by token id with the email key and the remaining lifetime as ttl', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        await send({ formToken: 't' });
+        expect(mockClaimDedup).toHaveBeenCalledWith(
+          'signup-form-token:j1',
+          { email: otcEmailKey(EMAIL) },
+          expect.any(Number)
+        );
+        const ttl = mockClaimDedup.mock.calls[0][2];
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(3_600_000);
+      });
+
+      it('does not claim when the token does not verify', async () => {
+        mockEvaluateSignals.mockReturnValue(['signup_token_invalid']);
+        await send({ formToken: 't' });
+        expect(mockClaimDedup).not.toHaveBeenCalled();
+        expect(storedSignals()).toEqual([['signup_token_invalid']]);
+      });
+
+      it('keeps other signals and the uniform response when the claim fails', async () => {
+        mockVerifiedTokenId.mockReturnValue(tokenId('j1'));
+        mockEvaluateSignals.mockReturnValue(['signup_too_fast']);
+        mockClaimDedup.mockRejectedValueOnce(new Error('db down'));
+        mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt: new Date('2026-01-01T00:00:00.000Z') });
+        mockConfirmReservation.mockResolvedValue(true);
+        const { req, res } = makeReqRes();
+        req.body = { email: EMAIL, formToken: 't' };
+        await handler(req, res);
+        expect(res._getStatusCode()).toBe(200);
+        expect(res._getJSONData()).toEqual({ pendingToken: 'pending-token' });
+        expect(storedSignals()).toEqual([['signup_too_fast']]);
+        expect(req.logger.warn).toHaveBeenCalled();
+      });
+    });
+
+    it('records nothing when E2E is enabled', async () => {
+      mockIsE2EEnabled.mockReturnValue(true);
+      mockEvaluateSignals.mockReturnValue(['signup_honeypot']);
+      mockVerifiedTokenId.mockReturnValue({ jti: 'j1', expMs: Date.now() + 3_600_000 });
+      await send();
+      expect(mockEvaluateSignals).not.toHaveBeenCalled();
+      expect(mockClaimDedup).not.toHaveBeenCalled();
+      expect(mockConfirmReservation.mock.calls[0][5]).toEqual([]);
+    });
+  });
+});
+
+describe('/api/otc/send recipient checks', () => {
+  const reservedAt = new Date('2026-01-01T00:00:00.000Z');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCache();
+    mockIsE2EEnabled.mockReturnValue(false);
+    mockEvaluateSignals.mockReturnValue([]);
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    mockConfirmReservation.mockResolvedValue(true);
+    mockSendOTC.mockImplementation(
+      async (
+        params: { email: string },
+        adapters: { mailer: { sendOTCEmail: (email: string, code: string) => Promise<void> } }
+      ) => {
+        await adapters.mailer.sendOTCEmail(params.email, '123456');
+        return { pendingToken: 'pending-token', nonce: 'real-nonce', otcHash: 'code-hash', code: '123456' };
+      }
+    );
+  });
+
+  async function send(email = EMAIL) {
+    const { req, res } = makeReqRes(email);
+    await handler(req, res);
+    return { req, res };
+  }
+
+  it('answers a refused address with no account exactly as a delivered one, without mailing', async () => {
+    const delivered = await send();
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(mockFindByEmail).toHaveBeenCalledWith(EMAIL);
+
+    vi.mocked(EmailEvents.Send.publish).mockClear();
+    mockRecipientRefusal.mockResolvedValue('blocked-domain');
+    const refused = await send();
+
+    expect(EmailEvents.Send.publish).not.toHaveBeenCalled();
+    expect(refused.req.logger.info).toHaveBeenCalledWith('otc-code-suppressed', {
+      reason: 'blocked-domain',
+      domain: EMAIL.split('@')[1],
+    });
+    expect(JSON.stringify(vi.mocked(refused.req.logger.info).mock.calls)).not.toContain(EMAIL);
+    expect(mockFindByEmail).toHaveBeenCalledTimes(2);
+    expect(refused.res._getStatusCode()).toBe(delivered.res._getStatusCode());
+    expect(refused.res._getJSONData()).toEqual(delivered.res._getJSONData());
+    expect(mockConfirmReservation).toHaveBeenLastCalledWith(
+      EMAIL,
+      reservedAt,
+      'real-nonce',
+      'code-hash',
+      undefined,
+      []
+    );
+  });
+
+  it('still mails an existing account on a refused domain', async () => {
+    mockRecipientRefusal.mockResolvedValue('no-mail-host');
+    mockFindByEmail.mockResolvedValue({ id: 'user-1' });
+
+    const { res } = await send();
+
+    expect(mockFindByEmail).toHaveBeenCalledWith(EMAIL);
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('mails a refused address when the account lookup fails', async () => {
+    mockRecipientRefusal.mockResolvedValue('blocked-domain');
+    mockFindByEmail.mockRejectedValueOnce(new Error('db down'));
+
+    const { req, res } = await send();
+
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(req.logger.warn).toHaveBeenCalledWith('otc-account-lookup-failed', expect.any(Error));
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('spends the per-email budgets for a refused address like any other send', async () => {
+    mockRecipientRefusal.mockResolvedValue('blocked-domain');
+    await send();
+    expect(cache.counts.get(`otc-limit:send-email:${otcEmailKey(EMAIL)}`)).toBe(1);
+  });
+});
+
+describe('/api/otc/send challenge budgets', () => {
+  const reservedAt = new Date('2026-01-01T00:00:00.000Z');
+  const dailyKey = `otc-limit:send-email-daily-challenge:${otcEmailKey(EMAIL)}`;
+  const globalKey = `otc-limit:send-global-hourly-challenge:${otcEmailKey('all')}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCache();
+    mockIsE2EEnabled.mockReturnValue(false);
+    mockTryReserveSlot.mockResolvedValue({ allowed: true, reservedAt });
+    mockConfirmReservation.mockResolvedValue(true);
+    mockSendOTC.mockResolvedValue({ pendingToken: 'pending-token', nonce: 'real-nonce', otcHash: 'code-hash' });
+  });
+
+  async function send(turnstileToken?: string) {
+    const { req, res } = makeReqRes();
+    req.body.turnstileToken = turnstileToken;
+    await handler(req, res);
+    return { req, res };
+  }
+
+  it('charges both budgets once a code is dispatched, and not on a refused send', async () => {
+    await send();
+    expect(cache.counts.get(dailyKey)).toBe(1);
+    expect(cache.counts.get(globalKey)).toBe(1);
+
+    mockTryReserveSlot.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 10 });
+    await send();
+    expect(cache.counts.get(dailyKey)).toBe(1);
+  });
+
+  it.each([
+    ['inbox daily', () => cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit)],
+    ['deployment hourly', () => cache.counts.set(globalKey, OTC_LIMITS.send.globalHourlyChallenge.limit)],
+  ])('asks for a challenge past the %s budget, naming the site key', async (_name, exhaust) => {
+    exhaust();
+    Object.assign(stepUpPolicy, { active: true, siteKey: 'site', secret: 'secret' });
+
+    const { res } = await send();
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ code: 'challenge_required', siteKey: 'site' });
+    expect(mockTryReserveSlot).not.toHaveBeenCalled();
+    expect(mockSendOTC).not.toHaveBeenCalled();
+  });
+
+  it('sends past the budget with a valid token, and refuses an invalid one', async () => {
+    cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit);
+    Object.assign(stepUpPolicy, { active: true, siteKey: 'site', secret: 'secret' });
+
+    mockCheckTurnstileToken.mockResolvedValueOnce(null);
+    expect((await send('good-token')).res._getStatusCode()).toBe(200);
+    expect(mockCheckTurnstileToken).toHaveBeenCalledWith(
+      expect.anything(),
+      'otc-send',
+      expect.objectContaining({ siteKey: 'site' }),
+      'good-token'
+    );
+
+    mockCheckTurnstileToken.mockResolvedValueOnce({
+      code: 'challenge_failed',
+      status: 403,
+      error: 'Verification failed.',
+    });
+    const refused = await send('bad-token');
+    expect(refused.res._getStatusCode()).toBe(403);
+    expect(refused.res._getJSONData()).toMatchObject({ code: 'challenge_failed' });
+  });
+
+  it('never refuses past the budget when no challenge can be offered', async () => {
+    cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit);
+    cache.counts.set(globalKey, OTC_LIMITS.send.globalHourlyChallenge.limit);
+
+    const { req, res } = await send();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockSendOTC).toHaveBeenCalledTimes(1);
+    expect(req.logger.warn).toHaveBeenCalledWith('otc-send-challenge-budget-exceeded');
+  });
+
+  it('skips the challenge budgets under E2E', async () => {
+    mockIsE2EEnabled.mockReturnValue(true);
+    cache.counts.set(dailyKey, OTC_LIMITS.send.perEmailDailyChallenge.limit);
+    Object.assign(stepUpPolicy, { active: true, siteKey: 'site', secret: 'secret' });
+
+    expect((await send()).res._getStatusCode()).toBe(200);
   });
 });

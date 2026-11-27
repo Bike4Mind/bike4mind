@@ -173,7 +173,7 @@ describe('sessionListFilterQuery', () => {
   it('builds an $in over the remaining channels, adding null when web remains', () => {
     expect(sessionListFilterQuery({ origin: 'api' })).toEqual({ 'origin.channel': { $in: ['api'] } });
     expect(sessionListFilterQuery({ excludeOrigin: 'api' })).toEqual({
-      'origin.channel': { $in: ['web', 'slack', 'cli', 'agent', null] },
+      'origin.channel': { $in: ['web', 'slack', 'cli', 'desktop', 'agent', null] },
     });
   });
 });

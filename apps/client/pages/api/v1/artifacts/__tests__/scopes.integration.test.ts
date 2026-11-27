@@ -5,31 +5,52 @@
  * writes accept notebooks:write only, and a rejected key never reaches the artifact code.
  * Same harness shape as pages/api/v1/files/__tests__/scopes.integration.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindUser, mockRateLimit, mockList, mockGet, mockCreate, mockUpdate, mockDelete } = vi.hoisted(
-  () => ({
-    mockValidate: vi.fn(),
-    mockFindUser: vi.fn(),
-    mockRateLimit: vi.fn(),
-    mockList: vi.fn(),
-    mockGet: vi.fn(),
-    mockCreate: vi.fn(),
-    mockUpdate: vi.fn(),
-    mockDelete: vi.fn(),
-  })
-);
+const {
+  mockValidate,
+  mockFindUser,
+  mockRateLimit,
+  mockList,
+  mockSearch,
+  mockGet,
+  mockCreate,
+  mockUpdate,
+  mockDelete,
+  mockPublish,
+  mockRepublish,
+  mockUnpublish,
+} = vi.hoisted(() => ({
+  mockValidate: vi.fn(),
+  mockFindUser: vi.fn(),
+  mockRateLimit: vi.fn(),
+  mockList: vi.fn(),
+  mockSearch: vi.fn(),
+  mockGet: vi.fn(),
+  mockCreate: vi.fn(),
+  mockUpdate: vi.fn(),
+  mockDelete: vi.fn(),
+  mockPublish: vi.fn(),
+  mockRepublish: vi.fn(),
+  mockUnpublish: vi.fn(),
+}));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: vi.fn().mockResolvedValue(undefined),
   logEventSafe: vi.fn().mockResolvedValue(undefined),
 }));
@@ -60,10 +81,22 @@ vi.mock('@bike4mind/database', async orig => {
     connectDB: vi.fn().mockResolvedValue(undefined),
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindUser(...a) }),
     userRepository: { findById: (...a: unknown[]) => mockFindUser(...a) },
-    artifactRepository: { listOwnedBeforeId: (...a: unknown[]) => mockList(...a), findOne: vi.fn() },
+    artifactRepository: {
+      listOwnedBeforeId: (...a: unknown[]) => mockList(...a),
+      searchOwnedBeforeId: (...a: unknown[]) => mockSearch(...a),
+      findOne: vi.fn(),
+    },
     artifactContentRepository: { findLatestContent: vi.fn().mockResolvedValue(null) },
   };
 });
+
+vi.mock('@server/services/publish/publishStoredArtifact', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  publishStoredArtifact: (...a: unknown[]) => mockPublish(...a),
+  republishStoredArtifact: (...a: unknown[]) => mockRepublish(...a),
+  unpublishStoredArtifact: (...a: unknown[]) => mockUnpublish(...a),
+}));
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({ assertOutboundActionAllowed: vi.fn() }));
 
 vi.mock('@server/auth/auth', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -74,6 +107,11 @@ vi.mock('@server/auth/auth', async orig => ({
 import { ApiKeyScope } from '@bike4mind/common';
 import listOrCreate from '../index';
 import byId from '../[id]/index';
+import versions from '../[id]/versions/index';
+import search from '../search';
+import types from '../types';
+import publishRoute from '../[id]/publish';
+import republishRoute from '../[id]/republish';
 
 const ARTIFACT_ID = 'mermaid-signup-flow-1';
 const ARTIFACT = {
@@ -121,8 +159,53 @@ const patchOne = (body: object = { title: 'Renamed' }) =>
 const deleteOne = () =>
   fire(byId, { method: 'DELETE', url: `/api/v1/artifacts/${ARTIFACT_ID}`, query: { id: ARTIFACT_ID } });
 
+const createVersion = (body: object = { content: 'graph TD; A-->B-->C' }) =>
+  fire(versions, {
+    method: 'POST',
+    url: `/api/v1/artifacts/${ARTIFACT_ID}/versions`,
+    query: { id: ARTIFACT_ID },
+    body,
+  });
+const searchFor = () => fire(search, { method: 'GET', url: '/api/v1/artifacts/search', query: { q: 'signup' } });
+const listTypes = () => fire(types, { method: 'GET', url: '/api/v1/artifacts/types' });
+
+const PUBLISHED_PAGE = {
+  publicId: 'pub1',
+  slug: 'signup-flow',
+  path: '/p/u/user-1/signup-flow',
+  visibility: 'public',
+  accessGateKind: null,
+  publishedVersion: 1,
+  publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+};
+
+const publishOne = (body: object = { visibility: 'public' }) =>
+  fire(publishRoute, {
+    method: 'POST',
+    url: `/api/v1/artifacts/${ARTIFACT_ID}/publish`,
+    query: { id: ARTIFACT_ID },
+    body,
+  });
+const republishOne = () =>
+  fire(republishRoute, {
+    method: 'POST',
+    url: `/api/v1/artifacts/${ARTIFACT_ID}/republish`,
+    query: { id: ARTIFACT_ID },
+    body: {},
+  });
+const unpublishOne = () =>
+  fire(publishRoute, {
+    method: 'DELETE',
+    url: `/api/v1/artifacts/${ARTIFACT_ID}/publish`,
+    query: { id: ARTIFACT_ID },
+  });
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPublish.mockResolvedValue(PUBLISHED_PAGE);
+  mockRepublish.mockResolvedValue(PUBLISHED_PAGE);
+  mockUnpublish.mockResolvedValue(undefined);
+  mockSearch.mockResolvedValue({ data: [], hasMore: false });
   mockFindUser.mockResolvedValue({ id: 'user-1', _id: 'user-1', groups: [], isBanned: false, disputePending: false });
   mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: {} });
   mockList.mockResolvedValue({ data: [ARTIFACT], hasMore: false });
@@ -195,5 +278,112 @@ describe('/api/v1/artifacts scope enforcement (real middleware chain)', () => {
     withScopes([ApiKeyScope.READ_NOTEBOOKS]);
     expect((await list({ cursor: 'not-a-cursor' }))._getStatusCode()).toBe(422);
     expect(mockList).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/v1/artifacts version-create, search and types scope enforcement (real middleware chain)', () => {
+  it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_NOTEBOOKS]])(
+    'a %s key can search and list types',
+    async scope => {
+      withScopes([scope]);
+      expect((await searchFor())._getStatusCode()).toBe(200);
+      expect((await listTypes())._getStatusCode()).toBe(200);
+    }
+  );
+
+  it('a key without a notebooks scope can neither search nor list types (403) and nothing is read', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    for (const res of [await searchFor(), await listTypes()]) {
+      expect(res._getStatusCode()).toBe(403);
+    }
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it('a read-only key cannot create a version (403) and nothing is written', async () => {
+    withScopes([ApiKeyScope.READ_NOTEBOOKS]);
+    const res = await createVersion();
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().required_scopes).toEqual([ApiKeyScope.WRITE_NOTEBOOKS]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a key without a notebooks scope cannot create a version (403)', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    expect((await createVersion())._getStatusCode()).toBe(403);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('a write key can create a version (201)', async () => {
+    withScopes([ApiKeyScope.WRITE_NOTEBOOKS]);
+    expect((await createVersion())._getStatusCode()).toBe(201);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('an invalid key is refused (401) on all three routes', async () => {
+    mockValidate.mockResolvedValue({ isValid: false });
+    for (const res of [await createVersion(), await searchFor(), await listTypes()]) {
+      expect(res._getStatusCode()).toBe(401);
+    }
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/v1/artifacts publish, republish and unpublish scope enforcement (real middleware chain)', () => {
+  beforeEach(() => {
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    mockGet.mockResolvedValue({ access: 'owner', artifact: ARTIFACT, content: { content: 'graph TD; A-->B' } });
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_NOTEBOOKS], [ApiKeyScope.WRITE_FILES]])(
+    'a %s key is refused (403) on all three routes and nothing is published',
+    async scope => {
+      withScopes([scope]);
+      for (const res of [await publishOne(), await republishOne(), await unpublishOne()]) {
+        expect(res._getStatusCode()).toBe(403);
+        expect(res._getJSONData().required_scopes).toEqual([ApiKeyScope.ARTIFACTS_PUBLISH]);
+      }
+      expect(mockGet).not.toHaveBeenCalled();
+      expect(mockPublish).not.toHaveBeenCalled();
+      expect(mockRepublish).not.toHaveBeenCalled();
+      expect(mockUnpublish).not.toHaveBeenCalled();
+    }
+  );
+
+  it('an artifacts:publish key can publish (201), republish (200) and unpublish (204)', async () => {
+    withScopes([ApiKeyScope.ARTIFACTS_PUBLISH]);
+    const published = await publishOne();
+    expect(published._getStatusCode()).toBe(201);
+    expect(published._getJSONData()).toMatchObject({
+      artifact_id: ARTIFACT_ID,
+      public_id: 'pub1',
+      url: 'https://app.example.com/p/u/user-1/signup-flow',
+    });
+    expect((await republishOne())._getStatusCode()).toBe(200);
+    expect((await unpublishOne())._getStatusCode()).toBe(204);
+    expect(mockPublish).toHaveBeenCalledTimes(1);
+    expect(mockRepublish).toHaveBeenCalledTimes(1);
+    expect(mockUnpublish).toHaveBeenCalledTimes(1);
+  });
+
+  it('an artifacts:publish key cannot read or write artifacts (403)', async () => {
+    withScopes([ApiKeyScope.ARTIFACTS_PUBLISH]);
+    for (const res of [await list(), await getOne(), await create(), await patchOne(), await deleteOne()]) {
+      expect(res._getStatusCode()).toBe(403);
+    }
+    expect(mockList).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('an invalid key is refused (401) on all three routes', async () => {
+    mockValidate.mockResolvedValue({ isValid: false });
+    for (const res of [await publishOne(), await republishOne(), await unpublishOne()]) {
+      expect(res._getStatusCode()).toBe(401);
+    }
+    expect(mockPublish).not.toHaveBeenCalled();
   });
 });

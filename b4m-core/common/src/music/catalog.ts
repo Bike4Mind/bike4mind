@@ -25,6 +25,9 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
   'test-music': {
     provider: 'test',
     displayName: 'Test music (non-production)',
+    // Ranks after every GA model; a preview still ranks after it.
+    tier: 'fast',
+    releasedAt: '1970-01-01',
     vocals: 'optional',
     lyrics: { maxChars: 2000 },
     duration: { control: 'exact', min: 1, max: 30, default: 5 },
@@ -39,6 +42,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
   'lyria-3.5': {
     provider: 'gemini-lyria',
     displayName: 'Lyria 3.5',
+    tier: 'flagship',
+    releasedAt: '2026-09-03',
     vocals: 'optional',
     lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
     duration: { control: 'approximate', min: 30, max: 180, default: 120 },
@@ -52,6 +57,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
   'lyria-3-clip-preview': {
     provider: 'gemini-lyria',
     displayName: 'Lyria 3 Clip',
+    tier: 'fast',
+    releasedAt: '2026-02-18',
     vocals: 'optional',
     lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS },
     duration: { control: 'fixed', seconds: 30 },
@@ -66,6 +73,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
   music_v2_5: {
     provider: 'elevenlabs',
     displayName: 'ElevenLabs Music v2.5',
+    tier: 'flagship',
+    releasedAt: '2026-09-11',
     vocals: 'optional',
     lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS, maxLineChars: ELEVENLABS_MAX_LINE_CHARS },
     duration: ELEVENLABS_MUSIC_DURATION,
@@ -78,6 +87,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
   music_v2: {
     provider: 'elevenlabs',
     displayName: 'ElevenLabs Music v2',
+    tier: 'flagship',
+    releasedAt: '2026-06-15',
     vocals: 'optional',
     lyrics: { maxChars: MAX_MUSIC_LYRICS_CHARS, maxLineChars: ELEVENLABS_MAX_LINE_CHARS },
     duration: ELEVENLABS_MUSIC_DURATION,
@@ -91,6 +102,8 @@ export const MUSIC_MODEL_CATALOG: Record<MusicModelId, MusicModelCapabilities> =
   music_v1: {
     provider: 'elevenlabs',
     displayName: 'ElevenLabs Music v1',
+    tier: 'standard',
+    releasedAt: '2025-08-05',
     vocals: 'optional',
     lyrics: { maxChars: 4000, maxLineChars: ELEVENLABS_MAX_LINE_CHARS },
     duration: ELEVENLABS_MUSIC_DURATION,

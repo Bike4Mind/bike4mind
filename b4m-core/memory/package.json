@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/memory",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -28,13 +28,14 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit --types node",
+    "typecheck:tsc": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

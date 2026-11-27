@@ -98,12 +98,12 @@ describe('premium contracts codegen', () => {
     mkdirSync(join(root, 'apps/client/server/premium-generated'), { recursive: true });
     writeFileSync(
       join(root, 'apps/client/server/premium-generated/deploymentOpenApi.generated.ts'),
-      'export const deploymentOpenApiSpec = { stale: true };\n'
+      'export const deploymentOpenApiPatch = { stale: true };\n'
     );
     runCodegen();
     const content = read('deploymentOpenApi.generated.ts');
-    expect(content).toContain("import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';");
-    expect(content).toContain('export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;');
+    expect(content).toContain("import type { OpenApiPatchNode } from '@bike4mind/common';");
+    expect(content).toContain('export const deploymentOpenApiPatch: OpenApiPatchNode | null = null;');
   });
 
   it('rejects a relative contractsExport before resolving it', () => {

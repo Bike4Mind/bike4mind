@@ -1,0 +1,200 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { inheritancePolicy, type RootPolicy } from '@shared/orchestration';
+import { OrchestratePill } from './OrchestratePill';
+import { createThemedMount, el, query } from './testUtils';
+
+const onChange = vi.fn();
+const themed = createThemedMount();
+
+afterEach(() => {
+  themed.unmount();
+  onChange.mockReset();
+});
+
+const models = [
+  { id: 'planner', name: 'Available Opus', supportsTools: true },
+  { id: 'current-sonnet', name: 'Current Sonnet', supportsTools: true },
+];
+const policyWith = (roles: RootPolicy['policy']['roles']): RootPolicy => ({
+  rootSessionId: 'root',
+  rootRunId: 'run',
+  policy: { ...inheritancePolicy(), roles },
+});
+
+async function hoverTooltip(): Promise<HTMLElement | null> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    await act(async () => {
+      el('composer-orchestrate-toggle').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      // Joy's Tooltip opens after its enter delay (100ms).
+      await vi.advanceTimersByTimeAsync(150);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+  return document.body.querySelector<HTMLElement>('[role="tooltip"]');
+}
+
+describe('OrchestratePill', () => {
+  it('reflects the behaviour and flips it', async () => {
+    await themed.render(<OrchestratePill on={false} onChange={onChange} />);
+    const pill = el('composer-orchestrate-toggle');
+    expect(pill.getAttribute('aria-label')).toBe('Orchestrate');
+    expect(pill.getAttribute('aria-pressed')).toBe('false');
+    act(() => pill.click());
+    // Turning on asks for the run's budget first; Start with the field blank means none.
+    expect(onChange).not.toHaveBeenCalled();
+    await act(async () => el('orchestrate-budget-start-btn').click());
+    expect(onChange).toHaveBeenCalledWith(true, undefined);
+
+    await themed.render(<OrchestratePill on onChange={onChange} />);
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
+    act(() => el('composer-orchestrate-toggle').click());
+    expect(onChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('shows the run policy in its tooltip while on', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith({ implementation: 'current-sonnet', exploration: 'inherit', review: 'inherit' })}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    expect(query('orchestration-policy-summary')).toBeNull();
+    const tooltip = await hoverTooltip();
+    expect(tooltip?.textContent).toContain('Orchestrate on: new work is split across agents');
+    const summary = el('orchestration-policy-summary').textContent;
+    expect(summary).toContain('Planner: Available Opus');
+    expect(summary).toContain('implementation: Current Sonnet');
+    expect(summary).toContain('review: inherit parent');
+    expect(summary).toContain('Worker defaults are in Settings.');
+    expect(summary).toContain('Active tasks retain this run policy.');
+    expect(query('composer-orchestrate-unavailable')).toBeNull();
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-label')).toBe('Orchestrate');
+  });
+
+  it('keeps the button name and describes it with the open tooltip', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith({ implementation: 'inherit', exploration: 'inherit', review: 'inherit' })}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    const tooltip = await hoverTooltip();
+    const toggle = el('composer-orchestrate-toggle');
+    expect(toggle.getAttribute('aria-labelledby')).toBeNull();
+    expect(toggle.getAttribute('aria-describedby')).toBe(tooltip?.id);
+  });
+
+  it('marks the icon and flags the role when a policy model is unavailable', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith({ implementation: 'inherit', exploration: 'missing', review: 'inherit' })}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    expect(query('composer-orchestrate-unavailable')).not.toBeNull();
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-label')).toMatch(/unavailable/);
+    await hoverTooltip();
+    expect(el('orchestration-policy-summary').textContent).toContain(
+      'exploration: missing (unavailable; choose a replacement)'
+    );
+  });
+
+  it.each([
+    ['an unavailable planner', 'missing', { implementation: 'inherit', exploration: 'inherit', review: 'inherit' }],
+    ['a disabled model', 'planner', { implementation: 'off', exploration: 'inherit', review: 'inherit' }],
+    ['a model without tool support', 'planner', { implementation: 'inherit', exploration: 'plain', review: 'inherit' }],
+  ])('marks the icon for %s', async (_name, planner, roles) => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith(roles)}
+        planner={planner}
+        models={[
+          ...models,
+          { id: 'off', name: 'Off Model', supportsTools: true, disabled: true },
+          { id: 'plain', name: 'Plain Model', supportsTools: false },
+        ]}
+        onChange={onChange}
+      />
+    );
+    expect(query('composer-orchestrate-unavailable')).not.toBeNull();
+  });
+
+  it('leaves the icon unmarked before the model catalog has loaded', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={policyWith({ implementation: 'current-sonnet', exploration: 'inherit', review: 'inherit' })}
+        planner="planner"
+        models={[]}
+        onChange={onChange}
+      />
+    );
+    expect(query('composer-orchestrate-unavailable')).toBeNull();
+  });
+
+  it('keeps the plain label and no policy while off', async () => {
+    await themed.render(
+      <OrchestratePill
+        on={false}
+        policy={policyWith({ implementation: 'missing', exploration: 'inherit', review: 'inherit' })}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    const tooltip = await hoverTooltip();
+    expect(tooltip?.textContent).toBe('Orchestrate: split work across agents');
+    expect(query('orchestration-policy-summary')).toBeNull();
+    expect(query('composer-orchestrate-unavailable')).toBeNull();
+  });
+
+  it('starts with the budget typed into the dialog, and refuses one that is not whole credits', async () => {
+    await themed.render(<OrchestratePill on={false} onChange={onChange} />);
+    act(() => el('composer-orchestrate-toggle').click());
+    const input = el('orchestrate-budget-input') as HTMLInputElement;
+    const type = (value: string) =>
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+    type('12.5');
+    expect((el('orchestrate-budget-start-btn') as HTMLButtonElement).disabled).toBe(true);
+    type('2,500');
+    await act(async () => el('orchestrate-budget-start-btn').click());
+
+    expect(onChange).toHaveBeenCalledWith(true, 2500);
+  });
+
+  it('shows the budget in the tooltip while on', async () => {
+    await themed.render(
+      <OrchestratePill
+        on
+        policy={{
+          ...policyWith({ implementation: 'inherit', exploration: 'inherit', review: 'inherit' }),
+          budgetCredits: 5000,
+          budgetPaused: true,
+        }}
+        planner="planner"
+        models={models}
+        onChange={onChange}
+      />
+    );
+    const tooltip = await hoverTooltip();
+    expect(tooltip?.textContent).toContain('Budget: 5,000 credits (paused)');
+  });
+});

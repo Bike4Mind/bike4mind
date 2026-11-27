@@ -1,8 +1,10 @@
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { Quest } from '@bike4mind/database';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { resolveQuestModelType } from '@server/utils/questModelType';
 import { ApiKeyScope, IChatHistoryItemDocument } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'adminAnalytics' } });
 
 interface AnalyticsMetricResponse {
   id: string;
@@ -124,7 +126,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
           }
           return undefined;
         } catch (e) {
-          console.warn('Failed to convert featureExecutionTimes:', e);
+          logger.warn('Failed to convert featureExecutionTimes', { error: e });
           return undefined;
         }
       })(),
@@ -151,7 +153,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
           }
           return undefined;
         } catch (e) {
-          console.warn('Failed to convert databaseOperationTimes:', e);
+          logger.warn('Failed to convert databaseOperationTimes', { error: e });
           return undefined;
         }
       })(),
@@ -165,72 +167,63 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
   };
 }
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
+const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+  async (req, res) => {
+    try {
+      // Extract query parameters (same as model-metrics for consistency)
+      const { dateFrom, dateTo, userFilter, modelFilter, statusFilter } = req.query;
 
-  console.log('📊 Analytics API called');
+      // Build query with filters (same as model-metrics)
+      const query: any = {
+        promptMeta: { $exists: true },
+        'promptMeta.model.name': { $exists: true },
+      };
 
-  try {
-    // Extract query parameters (same as model-metrics for consistency)
-    const { dateFrom, dateTo, userFilter, modelFilter, statusFilter } = req.query;
-
-    // Build query with filters (same as model-metrics)
-    const query: any = {
-      promptMeta: { $exists: true },
-      'promptMeta.model.name': { $exists: true },
-    };
-
-    // Add date range filter
-    if (dateFrom || dateTo) {
-      query.timestamp = {};
-      if (dateFrom) {
-        query.timestamp.$gte = new Date(dateFrom as string);
+      // Add date range filter
+      if (dateFrom || dateTo) {
+        query.timestamp = {};
+        if (dateFrom) {
+          query.timestamp.$gte = new Date(dateFrom as string);
+        }
+        if (dateTo) {
+          query.timestamp.$lte = new Date(dateTo as string);
+        }
       }
-      if (dateTo) {
-        query.timestamp.$lte = new Date(dateTo as string);
+
+      // Add user filter
+      if (userFilter && userFilter !== '') {
+        query['promptMeta.session.userId'] = userFilter;
       }
+
+      // Add model filter
+      if (modelFilter && modelFilter !== '') {
+        query['promptMeta.model.name'] = modelFilter;
+      }
+
+      // Add status filter
+      if (statusFilter && statusFilter !== '') {
+        query.status = statusFilter;
+      }
+
+      // Query quests with filters, sorted by most recent first
+      const quests = await Quest.find(query)
+        .sort({ timestamp: -1 })
+        .limit(1500) // Same limit as model-metrics
+        .lean();
+
+      // Transform the data into the format expected by the frontend (same as model-metrics)
+      const metrics: AnalyticsMetricResponse[] = quests.map(mapQuestToAnalyticsMetric);
+
+      return res.json(metrics);
+    } catch (error) {
+      req.logger.error('Error fetching analytics data', { error });
+      return res.status(500).json({
+        error: 'Failed to fetch analytics data',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
-
-    // Add user filter
-    if (userFilter && userFilter !== '') {
-      query['promptMeta.session.userId'] = userFilter;
-    }
-
-    // Add model filter
-    if (modelFilter && modelFilter !== '') {
-      query['promptMeta.model.name'] = modelFilter;
-    }
-
-    // Add status filter
-    if (statusFilter && statusFilter !== '') {
-      query.status = statusFilter;
-    }
-
-    console.log('📊 Analytics query filters:', { dateFrom, dateTo, userFilter, modelFilter, statusFilter });
-
-    // Query quests with filters, sorted by most recent first
-    const quests = await Quest.find(query)
-      .sort({ timestamp: -1 })
-      .limit(1500) // Same limit as model-metrics
-      .lean();
-
-    console.log(`Found ${quests.length} quests with analytics data`);
-
-    // Transform the data into the format expected by the frontend (same as model-metrics)
-    const metrics: AnalyticsMetricResponse[] = quests.map(mapQuestToAnalyticsMetric);
-
-    console.log(`✅ Returning ${metrics.length} analytics metrics`);
-    return res.json(metrics);
-  } catch (error) {
-    console.error('❌ Error fetching analytics data:', error);
-    return res.status(500).json({
-      error: 'Failed to fetch analytics data',
-      message: error instanceof Error ? error.message : 'Unknown error',
-    });
   }
-});
+);
 
 export const config = {
   api: {

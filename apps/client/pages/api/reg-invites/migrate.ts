@@ -1,12 +1,13 @@
-import { RegInviteEvents, requireEnv, sanitizeUsername } from '@bike4mind/common';
+import { RegInviteEvents, isFullAdmin, requireEnv, sanitizeUsername } from '@bike4mind/common';
 import { organizationService, userService } from '@bike4mind/services';
 import { withTransaction } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
-import { logEvent } from '@server/utils/analyticsLog';
-import { baseApi } from '@server/middlewares/baseApi';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { EmailEvents } from '@server/utils/eventBus';
+import { EmailEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
@@ -53,12 +54,12 @@ function buildMigrationEmailBody(userName: string, loginLink: string): string {
   `;
 }
 
-const handler = baseApi().post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Only admins can perform user migration');
-  }
-
+const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post(async (req, res) => {
   const { usersData, sendEmail, orgId } = migrateRequestSchema.parse(req.body);
+  // addMember only admits a platform admin to an org it does not manage, so a delegate would fail every user.
+  if (orgId && !isFullAdmin(req.user)) {
+    throw new ForbiddenError('Only full administrators can migrate users into an organization');
+  }
 
   const createdUsers: Array<{
     name: string;
@@ -97,7 +98,7 @@ const handler = baseApi().post(async (req, res) => {
       }
 
       if (orgId) {
-        // Admin-only migration path (gated above). addMember fills the user's organizationId
+        // Full-admin-only path (gated above). addMember fills the user's organizationId
         // itself when it is vacant - which is the case for the accounts this path creates - so no
         // separate user write is needed. An account that already belongs to another org keeps
         // pointing there: the migration adds the roster row, it does not move someone's active org.
@@ -137,13 +138,31 @@ const handler = baseApi().post(async (req, res) => {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      console.error(`Failed to migrate user ${email}:`, message);
+      req.logger.error('Failed to migrate user', { email, error: message });
     }
   }
 
   if (createdUsers.length === 0) {
     throw new BadRequestError('No users were migrated. Check server logs for details.');
   }
+
+  // Best effort: each user is created and added on its own, so a partial run is normal and there
+  // is no single transaction to tie a strict entry to; record the outcome once the loop finishes.
+  const organization = orgId ? await organizationRepository.findById(orgId).catch(() => null) : null;
+  await recordAdminActionFromRequest(req, {
+    action: 'user.accounts.migrated',
+    target: orgId
+      ? { kind: 'organization', id: orgId, displayName: organization?.name ?? orgId }
+      : { kind: 'system', id: 'reg_invite_migration', displayName: 'user migration' },
+    summary: `migrated ${createdUsers.length} of ${usersData.length} users`,
+    details: {
+      requested: usersData.length,
+      migrated: createdUsers.length,
+      failed: usersData.length - createdUsers.length,
+      organizationId: orgId ?? null,
+      sendEmail,
+    },
+  });
 
   return res.json({ message: 'User migration initiated successfully', createdUsers });
 });

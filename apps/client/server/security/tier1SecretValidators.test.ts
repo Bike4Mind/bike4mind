@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NOT_CONFIGURED_PLACEHOLDER, SST_PLACEHOLDER_VALUE } from '@bike4mind/common';
+import { NOT_CONFIGURED_PLACEHOLDER, SST_PLACEHOLDER_VALUE, isUnconfiguredSecret } from '@bike4mind/common';
 import {
+  COMMON_PLACEHOLDERS,
   SST_PLACEHOLDER_VALUE as INFRA_SST_PLACEHOLDER_VALUE,
   NOT_CONFIGURED_PLACEHOLDER as INFRA_NOT_CONFIGURED_PLACEHOLDER,
 } from '@bike4mind/infra';
@@ -27,6 +28,11 @@ describe('tier1SecretValidators', () => {
     it('match the @bike4mind/common declarations', () => {
       expect(INFRA_SST_PLACEHOLDER_VALUE).toBe(SST_PLACEHOLDER_VALUE);
       expect(INFRA_NOT_CONFIGURED_PLACEHOLDER).toBe(NOT_CONFIGURED_PLACEHOLDER);
+    });
+
+    // A value the deploy gate refuses must also be refused at runtime (self-host has no deploy gate).
+    it.each(COMMON_PLACEHOLDERS)('the runtime guard refuses deploy-gate placeholder %j', placeholder => {
+      expect(isUnconfiguredSecret(placeholder)).toBe(true);
     });
   });
 

@@ -11,7 +11,10 @@ const mockRefs = vi.hoisted(() => ({
   rateLimitOptions: undefined as unknown,
   orgFindById: vi.fn(),
   getOrganizationStorageUsage: vi.fn(),
+  recordOrganizationRead: vi.fn(async () => undefined),
 }));
+
+vi.mock('@server/utils/orgReadAudit', () => ({ recordOrganizationRead: mockRefs.recordOrganizationRead }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: { use: () => unknown; get: (fn: Handler) => unknown } = {
@@ -28,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
   };
 });
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     mockRefs.rateLimitOptions = options;
     return vi.fn();
@@ -61,7 +64,7 @@ const org = {
   id: ORG,
   userId: OWNER,
   adminUserIds: [APPOINTED_ADMIN],
-  users: [{ userId: MEMBER }],
+  users: [{ userId: MEMBER }, { userId: APPOINTED_ADMIN }],
   storageLimit: 5,
   currentStorageSize: 400,
 };
@@ -113,6 +116,16 @@ describe('GET /api/organizations/[id]/storage-usage', () => {
     );
   });
 
+  it('404s an appointed admin with no users[] row without reading usage', async () => {
+    mockRefs.orgFindById.mockResolvedValue({ ...org, users: [{ userId: MEMBER }] });
+
+    await expect(call({ id: APPOINTED_ADMIN, isAdmin: false })).rejects.toMatchObject({
+      constructor: NotFoundError,
+      message: 'Organization not found',
+    });
+    expect(mockRefs.getOrganizationStorageUsage).not.toHaveBeenCalled();
+  });
+
   it('404s an ordinary member without reading usage', async () => {
     await expect(call({ id: MEMBER, isAdmin: false })).rejects.toMatchObject({
       constructor: NotFoundError,
@@ -146,5 +159,22 @@ describe('GET /api/organizations/[id]/storage-usage', () => {
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('operation exceeded time limit');
     expect(res._isEndCalled()).toBe(false);
     expect(res.getHeader('Cache-Control')).toBeUndefined();
+  });
+
+  it('records the read against the organization before serving it', async () => {
+    const res = await call({ id: MEMBER, isAdmin: true });
+    expect(mockRefs.recordOrganizationRead).toHaveBeenCalledWith(expect.anything(), [org], { view: 'storage_usage' });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('serves nothing when the read cannot be recorded', async () => {
+    mockRefs.recordOrganizationRead.mockRejectedValueOnce(new Error('audit down'));
+    await expect(call({ id: MEMBER, isAdmin: true })).rejects.toThrow('audit down');
+    expect(mockRefs.getOrganizationStorageUsage).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for a caller outside the organization', async () => {
+    await expect(call({ id: '650000000000000000000999', isAdmin: false })).rejects.toBeInstanceOf(NotFoundError);
+    expect(mockRefs.recordOrganizationRead).not.toHaveBeenCalled();
   });
 });

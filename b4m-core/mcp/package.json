@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/mcp",
-  "version": "2.1.9",
+  "version": "2.2.15",
   "publishConfig": {
     "access": "restricted"
   },
@@ -68,24 +68,23 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run"
   },
   "devDependencies": {
-    "@types/unzipper": "^0.10.11",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
-    "unzipper": "^0.12.5",
+    "jszip": "^3.10.2",
     "zod": "^4.6.6"
   }
 }

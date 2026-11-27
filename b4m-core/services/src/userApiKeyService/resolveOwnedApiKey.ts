@@ -5,6 +5,12 @@ interface ResolveOwnedApiKeyAdapters {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
+  /**
+   * Resolve an org-owned key (`orgOwned`) too. Only the org key routes
+   * (pages/api/organizations/[id]/api-keys/*) pass it, after authorizing the caller and recording an
+   * `org.api_key.*` audit row; every other caller treats an org-owned key as not found.
+   */
+  includeOrgOwned?: boolean;
 }
 
 /**
@@ -28,9 +34,11 @@ export const resolveOwnedApiKey = async (
   if (!userId) return null;
 
   const { db } = adapters;
+  const visible = (key: IUserApiKeyDocument | null) => (key?.orgOwned && !adapters.includeOrgOwned ? null : key);
+
   const minted = await db.userApiKeys.findByUserIdAndId(userId, keyId);
-  if (minted) return minted;
+  if (minted) return visible(minted);
 
   const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-  return db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, keyId);
+  return visible(await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, keyId));
 };

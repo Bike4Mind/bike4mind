@@ -15,14 +15,14 @@
  *
  * Lives in server-utils rather than next to the executor because both the prompt-side gate
  * (`apps/workers/src/queueHandlers/agentExecutor.ts`) and the persistence-side gate
- * (`apps/client/server/utils/persistAgentArtifacts.ts`) must answer this question identically - two
+ * (`packages/server-utils/src/utils/persistAgentArtifacts.ts`) must answer this question identically - two
  * gates that can disagree is the defect this replaced - and a shared package is the one place both
  * apps may depend on. `resolveUserArtifactGate` at the bottom joins it for
  * the same reason: the browser-initiated `POST /api/artifacts` write is a third surface that must
  * not answer differently.
  */
-import { ARTIFACT_EMISSION_PROMPT } from '@bike4mind/common';
-import { resolveArtifactsEnabled } from '@bike4mind/services/llm/artifactGating';
+import { ARTIFACT_EMISSION_PROMPT, withCallableFunctions } from '@bike4mind/common';
+import { resolveArtifactsEnabled, withArtifactDataOrigins } from '@bike4mind/services/llm/artifactGating';
 
 export interface ResolveAgentArtifactGateInput {
   /**
@@ -66,10 +66,16 @@ export async function resolveAgentArtifactEmissionPrompt(args: {
   artifactsEnabled: boolean;
   isNewExecution?: boolean;
   readPromptSetting: () => Promise<string | undefined>;
+  /** The `pythonArtifactDataOrigins` setting; when it lists origins the prompt names them, as on chat. */
+  readDataOriginsSetting?: () => Promise<unknown>;
+  /** Whether callable functions are on for the requester; when true the prompt says how to write one, as on chat. Must not throw: wrap the read in `resolveCallableFunctionsSafely`. */
+  readCallableFunctionsEnabled?: () => Promise<boolean>;
 }): Promise<string | undefined> {
-  const { artifactsEnabled, isNewExecution = true, readPromptSetting } = args;
+  const { artifactsEnabled, isNewExecution = true, readPromptSetting, readDataOriginsSetting } = args;
   if (!isNewExecution || !artifactsEnabled) return undefined;
-  return (await readPromptSetting()) || ARTIFACT_EMISSION_PROMPT;
+  const prompt = (await readPromptSetting()) || ARTIFACT_EMISSION_PROMPT;
+  const withOrigins = readDataOriginsSetting ? withArtifactDataOrigins(prompt, await readDataOriginsSetting()) : prompt;
+  return withCallableFunctions(withOrigins, (await args.readCallableFunctionsEnabled?.()) === true);
 }
 
 /**

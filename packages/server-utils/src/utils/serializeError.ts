@@ -1,8 +1,11 @@
+import { describeErrorCause } from '@bike4mind/observability';
+
 type SerializedError = {
   message: string;
   name: string;
   stack?: string;
   code?: string;
+  cause?: string;
 };
 
 /**
@@ -16,11 +19,13 @@ type SerializedError = {
 export function serializeError(err: unknown): SerializedError | string {
   if (err instanceof Error) {
     const code = (err as { code?: unknown }).code;
+    const cause = describeErrorCause(err);
     return {
       message: err.message,
       name: err.name,
       ...(err.stack ? { stack: err.stack } : {}),
       ...(typeof code === 'string' ? { code } : {}),
+      ...(cause ? { cause } : {}),
     };
   }
   // Non-Error objects (e.g. a thrown plain object or rejected non-Error

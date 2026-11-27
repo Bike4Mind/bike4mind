@@ -1,0 +1,625 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMocks } from 'node-mocks-http';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  MODERATION_PAGE_READ,
+  SIGNUP_RISK_REVIEW_LIST_LIMIT,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
+
+const h = vi.hoisted(() => ({
+  handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
+  baseOptions: vi.fn(),
+  find: vi.fn(),
+  findPending: vi.fn(),
+  findAutoApprovals: vi.fn(),
+  setState: vi.fn(),
+  creditsSpent: vi.fn(),
+  keysCreated: vi.fn(),
+  record: vi.fn(),
+  denySelf: vi.fn(),
+  inTransaction: false,
+  settings: vi.fn(),
+  release: vi.fn(),
+  advisories: vi.fn(),
+  decisions: vi.fn(),
+  warn: vi.fn(),
+  aiSuggestion: vi.fn(),
+  aiOverride: vi.fn(),
+}));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  getSettingsMap: h.settings,
+}));
+vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
+vi.mock('@server/middlewares/adminApi', () => ({
+  requireAdminPermission: (
+    req: { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] },
+    requirement: AdminPermissionRequirement
+  ) => {
+    if (!meetsAdminPermissionRequirement(req.user, requirement)) {
+      throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+    }
+  },
+  adminApi: (options: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
+    h.baseOptions(options);
+    const gated =
+      (method: string, fn: (req: unknown, res: unknown) => Promise<void>) => async (req: unknown, res: unknown) => {
+        const requirement = options.adminPermissions[method];
+        const { user } = req as { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+        if (requirement && !meetsAdminPermissionRequirement(user, requirement)) {
+          throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+        }
+        return fn(req, res);
+      };
+    const chain = {
+      use: () => chain,
+      get: (fn: (req: unknown, res: unknown) => Promise<void>) => {
+        h.handlers.get = gated('GET', fn);
+        return chain;
+      },
+      post: (fn: (req: unknown, res: unknown) => Promise<void>) => {
+        h.handlers.post = gated('POST', fn);
+        return chain;
+      },
+    };
+    return chain;
+  },
+}));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: {
+    findPendingRiskReviews: h.findPending,
+    findRiskAutoApprovals: h.findAutoApprovals,
+    setRiskReviewState: h.setState,
+    find: h.find,
+  },
+  usageEventRepository: { creditsSpentByUsers: h.creditsSpent },
+  userApiKeyRepository: { countCreatedByUserIds: h.keysCreated },
+  adminSettingsRepository: {},
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    h.inTransaction = true;
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction = false;
+    }
+  },
+}));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
+  recordAdminActionFromRequest: h.record,
+  denySelfAdminAction: h.denySelf,
+  userAuditTarget: async (id: string) => ({ kind: 'user', id, displayName: `${id}@example.com` }),
+}));
+vi.mock('@server/credits/riskReviewGrantRelease', () => ({ releaseRiskReviewedSignupGrant: h.release }));
+vi.mock('@server/security/abuseAssessment/riskReviewAdvisory', () => ({ findRiskReviewAdvisories: h.advisories }));
+vi.mock('@server/admin/ai/assessmentSuggestion', () => ({
+  userAssessmentSuggestion: h.aiSuggestion,
+  recordUserAssessmentOverride: h.aiOverride,
+  withSuggestionDecisions: h.decisions,
+}));
+import '@pages/api/admin/signup-risk-reviews';
+
+const ADMIN_ID = 'a'.repeat(24);
+const USER_A = '1'.repeat(24);
+const USER_B = '2'.repeat(24);
+const REASON = 'Spam or bot cohort';
+const ASSESSMENT_ID = 'b'.repeat(24);
+const SUGGESTION_ID = 'c'.repeat(24);
+
+const DELEGATE = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['users:moderate', 'credits:adjust'] };
+const MODERATOR = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['users:moderate'] };
+
+const request = (
+  method: 'GET' | 'POST',
+  body?: unknown,
+  user: Record<string, unknown> = { id: ADMIN_ID, isAdmin: true }
+) => {
+  const { req, res } = createMocks({ method, body });
+  Object.assign(req, { user, logger: { warn: h.warn } });
+  return { req, res };
+};
+
+const pendingUser = (id: string, email: string, score: number) => ({
+  id,
+  email,
+  username: `user-${id.slice(0, 4)}`,
+  createdAt: new Date('2026-10-20T10:00:00Z'),
+  riskScore: {
+    score,
+    signals: [{ signal: 'quickApiKey', points: 15, reason: 'First API key created 3 minutes after signup' }],
+    computedAt: new Date('2026-10-20T11:00:00Z'),
+    reviewState: 'pending',
+  },
+});
+
+beforeEach(() => {
+  h.advisories.mockResolvedValue(new Map());
+  h.decisions.mockImplementation(async (_surface: string, found: Map<string, object>) => found);
+  h.warn.mockReset();
+  h.findPending.mockReset().mockResolvedValue([]);
+  h.findAutoApprovals.mockReset().mockResolvedValue([]);
+  h.setState.mockReset().mockResolvedValue(true);
+  h.find.mockReset().mockResolvedValue([]);
+  h.settings.mockReset().mockResolvedValue({});
+  h.creditsSpent.mockReset().mockResolvedValue({});
+  h.keysCreated.mockReset().mockResolvedValue({});
+  h.record.mockReset().mockImplementation(async () => expect(h.inTransaction).toBe(true));
+  h.denySelf.mockReset().mockRejectedValue(new Error('Admins cannot review their own account.'));
+  h.release.mockReset().mockResolvedValue(0);
+  h.aiSuggestion.mockReset().mockResolvedValue({ id: SUGGESTION_ID });
+  h.aiOverride.mockReset().mockResolvedValue({ id: SUGGESTION_ID, status: 'overridden' });
+});
+
+const NO_GRANT_RELEASES = { grantReleasedUserIds: [] };
+
+describe('signup risk review queue', () => {
+  it('is session-only and declares a moderation read for the queue and users:moderate for decisions', () => {
+    expect(h.baseOptions).toHaveBeenCalledWith({
+      auth: 'jwtOnly',
+      requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: MODERATION_PAGE_READ, POST: 'users:moderate' },
+    });
+  });
+
+  it('refuses a delegate without the needed permission for reads and decisions', async () => {
+    const outsider = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['credits:adjust'] };
+    const get = request('GET', undefined, outsider);
+    await expect(h.handlers.get(get.req, get.res)).rejects.toThrow(missingAdminPermissionMessage(MODERATION_PAGE_READ));
+    const reader = { id: ADMIN_ID, isAdmin: false, adminPermissions: ['support:read'] };
+    const post = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, reader);
+    await expect(h.handlers.post(post.req, post.res)).rejects.toThrow(missingAdminPermissionMessage('users:moderate'));
+
+    expect(h.findPending).not.toHaveBeenCalled();
+    expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('admits a support:read delegate to the queue', async () => {
+    const { req, res } = request('GET', undefined, {
+      id: ADMIN_ID,
+      isAdmin: false,
+      adminPermissions: ['support:read'],
+    });
+
+    await h.handlers.get(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it.each([
+    ['a full administrator', { isAdmin: true }],
+    ['a delegate with admin permissions', { adminPermissions: ['support:read'] }],
+  ])('refuses a users:moderate delegate deciding on %s and writes nothing', async (_label, adminFields) => {
+    h.find.mockResolvedValue([{ id: USER_B, ...adminFields }]);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A, USER_B], reason: REASON }, DELEGATE);
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow(
+      'Only full administrators can review the signup of users with admin access'
+    );
+    expect(h.find).toHaveBeenCalledWith({ _id: { $in: [USER_A, USER_B] } });
+    expect(h.setState).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('needs credits:adjust to approve, since approving pays a withheld grant', async () => {
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, MODERATOR);
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow('Missing permission: credits:adjust');
+    expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('lets a users:moderate delegate reopen without credits:adjust', async () => {
+    h.find.mockResolvedValue([{ id: USER_A }]);
+    const { req, res } = request('POST', { action: 'reopen', userIds: [USER_A], reason: REASON }, MODERATOR);
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'approved', 'pending');
+  });
+
+  it('lets a delegate decide on ordinary accounts', async () => {
+    h.find.mockResolvedValue([{ id: USER_A }]);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON }, DELEGATE);
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'pending', 'approved');
+  });
+
+  it('lets a full admin decide on an admin account without loading the targets', async () => {
+    h.find.mockResolvedValue([{ id: USER_A, isAdmin: true }]);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(h.find).not.toHaveBeenCalled();
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'pending', 'approved');
+  });
+
+  it('lists recent automatic approvals so a reviewer can reopen them', async () => {
+    const decidedAt = new Date('2026-11-01T09:00:00Z');
+    h.findAutoApprovals.mockResolvedValue([
+      {
+        id: USER_A,
+        email: 'payer@example.org',
+        username: 'payer',
+        riskScore: { score: 62, signals: [], computedAt: decidedAt, reviewState: 'approved' },
+        riskReviewAutoApproval: { policy: 'settled_payment', decidedAt },
+      },
+    ]);
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.findAutoApprovals).toHaveBeenCalledWith({ since: expect.any(Date), limit: 200 });
+    expect(res._getJSONData().autoApproved).toEqual([
+      {
+        userId: USER_A,
+        email: 'payer@example.org',
+        username: 'payer',
+        score: 62,
+        policy: 'settled_payment',
+        decidedAt: decidedAt.toISOString(),
+      },
+    ]);
+  });
+
+  it('lists pending accounts with their registrable domain, spend and key count', async () => {
+    h.findPending.mockResolvedValue([
+      pendingUser(USER_A, 'bot1@np.burner-example.com', 80),
+      pendingUser(USER_B, 'jane@example.org', 55),
+    ]);
+    h.creditsSpent.mockResolvedValue({ [USER_A]: 1200 });
+    h.keysCreated.mockResolvedValue({ [USER_A]: 3 });
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.findPending).toHaveBeenCalledWith(SIGNUP_RISK_REVIEW_LIST_LIMIT + 1);
+    expect(res._getHeaders()['cache-control']).toBe('private, no-store');
+    const body = res._getJSONData();
+    expect(body.truncated).toBe(false);
+    expect(body.reviewThreshold).toBe(50);
+    expect(body.data).toMatchObject([
+      { userId: USER_A, domain: 'burner-example.com', score: 80, creditsSpent: 1200, apiKeysCreated: 3 },
+      { userId: USER_B, domain: 'example.org', score: 55, creditsSpent: 0, apiKeysCreated: 0 },
+    ]);
+    expect(body.data[0].signals[0]).toEqual({
+      signal: 'quickApiKey',
+      points: 15,
+      reason: 'First API key created 3 minutes after signup',
+    });
+  });
+
+  it('attaches the advisory model verdict to the rows it names, and null elsewhere', async () => {
+    h.findPending.mockResolvedValue([
+      pendingUser(USER_A, 'bot1@np.burner-example.com', 80),
+      pendingUser(USER_B, 'jane@example.org', 55),
+    ]);
+    const assessedAt = new Date('2026-11-02T10:00:00Z');
+    h.advisories.mockResolvedValue(
+      new Map([
+        [
+          USER_A,
+          {
+            assessmentId: 'a1',
+            detectionId: 'd1',
+            detector: 'signupNetworkBurst',
+            result: 'abuse',
+            confidence: 0.8,
+            assessedAt,
+            otherVerdicts: 2,
+            newerVerdicts: 1,
+          },
+        ],
+      ])
+    );
+    h.decisions.mockImplementation(
+      async (_surface: string, found: Map<string, object>) =>
+        new Map([...found].map(([userId, advisory]) => [userId, { ...advisory, decision: 'accepted' }]))
+    );
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(h.advisories).toHaveBeenCalledWith([USER_A, USER_B], expect.objectContaining({ warn: h.warn }));
+    expect(h.decisions).toHaveBeenCalledWith('signupRiskReview', expect.any(Map));
+    const body = res._getJSONData();
+    expect(body.data[0].advisory).toEqual({
+      assessmentId: 'a1',
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst',
+      result: 'abuse',
+      confidence: 0.8,
+      assessedAt: assessedAt.toISOString(),
+      otherVerdicts: 2,
+      newerVerdicts: 1,
+      decision: 'accepted',
+    });
+    expect(body.data[1].advisory).toBeNull();
+  });
+
+  it('still lists the queue when the advisory read fails', async () => {
+    h.findPending.mockResolvedValue([pendingUser(USER_A, 'bot1@np.burner-example.com', 80)]);
+    h.advisories.mockRejectedValue(new Error('assessments down'));
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().data[0].advisory).toBeNull();
+    expect(h.warn).toHaveBeenCalledWith('Signup risk review advisories unavailable', { error: expect.any(Error) });
+  });
+
+  it('returns the configured review threshold', async () => {
+    h.settings.mockResolvedValue({ signupRiskScoring: { reviewThreshold: 30 } });
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getJSONData().reviewThreshold).toBe(30);
+  });
+
+  it('caps the list and says so', async () => {
+    h.findPending.mockResolvedValue(
+      Array.from({ length: SIGNUP_RISK_REVIEW_LIST_LIMIT + 1 }, (_, i) =>
+        pendingUser(i.toString(16).padStart(24, '0'), `u${i}@example.com`, 60)
+      )
+    );
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    const body = res._getJSONData();
+    expect(body.data).toHaveLength(SIGNUP_RISK_REVIEW_LIST_LIMIT);
+    expect(body.truncated).toBe(true);
+  });
+
+  it('refuses a decision without a reason before writing', async () => {
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A] });
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow();
+    expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('approves each pending account with a strict audit entry in its own transaction', async () => {
+    h.setState.mockImplementation(async (userId: string) => userId === USER_A);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A, USER_B, USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState.mock.calls).toEqual([
+      [USER_A, 'pending', 'approved'],
+      [USER_B, 'pending', 'approved'],
+    ]);
+    expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record).toHaveBeenCalledWith(req, {
+      action: 'user.signup_risk.approved',
+      target: { kind: 'user', id: USER_A, displayName: `${USER_A}@example.com` },
+      summary: 'approved a flagged signup',
+      reason: REASON,
+      changes: [{ field: 'riskScore.reviewState', before: 'pending', after: 'approved' }],
+    });
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [USER_A],
+      skippedUserIds: [USER_B],
+      failedUserIds: [],
+      ...NO_GRANT_RELEASES,
+    });
+    expect(h.release.mock.calls.map(([userId]) => userId)).toEqual([USER_A, USER_B]);
+  });
+
+  it('records approving over an abuse assessment as an override, linked in the audit entry', async () => {
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID, overrideReason: 'Missing context' },
+    });
+
+    await h.handlers.post(req, res);
+
+    expect(h.aiSuggestion).toHaveBeenCalledWith('signupRiskReview', USER_A, ASSESSMENT_ID);
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'user.signup_risk.approved',
+        details: { aiSuggestionId: SUGGESTION_ID },
+      })
+    );
+    expect(h.aiOverride).toHaveBeenCalledWith(
+      { id: SUGGESTION_ID },
+      {
+        overrideAction: { action: 'approve' },
+        overrideReason: 'Missing context',
+        decidedBy: { userId: ADMIN_ID, name: 'Admin' },
+      }
+    );
+    expect(res._getJSONData()).toMatchObject({ updatedUserIds: [USER_A] });
+  });
+
+  it('falls back to the approval reason when no why-wrong reason was picked', async () => {
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID },
+    });
+
+    await h.handlers.post(req, res);
+
+    expect(h.aiOverride).toHaveBeenCalledWith(
+      { id: SUGGESTION_ID },
+      expect.objectContaining({ overrideReason: REASON })
+    );
+  });
+
+  it('records no override when the approval did not land', async () => {
+    h.setState.mockResolvedValue(false);
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID },
+    });
+
+    await h.handlers.post(req, res);
+
+    expect(h.aiOverride).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a reopen', { action: 'reopen', userIds: [USER_A] }],
+    ['a batch', { action: 'approve', userIds: [USER_A, USER_B] }],
+  ])('refuses an AI decision on %s before writing', async (_label, body) => {
+    const { req, res } = request('POST', { ...body, reason: REASON, aiDecision: { assessmentId: ASSESSMENT_ID } });
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow('applies to approving one account');
+    expect(h.setState).not.toHaveBeenCalled();
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('refuses before paying when the assessment does not name the account', async () => {
+    h.aiSuggestion.mockRejectedValue(new Error('Assessment does not name this account'));
+    const { req, res } = request('POST', {
+      action: 'approve',
+      userIds: [USER_A],
+      reason: REASON,
+      aiDecision: { assessmentId: ASSESSMENT_ID },
+    });
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow('does not name');
+    expect(h.release).not.toHaveBeenCalled();
+    expect(h.setState).not.toHaveBeenCalled();
+  });
+
+  it('keeps going when one account fails and reports it', async () => {
+    const USER_C = '3'.repeat(24);
+    h.setState.mockImplementation(async (userId: string) => {
+      if (userId === USER_B) throw new Error('transaction aborted');
+      return true;
+    });
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A, USER_B, USER_C], reason: REASON });
+    const error = vi.fn();
+    Object.assign(req, { logger: { error } });
+
+    await h.handlers.post(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [USER_A, USER_C],
+      skippedUserIds: [],
+      failedUserIds: [USER_B],
+      ...NO_GRANT_RELEASES,
+    });
+    expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: USER_B }));
+  });
+
+  it('reopens an approval back into the queue', async () => {
+    const { req, res } = request('POST', { action: 'reopen', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).toHaveBeenCalledWith(USER_A, 'approved', 'pending');
+    expect(h.record).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'user.signup_risk.reopened', reason: REASON })
+    );
+    expect(h.release).not.toHaveBeenCalled();
+  });
+
+  it('flags rows whose signup tranche the grant policy holds for review', async () => {
+    const grant = { stage: 'signup', signupCredits: 500, unlockCredits: 500, creditsReleased: 0 };
+    h.findPending.mockResolvedValue([
+      {
+        ...pendingUser(USER_A, 'a@example.com', 0),
+        signupGrant: grant,
+        signupGrantAssessment: { band: 'review', status: 'evaluated' },
+      },
+      { ...pendingUser(USER_B, 'b@example.com', 60), signupGrant: grant, signupGrantAssessment: { band: 'full' } },
+    ]);
+    const { req, res } = request('GET');
+
+    await h.handlers.get(req, res);
+
+    expect(res._getJSONData().data.map((row: { grantHeld: boolean }) => row.grantHeld)).toEqual([true, false]);
+  });
+
+  it('pays a held signup tranche before approving, audited outside the review transaction', async () => {
+    const order: string[] = [];
+    h.setState.mockImplementation(async () => {
+      order.push('approve');
+      return true;
+    });
+    h.record.mockImplementation(async (_req: unknown, entry: { action: string }) =>
+      expect(h.inTransaction).toBe(entry.action.startsWith('user.signup_risk.'))
+    );
+    h.release.mockImplementation(async (_userId: string, { audit }) => {
+      order.push('release');
+      await audit({ credits: 500, creditTransactionId: 'tx1' });
+      return 500;
+    });
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(order).toEqual(['release', 'approve']);
+    expect(h.release).toHaveBeenCalledWith(USER_A, expect.objectContaining({ reason: REASON }));
+    expect(h.record).toHaveBeenCalledWith(req, {
+      action: 'user.credits.adjusted',
+      target: { kind: 'user', id: USER_A, displayName: `${USER_A}@example.com` },
+      summary: 'released a signup grant held for risk review',
+      reason: REASON,
+      details: { credits: 500, source: 'signup_unlock' },
+      related: { creditTransactionId: 'tx1' },
+    });
+    expect(res._getJSONData()).toMatchObject({ updatedUserIds: [USER_A], grantReleasedUserIds: [USER_A] });
+  });
+
+  it('does not report a payout for an account whose approval did not land', async () => {
+    h.release.mockResolvedValue(500);
+    h.setState.mockResolvedValue(false);
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+
+    await h.handlers.post(req, res);
+
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [],
+      skippedUserIds: [USER_A],
+      failedUserIds: [],
+      ...NO_GRANT_RELEASES,
+    });
+  });
+
+  it('leaves the account pending for a retry when the held tranche cannot be paid', async () => {
+    h.release.mockRejectedValue(new Error('ledger unavailable'));
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A], reason: REASON });
+    const error = vi.fn();
+    Object.assign(req, { logger: { error } });
+
+    await h.handlers.post(req, res);
+
+    expect(h.setState).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toEqual({
+      updatedUserIds: [],
+      skippedUserIds: [],
+      failedUserIds: [USER_A],
+      ...NO_GRANT_RELEASES,
+    });
+    expect(error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ userId: USER_A }));
+  });
+
+  it("refuses to review the admin's own account and changes nothing", async () => {
+    const { req, res } = request('POST', { action: 'approve', userIds: [USER_A, ADMIN_ID], reason: REASON });
+
+    await expect(h.handlers.post(req, res)).rejects.toThrow(/own account/);
+    expect(h.denySelf).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'user.signup_risk.denied', attempted: 'user.signup_risk.approved' })
+    );
+    expect(h.setState).not.toHaveBeenCalled();
+  });
+});

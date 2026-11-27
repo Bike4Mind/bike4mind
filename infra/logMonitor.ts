@@ -8,15 +8,19 @@ import {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   generationCallbackQueueSubscription,
-  liveOpsTriageQueueSubscription,
   secopsTriageQueueSubscription,
   notebookCurationQueueSubscription,
   agentProactiveMessageQueueSubscription,
   whatsNewGenerationQueueSubscription,
-  whatsNewHighlightsQueueSubscription,
   researchEngineQueueSubscription,
   slackExportQueueSubscription,
+  callableFunctionCallQueueSubscription,
   questExportQueueSubscription,
+  accountDataExportQueueSubscription,
+  accountErasureQueueSubscription,
+  publishThumbnailQueueSubscription,
+  generatedMediaPurgeQueueSubscription,
+  publishThumbnailRenderer,
   dataLakeCleanupQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
   githubLakeIngestQueueSubscription,
@@ -33,6 +37,8 @@ import { agentContinuationQueueSubscription, agentExecutor } from './agentExecut
 import { agentExecutionAbandonedSweepCron, questTimeoutSweepCron } from './cron';
 import { chatCompletion } from './chatCompletion';
 import {
+  briefComposeSubscription,
+  delegationProcessSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionTaggingSubscription,
@@ -42,6 +48,7 @@ import {
 import { allSecrets } from './secrets';
 import { web } from './web';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { imageProcessor } from './functions';
@@ -89,11 +96,14 @@ const KILLS_PATTERN = '?"Task timed out" ?"Runtime.OutOfMemory" ?"signal: killed
 // filter never matches. Match the JSON severity field directly instead.
 const FARGATE_ERROR_PATTERN = '{ $.severity = "error" }';
 
-interface LogSubscriptionSpec {
-  logGroup: string;
+interface LogFilter {
   pattern: string;
   suffix: string;
 }
+
+const ERROR_FILTER: LogFilter = { pattern: DEFAULT_ERROR_PATTERN, suffix: DEFAULT_ERROR_SUFFIX };
+const KILLS_FILTER: LogFilter = { pattern: KILLS_PATTERN, suffix: 'kills' };
+const FARGATE_ERROR_FILTER: LogFilter = { pattern: FARGATE_ERROR_PATTERN, suffix: DEFAULT_ERROR_SUFFIX };
 
 // Stable, index-independent name for a log group, used to derive the subscription
 // resource id. Strips the prefixes SST/AWS prepend so the id stays short and human
@@ -107,12 +117,19 @@ function sanitizeLogGroupName(logGroupName: string): string {
     .substring(0, 64); // Keep reasonable length
 }
 
-// Helper function to create log subscription filters with stable resource names
-function createLogSubscriptions(specs: LogSubscriptionSpec[]) {
-  const subscriptionFilters: aws.cloudwatch.LogSubscriptionFilter[] = [];
-
-  specs.forEach(({ logGroup, pattern, suffix }) => {
-    const sanitizedName = sanitizeLogGroupName(logGroup);
+/**
+ * Subscribes one log group to logHandler, ERROR lines by default. Every subscription in this file
+ * goes through here, and sst.config.ts hands it to package infra, whose functions are created after
+ * the list below is evaluated. A no-op under `sst dev`, and for an undefined log group name.
+ */
+export function forwardErrorLogs(
+  logGroup: $util.Input<string | undefined>,
+  { pattern, suffix }: LogFilter = ERROR_FILTER
+): $util.Output<aws.cloudwatch.LogSubscriptionFilter | undefined> {
+  if ($dev) return $util.output(undefined);
+  return $util.output(logGroup).apply(logGroupName => {
+    if (!logGroupName) return undefined;
+    const sanitizedName = sanitizeLogGroupName(logGroupName);
 
     // Resource name is stable per log group + filter kind (never the array index), so
     // adding or removing a log group does not recreate the others. The default ERROR
@@ -122,10 +139,10 @@ function createLogSubscriptions(specs: LogSubscriptionSpec[]) {
     const resourceName =
       suffix === DEFAULT_ERROR_SUFFIX ? `logSub-${sanitizedName}` : `logSub-${sanitizedName}-${suffix}`;
 
-    const filter = new aws.cloudwatch.LogSubscriptionFilter(
+    return new aws.cloudwatch.LogSubscriptionFilter(
       resourceName,
       {
-        logGroup,
+        logGroup: logGroupName,
         destinationArn: logHandler.arn,
         filterPattern: pattern,
         name: `${sanitizedName}-${suffix}`,
@@ -136,12 +153,7 @@ function createLogSubscriptions(specs: LogSubscriptionSpec[]) {
         retainOnDelete: false, // Ensure clean deletion when removed
       }
     );
-
-    subscriptionFilters.push(filter);
   });
-
-  console.log(`Created ${subscriptionFilters.length} log subscription filters for ${specs.length} log groups`);
-  return subscriptionFilters;
 }
 
 // First, collect bucket notification functions separately
@@ -170,36 +182,43 @@ const individualLogGroups = $util.all([
   imageEditQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   imageProcessor.nodes.logGroup.apply(lg => lg?.name),
   mcpHandler.nodes.logGroup.apply(lg => lg?.name),
+  remoteMcpHandler.nodes.logGroup.apply(lg => lg?.name),
+  briefComposeSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  delegationProcessSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionAutoNamingSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionSummarizationSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionTaggingSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   stripeInvoicePaymentSucceededSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   stripeCustomerSubscriptionUpdatedSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   // Queue handlers not previously monitored — gaps exposed by prod incident 2026-05-09
-  githubWebhookQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  githubWebhookQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   webhookDeliveryQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   generationCallbackQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  liveOpsTriageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  secopsTriageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  secopsTriageQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   notebookCurationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   agentProactiveMessageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  whatsNewGenerationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  whatsNewHighlightsQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  whatsNewGenerationQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   researchEngineQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  slackExportQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  slackExportQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  callableFunctionCallQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   questExportQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  accountDataExportQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  accountErasureQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  publishThumbnailQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  generatedMediaPurgeQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  publishThumbnailRenderer.nodes.logGroup.apply(lg => lg?.name),
   dataLakeCleanupQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   driveDisconnectPurgeQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  githubLakeIngestQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  githubLakeRevokeQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  githubLakeIngestQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  githubLakeRevokeQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   dataLakeTaxonomyQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   dataLakeResearchQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   generationJobQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  overwatchAnalyticsQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  emailParserQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  emailAnalyzerQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  emailBatchQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
-  emailJobQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  overwatchAnalyticsQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  emailParserQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  emailAnalyzerQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  emailBatchQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  emailJobQueueSubscription?.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   agentContinuationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   // Agent runs that stall/crash and the sweeps that detect them previously had no
   // subscription, so LiveOps only heard about them if a user complained (GH #3228).
@@ -239,25 +258,14 @@ if (!$dev) {
       return logGroupName;
     });
 
-  const extraLogGroups = $util
-    .all([
-      agentExecutorLogGroup,
-      agentContinuationLogGroup,
-      questTimeoutSweepLogGroup,
-      agentExecutionAbandonedSweepLogGroup,
-    ])
-    .apply(([agentExecutorGroup, continuationGroup, questSweepGroup, abandonedSweepGroup]) => {
-      const specs: LogSubscriptionSpec[] = [];
-      if (agentExecutorGroup) specs.push({ logGroup: agentExecutorGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
-      if (continuationGroup) specs.push({ logGroup: continuationGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
-      if (questSweepGroup) specs.push({ logGroup: questSweepGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
-      if (abandonedSweepGroup) specs.push({ logGroup: abandonedSweepGroup, pattern: KILLS_PATTERN, suffix: 'kills' });
-      return specs;
-    });
+  const killsLogGroups = $util.all([
+    agentExecutorLogGroup,
+    agentContinuationLogGroup,
+    questTimeoutSweepLogGroup,
+    agentExecutionAbandonedSweepLogGroup,
+  ]);
 
-  const chatCompletionSubscriptions = chatCompletionLogGroup.apply(group =>
-    createLogSubscriptions([{ logGroup: group, pattern: FARGATE_ERROR_PATTERN, suffix: DEFAULT_ERROR_SUFFIX }])
-  );
+  const chatCompletionSubscription = forwardErrorLogs(chatCompletionLogGroup, FARGATE_ERROR_FILTER);
 
   // Combine all log groups when ready - simplified approach
   const allLogGroups = $util.all([
@@ -265,27 +273,21 @@ if (!$dev) {
     appFilesBucketLogGroups,
     fabFileBucketLogGroups,
     webServerLogGroup,
-    extraLogGroups,
+    killsLogGroups,
   ]);
 
-  const sharedSubscriptions = allLogGroups.apply(([individual, appFilesBucket, fabFileBucket, webServer, extras]) => {
-    // Flatten all log group names into a single array, filtering out undefined values
-    const logGroups = [...individual, ...appFilesBucket, ...fabFileBucket, ...(webServer ? [webServer] : [])].filter(
-      logGroupName => logGroupName !== undefined
-    );
+  const sharedSubscriptions = allLogGroups.apply(([individual, appFilesBucket, fabFileBucket, webServer, kills]) =>
+    $util.all([
+      ...[...individual, ...appFilesBucket, ...fabFileBucket, webServer].map(logGroup => forwardErrorLogs(logGroup)),
+      ...kills.map(logGroup => forwardErrorLogs(logGroup, KILLS_FILTER)),
+    ])
+  );
 
-    const defaultSpecs: LogSubscriptionSpec[] = logGroups.map(logGroup => ({
-      logGroup,
-      pattern: DEFAULT_ERROR_PATTERN,
-      suffix: DEFAULT_ERROR_SUFFIX,
-    }));
-
-    return createLogSubscriptions([...defaultSpecs, ...extras]);
+  logSubscriptions = $util.all([sharedSubscriptions, chatCompletionSubscription]).apply(([shared, chat]) => {
+    const filters = [...shared, chat].filter(filter => filter !== undefined);
+    console.log(`Created ${filters.length} log subscription filters`);
+    return filters;
   });
-
-  logSubscriptions = $util
-    .all([sharedSubscriptions, chatCompletionSubscriptions])
-    .apply(([shared, chat]) => [...shared, ...chat]);
 }
 
 export { logHandler, logSubscriptions };

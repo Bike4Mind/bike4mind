@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import { Memento } from '@bike4mind/database';
 
 // Load env vars when running locally
-dotenv.config();
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 async function main() {
   const uri = process.env.MONGODB_URI;

@@ -31,7 +31,12 @@ vi.mock('@bike4mind/database', () => ({
   passkeyCredentialRepository: { removeAllForUser: mocks.removeAllForUser },
 }));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userCanDisableMFA: mocks.userCanDisableMFA, disableMFA: mocks.disableMFA },
+  mfaService: {
+    userHasMFAConfigured: (user: { mfa?: { totpEnabled?: boolean; passkeyEnabled?: boolean } }) =>
+      !!user?.mfa?.totpEnabled || !!user?.mfa?.passkeyEnabled,
+    userCanDisableMFA: mocks.userCanDisableMFA,
+    disableMFA: mocks.disableMFA,
+  },
   userService: { revokeUserSessions: mocks.revokeUserSessions },
 }));
 
@@ -43,6 +48,7 @@ async function postDisable() {
   const { req, res } = createMocks({ method: 'POST' });
   // any: node-mocks-http requests are not structurally the typed Express request.
   (req as any).user = { id: 'u1' };
+  Object.assign(req, { logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } });
   await (handler as unknown as Handler)(req, res);
   return res;
 }

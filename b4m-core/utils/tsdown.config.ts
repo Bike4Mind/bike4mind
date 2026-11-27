@@ -3,6 +3,7 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
   entry: [
     'src/index.ts',
+    'src/cache/ApplicationCache.ts',
     'src/artifactParser.ts',
     // Own entry so the client can import the elision detector without pulling the whole
     // utils barrel into the browser bundle (same reason as artifactParser above).
@@ -17,8 +18,11 @@ export default defineConfig({
     'src/imageModeration/index.ts',
     // Server-only image downscaling (jimp), kept off the barrel for the same reason. #660
     'src/imageResize.ts',
+    // Server-only product cutout (jimp): pads a source for the matte model and lays its alpha onto the original.
+    'src/imageCutout.ts',
     'src/llm/backend.ts',
     'src/escapeRegex.ts',
+    'src/escapeHtml.ts',
     'src/safeObjectKey.ts',
     'src/globMatches.ts',
     // Own entry so the CLI can import scaleTokenEstimate without pulling the whole utils
@@ -34,6 +38,7 @@ export default defineConfig({
     // database repositories, migration scripts) import it without dragging the whole utils
     // barrel - which reaches artifactParser and other modules - into their graph or tests.
     'src/security/index.ts',
+    'src/security/testing.ts',
     // Kind-agnostic provider interface, registry and errors shared by videoProviders and musicProviders. Own entry
     // so a music job can import the shared error classes without pulling in the video adapters.
     'src/generationProviders/index.ts',
@@ -42,8 +47,14 @@ export default defineConfig({
     'src/videoProviders/index.ts',
     // Music provider interface, registry and adapters, isolated the same way as videoProviders.
     'src/musicProviders/index.ts',
+    // Speech and sound-effect sync providers for the audio job kinds, isolated the same way.
+    'src/audioProviders/index.ts',
+    // Image provider interface, registry and adapters for the image job kind, isolated the same way.
+    'src/imageProviders/index.ts',
     // Decision provider interface, registry, retry policy and adapters. Same isolation as videoProviders.
     'src/decisionProviders/index.ts',
+    // Batch-first embedding provider interface, registry and adapters. Same isolation as videoProviders.
+    'src/embeddingProviders/index.ts',
   ],
   format: ['esm', 'cjs'],
   dts: true,

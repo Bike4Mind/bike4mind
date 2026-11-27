@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { createMocks } from 'node-mocks-http';
+
+const { refreshSignupRiskScore } = vi.hoisted(() => ({ refreshSignupRiskScore: vi.fn(async () => undefined) }));
+vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore }));
 
 /**
  * Mint-route embed branching: the host-aware origin screen (validateEmbedKeyOrigins,
@@ -18,6 +24,20 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+const isApiKeyAccessAllowedMock = vi.hoisted(() =>
+  vi.fn(async (_user: unknown, _billing?: unknown, _request?: unknown) => true)
+);
+vi.mock('@bike4mind/server-utils/utils/apiKeyAccessGate', async () => {
+  const { ForbiddenError } = await import('@bike4mind/server-utils/utils/errors');
+  const message = 'API keys require an active paid subscription';
+  return {
+    API_KEY_ACCESS_DENIED_MESSAGE: message,
+    isApiKeyAccessAllowed: isApiKeyAccessAllowedMock,
+    assertApiKeyAccessAllowed: async (user: unknown, billing?: unknown, request?: unknown) => {
+      if (!(await isApiKeyAccessAllowedMock(user, billing, request))) throw new ForbiddenError(message);
+    },
+  };
+});
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     get: (fn: any) => {
@@ -49,6 +69,11 @@ vi.mock('@bike4mind/services', () => ({
   userApiKeyService: { createUserApiKey, listUserApiKeys, listOrganizationApiKeys },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+const legacyWindow = vi.hoisted(() => ({ cutoff: null as Date | null, endsAt: null as Date | null }));
+vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', async importOriginal => ({
+  ...(await importOriginal<object>()),
+  LEGACY_API_KEY_WINDOW: legacyWindow,
+}));
 // findIdsAdministeredBy stays (GET org-list + POST org-billing auth use it);
 // findById is added because the owner-scoped gate + GET now resolve owners.
 const userRepository = vi.hoisted(() => ({ findById: vi.fn().mockResolvedValue({ id: 'owner' }) }));
@@ -62,24 +87,49 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { findById: agentFindById },
 }));
 const logEventSafe = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe }));
 
 // The real gateEmbedBrandingWrite AND embedKeyOwnerHasEntitlement run; only the
 // leaf entitlement source (getUserEntitlements) is stubbed, so these tests
 // exercise the actual OWNER-scoped strip logic through the route (#891).
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
-vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements }));
 
 // Product-scope access of the minting user; every product on by default so the embed/org cases
 // below are unaffected. The resolver itself is covered in server/entitlements/apiKeyScopeAccess.test.ts.
 const scopeAccess = vi.hoisted(() => ({
-  current: { hasOptiAccess: true, hasOverwatchAccess: true, hearthEnabled: true },
+  current: {
+    hasOptiAccess: true,
+    hasOverwatchAccess: true,
+    hearthEnabled: true,
+    bypass: false,
+    entitlements: new Set<string>() as ReadonlySet<string>,
+  },
 }));
 vi.mock('@server/entitlements/apiKeyScopeAccess', () => ({
   resolveApiKeyScopeAccess: vi.fn(async () => scopeAccess.current),
 }));
 
-import { CreditHolderType } from '@bike4mind/common';
+// One contributed scope, so the merged catalog the route screens against holds a non-built-in row.
+vi.mock('@bike4mind/server-utils/premium-generated/premiumApiKeyScopes.generated', () => ({
+  premiumApiKeyScopes: [
+    {
+      value: 'acme:read',
+      label: 'Acme: Read',
+      description: 'Read Acme records',
+      endpoints: ['GET /api/acme'],
+      requiredEntitlement: 'acme:pro',
+    },
+  ],
+}));
+const requireStepUp = vi.hoisted(() => vi.fn(async (_req?: unknown) => undefined));
+vi.mock('@server/auth/stepUp', () => ({ requireStepUp }));
+const resolveApiKeyTrust = vi.hoisted(() => vi.fn().mockResolvedValue({ assessment: { status: 'trusted' } }));
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({ resolveApiKeyTrust }));
+
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
+import { resolveApiKeyScopeAccess } from '@server/entitlements/apiKeyScopeAccess';
+import { requestRiskEvidenceRefresh } from '@bike4mind/server-utils/auth/riskEvidence';
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
@@ -112,6 +162,50 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
       }),
       expect.anything()
     );
+  });
+
+  it('rescores the minting user after a key is created, and not when creation is refused', async () => {
+    refreshSignupRiskScore.mockClear();
+    const created = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(created.req, created.res);
+    expect(refreshSignupRiskScore).toHaveBeenCalledWith('u1', created.req.logger);
+
+    refreshSignupRiskScore.mockClear();
+    const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
+    await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
+    expect(refreshSignupRiskScore).not.toHaveBeenCalled();
+  });
+
+  it('requests a risk evidence refresh after a key is created, and not when creation is refused or fails', async () => {
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    const created = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(created.req, created.res);
+    expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'api_key_created', expect.anything());
+
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    const refused = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', allowedOrigins: 'nope' });
+    await mockRefs.postHandler!(refused.req, refused.res).catch(() => undefined);
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
+
+    createUserApiKey.mockRejectedValueOnce(new Error('service refused'));
+    const failed = post({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      allowedOrigins: ['https://example.com'],
+    });
+    await mockRefs.postHandler!(failed.req, failed.res).catch(() => undefined);
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
   });
 
   it('(b) rejects a first-party (self) host origin with 400 and never calls the service', async () => {
@@ -309,6 +403,7 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
 describe('POST /api/user-api-keys - org-billed authorization', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
+    isApiKeyAccessAllowedMock.mockClear();
     findIdsAdministeredBy.mockResolvedValue([]);
   });
 
@@ -345,6 +440,7 @@ describe('POST /api/user-api-keys - org-billed authorization', () => {
     findIdsAdministeredBy.mockResolvedValue([]);
     const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-9' });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission/i);
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });
@@ -382,6 +478,49 @@ describe('GET /api/user-api-keys - revoked-key visibility', () => {
 
     expect(listUserApiKeys).toHaveBeenCalledWith('u1', expect.anything(), { includeDisabled: false });
     expect(listOrganizationApiKeys).toHaveBeenCalledWith('org-1', expect.anything(), { includeDisabled: false });
+  });
+});
+
+describe('GET /api/user-api-keys - legacy status', () => {
+  const pre = { userId: 'u1', status: 'active', createdAt: new Date('2026-06-01T00:00:00Z') };
+
+  beforeEach(() => {
+    findIdsAdministeredBy.mockResolvedValue([]);
+    legacyWindow.cutoff = null;
+    legacyWindow.endsAt = null;
+  });
+
+  async function listKeys(keys: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
+    listUserApiKeys.mockResolvedValueOnce(keys);
+    const { req, res } = createMocks({ method: 'GET' });
+    const json = vi.fn();
+    Object.assign(req, { user: { id: 'u1' } });
+    Object.assign(res, { json });
+    await mockRefs.getHandler!(req, res);
+    return json.mock.calls[0][0];
+  }
+
+  it('flags a key created before the cutoff with the end date, and not a newer one', async () => {
+    legacyWindow.cutoff = new Date('2027-01-01T00:00:00Z');
+    legacyWindow.endsAt = new Date('2099-01-01T00:00:00Z');
+
+    const [older, newer] = await listKeys([
+      { ...pre, id: 'k-older', scopes: [ApiKeyScope.AI_GENERATE] },
+      { ...pre, id: 'k-newer', scopes: [ApiKeyScope.AI_GENERATE], createdAt: new Date('2027-02-01T00:00:00Z') },
+    ]);
+
+    expect(older).toMatchObject({ legacy: true, legacyEndsAt: legacyWindow.endsAt });
+    expect(newer).toMatchObject({ legacy: false, legacyEndsAt: null });
+  });
+
+  it('flags every ordinary key with no date while the window is unset, never a confined key', async () => {
+    const [ordinary, embed] = await listKeys([
+      { ...pre, id: 'k-ordinary', scopes: [ApiKeyScope.AI_GENERATE] },
+      { ...pre, id: 'k-embed', scopes: [ApiKeyScope.EMBED_CHAT] },
+    ]);
+
+    expect(ordinary).toMatchObject({ legacy: true, legacyEndsAt: null });
+    expect(embed).toMatchObject({ legacy: false, legacyEndsAt: null });
   });
 });
 
@@ -580,7 +719,13 @@ describe('POST /api/user-api-keys - caller key scopes forwarded for containment'
 describe('POST /api/user-api-keys - product scope entitlement', () => {
   beforeEach(() => {
     createUserApiKey.mockClear();
-    scopeAccess.current = { hasOptiAccess: false, hasOverwatchAccess: false, hearthEnabled: false };
+    scopeAccess.current = {
+      hasOptiAccess: false,
+      hasOverwatchAccess: false,
+      hearthEnabled: false,
+      bypass: false,
+      entitlements: new Set<string>(),
+    };
   });
 
   it.each(['hearth:read', 'overwatch:read', 'marketing-reports:write', 'optihashi:compute'])(
@@ -615,5 +760,204 @@ describe('POST /api/user-api-keys - product scope entitlement', () => {
       expect.objectContaining({ scopes: ['bob:read', 'bob:run'] }),
       expect.anything()
     );
+  });
+});
+
+describe('POST /api/user-api-keys - persona mint scope', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    requireStepUp.mockReset();
+    requireStepUp.mockResolvedValue(undefined);
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+  });
+
+  it('requires step-up before minting a key that holds personas:mint', async () => {
+    const { req, res } = post({ name: 'qa-bot', scopes: ['me:read', 'personas:mint'] });
+    await mockRefs.postHandler!(req, res);
+    expect(requireStepUp).toHaveBeenCalledWith(req);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalled();
+  });
+
+  it('mints nothing when step-up is refused', async () => {
+    requireStepUp.mockRejectedValue(new Error('step-up required'));
+    const { req, res } = post({ name: 'qa-bot', scopes: ['personas:mint'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('step-up required');
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not ask for step-up on a key without personas:mint', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['me:read', 'files:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('refuses personas:mint to a user who is not offered it, before any step-up', async () => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: false };
+    const { req, res } = post({ name: 'qa-bot', scopes: ['personas:mint'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow('Scope not available on your account: personas:mint');
+    expect(requireStepUp).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/user-api-keys - contributed scopes', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    scopeAccess.current = {
+      hasOptiAccess: false,
+      hasOverwatchAccess: false,
+      hearthEnabled: false,
+      bypass: false,
+      entitlements: new Set<string>(),
+    };
+  });
+
+  it('mints a contributed scope for a user holding its entitlement, passing the merged predicate', async () => {
+    scopeAccess.current = { ...scopeAccess.current, entitlements: new Set(['acme:pro']) };
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    const adapters = createUserApiKey.mock.calls[0][2] as unknown as { isKnownScope: (v: string) => boolean };
+    expect(adapters.isKnownScope('acme:read')).toBe(true);
+    expect(adapters.isKnownScope('acme:write')).toBe(false);
+  });
+
+  it('mints a contributed scope for an admin or developer without the entitlement', async () => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('refuses a contributed scope with 403 to a user without its entitlement', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 403,
+      message: 'Scope not available on your account: acme:read',
+    });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('does not mint when the caller entitlement lookup fails', async () => {
+    const failure = new Error('entitlement lookup unavailable');
+    vi.mocked(resolveApiKeyScopeAccess).mockRejectedValueOnce(failure);
+    const { req, res } = post({ name: 'k', scopes: ['acme:read'] });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(failure);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it.each([['acme:write'], ['']])('refuses %j with the allowlist 400 before any entitlement check', async scope => {
+    scopeAccess.current = { ...scopeAccess.current, bypass: true };
+    const { req, res } = post({ name: 'k', scopes: [scope] });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({
+      statusCode: 400,
+      message: `Scope not allowed: ${scope}`,
+    });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  // The route only screens what it is given; the service owns the empty and non-array refusals
+  // (see contributedScopes.e2e.test.ts beside this file).
+  it.each([[[]], ['acme:read']])('leaves %j to the service rather than refusing it here', async scopes => {
+    const { req, res } = post({ name: 'k', scopes });
+    await mockRefs.postHandler!(req, res);
+    expect(createUserApiKey).toHaveBeenCalledWith('u1', expect.objectContaining({ scopes }), expect.anything());
+  });
+});
+
+describe('POST /api/user-api-keys - trust gate', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    resolveApiKeyTrust.mockClear();
+    findIdsAdministeredBy.mockResolvedValue([]);
+  });
+
+  it("hands the caller's trust assessment to the service, which enforces it", async () => {
+    const assessment = { status: 'untrusted', reason: 'email_unverified' };
+    resolveApiKeyTrust.mockResolvedValueOnce({ assessment });
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(resolveApiKeyTrust).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }), expect.anything());
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: assessment })
+    );
+  });
+
+  it('skips the trust assessment for an org-billed mint and passes trust undefined', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-1' });
+
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ trust: undefined })
+    );
+  });
+});
+
+describe('POST /api/user-api-keys - paid-only access switch', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    isApiKeyAccessAllowedMock.mockReset().mockResolvedValue(true);
+    resolveApiKeyTrust.mockClear();
+  });
+
+  it('rejects the mint with 403 and never calls the service when the setting denies the caller', async () => {
+    isApiKeyAccessAllowedMock.mockResolvedValueOnce(false);
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'] });
+    const error = await mockRefs.postHandler!(req, res).catch((e: unknown) => e);
+    expect(error).toMatchObject({ statusCode: 403, message: 'API keys require an active paid subscription' });
+    expect(createUserApiKey).not.toHaveBeenCalled();
+    expect(resolveApiKeyTrust).not.toHaveBeenCalled();
+  });
+
+  it('answers an unauthorized org-billed mint with the org-permission 403 before reading any plan', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'someone-elses-org' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission to mint API keys billed/);
+    expect(isApiKeyAccessAllowedMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the org as billing owner for an org-billed mint', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['notebooks:read'], organizationId: 'org-9' }, { isAdmin: true });
+    await mockRefs.postHandler!(req, res);
+    expect(isApiKeyAccessAllowedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      {
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-9',
+      },
+      req
+    );
+  });
+});
+
+describe('/api/user-api-keys - org service account', () => {
+  // An org-owned key authenticates as its org's service account, which holds all of the org's keys.
+  it('refuses to list or mint keys for it', async () => {
+    listUserApiKeys.mockClear();
+    createUserApiKey.mockClear();
+    const serviceAccount = { id: 'sa1', isAdmin: false, isSystem: true, serviceAccountOrganizationId: 'org-1' };
+
+    const listing = createMocks({ method: 'GET', query: {} });
+    Object.assign(listing.req, { user: serviceAccount });
+    await expect(mockRefs.getHandler!(listing.req, listing.res)).rejects.toMatchObject({ statusCode: 403 });
+
+    const { req, res } = post({ name: 'k', scopes: ['ai:chat'] });
+    Object.assign(req, { user: serviceAccount });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(listUserApiKeys).not.toHaveBeenCalled();
+    expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });

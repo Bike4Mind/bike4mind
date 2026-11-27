@@ -1,0 +1,118 @@
+name: Android Play internal
+
+# The Android lane of the mobile release train (docs/mobile-release-train.md): build a signed release bundle and
+# upload it to the Play Console internal testing track. A mobile-v* tag ships that version; a manual run ships the
+# version and rc it is given. Either way the plan job derives the versionCode and refuses a train the parity
+# matrix blocks.
+on:
+  push:
+    tags: ['mobile-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Train version, YY.M.PATCH (e.g. 26.12.0)'
+        required: true
+        type: string
+      rc:
+        description: 'Release candidate number, 1-98; empty for the final build'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-play-internal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Manual runs ship from main or a hotfix branch only, so a stray branch cannot spend a versionCode.
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/mobile-')
+    uses: ./.github/workflows/_mobile-release-plan.yml
+    with:
+      platform: android
+      version: ${{ inputs.version }}
+      rc: ${{ inputs.rc }}
+
+  play-internal:
+    name: Build and upload to the internal track
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    # Environment-scoped secrets: add required reviewers on the environment to gate every upload.
+    environment: mobile-release
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+
+      # The keystore exists only in the runner's temp dir for this job; app/build.gradle.kts reads it from the env.
+      - name: Install the upload keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          ANDROID_PACKAGE_NAME: ${{ vars.ANDROID_PACKAGE_NAME }}
+          FCM_APPLICATION_ID: ${{ vars.FCM_APPLICATION_ID }}
+          FCM_API_KEY: ${{ vars.FCM_API_KEY }}
+          FCM_PROJECT_ID: ${{ vars.FCM_PROJECT_ID }}
+          FCM_SENDER_ID: ${{ vars.FCM_SENDER_ID }}
+        run: |
+          missing=""
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD \
+            PLAY_SERVICE_ACCOUNT_JSON ANDROID_PACKAGE_NAME FCM_APPLICATION_ID FCM_API_KEY FCM_PROJECT_ID FCM_SENDER_ID; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "The Play lane needs signing and upload configuration; missing:$missing" >&2
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/upload.jks"
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          echo "ANDROID_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+
+      - name: Build the signed release bundle
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ needs.plan.outputs.version }}
+          VERSION_CODE: ${{ needs.plan.outputs.build_number }}
+          FCM_APPLICATION_ID: ${{ vars.FCM_APPLICATION_ID }}
+          FCM_API_KEY: ${{ vars.FCM_API_KEY }}
+          FCM_PROJECT_ID: ${{ vars.FCM_PROJECT_ID }}
+          FCM_SENDER_ID: ${{ vars.FCM_SENDER_ID }}
+        run: |
+          ./gradlew :app:bundleRelease \
+            -Pb4m.versionName="$VERSION_NAME" -Pb4m.versionCode="$VERSION_CODE" \
+            -Pb4m.fcm.applicationId="$FCM_APPLICATION_ID" -Pb4m.fcm.apiKey="$FCM_API_KEY" \
+            -Pb4m.fcm.projectId="$FCM_PROJECT_ID" -Pb4m.fcm.senderId="$FCM_SENDER_ID"
+
+      - uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ vars.ANDROID_PACKAGE_NAME }}
+          releaseFiles: apps/android/app/build/outputs/bundle/release/app-release.aab
+          releaseName: ${{ needs.plan.outputs.version }} (${{ needs.plan.outputs.build_number }})
+          track: internal
+          # Play accepts only draft releases until the app's first review completes; set the variable to draft then.
+          status: ${{ vars.ANDROID_PLAY_RELEASE_STATUS || 'completed' }}
+
+      - name: Remove the keystore
+        if: always()
+        working-directory: .
+        run: rm -f "$RUNNER_TEMP/upload.jks"

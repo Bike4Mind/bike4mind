@@ -5,6 +5,7 @@ import {
   InviteType,
   IOrganizationDocument,
   ISessionDocument,
+  ISpaceRepository,
   IUserDocument,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -37,6 +38,7 @@ interface GetInviteAdapters {
     groups: {
       findById: (id: string) => Promise<IGroupDocument | null>;
     };
+    spaces: Pick<ISpaceRepository, 'findLiveById'>;
   };
 }
 
@@ -71,6 +73,11 @@ export const getInvite = async (userId: string, params: GetInviteParameters, { d
     case InviteType.Group: {
       const group: IGroupDocument | null = await db.groups.findById(docId);
       name = group?.name;
+      break;
+    }
+    case InviteType.Space: {
+      const space = await db.spaces.findLiveById(docId);
+      name = space?.name;
       break;
     }
     default:

@@ -12,7 +12,9 @@ import ErrorIcon from '@mui/icons-material/Error';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { diffLines } from 'diff';
+import { useMarketMe } from '@client/app/hooks/data/skillMarket';
 import type {
+  ISkillFile,
   ISkillHonestSummary,
   ISkillScanFinding,
   SkillListingVisibility,
@@ -80,23 +82,36 @@ export const StarInput: FC<{ value: number; onChange: (v: number) => void }> = (
 const VISIBILITY: Record<SkillListingVisibility, { label: string; icon: ReactElement }> = {
   public: { label: 'Public', icon: <PublicIcon /> },
   organization: { label: 'Organization', icon: <GroupsIcon /> },
+  space: { label: 'Space', icon: <GroupsIcon /> },
   unlisted: { label: 'Unlisted', icon: <LinkIcon /> },
 };
 
-export const VisibilityChip: FC<{ visibility: SkillListingVisibility }> = ({ visibility }) => (
-  <Chip size="sm" variant="soft" color="neutral" startDecorator={VISIBILITY[visibility].icon}>
-    {VISIBILITY[visibility].label}
-  </Chip>
-);
+/** `spaceId` names the Space on a Space listing when the viewer is a member; otherwise the chip says "Space". */
+export const VisibilityChip: FC<{ visibility: SkillListingVisibility; spaceId?: string }> = ({
+  visibility,
+  spaceId,
+}) => {
+  const { data: me } = useMarketMe();
+  const spaceName = visibility === 'space' ? me?.spaces?.find(s => s.id === spaceId)?.name : undefined;
+  return (
+    <Chip size="sm" variant="soft" color="neutral" startDecorator={VISIBILITY[visibility].icon}>
+      {spaceName ?? VISIBILITY[visibility].label}
+    </Chip>
+  );
+};
 
 const TIER: Record<SkillRiskTier, { label: string; color: 'success' | 'warning' | 'danger'; hint: string }> = {
   clean: { label: 'Low risk', color: 'success', hint: 'No findings that need a human' },
   review: {
-    label: 'Needs a look',
+    label: 'Scan: needs a look',
     color: 'warning',
     hint: 'Medium findings, low classifier confidence, or a description mismatch',
   },
-  high: { label: 'High risk', color: 'danger', hint: 'Declares tools that act outside the conversation' },
+  high: {
+    label: 'High risk',
+    color: 'danger',
+    hint: 'High-risk findings that need a reviewer, listed under What the scan found',
+  },
 };
 
 export const TierChip: FC<{ tier?: SkillRiskTier }> = ({ tier }) =>
@@ -227,7 +242,7 @@ export const HonestSummaryPanel: FC<{ summary?: ISkillHonestSummary; tools?: str
 
 /** Line diff of two skill bodies (added lines green, removed red). */
 export const BodyDiff: FC<{ before: string; after: string; testId?: string }> = ({ before, after, testId }) => {
-  const parts = useMemo(() => diffLines(before, after), [before, after]);
+  const parts = useMemo(() => diffLines(before, after, { ignoreNewlineAtEof: true }), [before, after]);
   const unchanged = parts.every(p => !p.added && !p.removed);
   return (
     <Box
@@ -302,3 +317,36 @@ export const BodyBlock: FC<{ body: string; testId?: string }> = ({ body, testId 
 
 export const formatCount = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(n);
+
+/** A version's supporting files, each expandable to its full text so a reviewer reads what they approve. */
+export const SupportingFiles: FC<{ files?: ISkillFile[] }> = ({ files }) =>
+  files?.length ? (
+    <Box data-testid="market-supporting-files">
+      <Typography level="title-sm" sx={{ mb: 1 }}>
+        Supporting files ({files.length})
+      </Typography>
+      <Stack spacing={1}>
+        {files.map(f => (
+          <Box key={f.path} component="details" data-testid="market-supporting-file">
+            <Typography component="summary" level="body-sm" sx={{ cursor: 'pointer', fontFamily: 'code' }}>
+              {f.path}
+              {f.path.startsWith('scripts/') ? (
+                <Chip size="sm" variant="soft" color="warning" sx={{ ml: 1 }}>
+                  runs on the user&apos;s machine
+                </Chip>
+              ) : null}
+            </Typography>
+            <Box sx={{ mt: 1 }}>
+              <BodyBlock body={f.content} />
+            </Box>
+          </Box>
+        ))}
+      </Stack>
+    </Box>
+  ) : null;
+
+/** An open Select listbox keeps focus on its button and bubbles Escape to the Modal, which must not treat it as a close. */
+export const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
+};

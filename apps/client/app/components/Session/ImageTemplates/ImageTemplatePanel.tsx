@@ -1,6 +1,7 @@
 import { FC, useMemo, useState } from 'react';
 import { Box, Button, Card, Chip, CircularProgress, IconButton, Input, Sheet, Tooltip, Typography } from '@mui/joy';
-import { Delete as DeleteIcon, InfoOutlined as InfoIcon } from '@mui/icons-material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import InfoIcon from '@mui/icons-material/InfoOutlined';
 import { toast } from 'sonner';
 import { IMAGE_TEMPLATE_NAME_MAX, type ImageGenerationTemplateInputType } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -9,6 +10,7 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { useImageTemplates, useCreateImageTemplate, useDeleteImageTemplate } from '../../../hooks/data/imageTemplates';
 import { findMatchingTemplate } from './settingsSnapshot';
 import { useImageSettingsSnapshot } from './useImageSettingsSnapshot';
+import OrganizationLibraryPicker from '@client/app/components/organizations/OrganizationLibraryPicker';
 
 /**
  * The single home for image settings templates: renders below the image settings
@@ -91,6 +93,7 @@ export const ImageTemplatePanel: FC = () => {
       </Box>
 
       {/* Inline save of the current settings. */}
+      <OrganizationLibraryPicker kind="template" />
       <Box sx={{ display: 'flex', gap: 0.5 }}>
         <Input
           size="sm"

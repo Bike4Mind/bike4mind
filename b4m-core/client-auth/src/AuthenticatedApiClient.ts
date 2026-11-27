@@ -1,4 +1,10 @@
-import axios, { isAxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import axios, {
+  isAxiosError,
+  type AxiosAdapter,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 import type { RefreshTokenResponse } from './DeviceFlowClient';
 import type { AuthLogger, AuthTokens, TokenStore } from './tokens';
 
@@ -34,6 +40,14 @@ export class NotAuthenticatedError extends Error {
   }
 }
 
+/** A captured session no longer owns this operation. */
+export class SessionChangedError extends Error {
+  constructor(readonly beforeRequest = false) {
+    super('The account or environment changed. Please try again from the current session.');
+    this.name = 'SessionChangedError';
+  }
+}
+
 /** The one thing the refresh-on-401 path needs from an OAuth client. */
 export interface RefreshingOAuthClient {
   refreshToken(refreshToken: string): Promise<RefreshTokenResponse>;
@@ -44,8 +58,13 @@ export interface RefreshingOAuthClient {
  * "open Settings"), so the host supplies them rather than this package inventing wording.
  */
 export interface ReauthMessages {
-  /** A refresh attempt failed and the stored access token is already expired. */
+  /** The refresh endpoint rejected the refresh token: the session is over. */
   refreshFailed: string;
+  /**
+   * A refresh could not complete (network, timeout, 5xx, 429) and the tokens were kept.
+   * Defaults to `refreshFailed`.
+   */
+  refreshUnavailable?: string;
   /** A request still 401d after a successful refresh. */
   stillUnauthorized: string;
   /** A request 401d and there are no stored tokens to refresh. */
@@ -79,6 +98,52 @@ export interface AuthenticatedApiClientOptions {
    * signed out, with the reason, instead of carrying on over an empty store.
    */
   onTokensCleared?: (reason: string) => void;
+  /**
+   * Refresh on a 401 even while the stored access token is inside its own lifetime. Off by
+   * default, which treats such a 401 as transient. A host that would rather re-authenticate than
+   * keep presenting a token the server has stopped accepting (a secret rotation, a tokenVersion
+   * bump) turns it on.
+   */
+  refreshUnexpiredOn401?: boolean;
+  /**
+   * Called when a request still 401s after a successful refresh. The tokens are kept (see
+   * {@link SessionRevokedError}); this lets a host stop using them until the user signs in again.
+   */
+  onStillUnauthorized?: (reason: string) => void;
+  /** Return true synchronously for the captured host session. API-key transport checks receive null. */
+  isSessionCurrent?: (tokens: AuthTokens | null) => boolean;
+}
+
+/** Enough of an error body to classify it; a 401 body is a few hundred bytes. */
+const ERROR_BODY_LIMIT = 64 * 1024;
+
+function isReadableStream(data: unknown): data is AsyncIterable<unknown> {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    typeof (data as { pipe?: unknown }).pipe === 'function' &&
+    typeof (data as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === 'function'
+  );
+}
+
+/**
+ * A `responseType: 'stream'` request hands back its error body as a stream, which neither
+ * `isPassThrough401` nor the caller can read synchronously. Buffered into a string in place, so
+ * both see the same body. A read that fails leaves an empty string rather than a spent stream.
+ */
+async function bufferStreamedBody(response: { data?: unknown } | undefined): Promise<void> {
+  if (!response || !isReadableStream(response.data)) return;
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    for await (const chunk of response.data) {
+      text += typeof chunk === 'string' ? chunk : decoder.decode(chunk as Uint8Array, { stream: true });
+      if (text.length >= ERROR_BODY_LIMIT) break;
+    }
+  } catch {
+    // Unreadable body: classified as an ordinary 401.
+  }
+  response.data = text.slice(0, ERROR_BODY_LIMIT);
 }
 
 function isExpired(tokens: AuthTokens): boolean {
@@ -102,22 +167,28 @@ export class AuthenticatedApiClient {
   private apiKey?: string;
   private isPassThrough401?: (data: unknown) => boolean;
   private onTokensCleared?: (reason: string) => void;
+  private onStillUnauthorized?: (reason: string) => void;
+  private refreshUnexpiredOn401: boolean;
   private reauthMessages: Required<ReauthMessages>;
   /** The one refresh exchange in flight, shared by every caller - see {@link refreshSession}. */
-  private inFlightRefresh: Promise<AuthTokens> | null = null;
+  private refreshState: { inFlight: Promise<AuthTokens> | null } = { inFlight: null };
+  private readonly sessionAdapters = new WeakMap<AxiosAdapter, AxiosAdapter>();
 
-  constructor(options: AuthenticatedApiClientOptions) {
+  constructor(private readonly options: AuthenticatedApiClientOptions) {
     this.tokenStore = options.tokenStore;
     this.oauthClient = options.oauthClient;
     this.logger = options.logger;
     this.apiKey = options.apiKey;
     this.isPassThrough401 = options.isPassThrough401;
     this.onTokensCleared = options.onTokensCleared;
+    this.onStillUnauthorized = options.onStillUnauthorized;
+    this.refreshUnexpiredOn401 = options.refreshUnexpiredOn401 ?? false;
     this.reauthMessages = {
       notLoggedIn: 'Authentication failed: not logged in.',
       ...options.reauthMessages,
+      refreshUnavailable: options.reauthMessages.refreshUnavailable ?? options.reauthMessages.refreshFailed,
     };
-    const { refreshFailed, stillUnauthorized, notLoggedIn } = this.reauthMessages;
+    const { refreshUnavailable, stillUnauthorized, notLoggedIn } = this.reauthMessages;
 
     this.client = axios.create({
       baseURL: options.baseUrl,
@@ -133,11 +204,17 @@ export class AuthenticatedApiClient {
     this.client.interceptors.request.use(
       async config => {
         if (this.apiKey) {
+          this.assertSession(null, !('_retry' in config && config._retry === true));
+          this.guardTransport(config, null);
           config.headers['x-api-key'] = this.apiKey;
           return config;
         }
 
         const tokens = await this.tokenStore.getAuthTokens();
+        this.assertSession(tokens, !('_retry' in config && config._retry === true));
+        if (this.options.isSessionCurrent && !tokens)
+          throw new SessionChangedError(!('_retry' in config && config._retry === true));
+        this.guardTransport(config, tokens);
 
         if (tokens) {
           config.headers.Authorization = `Bearer ${tokens.accessToken}`;
@@ -158,7 +235,7 @@ export class AuthenticatedApiClient {
         if (error.response?.status === 401) {
           this.logger.debug('AUTH: Received 401 Unauthorized');
         } else if (error.response?.status === 403) {
-          this.logger.error('403 Forbidden', error);
+          this.logger.error('AUTH: Received 403 Forbidden');
         }
 
         // API-key auth has no refresh token to rotate, so a 401 is terminal - skip
@@ -166,6 +243,8 @@ export class AuthenticatedApiClient {
         if (this.apiKey) {
           return Promise.reject(error);
         }
+
+        if (error.response?.status === 401) await bufferStreamedBody(error.response);
 
         if (error.response?.status === 401 && this.isPassThrough401?.(error.response.data)) {
           return Promise.reject(error);
@@ -175,8 +254,9 @@ export class AuthenticatedApiClient {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
 
-          // Outside the try: the catch below would rewrite a no-token throw as refreshFailed.
+          // Outside the try: the catch below would rewrite a no-token throw as refreshUnavailable.
           const tokens = await this.tokenStore.getAuthTokens();
+          this.assertSession(tokens);
 
           if (!tokens) {
             throw new NotAuthenticatedError(notLoggedIn);
@@ -186,7 +266,7 @@ export class AuthenticatedApiClient {
 
           // The store already moved past the token this request carried (a refresh landed while
           // it was in flight): retry with the current one rather than spending another rotation.
-          if (sentAccessToken !== tokens.accessToken && !isExpired(tokens) && !this.inFlightRefresh) {
+          if (sentAccessToken !== tokens.accessToken && !isExpired(tokens) && !this.refreshState.inFlight) {
             this.logger.debug('AUTH: Retrying with the access token stored since this request was sent');
             originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
             return this.client(originalRequest);
@@ -201,7 +281,7 @@ export class AuthenticatedApiClient {
           // until the token actually expires (checkSessionValid reports it valid until then).
           // REST calls still 401 in the meantime, so it is a bounded no-teardown delay, not
           // retained access.
-          if (!isExpired(tokens) && !this.inFlightRefresh) {
+          if (!this.refreshUnexpiredOn401 && !isExpired(tokens) && !this.refreshState.inFlight) {
             this.logger.debug('AUTH: Access token has not expired, skipping refresh - 401 is likely transient');
             return Promise.reject(error);
           }
@@ -210,15 +290,19 @@ export class AuthenticatedApiClient {
           try {
             refreshed = await this.refreshSession(sentAccessToken);
           } catch (refreshError) {
-            if (refreshError instanceof SessionRevokedError || refreshError instanceof NotAuthenticatedError) {
+            if (
+              refreshError instanceof SessionRevokedError ||
+              refreshError instanceof NotAuthenticatedError ||
+              refreshError instanceof SessionChangedError
+            ) {
               throw refreshError;
             }
             // A 5xx / network / timeout / 429 is a transient outage: the tokens stay, and a plain
-            // Error (same message, so string-matching callers are unaffected) keeps
+            // Error (`refreshUnavailable` defaults to the old message, so string-matching callers
+            // are unaffected) keeps
             // revoke-vs-transient consumers retrying instead of tearing down.
-            const refreshMsg = refreshError instanceof Error ? refreshError.message : 'Unknown error';
-            this.logger.warn(`AUTH: Token refresh failed: ${refreshMsg}`);
-            throw new Error(refreshFailed);
+            this.logger.warn('AUTH: Token refresh temporarily unavailable');
+            throw new Error(refreshUnavailable);
           }
 
           originalRequest.headers.Authorization = `Bearer ${refreshed.accessToken}`;
@@ -229,7 +313,12 @@ export class AuthenticatedApiClient {
         // A 401 that survives a successful refresh is reported as a revocation, but the tokens
         // stay: the refresh endpoint just accepted them, so only it can say the session is gone.
         if (error.response?.status === 401 && originalRequest._retry) {
+          const current = await this.readStoredTokens();
+          this.assertSession(current);
           this.logger.debug('AUTH: Token refresh retry failed');
+          if (current?.accessToken === bearerToken(originalRequest)) {
+            this.onStillUnauthorized?.('a request was still refused after the session was refreshed');
+          }
           throw new SessionRevokedError(stillUnauthorized);
         }
 
@@ -253,29 +342,77 @@ export class AuthenticatedApiClient {
    * the one case in which the stored tokens are cleared. Any other failure (network, timeout,
    * 5xx, 429) is rethrown as-is and leaves the tokens untouched.
    */
-  refreshSession(rejectedAccessToken?: string): Promise<AuthTokens> {
-    if (!this.inFlightRefresh) {
-      this.inFlightRefresh = this.exchangeRefreshToken(rejectedAccessToken).finally(() => {
-        this.inFlightRefresh = null;
+  async refreshSession(rejectedAccessToken?: string): Promise<AuthTokens> {
+    await this.readStoredTokens();
+    if (!this.refreshState.inFlight) {
+      this.refreshState.inFlight = this.lockedExchange(rejectedAccessToken).finally(() => {
+        this.refreshState.inFlight = null;
       });
     }
-    return this.inFlightRefresh;
+    const refreshed = await this.refreshState.inFlight;
+    this.assertSession(refreshed);
+    return refreshed;
   }
 
-  private async exchangeRefreshToken(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+  /** A session-bound client that shares refresh rotations with this client. */
+  withSessionGuard(isSessionCurrent: (tokens: AuthTokens | null) => boolean): AuthenticatedApiClient {
+    const inherited = this.options.isSessionCurrent;
+    const fork = new AuthenticatedApiClient({
+      ...this.options,
+      isSessionCurrent: tokens =>
+        (inherited === undefined || inherited(tokens) === true) && isSessionCurrent(tokens) === true,
+    });
+    fork.refreshState = this.refreshState;
+    return fork;
+  }
+
+  private assertSession(tokens: AuthTokens | null, beforeRequest = false): void {
+    if (this.options.isSessionCurrent && this.options.isSessionCurrent(tokens) !== true) {
+      throw new SessionChangedError(beforeRequest);
+    }
+  }
+
+  private guardTransport(config: InternalAxiosRequestConfig<unknown>, tokens: AuthTokens | null): void {
+    if (!this.options.isSessionCurrent) return;
+    const selected = axios.getAdapter(config.adapter ?? this.client.defaults.adapter);
+    const adapter = this.sessionAdapters.get(selected) ?? selected;
+    const guarded: AxiosAdapter = request => {
+      this.assertSession(tokens, !('_retry' in request && request._retry === true));
+      return adapter(request);
+    };
+    this.sessionAdapters.set(guarded, adapter);
+    config.adapter = guarded;
+  }
+
+  private async lockedExchange(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+    const store = this.tokenStore;
+    if (!store.withRefreshLock) return this.exchangeRefreshToken(rejectedAccessToken, undefined);
+    const seen = await this.readStoredTokens();
+    return store.withRefreshLock(() => this.exchangeRefreshToken(rejectedAccessToken, seen?.refreshToken));
+  }
+
+  /** `seenRefreshToken`: the refresh token stored before waiting on the refresh lock, if one was taken. */
+  private async exchangeRefreshToken(
+    rejectedAccessToken: string | undefined,
+    seenRefreshToken: string | undefined
+  ): Promise<AuthTokens> {
     const presented = await this.readStoredTokens();
     if (!presented) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
 
-    if (rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken && !isExpired(presented)) {
+    const rotatedWhileWaiting = seenRefreshToken !== undefined && presented.refreshToken !== seenRefreshToken;
+    const rejectedWasReplaced = rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken;
+    if ((rotatedWhileWaiting || rejectedWasReplaced) && !isExpired(presented)) {
       this.logger.debug('AUTH: Stored tokens were already refreshed elsewhere, adopting them');
       return presented;
     }
 
     this.logger.debug('AUTH: Attempting token refresh');
     let response: RefreshTokenResponse;
+    this.assertSession(presented);
     try {
       response = await this.oauthClient.refreshToken(presented.refreshToken);
     } catch (refreshError) {
+      if (this.options.isSessionCurrent) await this.readStoredTokens();
       const status = isAxiosError(refreshError) ? refreshError.response?.status : undefined;
       if (status !== 400 && status !== 401) throw refreshError;
 
@@ -286,7 +423,27 @@ export class AuthenticatedApiClient {
         this.logger.warn('AUTH: Refresh rejected for a token already replaced in storage; keeping the newer one');
         return current;
       }
-      if (current) await this.clearStoredTokens(`refresh token rejected by the server (HTTP ${status})`);
+      if (current) {
+        const reason = `refresh token rejected by the server (HTTP ${status})`;
+        this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
+        this.assertSession(current);
+        const cleared = await this.tokenStore.clearAuthTokens(presented.refreshToken);
+        const now = await this.readStoredTokens();
+        this.assertSession(now);
+        // An inconclusive storage comparison can retain the rejected cached copy.
+        // Only a different credential can be adopted in place of this revoked one.
+        if (
+          now &&
+          (now.accessToken !== presented.accessToken ||
+            now.refreshToken !== presented.refreshToken ||
+            now.userId !== presented.userId)
+        ) {
+          return now;
+        }
+        if (!now && cleared !== false) {
+          this.onTokensCleared?.(reason);
+        }
+      }
       throw new SessionRevokedError(this.reauthMessages.refreshFailed);
     }
     this.logger.debug('AUTH: Token refresh successful');
@@ -296,6 +453,7 @@ export class AuthenticatedApiClient {
     // overwriting it would put a superseded token back - whose next use reads as theft and
     // revokes the whole session. Cleared meanwhile means signed out: do not resurrect it.
     const current = await this.readStoredTokens();
+    this.assertSession(current);
     if (!current) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
     if (current.refreshToken !== presented.refreshToken) {
       this.logger.debug('AUTH: Stored tokens changed during refresh, keeping the stored ones');
@@ -310,18 +468,21 @@ export class AuthenticatedApiClient {
       expiresAt: new Date(Date.now() + response.expires_in * 1000).toISOString(),
       userId: presented.userId,
     };
-    await this.tokenStore.setAuthTokens(next);
+    // The check above and this save are separate calls; the store re-checks so a logout in between stands.
+    if ((await this.tokenStore.setAuthTokens(next, presented.refreshToken)) === false) {
+      const now = await this.readStoredTokens();
+      if (!now) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
+      return now;
+    }
     return next;
   }
 
-  private readStoredTokens(): Promise<AuthTokens | null> {
-    return this.tokenStore.reloadAuthTokens ? this.tokenStore.reloadAuthTokens() : this.tokenStore.getAuthTokens();
-  }
-
-  private async clearStoredTokens(reason: string): Promise<void> {
-    this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
-    await this.tokenStore.clearAuthTokens();
-    this.onTokensCleared?.(reason);
+  private async readStoredTokens(): Promise<AuthTokens | null> {
+    const tokens = await (this.tokenStore.reloadAuthTokens
+      ? this.tokenStore.reloadAuthTokens()
+      : this.tokenStore.getAuthTokens());
+    this.assertSession(tokens);
+    return tokens;
   }
 
   /**
@@ -336,8 +497,7 @@ export class AuthenticatedApiClient {
    * Make a POST request
    */
   async post<T = unknown>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    this.logger.debug(`[ApiClient] POST ${this.client.defaults.baseURL}${url}`);
-    this.logger.debug(`[ApiClient] Request body: ${JSON.stringify(data)}`);
+    this.logger.debug('[ApiClient] POST request');
     const response = await this.client.post<T>(url, data, config);
     this.logger.debug(`[ApiClient] Response status: ${response.status}`);
     return response.data;
@@ -370,6 +530,7 @@ export class AuthenticatedApiClient {
    * Check if user is authenticated
    */
   async isAuthenticated(): Promise<boolean> {
+    if (this.options.isSessionCurrent) return (await this.readStoredTokens()) !== null;
     return this.tokenStore.isAuthenticated();
   }
 
@@ -378,7 +539,7 @@ export class AuthenticatedApiClient {
    */
   async getCurrentUser(): Promise<{ id: string; email?: string; displayName?: string } | null> {
     try {
-      const tokens = await this.tokenStore.getAuthTokens();
+      const tokens = await this.readStoredTokens();
       if (!tokens) return null;
 
       // TODO: Implement /api/me endpoint to get user info

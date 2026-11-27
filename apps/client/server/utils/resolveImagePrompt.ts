@@ -2,7 +2,10 @@ import { getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { IChatHistoryItemDocument, PromptIntent } from '@bike4mind/common';
-import { getEffectiveApiKeyByBackend, OperationsModelService } from '@client/services/operationsModelService';
+import {
+  getEffectiveApiKeyByBackend,
+  OperationsModelService,
+} from '@bike4mind/server-utils/services/operationsModelService';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
@@ -167,7 +170,7 @@ export const resolveImagePrompt = async (args: {
   const fallback: PromptResolution = { rewrittenPrompt: originalPrompt, intent: 'continuation' };
 
   try {
-    const operationsModel = await OperationsModelService.getOperationsModel();
+    const operationsModel = await OperationsModelService.getOperationsModel({ endUserId });
     const operationsModelInfo = operationsModel.modelInfo;
     // Intent classification is a platform operation billed to the system key so quota stays
     // consistent with other operations callers (summarization, auto-naming). Provider abuse

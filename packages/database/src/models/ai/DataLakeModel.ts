@@ -35,10 +35,12 @@ import {
   DATA_LAKE_STABLE_STATUSES,
   DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
+  LAKE_UNCOUNTED_STATUSES,
   DATA_LAKE_ORIGINS,
   DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
   LAKE_MANAGE_RUNGS,
+  isRegistryLakeKey,
 } from '@bike4mind/common';
 
 // --- Data Lake Schema ---
@@ -210,7 +212,7 @@ DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1, _id: 1 });
 // that sort.
 DataLakeSchema.index({ status: 1, lastInconsistencyScanAt: 1, _id: 1 });
 
-export const DataLakeModel =
+export const DataLakeModel: mongoose.Model<IDataLakeDocument> =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
   mongoose.model<IDataLakeDocument>('DataLake', DataLakeSchema);
 
@@ -501,7 +503,7 @@ export const buildAccessibleQuery = (
   // Org-admin arm (#2005): a lake in an org the caller holds ADMIN rights in, reachable by those
   // rights alone - the analog of the owner arm, for the same reason (the gate admits them via
   // canManageLake before it ever reaches the org prerequisite). Keyed off `administeredOrgIds`
-  // (billing owner OR adminUserIds), deliberately a DIFFERENT set from the
+  // (billing owner OR a manager with a users[] row), deliberately a DIFFERENT set from the
   // `organizationIds` membership the org arm above uses: membership also decides what the account
   // switcher offers as a write target (see `orgMembershipFilter`), so widening membership to fix
   // this would have handed a team manager the org as somewhere to write as. The two sets are meant
@@ -619,6 +621,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
+    // A registry key resolves to the registry lake (assertLakeAccess's fallback) for anyone outside
+    // an org that holds it, never to an org-less row.
+    if (isRegistryLakeKey(slug)) return null;
     // Sorted too (#2425 review): `organizationId: null` and `organizationId: ''` are both stored
     // as "org-less" but are distinct index keys, so two org-less lakes CAN share a slug. Without
     // this, which one wins would depend on document order rather than being merely unspecified.
@@ -643,8 +648,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
     // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
     // wins would be nondeterministic rather than merely unspecified-but-stable.
+    // Same registry-key rule as findBySlug: only an org-scoped grant-held lake may answer one.
+    const orgArm = isRegistryLakeKey(slug) ? { organizationId: { $nin: [null, ''] } } : {};
     const granted = await this.dataLakeModel
-      .findOne({ slug, _id: { $in: usable }, status: SLUG_RESOLVABLE })
+      .findOne({ slug, _id: { $in: usable }, status: SLUG_RESOLVABLE, ...orgArm })
       .sort({ _id: 1 });
     return (granted?.toJSON() as IDataLakeDocument) ?? null;
   }
@@ -909,6 +916,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       ],
     };
     return this.dataLakeModel.countDocuments(filter);
+  }
+
+  /** Served by the { createdByUserId: 1 } index; see IDataLakeRepository for the contract. */
+  async countCountedCreatedBy(userId: string): Promise<number> {
+    if (!userId) return 0;
+    return this.dataLakeModel.countDocuments({
+      createdByUserId: userId,
+      status: { $nin: [...LAKE_UNCOUNTED_STATUSES] },
+    });
   }
 
   /**
@@ -1586,6 +1602,17 @@ const DataLakeBatchSchema = new mongoose.Schema(
     // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
     // comment for why it isn't layered onto the ingest status instead).
     wantsTaxonomy: { type: Boolean, default: false },
+    taxonomyBilling: {
+      type: new mongoose.Schema(
+        {
+          organizationId: { type: String, default: null },
+          apiKeyId: { type: String },
+          source: { type: String, enum: ['api', 'cli', 'desktop'] },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     taxonomyStatus: {
       type: String,
       enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'],
@@ -1621,7 +1648,7 @@ DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 // Exported like its sibling `DataLakeModel` above: app code goes through
 // `dataLakeBatchRepository`, but the operator scripts under packages/scripts/migrate read models
 // directly (see check-datalake-prefix-whitespace.ts, which reads stored taxonomy suffixes).
-export const DataLakeBatchModel =
+export const DataLakeBatchModel: mongoose.Model<IDataLakeBatchDocument> =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
   mongoose.model<IDataLakeBatchDocument>('DataLakeBatch', DataLakeBatchSchema);
 

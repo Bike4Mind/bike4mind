@@ -239,7 +239,7 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(persistedData).not.toHaveProperty('fileUrlExpireAt');
   });
 
-  it('still mints and persists a fileUrl for non-image content (unaffected)', async () => {
+  it('returns a signed fileUrl for non-image content without persisting it', async () => {
     const result = await createFabFile(
       mockUserId,
       {
@@ -253,9 +253,15 @@ describe('createFabFile (upload moderation gate root cause)', () => {
       mockAdapters
     );
 
-    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get', {
+      ResponseContentDisposition: 'attachment; filename="notes.txt"',
+    });
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('fileUrl');
+    expect(persisted).not.toHaveProperty('fileUrlExpireAt');
+    expect(persisted).not.toHaveProperty('presignedUrl');
     // Bytes this service wrote itself are not judged by the landed-size gate.
     expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
   });
@@ -276,8 +282,21 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put', { ContentLength: 2048 });
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('presignedUrl');
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ clientUpload: true });
+  });
+
+  it('mints no PUT and stamps no client upload when the caller uploads the bytes itself', async () => {
+    const result = await createFabFile(
+      mockUserId,
+      { fileName: 'page.txt', mimeType: 'text/plain', fileSize: 12, type: KnowledgeType.URL },
+      { ...mockAdapters, serverUpload: true }
+    );
+
+    expect(storageGenerateSignedUrl).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty('presignedUrl');
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
   });
 
   // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was
@@ -300,7 +319,9 @@ describe('createFabFile (upload moderation gate root cause)', () => {
 
     expect(storageUpload).toHaveBeenCalled();
     // Non-image content path: a GET url is minted immediately (no moderation hold).
-    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get', {
+      ResponseContentType: 'audio/mpeg',
+    });
     expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
 
     const persistedData = fabFilesCreate.mock.calls[0][0];
@@ -428,6 +449,21 @@ describe('createFabFile provenance', () => {
     const persisted = fabFilesCreate.mock.calls[0][0];
     expect(persisted.sourceType).toBe(FabFileSourceType.SLACK);
     expect(persisted.sourceMetadata).toEqual({ channel: 'C1', messageTs: '1700000000.0001' });
+  });
+
+  it('persists generated-asset lineage, and no key when it is empty', async () => {
+    const derivedFrom = [{ fileId: 'a'.repeat(24), role: 'reference' as const }];
+    await createFabFile(mockUserId, params, {
+      ...mockAdapters,
+      provenance: { sourceType: FabFileSourceType.TOOL_GENERATED, derivedFrom },
+    });
+    expect(fabFilesCreate.mock.calls[0][0].derivedFrom).toEqual(derivedFrom);
+
+    await createFabFile(mockUserId, params, {
+      ...mockAdapters,
+      provenance: { sourceType: FabFileSourceType.TOOL_GENERATED, derivedFrom: [] },
+    });
+    expect(fabFilesCreate.mock.calls[1][0]).not.toHaveProperty('derivedFrom');
   });
 
   it('leaves both fields off when no provenance is supplied', async () => {
@@ -714,6 +750,36 @@ describe('createFabFile - owning organization', () => {
     expect(adapters.db.fabFiles.create).not.toHaveBeenCalled();
   });
 
+  it("counts the owning org's in-flight upload bytes as used", async () => {
+    const adapters = ownerAdapters();
+    vi.mocked(adapters.db.organizations.findById).mockResolvedValue({
+      id: 'org-1',
+      storageLimit: 1,
+      currentStorageSize: 0,
+    } as unknown as IOrganizationDocument);
+    const pendingUploadBytes = vi.fn(() => 950_000);
+
+    await expect(
+      createFabFile(
+        'u1',
+        { ...file, fileSize: 100_000, tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+        { ...adapters, pendingUploadBytes }
+      )
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', used_bytes: 950_000 } });
+    expect(pendingUploadBytes).toHaveBeenCalledWith('org-1');
+  });
+
+  it("counts the uploader's personal in-flight upload bytes for a personal file", async () => {
+    const adapters = ownerAdapters();
+    vi.mocked(adapters.db.users.findById).mockResolvedValue({ id: 'u1', storageLimit: 1 } as never);
+    const pendingUploadBytes = vi.fn(() => 950_000);
+
+    await expect(
+      createFabFile('u1', { ...file, fileSize: 100_000 }, { ...adapters, pendingUploadBytes })
+    ).rejects.toMatchObject({ info: { errorCode: 'storage_limit_exceeded', used_bytes: 950_000 } });
+    expect(pendingUploadBytes).toHaveBeenCalledWith(undefined);
+  });
+
   it('persists the derived owner, not the caller-supplied org, when both are present', async () => {
     const created = await createFabFile(
       'u1',
@@ -779,5 +845,65 @@ describe('createFabFile - organization storage limit lookup', () => {
     await expect(createFabFile('u1', lakeFile('org-missing'), deps())).rejects.toSatisfy(
       error => isStorageLimitError(error) && error.info.errorCode === 'org_storage_limit_exceeded'
     );
+  });
+});
+
+describe('createFabFile storageExempt', () => {
+  const mockUserId = 'user-123';
+  let fabFilesCreate: Mock;
+  let mockAdapters: CreateFabFileAdapters;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateSettingsCache();
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          // 1 MB limit, already over it.
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1, currentStorageSize: 5_000_000 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  afterEach(() => invalidateSettingsCache());
+
+  const params = { fileName: 'notes.md', mimeType: 'text/markdown', fileSize: 10, type: KnowledgeType.FILE as const };
+
+  it('refuses an over-quota owner without the flag', async () => {
+    await expect(createFabFile(mockUserId, params, mockAdapters)).rejects.toSatisfy(isStorageLimitError);
+  });
+
+  it('creates the file for an over-quota owner and stamps the row exempt', async () => {
+    await createFabFile(mockUserId, params, { ...mockAdapters, storageExempt: true });
+    expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ storageExempt: true });
+  });
+
+  it('still enforces MaxFileSize on an exempt file', async () => {
+    const limit = settingsMap.MaxFileSize.defaultValue! * 1024 * 1024;
+    await expect(
+      createFabFile(mockUserId, { ...params, fileSize: limit + 1 }, { ...mockAdapters, storageExempt: true })
+    ).rejects.toMatchObject({ info: { errorCode: 'file_too_large' } });
+  });
+
+  it('cannot be set through the request parameters', async () => {
+    // Under quota, so only the stripped body can make the row exempt.
+    (mockAdapters.db.users.findById as Mock).mockResolvedValue({
+      id: mockUserId,
+      storageLimit: 1000,
+      currentStorageSize: 0,
+    });
+    await createFabFile(mockUserId, { ...params, storageExempt: true } as typeof params, mockAdapters);
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('storageExempt');
   });
 });

@@ -1,6 +1,8 @@
-import { User } from '@bike4mind/database';
+import { Project, Session, User, organizationRepository, readAccessArms } from '@bike4mind/database';
+import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  ApiKeyScope,
   IUserDocument,
   redactUserSecretsForSelf,
   publicUserProfileResponseSchema,
@@ -8,25 +10,62 @@ import {
   selfUserProfileResponseSchema,
 } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
-import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocument';
+import { holdsApiKeyScope, isLegacyApiKey } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { withSafeOrganization } from '@bike4mind/server-utils/utils/toSafeOrganizationSubdocument';
+import { accessibleHomeOrg } from '@bike4mind/server-utils/utils/homeOrgPointer';
 import { Request } from 'express';
 
-function toPublicProfile(user: IUserDocument): PublicUserProfile {
+function toPublicProfile(user: IUserDocument, isColleague: boolean): PublicUserProfile {
   return {
     id: user.id,
     username: user.username,
     name: user.name,
     photoUrl: user.photoUrl,
-    level: user.level,
-    role: user.role,
-    team: user.team,
-    lastActiveAt: user.lastActiveAt,
-    isOnline: user.isOnline ?? false,
+    ...(isColleague && {
+      level: user.level,
+      role: user.role,
+      team: user.team,
+      lastActiveAt: user.lastActiveAt,
+      isOnline: user.isOnline ?? false,
+    }),
   };
 }
 
-const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(async (req, res) => {
+async function sharesWorkspace(viewer: IUserDocument, subject: IUserDocument): Promise<boolean> {
+  const [viewerOrgIds, subjectOrgIds] = await Promise.all([
+    organizationRepository.findMembershipOrgIds(viewer.id),
+    organizationRepository.findMembershipOrgIds(subject.id),
+  ]);
+  if (viewerOrgIds.some(id => subjectOrgIds.includes(id))) return true;
+
+  const access = { $and: [{ $or: readAccessArms(viewer) }, { $or: readAccessArms(subject) }], deletedAt: null };
+  const [project, notebook] = await Promise.all([Project.exists(access), Session.exists(access)]);
+  return Boolean(project || notebook);
+}
+
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get<
+  Request<{}, unknown, unknown, { id: string }>
+>(async (req, res) => {
   const userId = req.query.id;
+
+  // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
+  if (req.apiKeyInfo?.oauthExchangeClientId) {
+    return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
+  }
+
+  // Admin authority needs an admin owner AND, for a key caller, the key's own admin:* scope: an
+  // admin's least-privilege me:read key reads like anyone else's. JWT callers carry no key, so
+  // holdsApiKeyScope passes and the owner's role alone decides. Legacy keys predate scopes and
+  // keep the reads they had until the legacy window ends, as at the route gate.
+  const isAdmin =
+    req.user.isAdmin === true && holdsApiKeyScope(req, [ApiKeyScope.ADMIN], { grandfatherLegacyKeys: true });
+
+  // me:read covers only the key owner's own account, so a key reads other users' profiles only
+  // with admin authority. 404, not 403, for the enumeration reason below. Legacy keys keep the
+  // public-profile reads they had until the legacy window ends.
+  if (req.apiKeyInfo && !isLegacyApiKey(req.apiKeyInfo.createdAt) && req.user.id !== userId && !isAdmin) {
+    return res.status(404).json({ error: 'User not found' });
+  }
 
   const user = await User.findById(userId).populate('organizationId').select('-password -counters');
   // Return 404 for missing users regardless of requester privilege.
@@ -35,17 +74,25 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const isSelf = req.user.id === userId;
-  const isAdmin = req.user.isAdmin;
 
   if (isSelf || isAdmin) {
+    // The sign-in bootstrap reads the caller's own profile here, so it must carry the role permissions too.
+    await resolveRoleAdminPermissions(user);
     // Self/admin-gated profile view. securityQuestions belong to the subject, so a self view
     // keeps them. userNotes are admin-authored notes ABOUT the subject and are gated on the
     // VIEWER: ProfileDataForm excludes them from its save payload (see its field allowlist
     // and ProfileDataForm.test.tsx), so a non-admin self view cannot blank them on save.
     const safeSelf = redactUserSecretsForSelf(user, {
       keep: ['securityQuestions'],
-      ...(isAdmin && { keepAdminOnly: ['userNotes'] as const }),
+      ...(isAdmin && {
+        keepAdminOnly: ['userNotes', 'signupMeta', 'signupGrantAssessment', 'throttle', 'riskSignals'] as const,
+      }),
     });
+
+    // Same recheck as GET /api/users/:id/organization: a pointer to an org the subject left is
+    // served as null.
+    const pointed = user.organizationId as unknown as { id: string } | null | undefined;
+    const stalePointer = Boolean(pointed) && !(await accessibleHomeOrg(user, pointed));
 
     // `.populate('organizationId')` above inlines the WHOLE Organization document, and
     // redactUserSecretsForSelf is a denylist over the USER's own fields - it never descends into a
@@ -55,11 +102,16 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
     return respond(
       res,
       selfUserProfileResponseSchema.nullable(),
-      safeSelf && withSafeOrganization(safeSelf, { userId: req.user.id, isAdmin })
+      safeSelf &&
+        withSafeOrganization(stalePointer ? { ...safeSelf, organizationId: null } : safeSelf, {
+          userId: req.user.id,
+          isAdmin,
+        })
     );
   }
 
-  return respond(res, publicUserProfileResponseSchema, toPublicProfile(user));
+  const isColleague = await sharesWorkspace(req.user, user);
+  return respond(res, publicUserProfileResponseSchema, toPublicProfile(user, isColleague));
 });
 
 export const config = {

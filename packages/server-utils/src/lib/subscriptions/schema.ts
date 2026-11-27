@@ -1,0 +1,80 @@
+import { TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
+import { SubscriptionOwnerType } from './types';
+import { checkoutSurfaceSchema } from '../userSubscriptions/schemas';
+import { z } from 'zod';
+
+export const BaseStripeSubscriptionMetadata = z.object({
+  userId: z.string(),
+  stage: z.string(),
+});
+
+export const UserStripeSubscriptionMetadata = BaseStripeSubscriptionMetadata.extend({
+  ownerType: z.literal(SubscriptionOwnerType.User),
+});
+
+export const OrganizationStripeSubscriptionMetadata = BaseStripeSubscriptionMetadata.extend({
+  ownerType: z.literal(SubscriptionOwnerType.Organization),
+  organizationId: z.string().optional(),
+  newOrganizationName: z.string().optional(),
+}).refine(data => data.organizationId !== undefined || data.newOrganizationName !== undefined, {
+  path: ['organizationId'], // path of error
+  error: 'Either organizationId or newOrganizationName must be provided',
+});
+
+export const StripeSubscriptionMetadataSchema = z.union([
+  UserStripeSubscriptionMetadata,
+  OrganizationStripeSubscriptionMetadata,
+]);
+
+export const OrgSubscriptionSubscribeSchema = z
+  .object({
+    /**
+     * The Stripe price ID to subscribe to.
+     */
+    priceId: z.string(),
+
+    /**
+     * Number of seats to subscribe to. Whole seats only - this value flows into Stripe checkout
+     * line_items and into organization.seats at creation, so a non-integer value must be rejected
+     * here rather than relying on Stripe to bounce it. The paid-plan floor/ceiling are admin
+     * settings (`teamPlanMinSeats` / `teamPlanMaxSeats`), so the subscribe handler checks them;
+     * this schema only holds the absolute rail.
+     */
+    quantity: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
+
+    /**
+     * The organization that is subscribing. If not provided, a new organization will be created.
+     *
+     * Empty ids must not select the new-organization branch after satisfying the presence check.
+     */
+    organizationId: z.string().min(1).optional(),
+
+    /**
+     * The URL to redirect to after the subscription is created. Must be a real URL -
+     * origin is further restricted to the deployed app in the subscribe handler
+     * (isAllowedCallbackOrigin) to prevent an open-redirect through Stripe's hosted
+     * checkout success/cancel pages.
+     */
+    callbackUrl: z.string().url(),
+
+    /**
+     * If organizationId is not provided, this is the data of the organization to create.
+     */
+    organizationData: z
+      .object({
+        name: z.string().trim().min(1),
+      })
+      .optional(),
+
+    /** Consent to attach campaign attribution, as individual checkout sends it. */
+    attributionConsent: z.boolean().optional(),
+
+    /** Which UI started the checkout; see checkoutSurfaceSchema. */
+    surface: checkoutSurfaceSchema.optional(),
+  })
+  .refine(data => (data.organizationId !== undefined) !== (data.organizationData !== undefined), {
+    path: ['organizationId'], // path of error
+    error: 'Exactly one of organizationId or organizationData must be provided',
+  });
+
+export type OrgSubscriptionSubscribeRequest = z.infer<typeof OrgSubscriptionSubscribeSchema>;

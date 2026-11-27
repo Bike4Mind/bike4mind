@@ -1,3 +1,17 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  bindEmbeddingModel: (_registry: unknown, model: string) => {
+    mockCreateEmbeddingService(model);
+    return {
+      model,
+      maxInputTokens: 8192,
+      embed: async (inputs: readonly string[]) => ({
+        vectors: await Promise.all(inputs.map(async () => mockGenerateEmbedding(model))),
+      }),
+    };
+  },
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Cosine is a hoisted mock so individual tests can vary scores; the default keeps every chunk
@@ -12,26 +26,17 @@ const { mockCosine, mockCreateEmbeddingService, mockGenerateEmbedding } = vi.hoi
   mockGenerateEmbedding: vi.fn(),
 }));
 
-// Mock only the embedding/provider helpers from the utils barrel; keep the real
+// Mock only computeCosineSimilarity from the utils barrel; keep the real
 // `@bike4mind/utils/retrievalExclusion` subpath so filterRetrievalExcluded runs for real.
 //
-// getProviderFromModel branches on a 'voyage-' prefix (not a hardcoded 'openai') and
-// createEmbeddingService returns a vector that ENCODES the model, so a mixed-model test can prove
-// each ANN call embedded the query under its OWN model rather than reusing the primary embed.
-// This does not affect scoring: computeCosineSimilarity is mocked separately below and the ANN
-// path never calls it (adapter mocks supply raw hit scores directly).
+// The bindEmbeddingModel mock above returns a vector that ENCODES the model, so a mixed-model test
+// can prove each ANN call embedded the query under its OWN model rather than reusing the primary
+// embed. The ANN path never calls computeCosineSimilarity (adapter mocks supply raw hit scores).
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    getProviderFromModel: (m: string) => (m.startsWith('voyage-') ? 'voyageai' : 'openai'),
     computeCosineSimilarity: mockCosine,
-    EmbeddingFactory: class {
-      createEmbeddingService(model: string) {
-        mockCreateEmbeddingService(model);
-        return { generateEmbedding: async () => mockGenerateEmbedding(model) };
-      }
-    },
   };
 });
 
@@ -1650,6 +1655,78 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.scan.annFilesQueried).toBe(1);
     expect(result.scan.annHits).toBe(1);
     expect(result.results.map(r => r.fileId).sort()).toEqual(['fresh', 'ready']);
+  });
+
+  describe('fallback-to-scan metrics', () => {
+    const runAtlasSearch = async (adapters: ReturnType<typeof annAdapters>) => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = adapters;
+      return semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+    };
+    const reportedFallbacks = () => {
+      expect(mockRecordDataLakeSearchMetrics).toHaveBeenCalledTimes(1);
+      return mockRecordDataLakeSearchMetrics.mock.calls[0][0].fallbacks;
+    };
+
+    it('reports a not-queryable index, and the scan-only search it caused', async () => {
+      const result = await runAtlasSearch(
+        annAdapters({ files: [annFile('f1')], scanChunks: chunkRows('f1', 2), indexQueryable: false })
+      );
+
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: true,
+        annQueryFailed: false,
+        annServedNothingReason: 'index-not-queryable',
+      });
+      expect(result.scan.chunksScanned).toBe(2);
+    });
+
+    it('reports a throwing ANN query, and still serves its files from the scan', async () => {
+      const adapters = annAdapters({ files: [annFile('f1')], scanChunks: chunkRows('f1', 2) });
+      adapters.vectorSearch.mockRejectedValue(new Error('vector index unavailable'));
+
+      const result = await runAtlasSearch(adapters);
+
+      expect(adapters.vectorSearch).toHaveBeenCalledTimes(1);
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: false,
+        annQueryFailed: true,
+        annServedNothingReason: null,
+      });
+      expect(result.scan.chunksScanned).toBe(2);
+      expect(result.results.map(r => r.fileId)).toEqual(['f1', 'f1']);
+    });
+
+    it('reports the blocked reason when vector search serves nothing', async () => {
+      await runAtlasSearch(
+        annAdapters({
+          files: [annFile('f1', { chunkEmbeddingModelStampedAt: freshStamp })],
+          scanChunks: chunkRows('f1', 2),
+        })
+      );
+
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: false,
+        annQueryFailed: false,
+        annServedNothingReason: 'ready-files-within-lag',
+      });
+    });
+
+    it('reports no fallback when ANN serves the search', async () => {
+      await runAtlasSearch(
+        annAdapters({
+          files: [annFile('f1')],
+          annHits: [{ id: 'f1-c0', fabFileId: 'f1', text: 'ann hit', score: 0.95 }],
+        })
+      );
+
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: false,
+        annQueryFailed: false,
+        annServedNothingReason: null,
+      });
+    });
   });
 
   describe("the per-document cap's widened ANN limit", () => {

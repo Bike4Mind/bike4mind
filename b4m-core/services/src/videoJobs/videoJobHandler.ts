@@ -3,9 +3,11 @@ import {
   estimateVideoCostUsd,
   getVideoModelCapabilities,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
+  retiredVideoModelMessage,
   validateAgainstCapabilities,
   videoFileExtension,
-  videoInputImageRef,
+  videoInputRef,
+  videoRequestInputs,
   type GenerationJobErrorCode,
   type IGenerationJobDocumentOf,
   type ValidatedVideoRequest,
@@ -19,12 +21,14 @@ import {
   ProviderOutputTooLargeError,
   type ProviderJobHandle,
   type ProviderOutput,
+  type ResolvedInputImage,
   type ResolvedInputs,
   type VideoProvider,
   type VideoProviderContext,
 } from '@bike4mind/utils/videoProviders';
 import type { CreditLedgerEntry } from '../creditService/creditHold';
 import { releaseJobHold, settleJobHold } from '../generationJobs/settlement';
+import { storeGeneratedOutput } from '../generationJobs/storeOutput';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
 import { isUsableApiKey, type VideoJobDeps } from './types';
 
@@ -33,10 +37,31 @@ const FEATURE_LABEL = 'video generation';
 type VideoJob = IGenerationJobDocumentOf<'video'>;
 type VideoStepResult = StepResult<'video'>;
 
+const MAX_RAW_PROVIDER_BYTES = 16 * 1024;
+
+// The raw payload rides on the job document and into logs, and a provider can echo the request (a base64 image) into it.
+const boundRawPayload = (raw: unknown): unknown => {
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(raw);
+  } catch {
+    return '[raw provider payload not serializable]';
+  }
+  if (json === undefined) return raw;
+  const bytes = Buffer.from(json, 'utf8');
+  if (bytes.byteLength <= MAX_RAW_PROVIDER_BYTES) return raw;
+  const marker = `...[truncated, ${json.length} chars total]`;
+  // Streaming decode omits a trailing partial UTF-8 character.
+  const prefix = new TextDecoder().decode(bytes.subarray(0, MAX_RAW_PROVIDER_BYTES - Buffer.byteLength(marker)), {
+    stream: true,
+  });
+  return prefix + marker;
+};
+
 const fail = (code: GenerationJobErrorCode, message: string, rawProviderError?: unknown): VideoStepResult => ({
   next: 'failed',
   error: { code, message },
-  rawProviderError,
+  rawProviderError: boundRawPayload(rawProviderError),
 });
 
 const noApiKey = (job: VideoJob) => fail('provider_error', `No API key configured for ${job.payload.providerId}`);
@@ -134,6 +159,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
     job: VideoJob,
     context: GenerationJobStepContext
   ): Promise<PreparedSubmit | VideoStepResult> => {
+    // A job queued before its model was retired fails here rather than spending a submit the provider refuses.
+    const retired = retiredVideoModelMessage(job.payload.request.model);
+    if (retired) return fail('provider_error', retired);
     const provider = providerFor(job);
     const ctx = await contextFor(job, context);
     if (!ctx) return noApiKey(job);
@@ -141,14 +169,13 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
     // Defensive: the catalog may have changed since the job was created.
     const validation = validateAgainstCapabilities(request, getVideoModelCapabilities(request.model));
     if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
-    const inputs: ResolvedInputs = {};
-    const inputImage = request.mode === 'image_to_video' ? videoInputImageRef(request) : null;
-    if (inputImage) {
-      const image = await deps.loadInputImage(job.requestedBy, inputImage);
-      if (!image) return fail('input_image_not_found', 'Input image not found');
-      inputs.inputImage = image;
+    const images: ResolvedInputImage[] = [];
+    for (const videoInput of videoRequestInputs(request)) {
+      const image = await deps.loadInputImage(job.requestedBy, videoInputRef(videoInput));
+      if (!image) return fail('input_image_not_found', `Input image not found (${videoInput.role})`);
+      images.push({ role: videoInput.role, ...image });
     }
-    return { provider, request: validation.request, inputs, ctx };
+    return { provider, request: validation.request, inputs: { images }, ctx };
   };
 
   return {
@@ -178,7 +205,12 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
         // the same request cannot help (ProviderSubmitError.retryable). See GenerationJobHandler.submit.
         if (!(error instanceof ProviderSubmitError) || !error.definitive) throw error;
         if (!error.retryable) {
-          deps.logger.warn('video provider rejected the submit for good', { jobId: job.id, message: error.message });
+          // rawProviderError is select: false and never read back, so the provider's own reason must be logged here.
+          deps.logger.warn('video provider rejected the submit for good', {
+            jobId: job.id,
+            message: error.message,
+            raw: boundRawPayload(error.raw),
+          });
           return fail('provider_error', error.message, error.raw);
         }
         deps.logger.warn('video provider rejected the submit; retrying', { jobId: job.id, message: error.message });
@@ -214,13 +246,17 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
           return {
             next: 'blocked',
             error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
-            rawProviderError: result.raw,
+            rawProviderError: boundRawPayload(result.raw),
             ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
           };
         case 'failed':
-          return result.retryable
-            ? { next: 'retry', reason: result.message }
-            : fail('provider_error', result.message, result.raw);
+          if (result.retryable) return { next: 'retry', reason: result.message };
+          deps.logger.warn('video provider failed the job', {
+            jobId: job.id,
+            message: result.message,
+            raw: boundRawPayload(result.raw),
+          });
+          return fail('provider_error', result.message, result.raw);
       }
     },
 
@@ -250,35 +286,38 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler<
         durationSeconds: payload.reportedDurationSeconds ?? payload.request.durationSeconds,
       };
 
-      const files = await deps.saveToFiles({
-        userId: job.requestedBy,
-        bytes,
-        contentType,
-        generation: {
-          generator: 'video',
-          provider: payload.providerId,
-          modelId: payload.request.model,
-          jobId: job.id,
-          prompt: payload.request.prompt,
-          durationSeconds: common.durationSeconds,
-        },
-        ...(job.questId && { questId: job.questId }),
-        signal: context.signal,
-      });
-      let output: VideoJobOutput;
-      if (files.saved) {
-        output = { location: 'files', s3Key: files.s3Key, fileId: files.fileId, ...common };
-      } else {
-        deps.logger.warn('video saved outside Files', { jobId: job.id, reason: files.reason });
-        const key = `generated-video/${job.ownerId}/${job.id}.${extensionFor(contentType)}`;
-        const { s3Key } = await deps.saveToGeneratedBucket({
-          key,
+      // Generated-key inputs (chat images in quest.images) are not Files, so they carry no lineage. The file id is
+      // the caller's raw string, and the input lookup accepts uppercase hex, so canonicalize it for the lineage guard.
+      const derivedFrom = videoRequestInputs(payload.request).flatMap(input =>
+        'fileId' in input ? [{ fileId: input.fileId.toLowerCase(), role: input.role }] : []
+      );
+      const { location } = await storeGeneratedOutput(
+        {
+          job,
+          noun: 'video',
           bytes,
           contentType,
+          generation: {
+            generator: 'video',
+            provider: payload.providerId,
+            modelId: payload.request.model,
+            jobId: job.id,
+            prompt: payload.request.prompt,
+            durationSeconds: common.durationSeconds,
+            request: payload.request,
+          },
+          derivedFrom,
+          questId: job.questId,
+          bucketFolder: 'generated-video',
+          extension: extensionFor(contentType),
+          // The async store step is retried by the engine, so a throwing Files save is retried rather than
+          // bypassing Files for the bucket.
+          onFilesError: 'rethrow',
           signal: context.signal,
-        });
-        output = { location: 'generated', s3Key, ...common };
-      }
+        },
+        deps
+      );
+      const output: VideoJobOutput = { ...location, ...common };
       return { next: 'succeeded', payload: { ...withoutProviderOutput(payload), output } };
     },
 

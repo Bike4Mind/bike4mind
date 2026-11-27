@@ -1,19 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { InviteType, IUserDocument, Permission } from '@bike4mind/common';
+import { ForbiddenError, InviteType, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 import { removeFiles } from './removeFiles';
+import { applyUserSharesChange } from '../__tests__/utils/shareableFake';
 
 /**
- * IUserShare tracks a single projectId, so a user who is both a project member AND holds a
- * separately-accepted direct invite for the same file could not otherwise be told apart from
- * one whose only access came from the project - a bot review on #1151 found that the
- * pushShareable merge fix there makes this reachable via either accept ordering, where before
- * it depended on which grant happened first. A human reviewer then found the first pass of this
- * fix kept the FULL merged permission set (project-derived permissions included) rather than
- * resetting to what the independent direct invite itself grants, and that the per-entry
- * `users.findById` inside this loop is unmemoized inside the route's transaction. These tests
- * pin all three: drop a project-only entry entirely; for one with an accepted direct invite,
- * clear projectId AND reset permissions to just the direct invite's own grant; resolve grantee
- * emails via one batched `findByIds` call, not one per entry.
+ * Detaching a file drops only the rows this project minted on it; direct shares are separate untagged
+ * rows and are never re-created from invite history.
  */
 describe('projectService - removeFiles (project-derived access revocation)', () => {
   const OWNER_ID = 'owner-1';
@@ -42,14 +34,26 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
       users: {
         findById: vi.fn(async (id: string) => asUser(id)),
         findByIds: vi.fn(async (ids: string[]) => ids.map(id => asUser(id))),
+        findUserIdsByGroupIds: vi.fn(async () => ({})),
       },
       projects: {
         shareable: { findAccessibleById: vi.fn(async () => project) },
         update: vi.fn(async () => project),
+        findParticipatingReferencing: vi.fn(async () => []),
       },
       fabFiles: {
-        shareable: { findAllAccessibleByIds: vi.fn(async () => [file]) },
-        update: vi.fn(async () => file),
+        shareable: {
+          findAllAccessibleByIds: vi.fn(async () => [file]),
+          updateUserShares: vi.fn(async (_id: string, change: never) => applyUserSharesChange(file, change)),
+        },
+        findExistingIdsByIds: vi.fn(async () => []),
+        findExistingIdsIncludingDeletedByIds: vi.fn(async () => []),
+        findAllByIds: vi.fn(async (ids: string[]) => (ids.includes(file.id) ? [structuredClone(file)] : [])),
+        updateGuarded: vi.fn(async (write: { id: string; users: unknown[] }) => {
+          Object.assign(file, write);
+          return file;
+        }),
+        update: vi.fn(),
       },
       invites: {
         findAllByDocumentId: vi.fn(async () => []),
@@ -69,7 +73,7 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [JUNK_ID] }, { db });
 
     expect(project.fileIds).toEqual([FILE_ID]);
-    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
@@ -84,17 +88,15 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     // request that worked before the set comparison landed.
     const UPPER = FILE_ID_HEX.toUpperCase();
     project.fileIds = [FILE_ID_HEX];
-    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => [
-      { id: FILE_ID_HEX, userId: OWNER_ID, users: [] },
-    ]);
+    file.id = FILE_ID_HEX;
+    file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
 
     await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [UPPER] }, { db });
 
     // Asserting the file is GONE, not merely that the call returned: a case-sensitive filter
     // answered 200 having removed nothing, which a status-only assertion happily accepts.
     expect(project.fileIds).toEqual([]);
-    expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
-    expect(db.fabFiles.update.mock.calls[0][0]).toStrictEqual({ id: FILE_ID_HEX, users: [] });
+    expect(file.users).toEqual([]);
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
       id: PROJECT_ID,
@@ -112,61 +114,48 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     );
   });
 
+  it('rejects with a ForbiddenError when a non-owner removes a file they do not own', async () => {
+    project.userId = 'someone-else';
+    file.userId = 'someone-else';
+
+    await expect(call()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
+  });
+
   it('drops a user whose only access to the file came from this project', async () => {
     file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
 
     await call();
 
     expect(file.users).toEqual([]);
-    expect(db.invites.findAllByDocumentId).toHaveBeenCalledWith(FILE_ID);
   });
 
-  it('keeps a project member with an accepted direct invite, resetting to the direct grant only', async () => {
-    // Project granted [read, update, share] (via pushShareable's union); the direct invite
-    // only ever granted [read, share] - the update permission must NOT survive the revoke.
-    file.users = [
-      {
-        userId: 'member-1',
-        permissions: [Permission.read, Permission.update, Permission.share],
-        projectId: PROJECT_ID,
-      },
-    ];
-    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
-    db.invites.findAllByDocumentId = vi.fn(async () => [
-      {
-        type: InviteType.FabFile,
-        permissions: [Permission.read, Permission.share],
-        recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
-      },
-    ]);
-
-    await call();
-
-    expect(file.users).toEqual([
-      { userId: 'member-1', permissions: [Permission.read, Permission.share], projectId: undefined },
-    ]);
-  });
-
-  it('unions permissions across more than one accepted direct invite for the same recipient', async () => {
+  it('does not re-create a direct grant from an accepted invite once the direct row is gone', async () => {
     file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
-    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
     db.invites.findAllByDocumentId = vi.fn(async () => [
       {
         type: InviteType.FabFile,
-        permissions: [Permission.read],
-        recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
-      },
-      {
-        type: InviteType.FabFile,
-        permissions: [Permission.share],
+        permissions: [Permission.read, Permission.update, Permission.share],
         recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
       },
     ]);
+    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
 
     await call();
 
-    expect(file.users[0].permissions).toEqual(expect.arrayContaining([Permission.read, Permission.share]));
-    expect(file.users[0].permissions).toHaveLength(2);
+    expect(file.users).toEqual([]);
+    expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
+  });
+
+  it("keeps a member's untagged direct row while dropping the project's row", async () => {
+    file.users = [
+      { userId: 'member-1', permissions: [Permission.read, Permission.update], projectId: PROJECT_ID },
+      { userId: 'member-1', permissions: [Permission.read] },
+    ];
+
+    await call();
+
+    expect(file.users).toEqual([{ userId: 'member-1', permissions: [Permission.read] }]);
   });
 
   it('leaves an entry unrelated to this project untouched', async () => {
@@ -179,48 +168,112 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     ]);
   });
 
-  it('skips the invite lookup and the batched user lookup when no entry is project-derived (common case)', async () => {
-    file.users = [{ userId: 'other-project-member', permissions: [Permission.read], projectId: 'a-different-project' }];
+  it('answers NotFoundError for an unknown user or an inaccessible project', async () => {
+    db.users.findById.mockResolvedValueOnce(null);
+    await expect(call()).rejects.toBeInstanceOf(NotFoundError);
 
-    await call();
-
-    expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
-    expect(db.users.findByIds).not.toHaveBeenCalled();
+    db.projects.shareable.findAccessibleById.mockResolvedValueOnce(null);
+    await expect(call()).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it('only counts an accepted invite of type FabFile, not an unrelated invite for the same document id', async () => {
+  it('answers ForbiddenError when a non-owner removes a file they do not own', async () => {
+    await expect(removeFiles('member-1', { projectId: PROJECT_ID, fileIds: [FILE_ID] }, { db })).rejects.toBeInstanceOf(
+      ForbiddenError
+    );
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner clear a held id that no longer resolves, such as a deleted file', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    const { removedIds } = await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
+
+    expect(removedIds).toEqual([FILE_ID_HEX]);
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('refuses the owner a held id whose file still exists but is unreadable, so no grant is left behind', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+    db.fabFiles.findExistingIdsByIds = vi.fn(async () => [FILE_ID_HEX]);
+
+    await expect(removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db })).rejects.toThrow(
+      'Some files are not accessible'
+    );
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a held id that no longer resolves for a member who is not the owner', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await expect(removeFiles('member-1', { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db })).rejects.toThrow(
+      'Some files are not accessible'
+    );
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('reports no removed ids when the file is not in the project', async () => {
+    project.fileIds = [];
+
+    const { removedIds } = await call();
+
+    expect(removedIds).toEqual([]);
+  });
+
+  it('revokes the project grants on a soft-deleted held file as well as clearing its id', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    file.id = FILE_ID_HEX;
+    file.deletedAt = new Date('2025-12-01');
     file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
-    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
-    // Same documentId, but a Session-type invite - must not be mistaken for a FabFile share.
-    db.invites.findAllByDocumentId = vi.fn(async () => [
-      {
-        type: InviteType.Session,
-        permissions: [Permission.read],
-        recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
-      },
-    ]);
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+    db.fabFiles.findExistingIdsIncludingDeletedByIds = vi.fn(async () => [FILE_ID_HEX]);
 
-    await call();
+    const { removedIds } = await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
 
+    expect(removedIds).toEqual([FILE_ID_HEX]);
     expect(file.users).toEqual([]);
+    expect(file.deletedAt).toEqual(new Date('2025-12-01'));
+    expect(db.fabFiles.updateGuarded).toHaveBeenCalledWith({ id: FILE_ID_HEX, users: [] }, { includeDeleted: true });
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
   });
 
-  it('resolves grantee emails with one batched findByIds call, not one findById per project-member entry', async () => {
-    file.users = [
-      { userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID },
-      { userId: 'member-2', permissions: [Permission.read], projectId: PROJECT_ID },
-    ];
-    db.invites.findAllByDocumentId = vi.fn(async () => [
-      {
-        type: InviteType.FabFile,
-        permissions: [Permission.read],
-        recipients: { pending: [], accepted: [], refused: [] },
-      },
-    ]);
+  it('clears a hard-deleted held file id without any revoke', async () => {
+    project.fileIds = [FILE_ID_HEX];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await removeFiles(OWNER_ID, { projectId: PROJECT_ID, fileIds: [FILE_ID_HEX] }, { db });
+
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('refuses a non-owner a legacy non-ObjectId entry listed in the project', async () => {
+    project.fileIds = ['legacy-entry'];
+    db.fabFiles.shareable.findAllAccessibleByIds = vi.fn(async () => []);
+
+    await expect(
+      removeFiles('member-1', { projectId: PROJECT_ID, fileIds: ['legacy-entry'] }, { db })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('still lets a non-owner remove a readable file they own', async () => {
+    file.userId = 'member-1';
+
+    const { removedIds } = await removeFiles('member-1', { projectId: PROJECT_ID, fileIds: [FILE_ID] }, { db });
+
+    expect(removedIds).toEqual([FILE_ID]);
+    expect(db.projects.update).toHaveBeenCalledWith(expect.objectContaining({ fileIds: [] }));
+  });
+
+  it('does not write the project or revoke anything when nothing is removed', async () => {
+    project.fileIds = [];
 
     await call();
 
-    expect(db.users.findByIds).toHaveBeenCalledTimes(1);
-    expect(db.users.findByIds).toHaveBeenCalledWith(expect.arrayContaining(['member-1', 'member-2']));
+    expect(db.projects.update).not.toHaveBeenCalled();
+    expect(db.fabFiles.shareable.updateUserShares).not.toHaveBeenCalled();
   });
 });

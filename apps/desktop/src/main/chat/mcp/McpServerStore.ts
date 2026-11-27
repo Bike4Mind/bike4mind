@@ -1,16 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { McpServerInput, McpServerProvenance, McpTransport } from '@shared/mcp';
-
-/**
- * The slice of Electron's `safeStorage` this module needs, narrowed to a port for the same
- * reasons as auth/tokenVault.ts: testable without an Electron app, and the "only after the
- * app ready event" rule stays the caller's problem rather than an import-time landmine.
- */
-export interface SecretCipher {
-  isEncryptionAvailable(): boolean;
-  encryptString(plainText: string): Buffer;
-  decryptString(encrypted: Buffer): string;
-}
+import type { SecretCipher } from '../../../host/ports';
+import { resealed } from '../../secrets/reseal';
 
 export interface StoreFile {
   read(): Promise<string | null>;
@@ -182,6 +173,20 @@ export class McpServerStore {
     document.servers = document.servers.filter(server => server.id !== id);
     this.cache.delete(id);
     if (document.servers.length !== before) await this.persist(document);
+  }
+
+  /** Re-saves secrets the cipher reports as an older format; one it cannot open stays as it is. */
+  async reencrypt(): Promise<void> {
+    if (!this.cipher.needsReencrypt || !this.secretsPersisted()) return;
+    const document = await this.load();
+    let changed = false;
+    for (const server of document.servers) {
+      const secrets = server.secrets ? resealed(this.cipher, server.secrets) : null;
+      if (secrets === null) continue;
+      server.secrets = secrets;
+      changed = true;
+    }
+    if (changed) await this.persist(document);
   }
 
   private hydrate(stored: StoredServer): McpServerRecord {

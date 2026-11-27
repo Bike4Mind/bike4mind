@@ -6,15 +6,24 @@
  */
 import type { NetworkConfig } from '../types.js';
 import { HttpConnectProxy, type ProxyEvent } from './HttpConnectProxy.js';
+import { UnixSocketRelay } from './UnixSocketRelay.js';
+
+export interface ProxyManagerOptions {
+  /** Also expose the proxy on a unix socket, for a sandbox whose network namespace cannot reach host loopback. */
+  unixSocket?: boolean;
+}
 
 export class ProxyManager {
   private proxy: HttpConnectProxy | null = null;
+  private relay: UnixSocketRelay | null = null;
+  private readonly unixSocket: boolean;
   private networkConfig: NetworkConfig;
   private eventHandlers = new Set<(event: ProxyEvent) => void>();
   private startPromise: Promise<void> | null = null;
 
-  constructor(networkConfig: NetworkConfig) {
+  constructor(networkConfig: NetworkConfig, options: ProxyManagerOptions = {}) {
     this.networkConfig = { ...networkConfig, allowedDomains: [...networkConfig.allowedDomains] };
+    this.unixSocket = options.unixSocket === true;
   }
 
   /**
@@ -54,7 +63,19 @@ export class ProxyManager {
       }
     });
 
-    await this.proxy.start();
+    const port = await this.proxy.start();
+    if (!this.unixSocket) return;
+
+    // Without the socket a namespaced sandbox has no route out, so a relay failure fails the whole start.
+    const relay = new UnixSocketRelay();
+    try {
+      await relay.start(port);
+    } catch (error) {
+      await this.proxy.stop();
+      this.proxy = null;
+      throw error;
+    }
+    this.relay = relay;
   }
 
   async stop(): Promise<void> {
@@ -63,6 +84,8 @@ export class ProxyManager {
     // listener a concurrent start bound just after our check. A start's own failure
     // is irrelevant to a stop, so swallow it.
     if (this.startPromise) await this.startPromise.catch(() => {});
+    await this.relay?.stop();
+    this.relay = null;
     if (!this.proxy) return;
     await this.proxy.stop();
     this.proxy = null;
@@ -88,6 +111,10 @@ export class ProxyManager {
       https_proxy: proxyUrl,
       NO_PROXY: noProxy,
       no_proxy: noProxy,
+      ALL_PROXY: proxyUrl,
+      all_proxy: proxyUrl,
+      // Node's fetch ignores the vars above unless opted in, and the sandbox blocks direct egress.
+      NODE_USE_ENV_PROXY: '1',
     };
   }
 
@@ -108,6 +135,11 @@ export class ProxyManager {
 
   getPort(): number | null {
     return this.proxy?.getPort() ?? null;
+  }
+
+  /** Host path of the proxy's unix socket, or null when the manager was not asked for one. */
+  getSocketPath(): string | null {
+    return this.relay?.getSocketPath() ?? null;
   }
 
   /**

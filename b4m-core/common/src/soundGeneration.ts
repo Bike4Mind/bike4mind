@@ -1,6 +1,7 @@
 import z from 'zod';
 import { generatedAudioRequestFields } from './generatedAudio';
 import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
 
 /**
  * Supported sound-effects generation vendors. Currently only ElevenLabs.
@@ -8,12 +9,14 @@ import { BillingOrganizationIdSchema } from './schemas/billingOrganization';
  */
 export const supportedSoundGenerationVendor = z.enum(['elevenlabs']);
 
+export const DEFAULT_SOUND_MODEL_ID = 'eleven_text_to_sound_v2';
+
 export type SoundGenerationVendor = z.infer<typeof supportedSoundGenerationVendor>;
 
-// Max prompt length (characters) for a sound-effects generation, per the
-// ElevenLabs sound-generation API. Exported so the client can enforce the same
-// limit before calling the endpoint.
-export const SOUND_EFFECTS_MAX_INPUT_CHARS = 1000;
+// Max prompt length (characters) for a sound-effects generation. ElevenLabs
+// rejects anything longer with a 400 `text_too_long`. Exported so the client can
+// enforce the same limit before calling the endpoint.
+export const SOUND_EFFECTS_MAX_INPUT_CHARS = 450;
 
 /**
  * Inbound request body for `POST /api/ai/sound-effects`.
@@ -30,7 +33,22 @@ export const soundEffectsRequestSchema = z.object({
   promptInfluence: z.number().min(0).max(1).optional(),
   format: z.string().optional(),
   organization_id: BillingOrganizationIdSchema,
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget before the " +
+      'provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit.'
+  ),
   ...generatedAudioRequestFields,
 });
 
 export type SoundEffectsRequest = z.infer<typeof soundEffectsRequestSchema>;
+
+/** A sound-effect job's request: the generation fields of soundEffectsRequestSchema, without delivery and billing. */
+export const soundEffectJobRequestSchema = soundEffectsRequestSchema.pick({
+  provider: true,
+  text: true,
+  durationSeconds: true,
+  promptInfluence: true,
+  format: true,
+});
+
+export type SoundEffectJobRequest = z.infer<typeof soundEffectJobRequestSchema>;

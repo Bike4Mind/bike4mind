@@ -18,6 +18,7 @@ const {
   mockCreateUpload,
   mockUpdateFabFile,
   mockDeleteFileForUser,
+  mockBuildLineage,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindUser: vi.fn(),
@@ -27,22 +28,34 @@ const {
   mockCreateUpload: vi.fn(),
   mockUpdateFabFile: vi.fn(),
   mockDeleteFileForUser: vi.fn(),
+  mockBuildLineage: vi.fn(),
 }));
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: vi.fn().mockResolvedValue(undefined),
   logEventSafe: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: (...a: unknown[]) => mockLoad(...a) }));
+vi.mock('@bike4mind/server-utils/files/loadAccessibleFabFile', () => ({
+  loadAccessibleFabFile: (...a: unknown[]) => mockLoad(...a),
+}));
 vi.mock('@server/files/deleteFileForUser', () => ({
   deleteFileForUser: (...a: unknown[]) => mockDeleteFileForUser(...a),
+}));
+vi.mock('@server/files/fileLineage', () => ({
+  buildFileLineage: (...a: unknown[]) => mockBuildLineage(...a),
 }));
 vi.mock('@server/files/createPresignedUpload', () => ({
   createPresignedUpload: (...a: unknown[]) => mockCreateUpload(...a),
@@ -86,6 +99,7 @@ vi.mock('@server/auth/auth', async orig => ({
 import { ApiKeyScope } from '@bike4mind/common';
 import listOrCreate from '../index';
 import byId from '../[id]/index';
+import lineageRoute from '../[id]/lineage';
 
 const FILE_ID = '65a000000000000000000001';
 const FILE = {
@@ -128,6 +142,8 @@ const upload = () =>
     body: { file_name: 'reference.png', mime_type: 'image/png', file_size: 10 },
   });
 const getOne = () => fire(byId, { method: 'GET', url: `/api/v1/files/${FILE_ID}`, query: { id: FILE_ID } });
+const getLineage = (id: string = FILE_ID) =>
+  fire(lineageRoute, { method: 'GET', url: `/api/v1/files/${id}/lineage`, query: { id } });
 const patchOne = (body: object = { file_name: 'renamed.png' }) =>
   fire(byId, { method: 'PATCH', url: `/api/v1/files/${FILE_ID}`, query: { id: FILE_ID }, body });
 const deleteOne = () => fire(byId, { method: 'DELETE', url: `/api/v1/files/${FILE_ID}`, query: { id: FILE_ID } });
@@ -141,6 +157,7 @@ beforeEach(() => {
   mockCreateUpload.mockResolvedValue({ url: 'https://bucket.example/key', fileId: FILE_ID });
   mockUpdateFabFile.mockResolvedValue(FILE);
   mockDeleteFileForUser.mockResolvedValue('deleted');
+  mockBuildLineage.mockResolvedValue({ fileId: FILE_ID, ancestors: [], children: [], edges: [], truncated: false });
 });
 
 describe('/api/v1/files scope enforcement (real middleware chain)', () => {
@@ -237,5 +254,37 @@ describe('/api/v1/files scope enforcement (real middleware chain)', () => {
     const res = await list({ search: '' });
     expect(res._getStatusCode()).toBe(422);
     expect(mockList).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/files/{id}/lineage (real middleware chain)', () => {
+  it('a files:read key gets the published shape, uncached and exempt from the daily quota', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    const res = await getLineage();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ file_id: FILE_ID, ancestors: [], children: [], edges: [], truncated: false });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(mockRateLimit).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ meterDailyLimit: false })
+    );
+  });
+
+  it.each([[ApiKeyScope.READ_NOTEBOOKS], [ApiKeyScope.WRITE_FILES]])('a %s key is refused (403)', async scope => {
+    withScopes([scope]);
+    const res = await getLineage();
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().required_scopes).toEqual([ApiKeyScope.READ_FILES]);
+    expect(mockLoad).not.toHaveBeenCalled();
+    expect(mockBuildLineage).not.toHaveBeenCalled();
+  });
+
+  it('a malformed id is a 404 before any lookup', async () => {
+    withScopes([ApiKeyScope.READ_FILES]);
+    const res = await getLineage('not-an-object-id');
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockLoad).not.toHaveBeenCalled();
   });
 });

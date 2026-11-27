@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { buildMementoExtractionPrompt } from './MementoEvaluationService';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildMementoExtractionPrompt, MementoEvaluationService } from './MementoEvaluationService';
+
+const llmMocks = vi.hoisted(() => ({ complete: vi.fn() }));
+const modelInfo = { id: 'test-model', backend: 'openai' };
+vi.mock('@bike4mind/llm-adapters', () => ({
+  getAvailableModels: vi.fn(async () => [modelInfo]),
+  getLlmByModel: vi.fn(() => ({ complete: llmMocks.complete })),
+}));
 
 /**
  * The extraction prompt is the highest-leverage text in the memory system, and its quality is invisible
@@ -54,5 +61,56 @@ describe('memento extraction prompt', () => {
   it('still refuses to store a knowledge question as a memory', () => {
     expect(prompt).toMatch(/DO NOT mark as personal/i);
     expect(prompt).toMatch(/What is React/);
+  });
+});
+
+describe('MementoEvaluationService usage reporting', () => {
+  const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
+  const completionInfo = { inputTokens: 120, outputTokens: 40 };
+
+  const respondWith = (text: string) =>
+    llmMocks.complete.mockImplementation(async (_m, _msgs, _opts, cb) => {
+      await cb([text], completionInfo);
+    });
+
+  const evaluate = (onUsage: Parameters<MementoEvaluationService['evaluate']>[0]['onUsage']) =>
+    new MementoEvaluationService(logger as never).evaluate({
+      apiKeyTable: {} as never,
+      model: 'test-model' as never,
+      prompt: 'I live in Austin',
+      onUsage,
+    });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reports the provider usage of the evaluation call', async () => {
+    respondWith('{"isPersonal": true, "mementos": [{"importance": 6, "summary": "Lives in Austin"}]}');
+    const onUsage = vi.fn();
+
+    const result = await evaluate(onUsage);
+
+    expect(result).toHaveLength(1);
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith({
+      modelInfo,
+      completionInfo,
+      startTime: expect.any(Number),
+    });
+  });
+
+  it('reports usage even when the output is not personal or does not parse', async () => {
+    respondWith('not json at all');
+    const onUsage = vi.fn();
+
+    expect(await evaluate(onUsage)).toBeNull();
+    expect(onUsage).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the evaluation result when usage reporting throws', async () => {
+    respondWith('{"isPersonal": true, "mementos": [{"importance": 6, "summary": "Lives in Austin"}]}');
+
+    const result = await evaluate(() => Promise.reject(new Error('ledger down')));
+
+    expect(result).toHaveLength(1);
+    expect(logger.warn).toHaveBeenCalledWith('Failed to record memento evaluation usage', expect.any(Error));
   });
 });

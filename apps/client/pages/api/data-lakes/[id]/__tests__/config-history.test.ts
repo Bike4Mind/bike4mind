@@ -30,10 +30,14 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
+  lakeConfigUndoClaimRepository: {},
+  lakeMembershipChangeEventRepository: {},
+  dataLakeResearchConfigRepository: {},
+  fabFileRepository: {},
   userRepository: {},
   userApiKeyRepository: { mock: 'userApiKeyRepository' },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../config-history';
 
@@ -127,6 +131,33 @@ describe('GET /api/data-lakes/[id]/config-history', () => {
       await call(req({ id: 'lake1' }), res);
 
       expect(order).toEqual(['access', 'manage']);
+    });
+  });
+
+  describe('include', () => {
+    it('reads config rows only by default', async () => {
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1' }), res);
+
+      expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ includeFiles: false })
+      );
+    });
+
+    it('returns file rows when include=files is set', async () => {
+      const withFile = { ...view, entries: [{ kind: 'file', eventId: 'f1' }] };
+      h.assembleLakeConfigHistory.mockImplementation(async (_lake, opts) => (opts.includeFiles ? withFile : view));
+      const { res, json } = makeRes();
+
+      await call(req({ id: 'lake1', include: 'files' }), res);
+
+      expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ includeFiles: true, viewerUserId: 'u1' })
+      );
+      expect(json.mock.calls[0][0].data.entries[0].kind).toBe('file');
     });
   });
 

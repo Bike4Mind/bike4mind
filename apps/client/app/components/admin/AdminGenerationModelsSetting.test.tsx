@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { MUSIC_MODEL_CATALOG, MUSIC_MODEL_IDS, VIDEO_MODEL_CATALOG, VIDEO_MODEL_IDS } from '@bike4mind/common';
 
-const mutate = vi.fn();
-let updatePending = false;
-// Sections call useUpdateSettings in render order (video, then music); null applies updatePending to both.
-let pendingSection: 'video' | 'music' | null = null;
-let updateHookCalls = 0;
+const mutateAsync = vi.fn();
+vi.mock('@tanstack/react-router', () => ({
+  useBlocker: () => ({ status: 'idle' }),
+  useRouter: () => ({
+    state: { location: { pathname: '/admin', search: { tab: 'admin-settings' } } },
+    navigate: vi.fn(),
+  }),
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useUpdateSettings: () => {
-    const section = updateHookCalls++ % 2 === 0 ? 'video' : 'music';
-    return { mutate, isPending: pendingSection ? pendingSection === section : updatePending };
-  },
+  useUpdateSettings: () => ({ mutateAsync }),
 }));
 let storedSettings: Record<string, unknown> = {};
 let authedSettingsLoaded = true;
@@ -23,17 +23,18 @@ vi.mock('@client/app/contexts/AdminSettingsContext', () => ({
     authedSettingsLoaded,
   }),
 }));
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock('sonner', () => ({ toast }));
 
 import { AdminGenerationModelsSetting } from './AdminGenerationModelsSetting';
+import { SettingsDraftProvider } from './SettingsDraftProvider';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderSetting = (settings: Record<string, unknown>) => {
   storedSettings = settings;
   return render(
     <CssVarsProvider theme={appTheme}>
-      <AdminGenerationModelsSetting />
+      <SettingsDraftProvider>
+        <AdminGenerationModelsSetting />
+      </SettingsDraftProvider>
     </CssVarsProvider>
   );
 };
@@ -51,9 +52,7 @@ const MODALITIES: {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  updatePending = false;
-  pendingSection = null;
-  updateHookCalls = 0;
+  mutateAsync.mockResolvedValue(undefined);
   authedSettingsLoaded = true;
 });
 
@@ -93,24 +92,34 @@ describe.each(MODALITIES)(
       expect(switchFor(firstId).checked).toBe(override);
     });
 
-    it('saves the merged enabledModels under its own setting key when toggled', () => {
+    it('stages a toggle without writing, then saves the merged enabledModels from the SaveBar', async () => {
       renderSetting({ [settingKey]: { enabledModels: { 'other-model': true } } });
       fireEvent.click(switchFor(firstId));
-      expect(mutate).toHaveBeenCalledTimes(1);
-      expect(mutate.mock.calls[0][0]).toEqual({
+      expect(switchFor(firstId).checked).toBe(!defaultEnabled);
+      expect(mutateAsync).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+      expect(mutateAsync.mock.calls[0][0]).toEqual({
         key: settingKey,
         value: { enabledModels: { 'other-model': true, [firstId]: !defaultEnabled } },
       });
     });
 
-    it('toasts on success and on failure', () => {
+    it('restores the stored value when the staged change is discarded', () => {
       renderSetting({});
       fireEvent.click(switchFor(firstId));
-      const options = mutate.mock.calls[0][1] as { onSuccess: () => void; onError: (error: Error) => void };
-      options.onSuccess();
-      expect(toast.success).toHaveBeenCalledWith(expect.stringContaining(catalog[firstId].displayName));
-      options.onError(new Error('boom'));
-      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining(`${modality} generation models: boom`));
+      fireEvent.click(screen.getByTestId('admin-save-discard-btn'));
+      expect(switchFor(firstId).checked).toBe(defaultEnabled);
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it('keeps the staged toggle and shows the error when the save fails', async () => {
+      mutateAsync.mockRejectedValue(new Error('Try again'));
+      renderSetting({});
+      fireEvent.click(switchFor(firstId));
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('was not saved: Try again'));
+      expect(switchFor(firstId).checked).toBe(!defaultEnabled);
     });
 
     it('disables the switches until the stored settings have loaded', () => {
@@ -119,10 +128,24 @@ describe.each(MODALITIES)(
       expect(switchFor(firstId).disabled).toBe(true);
     });
 
-    it('disables the switches while a save is in flight', () => {
-      updatePending = true;
+    it('disables the switches while the SaveBar write is in flight', () => {
+      mutateAsync.mockReturnValue(new Promise(() => {}));
       renderSetting({});
+      fireEvent.click(switchFor(firstId));
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
       expect(switchFor(firstId).disabled).toBe(true);
+    });
+
+    it('throws when rendered outside a SettingsDraftProvider', () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(() =>
+        render(
+          <CssVarsProvider theme={appTheme}>
+            <AdminGenerationModelsSetting />
+          </CssVarsProvider>
+        )
+      ).toThrow('AdminGenerationModelsSetting must be rendered inside a SettingsDraftProvider.');
+      error.mockRestore();
     });
 
     it('notes a default-enabled model only while it has no override', () => {
@@ -150,34 +173,41 @@ describe('AdminGenerationModelsSetting', () => {
   const musicSwitch = (id: string) =>
     screen.getByTestId(`admin-generation-models-music-${id}-switch`).querySelector('input') as HTMLInputElement;
 
-  it('shows an off-by-default model as off, without the default note, and saves true when toggled', () => {
+  it('shows an off-by-default model as off, without the default note, and saves true when toggled', async () => {
     expect(offByDefault).toBeDefined();
     const id = offByDefault!;
     renderSetting({});
     expect(musicSwitch(id).checked).toBe(false);
     expect(screen.queryByTestId(`admin-generation-models-music-${id}-default-note`)).toBeNull();
     fireEvent.click(musicSwitch(id));
-    expect(mutate.mock.calls[0][0]).toEqual({ key: 'musicGeneration', value: { enabledModels: { [id]: true } } });
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toEqual({ key: 'musicGeneration', value: { enabledModels: { [id]: true } } });
   });
 
-  it.each(['video', 'music'] as const)('locks only the %s section while its save is in flight', pending => {
-    pendingSection = pending;
-    renderSetting({});
-    const firstSwitch = (modality: string, id: string) =>
-      screen.getByTestId(`admin-generation-models-${modality}-${id}-switch`).querySelector('input') as HTMLInputElement;
-    expect(firstSwitch('video', VIDEO_MODEL_IDS[0]).disabled).toBe(pending === 'video');
-    expect(firstSwitch('music', MUSIC_MODEL_IDS[0]).disabled).toBe(pending === 'music');
+  it('shows a retired video model as off and locked, even under an override that enables it', () => {
+    const retired = VIDEO_MODEL_IDS.find(id => VIDEO_MODEL_CATALOG[id].retired);
+    expect(retired).toBeDefined();
+    const id = retired!;
+    renderSetting({ videoGeneration: { enabledModels: { [id]: true } } });
+    const input = screen
+      .getByTestId(`admin-generation-models-video-${id}-switch`)
+      .querySelector('input') as HTMLInputElement;
+    expect(input.checked).toBe(false);
+    expect(input.disabled).toBe(true);
+    expect(screen.getByTestId(`admin-generation-models-video-${id}-retired-chip`)).toBeTruthy();
   });
 
-  it('keeps the two settings independent', () => {
+  it('keeps the two settings independent', async () => {
     const [videoId] = VIDEO_MODEL_IDS;
     const [musicId] = MUSIC_MODEL_IDS;
     renderSetting({ videoGeneration: { enabledModels: { [videoId]: false } } });
     fireEvent.click(
       screen.getByTestId(`admin-generation-models-music-${musicId}-switch`).querySelector('input') as HTMLInputElement
     );
-    expect(mutate).toHaveBeenCalledTimes(1);
-    expect(mutate.mock.calls[0][0]).toEqual({
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync.mock.calls[0][0]).toEqual({
       key: 'musicGeneration',
       value: { enabledModels: { [musicId]: !MUSIC_MODEL_CATALOG[musicId].defaultEnabled } },
     });

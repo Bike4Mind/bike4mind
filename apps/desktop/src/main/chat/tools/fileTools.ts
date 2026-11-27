@@ -1,10 +1,13 @@
 import { glob, lstat, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, join, matchesGlob, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
 import { envReadPrompt, readsEnvFile } from './envFiles';
-import { resolveWithinRoots } from './paths';
+import { hostRealpath, isWithin, resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
+import { listDistroFiles } from './wslFiles';
+import { shareRelativePath, wslLocation } from '../../wsl/wslPath';
+import { IMAGE_FORMAT_NAMES, showAndKeepImage, sniffImageType } from './toolImages';
 import {
   capOutput,
   MAX_FILE_READ_OUTPUT_CHARS,
@@ -155,11 +158,31 @@ async function trackedButIgnored(base: string): Promise<string[]> {
   }
 }
 
+/**
+ * For a path git or rg printed relative to `directory`: in a WSL folder they ran in the distro, so
+ * the path is respelled the way Windows opens it over the share, or null when Windows cannot open
+ * it there (see `shareRelativePath`). Elsewhere it is kept as printed.
+ */
+function hostSpelling(directory: string): (path: string) => string | null {
+  return wslLocation(directory) ? shareRelativePath : path => path;
+}
+
+/** A listed `file` joined to `directory`, or null when the join lands anywhere but below it. */
+function listedPath(directory: string, file: string): string | null {
+  const root = join(directory);
+  const absolute = join(root, file);
+  return absolute !== root && isWithin(root, absolute) ? absolute : null;
+}
+
 interface FileListing {
   /** Relative to the base, sorted. */
   files: string[];
   /** False when the fallback walk stopped at MAX_WALKED_FILES. */
   complete: boolean;
+  /** How many names were left out because no Windows path opens them over the share. */
+  dropped: number;
+  /** Size and modification time by path, when the listing already carries them. */
+  stats?: ReadonlyMap<string, { size: number; modified: number }>;
 }
 
 /**
@@ -170,7 +193,25 @@ interface FileListing {
  */
 async function listFiles(base: string, context: ToolContext): Promise<FileListing> {
   const tracked = await gitListing(base);
-  if (tracked) return { files: tracked.sort(), complete: true };
+  if (tracked) {
+    const spelled = hostSpelling(base);
+    const files = tracked.flatMap(path => spelled(path) ?? []);
+    return { files: files.sort(), complete: true, dropped: tracked.length - files.length };
+  }
+
+  const inDistro = await listDistroFiles(base, IGNORED, MAX_WALKED_FILES, context.signal);
+  if (inDistro) {
+    const files = inDistro.files.flatMap(file => {
+      const path = shareRelativePath(file.path);
+      return path === null ? [] : [{ ...file, path }];
+    });
+    return {
+      files: files.map(file => file.path).sort(),
+      complete: inDistro.complete,
+      dropped: inDistro.files.length - files.length,
+      stats: new Map(files.map(file => [file.path, { size: file.size, modified: file.modified }])),
+    };
+  }
 
   const files: string[] = [];
   let complete = true;
@@ -181,7 +222,12 @@ async function listFiles(base: string, context: ToolContext): Promise<FileListin
     }
     files.push(relative(base, absolute));
   });
-  return { files: files.sort(), complete };
+  return { files: files.sort(), complete, dropped: 0 };
+}
+
+/** The sentence a result ends with when its listing left out names no Windows path opens. */
+function droppedNote(dropped: number): string {
+  return dropped > 0 ? ` Left out ${dropped} file(s) whose names no Windows path opens.` : '';
 }
 
 export const fileRead: ToolDefinition = {
@@ -196,7 +242,8 @@ export const fileRead: ToolDefinition = {
       'a tab; those prefixes are not part of the file, so never copy them into an edit or a patch. When ' +
       'the output stops before the end of the file, it says the offset to continue from. Avoid ' +
       'repeated small slices (around 30 lines): when you need more context, read a larger window in ' +
-      'one call. ' +
+      'one call. PNG, JPEG, GIF and WebP files are shown to you as an image instead, downscaled to ' +
+      'fit: read a screenshot or a design file to look at it. ' +
       'Independent calls placed in one reply run in parallel, so batch them instead of issuing one per turn.',
     parameters: {
       type: 'object',
@@ -224,6 +271,15 @@ export const fileRead: ToolDefinition = {
     recordRecentFile(context, target);
 
     const buffer = await readFile(target);
+    const imageType = sniffImageType(buffer);
+    if (imageType) {
+      const about = `${target} is a ${IMAGE_FORMAT_NAMES[imageType]} image (${formatBytes(info.size)})`;
+      const { shown, kept } = await showAndKeepImage(context, buffer, imageType, target);
+      const userSees = kept ? " The user sees it in the chat, on this call's row." : '';
+      if (!shown.ok) return `${about}. It was not shown: ${shown.reason}.${userSees}`;
+      const pixels = shown.pixels ? `, ${shown.pixels}` : '';
+      return `${about}${pixels}. You see it below this result in this reply only; read it again to look at it later.${userSees}`;
+    }
     if (isBinary(buffer)) return `${target} is a binary file (${formatBytes(info.size)}), so it is not shown as text.`;
 
     const lines = buffer.toString('utf8').split('\n');
@@ -263,23 +319,58 @@ export const fileRead: ToolDefinition = {
   },
 };
 
+// The Windows fallback walk lists paths with backslashes.
+const PATH_SEPARATOR = /[\\/]/;
+
+/** A pattern ending in `**` or `**` then `*` matches every path under its prefix, so folder rows add nothing. */
+const MATCH_ALL = /(^|\/)\*\*(\/\*)?$/;
+
 /** Top-level folders of a listing with how many files each holds, so "*" also shows the shape of a tree. */
 function summarizeFolders(files: readonly string[]): string[] {
   const counts = new Map<string, number>();
   for (const file of files) {
-    const slash = file.indexOf('/');
-    if (slash > 0) counts.set(file.slice(0, slash), (counts.get(file.slice(0, slash)) ?? 0) + 1);
+    const separator = file.search(PATH_SEPARATOR);
+    if (separator > 0) counts.set(file.slice(0, separator), (counts.get(file.slice(0, separator)) ?? 0) + 1);
   }
   return [...counts.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([folder, count]) => `  ${folder}/ (${count} file${count === 1 ? '' : 's'})`);
 }
 
+/** Every folder that holds a listed file, at any depth, with how many files lie beneath it. */
+function folderCounts(files: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const file of files) {
+    const parts = file.split(PATH_SEPARATOR);
+    for (let depth = 1; depth < parts.length; depth++) {
+      const folder = parts.slice(0, depth).join('/');
+      counts.set(folder, (counts.get(folder) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/** True when a glob-free `pattern` names an existing directory inside `base`. */
+async function isFolderWithoutListedFiles(base: string, pattern: string): Promise<boolean> {
+  if (/[*?[\]{}]/.test(pattern) || isAbsolute(pattern)) return false;
+  const absolute = listedPath(base, pattern);
+  if (absolute === null) return false;
+  try {
+    // Links on the way (or the target itself) may lead out of the base, so judge the real path.
+    const real = await hostRealpath(absolute);
+    return isWithin(await hostRealpath(base), real) && (await stat(real)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export const globFiles: ToolDefinition = {
   schema: {
     name: 'glob_files',
     description:
-      'List files matching a glob pattern, newest-modified first, with their sizes. Skips files ' +
+      'List files matching a glob pattern, newest-modified first, with their sizes; folders whose ' +
+      'path matches the pattern are listed after them with their file counts (a folder is found ' +
+      'through its listed files, so one with no listed files is not listed). Skips files ' +
       'ignored by .gitignore and dependency folders. "*" lists the top level of a folder, ' +
       'including its subfolders with file counts; "**/*.ts" matches at any depth. Use this to ' +
       'explore a project or find files by name, or to find the largest or most recent files. ' +
@@ -300,10 +391,17 @@ export const globFiles: ToolDefinition = {
     const pattern = typeof input.pattern === 'string' && input.pattern ? input.pattern : '*';
 
     const listing = await listFiles(base, context);
-    const matched = listing.files.filter(file => matchesGlob(file, pattern));
+    const matched = listing.files.filter(file => matchesGlob(file, pattern) && listedPath(base, file));
 
     const found: { path: string; size: number; modified: number }[] = [];
-    for (let start = 0; start < matched.length && !context.signal.aborted; start += SCAN_BATCH) {
+    const known = listing.stats;
+    if (known) {
+      for (const file of matched) {
+        const entry = known.get(file);
+        if (entry) found.push({ path: file, ...entry });
+      }
+    }
+    for (let start = 0; !known && start < matched.length && !context.signal.aborted; start += SCAN_BATCH) {
       const batch = await Promise.all(
         matched.slice(start, start + SCAN_BATCH).map(async file => {
           try {
@@ -318,8 +416,18 @@ export const globFiles: ToolDefinition = {
     }
 
     const folders = pattern === '*' ? summarizeFolders(listing.files) : [];
+    const folderPattern = pattern.length > 1 && pattern.endsWith('/') ? pattern.slice(0, -1) : pattern;
+    const matchedFolders =
+      pattern === '*' || MATCH_ALL.test(folderPattern)
+        ? []
+        : [...folderCounts(listing.files)]
+            .filter(([folder]) => matchesGlob(folder, folderPattern) && listedPath(base, folder))
+            .sort(([a], [b]) => a.localeCompare(b));
 
-    if (found.length === 0 && folders.length === 0) {
+    if (found.length === 0 && folders.length === 0 && matchedFolders.length === 0) {
+      if (await isFolderWithoutListedFiles(base, folderPattern)) {
+        return `${folderPattern} is a folder in ${base} but holds no listed files: it is empty, holds only ignored files, or is a dependency folder the search skips.`;
+      }
       const hint = pattern.includes('/')
         ? ''
         : ` A pattern without a slash only matches the top level; try "**/${pattern}".`;
@@ -337,9 +445,25 @@ export const globFiles: ToolDefinition = {
       );
     const shown =
       found.length > MAX_MATCHES ? `; showing the first ${MAX_MATCHES}, so narrow the pattern to see the rest` : '';
-    const partial = listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were considered.`;
-    const header = `${found.length} file(s) in ${base}, sorted by ${bySize ? 'size' : 'modification time'}${shown}:${partial}`;
+    const partial =
+      (listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were considered.`) +
+      droppedNote(listing.dropped);
+    const header =
+      found.length === 0 && pattern !== '*'
+        ? `Only folders matched ${pattern} in ${base}:${partial}`
+        : `${found.length} file(s) in ${base}, sorted by ${bySize ? 'size' : 'modification time'}${shown}:${partial}`;
     const tail = folders.length > 0 ? ['', 'Folders:', ...folders] : [];
+    if (matchedFolders.length > 0) {
+      const more =
+        matchedFolders.length > MAX_MATCHES ? `; showing the first ${MAX_MATCHES} folders, so narrow the pattern` : '';
+      tail.push(
+        '',
+        `Folders matching ${pattern}${more}:`,
+        ...matchedFolders
+          .slice(0, MAX_MATCHES)
+          .map(([folder, count]) => `  ${folder}/ (${count} file${count === 1 ? '' : 's'})`)
+      );
+    }
     return capOutput([header, ...rows, ...tail].join('\n'));
   },
 };
@@ -574,6 +698,8 @@ export const grepSearch: ToolDefinition = {
     const directory = single ? dirname(base) : base;
 
     const tally = createTally(filesOnly, maxResults);
+    const spelled = hostSpelling(directory);
+    let dropped = 0;
 
     const viaRipgrep =
       !single &&
@@ -586,20 +712,33 @@ export const grepSearch: ToolDefinition = {
         maxFileBytes: MAX_SEARCH_FILE_BYTES,
         signal: context.signal,
         // Filtered here rather than with rg --glob, which would also override .gitignore.
-        onFile: file =>
-          (include !== undefined && !matchesInclude(file.path, include)) ||
-          tally.add(file.path, file.matches, shown => renderRipgrepFile(file, shown, around, expression)),
+        onFile: file => {
+          const path = spelled(file.path);
+          if (path === null) dropped += 1;
+          return (
+            path === null ||
+            (include !== undefined && !matchesInclude(path, include)) ||
+            tally.add(path, file.matches, shown => renderRipgrepFile(file, shown, around, expression))
+          );
+        },
       }));
 
     // rg lists files itself with no walk cap, so a search it ran leaves nothing unsearched.
     let complete = true;
-    const ranRipgrep = viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out';
+    const ranRipgrep =
+      viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out' || viaRipgrep === 'cut-short';
     if (ranRipgrep && viaRipgrep === 'done') {
       // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
-      for (const file of await trackedButIgnored(directory)) {
+      for (const name of await trackedButIgnored(directory)) {
         if (tally.truncated || context.signal.aborted) break;
-        if (include && !matchesInclude(file, include)) continue;
-        const result = await scanFile(join(directory, file), expression);
+        const file = spelled(name);
+        if (file === null) {
+          dropped += 1;
+          continue;
+        }
+        const absolute = listedPath(directory, file);
+        if (!absolute || (include && !matchesInclude(file, include))) continue;
+        const result = await scanFile(absolute, expression);
         if (result) {
           tally.add(file, result.hits.length, shown =>
             formatHits(result.lines, result.hits.slice(0, shown), around, expression)
@@ -609,9 +748,10 @@ export const grepSearch: ToolDefinition = {
     }
     if (!ranRipgrep) {
       const listing: FileListing = single
-        ? { files: [basename(base)], complete: true }
+        ? { files: [basename(base)], complete: true, dropped: 0 }
         : await listFiles(base, context);
       complete = listing.complete;
+      dropped += listing.dropped;
       const candidates =
         include && !single ? listing.files.filter(file => matchesInclude(file, include)) : listing.files;
 
@@ -621,7 +761,12 @@ export const grepSearch: ToolDefinition = {
       for (let start = 0; start < candidates.length && !tally.truncated; start += SCAN_BATCH) {
         if (context.signal.aborted) break;
         const batch = candidates.slice(start, start + SCAN_BATCH);
-        const scanned = await Promise.all(batch.map(file => scanFile(join(directory, file), expression)));
+        const scanned = await Promise.all(
+          batch.map(file => {
+            const absolute = listedPath(directory, file);
+            return absolute ? scanFile(absolute, expression) : null;
+          })
+        );
 
         for (let index = 0; index < batch.length; index += 1) {
           const result = scanned[index];
@@ -637,8 +782,12 @@ export const grepSearch: ToolDefinition = {
     const { body, matchingFiles, totalMatches, shownMatches, truncated } = tally;
     const scope = include ? ` in files matching ${include}` : '';
     const timedOut = viaRipgrep === 'timed-out' ? ' The search timed out, so these results are partial.' : '';
+    const cutShort = viaRipgrep === 'cut-short' ? ' The search ended early, so these results are partial.' : '';
     const partial =
-      timedOut || (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`);
+      (timedOut ||
+        cutShort ||
+        (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`)) +
+      droppedNote(dropped);
     if (matchingFiles === 0) return `${note}No matches for ${expression} under ${base}${scope}.${partial}`;
 
     let header: string;

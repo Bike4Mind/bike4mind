@@ -1,0 +1,98 @@
+import {
+  hasAdminPermission,
+  isFullAdmin,
+  meetsAdminPermissionRequirement,
+  MODERATION_PAGE_READ,
+  SETTINGS_PAGE_READ,
+  CREDITS_PAGE_READ,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
+import { AdminTab } from './adminSidebarConfig';
+
+type AdminIdentity = Parameters<typeof hasAdminPermission>[0];
+
+/**
+ * The tabs a delegated admin (`adminPermissions` without `isAdmin`) may open, and the permission
+ * each one needs. Fail closed: list a tab only once every request it makes accepts that
+ * permission server-side. An unlisted tab stays full-admin only, so a delegate never lands on a
+ * pane its own requests answer with 403. A list admits any one of its permissions: a write
+ * permission's own pages list it beside `support:read`, matching their routes' GET requirement.
+ */
+export const DELEGATED_ADMIN_TAB_PERMISSIONS: Readonly<Partial<Record<AdminTab, AdminPermissionRequirement>>> = {
+  // The modal endpoints' CASL rules grant read and write on settings:manage; What's new adds its
+  // variants, highlights and deployment-info routes, all declared settings:manage.
+  [AdminTab.Modals]: 'settings:manage',
+  [AdminTab.WhatsNewModals]: 'settings:manage',
+  [AdminTab.AiOperations]: 'settings:manage',
+
+  // settings:manage only, not support:read: a support reader would 403 on the scoped overrides,
+  // secrets, release-note and prompt history reads these pages load. General settings locks the
+  // FULL_ADMIN_SETTING_KEYS fields for delegates. Secrets rotation and Tutorials stay full-admin:
+  // their writes check for a full admin on purpose.
+  [AdminTab.AdminSettings]: 'settings:manage',
+  [AdminTab.SystemPrompts]: 'settings:manage',
+  [AdminTab.SystemSecrets]: 'settings:manage',
+  [AdminTab.ReleaseNotes]: 'settings:manage',
+
+  // Read-only for support:read. Their write controls name the permission they need
+  // (AdminPermissionAction), or are already decided per row by the server (Approvals, Audit log).
+  [AdminTab.RetrievalRate]: 'support:read',
+  [AdminTab.WebhookAuditLogs]: 'support:read',
+  [AdminTab.HelpAnalytics]: 'support:read',
+  [AdminTab.SpendExplorer]: 'support:read',
+  [AdminTab.ApiKeyScopePreflight]: 'support:read',
+  [AdminTab.LegacyApiKeys]: 'support:read',
+  // Its overview and freeze-list GETs accept support:read; freezing and lifting need credits:adjust.
+  [AdminTab.SpendMonitor]: 'support:read',
+  [AdminTab.IntegrationDemand]: 'support:read',
+  [AdminTab.AuditLog]: 'support:read',
+  [AdminTab.Approvals]: 'support:read',
+  [AdminTab.StripeDisputes]: 'support:read',
+  [AdminTab.ShadowDetections]: 'support:read',
+
+  // Read-only for support:read: the roles routes' GET declares it. Creating, editing and deleting
+  // are full-admin only, so the tab hides those controls from a delegate.
+  [AdminTab.Roles]: 'support:read',
+
+  // Reads declare support:read; writes need a full admin and stay disabled for a delegate. The lifecycle queue and
+  // Settings section need settings:manage as well and gate themselves.
+  [AdminTab.Models]: 'support:read',
+
+  // View-only for support:read; replay actions gate on settings:manage inside the tab.
+  [AdminTab.DlqReplay]: 'support:read',
+
+  // Pages whose writes need settings:manage; their GET routes declare the same SETTINGS_PAGE_READ.
+  [AdminTab.ToolDefinitions]: SETTINGS_PAGE_READ,
+  [AdminTab.ManageGears]: SETTINGS_PAGE_READ,
+  [AdminTab.AgentExecutions]: SETTINGS_PAGE_READ,
+
+  // Subscriptions: writes need credits:adjust and its GET routes declare the same CREDITS_PAGE_READ.
+  [AdminTab.Subscriptions]: CREDITS_PAGE_READ,
+  // A delegate sees only the held-grant actions, whose list, release and revoke routes declare credits:adjust;
+  // the rest of Invite Center is full-admin only and relies on the guard in InviteCenterShell.
+  [AdminTab.Waitlist]: 'credits:adjust',
+  // Pages whose writes need users:moderate; their GET routes declare the same MODERATION_PAGE_READ.
+  [AdminTab.EmailVerification]: MODERATION_PAGE_READ,
+  [AdminTab.SignupDomainHolds]: MODERATION_PAGE_READ,
+  [AdminTab.SignupRiskReview]: MODERATION_PAGE_READ,
+  [AdminTab.RateLimits]: MODERATION_PAGE_READ,
+  [AdminTab.PublishedPages]: MODERATION_PAGE_READ,
+  [AdminTab.TextModerationReview]: MODERATION_PAGE_READ,
+};
+
+export function canOpenAdminTab(user: AdminIdentity, tab: AdminTab): boolean {
+  if (isFullAdmin(user)) return true;
+  const requirement = DELEGATED_ADMIN_TAB_PERMISSIONS[tab];
+  return requirement !== undefined && meetsAdminPermissionRequirement(user, requirement);
+}
+
+/**
+ * Whether the admin console has anything to show this user. A delegate whose permissions open no
+ * tab is turned away rather than shown an empty console.
+ */
+export function canEnterAdminConsole(user: AdminIdentity): boolean {
+  if (isFullAdmin(user)) return true;
+  return Object.values(DELEGATED_ADMIN_TAB_PERMISSIONS).some(
+    requirement => requirement !== undefined && meetsAdminPermissionRequirement(user, requirement)
+  );
+}

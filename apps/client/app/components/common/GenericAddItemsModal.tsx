@@ -15,7 +15,7 @@ import {
   useTheme,
 } from '@mui/joy';
 import { useMediaQuery } from '@mui/system';
-import { ReactNode, useCallback, useState } from 'react';
+import { ReactNode, useCallback, useMemo, useState } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import SearchIcon from '@mui/icons-material/Search';
@@ -33,6 +33,7 @@ export interface GenericAddItemsModalProps<T> {
   selectedIds: string[];
   onSelectIds: (ids: string[]) => void;
   getItemId: (item: T) => string;
+  isItemDisabled?: (item: T) => boolean;
 
   // Search functionality
   onSearch?: (searchTerm: string) => void;
@@ -47,6 +48,7 @@ export interface GenericAddItemsModalProps<T> {
 
   // Render props
   renderItem: (item: T, isSelected: boolean, onSelect: () => void) => ReactNode;
+  renderNoResults?: (searchTerm: string) => ReactNode;
 
   // Scroll handling
   onScroll?: (e: React.UIEvent<HTMLDivElement>) => void;
@@ -57,6 +59,10 @@ export interface GenericAddItemsModalProps<T> {
   value?: string[];
   showButtonBadge?: boolean;
   searchMinLength?: number;
+  triggerTestId?: string;
+  /** 'sm' renders a toolbar-sized trigger that sits beside other `size="sm"` buttons. */
+  triggerSize?: 'sm';
+  testIdPrefix?: string;
 }
 
 function GenericAddItemsModal<T>({
@@ -71,6 +77,7 @@ function GenericAddItemsModal<T>({
   selectedIds,
   onSelectIds,
   getItemId,
+  isItemDisabled,
 
   // Search functionality
   onSearch,
@@ -85,6 +92,7 @@ function GenericAddItemsModal<T>({
 
   // Render props
   renderItem,
+  renderNoResults,
 
   // Scroll handling
   onScroll,
@@ -95,6 +103,9 @@ function GenericAddItemsModal<T>({
   value,
   showButtonBadge = true,
   searchMinLength,
+  triggerTestId,
+  triggerSize,
+  testIdPrefix = 'generic-add-items',
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -117,32 +128,44 @@ function GenericAddItemsModal<T>({
     [onSearch]
   );
 
+  const disabledItemIds = useMemo(
+    () => new Set(items.filter(item => isItemDisabled?.(item)).map(getItemId)),
+    [items, isItemDisabled, getItemId]
+  );
+
+  const selectableSelectedIds = useMemo(
+    () => selectedIds.filter(id => !disabledItemIds.has(id)),
+    [selectedIds, disabledItemIds]
+  );
+
   const handleSelectAll = useCallback(() => {
-    if (selectedIds.length === items.length || selectedIds.length > 0) {
+    if (selectableSelectedIds.length === items.length || selectableSelectedIds.length > 0) {
       // If all items are selected or any items are selected, unselect all
       onSelectIds([]);
     } else {
       // Otherwise, select all items
-      onSelectIds(items.map(getItemId));
+      onSelectIds(items.map(getItemId).filter(id => !disabledItemIds.has(id)));
     }
-  }, [items, selectedIds, onSelectIds, getItemId]);
+  }, [items, selectableSelectedIds, onSelectIds, getItemId, disabledItemIds]);
 
   const handleItemSelect = useCallback(
     (itemId: string) => {
-      if (selectedIds.includes(itemId)) {
-        onSelectIds(selectedIds.filter(id => id !== itemId));
+      if (disabledItemIds.has(itemId)) return;
+      if (selectableSelectedIds.includes(itemId)) {
+        onSelectIds(selectableSelectedIds.filter(id => id !== itemId));
       } else {
-        onSelectIds([...selectedIds, itemId]);
+        onSelectIds([...selectableSelectedIds, itemId]);
       }
     },
-    [selectedIds, onSelectIds]
+    [selectableSelectedIds, onSelectIds, disabledItemIds]
   );
 
   const handleAddItems = useCallback(() => {
-    onAdd(selectedIds);
+    if (selectableSelectedIds.length === 0) return;
+    onAdd(selectableSelectedIds);
     setOpen(false);
     if (onSearch) onSearch('');
-  }, [onAdd, selectedIds, onSearch]);
+  }, [onAdd, selectableSelectedIds, onSearch]);
 
   // Calculate responsive modal width
   const responsiveModalWidth = isMobile
@@ -155,17 +178,31 @@ function GenericAddItemsModal<T>({
 
   return (
     <>
-      <Button
-        className="generic-add-items-modal-trigger"
-        sx={{
-          width: { xs: 'auto', sm: '190px' },
-          fontSize: { xs: '0.875rem', sm: '1rem' },
-          whiteSpace: 'nowrap',
-        }}
-        onClick={() => setOpen(true)}
-      >
-        {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
-      </Button>
+      {triggerSize === 'sm' ? (
+        <Button
+          className="generic-add-items-modal-trigger"
+          data-testid={triggerTestId}
+          size="sm"
+          startDecorator={buttonIcon}
+          sx={{ whiteSpace: 'nowrap' }}
+          onClick={() => setOpen(true)}
+        >
+          {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
+        </Button>
+      ) : (
+        <Button
+          className="generic-add-items-modal-trigger"
+          data-testid={triggerTestId}
+          sx={{
+            width: { xs: 'auto', sm: '190px' },
+            fontSize: { xs: '0.875rem', sm: '1rem' },
+            whiteSpace: 'nowrap',
+          }}
+          onClick={() => setOpen(true)}
+        >
+          {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
+        </Button>
+      )}
       <Modal
         className="generic-add-items-modal"
         open={open}
@@ -186,6 +223,7 @@ function GenericAddItemsModal<T>({
       >
         <ModalDialog
           className="generic-add-items-modal-dialog"
+          data-testid={`${testIdPrefix}-modal`}
           sx={{
             width: responsiveModalWidth,
             maxWidth: '95vw',
@@ -198,6 +236,7 @@ function GenericAddItemsModal<T>({
         >
           <IconButton
             className="generic-add-items-modal-close-button"
+            aria-label={t('common.close', 'Close')}
             sx={{
               position: 'absolute',
               top: { xs: '5px', sm: '10px' },
@@ -242,6 +281,7 @@ function GenericAddItemsModal<T>({
                         sx={{ width: '100%' }}
                         placeholder={searchPlaceholder}
                         onChange={e => handleSearch(e.target.value)}
+                        slotProps={{ input: { 'data-testid': `${testIdPrefix}-search-input` } }}
                         startDecorator={<SearchIcon />}
                       />
                     )}
@@ -254,6 +294,7 @@ function GenericAddItemsModal<T>({
                     sx={{ width: '100%', pr: { xs: '15px', sm: '30px' } }}
                     placeholder={searchPlaceholder}
                     onChange={e => handleSearch(e.target.value)}
+                    slotProps={{ input: { 'data-testid': `${testIdPrefix}-search-input` } }}
                     startDecorator={<SearchIcon />}
                   />
                 )
@@ -271,9 +312,14 @@ function GenericAddItemsModal<T>({
                 <Stack gap={{ xs: '5px', sm: '10px' }}>
                   {items.map(item => {
                     const itemId = getItemId(item);
-                    const isSelected = selectedIds.includes(itemId);
+                    const isSelected = selectableSelectedIds.includes(itemId);
                     return (
-                      <Box key={itemId} onClick={() => handleItemSelect(itemId)}>
+                      <Box
+                        key={itemId}
+                        onClick={() => handleItemSelect(itemId)}
+                        aria-disabled={disabledItemIds.has(itemId)}
+                        data-testid={`${testIdPrefix}-item`}
+                      >
                         {renderItem(item, isSelected, () => handleItemSelect(itemId))}
                       </Box>
                     );
@@ -288,13 +334,17 @@ function GenericAddItemsModal<T>({
                         color: 'text.secondary',
                       }}
                     >
-                      <Typography level="body-lg" color="neutral">
-                        {searchMinLength && searchTerm.length > 0 && searchTerm.length < searchMinLength
-                          ? t('common.search_min_length', 'Type at least {{count}} characters to search.', {
-                              count: searchMinLength,
-                            })
-                          : t('common.no_results_found', 'No results found')}
-                      </Typography>
+                      {renderNoResults && searchTerm && (!searchMinLength || searchTerm.length >= searchMinLength) ? (
+                        renderNoResults(searchTerm)
+                      ) : (
+                        <Typography level="body-lg" color="neutral">
+                          {searchMinLength && searchTerm.length > 0 && searchTerm.length < searchMinLength
+                            ? t('common.search_min_length', 'Type at least {{count}} characters to search.', {
+                                count: searchMinLength,
+                              })
+                            : t('common.no_results_found', 'No results found')}
+                        </Typography>
+                      )}
                     </Box>
                   )}
                   {isLoadingMore && (
@@ -318,6 +368,7 @@ function GenericAddItemsModal<T>({
           >
             <Button
               className="generic-add-items-modal-select-all-button"
+              data-testid={`${testIdPrefix}-select-all-btn`}
               variant="outlined"
               sx={{
                 width: { xs: '100%', sm: '140px' },
@@ -325,22 +376,23 @@ function GenericAddItemsModal<T>({
               }}
               onClick={handleSelectAll}
             >
-              {selectedIds.length > 0
+              {selectableSelectedIds.length > 0
                 ? t('projects.modals.generic.unselect_all')
                 : t('projects.modals.generic.select_all')}
             </Button>
             <Button
               className="generic-add-items-modal-add-button"
+              data-testid={`${testIdPrefix}-submit-btn`}
               sx={{
                 minWidth: { xs: '100%', sm: '140px' },
                 minHeight: { xs: '36px', sm: '32px' },
                 gap: '5px',
               }}
               onClick={handleAddItems}
-              disabled={isPending || selectedIds.length === 0}
+              disabled={isPending || selectableSelectedIds.length === 0}
             >
               {isPending ? <CircularProgress /> : <AddIcon />}{' '}
-              {t('projects.modals.generic.add_items', { count: selectedIds.length })}
+              {t('projects.modals.generic.add_items', { count: selectableSelectedIds.length })}
             </Button>
           </DialogActions>
         </ModalDialog>

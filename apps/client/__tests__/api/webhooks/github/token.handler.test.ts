@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { encryptSecret, generateEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
 /**
  * Handler-level regression test for the org webhook decrypt path.
@@ -24,6 +25,8 @@ const ROUTING_TOKEN = 'routing-token-abc';
 
 // Secret stored in the DB, encrypted under the now-previous key.
 const secretEncryptedWithPreviousKey = encryptSecret(PLAINTEXT_SECRET, previousKey);
+
+configureSecretsAtRest(currentKey, previousKey);
 
 const mockConfig: Record<string, string | undefined> = {
   MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
@@ -55,6 +58,7 @@ vi.mock('@bike4mind/observability', () => {
     Logger: vi.fn(function () {
       return logger;
     }),
+    describeErrorCause: () => undefined,
   };
 });
 
@@ -81,7 +85,7 @@ vi.mock('@server/integrations/github/WebhookAuditLogger', () => ({
   extractWebhookMetadata: vi.fn(() => ({})),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
   IntegrationAuditLogger: {
     create: vi.fn(() => ({ failure: vi.fn(), success: vi.fn(), setUserId: vi.fn() })),
   },

@@ -14,12 +14,22 @@ import type { ISession } from '../types/entities/SessionTypes';
  * ISession.preauthorizedLakeIds) - an authorization detail set once by pages/api/v1/sessions/index.ts,
  * not something a client consumer reads or needs to render.
  *
+ * `conversationContext` is a server-side digest (repo slugs, PR/issue numbers, tracker keys)
+ * extracted from the owner's tool results to seed later turns. No client consumer reads it, and
+ * the admin support route that discloses it reads it from the database, not through this strip.
+ *
  * This list is the single source of truth: add a field here and every response boundary
  * that routes through {@link redactSessionForClient} inherits the redaction. Any future
  * need to echo a server-owned field to its owner must be a dedicated, separately-authorized
  * endpoint - never a relaxation of this strip.
  */
-export const SERVER_OWNED_SESSION_FIELDS = ['systemPromptText', 'preauthorizedLakeIds'] as const;
+export const SERVER_OWNED_SESSION_FIELDS = ['systemPromptText', 'preauthorizedLakeIds', 'conversationContext'] as const;
+
+/**
+ * Keys of `session.origin` that are server-owned. `origin.channel` is display data the sidebar
+ * reads; `apiKeyId` names the creating key. Shared with the WS data-subscribe projection.
+ */
+export const SERVER_OWNED_SESSION_ORIGIN_FIELDS = ['apiKeyId'] as const;
 
 export type ServerOwnedSessionField = (typeof SERVER_OWNED_SESSION_FIELDS)[number];
 
@@ -56,11 +66,12 @@ export function redactSessionForClient<T extends Partial<ISession>>(
   for (const field of SERVER_OWNED_SESSION_FIELDS) {
     delete clientSession[field];
   }
-  // origin.channel is display data the sidebar reads; origin.apiKeyId names the creating key and
-  // is stripped like a server-owned field. Copied, not mutated, for the same reason as above.
   const origin = clientSession.origin as Record<string, unknown> | null | undefined;
-  if (origin && typeof origin === 'object' && 'apiKeyId' in origin) {
-    const { apiKeyId: _apiKeyId, ...publicOrigin } = origin;
+  if (origin && typeof origin === 'object') {
+    const publicOrigin = { ...origin };
+    for (const field of SERVER_OWNED_SESSION_ORIGIN_FIELDS) {
+      delete publicOrigin[field];
+    }
     clientSession.origin = publicOrigin;
   }
   return clientSession as ClientSession<T>;

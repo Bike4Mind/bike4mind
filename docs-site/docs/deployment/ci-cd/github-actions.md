@@ -42,12 +42,11 @@ This project supports two deployment platforms:
 
 ### `deploy.yml` - Unified Deployment Workflow
 - **Triggers**: 
-  - Push to `main` or `prod` branches
+  - Push to `main`
   - Pull requests to `main` branches
-- **Purpose**: Handle all deployments (production and preview)
+- **Purpose**: Handle staging and preview deployments
 - **AWS Accounts**:
   - `main` → `dev` stage → **dev account** (staging.bike4mind.com)
-  - `prod` → `prod` stage → **prod account** (bike4mind.com)
   - `PR` → `pr{PR_NUMBER}` stage → **dev account** (preview environment)
 - **Features**:
   - Single workflow handles all deployment scenarios
@@ -65,23 +64,24 @@ The deployment workflow follows a clear branching strategy that maps branches to
 | Branch | Stage | AWS Account | Environment | Variables Used |
 |--------|-------|-------------|-------------|----------------|
 | `main` | `dev` | **dev** | Staging | `STAGING_*` or fallback to common |
-| `prod` | `production` | **prod** | Production | `PROD_*` or fallback to common |
 | `PR` | `pr{PR_NUMBER}` | **dev** | Preview | `STAGING_*` + preview domain |
 
 ### Deployment Behavior
 
-#### Protected Branches (Auto-Deploy)
+#### Main Branch (Auto-Deploy)
 - **`main` branch**: 
   - Maps to `dev` stage in dev account
   - Uses staging infrastructure (VPC, hosted zone, ECR)
   - Deploys to staging environment
   - Uses `STAGING_*` variables or falls back to common variables
 
-- **`prod` branch**: 
+#### Production (Promoted)
+
+- **Production**: promoted from a `main` commit by the deployment pipeline
   - Maps to `production` stage in prod account
   - Uses production infrastructure (VPC, hosted zone, ECR)
-  - Deploys to production environment
   - Uses `PROD_*` variables or falls back to common variables
+  - There is no separate production branch
 
 #### Pull Requests (Preview Deployments)
 - **Any PR to `main`**:
@@ -96,12 +96,20 @@ The deployment workflow follows a clear branching strategy that maps branches to
 - Branches like `feature/new-feature`, `bugfix/issue-123`, etc. are not deployed
 - Only protected branches and PRs trigger deployments
 
+#### Preview Sleep Schedule
+Preview stages scale their chat completion and realtime fanout services to zero tasks over the weekend, so idle previews stop billing for containers:
+
+- **Sleep**: Saturday 02:00 UTC. **Wake**: Sunday 23:00 UTC, which is Monday morning across Asia-Pacific. Both are scheduled scaling actions on the stage's own services; the window is set in `infra/previewSleepConfig.ts`.
+- **Waking early**: while a preview is asleep, the app shows a banner with a **Wake** button. It restores the regular task counts and shows progress until the tasks are running and passing their load balancer health checks, which can take a few minutes on Spot capacity. The banner works without the realtime connection, since that is one of the sleeping services.
+- **Deploying during the window does not wake the preview.** A deploy does not reset scheduled scaling, so a push to a sleeping PR leaves the services at zero until the scheduled wake or a click on **Wake**.
+- Production and `dev` never sleep. A preview that opts into service health alarms with `ENABLE_MONITORING=true` does not sleep either, since those alarms treat zero tasks as an outage.
+
 ### Environment Isolation
 
 This strategy provides clear environment separation:
 
 - **Staging Environment**: `main` branches → dev account
-- **Production Environment**: `prod` branch → prod account  
+- **Production Environment**: a promoted `main` commit → prod account
 - **Preview Environments**: PRs → dev account (isolated from production)
 - **Development Branches**: No deployment (prevents accidental deployments)
 
@@ -111,7 +119,7 @@ This strategy provides clear environment separation:
 - **Safe Previews**: PR deployments use staging infrastructure, not production
 - **Automatic Cleanup**: Preview environments are automatically removed
 - **Flexible Configuration**: Environment-specific variables allow customization
-- **Protected Production**: Only `prod` branch can deploy to production account
+- **Protected Production**: Production is promoted from a chosen `main` commit by the deployment pipeline
 
 ## Required Configuration
 
@@ -239,78 +247,34 @@ PROD_ECR_CACHE_REPO: 987654321098.dkr.ecr.us-east-2.amazonaws.com/prod-cache
 
 ## AWS IAM Role Setup (Multi-Account)
 
-The setup script automatically creates all necessary AWS resources for GitHub Actions deployment in both dev and prod accounts.
+The deploy roles are not created from this repository. Create and manage them wherever you manage the rest of your AWS accounts, ideally in infrastructure as code (OpenTofu, Terraform, CloudFormation), so the trust and permissions are reviewed like any other change. The Bike4Mind-hosted deployment manages its roles the same way, in a separate infrastructure repository.
 
-### Automated Setup (Recommended)
+You need, in both the dev and prod accounts:
 
-Use the provided setup script for both AWS accounts:
+1. **An OIDC provider** for GitHub Actions
+2. **An IAM role** whose trust policy references the OIDC provider and names the GitHub environments allowed to assume it
+3. **A deployment policy** attached to the role
+4. **The role ARN**, stored as a GitHub secret
 
-```bash
-./scripts/setup-github-actions.sh
-```
-
-This script will:
-- **Automatically detect AWS Account IDs** from your profiles
-- **Create OIDC providers** in both accounts for GitHub Actions authentication
-- **Create IAM roles** with proper trust policies (account IDs automatically substituted)
-- **Create and attach policies** with scoped SST deployment permissions (following principle of least privilege)
-- **Output the role ARNs** for GitHub Secrets
-
-The script handles all the account ID substitutions and policy details automatically. The created policies are scoped to only the permissions needed for SST deployments, following security best practices. For implementation details, see the well-commented script at `scripts/setup-github-actions.sh`.
-
-### Manual Setup
-
-If you prefer manual setup, you'll need to:
-
-1. **Create OIDC providers** in both AWS accounts
-2. **Create IAM roles** with trust policies that reference the OIDC providers
-3. **Create and attach policies** with SST deployment permissions
-4. **Get the role ARNs** for GitHub Secrets
-
-The setup script provides a complete reference implementation for all these steps.
+[Setup Steps](#setup-steps) below has the trust policies and the commands.
 
 ### Required Permissions
 
-Both roles should have permissions for:
-- CloudFormation (for SST deployments)
-- ECR (for Docker image operations)
-- Route53 (for DNS management)
-- All AWS services that your SST app uses
+Both roles need permissions for every AWS service your SST app uses. For this stack that is: ACM, API Gateway, Application Auto Scaling, CloudFormation, CloudFront (including KeyValueStore), CloudWatch and CloudWatch Logs, DAX, DynamoDB, EC2, ECR, ECS, Elastic Load Balancing, EventBridge and EventBridge Scheduler, IAM, KMS, Lambda, Route53, S3, Cloud Map (`servicediscovery`), SES, SNS, SQS, SSM, WAFv2, `tag:GetResources`, and management of the provider admin key secrets in Secrets Manager. Leave out any service your deployment does not use.
 
-The setup script creates scoped policies that follow the principle of least privilege, granting only the specific permissions needed for SST deployments rather than broad `"*"` permissions.
+The list includes IAM, because SST creates a role for each function and task it deploys. A role that can manage IAM is a privileged role, so who can assume it matters more than the action list. That is what the environment rules below control.
 
-### Security Best Practices
+### How Access Is Controlled
 
-The setup script implements several security best practices:
-
-1. **Principle of Least Privilege**: Policies are scoped to specific resources and actions rather than using broad `"*"` permissions
-2. **Resource Naming**: Permissions are limited to resources with specific naming patterns (e.g., `sst-*`, `*-dev-*`, `*-prod-*`)
-3. **Account Isolation**: Each account has its own role with account-specific resource ARNs
-4. **OIDC Authentication**: Uses GitHub's OIDC provider for secure, token-based authentication
-5. **Repository Scoping**: Trust policies are scoped to specific GitHub repositories
-
-This approach significantly reduces the attack surface compared to broad `"*"` permissions while still providing all necessary capabilities for SST deployments.
+1. **Environment-bound trust**: Each role can only be assumed by a job that declares one of its GitHub environments. A workflow run without that environment cannot assume the role.
+2. **Environment protection rules**: GitHub decides which runs may use an environment. Restrict `staging` and `production` to the `main` branch and require reviewers on `production` (see [Configure GitHub Environments](#4-configure-github-environments)).
+3. **Account Isolation**: Each account has its own role, and the prod role trusts only the `production` environment. The dev role trusts both `staging` and `preview`, and `preview` has no branch rule, so a job on any branch can assume the dev role. Keeping production in its own account is what protects it.
+4. **OIDC Authentication**: Uses GitHub's OIDC provider for short-lived, token-based authentication. No long-lived AWS keys are stored in GitHub.
 
 ## Setup Steps
 
-### 1. Automated Setup (Recommended)
-Use the provided setup script for both AWS accounts:
-
-```bash
-./scripts/setup-github-actions.sh
-```
-
-This script will:
-- **Automatically detect AWS Account IDs** from your profiles
-- **Create OIDC providers** in both accounts for GitHub Actions authentication
-- **Create IAM roles** with proper trust policies (account IDs automatically substituted)
-- **Create and attach policies** with scoped SST deployment permissions (following principle of least privilege)
-- **Output the role ARNs** for GitHub Secrets
-
-The script handles all the account ID substitutions and policy details automatically. The created policies are scoped to only the permissions needed for SST deployments, following security best practices. For implementation details, see the well-commented script at `scripts/setup-github-actions.sh`.
-
-### 2. Manual Setup
-If you prefer manual setup, follow these steps:
+### 1. Create the AWS Roles
+The commands below show each piece with the AWS CLI. Translate them to your infrastructure as code tool.
 
 #### Set up AWS OIDC Providers
 Set up OIDC providers in **both** AWS accounts:
@@ -332,7 +296,9 @@ aws iam create-open-id-connect-provider \
 ```
 
 #### Create IAM Roles
-Create the IAM roles in both accounts with the trust policies below. **Replace the account IDs** with your actual AWS account IDs:
+Create the IAM roles in both accounts with the trust policies below. **Replace the account IDs** with your actual AWS account IDs, and `YOUR_ORG` / `YOUR_REPO` with your repository.
+
+Each environment is listed twice because GitHub issues one of two subject formats depending on when the repository was created or last renamed: `repo:ORG/REPO:...` or `repo:ORG@<owner-id>/REPO@<repo-id>:...`. Replace `<owner-id>` and `<repo-id>` with your numeric ids: `gh api repos/YOUR_ORG/YOUR_REPO --jq '.owner.id, .id'` prints the owner id, then the repository id. Use the real ids, not `*`: they are what keep the policy pointing at your repository if a name is later reused. A repository only gets one of the two formats, so once you know which one yours gets, you can delete the other line.
 
 **Dev Account Trust Policy:**
 ```json
@@ -350,7 +316,12 @@ Create the IAM roles in both accounts with the trust policies below. **Replace t
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
         },
         "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
+          "token.actions.githubusercontent.com:sub": [
+            "repo:YOUR_ORG/YOUR_REPO:environment:staging",
+            "repo:YOUR_ORG@<owner-id>/YOUR_REPO@<repo-id>:environment:staging",
+            "repo:YOUR_ORG/YOUR_REPO:environment:preview",
+            "repo:YOUR_ORG@<owner-id>/YOUR_REPO@<repo-id>:environment:preview"
+          ]
         }
       }
     }
@@ -374,7 +345,10 @@ Create the IAM roles in both accounts with the trust policies below. **Replace t
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
         },
         "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
+          "token.actions.githubusercontent.com:sub": [
+            "repo:YOUR_ORG/YOUR_REPO:environment:production",
+            "repo:YOUR_ORG@<owner-id>/YOUR_REPO@<repo-id>:environment:production"
+          ]
         }
       }
     }
@@ -391,18 +365,29 @@ aws sts get-caller-identity --profile dev-account --query Account --output text
 aws sts get-caller-identity --profile prod-account --query Account --output text
 ```
 
-#### Create IAM Roles
-Create the IAM roles in both accounts with the trust policies above and attach necessary permissions.
+#### Attach Permissions
+Attach a deployment policy to each role covering the services under [Required Permissions](#required-permissions).
 
-### 3. Configure GitHub Repository Variables
+### 2. Configure GitHub Repository Variables
 1. Go to your repository settings
 2. Navigate to Secrets and variables → Actions → Variables
 3. Add the environment-specific variables listed above
 
-### 4. Configure GitHub Secrets
+### 3. Configure GitHub Secrets
 1. Go to your repository settings
 2. Navigate to Secrets and variables → Actions → Secrets
 3. Add the AWS role ARNs and optional secrets listed above
+
+### 4. Configure GitHub Environments
+The roles trust environment names, so create the environments and protect them. In Settings → Environments:
+
+| Environment | Used by | Recommended rules |
+|-------------|---------|-------------------|
+| `staging` | Deploys from `main` to the dev account | Deployment branches: `main` only |
+| `preview` | Pull request previews and their cleanup | None required; add reviewers if previews should need approval |
+| `production` | Production deploys to the prod account | Deployment branches: `main` only, plus required reviewers |
+
+A job selects an environment with `environment: <name>`. The sample workflow at `.github/sample-workflows/deploy.yml` already does this. If you add your own workflow that assumes one of these roles, give its job the matching `environment`, or the role assumption is refused.
 
 ### 5. Test the Workflows
 1. Create a test branch and push changes
@@ -431,7 +416,8 @@ Create the IAM roles in both accounts with the trust policies above and attach n
 
 The multi-account setup provides several security benefits:
 - **Isolation**: Dev and prod environments are completely separated
-- **Least Privilege**: Each role only has access to its respective account
+- **Account Scoping**: Each role only has access to its respective account
+- **Environment-Bound Roles**: Only jobs in the named GitHub environments can assume a role
 - **Audit Trail**: Clear separation of dev vs prod deployments
 - **Risk Mitigation**: Accidental deployments to prod are prevented by account separation
 
@@ -474,6 +460,7 @@ For GitHub Actions, we use `PREVIEW_SERVER_DOMAIN` to construct preview URLs lik
 1. **AWS Authentication Errors**
    - Verify the IAM role ARNs are correct for each account
    - Check that OIDC providers are configured in both accounts
+   - Check that the job declares an `environment` the role trusts (`staging`, `preview` or `production`); a job without one gets `Not authorized to perform sts:AssumeRoleWithWebIdentity`
    - Ensure roles have necessary permissions in their respective accounts
 
 2. **Cross-Account Issues**

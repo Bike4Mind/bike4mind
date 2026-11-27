@@ -12,6 +12,7 @@
 import type { GatedToolCall } from '@bike4mind/agents';
 import { classifyToolPermission } from '@bike4mind/common';
 import { isHeadlessConnection } from '@bike4mind/server-utils/utils/headlessConnection';
+import { confidenceOverrideFor, formatConfidenceGateReason, recordAndDecideConfidencePause } from './confidenceGate';
 
 export { classifyToolPermission, type ToolPermissionResult } from '@bike4mind/common';
 
@@ -68,6 +69,60 @@ export function selectGatedToolCall(
 }
 
 /**
+ * Observation for a withheld call that exactly repeats a call the user approved and the
+ * resume just ran. Running it would need a second approval for a duplicate side effect.
+ */
+export const REPEATED_APPROVED_CALL_OBSERVATION =
+  'Not run: this exact call was approved and already ran in the previous step, and its result is above. ' +
+  'Do not repeat it. If the user explicitly wants it run a second time, ask them first.';
+
+function canonicalToolInput(input: unknown): string {
+  let value = input;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return value as string;
+    }
+  }
+  const sortKeys = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(sortKeys);
+    if (node && typeof node === 'object') {
+      return Object.fromEntries(
+        Object.keys(node as Record<string, unknown>)
+          .sort()
+          .map(key => [key, sortKeys((node as Record<string, unknown>)[key])])
+      );
+    }
+    return node;
+  };
+  return JSON.stringify(sortKeys(value ?? {}));
+}
+
+const repeatKey = (call: GatedToolCall) => `${call.name}\u0000${canonicalToolInput(call.input)}`;
+
+/**
+ * Split withheld calls into exact repeats of a call the approval resume just replayed and
+ * the rest. Scoped to `guardedToolNames` (custom connector tools): a built-in tool such as a
+ * shell command can legitimately be re-run with identical arguments after something changed.
+ * The caller passes only the replays from the iteration directly before, so an identical
+ * call made later in the run still raises its own card.
+ */
+export function partitionRepeatedApprovedCalls(
+  withheld: GatedToolCall[],
+  justReplayed: readonly GatedToolCall[],
+  guardedToolNames: ReadonlySet<string>
+): { repeats: GatedToolCall[]; remaining: GatedToolCall[] } {
+  const replayed = new Set(justReplayed.filter(call => guardedToolNames.has(call.name)).map(repeatKey));
+  const repeats: GatedToolCall[] = [];
+  const remaining: GatedToolCall[] = [];
+  for (const call of withheld) {
+    (guardedToolNames.has(call.name) && replayed.has(repeatKey(call)) ? repeats : remaining).push(call);
+  }
+  return { repeats, remaining };
+}
+
+/**
  * Partition an iteration's withheld calls into the ones a permission response just
  * approved and the ones still awaiting a verdict - the pure decision behind the
  * approve -> replay resume block in `agentExecutor.ts`.
@@ -114,8 +169,10 @@ export async function resumeApprovedPause<TCheckpoint>(
     approvedToolCallId: string | undefined;
     approvedTools: string[];
     deniedTools: string[];
+    guardedToolNames: ReadonlySet<string>;
   },
   deps: {
+    answerRepeatedCall: (call: GatedToolCall) => void;
     executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
     toCheckpoint: () => TCheckpoint;
     updatePermissionState: (executionId: string) => Promise<unknown>;
@@ -128,15 +185,26 @@ export async function resumeApprovedPause<TCheckpoint>(
     logger: { error: (msg: string, meta?: Record<string, unknown>) => void };
   }
 ): Promise<ResumeApprovedPauseOutcome> {
-  const { executionId, iterationIndex, withheld, approvedToolCallId, approvedTools, deniedTools } = params;
-  const { nowApproved, stillWithheld } = partitionApprovedPause(
+  const { executionId, iterationIndex, withheld, approvedToolCallId, approvedTools, deniedTools, guardedToolNames } =
+    params;
+  const { nowApproved, stillWithheld: withheldBeforeRepeatGuard } = partitionApprovedPause(
     withheld,
     approvedToolCallId,
     approvedTools,
     deniedTools
   );
 
+  const replayedGuardedKeys = new Set<string>();
   for (const call of nowApproved) {
+    // Two identical custom calls in one batch run once; the sibling gets the repeat observation.
+    if (guardedToolNames.has(call.name)) {
+      const key = repeatKey(call);
+      if (replayedGuardedKeys.has(key)) {
+        deps.answerRepeatedCall(call);
+        continue;
+      }
+      replayedGuardedKeys.add(key);
+    }
     try {
       await deps.executeGatedToolCall({ id: call.id, name: call.name, input: call.input });
     } catch (err) {
@@ -155,6 +223,13 @@ export async function resumeApprovedPause<TCheckpoint>(
       return { status: 'replay_error' };
     }
   }
+
+  const { repeats: withheldRepeats, remaining: stillWithheld } = partitionRepeatedApprovedCalls(
+    withheldBeforeRepeatGuard,
+    nowApproved,
+    guardedToolNames
+  );
+  for (const call of withheldRepeats) deps.answerRepeatedCall(call);
 
   const replayCheckpoint = deps.toCheckpoint();
   await deps.updatePermissionState(executionId);
@@ -206,7 +281,11 @@ export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused'
  * `confidence: null` means nothing was replayed, nothing scored, or every replayed call
  * failed to run (a human cannot fix those) - proceed without touching the DB. A
  * `confidenceGateThreshold` of 0 (an unattended-loop profile override) always proceeds
- * too, since a real confidence score is never negative.
+ * too, since a real confidence score is never negative. Like the ordinary check, the
+ * replay advances the persisted low-confidence streak and pauses only on a streak.
+ *
+ * `confidenceOverrides` replaces a non-null score, as in `evaluateConfidenceGate`; a
+ * scripted score advances the streak but is kept out of the telemetry counters.
  */
 export async function gateReplayConfidence(
   params: {
@@ -214,9 +293,16 @@ export async function gateReplayConfidence(
     iterationIndex: number;
     confidence: number | null;
     confidenceGateThreshold: number;
+    /** False records the streak but never pauses (gateMode 'answer'). Defaults to true. */
+    pauseEnabled?: boolean;
+    confidenceOverrides?: readonly number[];
   },
   deps: {
-    recordIterationConfidence: (executionId: string, confidence: number) => Promise<void>;
+    recordIterationConfidence: (
+      executionId: string,
+      confidence: number,
+      options: { belowThreshold: boolean; recordTelemetry: boolean }
+    ) => Promise<number>;
     setPendingGate: (
       executionId: string,
       gate: { iteration: number; confidence: number; reason: string; requestedAt: Date }
@@ -226,17 +312,31 @@ export async function gateReplayConfidence(
     logger: { info: (msg: string, meta?: Record<string, unknown>) => void };
   }
 ): Promise<ReplayConfidenceOutcome> {
-  const { executionId, iterationIndex, confidence, confidenceGateThreshold } = params;
-  if (confidence === null) return { status: 'proceed' };
+  const { executionId, iterationIndex, confidenceGateThreshold } = params;
+  if (params.confidence === null) return { status: 'proceed' };
+
+  // `iterationIndex` is the checkpointed (1-indexed) iteration the replayed calls belong to.
+  const override = confidenceOverrideFor(params.confidenceOverrides, iterationIndex);
+  const confidence = override ?? params.confidence;
+  const isReal = override === undefined;
 
   // Telemetry parity with the ordinary per-iteration gate check: every evaluated
   // iteration is recorded, not just the ones that pause.
-  await deps.recordIterationConfidence(executionId, confidence);
-  if (confidence >= confidenceGateThreshold) return { status: 'proceed' };
+  const decision = await recordAndDecideConfidencePause(
+    {
+      iteration: iterationIndex,
+      confidence,
+      belowThreshold: confidence < confidenceGateThreshold,
+      pausable: true,
+      overridden: !isReal,
+    },
+    (c, options) => deps.recordIterationConfidence(executionId, c, options)
+  );
+  if (!decision.pause || params.pauseEnabled === false) return { status: 'proceed' };
 
   // Same 0-indexed wire convention as `settleGatedCall`'s `permission_request` emit.
   const wireIteration = Math.max(0, iterationIndex - 1);
-  const reason = `Iteration confidence ${(confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
+  const reason = formatConfidenceGateReason(confidence, confidenceGateThreshold, decision.lowConfidenceStreak);
   const gatePayload = { iteration: wireIteration, confidence, reason };
   deps.logger.info('[ConfidenceGate] Pausing execution for human review after a replayed approval', {
     executionId,
@@ -250,7 +350,7 @@ export async function gateReplayConfidence(
     await deps.sendWs('failed', { executionId, reason: 'aborted' });
     return { status: 'aborted' };
   }
-  await deps.recordGateEmitted(executionId);
+  if (isReal) await deps.recordGateEmitted(executionId);
   await deps.sendWs('confidence_gate', { executionId, ...gatePayload });
   await deps.sendWs('progress', { executionId, status: 'paused' });
   return { status: 'paused' };
@@ -274,8 +374,12 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     approvedTools: string[];
     deniedTools: string[];
     confidenceGateThreshold: number;
+    pauseEnabled?: boolean;
+    confidenceOverrides?: readonly number[];
+    guardedToolNames: ReadonlySet<string>;
   },
   deps: {
+    answerRepeatedCall: (call: GatedToolCall) => void;
     executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
     toCheckpoint: () => TCheckpoint;
     updatePermissionState: (executionId: string) => Promise<unknown>;
@@ -292,7 +396,11 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
     // Reads and clears the replay's confidence score - must run AFTER `resumeApprovedPause`
     // resolves, never before, or it observes nothing.
     takeIterationConfidence: () => number | null;
-    recordIterationConfidence: (executionId: string, confidence: number) => Promise<void>;
+    recordIterationConfidence: (
+      executionId: string,
+      confidence: number,
+      options: { belowThreshold: boolean; recordTelemetry: boolean }
+    ) => Promise<number>;
     setPendingGate: (
       executionId: string,
       gate: { iteration: number; confidence: number; reason: string; requestedAt: Date }
@@ -308,6 +416,7 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
       approvedToolCallId: params.approvedToolCallId,
       approvedTools: params.approvedTools,
       deniedTools: params.deniedTools,
+      guardedToolNames: params.guardedToolNames,
     },
     deps
   );
@@ -320,6 +429,8 @@ export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
       iterationIndex: params.iterationIndex,
       confidence: replayConfidence,
       confidenceGateThreshold: params.confidenceGateThreshold,
+      pauseEnabled: params.pauseEnabled,
+      confidenceOverrides: params.confidenceOverrides,
     },
     deps
   );

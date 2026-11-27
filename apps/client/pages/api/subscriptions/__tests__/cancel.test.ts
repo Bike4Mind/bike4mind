@@ -34,7 +34,7 @@ import Stripe from 'stripe';
 
 const mockFindCancelable = vi.fn();
 const mockFindActive = vi.fn();
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findCancelableUserSubscriptionByPriceId: (...args: unknown[]) => mockFindCancelable(...args),
     findActiveUserSubscriptions: (...args: unknown[]) => mockFindActive(...args),
@@ -44,7 +44,7 @@ vi.mock('@server/models/Subscription', () => ({
 const mockRetrieve = vi.fn();
 const mockCancel = vi.fn();
 const mockUpdate = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   stripe: {
     subscriptions: {
       retrieve: (...args: unknown[]) => mockRetrieve(...args),
@@ -55,7 +55,7 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
 }));
 
 const mockVoidOpenSubscriptionInvoices = vi.fn();
-vi.mock('@server/integrations/stripe/dunning', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
 }));
 

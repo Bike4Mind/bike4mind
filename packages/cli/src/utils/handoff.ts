@@ -1,7 +1,6 @@
 import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import type {
   Message,
   Session,
@@ -13,6 +12,7 @@ import type {
 import type { TodoItem } from '../tools/writeTodosTool.js';
 import { COMPACTION_SUMMARY_MARKER } from '../config/constants.js';
 import { renderWorkflowReminder } from './workflowReminder.js';
+import { sanitizeTerminalText } from './sanitizeTerminalText.js';
 
 /**
  * Sessions with fewer messages than this skip handoff generation.
@@ -279,7 +279,7 @@ function extractJsonObject(text: string): string | null {
  * timestamp so the user knows how fresh the context is.
  */
 export function formatHandoffOutput(handoff: SessionHandoff): string {
-  return formatHandoff(handoff, { includeTimestamp: true });
+  return sanitizeTerminalText(formatHandoff(handoff, { includeTimestamp: true }));
 }
 
 /**
@@ -359,7 +359,7 @@ export function isInjectedContinuity(message: Message): boolean {
  */
 export function injectHandoffMessage(messages: Message[], handoff: SessionHandoff): Message[] {
   const handoffMessage: Message = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     role: 'user',
     content: buildHandoffSystemMessage(handoff),
     timestamp: new Date().toISOString(),
@@ -395,7 +395,7 @@ export function injectWorkflowStateMessage(messages: Message[], workflow: Workfl
   if (!text) return withoutPriorInjections;
 
   const stateMessage: Message = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     role: 'user',
     content: `${WORKFLOW_STATE_MARKER}\n\n${text}`,
     timestamp: new Date().toISOString(),
@@ -449,7 +449,7 @@ export function buildLocalHandoff(
     `${decisions.length} decisions, ${openBlockers.length} open blockers, ${openTodos.length} open todos.`,
   ];
   if (currentTask) {
-    parts.push(`Current task: ${currentTask.description}.`);
+    parts.push(`Current task: ${currentTask.content}.`);
   }
   if (decisions.length > 0) {
     parts.push(`Latest decision: ${decisions[decisions.length - 1].summary}.`);
@@ -459,7 +459,7 @@ export function buildLocalHandoff(
   return {
     summary: parts.join(' '),
     keyFindings: decisions.map(d => `${d.summary} (rationale: ${d.rationale})`),
-    nextSteps: [...openTodos.map(t => t.description), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
+    nextSteps: [...openTodos.map(t => t.content), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
     pendingDecisions: [],
     blockers: openBlockers.map(b => b.description),
     generatedAt: new Date().toISOString(),
@@ -468,7 +468,8 @@ export function buildLocalHandoff(
 
 /**
  * Render a full Markdown handoff document from session state. Includes
- * session metadata, all decisions and open blockers verbatim, the last
+ * session metadata, all decisions and open blockers verbatim (minus terminal
+ * control characters, see sanitizeTerminalText), the last
  * `LOCAL_HANDOFF_MESSAGE_TAIL` messages role-labeled and lightly truncated,
  * and a pointer to the on-disk session JSON for deeper context.
  *
@@ -582,7 +583,9 @@ export function renderLocalHandoffMarkdown(session: Session, sessionJsonPath?: s
     }
   }
 
-  return lines.join('\n');
+  // The artifact is read with `cat`/pagers, so free text (decisions, blockers, todos,
+  // messages) must not carry terminal escapes. Markdown inside fields is kept as intended.
+  return sanitizeTerminalText(lines.join('\n'));
 }
 
 function appendMarkdownSection(lines: string[], heading: string, items: string[]): void {

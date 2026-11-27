@@ -85,9 +85,9 @@ vi.mock('@bike4mind/services', () => ({
     decideStampPrefix: h.decideStampPrefix,
   },
 }));
-vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: () => ({}) }));
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>()),
   getRecursiveTree: h.getRecursiveTree,
   getBlobBytes: h.getBlobBytes,
 }));

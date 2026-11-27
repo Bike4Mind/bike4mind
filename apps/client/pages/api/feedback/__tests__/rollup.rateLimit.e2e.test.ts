@@ -24,7 +24,7 @@ const mockRefs = vi.hoisted(() => ({
   currentUserId: 'rate-limit-user-a',
 }));
 
-vi.mock('@server/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
+vi.mock('@bike4mind/server-utils/services/gears/toolGearObserver', () => ({ registerToolGearObserver: vi.fn() }));
 vi.mock('@server/middlewares/logging', () => ({
   logging: (req: Record<string, unknown>, _res: unknown, next: () => void) => {
     const logger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };

@@ -30,9 +30,9 @@ import { isMac, isWindows } from './platform';
 export const REVEAL_LABEL = isMac ? 'Show in Finder' : isWindows ? 'Show in File Explorer' : 'Show in folder';
 
 /** Room the Copy submenu needs to open to the right; nearer the edge it opens to the left. */
-const SUBMENU_WIDTH = 200;
+export const SUBMENU_WIDTH = 200;
 
-interface Point {
+export interface Point {
   x: number;
   y: number;
 }
@@ -41,7 +41,7 @@ type OpenImageMenu = (image: ChatImageRef, at: Point, trigger: HTMLElement) => v
 
 const ImageMenuContext = createContext<OpenImageMenu | null>(null);
 
-function belowElement(element: Element): Point {
+export function belowElement(element: Element): Point {
   const rect = element.getBoundingClientRect();
   return { x: rect.left, y: rect.bottom };
 }
@@ -77,24 +77,35 @@ export function useImageMenu(image: ChatImageRef | null) {
 
 type CopyChoice = 'copy' | 'copy-path' | 'copy-markdown';
 
+export interface SubmenuChoice<T extends string> {
+  choice: T;
+  label: string;
+  testId: string;
+}
+
 /**
- * The Copy submenu, drawn inside the outer menu's listbox rather than portaled: the outer Menu
+ * A submenu, drawn inside the outer menu's listbox rather than portaled: the outer Menu
  * closes when focus leaves its listbox, so a submenu anywhere else would close both on entry.
  * Keys are stopped here for the same reason, or the outer list would also move on every arrow.
+ * Shared with the file link menu (FilePathLink.tsx).
  */
-function CopySubmenu({
-  onDisk,
+export function CopySubmenu<T extends string>({
+  choices,
+  label = 'Copy',
+  testId,
   top,
   flip,
   focusFirst,
   onPick,
   onBack,
 }: {
-  onDisk: boolean;
+  choices: SubmenuChoice<T>[];
+  label?: string;
+  testId: string;
   top: number;
   flip: boolean;
   focusFirst: boolean;
-  onPick: (choice: CopyChoice) => void;
+  onPick: (choice: T) => void;
   onBack: () => void;
 }) {
   const submenu = useRef<HTMLDivElement>(null);
@@ -123,7 +134,7 @@ function CopySubmenu({
       size?.disconnect();
       window.removeEventListener('resize', keepInViewport);
     };
-  }, [top, flip, onDisk]);
+  }, [top, flip, choices.length]);
   const items = () => Array.from(list.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
 
   useEffect(() => {
@@ -144,12 +155,6 @@ function CopySubmenu({
     }
   };
 
-  const choices: { choice: CopyChoice; label: string; testId: string; show: boolean }[] = [
-    { choice: 'copy', label: 'Image', testId: 'image-menu-copy-image-btn', show: onDisk },
-    { choice: 'copy-path', label: 'File path', testId: 'image-menu-copy-path-btn', show: onDisk },
-    { choice: 'copy-markdown', label: 'Markdown', testId: 'image-menu-copy-markdown-btn', show: true },
-  ];
-
   return (
     <Box component="li" role="none" sx={{ listStyle: 'none' }}>
       <Sheet
@@ -167,28 +172,34 @@ function CopySubmenu({
           bgcolor: 'background.popup',
         }}
         onKeyDown={onKeyDown}
-        data-testid="image-menu-copy-submenu"
+        data-testid={testId}
       >
-        <List ref={list} size="sm" role="menu" aria-label="Copy" sx={{ py: 0.5 }}>
-          {choices
-            .filter(entry => entry.show)
-            .map(entry => (
-              <ListItem key={entry.choice} role="none">
-                <ListItemButton
-                  role="menuitem"
-                  tabIndex={-1}
-                  onClick={() => onPick(entry.choice)}
-                  data-testid={entry.testId}
-                >
-                  {entry.label}
-                </ListItemButton>
-              </ListItem>
-            ))}
+        <List ref={list} size="sm" role="menu" aria-label={label} sx={{ py: 0.5 }}>
+          {choices.map(entry => (
+            <ListItem key={entry.choice} role="none">
+              <ListItemButton
+                role="menuitem"
+                tabIndex={-1}
+                onClick={() => onPick(entry.choice)}
+                data-testid={entry.testId}
+              >
+                {entry.label}
+              </ListItemButton>
+            </ListItem>
+          ))}
         </List>
       </Sheet>
     </Box>
   );
 }
+
+const IMAGE_COPY_CHOICES: SubmenuChoice<CopyChoice>[] = [
+  { choice: 'copy', label: 'Image', testId: 'image-menu-copy-image-btn' },
+  { choice: 'copy-path', label: 'File path', testId: 'image-menu-copy-path-btn' },
+  { choice: 'copy-markdown', label: 'Markdown', testId: 'image-menu-copy-markdown-btn' },
+];
+/** A remote image has no file, so only its Markdown can be copied. */
+const REMOTE_COPY_CHOICES = IMAGE_COPY_CHOICES.filter(entry => entry.choice === 'copy-markdown');
 
 interface MenuCallbacks {
   onAction: (image: ChatImageRef, action: ChatImageAction) => void;
@@ -259,7 +270,8 @@ function ImageMenuItems({
       </MenuItem>
       {copy && (
         <CopySubmenu
-          onDisk={onDisk}
+          choices={onDisk ? IMAGE_COPY_CHOICES : REMOTE_COPY_CHOICES}
+          testId="image-menu-copy-submenu"
           top={copy.top}
           flip={copy.flip}
           focusFirst={copy.focusFirst}

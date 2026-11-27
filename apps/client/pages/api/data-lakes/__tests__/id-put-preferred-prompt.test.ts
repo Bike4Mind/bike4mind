@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
     findAll: vi.fn().mockResolvedValue([]),
   },
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 // Real allowlist predicate on purpose - the whole point is which ids pass.
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {

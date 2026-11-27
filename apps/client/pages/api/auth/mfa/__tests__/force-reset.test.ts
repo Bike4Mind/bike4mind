@@ -12,9 +12,15 @@ const { mockForceResetMFA, mockRemovePasskeys, mockRevokeDevices, mockRecord, mo
     txEvents: [] as string[],
   }));
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
-}));
+vi.mock('@server/middlewares/baseApi', () => {
+  type Fn = (req: unknown, res: unknown, next?: () => void) => unknown;
+  let guard: Fn;
+  const chain = {
+    use: (fn: Fn) => ((guard = fn), chain),
+    post: (fn: Fn) => async (req: unknown, res: unknown) => (guard(req, res, () => {}), fn(req, res)),
+  };
+  return { baseApi: () => chain };
+});
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/services', () => ({
   mfaService: { forceResetMFA: (...a: unknown[]) => mockForceResetMFA(...a) },
@@ -32,8 +38,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: unknown[]) => mockLogAuthAudit(...a) }));
 // parseAdminActionReason and isSameUserId stay real so the 400 is the route's own.
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/utils/adminAudit')>()),
   recordAdminActionFromRequest: (...a: unknown[]) => mockRecord(...a),
   denySelfAdminAction: (...a: unknown[]) => mockDeny(...a),
 }));
@@ -44,7 +50,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { ForbiddenError } from '@bike4mind/common';
-import { SECRET_USER_FIELDS, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
+import { secretUserFields, expectSelfUserStripped } from '@server/auth/__tests__/sessionUserSecrets';
 import handler from '../force-reset';
 
 const REASON = 'Lost authenticator, identity verified by phone';
@@ -58,7 +64,6 @@ const post = (body: Record<string, unknown>, user: Record<string, unknown> | und
 
 beforeEach(() => {
   txEvents.length = 0;
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
   mockForceResetMFA.mockReset().mockResolvedValue({
     success: true,
     user: { id: 'target1', name: 'Target', username: 'target', email: 'target@example.com' },
@@ -73,13 +78,36 @@ beforeEach(() => {
 });
 
 describe('POST /api/auth/mfa/force-reset', () => {
-  it('answers 403 for a non-admin and touches nothing', async () => {
-    const { res, run } = post({ userId: 'target1', reason: REASON }, { id: 'user1', isAdmin: false });
-    await run();
+  it('refuses a caller without users:moderate and touches nothing', async () => {
+    const { run } = post({ userId: 'target1', reason: REASON }, { id: 'user1', isAdmin: false });
+    await expect(run()).rejects.toThrow('Missing permission: users:moderate');
 
-    expect(res._getStatusCode()).toBe(403);
     expect(mockForceResetMFA).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  describe('a users:moderate delegate', () => {
+    const DELEGATE = { id: 'delegate1', isAdmin: false, adminPermissions: ['users:moderate'], username: 'delegate' };
+
+    it('resets MFA for an account without admin access', async () => {
+      const { res, run } = post({ userId: 'target1', reason: REASON }, DELEGATE);
+      await run();
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockForceResetMFA).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 403, not 400, when the service refuses an admin-access target', async () => {
+      mockForceResetMFA.mockRejectedValue(
+        new ForbiddenError('Only full administrators can reset MFA for users with admin access')
+      );
+      const { run } = post({ userId: 'target1', reason: REASON }, DELEGATE);
+      await expect(run()).rejects.toBeInstanceOf(ForbiddenError);
+
+      expect(mockRemovePasskeys).not.toHaveBeenCalled();
+      expect(mockRevokeDevices).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
   });
 
   it('denies resetting your own MFA with a 403 and a user.mfa.denied entry', async () => {
@@ -91,7 +119,7 @@ describe('POST /api/auth/mfa/force-reset', () => {
       expect.objectContaining({
         action: 'user.mfa.denied',
         attempted: 'user.mfa.reset',
-        message: 'Use Profile > Settings > Security to turn off your own MFA.',
+        message: 'Use Profile > Security to turn off your own MFA.',
       })
     );
     expect(mockForceResetMFA).not.toHaveBeenCalled();
@@ -123,13 +151,13 @@ describe('POST /api/auth/mfa/force-reset', () => {
   });
 
   it('strips secrets and undeclared fields from the user in the response', async () => {
-    mockForceResetMFA.mockResolvedValue({ success: true, user: { id: 'target1', ...SECRET_USER_FIELDS } });
+    mockForceResetMFA.mockResolvedValue({ success: true, user: { id: 'target1', ...secretUserFields() } });
     const { res, run } = post({ userId: 'target1', reason: REASON });
     await run();
 
     const body = res._getJSONData();
     expect(body.success).toBe(true);
-    expectSelfUserStripped(body.user, body);
+    expectSelfUserStripped(body.user, body, 'target1');
   });
 
   it('resets inside the transaction and records user.mfa.reset with the reason and counts', async () => {
@@ -152,7 +180,7 @@ describe('POST /api/auth/mfa/force-reset', () => {
     const { res, run } = post({ userId: 'target1', reason: `  ${REASON}  ` });
     await run();
 
-    expect(txEvents).toEqual(['tx:start', 'passkeys', 'reset', 'devices', 'record', 'tx:end']);
+    expect(txEvents).toEqual(['tx:start', 'reset', 'passkeys', 'devices', 'record', 'tx:end']);
     expect(mockRecord).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

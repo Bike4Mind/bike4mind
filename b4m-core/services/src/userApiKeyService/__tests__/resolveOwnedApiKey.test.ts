@@ -53,4 +53,28 @@ describe('resolveOwnedApiKey', () => {
     expect(adapters.db.userApiKeys.findByUserIdAndId).not.toHaveBeenCalled();
     expect(adapters.db.organizations.findIdsAdministeredBy).not.toHaveBeenCalled();
   });
+
+  describe('org-owned keys', () => {
+    const orgOwnedKey = { id: 'key-1', orgOwned: { createdByUserId: 'creator' } } as IUserApiKeyDocument;
+
+    it('treats one as not found on the minter path (the org service account)', async () => {
+      const adapters = makeAdapters(orgOwnedKey, null);
+
+      await expect(resolveOwnedApiKey('service-account', 'key-1', adapters)).resolves.toBeNull();
+    });
+
+    it('treats one as not found on the org-admin fallback', async () => {
+      const adapters = makeAdapters(null, orgOwnedKey);
+
+      await expect(resolveOwnedApiKey('admin-user', 'key-1', adapters)).resolves.toBeNull();
+    });
+
+    it('resolves one only with the explicit opt-in the org key routes pass', async () => {
+      const adapters = makeAdapters(orgOwnedKey, null);
+
+      await expect(
+        resolveOwnedApiKey('service-account', 'key-1', { ...adapters, includeOrgOwned: true })
+      ).resolves.toBe(orgOwnedKey);
+    });
+  });
 });

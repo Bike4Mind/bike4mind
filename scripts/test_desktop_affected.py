@@ -155,9 +155,59 @@ class DesktopAffectedTest(unittest.TestCase):
         self.write_lock()
         self.assertTrue(self.changed())
 
+    def test_aliased_dependency_resolves(self):
+        # (dependency name, specifier, lockfile version, package key, snapshot key)
+        shapes = [
+            ('tool-next-0', 'npm:tool@2.0.0', 'tool@2.0.0', 'tool@2.0.0', 'tool@2.0.0'),
+            ('tool-next-1', 'npm:@scope/tool@1.0.0', '@scope/tool@1.0.0',
+             '@scope/tool@1.0.0', '@scope/tool@1.0.0'),
+            ('tool-next-2', 'npm:tool@2.0.0', 'tool@2.0.0(peer@1.0.0)',
+             'tool@2.0.0', 'tool@2.0.0(peer@1.0.0)'),
+            ('plain-0', '^1.0.0', '1.0.0(peer@1.0.0)', 'plain-0@1.0.0',
+             'plain-0@1.0.0(peer@1.0.0)'),
+        ]
+        for index, (name, specifier, version, package, snapshot) in enumerate(shapes):
+            with self.subTest(version=version):
+                self.lock['importers']['apps/desktop']['dependencies'] = {name: {
+                    'specifier': specifier, 'version': version}}
+                self.lock['snapshots'][snapshot] = {}
+                self.lock['packages'][package] = {}
+                self.write_lock()
+                self.git('add', '.')
+                self.git('commit', '-qm', 'build: aliased dependency')
+                base = self.git('rev-parse', 'HEAD')
+                self.commit('feat: unrelated', f'b4m-core/unrelated/src/{index}.ts')
+                self.assertFalse(affected(base, 'HEAD'))
+                self.lock['packages'][package] = {'resolution': {'integrity': f'changed-{index}'}}
+                self.write_lock()
+                self.git('add', '.')
+                self.git('commit', '-qm', 'chore: change aliased resolution')
+                self.assertTrue(affected(base, 'HEAD'))
+
     def test_shared_test_config_runs(self):
         self.commit('test: shared configuration', 'vitest.shared.ts')
         self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_curated_catalog_runs(self):
+        self.commit('fix(desktop): refresh curated pins', 'catalog/model-hub/curated-v2.json')
+        self.assertTrue(affected(self.base, 'HEAD'))
+
+    def test_curated_release_gate_changes_run(self):
+        for name in ('checkDesktopBuild.ts', 'devKey.ts', 'cli.ts'):
+            with self.subTest(file=name):
+                base = self.git('rev-parse', 'HEAD')
+                self.commit('fix(scripts): update curated release gate',
+                            f'packages/scripts/src/curatedCatalog/{name}')
+                self.assertTrue(affected(base, 'HEAD'))
+
+    def test_curated_publisher_change_skips(self):
+        self.commit('fix(scripts): update curated publisher',
+                    'packages/scripts/src/curatedCatalog/publishCurated.ts')
+        self.assertFalse(affected(self.base, 'HEAD'))
+
+    def test_curated_catalog_docs_only_skips(self):
+        self.commit('docs: catalog maintenance', 'catalog/model-hub/README.md')
+        self.assertFalse(affected(self.base, 'HEAD'))
 
     def test_gate_test_runs(self):
         self.commit('test: dependency gate', 'scripts/test_desktop_affected.py')
@@ -173,18 +223,26 @@ class DesktopAffectedTest(unittest.TestCase):
 
 
 class DesktopWorkflowTriggersTest(unittest.TestCase):
-    def test_automatic_triggers_are_temporarily_desktop_only(self):
+    def test_automatic_triggers_include_curated_trust_and_release_gate(self):
         workflow_path = Path(__file__).resolve().parents[1] / '.github/workflows/desktop-release.yml'
         workflow = yaml.load(workflow_path.read_text(), Loader=yaml.BaseLoader)
         expected = {
             'apps/desktop/**', '.github/workflows/desktop-release.yml',
             'scripts/desktop_release_version.py', 'scripts/test_desktop_release_version.py',
             'scripts/desktop_affected.py', 'scripts/test_desktop_affected.py',
+            'catalog/model-hub/**',
+            'b4m-core/local-models/**',
+            'b4m-core/common/src/schemas/modelHub.ts',
+            'packages/scripts/src/curatedCatalog/checkDesktopBuild.ts',
+            'packages/scripts/src/curatedCatalog/devKey.ts',
+            'packages/scripts/src/curatedCatalog/cli.ts',
         }
         for event in ('pull_request', 'push'):
             paths = workflow['on'][event]['paths']
             self.assertEqual(set(paths), expected)
-            for path in ('apps/desktop/src/main/index.ts', *sorted(expected - {'apps/desktop/**'})):
+            for path in ('apps/desktop/src/main/index.ts', 'catalog/model-hub/curated-v2.json',
+                         'b4m-core/local-models/src/curatedSignature.ts',
+                         *sorted(expected - {'apps/desktop/**', 'catalog/model-hub/**', 'b4m-core/local-models/**'})):
                 with self.subTest(event=event, included=path):
                     self.assertTrue(any(fnmatchcase(path, pattern) for pattern in paths))
             for path in ('b4m-core/services/src/notebookExportService/index.ts',

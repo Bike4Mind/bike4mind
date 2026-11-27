@@ -1,22 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+let runtimePlatform = 'linux';
+
 // A runtime that is "available" so buildSandbox enters the network branch.
-vi.mock('../sandbox/runtime/SandboxRuntimeAdapter.js', () => ({
-  createSandboxRuntime: async () => ({
-    platform: 'linux',
-    name: 'mock-runtime',
-    isAvailable: () => true,
-    wrapCommand: () => ({ executable: 'sh', args: [], env: {}, commandString: '', cleanupPaths: [] }),
-  }),
-}));
+vi.mock('../sandbox/runtime/SandboxRuntimeAdapter.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../sandbox/runtime/SandboxRuntimeAdapter.js')>();
+  return {
+    ...actual,
+    createSandboxRuntime: async () => ({
+      platform: runtimePlatform,
+      name: 'mock-runtime',
+      isAvailable: () => true,
+      wrapCommand: () => ({ executable: 'sh', args: [], env: {}, commandString: '', cleanupPaths: [] }),
+    }),
+  };
+});
 
 // Whether the mock proxy's start() actually brings it up. Toggled per test so we
 // can exercise BOTH the fail-closed branch (start no-ops, isRunning stays false)
 // and the happy branch (start succeeds, isRunning true -> "filtering on port N").
 let proxyStarts = false;
+let proxyOptions: unknown;
 
 vi.mock('../sandbox/proxy/ProxyManager.js', () => ({
   ProxyManager: class {
+    constructor(_config: unknown, options: unknown) {
+      proxyOptions = options;
+    }
     private running = false;
     setEnabled = vi.fn();
     start = vi.fn(async () => {
@@ -61,6 +71,16 @@ async function run(info: (line: string) => void, warn: (line: string) => void) {
 describe('buildSandbox network branch', () => {
   beforeEach(() => {
     proxyStarts = false;
+    runtimePlatform = 'linux';
+  });
+
+  it.each([
+    ['linux', true],
+    ['darwin', false],
+  ])('asks for the proxy unix socket only on Linux (%s)', async (platform, unixSocket) => {
+    runtimePlatform = platform;
+    await run(vi.fn(), vi.fn());
+    expect(proxyOptions).toEqual({ unixSocket });
   });
 
   it('warns and forces network off when the proxy will not start', async () => {

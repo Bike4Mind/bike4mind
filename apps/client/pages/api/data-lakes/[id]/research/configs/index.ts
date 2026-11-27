@@ -1,50 +1,41 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
-import {
-  withTransaction,
-  dataLakeProposalRepository,
-  dataLakeResearchConfigRepository,
-  dataLakeRepository,
-} from '@bike4mind/database';
 import { Request } from 'express';
-import { RESEARCH_RUN_TRIGGERS } from '@bike4mind/common';
-import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
-import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
-import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-
-const CreateInput = ResearchLeversInput.merge(ResearchScheduleInput).extend({
-  name: z.string(),
-  // Accepted so a client can be explicit; the service refuses one that disagrees with the cadence
-  // rather than silently saving a config whose trigger field means nothing.
-  trigger: z.enum(RESEARCH_RUN_TRIGGERS).optional(),
-});
-
-const db = { dataLakeResearchConfigs: dataLakeResearchConfigRepository, ...lakeConfigAuditDb };
+import {
+  researchConfigEnvelopeResponseSchema,
+  researchConfigListResponseSchema,
+  withResearchFeedStatus,
+} from '@bike4mind/common';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import {
+  CreateResearchConfigInput,
+  createLakeResearchConfig,
+  listLakeResearchConfigs,
+} from '@server/dataLakes/research/researchConfigHandlers';
+import { respond } from '@server/utils/respond';
 
 /**
  * GET  /api/data-lakes/:id/research/configs - the lake's saved research configurations (#1682).
  * POST /api/data-lakes/:id/research/configs - save a new one.
  *
  * Manage-gated on both verbs (see `assertLakeResearchManage`). Bounds and normalization live in the
- * service, not here, so a config written through any future second path means the same thing.
+ * service, not here, so a config written through any future second path means the same thing. The
+ * handler bodies are shared with the public v1 routes (`server/dataLakes/research`).
  *
  * The GET also returns the lake's live `pendingProposals` - the same count the research scheduler
- * compares against each config's `reviewBacklogLimit` - so the panel can say scheduling is paused.
+ * compares against each config's `reviewBacklogLimit` - so the panel can say scheduling is held.
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
-    const { lake } = await assertLakeResearchManage(req, id, await toAccessContext(req));
-    const [configs, pendingByLake] = await Promise.all([
-      dataLakeResearchService.listResearchConfigs(lake.id, { db }),
-      dataLakeProposalRepository.countPendingByLakes([lake.id]),
-    ]);
-    return res.json({ data: configs, pendingProposals: pendingByLake[lake.id] ?? 0 });
+    const { configs, pendingProposals } = await listLakeResearchConfigs(req, id, await toAccessContext(req));
+    return respond(res, researchConfigListResponseSchema, {
+      data: configs.map(c => withResearchFeedStatus(c, dataLakeResearchService.feedFingerprintLevers(c))),
+      pendingProposals,
+    });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -52,21 +43,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
     const ctx = await toAccessContext(req);
 
-    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
-    // on the lake doc and the retry re-reads live grants.
-    const config = await withTransaction(async () => {
-      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
-      const input = CreateInput.parse(req.body);
-
-      const created = await dataLakeResearchService.createResearchConfig(lake, actor, grants, input, {
-        db,
-        logger: req.logger,
-      });
-      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
-      await dataLakeRepository.touchIfStable(lake.id);
-      return created;
-    });
-    return res.status(201).json({ data: config });
+    const config = await createLakeResearchConfig(req, id, ctx, () => CreateResearchConfigInput.parse(req.body));
+    return respond(
+      res,
+      researchConfigEnvelopeResponseSchema,
+      { data: withResearchFeedStatus(config, dataLakeResearchService.feedFingerprintLevers(config)) },
+      201
+    );
   });
 
 export const config = {

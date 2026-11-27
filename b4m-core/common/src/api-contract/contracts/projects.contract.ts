@@ -13,9 +13,9 @@ import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the project API. Each route is a `/api/v1` twin of an SPA route
- * under `/api/projects/*` and reuses its service logic; the SPA routes are unchanged. The
- * sub-resources (files, sessions, members, invites, system prompts) are deliberately not published:
- * `session_ids`/`file_ids` on the project resource cover reading what a project groups.
+ * under `/api/projects/*` and reuses its service logic; the SPA routes are unchanged. The project's
+ * files and sessions are published by projectContent.contract.ts. Members, invites and system prompts
+ * are deliberately not published.
  */
 
 // projects:write is accepted for reads so a key that creates projects can read back what it wrote
@@ -97,6 +97,7 @@ export const createProjectContract = defineEndpoint({
   description:
     'Creates a project owned by the caller, optionally grouping existing sessions and files in it. ' +
     'Every listed session and file must be readable by the caller. ' +
+    'Set `organization_id` to create in an organization you belong to; this binding cannot be changed later. ' +
     `${MEMBERSHIP_NOTE} Sharing the project later shares them too. Unknown body fields are rejected.`,
   tags: ['Projects'],
   auth: 'apiKeyOrJwt',
@@ -112,7 +113,10 @@ export const createProjectContract = defineEndpoint({
         'valid JSON. Nothing is created.',
       schema: ApiErrorSchema,
     },
-    403: { description: 'The API key lacks `projects:write`.', schema: ScopeForbiddenErrorSchema },
+    403: {
+      description: 'The API key lacks `projects:write`, or the caller is not a member of the selected organization.',
+      schema: ScopeForbiddenErrorSchema,
+    },
     422: {
       description: 'Request body failed validation, or you already have a live project with this `name`.',
       schema: ApiErrorSchema,

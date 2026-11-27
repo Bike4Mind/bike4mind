@@ -1,16 +1,30 @@
-import { isGPTImageModel } from '@bike4mind/common';
+import { getMaxEditReferenceImages, getMaxReferenceImages, takesBflInputImageList } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
- * Reject `referenceImageFabFileIds` for a model that cannot carry them, before any work is queued.
- * Only gpt-image takes style anchors; the services drop them for every other model
- * (ImageGenerationService/ImageEditService.resolveReferenceImages), and a silent drop renders in an
- * unrelated style that a caller only notices when comparing a batch side by side.
+ * Reject unsupported reference images before any work is queued. For FLUX.2 / FLUX 3 generation the
+ * primary (`inputFabFileIds`) shares the cap with the references, so both are counted together.
  */
-export function assertReferenceImagesSupported(model: string, referenceImageFabFileIds: string[] | undefined): void {
-  if (!referenceImageFabFileIds?.length || isGPTImageModel(model)) return;
-
-  throw new BadRequestError(
-    `referenceImageFabFileIds is only supported by gpt-image models; model "${model}" cannot use reference images`
+export function assertReferenceImagesSupported(
+  model: string,
+  referenceImageFabFileIds: string[] | undefined,
+  operation: 'generate' | 'edit' = 'edit',
+  inputFabFileIds?: string[]
+): void {
+  if (!referenceImageFabFileIds?.length) return;
+  const limit = operation === 'generate' ? getMaxReferenceImages(model) : getMaxEditReferenceImages(model);
+  if (!limit) {
+    throw new BadRequestError(`referenceImageFabFileIds is not supported by model "${model}" for ${operation}`);
+  }
+  const sharesCap = operation === 'generate' && takesBflInputImageList(model);
+  const distinct = new Set(
+    sharesCap ? [...(inputFabFileIds ?? []), ...referenceImageFabFileIds] : referenceImageFabFileIds
   );
+  if (distinct.size > limit) {
+    throw new BadRequestError(
+      sharesCap
+        ? `fabFileIds plus referenceImageFabFileIds accept at most ${limit} images in total for model "${model}"`
+        : `referenceImageFabFileIds accepts at most ${limit} images for model "${model}"`
+    );
+  }
 }

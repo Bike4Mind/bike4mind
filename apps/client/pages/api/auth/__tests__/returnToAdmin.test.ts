@@ -10,7 +10,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/checkBlockedIP', () => ({
   checkBlockedIP: () => (_req: any, _res: any, next: any) => next(),
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
@@ -52,13 +52,14 @@ const mockRevokeBySid = vi.fn();
 const mockFindBySid = vi.fn();
 const mockEndConnections = vi.fn();
 const mockUserFindById = vi.fn();
-const mockRecordForActor = vi.fn();
-vi.mock('@server/utils/adminAudit', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
-  recordAdminActionForActor: (...args: any[]) => mockRecordForActor(...args),
+const mockEndImpersonation = vi.fn();
+const mockFindRoles = vi.fn();
+vi.mock('@bike4mind/server-utils/auth/impersonation', () => ({
+  endImpersonation: (...args: unknown[]) => mockEndImpersonation(...args),
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...args: any[]) => mockUserFindById(...args) },
+  adminRoleRepository: { findByIds: (...args: unknown[]) => mockFindRoles(...args) },
   realtimeConnectionRepository: { endConnections: (...args: any[]) => mockEndConnections(...args) },
   authSessionRepository: {
     revokeBySid: (...args: any[]) => mockRevokeBySid(...args),
@@ -66,6 +67,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+import { hasAdminPermission } from '@bike4mind/common';
 import handler from '../returnToAdmin';
 
 // Secrets the user document can carry. The redactor is stubbed to identity at the top of this file, so the
@@ -122,12 +124,84 @@ const post = (cookie: string) => {
   return { req, res };
 };
 
+describe('POST /api/auth/returnToAdmin - role permissions', () => {
+  const ROLE_ID = 'a'.repeat(24);
+  const cookie = 'b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret';
+
+  const restoreAs = async (user: Record<string, unknown>) => {
+    mockRotateSession.mockResolvedValueOnce({
+      status: 'rotated',
+      user,
+      userId: 'admin-1',
+      accessToken: 'admin-access',
+      refreshToken: 'admin-refresh-rotated',
+      sid: 'admin-sid',
+      impersonatedBy: null,
+    });
+    const { req, res } = post(cookie);
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+    await invoke(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    return res._getJSONData().user;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindRoles.mockReset();
+    mockRevokeBySid.mockResolvedValue(undefined);
+    mockEndConnections.mockResolvedValue({ connectionIds: [] });
+    mockEndImpersonation.mockResolvedValue(undefined);
+    mockUserFindById.mockResolvedValue({ id: 'cust-1', name: 'Customer', username: 'customer' });
+    mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'admin-1' });
+  });
+
+  it('carries a role-only admin permission on the restored admin user', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+
+    const user = await restoreAs({ id: 'admin-1', isAdmin: false, adminPermissions: [], adminRoleIds: [ROLE_ID] });
+
+    expect(mockFindRoles).toHaveBeenCalledWith([ROLE_ID]);
+    expect(user.roleAdminPermissions).toEqual(['support:read']);
+    expect(hasAdminPermission(user, 'support:read')).toBe(true);
+    expect(hasAdminPermission(user, 'users:delete')).toBe(false);
+  });
+
+  it('refuses the permission on the next call once the role is removed', async () => {
+    mockFindRoles.mockResolvedValue([{ permissions: ['support:read'] }]);
+    const held = { id: 'admin-1', isAdmin: false, adminPermissions: [] };
+
+    const before = await restoreAs({ ...held, adminRoleIds: [ROLE_ID] });
+    const after = await restoreAs({ ...held, adminRoleIds: [] });
+
+    expect(hasAdminPermission(before, 'support:read')).toBe(true);
+    expect(after.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(after, 'support:read')).toBe(false);
+    expect(mockFindRoles).toHaveBeenCalledTimes(1);
+  });
+
+  it('grants nothing for a deleted role id', async () => {
+    mockFindRoles.mockResolvedValue([]);
+
+    const user = await restoreAs({ id: 'admin-1', isAdmin: false, adminPermissions: [], adminRoleIds: [ROLE_ID] });
+
+    expect(user.roleAdminPermissions).toEqual([]);
+    expect(hasAdminPermission(user, 'support:read')).toBe(false);
+  });
+
+  it('grants nothing for a malformed role id and never queries the roles', async () => {
+    const user = await restoreAs({ id: 'admin-1', isAdmin: false, adminPermissions: [], adminRoleIds: ['not-an-id'] });
+
+    expect(user.roleAdminPermissions).toEqual([]);
+    expect(mockFindRoles).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/auth/returnToAdmin', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
     mockEndConnections.mockResolvedValue({ connectionIds: [] });
-    mockRecordForActor.mockResolvedValue(null);
+    mockEndImpersonation.mockResolvedValue(undefined);
     mockUserFindById.mockResolvedValue({ id: 'cust-1', name: 'Customer', username: 'customer' });
     mockRotateSession.mockResolvedValue({
       status: 'rotated',
@@ -263,17 +337,14 @@ describe('POST /api/auth/returnToAdmin', () => {
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).toHaveBeenCalledTimes(1);
-      const [, actor, input] = mockRecordForActor.mock.calls[0];
-      expect(actor).toMatchObject({ kind: 'user', userId: 'admin-1', impersonatedUserId: 'cust-1' });
-      expect(input).toMatchObject({
-        action: 'user.impersonation.ended',
-        target: { kind: 'user', id: 'cust-1', displayName: 'Customer' },
-        related: { impersonationSessionId: 'cust-sid' },
-      });
+      expect(mockEndImpersonation).toHaveBeenCalledWith(
+        req,
+        'cust-sid',
+        expect.objectContaining({ userId: 'admin-1' })
+      );
     });
 
-    it('records nothing when the rotation coalesced, so a double click writes one entry', async () => {
+    it('delegates concurrent end idempotence to the durable lifecycle helper', async () => {
       mockRotateSession.mockResolvedValue({
         status: 'coalesced',
         user: { id: 'admin-1' },
@@ -286,16 +357,24 @@ describe('POST /api/auth/returnToAdmin', () => {
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).not.toHaveBeenCalled();
+      expect(mockEndImpersonation).toHaveBeenCalledWith(
+        req,
+        'cust-sid',
+        expect.objectContaining({ userId: 'admin-1' })
+      );
     });
 
-    it("records nothing when the impersonation session is not this admin's", async () => {
+    it('binds durable cleanup to the restored admin even for a foreign session cookie', async () => {
       mockFindBySid.mockResolvedValue({ sid: 'cust-sid', userId: 'cust-1', impersonatedBy: 'a-different-admin' });
       const { req, res } = post(cookie);
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).not.toHaveBeenCalled();
+      expect(mockEndImpersonation).toHaveBeenCalledWith(
+        req,
+        'cust-sid',
+        expect.objectContaining({ userId: 'admin-1' })
+      );
     });
 
     it('records nothing when there is no impersonation cookie to name a session', async () => {
@@ -303,7 +382,7 @@ describe('POST /api/auth/returnToAdmin', () => {
 
       await handler(req as any, res as any);
 
-      expect(mockRecordForActor).not.toHaveBeenCalled();
+      expect(mockEndImpersonation).not.toHaveBeenCalled();
     });
   });
 });

@@ -7,7 +7,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * reaching the request body, or starts riding `params` instead of the top level.
  */
 
-const { post } = vi.hoisted(() => ({ post: vi.fn() }));
+const { post, updateOptimisticQuest } = vi.hoisted(() => ({
+  post: vi.fn(),
+  updateOptimisticQuest: vi.fn((_qc: unknown, _q: unknown, _s: unknown, _d: unknown, cb: () => unknown) => cb()),
+}));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post } }));
 
@@ -15,7 +18,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post } }));
 // so the payload assertion sees the real post.
 vi.mock('@client/app/utils/llm', () => ({
   createOptimisticQuest: (_qc: unknown, _sid: unknown, _prompt: unknown, cb: () => unknown) => cb(),
-  updateOptimisticQuest: (_qc: unknown, _q: unknown, _s: unknown, _d: unknown, cb: () => unknown) => cb(),
+  updateOptimisticQuest,
   createOptimisticSessionId: () => 'tmp-session-1',
 }));
 
@@ -101,6 +104,44 @@ describe('handleCommand("/llm") - composer preferences on the wire', () => {
     expect(body.agentMode).toEqual(agentMode);
     expect(body.researchMode).toEqual(researchMode);
     expect(body.params).not.toHaveProperty('agentMode');
+  });
+});
+
+describe('handleLLMCommand - custom MCP connectors switched off in the Tools menu', () => {
+  beforeEach(() => {
+    post.mockReset();
+    post.mockResolvedValue({ data: { quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  it('sends the opt-out list at the top level, through the /llm command map too', async () => {
+    await handleCommand({ '/llm': handleLLMCommand }, {
+      ...baseArgs(),
+      command: '/llm',
+      mcpServers: ['notion'],
+      disabledMcpConnections: ['acme'],
+    } as unknown as Parameters<typeof handleCommand>[1]);
+
+    const body = llmRequestBody();
+    expect(body.disabledMcpConnections).toEqual(['acme']);
+    expect(body.mcpServers).toEqual(['notion']);
+    expect(body.params).not.toHaveProperty('disabledMcpConnections');
+  });
+
+  it('omits an empty list, which means every connector is on', async () => {
+    await handleLLMCommand({ ...baseArgs(), disabledMcpConnections: [] });
+
+    expect(llmRequestBody()).not.toHaveProperty('disabledMcpConnections');
+  });
+
+  it('sends the platform connectors switched on as a top-level list, and omits an empty one', async () => {
+    await handleLLMCommand({ ...baseArgs(), enabledPlatformMcpConnections: ['p1'] });
+    const body = llmRequestBody();
+    expect(body.enabledPlatformMcpConnections).toEqual(['p1']);
+    expect(body.params).not.toHaveProperty('enabledPlatformMcpConnections');
+
+    post.mockClear();
+    await handleLLMCommand({ ...baseArgs(), enabledPlatformMcpConnections: [] });
+    expect(llmRequestBody()).not.toHaveProperty('enabledPlatformMcpConnections');
   });
 });
 
@@ -236,5 +277,22 @@ describe('handleLLMCommand - per-turn context placement', () => {
     await handleLLMCommand({ ...baseArgs(), systemContext: 'Extra instructions for this send.' });
 
     expect(messages().find(m => m.content === 'Extra instructions for this send.')).not.toHaveProperty('perTurn');
+  });
+});
+
+describe('handleLLMCommand - retrying a legacy QuestMaster turn', () => {
+  beforeEach(() => {
+    post.mockReset();
+    updateOptimisticQuest.mockClear();
+    post.mockResolvedValue({ data: { quest: { id: 'quest-1' }, session: { id: 'session-1' } } });
+  });
+
+  it('clears the plan fields in the optimistic retry write so the new reply renders', async () => {
+    await handleLLMCommand({ ...baseArgs(), questId: 'quest-1' });
+
+    const updates = updateOptimisticQuest.mock.calls[0][3] as Record<string, unknown>;
+    expect(Object.keys(updates)).toEqual(expect.arrayContaining(['questMasterPlanId', 'questMasterReply']));
+    expect(updates.questMasterPlanId).toBeUndefined();
+    expect(updates.questMasterReply).toBeUndefined();
   });
 });

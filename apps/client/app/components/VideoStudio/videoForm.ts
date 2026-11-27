@@ -103,7 +103,8 @@ export function clampToModel(state: VideoFormState, model: VideoModel): { state:
   };
 }
 
-export function toCreateBody(state: VideoFormState): CreateVideoGenerationBody {
+/** The request body. Audio is sent only to a model that lets the user choose it; the server refuses it otherwise. */
+export function toCreateBody(state: VideoFormState, model: VideoModel): CreateVideoGenerationBody {
   return {
     model: state.modelId,
     prompt: state.prompt.trim(),
@@ -112,7 +113,7 @@ export function toCreateBody(state: VideoFormState): CreateVideoGenerationBody {
     aspect_ratio: state.aspectRatio,
     resolution: state.resolution,
     ...(state.mode === 'image_to_video' && state.inputImage && { input_image_file_id: state.inputImage.fileId }),
-    ...(state.audio !== null && { audio: state.audio }),
+    ...(model.audio === 'optional' && { audio: state.audio ?? true }),
   };
 }
 

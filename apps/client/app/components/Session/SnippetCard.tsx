@@ -2,7 +2,7 @@ import { Box, Button, Card, CardContent, Textarea, Typography } from '@mui/joy';
 import { useState } from 'react';
 import { CopyCodeButton } from './CopyCodeButton';
 import { SnippetCardProps } from './types/UserPromptTypes';
-import { Save as SaveIcon } from '@mui/icons-material';
+import SaveIcon from '@mui/icons-material/Save';
 import { toast } from 'sonner';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';

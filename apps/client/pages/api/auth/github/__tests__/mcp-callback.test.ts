@@ -20,31 +20,34 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   getSettingsValue: (key: string) => (key === 'githubMcpClientId' ? 'client-id' : 'client-secret'),
 }));
 
-vi.mock('@server/auth/oauthFlowCookie', () => ({
-  readStateNonceHash: () => 'nonce-hash',
+vi.mock('@bike4mind/server-utils/auth/oauthFlowCookie', () => ({
+  readStateNonceHash: vi.fn(() => 'nonce-hash'),
   clearStateNonce: vi.fn(),
 }));
 
-vi.mock('@server/integrations/integrationAuditLogger', () => ({
-  IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: vi.fn() }) },
+const mockAuditFailure = vi.hoisted(() => vi.fn());
+
+vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
+  IntegrationAuditLogger: { create: () => ({ setUserId: vi.fn(), success: vi.fn(), failure: mockAuditFailure }) },
 }));
 
 const encryptEnvVariables = vi.hoisted(() => vi.fn(() => [{ key: 'GITHUB_ACCESS_TOKEN', value: 'encrypted' }]));
 
-vi.mock('@server/security/tokenEncryption', () => ({
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   encryptEnvVariables,
 }));
 
 // Tool discovery is best-effort; make it fail fast so only the connect write is exercised.
-vi.mock('@server/utils/invokeMcpHandler', () => ({
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({
   invokeMcpHandler: vi.fn().mockRejectedValue(new Error('discovery skipped in test')),
 }));
 
 import jwt from 'jsonwebtoken';
+import { readStateNonceHash } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import handler from '@pages/api/auth/github/mcp-callback';
 import { mcpServerRepository, userRepository } from '@bike4mind/database';
 import { getSettingsMap } from '@bike4mind/utils';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 
 const mockFindOne = vi.mocked(mcpServerRepository.findOne);
 const mockUpdate = vi.mocked(mcpServerRepository.update);
@@ -130,6 +133,7 @@ const STALE = '2026-01-01T00:00:00.000Z';
 describe('/api/auth/github/mcp-callback reconnect', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(readStateNonceHash).mockReturnValue('nonce-hash');
     // resetAllMocks also wipes the vi.mock factory implementations; re-seed them.
     vi.mocked(getSettingsMap).mockResolvedValue({} as any);
     vi.mocked(invokeMcpHandler).mockRejectedValue(new Error('discovery skipped in test'));
@@ -137,6 +141,36 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     vi.mocked(userRepository.findById).mockResolvedValue({ id: 'user-123' } as any);
     mockUpdate.mockImplementation(async data => data as any);
     mockCreate.mockImplementation(async data => ({ ...data, id: 'server-new' }) as any);
+  });
+
+  it('warns once for an expired state without alerting or looking up a user', async () => {
+    const { req, res } = makeReqRes();
+    req.query.state = jwt.sign({ userId: 'user-123', nh: 'nonce-hash' }, 'test-jwt-secret', { expiresIn: -1 });
+    await handler(req, res);
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).not.toHaveBeenCalled();
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toContain('error=invalid_state');
+  });
+
+  it('warns once when the browser nonce has expired', async () => {
+    vi.mocked(readStateNonceHash).mockReturnValue(null);
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).not.toHaveBeenCalled();
+    expect(userRepository.findById).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toContain('error=session_expired');
+  });
+
+  it('warns once for a reused authorization code', async () => {
+    mockFindOne.mockResolvedValue(null);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: async () => ({ error: 'bad_verification_code' }) }));
+    const { req, res } = makeReqRes();
+    await handler(req, res);
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).not.toHaveBeenCalled();
+    expect(res._getRedirectUrl()).toContain('error=auth_code_reused');
   });
 
   afterEach(() => {
@@ -339,5 +373,53 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
       2,
       expect.objectContaining({ id: 'server-1', tools: [], toolSchemas: [], toolSchemasFetchedAt: expect.any(Date) })
     );
+  });
+});
+
+describe('/api/auth/github/mcp-callback - authorization not completed', () => {
+  async function runWith(query: Record<string, string>) {
+    const { req, res } = createMocks({ method: 'GET', query });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    (req as any).logger = logger;
+    mockAuditFailure.mockClear();
+    await handler(req, res);
+    return { res, logger };
+  }
+
+  it('sends a declined consent back as access_denied, logged at warn', async () => {
+    const { res, logger } = await runWith({ error: 'access_denied', state: 'opaque-state' });
+
+    expect(res._getRedirectUrl()).toBe(
+      '/profile?tab=integrations&github_oauth=error&error=access_denied#github-integration'
+    );
+    expect(logger.warn).toHaveBeenCalledWith('GitHub authorization not completed', { error: 'access_denied' });
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(mockAuditFailure).toHaveBeenCalledWith('oauth_error');
+  });
+
+  it('maps any other provider error to the generic failure without echoing it', async () => {
+    const { res, logger } = await runWith({ error: 'call 555-0100' });
+
+    expect(res._getRedirectUrl()).toContain('error=callback_failed');
+    expect(logger.warn).toHaveBeenCalledWith('GitHub authorization not completed', { error: 'unrecognized' });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs a callback with no code at all at warn', async () => {
+    const { res, logger } = await runWith({});
+
+    expect(res._getRedirectUrl()).toContain('error=missing_code');
+    expect(logger.warn).toHaveBeenCalledWith('Missing or invalid code parameter');
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_code');
+  });
+
+  it('logs a callback with a code but no state at warn', async () => {
+    const { res, logger } = await runWith({ code: 'c' });
+
+    expect(res._getRedirectUrl()).toContain('error=missing_state');
+    expect(logger.warn).toHaveBeenCalledWith('Missing or invalid state parameter');
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_state');
   });
 });

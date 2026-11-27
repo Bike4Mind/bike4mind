@@ -1,15 +1,16 @@
 import { emailTemplateRepository } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import mailer from '@server/utils/mailer';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { queuedMailer } from '@bike4mind/server-utils/utils/mailer/queuedMailer';
 import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { ApiKeyScope } from '@bike4mind/common';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
-const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  auth: true,
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const { id } = req.query as { id: string };
   const { email } = req.body as { email: string };
 
@@ -53,7 +54,7 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).pos
   subject = `[TEST] ${subject}`;
 
   try {
-    const result = await mailer.sendEmail(email, {
+    const result = await queuedMailer.sendEmail(email, {
       subject,
       html: htmlContent,
       text: template.textContent || undefined,
@@ -62,15 +63,22 @@ const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] }).pos
     if (result === false) {
       throw new Error('Email service returned failure');
     }
-
-    return res.json({
-      success: true,
-      message: `Test email sent to ${email}`,
-      subject,
-    });
   } catch (error: any) {
     throw new BadRequestError(`Failed to send test email: ${error.message}`);
   }
+
+  await recordAdminActionFromRequest(req, {
+    action: 'email.template.test_sent',
+    target: { kind: 'settings', id, displayName: template.name },
+    summary: `sent test of email template ${template.name}`,
+    details: { recipientCount: 1 },
+  });
+
+  return res.json({
+    success: true,
+    message: `Test email accepted for delivery to ${email}`,
+    subject,
+  });
 });
 
 export const config = {

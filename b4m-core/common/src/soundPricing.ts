@@ -14,7 +14,8 @@ import { SoundGenerationVendor } from './soundGeneration';
  * ElevenLabsSoundCostCalculator delegates here - they MUST stay in sync.
  */
 const ELEVENLABS_USD_PER_SECOND = 0.12 / 60; // $0.002
-const ELEVENLABS_DEFAULT_DURATION_SECONDS = 200 / 11; // ~18.18s auto-duration equivalent
+/** Seconds billed (and recorded as usage units) for a generation with no requested duration. */
+export const ELEVENLABS_DEFAULT_DURATION_SECONDS = 200 / 11; // ~18.18s auto-duration equivalent
 
 export interface SoundCostInput {
   durationSeconds?: number;

@@ -55,6 +55,8 @@ describe('NotebookExportModal', () => {
     // The picker yields a bare "2026-01-15", which carries no offset - so whoever resolves it picks
     // the zone. Resolving it against UTC cost a user in UTC-8 the last 8 hours of the day they chose.
     renderModal();
+    fireEvent.click(screen.getByTestId('notebook-export-from-date-input-set-btn'));
+    fireEvent.click(screen.getByTestId('notebook-export-to-date-input-set-btn'));
     const from = screen.getByTestId('notebook-export-from-date-input');
     const to = screen.getByTestId('notebook-export-to-date-input');
     fireEvent.change(from, { target: { value: '2026-01-15' } });
@@ -67,6 +69,18 @@ describe('NotebookExportModal', () => {
       toDate: '2026-01-21T07:59:59.999Z',
     });
     expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  it('shows the empty state and sends no date range while both dates are unset', async () => {
+    renderModal();
+    expect(screen.getByTestId('notebook-export-from-date-input-empty')).toBeTruthy();
+    expect(screen.getByTestId('notebook-export-to-date-input-empty')).toBeTruthy();
+    clickExport();
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalled());
+    const body = mockPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.fromDate).toBeUndefined();
+    expect(body.toDate).toBeUndefined();
   });
 
   it('keeps the size box clearable, and does not submit the empty value', async () => {

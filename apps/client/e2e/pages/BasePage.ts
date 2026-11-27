@@ -9,6 +9,9 @@ import { TIMEOUTS } from '../constants';
 // switching users on a page already marked cleared.)
 const consentClearedByPage = new WeakMap<Page, boolean>();
 
+// Pages that already carry the gears discovery locator handler; Playwright stacks duplicate handlers.
+const gearsDiscoveryHandledPages = new WeakSet<Page>();
+
 export class BasePage {
   readonly page: Page;
 
@@ -56,6 +59,17 @@ export class BasePage {
     if (appeared) {
       await closeBtn.click();
     }
+  }
+
+  async handleGearsDiscoveryModal() {
+    // Backstop for users the fixture's localStorage pre-dismiss doesn't know (minted mid-test).
+    // The modal opens ~5s after load - usually after this call returns - so a one-shot probe would
+    // miss it; a locator handler instead closes it before any later action it would block.
+    if (gearsDiscoveryHandledPages.has(this.page)) return;
+    gearsDiscoveryHandledPages.add(this.page);
+    await this.page.addLocatorHandler(this.page.getByTestId('gears-discovery-modal'), async modal => {
+      await modal.getByTestId('gears-discovery-close-btn').click();
+    });
   }
 
   async handleEmailVerificationModal() {
@@ -160,6 +174,7 @@ export class BasePage {
     // modal) isn't mounted, so this must run before we probe for the What's New / verification modals.
     await this.handleAcceptPoliciesInterstitial();
     await this.suppressEmailVerificationModal();
+    await this.handleGearsDiscoveryModal();
     await this.handleWhatsNewModal();
     await this.handleEmailVerificationModal();
     await this.dismissNextjsOverlay();

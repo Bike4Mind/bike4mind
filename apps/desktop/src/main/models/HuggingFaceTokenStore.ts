@@ -1,0 +1,87 @@
+import { z } from 'zod';
+import type { StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
+
+const tokenDocumentSchema = z.object({ version: z.literal(1), token: z.string().optional() });
+type TokenCipher = SecretCipher & { getSelectedStorageBackend?: () => string };
+
+/** The token stays in memory when the OS has no secure secret store. */
+export class HuggingFaceTokenStore {
+  #ready: Promise<void> | null = null;
+  #token: string | null = null;
+  /** The token on disk was read from a blob the cipher reports as an older format. */
+  #resealPending = false;
+
+  constructor(
+    private readonly cipher: TokenCipher,
+    private readonly file: StoreFile,
+    private readonly logger: StoreLogger
+  ) {}
+
+  persisted(): boolean {
+    // Linux's basic_text backend encrypts with a hardcoded password, not an OS secret.
+    return this.cipher.isEncryptionAvailable() && this.cipher.getSelectedStorageBackend?.() !== 'basic_text';
+  }
+
+  async #ensureLoaded(): Promise<void> {
+    try {
+      await (this.#ready ??= this.#load());
+    } catch (error) {
+      this.#ready = null;
+      throw error;
+    }
+  }
+
+  async get(): Promise<string | null> {
+    await this.#ensureLoaded();
+    return this.#token;
+  }
+
+  async set(token: string): Promise<void> {
+    await this.#ensureLoaded();
+    const document = this.persisted()
+      ? { version: 1, token: this.cipher.encryptString(token).toString('base64') }
+      : { version: 1 };
+    await this.file.write(JSON.stringify(document));
+    this.#token = token;
+  }
+
+  /** Re-saves a token read from an older cipher format; one that could not be read stays on disk. */
+  async reencrypt(): Promise<void> {
+    if (!this.cipher.needsReencrypt) return;
+    await this.#ensureLoaded();
+    if (!this.#resealPending || this.#token === null || !this.persisted()) return;
+    await this.set(this.#token);
+    this.#resealPending = false;
+  }
+
+  async clear(): Promise<void> {
+    await this.#ensureLoaded();
+    await this.file.write(JSON.stringify({ version: 1 }));
+    this.#token = null;
+  }
+
+  async #load(): Promise<void> {
+    let raw: string | null;
+    try {
+      raw = await this.file.read();
+    } catch {
+      this.logger.warn('Models: could not read the Hugging Face token file');
+      throw new Error('Could not read the saved Hugging Face token. Try again.');
+    }
+    if (!raw || !this.persisted()) return;
+    try {
+      const stored = tokenDocumentSchema.parse(JSON.parse(raw));
+      if (!stored.token) return;
+      const sealed = Buffer.from(stored.token, 'base64');
+      const token = this.cipher.decryptString(sealed).trim();
+      if (token) {
+        this.#token = token;
+        this.#resealPending = this.cipher.needsReencrypt?.(sealed) === true;
+      }
+    } catch (err) {
+      this.logger.warn('Models: could not read the stored Hugging Face token');
+      this.logger.debug(`Models: token read failed: ${err instanceof Error ? err.name : 'unknown'}`);
+    }
+  }
+}

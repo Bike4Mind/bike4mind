@@ -9,9 +9,6 @@ import SiNotion, { defaultColor as SiNotionHex } from '@icons-pack/react-simple-
 import SiSlack, { defaultColor as SiSlackHex } from '@icons-pack/react-simple-icons/icons/SiSlack';
 import SiLinkedin, { defaultColor as SiLinkedinHex } from '@icons-pack/react-simple-icons/icons/SiLinkedin';
 import SiJupyter, { defaultColor as SiJupyterHex } from '@icons-pack/react-simple-icons/icons/SiJupyter';
-import SiGooglecalendar, {
-  defaultColor as SiGooglecalendarHex,
-} from '@icons-pack/react-simple-icons/icons/SiGooglecalendar';
 import SiOkta, { defaultColor as SiOktaHex } from '@icons-pack/react-simple-icons/icons/SiOkta';
 import SiHubspot, { defaultColor as SiHubspotHex } from '@icons-pack/react-simple-icons/icons/SiHubspot';
 import SiSalesforce, { defaultColor as SiSalesforceHex } from '@icons-pack/react-simple-icons/icons/SiSalesforce';
@@ -40,6 +37,7 @@ import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import { gray } from '@client/app/utils/themes/colors';
 
 type BrandIcon = ComponentType<{ color?: string; size?: string | number; title?: string }>;
@@ -69,10 +67,10 @@ const LOGOS: Record<IntegrationLogoKey, LogoSpec> = {
   jupyter: brand(SiJupyter, SiJupyterHex),
   blog: glyph(ArticleOutlinedIcon),
   'history-import': glyph(HistoryOutlinedIcon),
-  'google-calendar': brand(SiGooglecalendar, SiGooglecalendarHex),
   okta: brand(SiOkta, SiOktaHex),
   'claude-code': monogram('CC'),
   'mcp-cli': glyph(TerminalOutlinedIcon),
+  'mcp-custom': glyph(HubOutlinedIcon),
   'b4m-oauth': monogram('B4'),
   hubspot: brand(SiHubspot, SiHubspotHex),
   salesforce: brand(SiSalesforce, SiSalesforceHex),

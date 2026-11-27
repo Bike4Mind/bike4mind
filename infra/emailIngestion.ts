@@ -1,7 +1,9 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH, isPreviewStage } from './constants';
+import { subscribeUnlessPreview } from './previewQueueConsumers';
 import { lambdaVpc } from './vpc';
+import { BLOCK_ALL_PUBLIC_ACCESS, encryptBucketAtRest } from './bucketSecurity';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 
 /**
@@ -47,6 +49,7 @@ const sesSourceArn = $interpolate`arn:aws:ses:${awsRegion}:${awsAccountId}:*`;
 
 export const emailIngestionBucket = new sst.aws.Bucket('emailIngestionBucket', {
   versioning: false, // Not needed for raw emails
+  transform: { publicAccessBlock: BLOCK_ALL_PUBLIC_ACCESS },
   policy: [
     {
       effect: 'allow',
@@ -67,6 +70,7 @@ export const emailIngestionBucket = new sst.aws.Bucket('emailIngestionBucket', {
     },
   ],
 });
+encryptBucketAtRest('emailIngestionBucket', emailIngestionBucket);
 
 /**
  * S3 Lifecycle Rule - Auto-delete Raw Emails After 30 Days
@@ -147,7 +151,10 @@ export const emailAnalysisQueue = new sst.aws.Queue('emailAnalysisQueue', {
  *
  * Handler: apps/workers/src/emailIngestion/emailParser.dispatch
  */
-export const emailParserQueueSubscription = emailIngestionQueue.subscribe(
+export const emailParserQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'emailIngestionQueue',
+  emailIngestionQueue,
   {
     handler: 'apps/workers/src/emailIngestion/emailParser.dispatch',
     runtime: 'nodejs24.x',
@@ -301,7 +308,10 @@ const emailIngestionBucketNotification = emailIngestionBucket.notify({
  *
  * Handler: apps/workers/src/emailIngestion/emailAnalyzer.dispatch
  */
-const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
+const emailAnalyzerQueueSubscription = subscribeUnlessPreview(
+  isPreviewStage,
+  'emailAnalysisQueue',
+  emailAnalysisQueue,
   {
     handler: 'apps/workers/src/emailIngestion/emailAnalyzer.dispatch',
     runtime: 'nodejs24.x',

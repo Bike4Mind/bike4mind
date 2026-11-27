@@ -27,13 +27,13 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimitForOwner, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
-import defineAbilitiesFor from '@server/auth/ability';
+import defineAbilitiesFor from '@bike4mind/server-utils/auth/ability';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import {
   getBlobBytes,
   getRecursiveTree,
   gitHubRateLimitDelaySeconds,
-} from '@server/integrations/github/dataLake/lakeAppClient';
+} from '@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient';
 import {
   checkLakeFileContent,
   classifyTreeEntry,
@@ -47,7 +47,6 @@ import {
   ingestLakeFile,
   type IngestLake,
 } from '@workers/queueHandlers/lakeIngestShared';
-import { v4 as uuidv4 } from 'uuid';
 
 // Stop starting files with less than this left, so the invocation yields instead of dying mid-file.
 export const GITHUB_LAKE_DEADLINE_BUFFER_MS = 90_000;
@@ -384,7 +383,7 @@ export async function runGitHubLakeSlice(input: GitHubLakeSliceInput): Promise<G
         continue;
       }
 
-      const fileKey = `${uuidv4()}${path.posix.extname(candidate.path)}`;
+      const fileKey = `${crypto.randomUUID()}${path.posix.extname(candidate.path)}`;
       const tags = await applyFallbackTags([
         { name: lake.datalakeTag, strength: DATALAKE_TAG_STRENGTH },
         ...(folderPrefix ? folderPathTagsForFile(candidate.path, folderPrefix) : []),

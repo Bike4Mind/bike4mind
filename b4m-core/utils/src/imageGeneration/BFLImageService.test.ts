@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
 import { BFLImageService } from './BFLImageService';
 import { ImageModels, BFL_SAFETY_TOLERANCE } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { toProviderEndUserId } from '@bike4mind/llm-adapters';
+import { ImageModerationBlockedError, ImageProviderUnavailableError } from './imageGenerationErrors';
 
 const API_KEY = 'TEST-BFL-KEY-0a1b2c3d-do-not-log';
 
@@ -63,7 +66,183 @@ describe('BFLImageService — does not leak the API key to logs (#9230)', () => 
   });
 });
 
-describe('BFLImageService — safety_tolerance hard cap', () => {
+describe('BFLImageService - reference image field', () => {
+  let postSpy: ReturnType<typeof vi.spyOn>;
+  let logged: string[];
+  let service: BFLImageService;
+
+  const submittedBody = (callIndex = 0): Record<string, unknown> =>
+    postSpy.mock.calls[callIndex][1] as Record<string, unknown>;
+
+  beforeEach(() => {
+    logged = [];
+    const capture = (...args: unknown[]) =>
+      logged.push(
+        args
+          .map(arg => {
+            try {
+              return typeof arg === 'string' ? arg : JSON.stringify(arg);
+            } catch {
+              return String(arg);
+            }
+          })
+          .join(' ')
+      );
+    postSpy = vi.spyOn(axios, 'post').mockResolvedValue({
+      data: { id: 'req-1', polling_url: 'https://api.bfl.ai/v1/poll/req-1' },
+    });
+    vi.spyOn(axios, 'get').mockResolvedValue({
+      data: { status: 'Ready', result: { sample: 'https://img.example/out.png' } },
+    });
+    vi.spyOn(console, 'info').mockImplementation(capture);
+    vi.spyOn(console, 'log').mockImplementation(capture);
+    service = new BFLImageService(API_KEY, { log() {}, error() {}, warn() {}, info() {} } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends a FLUX.2 reference image as input_image, the field those endpoints define', async () => {
+    await service.generate('make it pop', { model: ImageModels.FLUX_2_PRO, image_prompt: 'base64-image' });
+
+    expect(submittedBody().input_image).toBe('base64-image');
+    expect(submittedBody()).not.toHaveProperty('image_prompt');
+  });
+
+  it('still sends a FLUX.1 reference image as image_prompt', async () => {
+    await service.generate('make it pop', { model: ImageModels.FLUX_PRO_1_1, image_prompt: 'base64-image' });
+
+    expect(submittedBody().image_prompt).toBe('base64-image');
+    expect(submittedBody()).not.toHaveProperty('input_image');
+  });
+
+  it('sends FLUX.2 references in order using numbered provider fields', async () => {
+    await service.generate('combine these', {
+      model: ImageModels.FLUX_2_PRO,
+      reference_images: ['first-image', 'second-image', 'third-image'],
+    });
+
+    expect(submittedBody()).toMatchObject({
+      input_image: 'first-image',
+      input_image_2: 'second-image',
+      input_image_3: 'third-image',
+    });
+    expect(submittedBody()).not.toHaveProperty('reference_images');
+    expect(submittedBody()).not.toHaveProperty('image_prompt');
+    const output = logged.join('\n');
+    for (const image of ['first-image', 'second-image', 'third-image']) {
+      expect(output).not.toContain(image);
+    }
+  });
+
+  it.each([
+    [ImageModels.FLUX_2_PRO, 8],
+    [ImageModels.FLUX_2_KLEIN_4B, 4],
+    [ImageModels.FLUX_2_KLEIN_9B, 4],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, 4],
+  ] as const)('enforces the reference limit for %s before submitting', async (model, limit) => {
+    const reference_images = Array.from({ length: limit }, (_, index) => `image-${index}`);
+    await service.generate('combine these', { model, reference_images });
+    expect(submittedBody()[`input_image_${limit}`]).toBe(`image-${limit - 1}`);
+    postSpy.mockClear();
+
+    await expect(
+      service.generate('too many', { model, reference_images: [...reference_images, 'one-too-many'] })
+    ).rejects.toThrow(`at most ${limit} reference images`);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('counts a legacy primary image toward the FLUX.2 limit', async () => {
+    await expect(
+      service.generate('too many', {
+        model: ImageModels.FLUX_2_KLEIN_4B,
+        image_prompt: 'primary',
+        reference_images: ['reference-1', 'reference-2', 'reference-3', 'reference-4'],
+      })
+    ).rejects.toThrow('at most 4 reference images');
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects explicit references for FLUX.1 instead of silently discarding them', async () => {
+    await expect(
+      service.generate('combine these', { model: ImageModels.FLUX_PRO_1_1, reference_images: ['image'] })
+    ).rejects.toThrow('does not support multiple reference images');
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends FLUX 3 references as one images array, redacted in the log', async () => {
+    await service.generate('combine these', {
+      model: ImageModels.FLUX_3_IMAGE,
+      image_prompt: 'primary-image',
+      reference_images: ['second-image', 'third-image'],
+    });
+
+    expect(submittedBody().images).toEqual(['primary-image', 'second-image', 'third-image']);
+    expect(submittedBody()).not.toHaveProperty('input_image');
+    expect(submittedBody()).not.toHaveProperty('image_prompt');
+    const output = logged.join('\n');
+    for (const image of ['primary-image', 'second-image', 'third-image']) {
+      expect(output).not.toContain(image);
+    }
+  });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'enforces the 10-image limit for %s before submitting',
+    async model => {
+      const reference_images = Array.from({ length: 11 }, (_, index) => `image-${index}`);
+      await expect(service.generate('too many', { model, reference_images })).rejects.toThrow(
+        'at most 10 reference images'
+      );
+      expect(postSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it('sends flux-3-image only the fields its endpoint defines, since it rejects unknown ones', async () => {
+    await service.generate('a lighthouse', {
+      model: ImageModels.FLUX_3_IMAGE,
+      seed: 42,
+      output_format: 'png',
+      prompt_upsampling: true,
+      aspect_ratio: '1:1',
+      width: 1024,
+      height: 1024,
+      user: 'user-1',
+      safety_tolerance: 2,
+      steps: 30,
+    });
+
+    expect(Object.keys(submittedBody()).sort()).toEqual(['height', 'prompt', 'safety_tolerance', 'user', 'width']);
+    expect(submittedBody().user).toBe(toProviderEndUserId('user-1'));
+  });
+
+  it('sends FLUX 3 Image Klein its seed and output_format, and no upsampling field', async () => {
+    await service.generate('a lighthouse', {
+      model: ImageModels.FLUX_3_IMAGE_KLEIN,
+      seed: 42,
+      output_format: 'png',
+      prompt_upsampling: true,
+      width: 1024,
+      height: 768,
+    });
+
+    expect(submittedBody()).toMatchObject({ seed: 42, output_format: 'png', width: 1024, height: 768 });
+    expect(submittedBody()).not.toHaveProperty('prompt_upsampling');
+    expect(submittedBody()).not.toHaveProperty('disable_pup');
+    expect(submittedBody()).not.toHaveProperty('images');
+  });
+
+  it('redacts the FLUX.2 reference image in the logged body', async () => {
+    await service.generate('make it pop', { model: ImageModels.FLUX_2_PRO, image_prompt: 'base64-secret-image' });
+
+    const output = logged.join('\n');
+    expect(output).toContain('BFL Image generation request body');
+    expect(output).toContain('[BASE64_DATA_19_CHARS]');
+    expect(output).not.toContain('base64-secret-image');
+  });
+});
+
+describe('BFLImageService - request body', () => {
   let postSpy: ReturnType<typeof vi.spyOn>;
   let service: BFLImageService;
 
@@ -97,6 +276,19 @@ describe('BFLImageService — safety_tolerance hard cap', () => {
     expect(submittedBody().safety_tolerance).toBe(BFL_SAFETY_TOLERANCE.DEFAULT);
   });
 
+  it('generate() rounds a fractional safety_tolerance to the integer BFL documents', async () => {
+    await service.generate('a prompt', { model: ImageModels.FLUX_3_IMAGE, safety_tolerance: 1.4 });
+    expect(postSpy.mock.calls[0][1]).toMatchObject({ safety_tolerance: 1 });
+  });
+
+  it.each([ImageModels.FLUX_PRO_1_1, ImageModels.FLUX_2_PRO])(
+    'generate() rounds a fractional safety_tolerance for %s as well',
+    async model => {
+      await service.generate('a prompt', { model, safety_tolerance: 1.6 });
+      expect(postSpy.mock.calls[0][1]).toMatchObject({ safety_tolerance: 2 });
+    }
+  );
+
   it('generate() clamps negative safety_tolerance up to MIN', async () => {
     await service.generate('a friendly cat', { safety_tolerance: -3 });
 
@@ -113,5 +305,418 @@ describe('BFLImageService — safety_tolerance hard cap', () => {
     await service.transform('base64-image', 'make it a watercolor', { safety_tolerance: 6 });
 
     expect(submittedBody().safety_tolerance).toBe(BFL_SAFETY_TOLERANCE.MAX);
+  });
+
+  it('generate() forwards prompt_upsampling: true to the BFL API', async () => {
+    await service.generate('a friendly cat', { prompt_upsampling: true });
+
+    expect(submittedBody().prompt_upsampling).toBe(true);
+  });
+
+  it('generate() forwards prompt_upsampling: false to the BFL API', async () => {
+    await service.generate('a friendly cat', { prompt_upsampling: false });
+
+    expect(submittedBody().prompt_upsampling).toBe(false);
+  });
+
+  it('generate() defaults prompt_upsampling to false when it is omitted', async () => {
+    await service.generate('a friendly cat', {});
+
+    expect(submittedBody().prompt_upsampling).toBe(false);
+  });
+
+  it.each([ImageModels.FLUX_2_MAX, ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_PRO_PREVIEW])(
+    'maps prompt upsampling to disable_pup for %s',
+    async model => {
+      await service.generate('a friendly cat', { model, prompt_upsampling: true });
+      expect(submittedBody().disable_pup).toBe(false);
+      expect(submittedBody()).not.toHaveProperty('prompt_upsampling');
+
+      await service.generate('a friendly cat', { model, prompt_upsampling: false });
+      expect(submittedBody(1).disable_pup).toBe(true);
+    }
+  );
+
+  it('keeps the prompt_upsampling field for FLUX.2 Flex', async () => {
+    await service.generate('a friendly cat', { model: ImageModels.FLUX_2_FLEX, prompt_upsampling: true });
+    expect(submittedBody().prompt_upsampling).toBe(true);
+    expect(submittedBody()).not.toHaveProperty('disable_pup');
+  });
+
+  it.each([ImageModels.FLUX_2_KLEIN_4B, ImageModels.FLUX_2_KLEIN_9B, ImageModels.FLUX_2_KLEIN_9B_PREVIEW])(
+    'omits unsupported prompt upsampling for %s',
+    async model => {
+      await service.generate('a friendly cat', { model, prompt_upsampling: true });
+      expect(submittedBody()).not.toHaveProperty('prompt_upsampling');
+      expect(submittedBody()).not.toHaveProperty('disable_pup');
+    }
+  );
+});
+
+describe('BFLImageService - expected failures stay below error level', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+  let service: BFLImageService;
+
+  const POLLING_URL = 'https://api.bfl.ai/v1/poll/req-1';
+
+  function pollReturns(data: Record<string, unknown>) {
+    vi.spyOn(axios, 'get').mockResolvedValue({ data });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(axios, 'post').mockResolvedValue({ data: { id: 'req-1', polling_url: POLLING_URL } });
+    errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'debug').mockImplementation(() => undefined);
+    vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    service = new BFLImageService(API_KEY, { log() {}, error() {}, warn() {}, info() {} } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(['Request Moderated', 'Content Moderated'])(
+    'throws ImageModerationBlockedError for a %s poll status',
+    async status => {
+      pollReturns({ status });
+
+      const thrown = await service.generate('a prompt', { model: ImageModels.FLUX_PRO }).catch((e: unknown) => e);
+
+      expect(thrown).toBeInstanceOf(ImageModerationBlockedError);
+      expect((thrown as ImageModerationBlockedError).logContext).toMatchObject({
+        provider: 'bfl',
+        requestId: 'req-1',
+        reason: status,
+      });
+      expect(errorSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it('throws ImageProviderUnavailableError when polling runs out of attempts', async () => {
+    pollReturns({ status: 'Pending' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thrown = await (service as any)
+      .pollForResult({ id: 'req-1', pollingUrl: POLLING_URL }, 1, 0)
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
+    expect((thrown as ImageProviderUnavailableError).logContext).toMatchObject({
+      provider: 'bfl',
+      reason: 'polling_timeout',
+      requestId: 'req-1',
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(['Reasoning', 'Generating'])('treats polling that runs out on FLUX 3 %s as a slow provider', async status => {
+    pollReturns({ status });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thrown = await (service as any)
+      .pollForResult({ id: 'req-1', pollingUrl: POLLING_URL }, 1, 0)
+      .catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
+  });
+
+  it.each(['ETIMEDOUT', 'ENETUNREACH'])('treats a %s network failure as provider unavailable', async code => {
+    vi.spyOn(axios, 'post').mockRejectedValue(
+      Object.assign(new Error(`connect ${code}`), { isAxiosError: true, code, config: { headers: {} } })
+    );
+
+    const thrown = await service.generate('a prompt', { model: ImageModels.FLUX_PRO }).catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ImageProviderUnavailableError);
+    expect((thrown as ImageProviderUnavailableError).logContext).toMatchObject({ provider: 'bfl', reason: code });
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('treats polling that ends on a non-Pending status as a genuine failure', async () => {
+    pollReturns({ status: 'Task not found' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thrown = await (service as any)
+      .pollForResult({ id: 'req-1', pollingUrl: POLLING_URL }, 1, 0)
+      .catch((e: unknown) => e);
+
+    expect(thrown).not.toBeInstanceOf(ImageProviderUnavailableError);
+    expect((thrown as Error).message).toBe('BFL polling ended on unexpected status: Task not found');
+  });
+
+  it('logs a genuine task failure once, at error', async () => {
+    pollReturns({ status: 'Error', result: { error: 'internal' } });
+
+    await expect(service.generate('a prompt', { model: ImageModels.FLUX_PRO })).rejects.toThrow(
+      'BFL image generation failed: internal'
+    );
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs a 422's provider detail, but not the echoed input", async () => {
+    vi.spyOn(axios, 'post').mockRejectedValue(
+      Object.assign(new Error('Request failed with status code 422'), {
+        isAxiosError: true,
+        code: 'ERR_BAD_REQUEST',
+        config: { method: 'post', headers: { 'x-key': API_KEY } },
+        response: {
+          status: 422,
+          data: {
+            detail: [{ loc: ['body', 'width'], msg: 'Input should be a multiple of 32', input: 'SECRET PROMPT' }],
+          },
+        },
+      })
+    );
+
+    await expect(service.generate('a prompt', { model: ImageModels.FLUX_PRO })).rejects.toThrow();
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(errorSpy.mock.calls[0]);
+    expect(logged).toContain('body.width: Input should be a multiple of 32');
+    expect(logged).not.toContain('SECRET PROMPT');
+    expect(logged).not.toContain(API_KEY);
+  });
+});
+
+describe('BFLImageService - edit()', () => {
+  let postSpy: ReturnType<typeof vi.spyOn>;
+  let service: BFLImageService;
+
+  const submittedBody = (): Record<string, unknown> => postSpy.mock.calls[0][1] as Record<string, unknown>;
+
+  beforeEach(() => {
+    postSpy = vi.spyOn(axios, 'post').mockResolvedValue({
+      data: { id: 'req-1', polling_url: 'https://api.bfl.ai/v1/poll/req-1' },
+    });
+    vi.spyOn(axios, 'get').mockResolvedValue({
+      data: { status: 'Ready', result: { sample: 'https://img.example/out.png' } },
+    });
+    service = new BFLImageService(API_KEY, { log() {}, error() {}, warn() {}, info() {} } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('refuses regions on Fill before the provider request', async () => {
+    await expect(
+      service.edit('source', 'edit', {
+        model: ImageModels.FLUX_PRO_FILL,
+        edit_regions: [{ prompt: 'blue', bbox: [0, 0, 1, 1] }],
+      })
+    ).rejects.toThrow('only supported on FLUX 3');
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mask on FLUX 3 before the provider request', async () => {
+    await expect(service.edit('source', 'edit', { model: ImageModels.FLUX_3_IMAGE, mask: 'mask' })).rejects.toThrow(
+      'take no mask'
+    );
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'submits the documented edit-with-boxes layout on %s',
+    async model => {
+      await service.edit('source', 'paint the selected area blue', {
+        model,
+        referenceImages: ['reference'],
+        seed: 17,
+        output_format: 'png',
+        edit_regions: [{ prompt: 'blue sky', bbox: [0.1, 0.2, 0.5, 0.8] }],
+      });
+      expect(postSpy.mock.calls[0][0]).toBe(`https://api.bfl.ai/v1/${model}`);
+      const body = submittedBody();
+      expect(body.images).toEqual(['source', 'reference']);
+      expect(typeof body.prompt).toBe('string');
+      const prompt = String(body.prompt);
+      expect(prompt).toContain('<ref_image_0>');
+      const layout: unknown = JSON.parse(prompt.slice(prompt.indexOf('\n\n') + 2));
+      expect(layout).toEqual([
+        { id: 'region_0', from: null, src_bbox: null, tgt_bbox: [100, 200, 500, 800], desc: 'blue sky' },
+      ]);
+      const klein = model === ImageModels.FLUX_3_IMAGE_KLEIN;
+      expect(Object.keys(body).sort()).toEqual(
+        (klein
+          ? ['prompt', 'images', 'safety_tolerance', 'seed', 'output_format']
+          : ['prompt', 'images', 'safety_tolerance']
+        ).sort()
+      );
+      if (klein) expect(body).toMatchObject({ seed: 17, output_format: 'png' });
+    }
+  );
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'uses native images for a plain edit without regions on %s',
+    async model => {
+      await service.edit('source', 'change the lighting', { model });
+      expect(submittedBody()).toMatchObject({ prompt: 'change the lighting', images: ['source'] });
+      expect(submittedBody()).not.toHaveProperty('mask');
+      expect(submittedBody()).not.toHaveProperty('image');
+    }
+  );
+
+  it.each([ImageModels.FLUX_3_IMAGE, ImageModels.FLUX_3_IMAGE_KLEIN])(
+    'refuses more than ten total images on %s before submitting',
+    async model => {
+      await expect(
+        service.edit('source', 'edit', {
+          model,
+          referenceImages: Array.from({ length: 10 }, (_, index) => `ref-${index}`),
+        })
+      ).rejects.toThrow('at most 10');
+      expect(postSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_KLEIN_4B] as const)(
+    'maps the source and references to input_image_N on %s, with no mask',
+    async model => {
+      await service.edit('source', 'blend them', { model, referenceImages: ['ref-1', 'ref-2'] });
+
+      expect(postSpy.mock.calls[0][0]).toBe(`https://api.bfl.ai/v1/${model}`);
+      expect(submittedBody()).toMatchObject({
+        input_image: 'source',
+        input_image_2: 'ref-1',
+        input_image_3: 'ref-2',
+      });
+      for (const field of ['image', 'mask', 'steps', 'guidance', 'width', 'height']) {
+        expect(submittedBody()).not.toHaveProperty(field);
+      }
+    }
+  );
+
+  it.each([
+    [ImageModels.FLUX_2_PRO, 7],
+    [ImageModels.FLUX_2_KLEIN_4B, 3],
+  ] as const)('accepts %s with its maximum references and rejects one more before posting', async (model, limit) => {
+    const referenceImages = Array.from({ length: limit }, (_, index) => `ref-${index}`);
+    await service.edit('source', 'blend them', { model, referenceImages });
+    expect(submittedBody()[`input_image_${limit + 1}`]).toBe(`ref-${limit - 1}`);
+    postSpy.mockClear();
+
+    await expect(
+      service.edit('source', 'too many', { model, referenceImages: [...referenceImages, 'extra'] })
+    ).rejects.toThrow(`at most ${limit + 1} input images`);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs no source or reference base64 for an edit', async () => {
+    const logged: string[] = [];
+    const capture = (...args: unknown[]) => logged.push(args.map(arg => JSON.stringify(arg)).join(' '));
+    vi.spyOn(Logger.globalInstance, 'debug').mockImplementation(capture);
+
+    await service.edit('secret-source-bytes', 'blend them', {
+      model: ImageModels.FLUX_2_PRO,
+      referenceImages: ['secret-reference-bytes'],
+    });
+
+    const output = logged.join('\n');
+    expect(output).toContain('BFL Image edit request body');
+    expect(output).toContain('[BASE64_DATA_');
+    expect(output).not.toContain('secret-source-bytes');
+    expect(output).not.toContain('secret-reference-bytes');
+  });
+
+  it('keeps the Fill request on image + mask, with no input_image', async () => {
+    await service.edit('source', 'fill it', { model: ImageModels.FLUX_PRO_FILL, mask: 'mask-data' });
+
+    expect(postSpy.mock.calls[0][0]).toBe(`https://api.bfl.ai/v1/${ImageModels.FLUX_PRO_FILL}`);
+    expect(submittedBody()).toMatchObject({ image: 'source', mask: 'mask-data' });
+    expect(submittedBody()).not.toHaveProperty('input_image');
+  });
+});
+
+describe('BFLImageService - request builders', () => {
+  const service = new BFLImageService(API_KEY, { log() {}, error() {}, warn() {}, info() {} } as never);
+  const safety = BFL_SAFETY_TOLERANCE.DEFAULT;
+
+  it('builds a FLUX 1.1 generation sized by width and height, with a reference as image_prompt', () => {
+    expect(service.buildGenerateRequest('a cat', { model: ImageModels.FLUX_PRO_1_1, image_prompt: 'ref' })).toEqual({
+      model: ImageModels.FLUX_PRO_1_1,
+      body: {
+        prompt: 'a cat',
+        safety_tolerance: safety,
+        output_format: 'png',
+        image_prompt: 'ref',
+        prompt_upsampling: false,
+        user: 'user',
+        width: 1024,
+        height: 768,
+      },
+    });
+  });
+
+  it('builds an Ultra generation sized by aspect_ratio, with no width or height', () => {
+    const { model, body } = service.buildGenerateRequest('a cat', {
+      model: ImageModels.FLUX_PRO_ULTRA,
+      aspect_ratio: '1:1',
+    });
+    expect(model).toBe(ImageModels.FLUX_PRO_ULTRA);
+    expect(body).toMatchObject({ prompt: 'a cat', aspect_ratio: '1:1' });
+    expect(body).not.toHaveProperty('width');
+    expect(body).not.toHaveProperty('height');
+  });
+
+  it('builds a FLUX.2 generation with numbered input images and disable_pup', () => {
+    const { model, body } = service.buildGenerateRequest('combine', {
+      model: ImageModels.FLUX_2_PRO,
+      reference_images: ['one', 'two'],
+    });
+    expect(model).toBe(ImageModels.FLUX_2_PRO);
+    expect(body).toMatchObject({ prompt: 'combine', input_image: 'one', input_image_2: 'two', disable_pup: true });
+    expect(body).not.toHaveProperty('prompt_upsampling');
+  });
+
+  it('builds a FLUX 3 generation from the field allowlist, with references as images', () => {
+    const { model, body } = service.buildGenerateRequest('a cat', {
+      model: ImageModels.FLUX_3_IMAGE,
+      seed: 7,
+      prompt_upsampling: true,
+      aspect_ratio: '1:1',
+      reference_images: ['one'],
+    });
+    expect(model).toBe(ImageModels.FLUX_3_IMAGE);
+    expect(body).toEqual({
+      prompt: 'a cat',
+      safety_tolerance: safety,
+      images: ['one'],
+      user: 'user',
+      width: 1024,
+      height: 768,
+    });
+  });
+
+  it('builds a Fill edit from image and mask with the Fill defaults', () => {
+    expect(service.buildEditRequest('src', 'fill it', { model: ImageModels.FLUX_PRO_FILL, mask: 'mask' })).toEqual({
+      model: ImageModels.FLUX_PRO_FILL,
+      body: {
+        prompt: 'fill it',
+        steps: 50,
+        safety_tolerance: safety,
+        prompt_upsampling: false,
+        image: 'src',
+        mask: 'mask',
+        guidance: 60,
+        output_format: 'jpeg',
+      },
+    });
+  });
+
+  it('builds a Kontext transform with the source as input_image and the aspect ratio when given', () => {
+    expect(
+      service.buildTransformRequest('src', 'make it pop', { model: ImageModels.FLUX_KONTEXT_PRO, aspect_ratio: '3:2' })
+    ).toEqual({
+      model: ImageModels.FLUX_KONTEXT_PRO,
+      body: {
+        prompt: 'make it pop',
+        input_image: 'src',
+        safety_tolerance: safety,
+        prompt_upsampling: false,
+        output_format: 'jpeg',
+        aspect_ratio: '3:2',
+      },
+    });
   });
 });

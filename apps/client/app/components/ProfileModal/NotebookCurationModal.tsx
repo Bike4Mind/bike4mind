@@ -32,26 +32,24 @@ import {
   Input,
   Textarea,
 } from '@mui/joy';
-import {
-  AutoAwesome,
-  CheckCircle,
-  Error as ErrorIcon,
-  HourglassEmpty,
-  Description,
-  Psychology,
-  MenuBook,
-  Code as CodeIcon,
-  Image as ImageIcon,
-  DataObject,
-  BarChart,
-  AccountTree,
-  Language,
-  Science,
-  Assignment,
-  Email as EmailIcon,
-  Add as AddIcon,
-  Close as CloseIcon,
-} from '@mui/icons-material';
+import AutoAwesome from '@mui/icons-material/AutoAwesome';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import HourglassEmpty from '@mui/icons-material/HourglassEmpty';
+import Description from '@mui/icons-material/Description';
+import Psychology from '@mui/icons-material/Psychology';
+import MenuBook from '@mui/icons-material/MenuBook';
+import CodeIcon from '@mui/icons-material/Code';
+import ImageIcon from '@mui/icons-material/Image';
+import DataObject from '@mui/icons-material/DataObject';
+import BarChart from '@mui/icons-material/BarChart';
+import AccountTree from '@mui/icons-material/AccountTree';
+import Language from '@mui/icons-material/Language';
+import Science from '@mui/icons-material/Science';
+import Assignment from '@mui/icons-material/Assignment';
+import EmailIcon from '@mui/icons-material/Email';
+import AddIcon from '@mui/icons-material/Add';
+import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useGetOwnSessions } from '@client/app/hooks/data/sessions';

@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import {
   dataLakeRepository,
@@ -10,7 +10,7 @@ import {
 import { lakeConnectionOwnerOf, isDriveDisconnectStalled, isSameLakeConnectionOwner } from '@bike4mind/common';
 import type { LakeConnectionOwner, IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 import type { DriveDisconnectPurgePayload } from '@bike4mind/server-utils/dataLakes/driveDisconnectPurgePayload';
-import { listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
+import { listDeletableDriveOrphans } from '@bike4mind/server-utils/integrations/google/drive/connectorOrphanFiles';
 import {
   DRIVE_LAKE_POLL_INTERVAL_MS,
   isDriveLakePollScheduled,
@@ -18,15 +18,15 @@ import {
 import {
   authorizeLakeConnectorAccess,
   authorizeLakeConnectorRead,
-} from '@server/dataLakes/authorizeLakeConnectorAccess';
+} from '@bike4mind/server-utils/dataLakes/authorizeLakeConnectorAccess';
 import { getSourceQueueUrl } from '@bike4mind/server-utils/utils/dlqRegistry';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { Request } from 'express';
 
 /**
- * Safe, credential-free view of a connection for whoever may read it (the lake's org owner, manager
- * or appointed admin, or a personal lake's creator). The refresh token is
+ * Safe, credential-free view of a connection for whoever may read it (the lake's org owner or manager,
+ * or a personal lake's creator). The refresh token is
  * `select: false` so it never reaches here anyway; this narrows further to just what the wizard
  * needs to show connection state and offer re-sync/disconnect.
  *
@@ -87,7 +87,7 @@ async function resolveLake(req: Request): Promise<{ lake: IDataLakeDocument; own
   return { lake, owner };
 }
 
-/** Same lookup for the status read, which an appointed org admin may also make (see authorizeLakeConnectorRead). */
+/** Same lookup for the status read (see authorizeLakeConnectorRead). */
 async function resolveLakeForRead(
   req: Request
 ): Promise<{ lake: IDataLakeDocument; owner: LakeConnectionOwner; canManage: boolean }> {
@@ -129,8 +129,8 @@ async function findLakeConnection(lakeId: string, owner: LakeConnectionOwner) {
  * phase-2 purge actually revokes.
  *
  * DELETE is gated like drive-sync: an org owner/manager (or platform admin) on an org lake, the
- * creator on a personal lake. GET also admits an appointed org admin, who can manage the lake but not
- * its connection; `canManage` tells the client which controls to offer. A lake with no connection resolves 200 with a null connection rather
+ * creator on a personal lake. GET admits the same set; `canManage` is always true on an org lake. A lake
+ * with no connection resolves 200 with a null connection rather
  * than 404 - a caller needs to tell "no connection" from "can't tell" apart, and conflating them into
  * one 404 broke every consumer that renders differently for the two (see useLakeDriveConnection).
  * A 404 from GET therefore always means a real failure: the lake doesn't exist, or the caller has no

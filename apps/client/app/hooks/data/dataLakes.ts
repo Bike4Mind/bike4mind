@@ -6,10 +6,13 @@ import type {
   DataLakeMembershipArm,
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
-  IDataLakeResearchConfigDocument,
+  IDataLakeResearchConfigResponse,
+  ResearchSource,
   IDataLakeResearchRunDocument,
   ResearchRunTrigger,
   ResearchScheduleCadence,
+  ResearchItemRule,
+  ResearchUnlistedSources,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
@@ -23,13 +26,14 @@ import type {
   IDataLakeSpendResponse,
   IFabFileDocument,
   DataLakePrincipalType,
-  LakeAccessView,
+  LakeAccessViewWithAdminBypass,
   LakeOwnershipCandidateList,
   LakeOwnershipOfferSummary,
   LakePendingOwnershipOffer,
   LakeHealthApiResponse,
   LakeMemoryHealth,
   LakeConfigHistoryView,
+  LakeConfigUndoResult,
   ManageableDataLakeConfig,
   RetrievabilityLabeledDataLake,
   TaxonomyTag,
@@ -57,8 +61,9 @@ import type {
   UpdateFallbackLakeSettingsRequestInputType,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -130,9 +135,10 @@ export function useGetDataLakes(
   enabled = true,
   opts?: { staleTime?: number; retry?: number | boolean; refetchOnWindowFocus?: boolean }
 ) {
+  const impersonating = useAccessToken(s => s.impersonating);
   return useQuery({
     queryKey: dataLakeKeys.list,
-    enabled,
+    enabled: enabled && !impersonating,
     retry: opts?.retry ?? false,
     queryFn: async () => {
       const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
@@ -255,10 +261,9 @@ export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, 
     refetchOnWindowFocus: false,
     staleTime: 0,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeConfigHistoryView }>(
-        `/api/data-lakes/${dataLakeId}/config-history`,
-        limit == null ? undefined : { params: { limit } }
-      );
+      const response = await api.get<{ data: LakeConfigHistoryView }>(`/api/data-lakes/${dataLakeId}/config-history`, {
+        params: { include: 'files', ...(limit == null ? {} : { limit }) },
+      });
       return response.data.data;
     },
   });
@@ -270,6 +275,30 @@ export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, 
     (query.error.response?.status ?? 0) >= 400 &&
     (query.error.response?.status ?? 0) < 500;
   return { ...query, isForbidden };
+}
+
+/**
+ * Reverse one History row. A refusal is returned to the caller (the row shows it inline) rather than
+ * toasted, since it names the field or reason the user can act on. Every success refreshes History
+ * plus whatever the reversed change touched: the research configs, proposals and file lists all live
+ * under the lake keys.
+ */
+export function useUndoLakeConfigChange(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (eventId: string) => {
+      const response = await api.post<{ data: LakeConfigUndoResult }>(
+        `/api/data-lakes/${dataLakeId}/config-history/${eventId}/undo`
+      );
+      return response.data.data;
+    },
+    onSettled: () => {
+      if (!dataLakeId) return;
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+    },
+  });
 }
 
 /**
@@ -286,7 +315,7 @@ export function useLakeAccessView(dataLakeId: string | null, enabled = true) {
     retry: false,
     queryFn: async () => {
       const response = await api.get<{
-        data: LakeAccessView;
+        data: LakeAccessViewWithAdminBypass;
         meta?: { canTransferOwnership?: boolean; readerGrantsEnforced?: boolean };
       }>(`/api/data-lakes/${dataLakeId}/access`);
       // The capability is kept OUT of the view object it sits beside: the view is the artifact the CSV
@@ -1216,15 +1245,18 @@ export type DataLakeMemberFile = IFabFileDocument & { membershipArm?: DataLakeMe
 /**
  * Hook: Fetch files belonging to a specific data lake by ID.
  * One lake's own file list (GET /api/data-lakes/{id}/articles) - not the cross-lake browse
- * query; see useGetDataLakeArticles.
+ * query; see useGetDataLakeArticles. `tag` narrows it to the members carrying that exact tag
+ * (one folder of the lake's tree). The route caps a page at 100 files.
  */
-export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number }) {
+export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number; tag?: string }) {
   return useQuery({
     queryKey: dataLakeKeys.files(dataLakeId, params),
     queryFn: async () => {
+      // One tag as a plain string: axios would write an array as `tags[]=`, which the route
+      // does not read (see useGetDataLakeArticles).
       const response = await api.get<{ data: DataLakeMemberFile[]; total: number; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/articles`,
-        { params: { limit: params?.limit ?? 100 } }
+        { params: { limit: params?.limit ?? 100, ...(params?.tag ? { tags: params.tag } : {}) } }
       );
       return response.data;
     },
@@ -2238,6 +2270,25 @@ export function useGetScopedDataLakeTagCounts(source: DataLakeBrowseSource, lake
 }
 
 /**
+ * Refreshes the Data Lake mode picker's reads: the labelled lake list (names) and the tag counts of
+ * `source` (the per-lake counts and the browse tree's, scoped ones included). For when the picker opens: both cache for minutes,
+ * and a connector sync renames a lake and adds files server-side, which only the sync poll sees -
+ * and that is mounted by the manager surfaces, not the picker. Rows stay on screen while it runs.
+ * `cancelRefetch: false` lets a read already in flight finish instead of restarting it.
+ */
+export function useRefreshLakePickerReads(sessionId: string | null | undefined, source: DataLakeBrowseSource) {
+  const queryClient = useQueryClient();
+  const sid = sessionId || null;
+  return useCallback(() => {
+    void queryClient.invalidateQueries(
+      { queryKey: dataLakeKeys.listWithRetrievability(sid), exact: true },
+      { cancelRefetch: false }
+    );
+    void queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCounts(source) }, { cancelRefetch: false });
+  }, [queryClient, sid, source]);
+}
+
+/**
  * Truthful Data-Lake article counts (distinct files, NOT tag occurrences) for the hero
  * tickers + mission chips, sourced from the same query the Explorer uses. `total` is the
  * combined unique count; the per-prefix fields are the individual per-lake unique counts.
@@ -2461,16 +2512,26 @@ export type ResearchConfigInput = {
   cadence?: ResearchScheduleCadence;
   /** Pending-proposal count at which a due scheduled run is skipped. See RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT. */
   reviewBacklogLimit?: number;
+  /** Sent alone to pause or resume the schedule without re-validating the levers. */
+  schedulePaused?: boolean;
+  source?: ResearchSource;
+  /** Absolute http(s) address of an RSS or Atom feed; sent when `source` is 'feed', null clears it. */
+  feedUrl?: string | null;
   query?: string;
   model?: string | null;
   maxResults?: number;
   maxProposals?: number;
   recencyDays?: number | null;
-  allowedDomains?: string[];
+  trustedDomains?: string[];
+  autoAdmitTrusted?: boolean;
+  maxAutoAdmits?: number;
+  reviewDomains?: string[];
+  unlistedSources?: ResearchUnlistedSources;
   blockedDomains?: string[];
   minRelevance?: number;
   costCeilingMicroUsd?: number;
   proposedTags?: string[];
+  itemRules?: ResearchItemRule[];
 };
 
 // -- Detected corpus problems (#3039) ---------------------------------------
@@ -2861,7 +2922,7 @@ export function useDataLakeResearchConfigs(dataLakeId: string | null, opts?: { e
   const query = useQuery({
     queryKey: dataLakeKeys.researchConfigs(dataLakeId),
     queryFn: async () => {
-      const { data } = await api.get<{ data: IDataLakeResearchConfigDocument[]; pendingProposals: number }>(
+      const { data } = await api.get<{ data: IDataLakeResearchConfigResponse[]; pendingProposals: number }>(
         `/api/data-lakes/${dataLakeId}/research/configs`
       );
       return data;
@@ -2884,7 +2945,7 @@ export function useCreateDataLakeResearchConfig(dataLakeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: ResearchConfigInput) => {
-      const { data } = await api.post<{ data: IDataLakeResearchConfigDocument }>(
+      const { data } = await api.post<{ data: IDataLakeResearchConfigResponse }>(
         `/api/data-lakes/${dataLakeId}/research/configs`,
         input
       );
@@ -2904,7 +2965,7 @@ export function useUpdateDataLakeResearchConfig(dataLakeId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ configId, ...input }: ResearchConfigInput & { configId: string }) => {
-      const { data } = await api.put<{ data: IDataLakeResearchConfigDocument }>(
+      const { data } = await api.put<{ data: IDataLakeResearchConfigResponse }>(
         `/api/data-lakes/${dataLakeId}/research/configs/${configId}`,
         input
       );

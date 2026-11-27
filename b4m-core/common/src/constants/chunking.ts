@@ -305,14 +305,41 @@ export const NO_EXTRACTABLE_TEXT_NOTICE =
   'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).';
 
 /**
+ * Why the chunker declined to read a file at all, as opposed to reading it and finding no text.
+ * Stored on `FabFile.extractionRefusalReason`; the chunker reports it through
+ * `SmartChunker.getExtractionRefusal()` (b4m-core/fab-pipeline/src/chunk.ts).
+ * - `decompressedSizeExceeded`: a DOCX/XLSX container would inflate past the chunker's budget.
+ * - `unopenableContainer`: a DOCX/XLSX is not a zip the chunker can open.
+ */
+export const EXTRACTION_REFUSAL_REASONS = ['decompressedSizeExceeded', 'unopenableContainer'] as const;
+export type ExtractionRefusalReason = (typeof EXTRACTION_REFUSAL_REASONS)[number];
+
+export function isExtractionRefusalReason(value: unknown): value is ExtractionRefusalReason {
+  return typeof value === 'string' && (EXTRACTION_REFUSAL_REASONS as readonly string[]).includes(value);
+}
+
+/** Owner-facing prose for each `ExtractionRefusalReason`. Shown in place of NO_EXTRACTABLE_TEXT_NOTICE. */
+export const EXTRACTION_REFUSAL_NOTICES: Record<ExtractionRefusalReason, string> = {
+  decompressedSizeExceeded:
+    'Not indexed - this document is too large to process once uncompressed. Split it into smaller files and upload them.',
+  unopenableContainer:
+    'Not indexed - this document could not be opened. It may be damaged or saved in another format; re-save it and upload it again.',
+};
+
+/**
  * The pipeline notice to show for a file, or null when the pipeline has nothing to say. Distinct
  * from `FabFile.notes`, which is the owner's own text and is never written by a pipeline path.
+ * A refusal outranks the generic zero-chunk notice: it says why there is no text.
  */
 export function describePipelineStall(file: {
   chunkStallReason?: string | null;
   noExtractableTextAt?: Date | string | null;
+  extractionRefusalReason?: string | null;
 }): string | null {
   if (isChunkStalled(file.chunkStallReason)) return CHUNK_STALL_NOTICES[file.chunkStallReason as ChunkStallReason];
+  if (isExtractionRefusalReason(file.extractionRefusalReason)) {
+    return EXTRACTION_REFUSAL_NOTICES[file.extractionRefusalReason];
+  }
   return file.noExtractableTextAt ? NO_EXTRACTABLE_TEXT_NOTICE : null;
 }
 

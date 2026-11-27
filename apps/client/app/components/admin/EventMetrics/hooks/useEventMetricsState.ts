@@ -1,9 +1,42 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from '../../shared/useAdminListUrlState';
 import type { EventMetric, SortField, SortDirection } from '../types';
+import type { MetricsFilters } from './useEventMetrics';
+
+/** `all` sets no date bounds; `custom` keeps the current bounds for the From and To inputs to edit. */
+export type DateRangePreset =
+  'all' | 'today' | 'yesterday' | 'last7days' | 'last30days' | 'last90days' | 'thisMonth' | 'lastMonth' | 'custom';
+
+const orderRange = (dateFrom?: string, dateTo?: string) =>
+  dateFrom && dateTo && dateFrom > dateTo
+    ? { dateFrom: dayjs(dateTo).startOf('day').toISOString(), dateTo: dayjs(dateFrom).endOf('day').toISOString() }
+    : { dateFrom, dateTo };
+
+/**
+ * Applies the picked filters once they have settled for SEARCH_TERM_URL_DEBOUNCE_MS: a filter takes
+ * effect without an Apply button, and typing a date does not fetch on every keystroke.
+ */
+export const useApplyPickedFilters = (filters: MetricsFilters, apply: (filters: MetricsFilters) => void) => {
+  const { dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter } = filters;
+  useEffect(() => {
+    const timer = setTimeout(
+      () =>
+        apply({
+          ...orderRange(dateFrom || undefined, dateTo || undefined),
+          userFilter: userFilter || undefined,
+          eventFilter: eventFilter || undefined,
+          eventCategoryFilter: eventCategoryFilter || undefined,
+        }),
+      SEARCH_TERM_URL_DEBOUNCE_MS
+    );
+    return () => clearTimeout(timer);
+  }, [dateFrom, dateTo, userFilter, eventFilter, eventCategoryFilter, apply]);
+};
 
 export const useEventMetricsState = (metrics: EventMetric[]) => {
   // Filter states
+  const [dateRange, setDateRangePreset] = useState<DateRangePreset>('all');
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
   const [userFilter, setUserFilter] = useState<string>('');
@@ -69,7 +102,10 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
     }
   };
 
+  const hasFilters = dateRange !== 'all' || !!userFilter || !!eventFilter || !!eventCategoryFilter;
+
   const clearFilters = () => {
+    setDateRangePreset('all');
     setDateFrom('');
     setDateTo('');
     setUserFilter('');
@@ -77,9 +113,14 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
     setEventCategoryFilter('');
   };
 
-  const setDateRange = (preset: string) => {
+  const setDateRange = (preset: DateRangePreset) => {
+    setDateRangePreset(preset);
     const now = dayjs();
     switch (preset) {
+      case 'all':
+        setDateFrom('');
+        setDateTo('');
+        break;
       case 'today':
         setDateFrom(now.startOf('day').toISOString());
         setDateTo(now.endOf('day').toISOString());
@@ -96,6 +137,10 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
         setDateFrom(now.subtract(30, 'days').startOf('day').toISOString());
         setDateTo(now.endOf('day').toISOString());
         break;
+      case 'last90days':
+        setDateFrom(now.subtract(90, 'days').startOf('day').toISOString());
+        setDateTo(now.endOf('day').toISOString());
+        break;
       case 'thisMonth':
         setDateFrom(now.startOf('month').toISOString());
         setDateTo(now.endOf('month').toISOString());
@@ -109,6 +154,7 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
 
   return {
     // Filter states
+    dateRange,
     dateFrom,
     dateTo,
     userFilter,
@@ -129,6 +175,7 @@ export const useEventMetricsState = (metrics: EventMetric[]) => {
     sortDirection,
     // Computed data
     filteredAndSortedMetrics,
+    hasFilters,
     // Helper functions
     handleSort,
     clearFilters,

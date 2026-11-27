@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { CreditHolderType, CreditPurchaseStatus } from '@bike4mind/common';
 import {
@@ -12,26 +12,29 @@ import {
 } from '@bike4mind/database';
 import { creditService, userService } from '@bike4mind/services';
 import {
-  createMongoServer,
+  createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 
 const mockList = vi.fn();
-vi.mock('@server/integrations/stripe/stripe', () => ({
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: () => true,
   stripe: { paymentIntents: { list: (...args: unknown[]) => mockList(...args) } },
 }));
 const mockPostMessageToSlack = vi.fn();
-vi.mock('@server/integrations/slack/slack', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
   postMessageToSlack: (...args: unknown[]) => mockPostMessageToSlack(...args),
 }));
-vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
+const mockEmitMetric = vi.fn();
+vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
+  emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
+}));
 
 import { runCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
-let mongo: Awaited<ReturnType<typeof createMongoServer>>;
+let mongo: Awaited<ReturnType<typeof createMongoReplSet>>;
 const adapters = { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository };
 
 async function seedUser() {
@@ -43,21 +46,26 @@ async function seedUser() {
   return String(user._id);
 }
 
+const purchaseFields = (userId: string, paymentIntentId: string) => ({
+  ownerId: userId,
+  ownerType: CreditHolderType.User,
+  amount: 1000,
+  credits: 5000,
+  status: CreditPurchaseStatus.Completed,
+  stripePaymentIntentId: paymentIntentId,
+});
+
 const purchase = (userId: string, paymentIntentId: string) =>
-  creditService.addCredits(
-    {
-      type: 'purchase',
-      ownerId: userId,
-      ownerType: CreditHolderType.User,
-      amount: 1000,
-      credits: 5000,
-      status: CreditPurchaseStatus.Completed,
-      stripePaymentIntentId: paymentIntentId,
-    },
-    adapters
-  );
+  creditService.addCredits({ type: 'purchase', ...purchaseFields(userId, paymentIntentId) }, adapters);
+
+const seedUncreditedPurchase = (userId: string, paymentIntentId: string) =>
+  creditTransactionRepository.createTransaction('purchase', purchaseFields(userId, paymentIntentId));
 
 function stripeReturns(userId: string, ...ids: string[]) {
+  stripeReturnsForStage('test', userId, ...ids);
+}
+
+function stripeReturnsForStage(stage: string, userId: string, ...ids: string[]) {
   mockList.mockResolvedValue({
     data: ids.map(id => ({
       id,
@@ -65,29 +73,27 @@ function stripeReturns(userId: string, ...ids: string[]) {
       amount: 1000,
       currency: 'usd',
       created: Math.floor(Date.now() / 1000),
-      metadata: { environment: 'test', credits: '5000', userId },
+      metadata: { environment: stage, credits: '5000', userId },
     })),
     has_more: false,
   });
 }
 
 beforeAll(async () => {
-  mongo = await createMongoServer();
+  mongo = await createMongoReplSet();
   await mongoose.connect(mongo.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
 });
 beforeEach(() => vi.clearAllMocks());
-afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   await mongoose.disconnect();
   await mongo?.stop({ doCleanup: false });
 });
 
 describe('credit purchase reconciliation against the real ledger', () => {
-  it('flags a purchase whose row committed but whose balance increment failed', async () => {
+  it('flags a historical purchase recorded without a balance increment', async () => {
     const userId = await seedUser();
-    vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('fixture increment failure'));
-    await expect(purchase(userId, 'pi_drifted')).rejects.toThrow('fixture increment failure');
+    await seedUncreditedPurchase(userId, 'pi_drifted');
 
     expect(await CreditTransaction.countDocuments({ stripePaymentIntentId: 'pi_drifted' })).toBe(1);
     expect((await User.findById(userId).lean())?.currentCredits).toBe(100);
@@ -99,6 +105,24 @@ describe('credit purchase reconciliation against the real ledger', () => {
       expect.objectContaining({ paymentIntentId: 'pi_drifted', reason: 'balance_not_applied', userId }),
     ]);
     expect(mockPostMessageToSlack.mock.calls[0][0]).toContain('transaction recorded but balance never credited');
+  });
+
+  it('flags exactly one seeded ungranted purchase on the self-host call path', async () => {
+    const userId = await seedUser();
+    await seedUncreditedPurchase(userId, 'pi_selfhost_ungranted');
+    await purchase(await seedUser(), 'pi_selfhost_granted');
+
+    stripeReturnsForStage('selfhost', userId, 'pi_selfhost_ungranted', 'pi_selfhost_granted');
+    const result = await runCreditPurchaseReconciliation(undefined, new Date(), {
+      stage: 'selfhost',
+      emitMetrics: false,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.ungranted).toEqual([
+      expect.objectContaining({ paymentIntentId: 'pi_selfhost_ungranted', reason: 'balance_not_applied', userId }),
+    ]);
+    expect(mockEmitMetric).not.toHaveBeenCalled();
   });
 
   it('does not flag a purchase whose balance was credited', async () => {
@@ -120,8 +144,7 @@ describe('credit purchase reconciliation against the real ledger', () => {
       name: 'Admin fixture',
       isAdmin: true,
     });
-    vi.spyOn(userRepository, 'incrementCredits').mockRejectedValueOnce(new Error('fixture increment failure'));
-    await expect(purchase(userId, 'pi_healed')).rejects.toThrow();
+    await seedUncreditedPurchase(userId, 'pi_healed');
 
     stripeReturns(userId, 'pi_healed');
     expect((await runCreditPurchaseReconciliation()).ungranted).toHaveLength(1);

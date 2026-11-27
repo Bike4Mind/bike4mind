@@ -1,6 +1,6 @@
 import { useUser } from '@client/app/contexts/UserContext';
 import { useStripePortal } from '@client/app/hooks/data/stripe';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 
 /**
  * Opens the Stripe billing portal for the signed-in user's own subscription. Shared by every

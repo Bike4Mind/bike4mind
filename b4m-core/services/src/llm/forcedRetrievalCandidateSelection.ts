@@ -1,4 +1,8 @@
-import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
+import {
+  isVectorSearchReady,
+  VECTOR_SEARCH_READY_LAG_MS,
+  type VectorSearchReadinessFile,
+} from '../dataLakeService/vectorSearchEligibility';
 
 /**
  * How forced retrieval chose the files whose chunks it scores this turn:
@@ -9,6 +13,13 @@ import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLake
  */
 export type ForcedRetrievalCandidateSelection = 'all' | 'relevance' | 'fileName';
 
+/**
+ * Why a `fileName` cut happened. Metric dimension value (forcedRetrievalSelectionMetrics.ts), so
+ * keep these stable. `relevance-unavailable` covers vector search off, unreadable, or not Atlas.
+ */
+export type ForcedRetrievalFallbackReason =
+  'relevance-unavailable' | 'no-ready-file' | 'not-queryable' | 'no-hits' | 'deadline' | 'error';
+
 type AnnChunkHit = { fabFileId: string; score: number };
 
 /**
@@ -18,12 +29,58 @@ type AnnChunkHit = { fabFileId: string; score: number };
  * 3. index-ready files the ANN ranked outside its pool, in input order.
  * Tier 2 outranks tier 3 because the index has already judged tier 3 and has no opinion on tier 2.
  * Hits naming a file outside `files` are ignored. `files` is expected in the stable scan order.
+ * This is the uncut order; selectRelevanceCandidates applies the cap and the tier-2 reserve.
  */
 export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFile>(
   files: T[],
   hits: AnnChunkHit[],
   now: Date
 ): T[] {
+  const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
+  return [...withHit, ...notIndexed, ...rankedOutside];
+}
+
+/**
+ * rankCandidateFilesByRelevance cut at `cap`, except that up to `notIndexedReserve` files stamped within
+ * the mongot lag take the first slots, displacing the lowest-scoring hits. Such a file has no hit yet,
+ * so without the reserve it would sit behind a full cap of hits and be dropped silently. They go first
+ * rather than last because the chunk scan spends its budget in this order (ChatCompletionFeatures.ts),
+ * so a reserved slot at the tail could be kept yet never read. Never-stamped files
+ * (chunkless images, legacy rows) never get a slot: waiting does not make them searchable, so they
+ * keep their tier-2 position behind the hits and are cut silently, as before.
+ * `notIndexedCut` counts only the lag-window files that still fell past the cap, for the coverage notice.
+ */
+export function selectRelevanceCandidates<T extends VectorSearchReadinessFile>(
+  files: T[],
+  hits: AnnChunkHit[],
+  now: Date,
+  { cap, notIndexedReserve }: { cap: number; notIndexedReserve: number }
+): { files: T[]; notIndexedCut: number } {
+  const { withHit, notIndexed, rankedOutside } = splitByRelevanceTier(files, hits, now);
+  const recent = notIndexed.filter(file => isStampedWithinLag(file, now));
+  const unstamped = notIndexed.filter(file => !isStampedWithinLag(file, now));
+  const reserved = Math.min(recent.length, notIndexedReserve);
+  const hitSlots = Math.max(0, cap - reserved);
+  const ordered = [
+    ...recent.slice(0, reserved),
+    ...withHit.slice(0, hitSlots),
+    ...recent.slice(reserved),
+    ...withHit.slice(hitSlots),
+    ...unstamped,
+    ...rankedOutside,
+  ];
+  const recentKept = Math.min(recent.length, Math.max(0, cap - Math.min(withHit.length, hitSlots)));
+  return { files: ordered.slice(0, cap), notIndexedCut: recent.length - recentKept };
+}
+
+/** Stamped, but not yet old enough for mongot to be trusted to have indexed it. */
+function isStampedWithinLag(file: VectorSearchReadinessFile, now: Date): boolean {
+  if (!file.chunkEmbeddingModelStampedAt) return false;
+  const stampedAt = new Date(file.chunkEmbeddingModelStampedAt).getTime();
+  return Number.isFinite(stampedAt) && now.getTime() - stampedAt < VECTOR_SEARCH_READY_LAG_MS;
+}
+
+function splitByRelevanceTier<T extends VectorSearchReadinessFile>(files: T[], hits: AnnChunkHit[], now: Date) {
   const bestScoreByFileId = new Map<string, number>();
   for (const hit of hits) {
     if (!Number.isFinite(hit.score)) continue;
@@ -44,7 +101,7 @@ export function rankCandidateFilesByRelevance<T extends VectorSearchReadinessFil
     if (byScore !== 0) return byScore;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
-  return [...withHit, ...notIndexed, ...rankedOutside];
+  return { withHit, notIndexed, rankedOutside };
 }
 
 export class DeadlineExceededError extends Error {

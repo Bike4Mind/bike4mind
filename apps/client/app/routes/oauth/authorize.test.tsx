@@ -135,7 +135,7 @@ describe('OAuthAuthorizePage consent screen', () => {
     expect(screen.getByTestId('oauth-consent-deny-btn')).toBeInTheDocument();
   });
 
-  it('renders the revoke-hint link pointing to Settings > Security > Approved Apps', async () => {
+  it('renders the revoke-hint link pointing to Security > Approved apps', async () => {
     global.fetch = vi.fn().mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -148,7 +148,7 @@ describe('OAuthAuthorizePage consent screen', () => {
     const hint = screen.getByTestId('oauth-consent-revoke-hint-link');
     expect(hint).toBeInTheDocument();
     expect(hint).toHaveAttribute('to', '/profile');
-    expect(hint).toHaveAttribute('data-search', JSON.stringify({ tab: 'settings', section: 'security' }));
+    expect(hint).toHaveAttribute('data-search', JSON.stringify({ tab: 'security' }));
   });
 
   it('shows a plain-language label with the raw scope id kept beside it', async () => {

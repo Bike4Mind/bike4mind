@@ -1,5 +1,8 @@
+import { resolveAudioVendorBackend } from '@bike4mind/common';
+import { createModelAdmission } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 import { randomUUID } from 'crypto';
 import {
+  DEFAULT_MUSIC_MODEL_ID,
   ApiKeyType,
   isSupportedElevenLabsFormat,
   UnprocessableEntityError,
@@ -8,14 +11,18 @@ import {
   MusicGenerationVendor,
   usdToCreditsStochastic,
 } from '@bike4mind/common';
-import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
-import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
-import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
+import { adminSettingsRepository, apiKeyRepository, cacheRepository, usageEventRepository } from '@bike4mind/database';
+import { apiKeyService, estimateMusicCredits, ProviderBusyError, runElevenLabsWithCapacity } from '@bike4mind/services';
+import { aiMusicService, getSettingsMap, getSettingsValue, ProviderQuotaExhaustedError } from '@bike4mind/utils';
+import {
+  reserveRequestCredits,
+  resolveRequestBillingOrgId,
+} from '@bike4mind/server-utils/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { saveGeneratedAssetToFiles } from '@server/utils/saveGeneratedAssetToFiles';
+import { providerBusyHttpError } from '@server/utils/providerBusyHttpError';
+import { saveGeneratedAssetToFiles } from '@bike4mind/server-utils/utils/saveGeneratedAssetToFiles';
 import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
-import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
+import { resolveRequestUsageSource } from '@bike4mind/server-utils/utils/resolveRequestUsageSource';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
 // back to the admin-configured key (getEffectiveApiKey), so the feature works
@@ -54,19 +61,24 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
     throw new UnprocessableEntityError(`The ${provider} provider does not support the '${format}' output format`);
   }
 
-  const apiKey = await apiKeyService.getEffectiveApiKey(
+  await (
+    await createModelAdmission(req.user!, undefined, false, { organizationId: resolveRequestBillingOrgId(req) })
+  ).assert(modelId ?? DEFAULT_MUSIC_MODEL_ID, { orgModelBackend: resolveAudioVendorBackend(provider) });
+
+  const effectiveKey = await apiKeyService.getEffectiveApiKeyWithSource(
     userId,
     { type: PROVIDER_API_KEY_TYPE[provider] },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
 
-  if (!apiKey) {
+  if (!effectiveKey) {
     // 503, not 401: the caller IS authenticated - the provider key is a server-side
     // capability gap. A 401 would tell an API-key caller to re-authenticate, which
     // never fixes a missing ElevenLabs key. The message survives to the CLI via the
     // arraybuffer error decode + mapApiError's server-message fallback.
     return res.status(503).json({ error: `No ${provider} API key configured` });
   }
+  const apiKey = effectiveKey.key;
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
@@ -107,6 +119,8 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
         model: modelId,
         // Matches this call's ledger write (deductCreditsWithOrgSupport).
         source,
+        // Only ElevenLabs is metered against a vendor plan (the admin ElevenLabs usage view).
+        ...(provider === 'elevenlabs' && { keySource: effectiveKey.source }),
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -123,14 +137,42 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
   let audio: Buffer;
   let contentType: string;
   try {
-    const musicService = aiMusicService(provider, apiKey, req.logger);
-    ({ audio, contentType } = await musicService.generate(prompt, { lengthMs, forceInstrumental, modelId, format }));
+    ({ audio, contentType } = await runElevenLabsWithCapacity(
+      {
+        operation: 'music',
+        apiKey,
+        db: { adminSettings: adminSettingsRepository, caches: cacheRepository },
+        logger: req.logger,
+      },
+      ({ timeoutMs }) =>
+        aiMusicService(provider, apiKey, req.logger, { timeoutMs }).generate(prompt, {
+          lengthMs,
+          forceInstrumental,
+          modelId,
+          format,
+        })
+    ));
   } catch (error) {
+    // Log before refunding, so a refund that throws cannot swallow the original failure.
+    if (error instanceof ProviderBusyError) {
+      req.logger.warn('Music generation deferred: provider at capacity', { provider, reason: error.reason });
+      // Refund the reserved credits - a failed generation incurs no provider cost.
+      await reservation.refund();
+      // Only a 429'd attempt reached the provider; a request that never got a slot made no call to record.
+      if (error.reason === 'upstream_rate_limited') recordUsage('error', 0, 0);
+      throw providerBusyHttpError(error);
+    }
+    if (error instanceof ProviderQuotaExhaustedError) {
+      // The account behind the shared key is out of credits: expected until it is topped up, so not a paging error.
+      req.logger.warn('Music generation unavailable: provider quota exhausted', { provider, status: error.status });
+      await reservation.refund();
+      recordUsage('error', 0, 0);
+      return res.status(503).json({ error: 'Music generation is temporarily unavailable. Please try again later.' });
+    }
     req.logger.error('Music generation failed', {
       provider,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
-    // Refund the reserved credits - a failed generation incurs no provider cost.
     await reservation.refund();
     recordUsage('error', 0, 0);
     return res.status(502).json({ error: 'Music generation failed' });
@@ -156,7 +198,21 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
             userId,
             bytes: audio,
             contentType,
-            generation: { generator: 'music', provider, modelId, prompt, durationSeconds: lengthMs / 1000 },
+            generation: {
+              generator: 'music',
+              provider,
+              modelId,
+              prompt,
+              durationSeconds: lengthMs / 1000,
+              request: {
+                provider,
+                prompt,
+                lengthMs,
+                ...(forceInstrumental !== undefined && { forceInstrumental }),
+                ...(modelId !== undefined && { modelId }),
+                ...(format !== undefined && { format }),
+              },
+            },
           },
           req.logger
         )

@@ -15,6 +15,8 @@ export enum ModelBackend {
   Anthropic = 'anthropic',
   Gemini = 'gemini',
   Ollama = 'ollama',
+  // A user's own vLLM, llama-server or LM Studio, built client-side; the server never dispatches it.
+  OpenAICompatible = 'openai-compatible',
   BFL = 'bfl',
   XAI = 'xai',
   // Moonshot AI's Kimi models, served from their OpenAI-compatible endpoint.
@@ -49,6 +51,15 @@ export enum ImageModels {
   FLUX_PRO_FILL = 'flux-pro-1.0-fill',
   FLUX_KONTEXT_PRO = 'flux-kontext-pro',
   FLUX_KONTEXT_MAX = 'flux-kontext-max',
+  FLUX_2_MAX = 'flux-2-max',
+  FLUX_2_PRO = 'flux-2-pro',
+  FLUX_2_PRO_PREVIEW = 'flux-2-pro-preview',
+  FLUX_2_FLEX = 'flux-2-flex',
+  FLUX_2_KLEIN_9B = 'flux-2-klein-9b',
+  FLUX_2_KLEIN_9B_PREVIEW = 'flux-2-klein-9b-preview',
+  FLUX_2_KLEIN_4B = 'flux-2-klein-4b',
+  FLUX_3_IMAGE = 'flux-3-image',
+  FLUX_3_IMAGE_KLEIN = 'flux-3-image-klein',
   GROK_IMAGINE_IMAGE_QUALITY = 'grok-imagine-image-quality',
   GEMINI_2_5_FLASH_IMAGE = 'gemini-2.5-flash-image',
   GEMINI_3_PRO_IMAGE_PREVIEW = 'gemini-3-pro-image-preview',
@@ -160,6 +171,7 @@ export enum ChatModels {
 
   // GPT-5 family
   GPT5 = 'gpt-5',
+  GPT5_2025_08_07 = 'gpt-5-2025-08-07',
   GPT5_MINI = 'gpt-5-mini',
   GPT5_NANO = 'gpt-5-nano',
   GPT5_CHAT_LATEST = 'gpt-5-chat-latest',
@@ -204,6 +216,9 @@ export enum ChatModels {
   DEEPSEEK_R1_BEDROCK = 'us.deepseek.r1-v1:0',
   DEEPSEEK_V3_1 = 'deepseek.v3-v1:0',
 
+  // Served by the generic Converse backend (llm-adapters bedrockBackend/converse.ts).
+  NOVA_PRO_BEDROCK = 'us.amazon.nova-pro-v1:0',
+
   TITAN_TEXT_G1_LITE = 'amazon.titan-text-lite-v1',
   TITAN_TEXT_G1_EXPRESS = 'amazon.titan-text-express-v1',
   // Bedrock hosted Anthropic models
@@ -245,6 +260,7 @@ export enum ChatModels {
   CLAUDE_4_5_OPUS = 'claude-opus-4-5-20251101',
   CLAUDE_4_6_SONNET = 'claude-sonnet-4-6',
   CLAUDE_5_SONNET = 'claude-sonnet-5',
+  CLAUDE_5_5_SONNET = 'claude-sonnet-5-5',
   CLAUDE_4_6_OPUS = 'claude-opus-4-6',
   CLAUDE_4_7_OPUS = 'claude-opus-4-7',
   CLAUDE_4_8_OPUS = 'claude-opus-4-8',
@@ -257,6 +273,9 @@ export enum ChatModels {
   JURASSIC2_MID = 'ai21.j2-mid-v1',
 
   // GEMINI
+  // Gemini 4
+  GEMINI_4_NEON = 'gemini-4-neon',
+
   // Gemini 3.5
   GEMINI_3_5_FLASH = 'gemini-3.5-flash',
 
@@ -323,9 +342,9 @@ export enum ChatModels {
   DEEPSEEK_FLASH = 'deepseek-flash',
   DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
-// The dated snapshot is excluded until it has a catalog row: the adapter tables hold no entry for
-// it, so getAvailableModels returns no ModelInfo (pricing, limits) for it unless a catalog row adds one.
-export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17']);
+// Dated snapshots are excluded until they have a catalog row: the adapter tables hold no entry for
+// them, so getAvailableModels returns no ModelInfo (pricing, limits) for them unless a catalog row adds one.
+export const supportedChatModels = z.enum(ChatModels).exclude(['GPT5_4_MINI_2026_03_17', 'GPT5_2025_08_07']);
 export type ChatModelName = z.infer<typeof supportedChatModels>;
 export const CHAT_MODELS: string[] = [...supportedChatModels.options];
 
@@ -355,6 +374,7 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.O3,
   ChatModels.O4_MINI,
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
@@ -366,6 +386,15 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
   ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * OpenAI models whose `reasoning_effort` also takes 'xhigh'; the o-series and GPT-5/5.1 reject it.
+ * Read by both the chat effort selector and the server clamp (chatReasoningEffortsFor).
+ */
+export const OPENAI_XHIGH_REASONING_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.GPT5_2,
+  ChatModels.GPT5_2_CHAT_LATEST,
 ]);
 
 /**
@@ -398,6 +427,7 @@ export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Se
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
@@ -445,6 +475,7 @@ export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Se
  */
 export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
@@ -480,6 +511,7 @@ export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string
  */
 export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
@@ -525,6 +557,7 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET,
   ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
@@ -560,39 +593,20 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
-// Matches the native, Bedrock (any region prefix), gateway (`anthropic/`), context-suffixed (`[1m]`)
-// and catalog spellings alike, so a catalog-only id is covered without a ChatModels entry first.
-// Deliberately a permissive deny-list, not claudeFamilyVersion: an unreviewed spelling of these models (a patch
-// version, a vendor prefix) must still read as unsupported. Keep in sync with TOOL_CHANGES_VERSIONS in
-// claudeToolCapabilities.ts when a new 5.x ships.
-const NO_FORCED_TOOL_CHOICE_FAMILY = /(?:^|[./])claude-(?:opus-5-5|sonnet-5-5|fable-5-1|mythos-5-1)(?=$|[-:@[])/;
-
 /**
- * Whether the model accepts forced tool use. Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
- * return 400 for `tool_choice` `{type:'any'}` and `{type:'tool'}` (Messages, count_tokens and Batches
- * alike); `auto` and `none` still work. Adapters route json_schema through `output_config.format` and
- * downgrade a caller's required/named choice to `auto` + `strict` for these models. Haiku 5.5 is
- * deliberately absent: it accepts forced `any`/`tool` (raw Bedrock API probe, adaptive thinking on;
- * native API: forced `tool` observed via json_schema, forced `any` not probed) and its response
- * just carries no thinking block.
- */
-export function supportsForcedToolChoice(modelId: string): boolean {
-  return !NO_FORCED_TOOL_CHOICE_FAMILY.test(modelId);
-}
-
-/**
- * Models whose safety classifiers can decline a request with `stop_reason: 'refusal'`
- * (HTTP 200, empty or partial content) - Claude Fable 5's GA classifiers target research
- * biology and most cybersecurity content and occasionally false-positive on benign adjacent
- * work. Per Anthropic's GA guidance a refusal from these is opt-in recoverable: rather than
- * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
- * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
- * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
- * sync with the `claude-fable-5` and Bedrock Fable fallback preference chains in
- * `adminSettings/fallback.ts`.
+ * Seed for the catalog's `refusalFallback` flag (see resolveApiSurface): models whose safety
+ * classifiers can decline a request with `stop_reason: 'refusal'` (HTTP 200, empty or partial
+ * content), including false positives on benign security or life-sciences work. Anthropic's
+ * guidance opts Fable 5.1+ into a refusal fallback by default, so for these the backend throws and
+ * the completion loop continues on the model's Opus chain in FALLBACK_PREFERENCES
+ * (`adminSettings/fallback.ts`), which each id here needs. A refusal from a model whose flag
+ * resolves false is a decline and surfaces unchanged. First-party Fable 5.1 and 5.2 are
+ * catalog-only, so they have no ChatModels constant.
  */
 export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_FABLE_5,
+  'claude-fable-5-1',
+  'claude-fable-5-2',
   ChatModels.CLAUDE_FABLE_5_BEDROCK,
   ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
 ]);
@@ -631,8 +645,8 @@ export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 /**
  * All supported models
  */
-// Deliberately not excluding the dated snapshot (unlike supportedChatModels): this is used as the
-// ModelName type only, and excluding it narrows ModelName so ChatModels values stop assigning to it.
+// Deliberately not excluding the dated snapshots (unlike supportedChatModels): this is used as the
+// ModelName type only, and excluding them narrows ModelName so ChatModels values stop assigning to it.
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
@@ -643,6 +657,9 @@ export type ModelName = z.infer<typeof supportedModels>;
 
 /** Whether a model's rates came from a ModelPrice catalog row or the adapter's literal fallback. */
 export type ModelPriceSource = UsagePriceSource;
+
+/** Why a listed model is shown to a caller but not selectable by them. */
+export type ModelAccessLock = { locked: true; reason: 'requires_paid_plan' | 'org_policy' };
 
 export type ModelInfo = {
   id: ModelName;
@@ -684,6 +701,23 @@ export type ModelInfo = {
    * Defaults to 'legacy' if unset and can_think is true.
    */
   thinkingStyle?: 'legacy' | 'adaptive';
+  /**
+   * Thinking cannot be switched off for this model. Derived by getAvailableModels
+   * (thinkingCannotBeDisabled in @bike4mind/llm-adapters), never hand-set on a table
+   * entry. Absent means thinking is switchable, or the model does not think.
+   */
+  thinkingAlwaysOn?: true;
+  /**
+   * The catalog says this model takes OpenAI's `reasoning_effort`. Set only for a
+   * record whose reasoning style is 'openai-effort'; absent means "not stated" and
+   * the OpenAI adapter falls back to REASONING_SUPPORTED_MODELS.
+   */
+  openaiReasoningEffort?: true;
+  /**
+   * Catalog form of REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: sending an effort
+   * level alongside function tools 400s. Absent means "not stated", not "compatible".
+   */
+  effortIncompatibleWithTools?: boolean;
   pricing: Record<number, PricingInfo>;
   /**
    * Where `pricing` came from. 'catalog' when applyModelPriceCatalog overlaid a ModelPrice row;
@@ -735,6 +769,8 @@ export type ModelInfo = {
    * Format: YYYY-MM-DD
    */
   deprecationDate?: string;
+  /** Superseded but still selectable; folded into Older models in the picker. */
+  isSuperseded?: boolean;
   /**
    * Successor id for a model this adapter table is sunsetting. Rides into
    * `lifecycle.replacedBy` on the seed row, which is what feeds
@@ -757,6 +793,11 @@ export type ModelInfo = {
   /** Human-readable reason surfaced in the picker (tooltip) and the server-side rejection when `disabled` is true. */
   disabledReason?: string;
   /**
+   * Set only on GET /api/models `lockedModels` entries, which never appear in `models` so nothing can select one.
+   * Display only: call-time createModelAdmission (services/llm/modelAdmission.ts) is the gate.
+   */
+  access?: ModelAccessLock;
+  /**
    * Which backend constructor serves this model. Present only on models the
    * catalog resolved; getLlmByModel dispatches on it and falls back to the
    * legacy id switch when it is absent (see llm-adapters/src/index.ts).
@@ -768,6 +809,16 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * The catalog's `apiSurface` flags (see ModelRecord). Present only where a catalog row states them;
+   * read them through resolveApiSurface (claudeToolCapabilities.ts), which supplies the seed and default.
+   */
+  forcedToolChoice?: boolean;
+  assistantPrefill?: boolean;
+  toolSearch?: boolean;
+  toolChanges?: boolean;
+  deferredToolAddition?: boolean;
+  refusalFallback?: boolean;
   /**
    * Size rules and supported params of an image model. Attached by GET /api/models (see
    * getImageModelCapabilities), not by the backends, so every image row derives it the same way.
@@ -788,9 +839,11 @@ type PricingInfo = {
 /** Anthropic-published default multipliers for prompt cache pricing. */
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
+/** A write with the 1-hour TTL costs 2x base input on Anthropic and Bedrock. */
+export const CACHE_WRITE_1H_MULTIPLIER = 2;
 
 /** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
-export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+export const pricingTierForTokens = (model: Pick<ModelInfo, 'pricing'>, tokens: number): number | null => {
   const thresholds = Object.keys(model.pricing)
     .map(Number)
     .sort((a, b) => a - b);
@@ -811,7 +864,13 @@ export type TurnUsage = {
   outputTokens: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /** The part of cacheCreationInputTokens written with the 1-hour TTL, billed at CACHE_WRITE_1H_MULTIPLIER. */
+  cacheWrite1hInputTokens?: number;
 };
+
+/** Total 1-hour cache writes across `turns`. */
+export const sumOneHourCacheWrites = (turns: readonly TurnUsage[] | undefined): number =>
+  (turns ?? []).reduce((sum, turn) => sum + (turn.cacheWrite1hInputTokens ?? 0), 0);
 
 // $0 for real usage on a model not marked freeToRun means a missing or
 // zero-rate pricing map: the call settles free (stochastic rounding has no
@@ -819,6 +878,7 @@ export type TurnUsage = {
 // Alarm-only: billing behavior is unchanged.
 const alarmIfUnpriced = (model: ModelInfo, cost: number, usage: number): number => {
   if (cost === 0 && usage > 0 && !model.freeToRun) {
+    // eslint-disable-next-line no-console -- alarm signal in pure pricing code shared with the browser bundle
     console.error(
       `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
     );
@@ -845,7 +905,10 @@ export type AppliedRates = IUsageEventRates;
  * place tier selection and cache-rate defaults live, so a stamped rate can never disagree with the
  * cost it explains.
  */
-export const resolveAppliedRates = (model: ModelInfo, tierBasisTokens: number): Required<AppliedRates> | null => {
+export const resolveAppliedRates = (
+  model: Pick<ModelInfo, 'pricing' | 'backend'>,
+  tierBasisTokens: number
+): Required<Omit<AppliedRates, 'cacheWrite1h'>> | null => {
   const tier = pricingTierForTokens(model, tierBasisTokens);
   // Guard against a malformed or non-tiered pricing map (e.g. a flat
   // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
@@ -866,22 +929,30 @@ export const resolveAppliedRates = (model: ModelInfo, tierBasisTokens: number): 
   };
 };
 
+/** The per-token rate of a 1-hour cache write in a tier resolved by resolveAppliedRates. */
+export const oneHourCacheWriteRate = (rates: Pick<AppliedRates, 'input'>): number =>
+  rates.input * CACHE_WRITE_1H_MULTIPLIER;
+
+// `cacheWrite1hTokens` is the part of `cacheCreationTokens` written with the 1-hour TTL.
 const costAtTier = (
   model: ModelInfo,
   tierBasisTokens: number,
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number,
-  cacheCreationTokens: number
+  cacheCreationTokens: number,
+  cacheWrite1hTokens = 0
 ): number => {
   const rates = resolveAppliedRates(model, tierBasisTokens);
   if (!rates) return 0;
 
+  const oneHourWrites = Math.min(Math.max(cacheWrite1hTokens, 0), cacheCreationTokens);
   return (
     rates.input * inputTokens +
     rates.output * outputTokens +
     rates.cacheRead * cacheReadTokens +
-    rates.cacheWrite * cacheCreationTokens
+    rates.cacheWrite * (cacheCreationTokens - oneHourWrites) +
+    oneHourCacheWriteRate(rates) * oneHourWrites
   );
 };
 
@@ -904,11 +975,20 @@ export const getTextModelCost = (
   outputTokens: number,
   cacheReadTokens: number = 0,
   cacheCreationTokens: number = 0,
-  tierBasisTokens: number = inputTokens
+  tierBasisTokens: number = inputTokens,
+  cacheWrite1hTokens: number = 0
 ): number =>
   alarmIfUnpriced(
     model,
-    costAtTier(model, tierBasisTokens, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens),
+    costAtTier(
+      model,
+      tierBasisTokens,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreationTokens,
+      cacheWrite1hTokens
+    ),
     inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
   );
 
@@ -929,7 +1009,8 @@ export const getTurnsCost = (model: ModelInfo, turns: readonly TurnUsage[]): num
       turn.inputTokens,
       turn.outputTokens,
       cacheRead,
-      cacheCreation
+      cacheCreation,
+      turn.cacheWrite1hInputTokens ?? 0
     );
     if (turnCost === 0) unpricedUsage += turn.inputTokens + turn.outputTokens + cacheRead + cacheCreation;
     cost += turnCost;

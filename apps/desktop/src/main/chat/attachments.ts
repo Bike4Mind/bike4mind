@@ -24,6 +24,12 @@ export const IMAGE_INPUT_MAX = 32 * 1024 * 1024;
  */
 export const IMAGE_MAX_EDGE = 1568;
 
+/** Nothing larger is even parsed: pdf.js holds the whole document in memory. */
+export const PDF_INPUT_MAX = 32 * 1024 * 1024;
+
+/** Past this the extracted text would be cut by TEXT_BYTE_CAP long before the last page anyway. */
+export const PDF_MAX_PAGES = 100;
+
 /** Per turn. Enough for "here are the three screenshots", far short of a dropped folder. */
 export const MAX_ATTACHMENTS_PER_TURN = 10;
 
@@ -103,6 +109,19 @@ export function looksBinary(head: Buffer): boolean {
   return replacements > decoded.length * 0.01;
 }
 
+/** Every PDF starts with this, whatever it is called. */
+const PDF_MAGIC = Buffer.from('%PDF-', 'latin1');
+
+/**
+ * The header is only trusted for a name with no extension (a paste, a download saved bare): a
+ * `.txt` or `.log` that happens to open with `%PDF-` is still the text file its name says.
+ */
+export function looksLikePdf(name: string, mediaType: string | undefined, head: Buffer): boolean {
+  const extension = extname(name).toLowerCase();
+  if (extension === '.pdf' || mediaType === 'application/pdf') return true;
+  return extension === '' && head.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC);
+}
+
 export interface PreparedAttachment {
   kind: ChatAttachmentKind;
   name: string;
@@ -112,6 +131,10 @@ export interface PreparedAttachment {
   /** What the user picked, before truncation or downscaling. */
   sourceBytes: number;
   truncated?: boolean;
+  /** Set for a PDF: the page count read at intake. */
+  pages?: number;
+  /** Set for a PDF: the capped text the model is sent, kept so the first turn need not parse it again. */
+  promptText?: string;
 }
 
 export type PrepareResult = { ok: true; prepared: PreparedAttachment } | { ok: false; reason: string };
@@ -167,34 +190,37 @@ export function prepareText(name: string, head: Buffer, sourceBytes: number): Pr
   }
 
   const safeName = sanitizeName(name);
-  if (sourceBytes <= TEXT_BYTE_CAP) {
-    return {
-      ok: true,
-      prepared: { kind: 'text', name: safeName, mediaType: 'text/plain', bytes: head, sourceBytes },
-    };
-  }
-
-  // Cut at the last newline inside the cap so the model is not handed half a line, and say so
-  // in the file itself: a prefix that reads as a whole file is what makes a model answer
-  // confidently about data it never saw.
-  const capped = head.subarray(0, TEXT_BYTE_CAP);
-  const lastNewline = capped.lastIndexOf(0x0a);
-  const body = lastNewline > TEXT_BYTE_CAP / 2 ? capped.subarray(0, lastNewline) : capped;
-  const marker = `\n\n[... truncated: this is the first ${formatBytes(body.length)} of a ${formatBytes(
-    sourceBytes
-  )} file. The rest was not sent. Do not assume anything about the part you cannot see. ...]`;
-
+  const capped = capText(head, sourceBytes, 'file');
   return {
     ok: true,
     prepared: {
       kind: 'text',
       name: safeName,
       mediaType: 'text/plain',
-      bytes: Buffer.concat([body, Buffer.from(marker, 'utf8')]),
+      bytes: capped.bytes,
       sourceBytes,
-      truncated: true,
+      ...(capped.truncated ? { truncated: true } : {}),
     },
   };
+}
+
+/**
+ * `bytes` is at most TEXT_BYTE_CAP + 1 bytes of something `totalBytes` long; `noun` completes
+ * "a 3 MB ..." in the marker.
+ */
+export function capText(bytes: Buffer, totalBytes: number, noun: string): { bytes: Buffer; truncated: boolean } {
+  if (totalBytes <= TEXT_BYTE_CAP) return { bytes, truncated: false };
+
+  // Cut at the last newline inside the cap so the model is not handed half a line, and say so
+  // in the file itself: a prefix that reads as a whole file is what makes a model answer
+  // confidently about data it never saw.
+  const capped = bytes.subarray(0, TEXT_BYTE_CAP);
+  const lastNewline = capped.lastIndexOf(0x0a);
+  const body = lastNewline > TEXT_BYTE_CAP / 2 ? capped.subarray(0, lastNewline) : capped;
+  const marker = `\n\n[... truncated: this is the first ${formatBytes(body.length)} of a ${formatBytes(
+    totalBytes
+  )} ${noun}. The rest was not sent. Do not assume anything about the part you cannot see. ...]`;
+  return { bytes: Buffer.concat([body, Buffer.from(marker, 'utf8')]), truncated: true };
 }
 
 export function formatBytes(bytes: number): string {
@@ -212,5 +238,6 @@ export function formatBytes(bytes: number): string {
  */
 export function textAttachmentBlock(attachment: ChatAttachment, body: string): string {
   const truncated = attachment.truncated ? ' truncated="true"' : '';
-  return `<attached-file name="${attachment.name}" bytes="${attachment.sourceBytes}"${truncated}>\n${body}\n</attached-file>`;
+  const pages = attachment.pages ? ` pages="${attachment.pages}"` : '';
+  return `<attached-file name="${attachment.name}" bytes="${attachment.sourceBytes}"${pages}${truncated}>\n${body}\n</attached-file>`;
 }

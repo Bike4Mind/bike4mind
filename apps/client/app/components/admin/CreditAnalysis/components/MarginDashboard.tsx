@@ -1,19 +1,15 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Alert,
   Box,
   Button,
   Chip,
-  CircularProgress,
   FormControl,
   FormLabel,
   IconButton,
   Input,
-  Modal,
-  ModalDialog,
-  Sheet,
   Stack,
-  Table,
   Textarea,
   Typography,
 } from '@mui/joy';
@@ -21,6 +17,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   getPriceMargin,
+  IFundingCohortCost,
   IModelDayMargin,
   IProviderInvoice,
   IProviderMonthCogs,
@@ -28,6 +25,16 @@ import {
   IUserMargin,
 } from '@bike4mind/common';
 import { ReconciliationBanner } from './ReconciliationBanner';
+import {
+  AdminDialog,
+  AdminPageHeader,
+  AdminSearchInput,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  FilterToolbar,
+  LoadingState,
+} from '../../shared';
 
 interface MarginResponse<T> {
   targetCreditsPerUsd: number;
@@ -62,8 +69,6 @@ const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> 
   );
 };
 
-const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
-
 // The server error envelope puts the human-readable reason in data.error
 // (see server/middlewares/errorHandler.ts); data.message and err.message
 // stay as fallbacks for endpoints that don't follow that envelope.
@@ -83,16 +88,22 @@ const invoiceStatus = (
   return { label: 'gap', color: 'danger' };
 };
 
+const formatCohortWeek = (cohortWeek: Date | string | null) =>
+  cohortWeek === null ? 'Unknown' : new Date(cohortWeek).toISOString().slice(0, 10);
+
+const formatUsd = (value: number) => `$${value.toFixed(2)}`;
+
+const grantedShare = (costUsd: IFundingCohortCost['costUsd']) => {
+  const attributed = costUsd.granted + costUsd.purchased + costUsd.subscription + costUsd.unknown;
+  return attributed > 0 ? `${Math.round((costUsd.granted / attributed) * 100)}%` : '-';
+};
+
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
+const MARGIN_QUERY_KEY = ['admin', 'usage-margin'] as const;
+const MARGIN_STALE_TIME_MS = 5 * 60 * 1000;
+
 export const MarginDashboard: React.FC = () => {
-  const [modelDay, setModelDay] = useState<MarginResponse<IModelDayMargin> | null>(null);
-  const [byUser, setByUser] = useState<MarginResponse<NamedUserMargin> | null>(null);
-  const [byProvider, setByProvider] = useState<MarginResponse<IProviderMonthCogs> | null>(null);
-  const [settlement, setSettlement] = useState<MarginResponse<ISettlementBreakdown> | null>(null);
-  const [invoices, setInvoices] = useState<IProviderInvoice[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [userSearch, setUserSearch] = useState('');
   const [providerFilter, setProviderFilter] = useState('');
 
@@ -103,10 +114,18 @@ export const MarginDashboard: React.FC = () => {
   const [entryError, setEntryError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const fetchAll = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
+  // Fetched apart from the other views: its aggregation joins users, and a failure there must
+  // not blank the margin sections that loaded fine.
+  const fundingCohortQuery = useQuery({
+    queryKey: [...MARGIN_QUERY_KEY, 'funding-cohort'],
+    queryFn: async () =>
+      (await api.get<MarginResponse<IFundingCohortCost>>('/api/admin/usage-margin?view=funding-cohort&days=30')).data,
+    staleTime: MARGIN_STALE_TIME_MS,
+  });
+  // Cached, so switching back to this tab does not re-run every margin aggregation.
+  const marginsQuery = useQuery({
+    queryKey: [...MARGIN_QUERY_KEY, 'views'],
+    queryFn: async () => {
       const [modelDayRes, userRes, providerRes, settlementRes, invoicesRes] = await Promise.all([
         api.get<MarginResponse<IModelDayMargin>>('/api/admin/usage-margin?view=model-day&days=30'),
         api.get<MarginResponse<NamedUserMargin>>('/api/admin/usage-margin?view=user&days=30'),
@@ -114,27 +133,39 @@ export const MarginDashboard: React.FC = () => {
         api.get<MarginResponse<ISettlementBreakdown>>('/api/admin/usage-margin?view=settlement&days=30'),
         api.get<{ invoices: IProviderInvoice[] }>('/api/admin/provider-invoices'),
       ]);
-      setModelDay(modelDayRes.data);
-      setByUser(userRes.data);
-      setByProvider(providerRes.data);
-      setSettlement(settlementRes.data);
-      setInvoices(invoicesRes.data.invoices);
-    } catch (err) {
-      setError((err as Error)?.message || 'Failed to load margin data');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+      return {
+        modelDay: modelDayRes.data,
+        byUser: userRes.data,
+        byProvider: providerRes.data,
+        settlement: settlementRes.data,
+        invoices: invoicesRes.data.invoices,
+      };
+    },
+    staleTime: MARGIN_STALE_TIME_MS,
+  });
 
-  useEffect(() => {
-    fetchAll();
-  }, [fetchAll]);
+  const modelDay = marginsQuery.data?.modelDay ?? null;
+  const byUser = marginsQuery.data?.byUser ?? null;
+  const byProvider = marginsQuery.data?.byProvider ?? null;
+  const settlement = marginsQuery.data?.settlement ?? null;
+  const invoices = marginsQuery.data?.invoices ?? [];
+  const fundingCohort = fundingCohortQuery.data ?? null;
+  const fundingCohortError = fundingCohortQuery.error
+    ? apiErrorMessage(fundingCohortQuery.error, 'Failed to load cost by funding source')
+    : null;
+  const error = marginsQuery.error ? marginsQuery.error.message || 'Failed to load margin data' : null;
+  const isLoading = marginsQuery.isFetching || fundingCohortQuery.isFetching;
+  const fetchFundingCohort = () => fundingCohortQuery.refetch();
+  const fetchAll = () => Promise.all([marginsQuery.refetch(), fundingCohortQuery.refetch()]);
 
   const target = modelDay?.targetCreditsPerUsd ?? 0;
   const providerNeedle = providerFilter.trim().toLowerCase();
   const userNeedle = userSearch.trim().toLowerCase();
   const modelDayRows = (modelDay?.rows ?? []).filter(
-    r => !providerNeedle || r.provider.toLowerCase().includes(providerNeedle)
+    r =>
+      !providerNeedle ||
+      r.provider.toLowerCase().includes(providerNeedle) ||
+      (r.executedProvider ?? '').toLowerCase().includes(providerNeedle)
   );
   const userRows = (byUser?.rows ?? []).filter(
     r =>
@@ -182,32 +213,43 @@ export const MarginDashboard: React.FC = () => {
   return (
     <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="margin-dashboard">
       <ReconciliationBanner />
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1, mt: 1 }}>
-        <Typography level="title-md">Margins (last 30 days)</Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <Input
-            size="sm"
-            placeholder="Filter provider"
+      <Stack gap={2} sx={{ mb: 2, mt: 1 }}>
+        <AdminPageHeader
+          level="section"
+          title="Margins (last 30 days)"
+          actions={
+            <>
+              {target > 0 && (
+                <Chip size="sm" color="primary" variant="soft" data-testid="margin-target-chip">
+                  target: {target.toLocaleString()} credits/$
+                </Chip>
+              )}
+              <IconButton
+                size="sm"
+                onClick={() => void fetchAll()}
+                disabled={isLoading}
+                data-testid="margin-refresh-btn"
+                aria-label="Refresh margins"
+              >
+                <RefreshIcon />
+              </IconButton>
+            </>
+          }
+        />
+        <FilterToolbar data-testid="margin-filter-toolbar">
+          <AdminSearchInput
+            label="Filter provider"
             value={providerFilter}
-            onChange={e => setProviderFilter(e.target.value)}
+            onChange={setProviderFilter}
             data-testid="margin-provider-filter"
           />
-          <Input
-            size="sm"
-            placeholder="Search user"
+          <AdminSearchInput
+            label="Search user"
             value={userSearch}
-            onChange={e => setUserSearch(e.target.value)}
+            onChange={setUserSearch}
             data-testid="margin-user-search"
           />
-          {target > 0 && (
-            <Chip size="sm" color="primary" variant="soft" data-testid="margin-target-chip">
-              target: {target.toLocaleString()} credits/$
-            </Chip>
-          )}
-          <IconButton size="sm" onClick={fetchAll} disabled={isLoading} data-testid="margin-refresh-btn">
-            <RefreshIcon />
-          </IconButton>
-        </Stack>
+        </FilterToolbar>
       </Stack>
 
       <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
@@ -216,195 +258,203 @@ export const MarginDashboard: React.FC = () => {
         break-even and +20% (typically older pricing), and red chips are below break-even or more than 20% above target.
       </Alert>
 
-      {error && (
+      {error && modelDay && (
         <Alert color="danger" sx={{ mb: 2 }} data-testid="margin-error">
           {error}
         </Alert>
       )}
 
-      {isLoading && !modelDay ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-          <CircularProgress />
-        </Box>
+      {error && !modelDay ? (
+        <ErrorState message={error} onRetry={() => void fetchAll()} />
+      ) : isLoading && !modelDay ? (
+        <LoadingState label="Loading margins" />
       ) : (
         <Stack spacing={3}>
           <Box>
             <Typography level="title-sm" sx={{ mb: 1 }}>
               By model by day
             </Typography>
-            <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="margin-model-day-table">
-                <thead>
-                  <tr>
-                    <th>Day</th>
-                    <th>Provider</th>
-                    <th>Model</th>
-                    <th style={{ textAlign: 'right' }}>Requests</th>
-                    <th style={{ textAlign: 'right' }}>COGS (USD)</th>
-                    <th style={{ textAlign: 'right' }}>Credits</th>
-                    <th>Margin</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {modelDayRows.map(row => (
-                    <tr key={`${row.day}-${row.provider}-${row.model}`}>
-                      <td>{row.day}</td>
-                      <td>{row.provider}</td>
-                      <td>{row.model}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(4)}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
-                      <td>
-                        <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />
-                      </td>
-                    </tr>
-                  ))}
-                  {modelDayRows.length === 0 && (
-                    <tr>
-                      <td colSpan={7}>
-                        <Typography level="body-sm" color="neutral">
-                          No usage events yet.
-                        </Typography>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+            <DataTable
+              label="By model by day"
+              testId="margin-model-day-table"
+              pageResetKey={providerFilter}
+              rows={modelDayRows}
+              getRowId={row =>
+                `${row.day}-${row.provider}-${row.model}-${row.executedProvider ?? row.provider}-${row.executedModel ?? row.model}`
+              }
+              onRetry={() => void fetchAll()}
+              minWidth="64rem"
+              maxHeight="320px"
+              empty={<EmptyState title="No usage events yet" action={null} />}
+              columns={[
+                { id: 'day', label: 'Day', render: row => row.day },
+                { id: 'provider', label: 'Provider', render: row => row.provider },
+                { id: 'model', label: 'Model', render: row => row.model },
+                {
+                  id: 'executed',
+                  label: 'Executed model',
+                  render: row => (
+                    <span data-testid="margin-executed-model-cell">
+                      {row.executedProvider &&
+                      (row.executedProvider !== row.provider || row.executedModel !== row.model)
+                        ? `${row.executedProvider} / ${row.executedModel ?? row.model}`
+                        : row.executedModel && row.executedModel !== row.model
+                          ? `${row.provider} / ${row.executedModel}`
+                          : '-'}
+                    </span>
+                  ),
+                },
+                { id: 'requests', label: 'Requests', numeric: true, render: row => row.requests.toLocaleString() },
+                { id: 'cogs', label: 'COGS (USD)', numeric: true, render: row => `$${row.cogsUsd.toFixed(4)}` },
+                { id: 'credits', label: 'Credits', numeric: true, render: row => row.creditsCharged.toLocaleString() },
+                {
+                  id: 'margin',
+                  label: 'Margin',
+                  render: row => <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />,
+                },
+              ]}
+            />
           </Box>
 
           <Box>
             <Typography level="title-sm" sx={{ mb: 1 }}>
               By user (worst margin first)
             </Typography>
-            <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="margin-user-table">
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th style={{ textAlign: 'right' }}>Requests</th>
-                    <th style={{ textAlign: 'right' }}>COGS (USD)</th>
-                    <th style={{ textAlign: 'right' }}>Credits</th>
-                    <th>Margin</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {userRows.map(row => (
-                    <tr key={row.userId}>
-                      <td title={row.userId}>{row.userName ?? row.userId}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(4)}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
-                      <td>
-                        <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />
-                      </td>
-                    </tr>
-                  ))}
-                  {userRows.length === 0 && (
-                    <tr>
-                      <td colSpan={5}>
-                        <Typography level="body-sm" color="neutral">
-                          No usage events yet.
-                        </Typography>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+            <DataTable
+              label="By user"
+              testId="margin-user-table"
+              pageResetKey={`${providerFilter}-${userSearch}`}
+              rows={userRows}
+              getRowId={row => row.userId}
+              onRetry={() => void fetchAll()}
+              maxHeight="320px"
+              empty={<EmptyState title="No usage events yet" action={null} />}
+              columns={[
+                {
+                  id: 'user',
+                  label: 'User',
+                  render: row => <span title={row.userId}>{row.userName ?? row.userId}</span>,
+                },
+                { id: 'requests', label: 'Requests', numeric: true, render: row => row.requests.toLocaleString() },
+                { id: 'cogs', label: 'COGS (USD)', numeric: true, render: row => `$${row.cogsUsd.toFixed(4)}` },
+                { id: 'credits', label: 'Credits', numeric: true, render: row => row.creditsCharged.toLocaleString() },
+                {
+                  id: 'margin',
+                  label: 'Margin',
+                  render: row => <RatioChip credits={row.creditsCharged} cogsUsd={row.cogsUsd} target={target} />,
+                },
+              ]}
+            />
           </Box>
 
           <Box>
             <Typography level="title-sm" sx={{ mb: 1 }}>
               Monthly COGS by provider (invoice reconciliation)
             </Typography>
-            <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-              <Table stickyHeader hoverRow size="sm" data-testid="margin-provider-month-table">
-                <thead>
-                  <tr>
-                    <th>Month</th>
-                    <th>Provider</th>
-                    <th style={{ textAlign: 'right' }}>Requests</th>
-                    <th style={{ textAlign: 'right' }}>COGS (USD)</th>
-                    <th style={{ textAlign: 'right' }}>Input tokens</th>
-                    <th style={{ textAlign: 'right' }}>Output tokens</th>
-                    <th style={{ textAlign: 'right' }}>Cached tokens</th>
-                    <th style={{ textAlign: 'right' }}>Cache writes</th>
-                    <th style={{ textAlign: 'right' }}>Invoice</th>
-                    <th style={{ textAlign: 'right' }}>Delta</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {providerMonthRows.map(row => {
+            <DataTable
+              label="Monthly COGS by provider"
+              testId="margin-provider-month-table"
+              rows={providerMonthRows}
+              getRowId={row => `${row.month}-${row.provider}`}
+              onRetry={() => void fetchAll()}
+              pagination={false}
+              minWidth="88rem"
+              maxHeight="320px"
+              empty={<EmptyState title="No usage events yet" action={null} />}
+              columns={[
+                { id: 'month', label: 'Month', render: row => row.month },
+                { id: 'provider', label: 'Provider', render: row => row.provider },
+                { id: 'requests', label: 'Requests', numeric: true, render: row => row.requests.toLocaleString() },
+                { id: 'cogs', label: 'COGS (USD)', numeric: true, render: row => `$${row.cogsUsd.toFixed(2)}` },
+                { id: 'input', label: 'Input tokens', numeric: true, render: row => row.inputTokens.toLocaleString() },
+                {
+                  id: 'output',
+                  label: 'Output tokens',
+                  numeric: true,
+                  render: row => row.outputTokens.toLocaleString(),
+                },
+                {
+                  id: 'cached',
+                  label: 'Cached tokens',
+                  numeric: true,
+                  render: row => row.cachedInputTokens.toLocaleString(),
+                },
+                {
+                  id: 'writes',
+                  label: 'Cache writes',
+                  numeric: true,
+                  render: row => row.cacheWriteTokens.toLocaleString(),
+                },
+                {
+                  id: 'invoice',
+                  label: 'Invoice',
+                  numeric: true,
+                  render: row => {
                     const key = `${row.month}-${row.provider}`;
                     const invoice = invoiceFor(row.month, row.provider);
-                    const isCurrent = row.month === currentMonth;
                     return (
-                      <tr key={key}>
-                        <td>{row.month}</td>
-                        <td>{row.provider}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(2)}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.inputTokens.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.outputTokens.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.cachedInputTokens.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.cacheWriteTokens.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }} data-testid={`margin-invoice-cell-${key}`}>
-                          {invoice ? (
-                            `$${invoice.invoiceUsd.toFixed(2)}`
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="plain"
-                              disabled={isCurrent}
-                              title={isCurrent ? 'Month still accruing; reconcile closed months only' : undefined}
-                              onClick={() => openEntry(row.month, row.provider)}
-                              data-testid={`margin-invoice-enter-${key}`}
-                            >
-                              Enter
-                            </Button>
-                          )}
-                        </td>
-                        <td style={{ textAlign: 'right', ...numberCell }} data-testid={`margin-invoice-delta-${key}`}>
-                          {invoice ? signedUsd(invoice.invoiceUsd - row.cogsUsd) : '-'}
-                        </td>
-                        <td>
-                          {invoice ? (
-                            (() => {
-                              const status = invoiceStatus(invoice.invoiceUsd, row.cogsUsd);
-                              return (
-                                <Chip
-                                  size="sm"
-                                  color={status.color}
-                                  onClick={() => openEntry(row.month, row.provider, invoice)}
-                                  data-testid={`margin-invoice-chip-${key}`}
-                                >
-                                  {status.label}
-                                </Chip>
-                              );
-                            })()
-                          ) : (
-                            <Chip size="sm" color="neutral" data-testid={`margin-invoice-chip-${key}`}>
-                              no invoice
-                            </Chip>
-                          )}
-                        </td>
-                      </tr>
+                      <span data-testid={`margin-invoice-cell-${key}`}>
+                        {invoice ? (
+                          `$${invoice.invoiceUsd.toFixed(2)}`
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="plain"
+                            disabled={row.month === currentMonth}
+                            title={
+                              row.month === currentMonth
+                                ? 'Month still accruing; reconcile closed months only'
+                                : undefined
+                            }
+                            onClick={() => openEntry(row.month, row.provider)}
+                            data-testid={`margin-invoice-enter-${key}`}
+                          >
+                            Enter
+                          </Button>
+                        )}
+                      </span>
                     );
-                  })}
-                  {providerMonthRows.length === 0 && (
-                    <tr>
-                      <td colSpan={11}>
-                        <Typography level="body-sm" color="neutral">
-                          No usage events yet.
-                        </Typography>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+                  },
+                },
+                {
+                  id: 'delta',
+                  label: 'Delta',
+                  numeric: true,
+                  render: row => (
+                    <span data-testid={`margin-invoice-delta-${row.month}-${row.provider}`}>
+                      {invoiceFor(row.month, row.provider)
+                        ? signedUsd(invoiceFor(row.month, row.provider)!.invoiceUsd - row.cogsUsd)
+                        : '-'}
+                    </span>
+                  ),
+                },
+                {
+                  id: 'status',
+                  label: 'Status',
+                  render: row => {
+                    const invoice = invoiceFor(row.month, row.provider);
+                    const key = `${row.month}-${row.provider}`;
+                    if (!invoice)
+                      return (
+                        <Chip size="sm" color="neutral" data-testid={`margin-invoice-chip-${key}`}>
+                          no invoice
+                        </Chip>
+                      );
+                    const status = invoiceStatus(invoice.invoiceUsd, row.cogsUsd);
+                    return (
+                      <Chip
+                        size="sm"
+                        color={status.color}
+                        onClick={() => openEntry(row.month, row.provider, invoice)}
+                        data-testid={`margin-invoice-chip-${key}`}
+                      >
+                        {status.label}
+                      </Chip>
+                    );
+                  },
+                },
+              ]}
+            />
           </Box>
 
           <Box>
@@ -415,90 +465,167 @@ export const MarginDashboard: React.FC = () => {
               How usage was priced: provider-reported token counts vs the local estimate fallback. Token deltas are
               provider minus local, averaged over rows reporting both.
             </Typography>
-            <Sheet sx={{ overflow: 'auto' }}>
-              <Table size="sm" data-testid="margin-settlement-table">
-                <thead>
-                  <tr>
-                    <th>Basis</th>
-                    <th style={{ textAlign: 'right' }}>Requests</th>
-                    <th style={{ textAlign: 'right' }}>Credits</th>
-                    <th style={{ textAlign: 'right' }}>Written off</th>
-                    <th style={{ textAlign: 'right' }}>Avg input token delta</th>
-                    <th style={{ textAlign: 'right' }}>Avg output token delta</th>
-                    <th style={{ textAlign: 'right' }}>Delta sample</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(settlement?.rows ?? []).map(row => {
-                    const avg = (delta: number) =>
-                      row.deltaSampleSize > 0 ? Math.round(delta / row.deltaSampleSize).toLocaleString() : 'n/a';
-                    return (
-                      <tr key={row.settledBasis} data-testid={`margin-settlement-row-${row.settledBasis}`}>
-                        <td>{row.settledBasis}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.writtenOffCredits.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{avg(row.inputTokenDelta)}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{avg(row.outputTokenDelta)}</td>
-                        <td style={{ textAlign: 'right', ...numberCell }}>{row.deltaSampleSize.toLocaleString()}</td>
-                      </tr>
-                    );
-                  })}
-                  {(settlement?.rows ?? []).length === 0 && (
-                    <tr>
-                      <td colSpan={7}>
-                        <Typography level="body-sm" color="neutral">
-                          No settled usage events in the window.
-                        </Typography>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </Sheet>
+            <DataTable
+              label="Settlement basis"
+              testId="margin-settlement-table"
+              rows={settlement?.rows ?? []}
+              getRowId={row => row.settledBasis}
+              rowTestId={row => `margin-settlement-row-${row.settledBasis}`}
+              onRetry={() => void fetchAll()}
+              pagination={false}
+              empty={<EmptyState title="No settled usage events in the window" action={null} />}
+              columns={[
+                { id: 'basis', label: 'Basis', render: row => row.settledBasis },
+                { id: 'requests', label: 'Requests', numeric: true, render: row => row.requests.toLocaleString() },
+                { id: 'credits', label: 'Credits', numeric: true, render: row => row.creditsCharged.toLocaleString() },
+                {
+                  id: 'written',
+                  label: 'Written off',
+                  numeric: true,
+                  render: row => row.writtenOffCredits.toLocaleString(),
+                },
+                {
+                  id: 'input',
+                  label: 'Avg input token delta',
+                  numeric: true,
+                  render: row =>
+                    row.deltaSampleSize > 0
+                      ? Math.round(row.inputTokenDelta / row.deltaSampleSize).toLocaleString()
+                      : 'n/a',
+                },
+                {
+                  id: 'output',
+                  label: 'Avg output token delta',
+                  numeric: true,
+                  render: row =>
+                    row.deltaSampleSize > 0
+                      ? Math.round(row.outputTokenDelta / row.deltaSampleSize).toLocaleString()
+                      : 'n/a',
+                },
+                {
+                  id: 'sample',
+                  label: 'Delta sample',
+                  numeric: true,
+                  render: row => row.deltaSampleSize.toLocaleString(),
+                },
+              ]}
+            />
+          </Box>
+
+          <Box>
+            <Typography level="title-sm" sx={{ mb: 1 }}>
+              Cost by funding source (last 30 days)
+            </Typography>
+            <Typography level="body-xs" sx={{ mb: 1 }} color="neutral">
+              Provider cost split by what funded the credits, grouped by the week each spender signed up. Unattributed
+              is cost on zero-credit calls, on calls recorded before funding was stamped, and on calls whose funding
+              lookup failed; granted share leaves it out. Platform operations are shown separately and do not represent
+              a credit-holder charge.
+            </Typography>
+            {fundingCohortError ? (
+              <ErrorState message={fundingCohortError} onRetry={() => void fetchFundingCohort()} />
+            ) : (
+              <DataTable
+                label="Cost by funding source"
+                testId="margin-funding-cohort-table"
+                rows={fundingCohort?.rows ?? []}
+                getRowId={row => formatCohortWeek(row.cohortWeek)}
+                rowTestId={row => `margin-funding-cohort-row-${formatCohortWeek(row.cohortWeek)}`}
+                onRetry={() => void fetchFundingCohort()}
+                pagination={false}
+                empty={<EmptyState title="No usage events yet" action={null} />}
+                columns={[
+                  { id: 'week', label: 'Signup week', render: row => formatCohortWeek(row.cohortWeek) },
+                  { id: 'accounts', label: 'Accounts', numeric: true, render: row => row.accounts.toLocaleString() },
+                  { id: 'granted', label: 'Granted $', numeric: true, render: row => formatUsd(row.costUsd.granted) },
+                  {
+                    id: 'purchased',
+                    label: 'Purchased $',
+                    numeric: true,
+                    render: row => formatUsd(row.costUsd.purchased),
+                  },
+                  {
+                    id: 'subscription',
+                    label: 'Subscription $',
+                    numeric: true,
+                    render: row => formatUsd(row.costUsd.subscription),
+                  },
+                  { id: 'unknown', label: 'Unknown $', numeric: true, render: row => formatUsd(row.costUsd.unknown) },
+                  {
+                    id: 'platform',
+                    label: 'Platform operations $',
+                    numeric: true,
+                    width: '10rem',
+                    wrapHeader: true,
+                    render: row => (
+                      <span data-testid={`margin-funding-cohort-platform-${formatCohortWeek(row.cohortWeek)}`}>
+                        {formatUsd(row.platformCostUsd ?? 0)}
+                      </span>
+                    ),
+                  },
+                  {
+                    id: 'unattributed',
+                    label: 'Unattributed $',
+                    numeric: true,
+                    render: row => formatUsd(row.unattributedCostUsd),
+                  },
+                  {
+                    id: 'share',
+                    label: 'Granted share',
+                    numeric: true,
+                    render: row => (
+                      <span data-testid={`margin-funding-cohort-share-${formatCohortWeek(row.cohortWeek)}`}>
+                        {grantedShare(row.costUsd)}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            )}
           </Box>
         </Stack>
       )}
 
-      <Modal open={entryTarget !== null} onClose={() => !isSaving && setEntryTarget(null)}>
-        <ModalDialog data-testid="margin-invoice-modal" sx={{ minWidth: 360 }}>
-          <Typography level="title-md">
-            Invoice: {entryTarget?.provider} {entryTarget?.month}
-          </Typography>
-          {entryError && (
-            <Alert color="danger" size="sm" data-testid="margin-invoice-modal-error">
-              {entryError}
-            </Alert>
-          )}
-          <FormControl>
-            <FormLabel>Invoice total (USD)</FormLabel>
-            <Input
-              type="number"
-              value={entryUsd}
-              onChange={e => setEntryUsd(e.target.value)}
-              slotProps={{ input: { min: 0, step: 'any' } }}
-              data-testid="margin-invoice-usd-input"
-            />
-          </FormControl>
-          <FormControl>
-            <FormLabel>Note (invoice id and billing period)</FormLabel>
-            <Textarea
-              minRows={2}
-              value={entryNote}
-              onChange={e => setEntryNote(e.target.value)}
-              data-testid="margin-invoice-note-input"
-            />
-          </FormControl>
-          <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button variant="plain" color="neutral" disabled={isSaving} onClick={() => setEntryTarget(null)}>
-              Cancel
-            </Button>
-            <Button loading={isSaving} disabled={!entryValid} onClick={saveEntry} data-testid="margin-invoice-save-btn">
-              Save
-            </Button>
-          </Stack>
-        </ModalDialog>
-      </Modal>
+      <AdminDialog
+        open={entryTarget !== null}
+        onClose={() => !isSaving && setEntryTarget(null)}
+        title={`Invoice: ${entryTarget?.provider ?? ''} ${entryTarget?.month ?? ''}`}
+        width={440}
+        data-testid="margin-invoice-modal"
+      >
+        {entryError && (
+          <Alert color="danger" size="sm" data-testid="margin-invoice-modal-error">
+            {entryError}
+          </Alert>
+        )}
+        <FormControl>
+          <FormLabel>Invoice total (USD)</FormLabel>
+          <Input
+            type="number"
+            value={entryUsd}
+            onChange={e => setEntryUsd(e.target.value)}
+            slotProps={{ input: { min: 0, step: 'any' } }}
+            data-testid="margin-invoice-usd-input"
+          />
+        </FormControl>
+        <FormControl>
+          <FormLabel>Note (invoice id and billing period)</FormLabel>
+          <Textarea
+            minRows={2}
+            value={entryNote}
+            onChange={e => setEntryNote(e.target.value)}
+            data-testid="margin-invoice-note-input"
+          />
+        </FormControl>
+        <Stack direction="row" spacing={1} justifyContent="flex-end">
+          <Button variant="plain" color="neutral" disabled={isSaving} onClick={() => setEntryTarget(null)}>
+            Cancel
+          </Button>
+          <Button loading={isSaving} disabled={!entryValid} onClick={saveEntry} data-testid="margin-invoice-save-btn">
+            Save
+          </Button>
+        </Stack>
+      </AdminDialog>
     </Box>
   );
 };

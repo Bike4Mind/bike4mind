@@ -1,13 +1,20 @@
 import {
+  assertMeasuredProviderUsage,
+  getAbortAwareRetrySignal,
+  reportUsageOnAbort,
+  retryAbortAware,
+} from './abortAwareRetry';
+import {
+  BadRequestError,
+  EmptyConversationError,
   ChatModels,
   IMessage,
   ImageModels,
   ModelBackend,
   PermissionDeniedError,
   FIXED_TEMPERATURE_MODELS,
-  REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
+  MIN_OUTPUT_TOKENS,
   RESPONSES_API_TOOL_MODELS,
-  REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
   type ModelInfo,
   type ReasoningEffort,
@@ -15,9 +22,13 @@ import {
   type ToolStarted,
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
+import { assertEvaluationTextWire, assertEvaluationWireBound } from './evaluationTextWire';
+import { matchesOpenAIResponseModel } from './openaiModelIdentity';
+import { reconcileAfterDispatch } from './evaluationReconcile';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
 import OpenAI from 'openai';
+import { providerFetchOptions } from './providerDispatcher';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
   Response as OpenAIResponse,
@@ -29,7 +40,12 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
+import { WorkloadIdentityAuth } from 'openai/auth/workload-identity-auth';
+import { normalizeProviderCredential, type ProviderCredentialSpec } from './providerAuth';
+import { resolveCredentialBeforeSend } from './providerCredentialResolution';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
+import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
@@ -49,6 +65,7 @@ import {
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
+import { openAIEffortIncompatibleWithTools, supportsOpenAIReasoningEffort } from './openaiReasoning';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import {
@@ -61,7 +78,8 @@ import {
   ARTIFACT_REMOVED_PLACEHOLDER,
 } from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
-import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
+import { appendIdentityReminder, buildIdentityReminder, shouldOmitIdentityReminder } from './identityReminder';
+import { exchangeFetch, selectedWifTokenSource, subjectTokenSource } from './wifTokenSource';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -80,6 +98,7 @@ const O1_MODELS: string[] = [
 
 const GPT5_MODELS: string[] = [
   ChatModels.GPT5,
+  ChatModels.GPT5_2025_08_07,
   ChatModels.GPT5_MINI,
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_CHAT_LATEST,
@@ -116,29 +135,98 @@ const effortMap_GPT5_1_2 = {
 } as const;
 
 /**
- * Key-table value meaning "authenticate through OpenAI workload identity federation": the client is
+ * Trusted constructor sentinel meaning "authenticate through OpenAI workload identity federation": the client is
  * built from OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE, with
- * the subject token taken from the GitHub Actions OIDC endpoint (the job needs `id-token: write`).
+ * the subject token from the PROVIDER_WIF_TOKEN_SOURCE source (see wifTokenSource).
  */
-export const OPENAI_FEDERATED_KEY = 'federated';
+export const OPENAI_FEDERATED_KEY = Symbol('OPENAI_FEDERATED_KEY');
 
-/** A fresh GitHub Actions identity token for `audience`; the SDK calls this again on each exchange. */
-export async function githubActionsIdToken(audience: string): Promise<string> {
-  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  if (!url || !requestToken) {
-    throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not set; the job needs `id-token: write` permission');
+/** A token is exchanged again up front, before the call is sent, once less than this is left. */
+export const MIN_FEDERATED_TOKEN_LIFETIME_MS = 120_000;
+
+/**
+ * A retry inside one call reuses the call's token while at least this is left. Past it (a long
+ * call that is then retried) the retry exchanges again inside the request, as the SDK's own
+ * lazy exchange did; a failure there fails that attempt, never switches credential.
+ */
+const RETRY_TOKEN_MARGIN_MS = 30_000;
+
+type IssuedToken = { value: string; expiresAt: number };
+
+/** Exchanged OpenAI access tokens, with their expiry tracked from each exchange response. */
+class FederatedOpenAIToken {
+  private readonly auth: WorkloadIdentityAuth;
+  private expiresAt = 0;
+  private refreshing?: Promise<string>;
+
+  constructor(config: ConstructorParameters<typeof WorkloadIdentityAuth>[0]) {
+    this.auth = new WorkloadIdentityAuth(config, this.trackingFetch);
   }
-  const res = await fetch(`${url}&audience=${encodeURIComponent(audience)}`, {
-    headers: { Authorization: `Bearer ${requestToken}` },
-  });
-  if (!res.ok) throw new Error(`GitHub identity token request failed with status ${res.status}`);
-  const body = (await res.json()) as { value?: string };
-  if (!body.value) throw new Error('GitHub identity token response had no value');
-  return body.value;
+
+  /** A token with at least MIN_FEDERATED_TOKEN_LIFETIME_MS left, exchanging again when below. */
+  async fresh(): Promise<IssuedToken> {
+    const value = await this.freshValue();
+    return { value, expiresAt: this.expiresAt };
+  }
+
+  private freshValue(): Promise<string> {
+    if (this.expiresAt - Date.now() >= MIN_FEDERATED_TOKEN_LIFETIME_MS) return this.auth.getToken();
+    this.refreshing ??= (async () => {
+      try {
+        this.auth.invalidateToken();
+        return await this.auth.getToken();
+      } finally {
+        this.refreshing = undefined;
+      }
+    })();
+    return this.refreshing;
+  }
+
+  invalidate(): void {
+    this.expiresAt = 0;
+    this.auth.invalidateToken();
+  }
+
+  // Reads `expires_in` the way WorkloadIdentityAuth does (default 3600 s), timed slightly earlier.
+  private readonly trackingFetch: typeof fetch = async (input, init) => {
+    const issuedAt = Date.now();
+    const response = await exchangeFetch(input, init);
+    if (response.ok) {
+      const body: unknown = await response
+        .clone()
+        .json()
+        .catch(() => undefined);
+      const expiresIn =
+        typeof body === 'object' && body !== null && 'expires_in' in body && typeof body.expires_in === 'number'
+          ? body.expires_in
+          : 3600;
+      this.expiresAt = issuedAt + expiresIn * 1000;
+    }
+    return response;
+  };
 }
 
-function federatedOpenAIClient(): OpenAI {
+type FederatedOpenAI = { client: OpenAI; token: FederatedOpenAIToken };
+
+// One client per config so its exchanged-token cache outlives the per-request backend.
+const federatedOpenAIClients = new Map<string, FederatedOpenAI>();
+
+// The token the in-flight complete() call resolved before sending; see federatedOpenAIClient.
+const callToken = new AsyncLocalStorage<IssuedToken>();
+
+/**
+ * The client authenticates through a function `apiKey` rather than the SDK's `workloadIdentity`
+ * option, whose exchange runs lazily inside the request. The backend exchanges before a request
+ * is sent (OpenAIBackend.clientForNextRequest) and runs the call with that token in `callToken`;
+ * the SDK reads it on every attempt, exchanging again only for a retry the call's token would
+ * not outlive (RETRY_TOKEN_MARGIN_MS). A 401 is not retried (the request was sent); the backend
+ * drops the token so the next call exchanges again.
+ *
+ * The SDK stores the key on the shared client before building headers, so two concurrent calls
+ * can send each other's token. Both are live tokens of this one identity, so only which of them
+ * is sent can differ, never the credential kind.
+ */
+function federatedOpenAIClient(): FederatedOpenAI {
   const identityProviderId = process.env.OPENAI_IDENTITY_PROVIDER_ID;
   const serviceAccountId = process.env.OPENAI_SERVICE_ACCOUNT_ID;
   const audience = process.env.OPENAI_WIF_AUDIENCE;
@@ -147,16 +235,38 @@ function federatedOpenAIClient(): OpenAI {
       'OPENAI_IDENTITY_PROVIDER_ID, OPENAI_SERVICE_ACCOUNT_ID and OPENAI_WIF_AUDIENCE are required for federated OpenAI auth'
     );
   }
-  // apiKey: null keeps an OPENAI_API_KEY in the environment from colliding with workloadIdentity.
-  return new OpenAI({
-    apiKey: null,
-    workloadIdentity: {
+  const source = selectedWifTokenSource();
+  const cacheKey = JSON.stringify([identityProviderId, serviceAccountId, audience, source]);
+  let federated = federatedOpenAIClients.get(cacheKey);
+  if (!federated) {
+    const getSubjectToken = subjectTokenSource(source);
+    const token = new FederatedOpenAIToken({
       identityProviderId,
       serviceAccountId,
-      provider: { tokenType: 'jwt', getToken: () => githubActionsIdToken(audience) },
-    },
-  });
+      provider: { tokenType: 'jwt', getToken: () => getSubjectToken(audience) },
+      // No background refresh: its failure is an unawaited rejection. FederatedOpenAIToken
+      // exchanges again, on the awaited path before sending, once the token runs low.
+      refreshBufferSeconds: 0,
+    });
+    // A function apiKey never falls back to an OPENAI_API_KEY in the environment.
+    const client = new OpenAI({
+      apiKey: async () => {
+        const resolved = callToken.getStore();
+        if (resolved === undefined)
+          throw new Error('Federated OpenAI request sent without a token resolved before send');
+        if (resolved.expiresAt - Date.now() >= RETRY_TOKEN_MARGIN_MS) return resolved.value;
+        return (await token.fresh()).value;
+      },
+      fetchOptions: providerFetchOptions(),
+    });
+    federated = { client, token };
+    federatedOpenAIClients.set(cacheKey, federated);
+  }
+  return federated;
 }
+
+/** Silently raises a tiny budget to OpenAI's minimum on purpose; an unset (or 0) budget stays unset. */
+const floorOutputBudget = (maxTokens?: number) => (maxTokens ? Math.max(maxTokens, MIN_OUTPUT_TOKENS) : undefined);
 
 /**
  * A Responses stream closed with no terminal event and no abort (upstream cut the connection).
@@ -169,6 +279,56 @@ export class ResponsesStreamTruncatedError extends Error {
   }
 }
 
+// Tools return once after a first failed round so the model can retry or route around it; a second
+// failure drops them so a broken tool cannot loop to the cap. Capture `priorToolFailure` before the round runs.
+function keepToolsForNextRound(
+  anyMcpTool: boolean,
+  priorToolFailure: boolean,
+  toolsUsed: RecordableToolUse[]
+): boolean {
+  return anyMcpTool || (!priorToolFailure && toolsUsed.some(t => t.success === false));
+}
+
+async function consumeAbortAwareChatStream(
+  stream: AsyncIterable<ChatCompletionChunk>,
+  signal: AbortSignal,
+  callback: (text: string[], info: CompletionInfo) => Promise<void>
+): Promise<void> {
+  const texts: string[] = [];
+  let usage: ChatCompletionChunk['usage'];
+  let stopReason: string | undefined;
+  const completionInfo = (): CompletionInfo => {
+    if (!usage) return stopReason ? { stopReason } : {};
+    const cacheReads = cachedTokensFromUsage(usage as unknown as Record<string, unknown>);
+    return {
+      ...splitCacheInclusiveInput(usage.prompt_tokens, cacheReads),
+      outputTokens: usage.completion_tokens,
+      turnUsage: appendCacheInclusiveTurn(undefined, usage.prompt_tokens, cacheReads, usage.completion_tokens),
+      ...reasoningTokensField(reasoningTokensFromUsage(usage)),
+      ...(stopReason ? { stopReason } : {}),
+    };
+  };
+
+  try {
+    for await (const chunk of stream) {
+      if (chunk.usage) usage = chunk.usage;
+      for (const choice of chunk.choices) {
+        stopReason = normalizeOpenAIFinishReason(choice.finish_reason) ?? stopReason;
+        if (!signal.aborted && choice.delta.content) {
+          texts[choice.index] = (texts[choice.index] ?? '') + choice.delta.content;
+        }
+      }
+    }
+  } catch (error) {
+    if (usage) await callback([], completionInfo()).catch(() => undefined);
+    throw error;
+  }
+
+  if (signal.aborted) await reportUsageOnAbort(signal, callback, usage ? completionInfo() : undefined);
+  await callback(texts, completionInfo());
+  signal.throwIfAborted();
+}
+
 export class OpenAIBackend implements ICompletionBackend {
   private _api: OpenAI;
   private logger: Logger;
@@ -177,13 +337,81 @@ export class OpenAIBackend implements ICompletionBackend {
   // OpenAI can attribute abuse to an individual user and scope enforcement to
   // them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  private readonly credential: ProviderCredentialSpec;
+  // The federated client, or why it could not be built (then each request falls back).
+  private federated?: FederatedOpenAI;
+  private federationSetupError: unknown;
+  private staticApi?: OpenAI;
+  // The client the in-flight complete() call resolved; see clientForNextRequest.
+  private readonly requestClient = new AsyncLocalStorage<OpenAI>();
+
+  /** The client to send on: the current call's resolved client, else the constructor's. */
+  private get api(): OpenAI {
+    return this.requestClient.getStore() ?? this._api;
+  }
   /** Catalog view of the model being completed; see DispatchModel. */
   private readonly _dispatch = new DispatchModel();
 
-  constructor(apiKey: string, logger?: Logger, endUserId?: string) {
-    this._api = apiKey === OPENAI_FEDERATED_KEY ? federatedOpenAIClient() : new OpenAI({ apiKey });
+  constructor(
+    apiKey: string | typeof OPENAI_FEDERATED_KEY | ProviderCredentialSpec,
+    logger?: Logger,
+    endUserId?: string
+  ) {
+    this.credential = normalizeProviderCredential(apiKey, OPENAI_FEDERATED_KEY);
+    this._api = this.initialClient(this.credential);
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
+  }
+
+  private initialClient(credential: ProviderCredentialSpec): OpenAI {
+    if (credential.kind !== 'federated') return this.staticClient(credential.key);
+    try {
+      this.federated = federatedOpenAIClient();
+      return this.federated.client;
+    } catch (err) {
+      // Without a fallback key a misconfigured federation is a hard error, as before.
+      if (credential.fallbackKey === null) throw err;
+      this.federationSetupError = err;
+      return this.staticClient(credential.fallbackKey);
+    }
+  }
+
+  private staticClient(apiKey: string): OpenAI {
+    this.staticApi ??= new OpenAI({ apiKey, fetchOptions: providerFetchOptions() });
+    return this.staticApi;
+  }
+
+  /** True when this backend was told to authenticate through workload identity federation. */
+  private get usesFederatedCredentials(): boolean {
+    return this.credential.kind === 'federated';
+  }
+
+  /**
+   * Fix the credential for the next request and return the client that matches it. Runs
+   * before anything is sent; see ResolvedProviderCredential for why a later failure never
+   * falls back. The exchange itself is forced here via the shared WorkloadIdentityAuth.
+   */
+  private async clientForNextRequest(signal?: AbortSignal): Promise<{ client: OpenAI; token?: IssuedToken }> {
+    const federated = this.federated;
+    let token: IssuedToken | undefined;
+    const resolved = await resolveCredentialBeforeSend({
+      provider: 'openai',
+      spec: this.credential,
+      setupError: this.federationSetupError,
+      exchange: async () => {
+        token = await federated?.token.fresh();
+      },
+      logger: this.logger,
+      signal,
+    });
+    // A static or user key keeps the constructor's client; `_api` itself is never reassigned, so
+    // concurrent calls on this instance each send on the client their own credential resolved.
+    if (resolved.kind === 'static_fallback') return { client: this.staticClient(resolved.key) };
+    if (resolved.kind !== 'federated') return { client: this._api };
+    if (!federated || token === undefined) {
+      throw new Error('Federated OpenAI credential resolved without a federated client');
+    }
+    return { client: federated.client, token };
   }
 
   setDispatchModel(info: ModelInfo): void {
@@ -219,6 +447,7 @@ export class OpenAIBackend implements ICompletionBackend {
     return [
       {
         id: ChatModels.GPT4_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1',
         backend: ModelBackend.OpenAI,
@@ -245,6 +474,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Mini',
         backend: ModelBackend.OpenAI,
@@ -270,6 +500,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_1_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4.1 Nano',
         backend: ModelBackend.OpenAI,
@@ -339,6 +570,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.O3,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'O3',
         backend: ModelBackend.OpenAI,
@@ -453,6 +685,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // rate applies once the prompt exceeds 272k input tokens (long context).
       {
         id: ChatModels.GPT5_6_SOL,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Sol',
         backend: ModelBackend.OpenAI,
@@ -478,6 +711,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_TERRA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Terra',
         backend: ModelBackend.OpenAI,
@@ -501,6 +735,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_6_LUNA,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.6 Luna',
         backend: ModelBackend.OpenAI,
@@ -526,6 +761,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.5
       {
         id: ChatModels.GPT5_5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.5',
         backend: ModelBackend.OpenAI,
@@ -551,6 +787,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.4
       {
         id: ChatModels.GPT5_4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4',
         backend: ModelBackend.OpenAI,
@@ -574,6 +811,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Mini',
         backend: ModelBackend.OpenAI,
@@ -596,6 +834,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_4_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.4 Nano',
         backend: ModelBackend.OpenAI,
@@ -620,6 +859,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.2
       {
         id: ChatModels.GPT5_2,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.2',
         backend: ModelBackend.OpenAI,
@@ -667,6 +907,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT 5.1
       {
         id: ChatModels.GPT5_1,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5.1',
         backend: ModelBackend.OpenAI,
@@ -715,6 +956,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // GPT-5 Family
       {
         id: ChatModels.GPT5,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5',
         backend: ModelBackend.OpenAI,
@@ -738,6 +980,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Mini',
         backend: ModelBackend.OpenAI,
@@ -760,6 +1003,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT5_NANO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-5 Nano',
         backend: ModelBackend.OpenAI,
@@ -806,6 +1050,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o',
         backend: ModelBackend.OpenAI,
@@ -826,6 +1071,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4o_MINI,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4o Mini',
         backend: ModelBackend.OpenAI,
@@ -846,6 +1092,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4_TURBO,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4 Turbo',
         backend: ModelBackend.OpenAI,
@@ -866,6 +1113,7 @@ export class OpenAIBackend implements ICompletionBackend {
       },
       {
         id: ChatModels.GPT4,
+        isSuperseded: true,
         type: 'text' as const,
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
@@ -908,6 +1156,7 @@ export class OpenAIBackend implements ICompletionBackend {
           'OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 10,
         deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
+        replacedBy: ImageModels.GPT_IMAGE_2,
       },
       {
         id: ImageModels.GPT_IMAGE_1_5,
@@ -1028,6 +1277,36 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const retrySignal = getAbortAwareRetrySignal(options, true);
+    if (retrySignal && this.usesFederatedCredentials) {
+      throw new Error('Abort-aware completion retries do not support federated credentials');
+    }
+    const { client, token } = await this.clientForNextRequest(options.abortSignal);
+    const run = () =>
+      this.requestClient.run(client, () =>
+        this.completeWithResolvedCredential(model, messages, options, callback, toolsUsed)
+      );
+    try {
+      return await (token === undefined ? run() : callToken.run(token, run));
+    } catch (err) {
+      // The provider rejected an issued token (e.g. revoked early): never resend, but stop
+      // serving that token from the cache.
+      if (err instanceof OpenAI.AuthenticationError && this.federated?.client === client) {
+        this.federated.token.invalidate();
+      }
+      throw err;
+    }
+  }
+
+  private async completeWithResolvedCredential(
+    model: string,
+    messages: IMessage[],
+    options: Partial<ICompletionOptions>,
+    callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
+    toolsUsed: Array<RecordableToolUse> = []
+  ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
+    const retrySignal = getAbortAwareRetrySignal(options, true);
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -1120,13 +1399,15 @@ export class OpenAIBackend implements ICompletionBackend {
       model,
       messages: this.formatMessages(messages, isO1Model, model, options),
       temperature: options.temperature ?? 0.9,
+      // Explicit even though Chat Completions defaults to false, so a default change cannot start retaining requests.
+      store: false,
       // Attribute the request to the end user (opaque, non-PII) so OpenAI can
       // scope abuse enforcement to them instead of the shared platform key.
       ...(this._endUserId ? { safety_identifier: this._endUserId } : {}),
     };
 
     // Add parameters conditionally based on model type
-    const supportsReasoning = REASONING_SUPPORTED_MODELS.has(model);
+    const supportsReasoning = supportsOpenAIReasoningEffort(this._dispatch.for(model), model);
     // A reasoning model that is only known through the catalog is not in
     // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
     // Losing temperature control on a model that would have accepted it is
@@ -1144,7 +1425,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(requiresFixedTemp && { temperature: 1.0 }),
         stream: true,
         stream_options: { include_usage: true },
-        ...(options.maxTokens && { max_completion_tokens: options.maxTokens }),
+        ...(options.maxTokens && { max_completion_tokens: floorOutputBudget(options.maxTokens) }),
       });
 
       // Only add reasoning_effort for models that support it (o1-preview/o1-mini do not).
@@ -1153,7 +1434,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // /v1/responses, dropping reasoning_effort keeps tool calling functional.
       const toolsPresent = !!options.tools?.length;
       const reasoningEffortIncompatibleWithTools =
-        toolsPresent && REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS.has(model);
+        toolsPresent && openAIEffortIncompatibleWithTools(this._dispatch.for(model), model);
 
       if (supportsReasoning && !reasoningEffortIncompatibleWithTools) {
         // Determine reasoning effort: explicit setting takes precedence over auto-classification
@@ -1178,10 +1459,10 @@ export class OpenAIBackend implements ICompletionBackend {
         }
       } else if (supportsReasoning && reasoningEffortIncompatibleWithTools) {
         // `supportsReasoning` is re-checked here so the log only fires for models
-        // where `reasoning_effort` would otherwise have been set. Today the set
-        // invariant (REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS is a subset of
-        // REASONING_SUPPORTED_MODELS) makes the two checks equivalent, but the
-        // explicit conjunction prevents a noisy log if that invariant ever drifts.
+        // where `reasoning_effort` would otherwise have been set. The id sets keep
+        // incompatible a subset of supported, but a catalog row can state
+        // effortIncompatibleWithTools on a model it never marked reasoning, so the
+        // explicit conjunction is load-bearing.
         this.logger.debug(
           `Skipping reasoning_effort for ${model}: function tools present, ` +
             `OpenAI rejects this combination on /v1/chat/completions (requires /v1/responses).`
@@ -1201,7 +1482,7 @@ export class OpenAIBackend implements ICompletionBackend {
         presence_penalty: options.presencePenalty,
         frequency_penalty: options.frequencyPenalty,
         stream: useStreaming,
-        max_tokens: options.maxTokens,
+        max_tokens: floorOutputBudget(options.maxTokens),
         ...(useStreaming && { stream_options: { include_usage: true } }),
       });
     }
@@ -1242,25 +1523,89 @@ export class OpenAIBackend implements ICompletionBackend {
       (parameters as any).response_format = { type: 'text' };
     }
 
+    if (options.retryMode === 'single-attempt') {
+      parameters.stream = false;
+      delete parameters.stream_options;
+    }
+
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
+    const evaluation = options._internal?.evaluation;
+    if (evaluation) {
+      const info = this._dispatch.for(model);
+      if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+      parameters.stream = false;
+      delete parameters.stream_options;
+      assertEvaluationTextWire(parameters);
+      assertEvaluationWireBound(parameters, info.contextWindow);
+      await evaluation.admit(info, parameters.model, parameters.max_completion_tokens ?? parameters.max_tokens ?? 0);
+    }
     // Wrap with retry for transient network errors (TLS abort, fetch terminated)
-    const response = await withRetry(
-      () =>
-        this._api.chat.completions.create(parameters as ChatCompletionCreateParams, {
-          signal: options.abortSignal,
-        }),
-      {
-        maxRetries: 3,
-        initialDelayMs: 500,
-        maxDelayMs: 10000,
-        jitterFactor: 0.25,
-        isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-        logger: this.logger,
-        abortSignal: options.abortSignal,
-        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+    const response = retrySignal
+      ? await retryAbortAware(
+          () =>
+            this.api.chat.completions.create(parameters as ChatCompletionCreateParams, {
+              signal: retrySignal,
+              maxRetries: 0,
+            }),
+          retrySignal,
+          {
+            ...(options.retryMode === 'single-attempt' ? { maxAttempts: 1 } : {}),
+            onRetry: ({ error, delayMs }) => {
+              this.logger.warn('Retrying OpenAI completion', { model, delayMs });
+              options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
+            },
+          }
+        )
+      : await withRetry(
+          () =>
+            this.api.chat.completions.create(parameters as ChatCompletionCreateParams, {
+              signal: options.abortSignal,
+              ...(evaluation ? { maxRetries: 0 } : {}),
+            }),
+          {
+            maxRetries: evaluation ? 0 : 3,
+            initialDelayMs: 500,
+            maxDelayMs: 10000,
+            jitterFactor: 0.25,
+            isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+            logger: this.logger,
+            abortSignal: options.abortSignal,
+            onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+          }
+        ).then(r => r.result);
+    if (options.retryMode === 'single-attempt' && !(response instanceof Stream)) {
+      if (!matchesOpenAIResponseModel(parameters.model, response.model))
+        throw new Error('Provider response model identity is unverified');
+      const cached = response.usage?.prompt_tokens_details?.cached_tokens;
+      assertMeasuredProviderUsage({
+        inputTokens: response.usage?.prompt_tokens,
+        outputTokens: response.usage?.completion_tokens,
+        ...(cached !== undefined ? { cacheReadInputTokens: cached } : {}),
+      });
+      if ((cached ?? 0) > (response.usage?.prompt_tokens ?? 0))
+        throw new Error('Provider response contained invalid measured cache usage');
+      if (!retrySignal?.aborted && response.usage) {
+        const measured = splitCacheInclusiveInput(response.usage.prompt_tokens, cached ?? 0);
+        await callback([], {
+          ...measured,
+          outputTokens: response.usage.completion_tokens,
+          turnUsage: appendCacheInclusiveTurn(
+            undefined,
+            response.usage.prompt_tokens,
+            cached ?? 0,
+            response.usage.completion_tokens
+          ),
+        });
       }
-    ).then(r => r.result);
+    }
+
+    if (retrySignal && response instanceof Stream) {
+      // Reasoning models can use an internal stream even with stream:false.
+      await consumeAbortAwareChatStream(response, retrySignal, callback);
+      return;
+    }
+
     // Non-streaming: the full response is back here. Streaming: reassigned once the stream is drained.
     let modelDoneAt = Date.now();
     let inputTokens = 0;
@@ -1268,6 +1613,39 @@ export class OpenAIBackend implements ICompletionBackend {
     let reasoningTokens: number | undefined;
 
     if (!(response instanceof Stream)) {
+      if (retrySignal?.aborted) {
+        const usage = response.usage;
+        const turnUsage = usage
+          ? appendCacheInclusiveTurn(
+              undefined,
+              usage.prompt_tokens,
+              cachedTokensFromUsage(usage as unknown as Record<string, unknown>),
+              usage.completion_tokens
+            )
+          : undefined;
+        await reportUsageOnAbort(retrySignal, callback, turnUsage ? { ...turnUsage[0], turnUsage } : undefined);
+      }
+      if (evaluation) {
+        const answered = response;
+        await reconcileAfterDispatch(
+          evaluation,
+          () => {
+            const usage = answered.usage;
+            if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+            const cachedTokens = usage.prompt_tokens_details?.cached_tokens;
+            const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens;
+            if (cachedTokens === undefined || reasoningTokens === undefined)
+              throw new Error('Evaluation cache or reasoning usage missing');
+            return {
+              inputTokens: usage.prompt_tokens,
+              outputTokens: usage.completion_tokens,
+              cacheReadTokens: cachedTokens,
+              reasoningTokens,
+            };
+          },
+          this.logger
+        );
+      }
       const streamedText: string[] = [];
       const turnCacheReadTokens = cachedTokensFromUsage(
         response.usage as unknown as Record<string, unknown> | undefined
@@ -1282,7 +1660,7 @@ export class OpenAIBackend implements ICompletionBackend {
       for (const c of response.choices) {
         if (!c.message) continue;
 
-        if (c.message.tool_calls && c.message.tool_calls.length > 0) {
+        if (!retrySignal && c.message.tool_calls && c.message.tool_calls.length > 0) {
           // Track all tools first
           for (const toolCall of c.message.tool_calls) {
             if (toolCall.type !== 'function') continue;
@@ -1399,6 +1777,11 @@ export class OpenAIBackend implements ICompletionBackend {
             for (const outcome of outcomes) {
               if (!outcome.ok) {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+                this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+                  toolName: outcome.name,
+                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                });
                 const errorMsg = stripToolArtifactMarkup(
                   `Error processing ${outcome.name} tool: ${
                     outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
@@ -1498,19 +1881,17 @@ export class OpenAIBackend implements ICompletionBackend {
               return;
             }
 
-            // Keep tools available for MCP tools (enables chaining); remove for built-in tools
+            const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
             // call is billed independently - accumulating is required for
             // correct credit attribution).
             await this.complete(
               model,
-              // Tracks the tools decision on the next line: this branch keeps tools only for MCP
-              // chaining, so on the built-in-tool path the tool-dependent prompts have to go too.
-              anyMcpTool ? messages : stripToolDependentMessages(messages),
+              keepTools ? messages : stripToolDependentMessages(messages),
               {
                 ...options,
-                tools: anyMcpTool ? options.tools : undefined,
+                tools: keepTools ? options.tools : undefined,
                 // First-turn-only tool_choice: after tools run, let the model synthesize.
                 tool_choice: 'auto',
                 _internal: {
@@ -1605,6 +1986,7 @@ export class OpenAIBackend implements ICompletionBackend {
         ...(finishReason ? { stopReason: finishReason } : {}),
       };
       await callback(streamedText, completionInfo);
+      retrySignal?.throwIfAborted();
       return;
     }
 
@@ -1864,7 +2246,7 @@ export class OpenAIBackend implements ICompletionBackend {
               }
         );
 
-        // See the streaming branch above for why the shared artifactGuard exists.
+        // See the non-streaming branch above for why the shared artifactGuard exists.
         const inheritedArtifactGuard = options._internal?.artifactGuard;
         let artifactGuard = inheritedArtifactGuard;
 
@@ -1873,9 +2255,15 @@ export class OpenAIBackend implements ICompletionBackend {
         // chaining: the model needs tools available to retry or continue the chain.
         const anyMcpTool = resolvedTools.some(t => t.isMcpTool);
 
+        const roundMessagesStart = messages.length;
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+            this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+              toolName: outcome.name,
+              error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+            });
             const errorMsg = stripToolArtifactMarkup(
               `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
               ARTIFACT_REMOVED_PLACEHOLDER
@@ -1924,7 +2312,7 @@ export class OpenAIBackend implements ICompletionBackend {
             declaredArtifactType(options.tools, outcome.name)
           );
 
-          // Same echo guard as the streaming path above.
+          // Same echo guard as the non-streaming branch above.
           const sanitizedResult = stripToolArtifactMarkup(
             resultStr,
             thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
@@ -1938,6 +2326,8 @@ export class OpenAIBackend implements ICompletionBackend {
             sanitizedResult
           );
         }
+
+        attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
         const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
         logToolRound(this.logger, {
@@ -1969,16 +2359,16 @@ export class OpenAIBackend implements ICompletionBackend {
           return;
         }
 
-        // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
+        const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
         // Carry this turn's tokens forward so the recursive call's emits carry the full
         // multi-turn billable total (each OpenAI API call is billed independently -
         // accumulating is required for correct credit attribution).
         await this.complete(
           model,
-          messages,
+          keepTools ? messages : stripToolDependentMessages(messages),
           {
             ...options,
-            tools: anyMcpTool ? options.tools : undefined,
+            tools: keepTools ? options.tools : undefined,
             // First-turn-only tool_choice: after tools run, let the model synthesize.
             tool_choice: 'auto',
             _internal: {
@@ -2001,7 +2391,7 @@ export class OpenAIBackend implements ICompletionBackend {
           toolsUsed
         );
 
-        // See the streaming branch above for why only a guard this level created is flushed.
+        // See anthropicBackend for why only a guard this level created is flushed.
         if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // Pass tool calls through callback without executing.
@@ -2046,10 +2436,14 @@ export class OpenAIBackend implements ICompletionBackend {
     // The only synthesized text is the shared identity reminder, placed last to mirror the
     // Anthropic adapters. Bare-completion contract (API promptMode raw): synthesize
     // nothing, so the lead message is exactly the caller's own system text, or absent
-    // entirely. Must stay in sync with the same flag in anthropicBackend / bedrockBackend.
-    const mergedContent = options.omitIdentityReminder
+    // entirely. Also omitted while current_model_details is on the request (see
+    // shouldOmitIdentityReminder). Must stay in sync with anthropicBackend / bedrockBackend.
+    const mergedContent = shouldOmitIdentityReminder(options)
       ? callerSystem
-      : appendIdentityReminder(callerSystem, buildIdentityReminder(model, options.modelDisplayName));
+      : appendIdentityReminder(
+          callerSystem,
+          buildIdentityReminder(options.modelIdentityId ?? model, options.modelDisplayName)
+        );
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -2059,6 +2453,17 @@ export class OpenAIBackend implements ICompletionBackend {
     // Convert B4M standard format (tool_use/tool_result) to OpenAI format (tool_calls/role:tool).
     // Exclude system messages from the body - they are now consolidated into systemMessage above.
     const nonSystemMessages = filteredMessages.filter(m => m.role !== 'system');
+    const hasEffectiveMessage = nonSystemMessages.some(message =>
+      'tool_calls' in message && Array.isArray(message.tool_calls) && message.tool_calls.length > 0
+        ? true
+        : typeof message.content === 'string'
+          ? message.content.trim().length > 0
+          : Array.isArray(message.content) &&
+            message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
+    );
+    if (!hasEffectiveMessage) {
+      throw new EmptyConversationError();
+    }
     const convertedMessages = convertMessagesToOpenAIFormat(nonSystemMessages);
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];
 
@@ -2194,6 +2599,7 @@ export class OpenAIBackend implements ICompletionBackend {
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
+    const priorToolFailure = toolsUsed.some(t => t.success === false);
     const toolCallCount = options._internal?.toolCallCount ?? 0;
     // Always set by complete() before it routes here.
     const requestStartedAt = options._internal?.requestStartedAt ?? Date.now();
@@ -2224,7 +2630,7 @@ export class OpenAIBackend implements ICompletionBackend {
             },
           }
         : {}),
-      ...(options.maxTokens ? { max_output_tokens: options.maxTokens } : {}),
+      ...(options.maxTokens ? { max_output_tokens: floorOutputBudget(options.maxTokens) } : {}),
       ...(mapToolChoiceForResponses(options.tool_choice) !== undefined
         ? { tool_choice: mapToolChoiceForResponses(options.tool_choice) }
         : {}),
@@ -2235,16 +2641,28 @@ export class OpenAIBackend implements ICompletionBackend {
     // iteration below and is not retried (mirrors the chat streaming path).
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
-    const stream = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
-      maxRetries: 3,
-      initialDelayMs: 500,
-      maxDelayMs: 10000,
-      jitterFactor: 0.25,
-      isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
-      logger: this.logger,
-      abortSignal: options.abortSignal,
-      onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
-    }).then(r => r.result);
+    const evaluation = options._internal?.evaluation;
+    if (evaluation) {
+      const info = this._dispatch.for(model);
+      if (!info) throw new BadRequestError('Evaluation model metadata missing.');
+      assertEvaluationTextWire(params);
+      assertEvaluationWireBound(params, info.contextWindow);
+      await evaluation.admit(info, params.model ?? '', params.max_output_tokens ?? 0);
+    }
+    const stream = await withRetry(
+      () =>
+        this.api.responses.create(params, { signal: options.abortSignal, ...(evaluation ? { maxRetries: 0 } : {}) }),
+      {
+        maxRetries: evaluation ? 0 : 3,
+        initialDelayMs: 500,
+        maxDelayMs: 10000,
+        jitterFactor: 0.25,
+        isRetryable: err => isRetryableError(err) && !isUserInitiatedAbort(err, options.abortSignal),
+        logger: this.logger,
+        abortSignal: options.abortSignal,
+        onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
+      }
+    ).then(r => r.result);
 
     // Stream text deltas live; capture the terminal Response for usage + tool handling.
     // Usage is only known at the terminal event, so per-delta emits carry the running
@@ -2306,6 +2724,27 @@ export class OpenAIBackend implements ICompletionBackend {
       throw new ResponsesStreamTruncatedError(model);
     }
 
+    if (evaluation) {
+      const answered = finalResponse;
+      await reconcileAfterDispatch(
+        evaluation,
+        () => {
+          const usage = answered.usage;
+          if (!usage || answered.model !== model) throw new Error('Evaluation provider identity or usage missing');
+          const cachedTokens = usage.input_tokens_details?.cached_tokens;
+          const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
+          if (cachedTokens === undefined || reasoningTokens === undefined)
+            throw new Error('Evaluation cache or reasoning usage missing');
+          return {
+            inputTokens: usage.input_tokens,
+            outputTokens: usage.output_tokens,
+            cacheReadTokens: cachedTokens,
+            reasoningTokens,
+          };
+        },
+        this.logger
+      );
+    }
     inputTokens = finalResponse.usage?.input_tokens ?? 0;
     outputTokens = finalResponse.usage?.output_tokens ?? 0;
     const reasoningTokens = reasoningTokensFromUsage(finalResponse.usage);
@@ -2419,10 +2858,11 @@ export class OpenAIBackend implements ICompletionBackend {
     // know an artifact was delivered THAT way, or it can't recognize the model reconstructing the
     // same tag from the tool call's own arguments (it retains them in context) as an echo when it
     // shows up in the synthesis reply below - so markDelivered records the markup without
-    // re-sending it. See the streaming branch above for why the shared artifactGuard exists.
+    // re-sending it. See the non-streaming branch above for why the shared artifactGuard exists.
     const inheritedArtifactGuard = options._internal?.artifactGuard;
     let artifactGuard = inheritedArtifactGuard;
 
+    const roundMessagesStart = messages.length;
     for (let i = 0; i < batchOutcomes.length; i++) {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
@@ -2440,6 +2880,11 @@ export class OpenAIBackend implements ICompletionBackend {
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+        // The tool layer leaves the failure log to the adapter: warn for expected refusals, error otherwise.
+        this.logger[toolFailureLogLevel(outcome.error)]('[Tool Execution] Tool failed', {
+          toolName: r.name,
+          error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+        });
         const errorMsg = stripToolArtifactMarkup(
           `Error processing ${r.name} tool: ${
             outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
@@ -2450,6 +2895,8 @@ export class OpenAIBackend implements ICompletionBackend {
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }
+
+    attachPreToolText(messages, roundMessagesStart, streamedRoundText);
 
     const anyMcpTool = resolved.some(r => r.isMcpTool);
 
@@ -2490,13 +2937,14 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Recurse. Tool results are now in `messages`; carry this turn's tokens forward so
     // the terminal emit reports the full multi-turn billable total. Drop tools for the
-    // synthesis turn (unless MCP, which chains) - mirrors the chat path.
+    // synthesis turn (unless MCP, which chains, or a first failure) - mirrors the chat path.
+    const keepTools = keepToolsForNextRound(anyMcpTool, priorToolFailure, toolsUsed);
     await this.complete(
       model,
-      messages,
+      keepTools ? messages : stripToolDependentMessages(messages),
       {
         ...options,
-        tools: anyMcpTool ? options.tools : undefined,
+        tools: keepTools ? options.tools : undefined,
         tool_choice: 'auto',
         _internal: {
           ...options._internal,
@@ -2513,7 +2961,7 @@ export class OpenAIBackend implements ICompletionBackend {
       toolsUsed
     );
 
-    // See the streaming branch above for why only a guard this level created is flushed.
+    // See anthropicBackend for why only a guard this level created is flushed.
     if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
   }
 }

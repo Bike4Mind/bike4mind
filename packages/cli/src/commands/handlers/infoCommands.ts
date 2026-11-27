@@ -29,6 +29,7 @@ Available commands:
   /usage - Show credit usage and balance
   /save <name> - Save current session
   /resume - List and resume saved sessions
+  /peers - Discover and message opted-in local CLI sessions
   /config - Show configuration
   /model [id-or-name] - Switch the active model (opens a picker, or matches an argument)
 
@@ -57,7 +58,9 @@ Terminal Setup:
 
 Keyboard Shortcuts:
   Ctrl+C          - Press twice to exit
-  Esc             - Abort current operation
+  Esc             - Abort current operation (queued messages return to the input)
+  Enter (busy)    - Steer the running turn with the message
+  Tab (busy)      - Queue the message to run as the next turn
   Shift+Tab       - Toggle auto-accept edits
   Ctrl+U          - Clear current line
   Ctrl+K          - Clear from cursor to end of line

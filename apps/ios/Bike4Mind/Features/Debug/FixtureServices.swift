@@ -1,0 +1,683 @@
+#if DEBUG
+  import B4MKit
+  import Foundation
+
+  /// Launch with the environment variable `B4M_UI_FIXTURES=1` to run the signed-in UI against canned data:
+  /// no sign-in, no network. For screenshots and UI work while a stage with the endpoints is unavailable.
+  enum FixtureServices {
+    /// Also accepts the launch argument `-B4M_UI_FIXTURES 1` (Maestro's `launchApp.arguments`), which lands in the
+    /// UserDefaults argument domain, because the Maestro suite cannot set environment variables.
+    static var isEnabled: Bool {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURES"] == "1"
+        || UserDefaults.standard.string(forKey: "B4M_UI_FIXTURES") == "1"
+    }
+
+    static let api: any B4MAPI = FixtureAPI()
+    static let media: any MediaAPI = FixtureMediaAPI()
+    static let studio: any StudioAPI = FixtureStudioAPI()
+    /// "Uploads" a frame by returning a fixture image, so the grab-a-frame flow runs offline.
+    static let frameUploader = FrameUploader(
+      capture: FixtureUploader(), media: media, put: { _, _, _ in }, sleep: { _ in })
+    static let realtime = FixtureRealtime()
+    static let pushTokenAPI: any PushTokenAPI = NoopPushTokenAPI()
+    static let agentRunAPI: any AgentRunAPI = FixtureAgentRunAPI()
+    static let account: any AccountAPI = FixtureAccountAPI()
+    static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
+    static let stepUp: any StepUpAPI = FixtureStepUpAPI()
+    static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
+    static let busyBlocks: any BusyBlocksAPI = FixtureBusyBlocksAPI()
+    static let interruptionFeedback: any InterruptionFeedbackAPI = FixtureInterruptionFeedbackAPI()
+    static let briefAPI: any BriefAPI = FixtureBriefAPI()
+    static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
+    /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
+    static let workingQuestID = "fixture-0-q4"
+
+    /// `B4M_UI_FIXTURE_LINK` opens an app link at launch (e.g. `https://app.bike4mind.com/notebooks/fixture-1`),
+    /// so a screenshot run can land on a screen without driving taps.
+    static var initialLink: URL? {
+      ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_LINK"].flatMap(URL.init(string:))
+    }
+
+    /// `B4M_UI_FIXTURE_ACCOUNT` picks the account-deletion story: `org-transfer` (the 409 list),
+    /// `pending` (launch on the restore screen) or the default (deletion succeeds and signs out).
+    enum AccountScenario: String {
+      case success, orgTransfer = "org-transfer", pending
+    }
+
+    static var accountScenario: AccountScenario {
+      AccountScenario(rawValue: ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_ACCOUNT"] ?? "") ?? .success
+    }
+
+    /// One ready brief with pending, lapsed and replaced approvals and an open question; composing a new one "takes" a few seconds, then returns it.
+    private struct FixtureBriefAPI: BriefAPI {
+      private static let brief: Brief = {
+        let now = Date()
+        return Brief(
+          id: "fixture", status: .ready, createdAt: now, composedAt: now,
+          periodStart: now.addingTimeInterval(-86_400), periodEnd: now,
+          headline: "Two agents finished overnight and one is waiting on you.",
+          happened: [
+            BriefItem(id: "h1", text: "The weekly metrics notebook picked up 14 new rows from the shared drive."),
+            BriefItem(id: "h2", text: "A 3-minute product walkthrough video finished generating."),
+          ],
+          handled: [
+            BriefItem(id: "d1", text: "The research agent summarized 6 articles into the Reading notebook."),
+            BriefItem(id: "d2", text: "Two draft replies were saved for your review."),
+          ],
+          decisions: [
+            BriefDecision(
+              id: "n1", text: "The release agent wants to open a pull request with the changelog update.",
+              approval: BriefApprovalRef(
+                questID: "fixture-0-q4", sessionID: "fixture-0", pendingActionTs: 1_700_000_000_000,
+                state: .pending)),
+            BriefDecision(
+              id: "n2", text: "The cleanup agent wanted to archive three notebooks untouched for 90 days.",
+              approval: BriefApprovalRef(
+                questID: "fixture-1-q2", sessionID: "fixture-1", pendingActionTs: 1_699_990_000_000,
+                state: .lapsed)),
+            BriefDecision(
+              id: "n3", text: "The calendar agent asked to send a meeting invite.",
+              approval: BriefApprovalRef(
+                questID: "fixture-2-q3", sessionID: "fixture-2", pendingActionTs: 1_699_980_000_000,
+                state: .replaced)),
+            BriefDecision(
+              id: "n4", text: "The research agent asked which topic to dig into next.",
+              question: BriefQuestionRef(
+                questID: "fixture-3-q1", sessionID: "fixture-3", options: ["Pricing", "Competitors"], state: .open)),
+          ])
+      }()
+
+      func compose() async throws -> Brief {
+        try await Task.sleep(for: .seconds(2))
+        return Self.brief
+      }
+
+      /// `B4M_UI_FIXTURE_BRIEF`: `composing` never finishes (the poll times out), `offline` is composing and
+      /// then every poll fails; anything else is the ready brief.
+      private static let scenario = ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_BRIEF"] ?? ""
+
+      private static var stuck: Brief {
+        Brief(
+          id: "fixture-stuck", status: .composing, createdAt: Date(), periodStart: Date(), periodEnd: Date())
+      }
+
+      func list() async throws -> [Brief] {
+        Self.scenario == "composing" || Self.scenario == "offline" ? [Self.stuck] : [Self.brief]
+      }
+
+      func brief(id: String) async throws -> Brief {
+        switch Self.scenario {
+        case "composing": return Self.stuck
+        case "offline":
+          // The first open (by the link's id) finds it composing; the polls by its own id then fail.
+          if id == Self.stuck.id { throw APIError.offline }
+          return Self.stuck
+        default: return FixtureAnswers.applied(to: Self.brief)
+        }
+      }
+
+      func reply(
+        briefID: String, decisionID: String, text: String, choiceIndex: Int?
+      ) async throws -> BriefReplyResult {
+        try await Task.sleep(for: .seconds(1))
+        FixtureAnswers.recordReply(decisionID: decisionID)
+        return BriefReplyResult(executionID: "fixture-run", sessionID: "fixture-3")
+      }
+    }
+
+    /// One saved instruction, kept in memory for the session.
+    private actor FixtureInstructionAPI: InstructionAPI {
+      private var instructions = [
+        AssistantInstruction(
+          id: "fixture-instruction-1", text: "Always lead with anything about invoices.", createdAt: Date())
+      ]
+
+      func list() async throws -> [AssistantInstruction] { instructions }
+
+      func add(text: String) async throws -> AssistantInstruction {
+        guard instructions.count < AssistantInstruction.maxCount else { throw InstructionError.limitReached }
+        let instruction = AssistantInstruction(id: UUID().uuidString, text: text, createdAt: Date())
+        instructions.append(instruction)
+        return instruction
+      }
+
+      func remove(id: String) async throws {
+        instructions.removeAll { $0.id == id }
+      }
+    }
+
+    /// `B4M_UI_FIXTURE_APPROVAL` picks how answering the fixture approval card ends: `replaced`, `expired`,
+    /// `resolved` (answered elsewhere) or `offline`; the default is success.
+    private struct FixturePendingActionAPI: PendingActionAPI {
+      func respond(
+        to target: PendingActionTarget, decision: PendingActionDecision
+      ) async throws
+        -> PendingActionResult
+      {
+        try await Task.sleep(for: .seconds(1))
+        switch ProcessInfo.processInfo.environment["B4M_UI_FIXTURE_APPROVAL"] {
+        case "replaced": throw PendingActionFailure.replaced
+        case "expired": throw PendingActionFailure.expired
+        case "resolved": throw PendingActionFailure.alreadyResolved
+        case "offline": throw PendingActionFailure.api(.offline)
+        default:
+          FixtureAnswers.record(decision, questID: target.questID)
+          return PendingActionResult(decision: decision)
+        }
+      }
+    }
+
+    /// What the fixture approval and reply calls answered, so the next brief fetch reports it the way the server's
+    /// live decision states do.
+    private enum FixtureAnswers {
+      private static let lock = NSLock()
+      nonisolated(unsafe) private static var approvals: [String: PendingActionDecision] = [:]
+      nonisolated(unsafe) private static var replied: Set<String> = []
+
+      static func record(_ decision: PendingActionDecision, questID: String) {
+        lock.withLock { approvals[questID] = decision }
+      }
+
+      static func recordReply(decisionID: String) {
+        lock.withLock { _ = replied.insert(decisionID) }
+      }
+
+      static func applied(to brief: Brief) -> Brief {
+        let answered: [String: PendingActionDecision] = lock.withLock { approvals }
+        let repliedIDs: Set<String> = lock.withLock { replied }
+        guard !answered.isEmpty || !repliedIDs.isEmpty else { return brief }
+        let decisions = brief.decisions.map { decision -> BriefDecision in
+          if let approval = decision.approval, approval.state == .pending, let answer = answered[approval.questID] {
+            return BriefDecision(
+              id: decision.id, text: decision.text,
+              approval: BriefApprovalRef(
+                questID: approval.questID, sessionID: approval.sessionID, pendingActionTs: approval.pendingActionTs,
+                state: answer == .approve ? .approved : .denied))
+          }
+          if let question = decision.question, question.state == .open, repliedIDs.contains(decision.id) {
+            return BriefDecision(
+              id: decision.id, text: decision.text,
+              question: BriefQuestionRef(
+                questID: question.questID, sessionID: question.sessionID, options: question.options, state: .answered))
+          }
+          return decision
+        }
+        return Brief(
+          id: brief.id, status: brief.status, createdAt: brief.createdAt, composedAt: brief.composedAt,
+          periodStart: brief.periodStart, periodEnd: brief.periodEnd, headline: brief.headline,
+          happened: brief.happened, handled: brief.handled, decisions: decisions)
+      }
+    }
+
+    /// Every generation runs for a few seconds, then succeeds. No outputs: the gallery fixtures stay as they are,
+    /// except a Scene, which lands on `FixtureMediaAPI.sceneID` so its detail and "Made from" chips can be opened.
+    private struct FixtureStudioAPI: StudioAPI {
+      static let runTime: TimeInterval = 4
+
+      func models(for kind: GenerationKind) async throws -> [GenerationModel] {
+        switch kind {
+        case .image:
+          [
+            GenerationModel(
+              id: "gpt-image-2", name: "GPT Image 2",
+              capabilities: .image(
+                ImageCapabilities(
+                  sizes: ["1024x1024", "1536x1024", "1024x1536"], defaultSize: "1024x1024",
+                  qualities: ["low", "medium", "high"], maxImages: 4, transparentBackground: true))),
+            GenerationModel(
+              id: GenerationModel.regionEditModels[0].id, name: GenerationModel.regionEditModels[0].name,
+              capabilities: .image(ImageCapabilities(seed: true, edit: true))),
+          ]
+        case .video:
+          [
+            GenerationModel(
+              id: "fixture-video", name: "Fixture Video",
+              capabilities: .video(
+                VideoCapabilities(
+                  modes: ["text_to_video", "image_to_video"], inputRoles: ["first_frame": 1],
+                  duration: .range(min: 1, max: 15, step: 1),
+                  aspectRatios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"], defaultDuration: 6,
+                  defaultAspectRatio: "16:9", defaultResolution: "480p", audio: .optional,
+                  creditsPerSecond: ["480p": 160, "720p": 280]))),
+            GenerationModel(
+              id: "fixture-video-morph", name: "Fixture Video Morph",
+              capabilities: .video(
+                VideoCapabilities(
+                  modes: ["image_to_video"], inputRoles: ["first_frame": 1, "last_frame": 1],
+                  duration: .discrete([5, 8]), aspectRatios: ["16:9"], resolutions: ["720p"], defaultDuration: 5,
+                  defaultAspectRatio: "16:9", defaultResolution: "720p"))),
+            GenerationModel(
+              id: "fixture-video-short", name: "Fixture Video Short",
+              capabilities: .video(
+                VideoCapabilities(
+                  duration: .discrete([4, 6, 8]), aspectRatios: ["16:9"], resolutions: ["720p", "1080p"],
+                  defaultDuration: 8, defaultAspectRatio: "16:9", defaultResolution: "720p"))),
+          ]
+        case .music:
+          [
+            GenerationModel(
+              id: "fixture-music", name: "Fixture Music",
+              capabilities: .music(
+                MusicCapabilities(
+                  lyricsMaxChars: 10_000, duration: .adjustable(min: 30, max: 180, defaultSeconds: 120, exact: false),
+                  pricing: MusicPricing(unit: .perSong, credits: 160))))
+          ]
+        case .scene:
+          []
+        }
+      }
+
+      func generate(_ request: GenerationRequest) async throws -> [GenerationHandle] {
+        let images = request.kind == .image ? Int(request.params[.count]?.number ?? 1) : 1
+        return (0..<images).map { _ in
+          GenerationHandle(
+            kind: request.kind, id: "fixture-\(UUID().uuidString)", prompt: request.prompt, startedAt: Date(),
+            modelID: request.modelID, params: request.params)
+        }
+      }
+
+      func editImage(_ request: ImageEditRequest) async throws -> GenerationHandle {
+        GenerationHandle(
+          kind: .image, id: "fixture-\(UUID().uuidString)", prompt: request.summaryPrompt, startedAt: Date())
+      }
+
+      func composeScene(_ request: SceneRequest) async throws -> GenerationHandle {
+        GenerationHandle(kind: .scene, id: "fixture-\(UUID().uuidString)", prompt: request.label, startedAt: Date())
+      }
+
+      func status(of handle: GenerationHandle) async throws -> GenerationStatus {
+        let elapsed = Date().timeIntervalSince(handle.startedAt)
+        guard elapsed >= Self.runTime else {
+          return GenerationStatus(phase: .running(progress: elapsed / Self.runTime))
+        }
+        return GenerationStatus(
+          phase: .succeeded, resultFileID: handle.kind == .scene ? FixtureMediaAPI.sceneID : nil)
+      }
+
+      func cancel(_ handle: GenerationHandle) async throws {}
+    }
+
+    private struct FixtureUploader: FileUploading {
+      func createUpload(fileName: String, mimeType: String, byteCount: Int) async throws -> UploadTicket {
+        UploadTicket(
+          fileID: "fixture-media-0", uploadURL: URL(string: "https://fixture.invalid/upload")!,
+          expiresAt: Date().addingTimeInterval(600))
+      }
+
+      func fileStatus(fileID: String) async throws -> RemoteFileStatus { .clean }
+    }
+
+    private struct FixtureAccountAPI: AccountAPI {
+      func requestDeletion() async throws -> AccountDeletionReceipt {
+        if FixtureServices.accountScenario == .orgTransfer {
+          throw AccountDeletionFailure.organizationTransferRequired([
+            AccountOrganization(id: "fixture-org-1", name: "Acme Analytics"),
+            AccountOrganization(id: "fixture-org-2", name: "Weekend Projects"),
+          ])
+        }
+        return AccountDeletionReceipt(scheduledFor: Date().addingTimeInterval(30 * 86_400))
+      }
+
+      func restoreDeletion() async throws {}
+
+      func profile(userID: String) async throws -> AccountProfile {
+        AccountProfile(firstName: "Alex", displayName: "Alex Rivera", email: "alex@example.com")
+      }
+    }
+
+    private struct FixtureStepUpAPI: StepUpAPI {
+      func fetchOptions() async throws -> StepUpOptions {
+        StepUpOptions(methods: [.password, .email], stepUpUntil: nil)
+      }
+      func sendEmailCode() async throws -> String { "fixture-pending-token" }
+      func verify(_ proof: StepUpProof) async throws -> Date { Date().addingTimeInterval(300) }
+    }
+
+    /// Keeps the last saved schedule for the run, so Settings shows what was just picked.
+    private actor FixtureBriefScheduleAPI: BriefScheduleAPI {
+      private var stored: BriefSchedule?
+
+      func schedule() async throws -> BriefSchedule? { stored }
+
+      func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
+        stored = schedule
+        return schedule
+      }
+    }
+
+    private actor FixtureBusyBlocksAPI: BusyBlocksAPI {
+      private var stored = BusyBlocksState(enabled: false, blocks: [])
+
+      func state() async throws -> BusyBlocksState { stored }
+
+      func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
+        stored = BusyBlocksState(enabled: enabled, blocks: enabled ? blocks : [])
+        return stored
+      }
+    }
+
+    private actor FixtureInterruptionFeedbackAPI: InterruptionFeedbackAPI {
+      private var stored = InterruptionFeedback()
+
+      func feedback() async throws -> InterruptionFeedback { stored }
+
+      func save(_ patch: InterruptionFeedback) async throws -> InterruptionFeedback {
+        if let value = patch.agentCompleted { stored.agentCompleted = value }
+        if let value = patch.agentFailed { stored.agentFailed = value }
+        return stored
+      }
+    }
+
+    private struct NoopPushTokenAPI: PushTokenAPI {
+      func registerPushToken(_ token: String, environment: PushEnvironment, appVersion: String?) async throws {}
+      func unregisterPushToken(_ token: String) async throws {}
+      func registerLiveActivityToken(
+        _ token: String, activityID: String, questID: String, environment: PushEnvironment, appVersion: String?
+      ) async throws {}
+    }
+
+    /// A scripted agent run: each poll advances it one stage, through an approval, to completion, so the
+    /// Live Activity can be watched going through every state without a server.
+    private actor FixtureAgentRunAPI: AgentRunAPI {
+      private var polls: [String: Int] = [:]
+      private var sequence = 0
+
+      func startRun(sessionID: String, message: String) async throws -> AgentRunReceipt {
+        sequence += 1
+        return AgentRunReceipt(
+          executionID: "fixture-exec-\(sequence)", questID: "fixture-run-quest-\(sequence)", sessionID: sessionID)
+      }
+
+      func run(id: String) async throws -> AgentRunStatus {
+        let count = (polls[id] ?? 0) + 1
+        polls[id] = count
+        let search = AgentRunStatus.Step(type: .action, toolName: "web_search")
+        let seen = AgentRunStatus.Step(type: .observation)
+        let write = AgentRunStatus.Step(type: .action, toolName: "write_report")
+        switch count {
+        case 1: return AgentRunStatus(id: id, state: .running, steps: [search])
+        case 2: return AgentRunStatus(id: id, state: .running, steps: [search, seen])
+        case 3, 4: return AgentRunStatus(id: id, state: .awaitingPermission, steps: [search, seen])
+        case 5: return AgentRunStatus(id: id, state: .running, steps: [search, seen, write])
+        default: return AgentRunStatus(id: id, state: .completed, steps: [search, seen, write])
+        }
+      }
+    }
+
+    private struct FixtureAPI: B4MAPI {
+      private static let now = Date()
+
+      func session(id: String) async throws -> SessionSummary {
+        let page = try await listSessions(cursor: nil, limit: 50)
+        guard let session = page.items.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return session
+      }
+
+      func renameSession(id: String, name: String) async throws -> SessionSummary {
+        let current = try await session(id: id)
+        return SessionSummary(
+          id: id, name: name, lastUsedModel: current.lastUsedModel, firstCreated: current.firstCreated,
+          lastUpdated: Date())
+      }
+
+      func deleteSession(id: String) async throws {}
+
+      func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
+        let names = ["Trip planning", "Quarterly metrics review", "Untitled", "Recipe ideas", "Contract summary"]
+        let sessions = names.enumerated().map { index, name in
+          SessionSummary(
+            id: "fixture-\(index)", name: name, lastUsedModel: index.isMultiple(of: 2) ? "claude-sonnet-4" : nil,
+            firstCreated: Self.now.addingTimeInterval(-Double(index + 1) * 86_400),
+            lastUpdated: Self.now.addingTimeInterval(-Double(index) * 5_400))
+        }
+        return Page(items: sessions, nextCursor: nil)
+      }
+
+      func listSessionQuests(sessionID: String, cursor: String?, limit: Int) async throws -> Page<QuestTurn> {
+        let now = Self.now
+        func done(_ id: String, _ prompt: String, _ reply: String, ago: TimeInterval, credits: Double = 12) -> QuestTurn
+        {
+          QuestTurn(
+            id: id, prompt: prompt, reply: reply, status: .done, kind: .message,
+            createdAt: now.addingTimeInterval(-ago), creditsUsed: credits)
+        }
+        let turns: [QuestTurn]
+        switch sessionID {
+        case "fixture-0":
+          let resolved = await FixtureServices.realtime.scheduleWorkingTurn(
+            questID: FixtureServices.workingQuestID, sessionID: sessionID, prompt: "Summarize.",
+            reply: "Lisbon in three days: **Alfama** on day one, **Belem** on day two, **Sintra** on day three.")
+          turns = [
+            done(
+              "fixture-0-q1", "Plan a three day trip to Lisbon.",
+              "Here is a **three day plan**:\n\n1. Day one: Alfama and the castle\n2. Day two: Belem\n3. Day three: Sintra\n\nUse `Tram 28` early to avoid queues.",
+              ago: 3_600, credits: 42),
+            QuestTurn(
+              id: "fixture-0-q2", prompt: "Book the restaurants.", reply: "", status: .pending, kind: .message,
+              createdAt: now.addingTimeInterval(-600),
+              pendingAction: PendingAction(
+                tool: "web_browse", parameters: ["url": "https://example.com/reserve", "party": "2"],
+                requestedAt: now.addingTimeInterval(-600))),
+            QuestTurn(
+              id: "fixture-0-q3", prompt: "Write the full itinerary as a book.", reply: "Not enough credits.",
+              status: .stopped, kind: .error, errorCode: .insufficientCredits,
+              createdAt: now.addingTimeInterval(-120)),
+            resolved
+              ? done(
+                FixtureServices.workingQuestID, "Summarize.",
+                "Lisbon in three days: **Alfama** on day one, **Belem** on day two, **Sintra** on day three.", ago: 20)
+              : QuestTurn(
+                id: FixtureServices.workingQuestID, prompt: "Summarize.", reply: nil, status: .running, kind: .message,
+                createdAt: now.addingTimeInterval(-20)),
+          ]
+        case "fixture-1":
+          turns = [
+            done(
+              "fixture-1-q1", "What moved revenue in Q3?",
+              "Three drivers:\n\n- **Enterprise renewals** up 14%\n- A pricing change in August\n- Churn down to 2.1%",
+              ago: 7_200,
+              credits: 31),
+            done(
+              "fixture-1-q2", "Draft two bullet points for the board deck.",
+              "- Revenue grew 9% quarter over quarter, led by renewals.\n- Churn fell to its lowest level in two years.",
+              ago: 6_900),
+            done(
+              "fixture-1-q3", "Show the churn query.",
+              "This reads the monthly churn rate:\n\n```sql\nSELECT month, churned / active AS rate\nFROM churn_by_month\nWHERE year = 2025;\n```\n\nRun it against the reporting replica.",
+              ago: 6_600),
+          ]
+        case "fixture-3":
+          turns = [
+            done(
+              "fixture-3-q1", "What can I cook with chickpeas and spinach?",
+              "A quick **chana saag**: saute onion and garlic, add spices, then the chickpeas and spinach. Serve with rice.",
+              ago: 90_000),
+            done(
+              "fixture-3-q2", "Make it vegan.",
+              "It already is, as long as you skip the cream. Use coconut milk for richness.", ago: 89_000),
+          ]
+        default:
+          turns = [
+            done(
+              "\(sessionID)-q1", "Give me a one line summary.", "Here is a short summary of this conversation.",
+              ago: 4_000)
+          ]
+        }
+        return Page(items: turns, nextCursor: nil)
+      }
+
+      func creditBalance() async throws -> CreditBalance { CreditBalance(credits: 31_667) }
+
+      func sendChatMessage(_ request: ChatSendRequest) async throws -> ChatSendReceipt {
+        let questID = "fixture-quest-\(UUID().uuidString.prefix(8))"
+        let sessionID: String
+        switch request.target {
+        case .session(let id): sessionID = id
+        case .newConversation: sessionID = "fixture-new"
+        }
+        await FixtureServices.realtime.streamReply(questID: questID, sessionID: sessionID, prompt: request.message)
+        return ChatSendReceipt(questID: questID, sessionID: sessionID)
+      }
+
+      func quest(id: String) async throws -> QuestTurn {
+        throw APIError.notFound
+      }
+    }
+
+    /// A canned gallery whose items open generated local files (`FixtureMediaFiles`), so the image detail and both
+    /// players work offline.
+    private struct FixtureMediaAPI: MediaAPI {
+      private static let now = Date()
+      /// A video item that plays the part of a composed Scene: its trail is the picture, soundtrack and cover.
+      static let sceneID = "fixture-media-8"
+
+      private static let all: [MediaItem] = (0..<24).map { index in
+        let kind: MediaKind = index % 5 == 3 ? .video : (index % 5 == 4 ? .audio : .image)
+        let (ext, mime) =
+          switch kind {
+          case .image: ("png", "image/png")
+          case .video: ("mp4", "video/mp4")
+          case .audio: ("wav", "audio/wav")
+          }
+        return MediaItem(
+          id: "fixture-media-\(index)", kind: kind, fileName: "generation-\(index).\(ext)", mimeType: mime,
+          createdAt: now.addingTimeInterval(-Double(index) * 3_600))
+      }
+
+      func listMedia(kind: MediaKind?, page: Int, limit: Int) async throws -> MediaPage {
+        let matching = Self.all.filter { kind == nil || $0.kind == kind }
+        let start = (page - 1) * limit
+        guard start < matching.count else { return MediaPage(items: [], hasMore: false) }
+        let slice = matching[start..<min(start + limit, matching.count)]
+        var items: [MediaItem] = []
+        for item in slice { items.append(await Self.withContent(item)) }
+        return MediaPage(items: items, hasMore: start + limit < matching.count)
+      }
+
+      func media(id: String) async throws -> MediaItem {
+        guard let item = Self.all.first(where: { $0.id == id }) else { throw APIError.notFound }
+        return await Self.withContent(item)
+      }
+
+      /// Video 3 was animated from image 0: its trail has a parent and image 0's has a child.
+      func lineage(of id: String) async throws -> FileLineage {
+        func node(_ item: MediaItem, generator: String, request: JSONObject? = nil) -> LineageNode {
+          LineageNode(
+            id: item.id, kind: item.kind, fileName: item.fileName, mimeType: item.mimeType, generator: generator,
+            modelID: nil, prompt: "A fox in the snow", createdAt: item.createdAt, request: request)
+        }
+        let image = Self.all[0]
+        let video = Self.all[3]
+        let edge = LineageEdge(parentID: image.id, childID: video.id, role: .firstFrame)
+        switch id {
+        case video.id:
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(video, generator: "video", request: ["durationSeconds": .number(6)]),
+              node(image, generator: "image"),
+            ],
+            children: [], edges: [edge])
+        case image.id:
+          return FileLineage(
+            fileID: id, ancestors: [node(image, generator: "image")], children: [node(video, generator: "video")],
+            edges: [edge])
+        case Self.sceneID:
+          let scene = Self.all[8]
+          let song = Self.all[4]
+          return FileLineage(
+            fileID: id,
+            ancestors: [
+              node(scene, generator: "scene"), node(video, generator: "video"), node(song, generator: "music"),
+              node(image, generator: "image"),
+            ],
+            children: [],
+            edges: [
+              LineageEdge(parentID: video.id, childID: id, role: .sceneVideo),
+              LineageEdge(parentID: song.id, childID: id, role: .sceneAudio),
+              LineageEdge(parentID: image.id, childID: id, role: .sceneCover),
+            ])
+        default:
+          return FileLineage(fileID: id, ancestors: [], children: [], edges: [])
+        }
+      }
+
+      private static func withContent(_ item: MediaItem) async -> MediaItem {
+        let index = Self.all.firstIndex(of: item) ?? 0
+        return await FixtureMediaFiles.shared.withContent(item, index: index)
+      }
+    }
+
+    /// Streams a canned reply as cumulative `streamed_chat_completion` frames, so the chat screen can be
+    /// exercised without a server.
+    actor FixtureRealtime: RealtimeClient {
+      private var listeners: [UUID: AsyncStream<RealtimeEvent>.Continuation] = [:]
+
+      private var scheduledTurns: Set<String> = []
+      private var settledTurns: Set<String> = []
+
+      var connectionState: RealtimeConnectionState { .connected }
+
+      /// Settles a turn that the transcript lists as working: a done frame arrives `delay` after the first
+      /// call. Returns whether it has settled already, so a reload after that lists it as done.
+      func scheduleWorkingTurn(
+        questID: String, sessionID: String, prompt: String, reply: String, delay: Duration = .seconds(5)
+      ) -> Bool {
+        if scheduledTurns.insert(questID).inserted {
+          Task {
+            try? await Task.sleep(for: delay)
+            emit(questID, sessionID, prompt, reply, "done")
+            settledTurns.insert(questID)
+          }
+        }
+        return settledTurns.contains(questID)
+      }
+
+      func start() {}
+      func stop() {}
+      func resume() {}
+      func reauthenticate(accessToken: String) {}
+      func subscribe(_ request: SubscriptionRequest) -> AsyncStream<DataUpdate> { AsyncStream { _ in } }
+
+      func events() -> AsyncStream<RealtimeEvent> {
+        let (stream, continuation) = AsyncStream<RealtimeEvent>.makeStream()
+        listeners[UUID()] = continuation
+        return stream
+      }
+
+      func streamReply(questID: String, sessionID: String, prompt: String) {
+        let reply =
+          "Here is a quick answer to **\(prompt)**.\n\n1. First, a short point.\n2. Then another.\n\nThat streamed in by replacement."
+        let words = reply.split(separator: " ", omittingEmptySubsequences: false)
+        // Status lines are what the Live Activity shows as its stage; the first ones arrive before any text.
+        let stages = ["Reading your message", "Searching your notes", "Drafting a reply"]
+        Task {
+          emit(questID, sessionID, prompt, "", "running", stages[0])
+          try? await Task.sleep(for: .milliseconds(1_500))
+          for count in stride(from: 1, through: words.count, by: 2) {
+            let stage = stages[min(count / 2, stages.count - 1)]
+            emit(questID, sessionID, prompt, words.prefix(count).joined(separator: " "), "running", stage)
+            try? await Task.sleep(for: .milliseconds(450))
+          }
+          emit(questID, sessionID, prompt, reply, "done")
+        }
+      }
+
+      private func emit(
+        _ questID: String, _ sessionID: String, _ prompt: String, _ reply: String, _ status: String,
+        _ statusMessage: String = ""
+      ) {
+        let quest: JSONObject = [
+          "id": .string(questID), "sessionId": .string(sessionID), "prompt": .string(prompt),
+          "reply": .string(reply), "status": .string(status), "type": "message", "creditsUsed": 12,
+        ]
+        let frame = ActionFrame(
+          action: ChatQuestFrame.action,
+          payload: [
+            "action": .string(ChatQuestFrame.action), "quest": .object(quest), "statusMessage": .string(statusMessage),
+          ])
+        for listener in listeners.values { listener.yield(.frame(frame)) }
+      }
+    }
+  }
+#endif

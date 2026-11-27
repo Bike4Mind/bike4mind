@@ -28,12 +28,12 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 const mockVerifyApiKey = vi.fn();
-vi.mock('@server/cli/auth', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({
   verifyApiKey: (...args: unknown[]) => mockVerifyApiKey(...args),
 }));
 
 const mockAssertAccountStateUsable = vi.fn();
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: (...args: unknown[]) => mockAssertAccountStateUsable(...args),
 }));
 
@@ -44,15 +44,33 @@ vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: (...args: unknown[]) => mockAssertSessionActive(...args),
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+const mockIsMfaEnrollmentOwed = vi.fn();
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: (...args: unknown[]) => mockIsMfaEnrollmentOwed(...args),
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
+}));
+
+const mockIpBlockRefusal = vi.fn();
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  ipBlockRefusal: (...args: unknown[]) => mockIpBlockRefusal(...args),
+}));
+
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: vi.fn(
     (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler
   ),
 }));
 
 import { func } from './connect';
-import { toApiKeyAuthError } from '@server/auth/apiKeyAuthFailure';
-import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { toApiKeyAuthError } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
+import { ACCOUNT_DELETION_PENDING_CODE } from '@bike4mind/common';
+
+const PENDING_DELETION = {
+  requestedAt: new Date('2026-11-01T00:00:00Z'),
+  scheduledFor: new Date('2026-12-01T00:00:00Z'),
+  source: 'self_serve',
+};
 
 const eventWithToken = (token = 'token-123') => ({
   requestContext: { connectionId: 'conn-1' },
@@ -72,6 +90,30 @@ describe('websocket connect - token gates', () => {
     mockConnectionCreate.mockResolvedValue({});
     mockAssertAccountStateUsable.mockReturnValue(undefined);
     mockAssertSessionActive.mockResolvedValue(undefined);
+    mockIpBlockRefusal.mockResolvedValue(null);
+    mockIsMfaEnrollmentOwed.mockResolvedValue(false);
+  });
+
+  it('marks the user online without stamping lastActiveAt: connecting is not an action', async () => {
+    const user: Record<string, unknown> = { id: 'user-1', tokenVersion: 3, save: vi.fn() };
+    mockFindById.mockResolvedValue(user);
+
+    await connect();
+
+    expect(user.isOnline).toBe(true);
+    expect(user).not.toHaveProperty('lastActiveAt');
+    expect(user.save).toHaveBeenCalled();
+  });
+
+  it('checks an API key without counting the connect as a use of it', async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('not a jwt');
+    });
+    mockVerifyApiKey.mockResolvedValue({ userId: 'user-1', scopes: ['ai:chat'], keyId: 'key-1' });
+
+    await connect('b4m_live_key');
+
+    expect(mockVerifyApiKey).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ recordUse: false }));
   });
 
   it("records a CLI JWT's sid and tokenVersion, bounded by the gateway cap rather than the token exp", async () => {
@@ -165,6 +207,83 @@ describe('websocket connect - token gates', () => {
 
     await expect(connect()).rejects.toThrow('blocked');
     expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a CLI JWT whose user owes MFA enrollment, before registering the connection', async () => {
+    mockIsMfaEnrollmentOwed.mockResolvedValue(true);
+
+    const refusal = connect();
+
+    await expect(refusal).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(refusal).rejects.toThrow('MFA enrollment required.');
+    expect(mockIsMfaEnrollmentOwed).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }));
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not apply the enrollment gate to an API-key connection', async () => {
+    mockVerifyToken.mockImplementation(() => {
+      throw new Error('not a jwt');
+    });
+    mockVerifyApiKey.mockResolvedValue({ userId: 'user-1', scopes: ['ai:chat'], keyId: 'key-1' });
+    mockIsMfaEnrollmentOwed.mockResolvedValue(true);
+
+    await connect('b4m_live_key');
+
+    expect(mockIsMfaEnrollmentOwed).not.toHaveBeenCalled();
+    expect(mockConnectionCreate).toHaveBeenCalled();
+  });
+
+  it('refuses a deletion-pending account before registering the connection', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, deletion: PENDING_DELETION });
+
+    await expect(connect()).rejects.toMatchObject({ additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE } });
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a connection from an address under an admin's all-scope IP block", async () => {
+    mockIpBlockRefusal.mockResolvedValue({ message: 'network blocked', scope: 'all', expiresAt: new Date() });
+    const event = {
+      ...eventWithToken(),
+      requestContext: { connectionId: 'conn-1', identity: { sourceIp: '203.0.113.9' } },
+    };
+
+    await expect(func(event as any, {} as any, noopLogger as any)).rejects.toThrow('network blocked');
+    expect(mockIpBlockRefusal).toHaveBeenCalledWith(
+      { headers: {}, socket: { remoteAddress: '203.0.113.9' } },
+      'app',
+      noopLogger
+    );
+    expect(mockConnectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('resolves the address from the API Gateway source IP, never a spoofed forwarding header', async () => {
+    const { getClientIp } = await vi.importActual<typeof import('@bike4mind/server-utils/utils/ip')>(
+      '@bike4mind/server-utils/utils/ip'
+    );
+    const base = eventWithToken();
+    const event = {
+      ...base,
+      headers: {
+        ...base.headers,
+        'x-forwarded-for': '198.51.100.77',
+        'x-real-ip': '198.51.100.77',
+        'cloudfront-viewer-address': '198.51.100.77:443',
+      },
+      requestContext: { connectionId: 'conn-1', identity: { sourceIp: '203.0.113.9' } },
+    };
+
+    await func(event as never, {} as never, noopLogger as never);
+    const [clientRequest] = mockIpBlockRefusal.mock.calls[0];
+    expect(getClientIp(clientRequest)).toBe('203.0.113.9');
+  });
+
+  it('lets an admin connect from a blocked address', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, isAdmin: true, save: vi.fn() });
+    mockIpBlockRefusal.mockResolvedValue({ message: 'network blocked', scope: 'all', expiresAt: new Date() });
+
+    await connect();
+    expect(mockIpBlockRefusal).not.toHaveBeenCalled();
+    expect(mockConnectionCreate).toHaveBeenCalled();
   });
 });
 

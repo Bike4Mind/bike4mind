@@ -133,7 +133,7 @@ export function reduceUpdate(state: UpdateState, event: UpdateEvent): UpdateStat
   }
 }
 
-/** One line for the Customize row, which is the only place any of this is described. */
+/** One line for the Settings row, which is the only place any of this is described. */
 export function updateSummary(state: UpdateState): string {
   switch (state.status) {
     case 'unsupported':
@@ -149,7 +149,7 @@ export function updateSummary(state: UpdateState): string {
     case 'up-to-date':
       return `Version ${state.currentVersion}, up to date`;
     // A check that could not reach the feed is not the user's problem to solve, so it reads as
-    // the plain version rather than as a failure. The dialog says when it last succeeded.
+    // the plain version rather than as a failure. The Settings page says it could not reach it.
     case 'unreachable':
     case 'idle':
     default:
@@ -158,7 +158,7 @@ export function updateSummary(state: UpdateState): string {
 }
 
 /**
- * The chip raised onto the shut Customize row, or nothing.
+ * The chip raised onto the Settings nav (About), or nothing.
  *
  * Nothing for a failed check, on purpose: the row must not nag about a feed the user cannot
  * reach and did not ask about.
@@ -234,7 +234,8 @@ export function compareVersions(left: string, right: string): number | null {
  * Whether `candidate` is a release the running build should be told about.
  *
  * A locally packaged build is versioned `<newest desktop tag>-local.<sha>` by
- * scripts/package-local.cjs, which is code at or after that tag. Plain SemVer ranks it BELOW the
+ * scripts/package-local.cjs, and a source run `<newest desktop tag>-dev.<sha>` by scripts/dev-version.cjs;
+ * both are code at or after that tag. Plain SemVer ranks them BELOW the
  * tag it was cut from, so the same release would be offered back to it forever; comparing only
  * the core version keeps it quiet until a strictly newer release ships. Anything unparsable is
  * not newer: a notice we cannot justify is worse than none.
@@ -243,21 +244,22 @@ export function isNewerRelease(candidate: string, current: string): boolean {
   const next = parseVersion(candidate);
   const running = parseVersion(current);
   if (!next || !running) return false;
-  if (running.prerelease[0] === 'local') return compareCores(next, running) > 0;
+  if (running.prerelease[0] === 'local' || running.prerelease[0] === 'dev') return compareCores(next, running) > 0;
   return (compareVersions(candidate, current) ?? 0) > 0;
 }
 
 /**
- * The version the floating "update available" notice should announce, or null for no notice.
+ * The version the "update available" notice should announce, or null for no notice.
  *
- * Shown while anything newer is on offer - found, downloading or staged - and hidden for the one
- * version the user dismissed. A later version is a different string, so it shows again.
+ * Shown while anything newer is on offer - found, downloading or staged. Dismissing declines the
+ * offer for that one version; a download, once started, stays on screen until the restart so the
+ * user is never left guessing whether it ran. A later version is a different string, so it shows.
  */
 export function updateNoticeVersion(state: UpdateState): string | null {
   if (state.status !== 'available' && state.status !== 'downloading' && state.status !== 'ready') return null;
   const version = state.version;
   if (!version || !isNewerRelease(version, state.currentVersion)) return null;
-  if (state.dismissedVersion === version) return null;
+  if (state.status === 'available' && state.dismissedVersion === version) return null;
   return version;
 }
 
@@ -269,10 +271,23 @@ export interface UpdateBusyReport {
   awaitingApproval: number;
   /** Background commands still running - dev servers, watchers, builds. */
   background: number;
+  /** Open terminal shells, including their foreground jobs. */
+  terminals?: number;
+  /** Model pulls that have not finished, failed or paused. */
+  modelDownloads?: number;
+  /** Model servers Desktop started or is starting/stopping. */
+  modelServers?: number;
 }
 
 export function isBusy(report: UpdateBusyReport): boolean {
-  return report.replying > 0 || report.awaitingApproval > 0 || report.background > 0;
+  return (
+    report.replying > 0 ||
+    report.awaitingApproval > 0 ||
+    report.background > 0 ||
+    (report.terminals ?? 0) > 0 ||
+    (report.modelDownloads ?? 0) > 0 ||
+    (report.modelServers ?? 0) > 0
+  );
 }
 
 /**
@@ -293,6 +308,17 @@ export function describeBusy(report: UpdateBusyReport): string {
   }
   if (report.background > 0) {
     parts.push(`${report.background} background ${report.background === 1 ? 'process is' : 'processes are'} running`);
+  }
+  if (report.terminals) {
+    parts.push(`${report.terminals} terminal ${report.terminals === 1 ? 'session is' : 'sessions are'} open`);
+  }
+  if (report.modelDownloads) {
+    parts.push(
+      `${report.modelDownloads} model ${report.modelDownloads === 1 ? 'download is' : 'downloads are'} active`
+    );
+  }
+  if (report.modelServers) {
+    parts.push(`${report.modelServers} model ${report.modelServers === 1 ? 'server is' : 'servers are'} running`);
   }
   if (parts.length === 0) return 'Nothing is running.';
   if (parts.length === 1) return `${parts[0]}.`;

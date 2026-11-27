@@ -10,7 +10,7 @@ import {
 } from '@bike4mind/common';
 import { useUpdateFabFile } from '@client/app/hooks/data/fabFiles';
 import { ImageModerationPlaceholder } from '@client/app/components/Session/ImageModerationPlaceholder';
-import { Description } from '@mui/icons-material';
+import Description from '@mui/icons-material/Description';
 import ArticleIcon from '@mui/icons-material/Article';
 import AudiotrackIcon from '@mui/icons-material/Audiotrack';
 import CodeIcon from '@mui/icons-material/Code';
@@ -38,6 +38,7 @@ import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
 import { brand, brandAlpha, green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
 import { useFileBrowserInstance } from './instanceContext';
+import FileStarButton from './FileStarButton';
 import FileBrowserItemActions from './ItemActions';
 import UsernameText from '@client/app/components/common/UsernameText';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -181,13 +182,16 @@ export const getFileIcon = (file: IFabFileDocument, size: number = 48) => {
             [SupportedFabFileMimeTypes.XML]: TagIcon,
             // Data
             [SupportedFabFileMimeTypes.JSON]: Description,
-            [SupportedFabFileMimeTypes.CSV]: DataObjectIcon,
+            [SupportedFabFileMimeTypes.CSV]: TableChartIcon,
             [SupportedFabFileMimeTypes.YAML]: DataObjectIcon,
             [SupportedFabFileMimeTypes.TOML]: DataObjectIcon,
           } as Record<string, React.ElementType>
         )[file.mimeType] || InsertDriveFileIcon;
+  // Browsers label CSV uploads inconsistently (application/csv, application/octet-stream), so trust the extension.
+  const Icon =
+    file.type !== KnowledgeType.URL && file.fileName?.toLowerCase().endsWith('.csv') ? TableChartIcon : IconComponent;
 
-  return <IconComponent sx={{ fontSize: size }} />;
+  return <Icon sx={{ fontSize: size }} />;
 };
 
 interface IFileBrowserItemProps {
@@ -287,6 +291,7 @@ const useCommon = (file: IFabFileDocument) => {
   const { selectedIds, setSelectedIds, config } = useFileBrowserInstance();
   const selected = selectedIds.has(file.id);
   const isAdded = config.addedFileIds?.has(file.id) ?? false;
+  const showStar = config.enableStar === true;
   const [editMode, setEditMode] = useState(false);
 
   function handleClick() {
@@ -302,6 +307,7 @@ const useCommon = (file: IFabFileDocument) => {
   return {
     selected,
     isAdded,
+    showStar,
     editMode,
     setEditMode,
     handleClick,
@@ -333,7 +339,7 @@ const isImageFile = (filename: string) => {
 
 const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = [] }) => {
   const { fileName, fileSize, createdAt, chunked, vectorized, isChunking, isVectorizing } = file;
-  const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
+  const { selected, isAdded, showStar, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 20);
   const playable = isPlayableMedia(file);
   const isVideo = isVideoMimeType(file.mimeType);
@@ -530,7 +536,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             }}
           >
             <Typography level="body-xs" sx={{ fontSize: '12px' }}>
-              {Math.round(fileSize / 1024)} KB
+              {numberToBytes(fileSize)}
             </Typography>
             <Typography level="body-xs" sx={{ fontSize: '12px' }}>
               •
@@ -599,6 +605,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
           />
 
           {isAdded && <AddedBadge />}
+          {showStar && <FileStarButton fileId={file.id} />}
 
           {tags.length - 6 > 0 && (
             <Chip
@@ -661,7 +668,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
         }}
       >
         <Typography level="body-xs" sx={{ fontSize: '14px' }}>
-          {Math.round(fileSize / 1024)} KB
+          {numberToBytes(fileSize)}
         </Typography>
         <Typography level="body-xs" sx={{ fontSize: '14px' }}>
           •
@@ -688,7 +695,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
 };
 
 const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = [] }) => {
-  const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
+  const { selected, isAdded, showStar, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 32);
   const { chunked, vectorized, isChunking, isVectorizing, fileName } = file;
   const { currentUser } = useUser();
@@ -968,6 +975,7 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
               isChunking={isChunking}
             />
             {isAdded && <AddedBadge />}
+            {showStar && <FileStarButton fileId={file.id} />}
             {/* Shared recipients (Grid) */}
             {sharedUsersGrid.length > 0 && (
               <Box sx={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -1081,8 +1089,8 @@ const ToggleRename: FC<{
 };
 
 const numberToBytes = (bytes: number) => {
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
-  if (bytes === 0) return 'n/a';
+  const sizes = ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+  if (!bytes) return 'n/a';
   const i = parseInt(String(Math.floor(Math.log(bytes) / Math.log(1024))));
   return Math.round(bytes / Math.pow(1024, i)) + ' ' + sizes[i];
 };

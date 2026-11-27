@@ -18,6 +18,7 @@ import { AuditLogFiltersSchema, type AuditLogFilters } from '../types/entities/a
 export const ADMIN_TAB_PARAM = 'tab';
 export const FEEDBACK_ID_PARAM = 'feedbackId';
 export const QUEST_ID_PARAM = 'questId';
+export const USER_ID_PARAM = 'userId';
 
 /**
  * URL-stable slug for the admin console's Feedback tab.
@@ -52,19 +53,48 @@ export function adminAuditLogPath(filters: AuditLogFilters = {}, entryId?: strin
   return `/admin?${params.toString()}`;
 }
 
-/**
- * Admin console Users tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. Moderation incidents
- * have no review tab of their own yet, so incident links land here, next to the per-user compliance view.
- */
+/** Admin console Users tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
 export const ADMIN_USERS_TAB_SLUG = 'users';
+/** Admin console image moderation incident review tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
+export const ADMIN_MODERATION_INCIDENTS_TAB_SLUG = 'moderation-incidents';
 export const MODERATION_INCIDENT_ID_PARAM = 'incidentId';
 
-/** Deep link to the admin console for one image moderation incident. */
+/** Deep link to the review page for one image moderation incident. */
 export function adminModerationIncidentPath(incidentId: string): string {
   const params = new URLSearchParams({
-    [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG,
+    [ADMIN_TAB_PARAM]: ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
     [MODERATION_INCIDENT_ID_PARAM]: incidentId,
   });
+  return `/admin?${params.toString()}`;
+}
+
+/** Admin console text-prompt moderation review tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
+export const ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG = 'text-moderation-review';
+
+/** Deep link to the text-prompt moderation review list. */
+export function adminTextModerationReviewPath(): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_TEXT_MODERATION_REVIEW_TAB_SLUG });
+  return `/admin?${params.toString()}`;
+}
+
+/** Admin console Dead letters tab slug; same stability rule as ADMIN_FEEDBACK_TAB_SLUG. */
+export const ADMIN_DLQ_REPLAY_TAB_SLUG = 'dlq-replay';
+/** Preselects one queue on the Dead letters tab, by its DLQ registry label. */
+export const DLQ_QUEUE_PARAM = 'dlqQueue';
+
+/** Deep link to the Dead letters tab, optionally opened on one queue. */
+export function adminDlqReplayPath(queueLabel?: string): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_DLQ_REPLAY_TAB_SLUG });
+  if (queueLabel) params.set(DLQ_QUEUE_PARAM, queueLabel);
+  return `/admin?${params.toString()}`;
+}
+
+/**
+ * Deep link to one user's admin profile. Ids here come from counter logs, so they are not trusted:
+ * URLSearchParams encoding keeps a crafted id from grafting extra params onto the link.
+ */
+export function adminUserProfilePath(userId: string): string {
+  const params = new URLSearchParams({ [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG, [USER_ID_PARAM]: userId });
   return `/admin?${params.toString()}`;
 }
 

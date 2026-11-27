@@ -13,10 +13,8 @@ const h = vi.hoisted(() => ({
   toastError: vi.fn(),
 }));
 
-vi.mock('@client/app/hooks/data/videoGenerations', () => ({
-  useVideoGeneration: () => h.query,
-  useCancelVideoGeneration: () => h.cancel,
-}));
+vi.mock('@client/app/hooks/data/generationJobs', () => ({ useGenerationJob: () => h.query }));
+vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useCancelVideoGeneration: () => h.cancel }));
 vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
   useFileBrowser: (selector: (state: { setOpen: (open: boolean) => void }) => unknown) =>
     selector({ setOpen: h.setOpen }),

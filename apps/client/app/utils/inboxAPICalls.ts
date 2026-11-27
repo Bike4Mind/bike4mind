@@ -30,7 +30,12 @@ export const sendMessage = async (data: { title: string; message: string; receiv
   return response.data;
 };
 
-export const sendSystemMessage = async (data: { title: string; message: string; receiverId: string }) => {
+export const sendSystemMessage = async (data: {
+  title: string;
+  message: string;
+  receiverId: string;
+  reason: string;
+}) => {
   const response = await api.post('/api/inbox/admin-send', data);
   return response.data;
 };

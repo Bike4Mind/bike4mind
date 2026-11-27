@@ -18,8 +18,11 @@
 import { Resource } from 'sst';
 import { systemSecretRepository, SystemSecretCategory } from '@bike4mind/database';
 import { isPlaceholderValue } from '@bike4mind/common';
-import { decryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { isValidEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { decryptStoredSecret } from '@bike4mind/server-utils/security/tokenEncryption';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { statusTransportKind, unusedMailSecrets } from '@bike4mind/server-utils/utils/mailer/configStatus';
+import type { MailTransportKind } from '@bike4mind/server-utils/utils/mailer/transport';
 
 /**
  * Result of secret resolution for debugging/logging.
@@ -120,7 +123,7 @@ export async function resolveSecret(secretName: string, skipCache = false): Prom
         warnings.push('SECRET_ENCRYPTION_KEY is invalid, cannot decrypt database secrets');
       } else {
         try {
-          const decryptedValue = decryptSecret(dbSecret.encryptedValue, encryptionKey);
+          const decryptedValue = decryptStoredSecret(dbSecret.encryptedValue);
 
           // Cache the result
           secretCache.set(secretName, {
@@ -295,6 +298,22 @@ export const RESOLVABLE_SECRETS = {
     category: 'oauth' as SystemSecretCategory,
     description: 'GitHub OAuth client secret',
   },
+  APPLE_CLIENT_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple Services ID',
+  },
+  APPLE_TEAM_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple team ID',
+  },
+  APPLE_KEY_ID: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple private key ID',
+  },
+  APPLE_PRIVATE_KEY: {
+    category: 'oauth' as SystemSecretCategory,
+    description: 'Sign in with Apple private key (.p8 PEM)',
+  },
 
   // API Keys
   ANTHROPIC_API_KEY: {
@@ -327,6 +346,14 @@ export const RESOLVABLE_SECRETS = {
     category: 'slack' as SystemSecretCategory,
     description: 'Slack webhook URL for error reporting',
   },
+  SLACK_ALARMS_WEBHOOK_URL: {
+    category: 'slack' as SystemSecretCategory,
+    description: 'Slack webhook URL for CloudWatch alarm notifications (falls back to error reporting)',
+  },
+  SLACK_COST_ALARMS_WEBHOOK_URL: {
+    category: 'slack' as SystemSecretCategory,
+    description: 'Slack webhook URL for cost and provider spend alarms (falls back to the alarms webhook)',
+  },
 
   // Financial Data
   FMP_API_KEY: {
@@ -342,3 +369,12 @@ export const RESOLVABLE_SECRETS = {
 } as const;
 
 export type ResolvableSecretName = keyof typeof RESOLVABLE_SECRETS;
+
+/** RESOLVABLE_SECRETS without the mail settings the stage's transport never reads. */
+export function getResolvableSecrets(
+  transport: MailTransportKind = statusTransportKind()
+): Partial<typeof RESOLVABLE_SECRETS> {
+  const resolvable: Partial<typeof RESOLVABLE_SECRETS> = { ...RESOLVABLE_SECRETS };
+  for (const name of unusedMailSecrets(transport)) delete resolvable[name];
+  return resolvable;
+}

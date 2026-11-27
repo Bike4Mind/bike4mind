@@ -7,6 +7,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import {
+  AdminSettings,
   DataLakeModel,
   DataLakeAccessGrantModel,
   LakeConfigChangeEventModel,
@@ -15,8 +16,9 @@ import {
   dataLakeRepository,
   lakeConnectorClaimRepository,
 } from '@bike4mind/database';
-import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
-import { nameLakeAfterRepository } from '@server/integrations/github/dataLake/githubLakeConnection';
+import { DATA_LAKE_PLAN_REQUIRED_CODE, GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
+import { clearLakePlanGateCache } from '@server/entitlements/lakePlanGate';
+import { nameLakeAfterRepository } from '@bike4mind/server-utils/integrations/github/dataLake/githubLakeConnection';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -30,7 +32,7 @@ type Middleware = (req: unknown, res: unknown, next: (err?: unknown) => void) =>
 
 const h = vi.hoisted(() => ({
   flags: { EnableDataLakes: true, EnableDataLakeGitHub: true } as Record<string, boolean>,
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
   createStateToken: vi.fn(),
 }));
@@ -63,13 +65,13 @@ vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
     (_req, res, next) =>
       h.flags[flag] ? next() : (res as { status: (n: number) => { json: (b: unknown) => void } }).status(404).json({}),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
-vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/integrations/github/dataLake/lakeAppClient')>()),
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
+vi.mock('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/integrations/github/dataLake/lakeAppClient')>()),
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
-vi.mock('@server/auth/jwtStateStore', async importOriginal => ({
-  ...(await importOriginal<typeof import('@server/auth/jwtStateStore')>()),
+vi.mock('@bike4mind/server-utils/auth/jwtStateStore', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/server-utils/auth/jwtStateStore')>()),
   createStateToken: h.createStateToken,
 }));
 
@@ -128,7 +130,7 @@ afterAll(async () => {
 beforeEach(() => {
   h.flags.EnableDataLakes = true;
   h.flags.EnableDataLakeGitHub = true;
-  h.verifyOrgAccess.mockReset().mockResolvedValue({ id: ORG });
+  h.verifyOrgPermission.mockReset().mockResolvedValue({ id: ORG });
   h.getGitHubLakeAppConfig.mockReset().mockReturnValue(APP_CONFIG);
   h.createStateToken
     .mockReset()
@@ -141,10 +143,24 @@ afterEach(async () => {
     DataLakeAccessGrantModel.deleteMany({}),
     LakeConfigChangeEventModel.deleteMany({}),
     LakeConnectorClaim.deleteMany({}),
+    AdminSettings.deleteMany({}),
   ]);
+  clearLakePlanGateCache();
 });
 
 describe('POST /api/data-lakes/github-connect', () => {
+  it('refuses a caller without paid standing when dataLakeRequirePaidPlan is on, creating no lake', async () => {
+    await AdminSettings.create({ settingName: 'dataLakeRequirePaidPlan', settingValue: true });
+    clearLakePlanGateCache();
+    const { res, json } = makeRes();
+    await expect(run(makeReq({}), res)).rejects.toMatchObject({
+      statusCode: 403,
+      additionalInfo: { code: DATA_LAKE_PLAN_REQUIRED_CODE },
+    });
+    expect(json).not.toHaveBeenCalled();
+    expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
+  });
+
   it('creates a draft connector-fed org lake awaiting GitHub and returns its authorize URL', async () => {
     const { res, json, setCookies } = makeRes();
     await run(makeReq({ organizationId: ORG }), res);
@@ -163,7 +179,11 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(await DataLakeAccessGrantModel.countDocuments({ dataLakeId, role: 'owner' })).toBe(1);
     expect(await LakeConfigChangeEventModel.countDocuments({ action: 'create' })).toBe(1);
 
-    expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-gh-connect' }), ORG);
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-gh-connect' }),
+      ORG,
+      'manageContent'
+    );
     expect(new URL(authorizeUrl).searchParams.get('state')).toBe(`state-for-${dataLakeId}`);
     expect(setCookies().some(c => c.includes('github-lake-connect=') && !c.includes('Max-Age=0'))).toBe(true);
   });
@@ -175,7 +195,7 @@ describe('POST /api/data-lakes/github-connect', () => {
       message: expect.stringMatching(/non-empty string/),
     });
     expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   describe('personal lake (organizationId omitted)', () => {
@@ -194,7 +214,7 @@ describe('POST /api/data-lakes/github-connect', () => {
       });
       expect(lake?.organizationId).toBeFalsy();
       expect(await DataLakeAccessGrantModel.countDocuments({ dataLakeId, role: 'owner' })).toBe(1);
-      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     });
 
     it("reuses the caller's unbound personal placeholder lake on a retried connect", async () => {
@@ -242,7 +262,7 @@ describe('POST /api/data-lakes/github-connect', () => {
       message: expect.stringMatching(/signed-in session/),
     });
     expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
   });
 
   it("reuses the caller's unbound placeholder lake on a retried connect instead of inserting another", async () => {
@@ -284,7 +304,7 @@ describe('POST /api/data-lakes/github-connect', () => {
   });
 
   it('refuses a caller who cannot manage the org before creating anything', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new NotFoundError('Organization not found'));
+    h.verifyOrgPermission.mockRejectedValue(new NotFoundError('Organization not found'));
     const { res } = makeRes();
     await expect(run(makeReq({ organizationId: ORG }), res)).rejects.toBeInstanceOf(NotFoundError);
     expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });

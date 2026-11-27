@@ -12,26 +12,39 @@ import { ModalTriggerProvider } from './ModalTriggerContext';
 import ModalManager from '@client/app/components/modals/ModalManager';
 import ModalErrorBoundary from '@client/app/components/modals/ModalErrorBoundary';
 import ReferralModal, { ReferralInviteType } from '@client/app/components/referrals/ReferralModal';
+import ReferralRewardNotice from '@client/app/components/referrals/ReferralRewardNotice';
 import HelpModal from '@client/app/components/HelpModal';
 import PromptMetaInspector from '@client/app/components/Session/PromptMetaInspector';
 import FileBrowser from '../components/Files/Browser';
 import SendToDataLakeModal from '@client/app/components/DataLakeWizard/SendToDataLakeModal';
 import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
+import OrgDomainJoinBanner from '@client/app/components/OrgDomainJoinBanner';
+import SpaceDomainJoinBanner from '@client/app/components/SpaceDomainJoinBanner';
 import CommandPalette from '../components/CommandPalette';
+import StudioJobCompletedListener from '@client/app/components/Studio/completion/StudioJobCompletedListener';
 import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
+import { SessionHandoffReceiver } from '@client/app/components/Session/SessionHandoff';
 
 interface ProviderBundleProps {
   children: ReactNode;
 }
 
-// Core data providers - grouped to reduce cascading re-renders
+// Core data providers - grouped to reduce cascading re-renders.
+// MFAEnforcementWrapper sits directly under AdminSettingsProvider (it reads enforceMFA there as a
+// loading hint; the MFA status decides) and encloses everything else: while a session owes MFA
+// enrollment the server 403s every route outside its allowlist (mfaEnrollmentGate in
+// server/auth/auth.ts), so the wrapper withholds the app until enrollment is ruled out, except on
+// a hint that none is owed (remembered as enrolled, or settings say enforcement is off), whose app
+// a refusal withdraws.
 const CoreDataProviders: React.FC<{ children: ReactNode }> = ({ children }) => (
   <InboxProvider>
     <UserSettingsProvider>
       <AdminSettingsProvider cacheTTL={5 * 60 * 1000} fetchOnMount={true}>
-        <LLMProvider />
-        {children}
+        <MFAEnforcementWrapper>
+          <LLMProvider />
+          {children}
+        </MFAEnforcementWrapper>
       </AdminSettingsProvider>
     </UserSettingsProvider>
   </InboxProvider>
@@ -67,6 +80,10 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
             <ModalManager />
           </ModalErrorBoundary>
           <ReferralModal inviteType={ReferralInviteType.referral} />
+          <ReferralRewardNotice />
+          {/* Under AdminSettingsProvider: its feature gate reads admin settings. */}
+          <StudioJobCompletedListener />
+          <SessionHandoffReceiver />
           <HelpModal />
           <PromptMetaInspector />
           <CreateTeamModal />
@@ -74,7 +91,9 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
           <SendToDataLakeModal />
           <CommandPalette />
           <EmailVerificationBanner />
-          <MFAEnforcementWrapper>{children}</MFAEnforcementWrapper>
+          <OrgDomainJoinBanner />
+          <SpaceDomainJoinBanner />
+          {children}
         </UIProviders>
       </SessionProviders>
     </CoreDataProviders>

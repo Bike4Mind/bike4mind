@@ -17,13 +17,15 @@
  * Paste the raw output into the PR description as follow-up cost evidence.
  */
 
-import 'dotenv/config';
+import { existsSync } from 'fs';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { ARTIFACT_EMISSION_PROMPT, HELP_CENTER_PROMPT, ABSTENTION_PROMPT } from '@bike4mind/common';
 import { AnthropicBackend } from '@bike4mind/llm-adapters';
 import { b4mTools } from '@bike4mind/services/llm/tools';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
+
+if (existsSync('.env')) process.loadEnvFile('.env');
 
 const DEFAULT_MODEL = 'claude-sonnet-4-5-20250929';
 

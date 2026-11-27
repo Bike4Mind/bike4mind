@@ -2,7 +2,7 @@
 title: Bike4Mind Terms of Service
 type: terms-of-service
 version: 1.0.0
-effectiveDate: TBD
+effectiveDate: 2026-11-09
 status: In force as drafted — outside-counsel review deferred to ~1,000 users/stars (see README)
 mirrors:
   anthropic: https://www.anthropic.com/legal/consumer-terms

@@ -1,31 +1,18 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { z } from 'zod';
 import { PublishedArtifact, shareTokenFilter } from '@bike4mind/database';
 import { checkShareGrant, checkVisibility, toPublishUser } from '@server/services/publish';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
-import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
+import { recordVerifiedView } from '@server/services/publish/recordVerifiedView';
 import type { PublishVisibility } from '@bike4mind/common';
+import { hasQualifyingSocialParty } from '@server/services/gears/socialParty';
 
-/**
- * POST /api/publish/view - record a signed-in, non-owner view of a published bundle, the
- * condition the Published gear's payout waits on (`externalViewCount`, see
- * server/services/gears/catalog.ts).
- *
- * The serve route can only count a view whose REQUEST identifies the viewer, and a top-level
- * navigation to /p/... or /a/... carries no Authorization header. So on an open-public page or
- * an open share link - the common way to share - the serve route sees every viewer as
- * anonymous, and must (anonymous views cannot be told apart from the owner's own; see
- * bumpViewCount in serve/[...path].ts). The wrapper widget closes that gap: when this browser
- * holds a session it exchanges the refresh cookie for a token and calls this route once,
- * so the viewer is identified the same way the comment overlay identifies them.
- *
- * Grants nothing a second account could not already get from the serve route itself (a
- * Bearer/X-API-Key request there counts too). Only `externalViewCount` moves: the navigation
- * already counted the view in `viewCount`. Gated pages are not double-counted: their wrapper is
- * reached through the loader shell, whose authenticated `?raw=1` fetch counts the view and
- * which never loads the widget.
+/** Record an admitted signed-in view reported by the bundle wrapper widget.
+ * Navigation already records viewCount; this route records external analytics
+ * and verified reward evidence without counting the navigation twice.
  */
 
 const BodySchema = z.object({
@@ -36,6 +23,7 @@ const BodySchema = z.object({
 type ViewLean = {
   publicId: string;
   ownerId: string;
+  verifiedExternalViewCount?: number;
   scopeId: string;
   visibility: PublishVisibility;
   accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
@@ -72,7 +60,7 @@ const handler = baseApi({ auth: false })
           : { publicId: resolved.publicId, 'source.kind': resolved.kind, deletedAt: null };
 
     const artifact = await PublishedArtifact.findOne(query)
-      .select('publicId ownerId scopeId visibility accessGate.kind accessGate.allowedDomains')
+      .select('publicId ownerId scopeId visibility accessGate.kind accessGate.allowedDomains verifiedExternalViewCount')
       .lean<ViewLean>();
     if (!artifact) return res.status(404).json({ error: 'Not found' });
 
@@ -88,9 +76,14 @@ const handler = baseApi({ auth: false })
       : await checkVisibility(gateArtifact, user, { passphraseVerified });
     if (!access.ok) return res.status(404).json({ error: 'Not found' });
 
-    // The owner opening their own page is the self-grant this whole rule exists to refuse.
-    if (String(artifact.ownerId) !== String(principal.id)) {
+    // One qualifying-party check gates both the external count and the reward evidence.
+    const viewerId = String(principal.id);
+    if (
+      String(artifact.ownerId) !== viewerId &&
+      (await hasQualifyingSocialParty(String(artifact.ownerId), [viewerId]))
+    ) {
       await PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: { externalViewCount: 1 } });
+      await recordVerifiedView(artifact, viewerId, true);
     }
     return res.status(204).end();
   });

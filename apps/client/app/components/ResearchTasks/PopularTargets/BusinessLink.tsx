@@ -1,17 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { whiteAlpha, grayAlpha, blackAlpha, gray, cyan } from '@client/app/utils/themes/colors';
 import { Box, Typography, Card, Chip, Tooltip, CircularProgress, IconButton, Button } from '@mui/joy';
-import {
-  Analytics,
-  Edit,
-  Delete,
-  ContentCopy,
-  CheckCircle,
-  Add,
-  AttachMoney,
-  Business,
-  TrendingUp,
-} from '@mui/icons-material';
+import Analytics from '@mui/icons-material/Analytics';
+import Edit from '@mui/icons-material/Edit';
+import Delete from '@mui/icons-material/Delete';
+import ContentCopy from '@mui/icons-material/ContentCopy';
+import CheckCircle from '@mui/icons-material/CheckCircle';
+import Add from '@mui/icons-material/Add';
+import AttachMoney from '@mui/icons-material/AttachMoney';
+import Business from '@mui/icons-material/Business';
+import TrendingUp from '@mui/icons-material/TrendingUp';
 import { IResearchLinkDocument } from '@bike4mind/common';
 import { useBusinessLinks, usePopularTargets, useDeleteBusinessLink } from './hooks';
 import ConfirmModal from './ConfirmModal';

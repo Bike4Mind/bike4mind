@@ -37,7 +37,7 @@ export type AccessContextOptions = {
 };
 
 /**
- * The ONE builder of the data-lake `AccessContext` - routes (`server/dataLakes/toAccessContext`),
+ * The ONE builder of the data-lake `AccessContext` - routes (`packages/server-utils/src/dataLakes/toAccessContext`),
  * tools (`buildToolAccessContext`) and Slack (`buildSlackAccessContext`) all delegate here, so the
  * shape and the admin rule cannot drift between surfaces.
  *

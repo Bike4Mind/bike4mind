@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
+import { ApiKeyScope, attachOrgApiKeyReach, getDataLakeTags } from '@bike4mind/common';
 import { buildUserFileScope, buildRequestFileScope } from './userFileScope';
 
 // `Opti` is the requiredUserTag of the only lake in the DATA_LAKES registry; without it the
@@ -24,6 +24,18 @@ describe('buildUserFileScope', () => {
 
   it('passes the caller groups through', () => {
     expect(buildUserFileScope({ groups: ['group-a', 'group-b'], tags: [] }).userGroups).toEqual(['group-a', 'group-b']);
+  });
+
+  // An org key's service account is in no group; its file search scope is the grant apiKeyAuth attaches.
+  it("adds an org key's granted groups to its own", () => {
+    const keyUser = attachOrgApiKeyReach(
+      { groups: ['own-group'], tags: [] },
+      { organizationId: 'org-1', readGroupIds: ['granted-a', 'granted-b'], dataLakeOrgIds: [] }
+    );
+
+    expect(buildUserFileScope(keyUser).userGroups).toEqual(
+      expect.arrayContaining(['own-group', 'granted-a', 'granted-b'])
+    );
   });
 
   it('defaults absent groups and tags to empty rather than undefined', () => {

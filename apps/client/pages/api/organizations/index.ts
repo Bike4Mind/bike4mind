@@ -8,6 +8,9 @@ import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
 import { ensureAdmin } from '@bike4mind/server-utils/utils/errors';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
+import { attachOrganizationLogos } from '@server/organizations/attachOrganizationLogos';
+import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -25,10 +28,11 @@ const handler = baseApi()
         organizations: organizationRepository,
       },
     });
+    await recordOrganizationRead(req, result.data, { view: 'list' });
 
     return res.json({
       ...result,
-      data: toSafeOrganizations(result.data, { userId: user.id, isAdmin: user.isAdmin }),
+      data: await attachOrganizationLogos(toSafeOrganizations(result.data, { userId: user.id, isAdmin: user.isAdmin })),
     });
   })
   .post(async (req, res) => {
@@ -52,6 +56,12 @@ const handler = baseApi()
         logger: req.logger,
       }
     );
+
+    await recordAdminActionFromRequest(req, {
+      action: 'org.created',
+      target: { kind: 'organization', id: organization.id, displayName: organization.name },
+      summary: `created organization ${organization.name}`,
+    });
 
     return res.status(201).json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));
   });

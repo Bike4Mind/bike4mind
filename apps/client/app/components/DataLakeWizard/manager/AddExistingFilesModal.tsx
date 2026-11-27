@@ -1,7 +1,7 @@
 import { Box, Checkbox, Chip, Typography } from '@mui/joy';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AddIcon from '@mui/icons-material/Add';
-import { debounce } from 'lodash';
+import debounce from 'lodash/debounce';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useIsMutating } from '@tanstack/react-query';

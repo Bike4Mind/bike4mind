@@ -1,4 +1,4 @@
-import { IOrganizationDocument } from '@bike4mind/common';
+import { hasOrgPermission, IOrganizationDocument } from '@bike4mind/common';
 import { useStripePortal, useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import {
   useGetSubscriptionsByOwner,
@@ -15,7 +15,11 @@ import {
   ISubscription,
   isDelinquentSubscriptionStatus,
   pickDisplayedSubscription,
-} from '@client/lib/subscriptions/types';
+  resolveSubscriptionSource,
+  SubscriptionSource,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { useUser } from '@client/app/contexts/UserContext';
+import PayNowButton from '@client/app/components/subscription/PayNowButton';
 import AddIcon from '@mui/icons-material/Add';
 import GroupIcon from '@mui/icons-material/Group';
 import PaymentIcon from '@mui/icons-material/Payment';
@@ -43,7 +47,10 @@ import {
 import dayjs from 'dayjs';
 import SeatCountInput from './SeatCountInput';
 import ContactSalesNote from './ContactSalesNote';
+import OrganizationInvoiceList from './OrganizationInvoiceList';
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { getOrgPlanState } from './orgPlanState';
 
 type OrganizationBillingSectionProps = {
   organization: IOrganizationDocument;
@@ -297,9 +304,21 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   const subscribeTeamPlan = useSubscribeTeamPlan();
   const teamPlanAvailable = useTeamPlanAvailable();
   const subscription = pickDisplayedSubscription(subscriptions.data ?? []);
+  const { t } = useTranslation();
+  const planState = getOrgPlanState(subscription);
   // A delinquent plan is still a plan: the row exists so the Billing Portal stays reachable,
   // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const { currentUser } = useUser();
+  // Same manageBilling gate as pay-invoice.ts and the portal; admin grants have no Stripe invoice.
+  const payableSubscriptionId =
+    subscription &&
+    paymentIssue &&
+    !!currentUser &&
+    hasOrgPermission(currentUser, organization, 'manageBilling') &&
+    resolveSubscriptionSource(subscription) === SubscriptionSource.Stripe
+      ? subscription.subscriptionId
+      : undefined;
   const plans = useGetSubscriptionPlans();
 
   // Get the price per seat from Stripe
@@ -397,7 +416,12 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
               >
                 <Box>
                   <Typography level="title-lg" sx={{ mb: 1 }} className="organization-billing-plan-title">
-                    {!!subscription ? 'Team Plan' : 'No Active Subscription'}
+                    {/* The status beside the title already reports a payment issue or a cancel. */}
+                    {!subscription
+                      ? 'No Active Subscription'
+                      : t(
+                          `organization.plan_states.${planState === 'none' || planState === 'payment_issue' ? 'active' : planState}`
+                        )}
                   </Typography>
                   <Typography level="body-md" color="neutral" className="organization-billing-plan-price">
                     {subscription ? (
@@ -431,9 +455,14 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
                     {paymentIssue ? (
                       // A delinquent plan still carries a period end, so a renewal date would read
                       // as healthy. Send them to the portal - the only place the card is fixed.
-                      <Typography level="body-sm" color="danger" className="organization-billing-plan-payment-issue">
-                        Update your payment method in the Billing Portal to keep this plan
-                      </Typography>
+                      <Stack spacing={1} alignItems="flex-end">
+                        <Typography level="body-sm" color="danger" className="organization-billing-plan-payment-issue">
+                          Update your payment method in the Billing Portal to keep this plan
+                        </Typography>
+                        {payableSubscriptionId && (
+                          <PayNowButton subscriptionId={payableSubscriptionId} testId="org-billing-pay-now-btn" />
+                        )}
+                      </Stack>
                     ) : (
                       <Typography
                         level="body-sm"
@@ -523,16 +552,13 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
           </CardContent>
         </Card>
 
-        {/* Billing History - Placeholder for future implementation */}
         {subscription && (
           <Card variant="outlined" className="organization-billing-history-card">
             <CardContent className="organization-billing-history-content">
               <Typography level="title-lg" sx={{ mb: 2 }} className="organization-billing-history-title">
-                Recent Activity
+                Billing History
               </Typography>
-              <Typography level="body-md" color="neutral" className="organization-billing-history-description">
-                View your billing history and download invoices in the billing portal.
-              </Typography>
+              <OrganizationInvoiceList organizationId={organization.id} />
             </CardContent>
           </Card>
         )}

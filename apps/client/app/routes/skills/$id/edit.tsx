@@ -69,9 +69,13 @@ const EditSkillPage: FC = () => {
             description: skill.description,
             body: skill.body,
             argumentHint: skill.argumentHint,
+            claudeCodeAllowedTools: skill.claudeCodeAllowedTools,
+            claudeCodeModel: skill.claudeCodeModel,
             disableModelInvocation: skill.disableModelInvocation,
+            files: skill.files,
           }}
           submitLabel="Save changes"
+          updateFromSkillMd
           submitting={updateSkill.isPending}
           onCancel={() => navigate({ to: '/skills/$id', params: { id } })}
           onSubmit={async input => {

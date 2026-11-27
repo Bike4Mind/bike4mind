@@ -18,7 +18,7 @@ import {
   type OpenAiPriceRow,
   type OpenAiRates,
 } from './openaiDocs';
-import { isIntroducibleModelId } from '../catalogWrite';
+import { datedSnapshotAliases, isIntroducibleModelId } from '../catalogWrite';
 import { PAGINATED_SOURCE_DEADLINE_MS } from '../runModelDiscovery';
 import { compact, count, fetchJson, fetchText, hasTimeLeft, text } from './http';
 
@@ -195,7 +195,8 @@ const rates = (from: OpenAiRates): OpenAiRates =>
 
 export interface OpenAiSourceOptions {
   /**
-   * Every model id the catalog holds, in any lifecycle state. Only the ids NOT in
+   * Every model id the catalog holds, in any lifecycle state, plus the static
+   * adapter ids (a dated one makes its alias known too). Only the ids NOT in
    * here get their docs page read: for a model the catalog holds, `name` and
    * `contextWindow` already belong to a seed, an operator or an aggregator, and a
    * provider claim would outrank all three.
@@ -358,12 +359,14 @@ async function readNewModelFacts(
   // context-window bullet is the one fact parseOpenAiModelPage cannot read a page
   // without, and an image, transcribe or realtime page states none, so those ids
   // would spend a slot every run and never yield a row. isIntroducibleModelId is
-  // what planCatalogWrites refuses a snapshot or a fine-tune by. Without all
-  // three filters the newest unintroducible ids take the whole budget every run.
+  // what planCatalogWrites refuses a snapshot or a fine-tune by, and it refuses
+  // the alias of a held snapshot too. Without all four filters the newest
+  // unintroducible ids take the whole budget every run.
+  const aliases = datedSnapshotAliases(known);
   const pending = models
     .filter(record => record.patch.type === 'text' && !known.has(record.modelId))
     .map(record => record.modelId)
-    .filter(isIntroducibleModelId)
+    .filter(modelId => isIntroducibleModelId(modelId) && !aliases.has(modelId))
     .sort((a, b) => (createdAt.get(b) ?? 0) - (createdAt.get(a) ?? 0) || a.localeCompare(b));
 
   let read = 0;

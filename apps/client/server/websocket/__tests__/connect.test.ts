@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   verifyApiKey: vi.fn(),
   assertAccountStateUsable: vi.fn(),
   assertRealtimeSessionActive: vi.fn(),
+  isMfaEnrollmentOwed: vi.fn(),
 }));
 
 const GATEWAY_CAP_EXPIRY = new Date('2030-01-01T02:00:00Z');
@@ -27,7 +28,7 @@ vi.mock('@server/websocket/realtimeSession', () => ({
   assertRealtimeSessionActive: h.assertRealtimeSessionActive,
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   withWebSocketContext: (handler: (event: unknown, context: unknown, logger: unknown) => Promise<unknown>) => handler,
 }));
 
@@ -43,13 +44,22 @@ vi.mock('@bike4mind/services', () => ({
   isTokenTypeAcceptable: () => true,
 }));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  LiveHandoffRegistrationSchema: (await importOriginal<typeof import('@bike4mind/common')>())
+    .LiveHandoffRegistrationSchema,
   ApiKeyScope: { AI_GENERATE: 'ai_generate', AI_CHAT: 'ai_chat', CC_BRIDGE: 'cc_bridge' },
 }));
+// The IP-block refusal path is covered in ../connect.test.ts; this suite stubs @bike4mind/common,
+// which the real gate needs.
+vi.mock('@server/middlewares/checkBlockedIP', () => ({ ipBlockRefusal: async () => null }));
 vi.mock('@server/auth/tokenGenerator', () => ({ authTokenGenerator: { verifyToken: h.verifyToken } }));
-vi.mock('@server/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({
+vi.mock('@bike4mind/server-utils/cli/auth', () => ({ verifyApiKey: h.verifyApiKey }));
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
   assertAccountStateUsable: h.assertAccountStateUsable,
+}));
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
+  isMfaEnrollmentOwed: h.isMfaEnrollmentOwed,
+  MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   UnauthorizedError: class UnauthorizedError extends Error {},
@@ -88,6 +98,16 @@ describe('web $connect ticket path', () => {
     expect(h.connectionCreate.mock.calls[0][0]).not.toHaveProperty('scopes');
   });
 
+  it('leaves the enrollment gate to the ticket mint, which runs behind the REST gate', async () => {
+    (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5, used: true });
+    (h.isMfaEnrollmentOwed as Mock).mockResolvedValue(true);
+
+    const res = await call(eventWith({ ticket: 't-abc' }));
+
+    expect(res.statusCode).toBe(200);
+    expect(h.isMfaEnrollmentOwed).not.toHaveBeenCalled();
+  });
+
   it("records the ticket's sid, tokenVersion and auth expiry on the connection", async () => {
     const authExpiresAt = new Date('2030-01-01T00:30:00Z');
     (h.consume as Mock).mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1', authExpiresAt });
@@ -107,6 +127,37 @@ describe('web $connect ticket path', () => {
 
     await expect(call(eventWith({ ticket: 't-abc' }))).rejects.toThrow('Session expired');
     expect(h.connectionCreate).not.toHaveBeenCalled();
+  });
+
+  it('registers handoff metadata only for a session-bound ticket', async () => {
+    h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1' });
+    await call(eventWith({ ticket: 't', handoffPlatform: 'desktop', handoffName: 'My Mac', handoffClientId: 'tab-1' }));
+    expect(h.connectionCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        handoffPlatform: 'desktop',
+        handoffName: 'My Mac',
+        handoffClientId: 'tab-1',
+        sid: 'sid-1',
+      })
+    );
+    h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5 });
+    await call(eventWith({ ticket: 't2', handoffPlatform: 'web', handoffName: 'Browser' }));
+    expect(h.connectionCreate.mock.calls.at(-1)?.[0]).not.toHaveProperty('handoffPlatform');
+  });
+
+  it('still opens the connection without handoff metadata when the registration is invalid', async () => {
+    h.consume.mockResolvedValue({ userId: 'u1', tokenVersion: 5, sid: 'sid-1' });
+    const warn = vi.fn();
+    const res = await (func as unknown as Handler)(
+      eventWith({ ticket: 't', handoffPlatform: 'desktop', handoffName: 'x'.repeat(81), handoffClientId: 'tab-1' }),
+      {},
+      { warn, info: vi.fn() }
+    );
+    expect(res.statusCode).toBe(200);
+    const created = h.connectionCreate.mock.calls.at(-1)?.[0];
+    expect(created).toMatchObject({ connectionId: 'conn-1', sid: 'sid-1' });
+    for (const key of ['handoffPlatform', 'handoffName', 'handoffClientId']) expect(created).not.toHaveProperty(key);
+    expect(warn).toHaveBeenCalledWith('[WS_CONNECT] handoff registration ignored', { issuePaths: ['name'] });
   });
 
   it('falls back to the gateway cap for a ticket minted without an expiry', async () => {

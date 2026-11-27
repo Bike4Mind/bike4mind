@@ -12,7 +12,7 @@ import { settingsMap, type ICcAgentSource, type ICcAgentStatus } from '@bike4min
 import { getSettingByName } from '@bike4mind/utils';
 import { isSettingEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { toPresenceProjection, toWireHearthEvent, wireActorIdentity } from '@server/utils/hearthWire';
-import { sendToClient } from '@server/websocket/utils';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 
 /**
  * cc-bridge as a Hearth gateway: the bridge WS write points additionally report

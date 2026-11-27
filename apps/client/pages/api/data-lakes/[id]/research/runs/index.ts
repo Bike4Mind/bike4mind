@@ -1,23 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
-import { dataLakeResearchService } from '@bike4mind/services';
-import {
-  dataLakeRepository,
-  dataLakeResearchConfigRepository,
-  dataLakeResearchRunRepository,
-  organizationRepository,
-  userRepository,
-  withTransaction,
-} from '@bike4mind/database';
-import { InternalServerError } from '@bike4mind/utils';
+import { researchRunEnvelopeResponseSchema, researchRunListResponseSchema } from '@bike4mind/common';
 import { Request } from 'express';
-import { Resource } from 'sst';
 import { z } from 'zod';
-import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
-import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { listLakeResearchRuns, startLakeResearchRun } from '@server/dataLakes/research/researchRunHandlers';
+import { respond } from '@server/utils/respond';
 
 const StartInput = z.object({ configId: z.string() });
 
@@ -32,21 +21,17 @@ const DEFAULT_LIMIT = 20;
  *
  * The POST writes the run row FIRST and enqueues second, so a user who clicked Run sees a queued
  * run immediately instead of waiting on a worker. The row is also what makes the enqueue safe to
- * retry: the handler claims it with a compare-and-set, so a duplicate message runs nothing.
+ * retry: the handler claims it with a compare-and-set, so a duplicate message runs nothing. The
+ * handler bodies are shared with the public v1 routes (`server/dataLakes/research`).
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
-    // Gated before the query is parsed, matching the POST below and the config routes: a caller who
-    // may not manage this lake should not be able to probe the request schema by reading which
-    // field it complains about. Nothing leaks through this particular 400, but a rule the two verbs
-    // in one file disagree about is a rule that erodes.
-    const { lake } = await assertLakeResearchManage(req, id, await toAccessContext(req));
-    const { limit } = ListQuery.parse(req.query);
-
-    const runs = await dataLakeResearchRunRepository.listByLake(lake.id, { limit: limit ?? DEFAULT_LIMIT });
-    return res.json({ data: runs });
+    const runs = await listLakeResearchRuns(req, id, await toAccessContext(req), () => ({
+      limit: ListQuery.parse(req.query).limit ?? DEFAULT_LIMIT,
+    }));
+    return respond(res, researchRunListResponseSchema, { data: runs });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -54,47 +39,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Computed outside the transaction: it issues concurrent reads, which an ambient session rejects.
     const ctx = await toAccessContext(req);
 
-    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
-    // on the lake doc and the retry re-reads live grants. Only the run row is written in it: the
-    // enqueue below is an external side effect, and the callback re-runs on retry.
-    const { run, lake, queueUrl } = await withTransaction(async () => {
-      // Gated before the body is parsed, matching the config routes: a caller who may not manage this
-      // lake should not be able to probe the request schema by reading which field it complains about.
-      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
-      const { configId } = StartInput.parse(req.body);
-
-      // Checked BEFORE the row is written, and after the gate and the parse so a refused or malformed
-      // request never learns about deployment config. Without the queue there is no executor, so a
-      // run started here would sit `queued` forever and block every later run behind the
-      // one-at-a-time guard. A pure config read, so safe to re-run on retry.
-      const queueUrl = Resource.dataLakeResearchQueue?.url;
-      if (!queueUrl) {
-        throw new InternalServerError('Research runs are not available on this deployment');
-      }
-
-      const started = await dataLakeResearchService.startResearchRun(
-        configId,
-        lake,
-        { trigger: 'on_demand', actor, grants },
-        {
-          db: {
-            dataLakeResearchConfigs: dataLakeResearchConfigRepository,
-            dataLakeResearchRuns: dataLakeResearchRunRepository,
-            users: userRepository,
-            organizations: organizationRepository,
-            ...lakeConfigAuditDb,
-          },
-          logger: req.logger,
-        }
-      );
-      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
-      await dataLakeRepository.touchIfStable(lake.id);
-      return { run: started, lake, queueUrl };
-    });
-
-    await queueResearchRun(run, lake, queueUrl, req.logger);
-
-    return res.status(202).json({ data: run });
+    const run = await startLakeResearchRun(req, id, ctx, () => StartInput.parse(req.body));
+    return respond(res, researchRunEnvelopeResponseSchema, { data: run }, 202);
   });
 
 export const config = {

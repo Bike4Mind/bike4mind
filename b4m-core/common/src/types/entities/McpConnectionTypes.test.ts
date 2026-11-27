@@ -6,10 +6,15 @@ import {
   RESERVED_MCP_CONNECTION_SLUGS,
   toMcpConnectionPublic,
   toMcpDisplayUrl,
+  toMcpPlatformConnectionMemberView,
   effectiveMcpConnectionStatus,
+  mcpConnectionOwnerProblem,
   MCP_CONNECTION_STATUSES,
+  PLATFORM_MCP_OWNER,
   type IMcpConnectionDocument,
+  type IMcpConnectionSummary,
 } from './McpConnectionTypes';
+import { CALLABLE_FUNCTION_TOOL_CONNECTION_ID } from './CallableFunctionTypes';
 import { McpServerName } from './McpServerTypes';
 
 describe('McpConnectionSlugSchema', () => {
@@ -35,6 +40,11 @@ describe('McpConnectionSlugSchema', () => {
     ['a_2345678901234567890', 'too long with underscores'],
   ])('rejects %s (%s)', slug => {
     expect(isValidMcpConnectionSlug(slug)).toBe(false);
+  });
+
+  it('keeps the function namespace outside valid connector slugs without reserving legacy fn', () => {
+    expect(isValidMcpConnectionSlug('fn')).toBe(true);
+    expect(isValidMcpConnectionSlug(CALLABLE_FUNCTION_TOOL_CONNECTION_ID)).toBe(false);
   });
 
   it('reserves every built-in server name and the first-party names', () => {
@@ -136,6 +146,114 @@ describe('toMcpConnectionPublic', () => {
   it('omits auth sub-objects the connection does not have', () => {
     const view = toMcpConnectionPublic({ ...doc, auth: { kind: 'none' } });
     expect(view.auth).toEqual({ kind: 'none' });
+  });
+});
+
+describe('toMcpPlatformConnectionMemberView', () => {
+  const now = new Date('2026-10-15T00:00:00Z');
+  const tool = {
+    name: 'search',
+    description: 'Searches',
+    descriptionRawHash: 'raw',
+    versionHash: 'v1',
+    enabled: true,
+    approval: 'default' as const,
+    state: 'active' as const,
+    firstSeenAt: now,
+  };
+  const doc: IMcpConnectionSummary = {
+    id: 'conn-9',
+    ...PLATFORM_MCP_OWNER,
+    userId: 'admin-1',
+    slug: 'docs',
+    displayName: 'Docs',
+    urlEnc: 'SECRET-0',
+    displayUrl: 'https://mcp.example.com/team/...WXYZ/mcp',
+    urlHost: 'mcp.example.com',
+    transport: 'auto',
+    auth: { kind: 'api_key', apiKey: { headerName: 'X-Api-Key', scheme: 'raw', valueEnc: 'SECRET-1', last4: 'wxyz' } },
+    status: 'connected',
+    lastError: { code: 'timeout', message: 'The server did not answer', at: now },
+    serverInfo: { name: 'docs-server', version: '1.2.3' },
+    tools: [tool],
+    toolsFingerprint: 'fp',
+    enabled: true,
+    lastUsedAt: now,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  it('is exactly the fields a Tools-menu row needs', () => {
+    expect(toMcpPlatformConnectionMemberView(doc, { allowed: true })).toEqual({
+      id: 'conn-9',
+      ownerType: 'platform',
+      slug: 'docs',
+      displayName: 'Docs',
+      urlHost: 'mcp.example.com',
+      status: 'connected',
+      tools: [tool],
+      enabled: true,
+    });
+  });
+
+  it('names no creator, URL path, key detail, error or last use', () => {
+    const serialized = JSON.stringify(toMcpPlatformConnectionMemberView(doc, { allowed: true }));
+    for (const hidden of ['admin-1', 'WXYZ', 'wxyz', 'X-Api-Key', 'SECRET', 'did not answer', 'docs-server']) {
+      expect(serialized).not.toContain(hidden);
+    }
+    for (const field of ['userId', 'displayUrl', 'auth', 'lastError', 'lastUsedAt', 'serverInfo', 'createdAt']) {
+      expect(serialized).not.toContain(`"${field}"`);
+    }
+  });
+
+  it('reports blocked_by_policy when the viewer policy denies the host', () => {
+    expect(toMcpPlatformConnectionMemberView(doc, { allowed: false }).status).toBe('blocked_by_policy');
+  });
+
+  it('carries only the tools the admin reviewed and switched on', () => {
+    const tools = [
+      tool,
+      { ...tool, name: 'draft_unreviewed', description: 'Awaiting review', state: 'pending_review' as const },
+      { ...tool, name: 'drop_switched_off', description: 'Switched off', enabled: false },
+    ];
+    const view = toMcpPlatformConnectionMemberView({ ...doc, tools }, { allowed: true });
+
+    expect(view.tools).toEqual([tool]);
+    for (const hidden of ['draft_unreviewed', 'Awaiting review', 'drop_switched_off', 'Switched off']) {
+      expect(JSON.stringify(view)).not.toContain(hidden);
+    }
+  });
+
+  it('carries the description the admin wrote, and none when it is absent or empty', () => {
+    const described = { ...doc, description: 'Searches the team handbook.' };
+    expect(toMcpPlatformConnectionMemberView(described, { allowed: true }).description).toBe(
+      'Searches the team handbook.'
+    );
+    expect(toMcpConnectionPublic(described).description).toBe('Searches the team handbook.');
+    const serializedKeys = (view: object) => Object.keys(JSON.parse(JSON.stringify(view)) as object);
+    for (const source of [doc, { ...doc, description: '' }]) {
+      expect(serializedKeys(toMcpPlatformConnectionMemberView(source, { allowed: true }))).not.toContain('description');
+      expect(serializedKeys(toMcpConnectionPublic(source))).not.toContain('description');
+    }
+  });
+});
+
+describe('mcpConnectionOwnerProblem for a platform connection', () => {
+  const platform = { ...PLATFORM_MCP_OWNER, userId: 'admin-1', auth: { kind: 'api_key' } };
+
+  it('accepts an API key or no sign-in under the fixed owner key', () => {
+    expect(mcpConnectionOwnerProblem(platform)).toBeNull();
+    expect(mcpConnectionOwnerProblem({ ...platform, auth: { kind: 'none' } })).toBeNull();
+  });
+
+  it.each([
+    ['another owner key', { ownerKey: 'admin-1' }],
+    ['an organization', { organizationId: 'org-1' }],
+    ['a definition', { definitionId: 'def-1' }],
+    ['a refresh lease', { refreshLease: { holder: 'h', until: new Date() } }],
+    ['OAuth sign-in', { auth: { kind: 'oauth' } }],
+  ])('refuses %s', (_label, overrides) => {
+    expect(mcpConnectionOwnerProblem({ ...platform, ...overrides })).toEqual(expect.any(String));
   });
 });
 

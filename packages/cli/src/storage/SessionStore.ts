@@ -1,7 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
-import { v4 as uuidv4 } from 'uuid';
 import type { Session } from './types';
 import { isValidSessionId, SESSION_ID_PATTERN } from '../utils/validateSessionId.js';
 
@@ -53,7 +52,7 @@ export class SessionStore {
 
     // Write-then-rename: saves can overlap (a `!` command result lands while a turn saves), and
     // two truncating writes to one file can interleave into JSON that no longer parses.
-    const tempPath = `${filePath}.${uuidv4()}.tmp`;
+    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
     try {
       await fs.writeFile(tempPath, JSON.stringify(session, null, 2), 'utf-8');
       await fs.rename(tempPath, filePath);
@@ -81,7 +80,7 @@ export class SessionStore {
       // Backward compatibility: Add IDs to messages that don't have them
       session.messages = session.messages.map(msg => {
         if (!msg.id) {
-          return { ...msg, id: uuidv4() };
+          return { ...msg, id: crypto.randomUUID() };
         }
         return msg;
       });
@@ -125,7 +124,7 @@ export class SessionStore {
           // Backward compatibility: Add IDs to messages that don't have them
           session.messages = session.messages.map(msg => {
             if (!msg.id) {
-              return { ...msg, id: uuidv4() };
+              return { ...msg, id: crypto.randomUUID() };
             }
             return msg;
           });

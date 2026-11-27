@@ -14,6 +14,7 @@
  * Counting mirrors the "Parse test results" jq in .github/workflows/e2e-run.yml;
  * keep the two in sync while that step exists.
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,19 @@ const MB = 1024 * 1024;
 export const UPLOAD_LIMITS = { screenshot: 5 * MB, video: 50 * MB, trace: 50 * MB, report: 20 * MB };
 export const ERROR_MAX_CHARS = 4000;
 export const MAX_TESTS = 2000;
+// Mirror the latency identity/display limits in b4m-core/common/src/schemas/qa.ts.
+const MODEL_ID_MAX = 200;
+const METRIC_LABEL_MAX = 200;
+const GATE_FIELD_MAX = 1000;
+const validModelId = model => typeof model === 'string' && model.length > 0 && model.length <= MODEL_ID_MAX;
+
+// Preserve the full identity in the suffix when a readable prefix needs shortening.
+function boundedIdentity(value, maxLength) {
+  if (value.length <= maxLength) return value;
+  const suffix = `::${createHash('sha256').update(value).digest('hex')}`;
+  return `${value.slice(0, maxLength - suffix.length)}${suffix}`;
+}
+
 /** Mirrors CREDITS_THRESHOLD in apps/client/e2e/helpers/slack.ts. */
 export const CREDITS_THRESHOLD = 60;
 
@@ -188,15 +202,25 @@ export function creditsMetrics(entries) {
     }));
 }
 
+/**
+ * The cell's gated latency: the median, or the mean a results file (or backfilled Slack post)
+ * written before the switch to a median carries. undefined when neither is a number.
+ */
+function cellLatencySec(json) {
+  if (typeof json?.medianResponseTimeSec === 'number') return json.medianResponseTimeSec;
+  if (typeof json?.averageResponseTimeSec === 'number') return json.averageResponseTimeSec;
+  return undefined;
+}
+
 /** 0 means "no data" in e2e-ai-latency.yml's Aggregate step. */
 export function latencyMetric(fileName, json) {
-  const avg = json?.averageResponseTimeSec;
-  if (typeof avg !== 'number' || avg <= 0 || typeof json.model !== 'string') return null;
+  const latencySec = cellLatencySec(json);
+  if (latencySec === undefined || latencySec <= 0 || !validModelId(json.model)) return null;
   const metric = {
     kind: 'latency',
     model: json.model,
-    label: path.basename(fileName, '-results.json'),
-    value: avg,
+    label: boundedIdentity(path.basename(fileName, '-results.json'), METRIC_LABEL_MAX),
+    value: latencySec,
     unit: 's',
   };
   if (typeof json.thresholdSec === 'number') metric.threshold = json.thresholdSec;
@@ -206,31 +230,116 @@ export function latencyMetric(fileName, json) {
 /**
  * The Aggregate step in e2e-ai-latency.yml fails the run on a latency breach after Playwright
  * passed, so the breach has to reach /status as a failed test. Mirrors that step's per-cell rule
- * (over threshold, no threshold, or an abandoned gated prompt); keep the two in sync. A cell
- * within budget posts a passed test, so the alarm's flake history (evaluateAlarm.ts) sees the
- * cell's passes too and does not call every repeat breach "known flaky". No data: no test.
+ * (over threshold, no threshold, or a gated prompt whose latest attempt was abandoned); keep the
+ * two in sync. A cell within budget posts a passed test, so the alarm's flake history
+ * (evaluateAlarm.ts) sees the cell's passes too and does not call every repeat breach "known
+ * flaky". No data: no test.
  */
 export function latencyGateTest(fileName, json) {
-  if (typeof json?.model !== 'string') return null;
-  const avg = typeof json.averageResponseTimeSec === 'number' ? json.averageResponseTimeSec : 0;
+  if (!validModelId(json?.model)) return null;
+  const latencySec = cellLatencySec(json) ?? 0;
   const threshold = typeof json.thresholdSec === 'number' ? json.thresholdSec : undefined;
   const abandoned = (Array.isArray(json.results) ? json.results : []).filter(
-    r => r?.incomplete === true && r.measuresDeliverable !== true
+    r => r?.incomplete === true && r.measuresDeliverable !== true && r.retried !== true
   ).length;
-  if (threshold !== undefined && avg === 0) return null;
+  if (threshold !== undefined && latencySec === 0) return null;
   const label = `${path.basename(fileName, '-results.json')} [${json.model}]`;
   const testKey = `latency-gate::${label}`;
   const title = `Latency gate: ${label}`;
-  if (threshold !== undefined && avg <= threshold && abandoned === 0) return gateTest(testKey, title, 'passed');
-  let error = `avg ${avg.toFixed(2)}s, ${threshold === undefined ? 'no threshold declared' : `threshold ${threshold}s`}`;
+  if (threshold !== undefined && latencySec <= threshold && abandoned === 0) return gateTest(testKey, title, 'passed');
+  let error = `${typeof json.medianResponseTimeSec === 'number' ? 'median' : 'avg'} ${latencySec.toFixed(2)}s, ${threshold === undefined ? 'no threshold declared' : `threshold ${threshold}s`}`;
   if (abandoned > 0) error += `, ${abandoned} prompt(s) never finished`;
   return gateTest(testKey, title, 'failed', error);
 }
 
 function gateTest(testKey, title, status, error) {
-  const test = { testKey, title, status, durationMs: 0, retries: 0, artifacts: [], attachments: [] };
+  const test = {
+    testKey: boundedIdentity(testKey, GATE_FIELD_MAX),
+    title: title.slice(0, GATE_FIELD_MAX),
+    status,
+    durationMs: 0,
+    retries: 0,
+    artifacts: [],
+    attachments: [],
+  };
   if (error !== undefined) test.error = error;
   return test;
+}
+
+/**
+ * Some results files are a list with one entry per prompt (`aiModel`, `promptName`, latencies as
+ * "51.67 secs." strings) instead of one summary per cell. Each prompt is then its own cell. The
+ * gate mirrors the producing workflow's per-prompt rule: `exceedsThreshold`, or no end-to-end time
+ * (the prompt crashed or timed out), fails. Any other list shape is ignored.
+ */
+function promptEntries(json) {
+  return Array.isArray(json) ? json.filter(e => validModelId(e?.aiModel) && typeof e.promptName === 'string') : [];
+}
+
+function promptSeconds(value) {
+  const sec = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  return Number.isFinite(sec) ? sec : 0;
+}
+
+const promptLabel = (fileName, entry) => `${path.basename(fileName, '-results.json')}: ${entry.promptName}`;
+
+/** Every latency metric in one results file: one per cell summary, or one per prompt. */
+export function latencyMetrics(fileName, json) {
+  if (!Array.isArray(json)) {
+    const metric = latencyMetric(fileName, json);
+    return metric ? [metric] : [];
+  }
+  return promptEntries(json).flatMap(entry => {
+    const latencySec = promptSeconds(entry.actualResponseLatency);
+    if (latencySec <= 0) return [];
+    const metric = {
+      kind: 'latency',
+      model: entry.aiModel,
+      label: boundedIdentity(promptLabel(fileName, entry), METRIC_LABEL_MAX),
+      value: latencySec,
+      unit: 's',
+    };
+    if (typeof entry.thresholdSec === 'number') metric.threshold = entry.thresholdSec;
+    return [metric];
+  });
+}
+
+/** Every latency gate test in one results file: one per cell summary, or one per prompt. */
+export function latencyGateTests(fileName, json) {
+  if (!Array.isArray(json)) {
+    const test = latencyGateTest(fileName, json);
+    return test ? [test] : [];
+  }
+  return promptEntries(json).map(entry => {
+    const label = `${promptLabel(fileName, entry)} [${entry.aiModel}]`;
+    const testKey = `latency-gate::${label}`;
+    const title = `Latency gate: ${label}`;
+    if (promptSeconds(entry.totalEndToEnd) <= 0)
+      return gateTest(testKey, title, 'failed', 'no measurement; the prompt crashed or timed out');
+    if (entry.exceedsThreshold !== true) return gateTest(testKey, title, 'passed');
+    return gateTest(testKey, title, 'failed', promptBreachReason(entry));
+  });
+}
+
+/**
+ * Names the check(s) behind `exceedsThreshold`: the producer sets it when a detected rapid reply
+ * exceeds `initialResponseThresholdSec`, or the actual or end-to-end time exceeds `thresholdSec`.
+ */
+function promptBreachReason(entry) {
+  const limit = entry.thresholdSec;
+  const initialLimit = entry.initialResponseThresholdSec;
+  const initial = promptSeconds(entry.initialResponseLatency);
+  const actual = promptSeconds(entry.actualResponseLatency);
+  const total = promptSeconds(entry.totalEndToEnd);
+  const reasons = [];
+  if (entry.rapidResponseDetected === true && typeof initialLimit === 'number' && initial > initialLimit)
+    reasons.push(`initial response ${initial.toFixed(2)}s, threshold ${initialLimit}s`);
+  // End-to-end usually equals the actual time, so it is named only when it alone is over.
+  if (typeof limit === 'number' && actual > limit) reasons.push(`${actual.toFixed(2)}s, threshold ${limit}s`);
+  else if (typeof limit === 'number' && total > limit)
+    reasons.push(`end-to-end ${total.toFixed(2)}s, threshold ${limit}s`);
+  if (reasons.length > 0) return reasons.join('; ');
+  return `${actual.toFixed(2)}s, ${typeof limit === 'number' ? `threshold ${limit}s` : 'no threshold declared'}`;
 }
 
 /** Fallback when the workflow reports a breach but no cell file explains it. */
@@ -262,10 +371,7 @@ async function loadLatencyGateTests(latencyDir, log) {
   if (!latencyDir) return [];
   const files = await findFiles(latencyDir, n => n.endsWith('-results.json') && !n.endsWith('-pw-results.json'));
   const tests = [];
-  for (const file of files) {
-    const test = latencyGateTest(file, await readJson(file, log));
-    if (test) tests.push(test);
-  }
+  for (const file of files) tests.push(...latencyGateTests(file, await readJson(file, log)));
   return tests;
 }
 
@@ -395,10 +501,7 @@ async function loadMetrics(args, log) {
   if (args.credits) metrics.push(...creditsMetrics(await readJson(args.credits, log)));
   if (args.latencyDir) {
     const files = await findFiles(args.latencyDir, n => n.endsWith('-results.json') && !n.endsWith('-pw-results.json'));
-    for (const file of files) {
-      const metric = latencyMetric(file, await readJson(file, log));
-      if (metric) metrics.push(metric);
-    }
+    for (const file of files) metrics.push(...latencyMetrics(file, await readJson(file, log)));
   }
   return metrics.slice(0, 500);
 }

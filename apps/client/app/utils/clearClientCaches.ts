@@ -2,6 +2,13 @@ import { del } from 'idb-keyval';
 import { dexie } from './dexie';
 import { tagCacheManager } from './tagCache';
 import { FIRST_SIGNUP_SESSION_KEY } from './firstSignupSession';
+import { MFA_ENROLLMENT_HINT_KEY } from './mfaEnrollmentHint';
+import { isPrecacheName } from '../swRoutes';
+import {
+  CHAT_INPUT_DRAFTS_STORAGE_KEY,
+  JUPYTER_CONFIG_STORAGE_KEY,
+  runIdentityResetHooks,
+} from './identityScopedStorage';
 import { premiumLocalStorageKeyPrefixes } from '../premium-generated/premiumLocalStorageKeys.generated';
 
 /**
@@ -24,6 +31,11 @@ const USER_SPECIFIC_LS_KEYS = [
   // behind handed the previous identity's model (often the priciest one) to the next account on
   // the same browser, which a fresh account then billed until access checks swapped it out.
   'llm-settings',
+  // MFAEnforcementWrapper's "this user is enrolled" hint (mfaEnrollmentHint.ts). It is keyed to a
+  // user id, so a stale one is already ignored for another account; removing it is hygiene.
+  MFA_ENROLLMENT_HINT_KEY,
+  CHAT_INPUT_DRAFTS_STORAGE_KEY,
+  JUPYTER_CONFIG_STORAGE_KEY,
 ];
 
 /**
@@ -35,7 +47,9 @@ const USER_SPECIFIC_LS_KEYS = [
  */
 export async function clearClientCaches(): Promise<void> {
   try {
-    // Clear user-specific localStorage entries (Zustand stores + artifact cache)
+    // Hooks first: a zustand persist store writes on every set, so resetting it after the key is
+    // removed would put the key back.
+    runIdentityResetHooks();
     USER_SPECIFIC_LS_KEYS.forEach(key => localStorage.removeItem(key));
     removePremiumLocalStorageKeys();
 
@@ -49,6 +63,7 @@ export async function clearClientCaches(): Promise<void> {
       dexie.delete(),
       // NotebookTagCache (custom IndexedDB - clear all users since userId unavailable at logout)
       tagCacheManager.clearAllCaches(),
+      clearRuntimeCacheStorage(),
     ]);
   } catch (error) {
     console.warn('Failed to clear client caches:', error);
@@ -73,4 +88,11 @@ function removePremiumLocalStorageKeys(): void {
   Object.keys(localStorage)
     .filter(key => premiumLocalStorageKeyPrefixes.some(prefix => key.startsWith(prefix)))
     .forEach(key => localStorage.removeItem(key));
+}
+
+/** Deletes the service worker's runtime caches; the precache holds only build assets and is kept. */
+async function clearRuntimeCacheStorage(): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  const names = await caches.keys();
+  await Promise.all(names.filter(name => !isPrecacheName(name)).map(name => caches.delete(name)));
 }

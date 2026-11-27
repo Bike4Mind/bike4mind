@@ -20,7 +20,8 @@ describe('addSessions authorization', () => {
     const session = { id: 'session-1', userId: SHAREE, users: [], groups: [] };
 
     const projectUpdate = vi.fn().mockResolvedValue({});
-    const sessionUpdate = vi.fn().mockResolvedValue(undefined);
+    const sessionShares = createShareableFake([session as never]);
+    const sessionUpdate = sessionShares.updateUserShares;
 
     return {
       project,
@@ -29,7 +30,7 @@ describe('addSessions authorization', () => {
       adapters: {
         db: {
           projects: { shareable: createShareableFake([project as never]), updateWithUpdateAccess: projectUpdate },
-          sessions: { shareable: createShareableFake([session as never]), update: sessionUpdate },
+          sessions: { shareable: sessionShares },
           fabFiles: { findAllByIds: vi.fn().mockResolvedValue([]) },
         },
       },
@@ -104,18 +105,14 @@ describe('addSessions grant cap', () => {
       ],
       groups: [],
     };
-    const fabFileUpdate = vi.fn();
     const adapters = {
       db: {
         projects: {
           shareable: createShareableFake([project as never]),
           updateWithUpdateAccess: vi.fn(async () => ({})),
         },
-        sessions: { shareable: createShareableFake([{ groups: [], ...session } as never]), update: vi.fn() },
-        fabFiles: {
-          shareable: createShareableFake(file ? [{ groups: [], ...file } as never] : []),
-          update: fabFileUpdate,
-        },
+        sessions: { shareable: createShareableFake([session as never]) },
+        fabFiles: { shareable: createShareableFake(file ? [file as never] : []) },
       },
     };
     await addSessions(
@@ -127,14 +124,18 @@ describe('addSessions grant cap', () => {
       doc.users.find(u => u.userId === userId && u.projectId === 'project-1')?.permissions;
   };
 
-  it('lets a read-only adder pass on only read on the session and its knowledge files', async () => {
+  it('lets an adder holding read+share pass on only read on the session and its knowledge files', async () => {
     const session = {
       id: 'session-1',
       userId: 'someone-else',
-      users: [{ userId: ADDER, permissions: [Permission.read] }],
+      users: [{ userId: ADDER, permissions: [Permission.read, Permission.share] }],
       knowledgeIds: ['file-1'],
     };
-    const file = { id: 'file-1', userId: 'someone-else', users: [{ userId: ADDER, permissions: [Permission.read] }] };
+    const file = {
+      id: 'file-1',
+      userId: 'someone-else',
+      users: [{ userId: ADDER, permissions: [Permission.read, Permission.share] }],
+    };
 
     const grantsFor = await run(session, file);
 

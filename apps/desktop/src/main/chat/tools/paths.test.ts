@@ -1,9 +1,45 @@
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied, resolveWithinRoots, resolveWithinRootsPhysically } from './paths';
+import { realpathSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  MAX_WALK_NAMES,
+  ownLocation,
+  PathAccessDenied,
+  resolveWithinRoots,
+  resolveWithinRootsPhysically,
+  withinGuarded,
+  realpathSyncNearest,
+  withRealPath,
+} from './paths';
+
+const readlinkTooLong = vi.hoisted(() => ({ for: (_path: string): boolean => false }));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const readlinkSync = ((...args: Parameters<typeof actual.readlinkSync>) => {
+    if (readlinkTooLong.for(String(args[0]))) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+    return actual.readlinkSync(...args);
+  }) as typeof actual.readlinkSync;
+  return { ...actual, readlinkSync };
+});
+
+/**
+ * macOS realpath(3) and readlink(2) refuse any path of PATH_MAX (1024) bytes or more, whatever its
+ * components. `overflows` is a link whose text takes realpath past that limit, so it fails there too.
+ */
+function limitPathMax(bytes: number, overflows?: string): void {
+  readlinkTooLong.for = path => Buffer.byteLength(path) >= bytes;
+  const native = realpathSync.native;
+  vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+    const text = String(path);
+    if (readlinkTooLong.for(text) || (overflows !== undefined && text.startsWith(overflows))) {
+      throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+    }
+    return native(path, options);
+  });
+}
 
 describe('resolveWithinRoots', () => {
   let base: string;
@@ -191,5 +227,266 @@ describe('resolveWithinRootsPhysically', () => {
 
   it('denies everything when no folder has been granted', async () => {
     await expect(resolveWithinRootsPhysically('in.txt', [], granted)).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+});
+
+describe('withinGuarded', () => {
+  const APP = 'C:\\Users\\me\\AppData\\Roaming\\App';
+
+  it('on Windows, reads a WSL /mnt/<x> share path as its drive path, ignoring case', () => {
+    for (const path of [
+      '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App\\vault.json',
+      '\\\\wsl$\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App',
+      '\\\\wsl.localhost\\Ubuntu\\mnt\\C\\users\\me\\appdata\\roaming\\app\\x',
+      'c:/users/me/appdata/roaming/app/x',
+    ]) {
+      expect(withinGuarded([APP], ['/elsewhere', path], 'win32')).toBe(true);
+    }
+    expect(withinGuarded([APP], ['\\\\wsl.localhost\\Ubuntu\\home\\me\\AppData\\Roaming\\App'], 'win32')).toBe(false);
+    expect(
+      withinGuarded([APP], ['\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App2'], 'win32')
+    ).toBe(false);
+  });
+
+  it('maps nothing and keeps case elsewhere', () => {
+    expect(withinGuarded([APP], ['\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App'], 'linux')).toBe(
+      false
+    );
+    expect(withinGuarded(['/home/me/App'], ['/home/me/App/x'], 'linux')).toBe(true);
+    expect(withinGuarded(['/home/me/App'], ['/home/me/app/x'], 'linux')).toBe(false);
+    expect(withinGuarded(['/Users/me/App'], ['/users/me/app/x'], 'darwin')).toBe(true);
+  });
+});
+
+describe('withRealPath', () => {
+  it('adds the real path when the given one runs through a symlink, and only then', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'config', 'App'), { recursive: true });
+    await symlink(join(base, 'config'), join(base, 'cfg-link'));
+
+    expect(withRealPath(join(base, 'cfg-link', 'App'))).toEqual([
+      join(base, 'cfg-link', 'App'),
+      join(base, 'config', 'App'),
+    ]);
+    expect(withRealPath(join(base, 'config', 'App'))).toEqual([join(base, 'config', 'App')]);
+    expect(withRealPath(join(base, 'missing'))).toEqual([join(base, 'missing')]);
+    expect(withRealPath(join(base, 'cfg-link', 'new', 'file'))).toEqual([
+      join(base, 'cfg-link', 'new', 'file'),
+      join(base, 'config', 'new', 'file'),
+    ]);
+  });
+});
+
+describe('ownLocation', () => {
+  it('returns a relative path or a root as given, and null only when the parent cannot be resolved', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'dir'));
+    await symlink(join(base, 'loop'), join(base, 'loop'));
+
+    expect(ownLocation('relative/name')).toBe('relative/name');
+    expect(ownLocation('/')).toBe('/');
+    expect(ownLocation(join(base, 'dir', 'name'))).toBe(join(base, 'dir', 'name'));
+    expect(ownLocation(join(base, 'loop', 'name'))).toBeNull();
+  });
+});
+
+describe('realpathSyncNearest', () => {
+  afterEach(() => {
+    readlinkTooLong.for = () => false;
+    vi.restoreAllMocks();
+  });
+
+  it('returns null when resolution fails for a reason other than a missing path', () => {
+    vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    });
+    expect(realpathSyncNearest(join(tmpdir(), 'a', 'b'))).toBeNull();
+    expect(withRealPath(join(tmpdir(), 'a', 'b'))).toEqual([join(tmpdir(), 'a', 'b')]);
+  });
+
+  it('walks up past a component over 255 characters and a NUL-containing name', () => {
+    const base = join(tmpdir(), 'b4m-missing-codes');
+    const native = realpathSync.native;
+    const toolong = 'x'.repeat(256);
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      const text = String(path);
+      if (text.includes(toolong)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      if (text.includes('\0')) throw Object.assign(new Error('nul'), { code: 'ERR_INVALID_ARG_VALUE' });
+      return native(path, options);
+    });
+    const long = join(tmpdir(), toolong, 'x');
+    expect(realpathSyncNearest(long)).toBe(join(native(tmpdir()), toolong, 'x'));
+    expect(realpathSyncNearest(`${base}\0x`)).toBe(join(native(tmpdir()), 'b4m-missing-codes\0x'));
+  });
+
+  it('walks up past a multibyte component under 255 units but over 255 bytes on POSIX', () => {
+    const native = realpathSync.native;
+    const wide = '中'.repeat(100);
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path).includes(wide)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(join(tmpdir(), wide, 'x'))).toBe(join(native(tmpdir()), wide, 'x'));
+  });
+
+  it('counts UTF-16 units on win32, so the same multibyte component is not skipped', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      const native = realpathSync.native;
+      const wide = '中'.repeat(100);
+      vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path).includes(wide)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+        return native(path, options);
+      });
+      readlinkTooLong.for = path => path.includes(wide);
+      expect(realpathSyncNearest(join(tmpdir(), wide, 'x'))).toBeNull();
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('keeps backslashes inside a POSIX component when measuring it', () => {
+    const native = realpathSync.native;
+    const name = 'ab\\'.repeat(100);
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path).includes(name)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(join(tmpdir(), name, 'x'))).toBe(join(native(tmpdir()), name, 'x'));
+  });
+
+  it.each([
+    ['as this platform allows', Infinity],
+    ['under the macOS PATH_MAX', 1024],
+  ])('follows a dangling link past PATH_MAX reached through links that shrink the path, %s', async (_, bytes) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const loop = 'L'.repeat(250);
+    await mkdir(join(base, 'prot'));
+    await symlink('.', join(base, loop));
+    await symlink(join('prot', 'new'), join(base, 'dang'));
+    const long = join(base, ...Array.from({ length: 17 }, () => loop), 'dang');
+    expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
+    limitPathMax(bytes);
+    expect(realpathSyncNearest(long)).toBe(join(base, 'prot', 'new'));
+    expect(withRealPath(long)).toEqual([long, join(base, 'prot', 'new'), join(base, 'dang')]);
+  });
+
+  it.each([
+    ['as this platform allows', Infinity],
+    ['under the macOS PATH_MAX', 1024],
+  ])('resolves a missing path over PATH_MAX made of short components, %s', async (_, bytes) => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const deep = join(base, ...Array.from({ length: 50 }, () => 'd'.repeat(100)));
+    expect(Buffer.byteLength(deep)).toBeGreaterThan(4096);
+    limitPathMax(bytes);
+    expect(realpathSyncNearest(deep)).toBe(deep);
+    expect(withRealPath(deep)).toEqual([deep]);
+  });
+
+  it('returns null for a name past PATH_MAX under a folder that exists, which could be a link', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'dir'));
+    limitPathMax(Buffer.byteLength(join(base, 'dir')) + 50);
+    const past = join(base, 'dir', 'n'.repeat(100), 'x');
+    expect(realpathSyncNearest(past)).toBeNull();
+    expect(ownLocation(past)).toBeNull();
+    expect(withRealPath(past)).toEqual([past]);
+    const underMissing = join(base, 'gone', 'n'.repeat(100), 'x');
+    expect(realpathSyncNearest(underMissing)).toBe(underMissing);
+  });
+
+  // node:path stays win32 on a Windows runner, so faking darwin there would mix the two.
+  it.skipIf(process.platform === 'win32')(
+    'returns null for a long UTF-8 name past the macOS PATH_MAX, which APFS could hold as a link',
+    async () => {
+      const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+      const dir = join(base, 'd'.repeat(250));
+      await mkdir(dir);
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+      try {
+        limitPathMax(1024);
+        const name = '中'.repeat(255);
+        expect(Buffer.byteLength(join(dir, name))).toBeGreaterThanOrEqual(1024);
+        expect(realpathSyncNearest(join(dir, name, 'x'))).toBeNull();
+        const short = join(base, '中'.repeat(100), 'x');
+        expect(realpathSyncNearest(short)).toBe(short);
+      } finally {
+        Object.defineProperty(process, 'platform', platform!);
+      }
+    }
+  );
+
+  it('returns null when realpath reports even the root missing', () => {
+    vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    });
+    expect(realpathSyncNearest(join(tmpdir(), 'a'))).toBeNull();
+  });
+
+  it('returns null for a path of more names than MAX_WALK_NAMES', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const most = join(base, ...Array.from({ length: MAX_WALK_NAMES }, () => 'a'));
+    expect(realpathSyncNearest(most)).toBe(most);
+    expect(realpathSyncNearest(join(most, 'a'))).toBeNull();
+  });
+
+  // Windows applies `..` to the name before it, so it never reaches the missing folder.
+  it.skipIf(process.platform === 'win32')('returns null for `..` under a missing folder', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'prot'));
+    await symlink(join(base, 'prot'), join(base, 'link'));
+    expect(realpathSyncNearest([base, 'missing', '..', 'link', 'x'].join(sep))).toBeNull();
+  });
+
+  it('returns null for a link that leads back to itself through a path realpath cannot read', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    // macOS caps a link's target text at its 1024-byte PATH_MAX: keep the target under it, past the mocked limit.
+    const loop = 'L'.repeat(100);
+    await symlink('.', join(base, loop));
+    const link = join(base, 'x');
+    await symlink(join(base, ...Array.from({ length: 5 }, () => loop), 'x'), link);
+    limitPathMax(512, link);
+    expect(realpathSyncNearest(join(link, 'new'))).toBeNull();
+  });
+
+  it('retries with the JS realpath on win32 when native throws EISDIR', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+        throw Object.assign(new Error('is a directory'), { code: 'EISDIR' });
+      });
+      expect(realpathSyncNearest(tmpdir())).toBe(realpathSync(tmpdir()));
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('still returns null on EISDIR off win32', () => {
+    vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('is a directory'), { code: 'EISDIR' });
+    });
+    expect(realpathSyncNearest(tmpdir())).toBeNull();
+  });
+
+  it('returns null when a missing path sits under a parent that cannot be resolved', () => {
+    const native = realpathSync.native;
+    const locked = join(tmpdir(), 'locked');
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path) === locked) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (String(path).startsWith(locked)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(join(locked, 'new', 'file'))).toBeNull();
+  });
+
+  it('returns null for a symlink loop', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await symlink(join(base, 'loop-a'), join(base, 'loop-b'));
+    await symlink(join(base, 'loop-b'), join(base, 'loop-a'));
+    expect(realpathSyncNearest(join(base, 'loop-a', 'x'))).toBeNull();
+    expect(realpathSyncNearest(join(base, 'missing', 'x'))).toBe(join(base, 'missing', 'x'));
   });
 });

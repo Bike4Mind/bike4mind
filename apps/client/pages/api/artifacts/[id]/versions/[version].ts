@@ -3,8 +3,9 @@ import { artifactRepository, artifactVersionRepository, artifactContentRepositor
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * GET /api/artifacts/[id]/versions/[version]
    * Get content for a specific version of an artifact
@@ -43,7 +44,7 @@ const handler = baseApi()
 
       if (!versionDoc) {
         // TEMPORARY FALLBACK: If version field is missing, try to find by index
-        console.warn(`Version ${versionNumber} not found by version field, trying by index`);
+        req.logger.warn('Version not found by version field, trying by index', { versionNumber });
 
         // Get all versions for this artifact and sort by creation date
         const allVersions = await artifactVersionRepository.findByArtifactId(artifactId as string);

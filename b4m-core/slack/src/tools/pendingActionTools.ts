@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@bike4mind/services/llm';
+import type { ToolDefinition } from '@bike4mind/services-core/llm';
 import { Logger } from '@bike4mind/observability';
 
 export interface PendingActionResult {

@@ -15,6 +15,9 @@ import { registerConfluencePageTools } from './tools/confluence-pages.js';
 import { registerConfluenceCommentTools } from './tools/confluence-comments.js';
 import { registerConfluenceRestrictionTools } from './tools/confluence-restrictions.js';
 import { registerConfluenceAttachmentTools } from './tools/confluence-attachments.js';
+import { createStderrLogger } from '../shared/stderrLog.js';
+
+const log = createStderrLogger('atlassian');
 
 // ============================================================================
 // MCP Server Setup
@@ -48,11 +51,11 @@ await server.connect(transport);
 
 // Handle graceful shutdown
 const shutdown = async () => {
-  console.error('[MCP] Shutting down Atlassian MCP Server');
+  log.info('shutting down');
   try {
     await server.close();
   } catch (error) {
-    console.error('[MCP] Error during shutdown:', error);
+    log.error('error during shutdown', { error });
   }
   process.exit(0);
 };
@@ -62,11 +65,11 @@ process.on('SIGTERM', shutdown);
 process.on('SIGHUP', shutdown);
 
 process.on('uncaughtException', error => {
-  console.error('[MCP] Uncaught exception in Atlassian MCP Server:', error);
+  log.error('uncaught exception', { error });
   shutdown();
 });
 
 process.on('unhandledRejection', reason => {
-  console.error('[MCP] Unhandled rejection in Atlassian MCP Server:', reason);
+  log.error('unhandled rejection', { reason });
   shutdown();
 });

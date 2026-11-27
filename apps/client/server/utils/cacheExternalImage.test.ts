@@ -1,7 +1,10 @@
+import { Logger } from '@bike4mind/observability';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockS3Send = vi.hoisted(() => vi.fn());
 const mockValidateTargetUrl = vi.hoisted(() => vi.fn());
+// Forwards to global fetch so the cases below can stub the upstream with vi.stubGlobal.
+const mockFetchPinned = vi.hoisted(() => vi.fn((url: string, init?: RequestInit) => globalThis.fetch(url, init)));
 const s3ClientConfigs = vi.hoisted(() => [] as unknown[]);
 
 vi.mock('sst', () => ({
@@ -25,6 +28,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
 
 vi.mock('@bike4mind/server-utils/utils/ssrfProtection', () => ({
   validateTargetUrl: (...args: unknown[]) => mockValidateTargetUrl(...args),
+  fetchPinned: mockFetchPinned,
 }));
 
 import { cacheExternalImage } from './cacheExternalImage';
@@ -51,6 +55,20 @@ describe('cacheExternalImage', () => {
       expect(result).toBe(ssrfUrl);
       expect(mockValidateTargetUrl).toHaveBeenCalledWith(ssrfUrl);
       expect(mockS3Send).not.toHaveBeenCalled();
+    });
+
+    it('logs a blocked URL by host only, never its path or query', async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      mockValidateTargetUrl.mockResolvedValue({ valid: false, error: 'URL points to a private or internal network' });
+
+      await cacheExternalImage('http://169.254.169.254/latest/meta-data/?token=secret-q');
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Blocked'),
+        expect.objectContaining({ urlHost: '169.254.169.254' })
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(/meta-data|secret-q/);
+      warn.mockRestore();
     });
 
     it('blocks localhost URLs and returns original URL without calling S3', async () => {
@@ -118,7 +136,7 @@ describe('cacheExternalImage', () => {
           })
         );
       vi.stubGlobal('fetch', fetchMock);
-      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+      const infoSpy = vi.spyOn(Logger.prototype, 'info').mockImplementation(() => {});
 
       const promise = cacheExternalImage(validUrl);
       await vi.runAllTimersAsync();
@@ -127,7 +145,10 @@ describe('cacheExternalImage', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(result).not.toBe(validUrl); // cached → S3 URL
       // observability: a success-after-retry log closes the "did the retry save us?" loop
-      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('after 1 retry'));
+      expect(infoSpy).toHaveBeenCalledWith(
+        'Image fetch succeeded after retries',
+        expect.objectContaining({ retries: 1 })
+      );
 
       infoSpy.mockRestore();
     });
@@ -143,6 +164,42 @@ describe('cacheExternalImage', () => {
       // initial attempt + MAX_FETCH_RETRIES (2) = 3 total
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(result).toBe(validUrl);
+    });
+
+    it('logs a terminal fetch failure through the Logger with the host, never the full URL', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('some other failure')));
+      const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const signedUrl = 'https://example.com/image.png?X-Amz-Signature=secret-sig';
+
+      const promise = cacheExternalImage(signedUrl);
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(error).toHaveBeenCalledWith(
+        'Failed to fetch image',
+        expect.objectContaining({ urlHost: 'example.com', error: expect.any(Error) })
+      );
+      expect(JSON.stringify(error.mock.calls)).not.toContain('secret-sig');
+      expect(consoleError).not.toHaveBeenCalled();
+      error.mockRestore();
+      consoleError.mockRestore();
+    });
+
+    it('downloads through the pinned fetch with http allowed and a body cap', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response(new ArrayBuffer(8), { headers: { 'content-type': 'image/png' } }))
+      );
+
+      const promise = cacheExternalImage(validUrl);
+      await vi.runAllTimersAsync();
+      await promise;
+
+      expect(mockFetchPinned).toHaveBeenCalledWith(validUrl, expect.any(Object), {
+        allowHttp: true,
+        maxBodyBytes: 25 * 1024 * 1024,
+      });
     });
 
     it('does not retry on a non-transient error', async () => {

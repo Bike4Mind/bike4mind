@@ -1,7 +1,9 @@
 import { Logger } from '@bike4mind/observability';
+import type { ISlackDevWorkspaceDocument } from '@bike4mind/common';
 import { getSlackDeps, getSlackDb } from './di/registry';
 import type { BaseStatePayload } from './di/types';
 import { getControlledScopes } from './manifestTemplate';
+import { selectSlackAppRow } from './slackAppSelection';
 
 const logger = new Logger();
 
@@ -10,23 +12,37 @@ const ORG_SLACK_CONNECT_AUDIENCE = 'org-slack-connect' as const;
 export interface OrgSlackConnectStatePayload extends BaseStatePayload {
   organizationId: string;
   userId: string;
+  /** Slack app row the flow was started with; absent on states minted before the app was carried. */
+  workspaceId?: string;
+}
+
+export interface SystemSlackAppCredentials {
+  workspaceId: string;
+  clientId: string;
+  clientSecret: string;
+  signingSecret: string | undefined;
+  appId: string;
 }
 
 /**
- * Get the system's Slack app credentials for org OAuth flow.
- * Reuses the first active SlackDevWorkspace with OAuth credentials.
+ * Get a Slack app's credentials for the org OAuth flow: the active SlackDevWorkspace row named by
+ * `workspaceId`, or the first active row with OAuth credentials when none is named.
  */
-export async function getSystemSlackAppCredentials() {
-  const { slackDevWorkspaceRepository } = getSlackDb() as any;
+export async function getSystemSlackAppCredentials(workspaceId?: string): Promise<SystemSlackAppCredentials | null> {
+  // DI types repositories as unknown; the bound implementation is the database SlackDevWorkspace repository.
+  const slackDevWorkspaceRepository = getSlackDb().slackDevWorkspaceRepository as {
+    findAllActiveWithCredentials(): Promise<ISlackDevWorkspaceDocument[]>;
+  };
   const workspaces = await slackDevWorkspaceRepository.findAllActiveWithCredentials();
-  const workspace = workspaces.find((ws: any) => ws.slackClientId && ws.slackClientSecret);
+  const workspace = selectSlackAppRow(workspaces, workspaceId);
 
   if (!workspace || !workspace.slackClientId || !workspace.slackClientSecret) {
-    logger.error('[ORG-SLACK] No system Slack app with OAuth credentials found');
+    logger.error('[ORG-SLACK] No Slack app with OAuth credentials found', { requestedWorkspaceId: workspaceId });
     return null;
   }
 
   return {
+    workspaceId: workspace.id,
     clientId: workspace.slackClientId,
     clientSecret: workspace.slackClientSecret,
     signingSecret: workspace.slackOAuthSigningSecret,
@@ -38,11 +54,16 @@ export async function getSystemSlackAppCredentials() {
  * Generate a JWT state token for org Slack connect OAuth flow.
  * Token expires in 10 minutes.
  */
-export function generateOrgSlackConnectStateToken(organizationId: string, userId: string, nonceHash?: string): string {
+export function generateOrgSlackConnectStateToken(
+  organizationId: string,
+  userId: string,
+  nonceHash?: string,
+  workspaceId?: string
+): string {
   const { jwtStateStore } = getSlackDeps();
-  return jwtStateStore.createStateToken<{ organizationId: string; userId: string }>(
+  return jwtStateStore.createStateToken<{ organizationId: string; userId: string; workspaceId?: string }>(
     { audience: ORG_SLACK_CONNECT_AUDIENCE, expiresIn: '10m' },
-    { organizationId, userId },
+    { organizationId, userId, ...(workspaceId ? { workspaceId } : {}) },
     nonceHash
   );
 }

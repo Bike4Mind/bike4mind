@@ -39,7 +39,7 @@ export const defaultSseTransportDeps: SseTransportDeps = {
  * how callers learn the realtime `websocketUrl` for non-completion features.
  */
 export async function createSseBackend<T = ServerLlmBackend>(
-  input: { apiClient: ApiClient; model: string },
+  input: { apiClient: ApiClient; model: string; getSessionId?: () => string | undefined },
   deps: SseTransportDeps<T> = defaultSseTransportDeps as SseTransportDeps<T>
 ): Promise<{ llm: T; serverConfig: ServerTransportConfig }> {
   let serverConfig: ServerTransportConfig = {};
@@ -59,6 +59,7 @@ export async function createSseBackend<T = ServerLlmBackend>(
     apiClient: input.apiClient,
     model: input.model,
     sseCompletionsUrl: serverConfig.sseCompletionsUrl,
+    getSessionId: input.getSessionId,
   });
   logger.debug('Using SSE transport');
 

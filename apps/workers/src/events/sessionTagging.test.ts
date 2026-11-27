@@ -11,7 +11,7 @@
  * resolve nor a completion. Asserting only on `sessionUpdate` cannot see either.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   getOperationsModel: vi.fn(),
   llmComplete: vi.fn(),
   recordUsage: vi.fn(),
+  payerCanFund: vi.fn(),
   completionText: [] as (string | null)[],
   session: {} as Record<string, unknown>,
 }));
@@ -29,7 +30,7 @@ vi.mock('@workers/utils/eventContext', () => ({
   withEventContext: (fn: unknown) => fn,
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SessionEvents: {
     Tag: { schema: { parse: (properties: unknown) => properties } },
   },
@@ -44,13 +45,15 @@ vi.mock('@bike4mind/database', () => ({
   questRepository: { findOne: h.questFindOne },
 }));
 
-vi.mock('@client/services/operationsModelService', () => ({
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: h.getOperationsModel },
 }));
 
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordUsage,
 }));
+
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
 
 import { handler } from './sessionTagging';
 
@@ -73,9 +76,12 @@ const expectNoOperationalSpend = () => {
 };
 
 describe('sessionTagging', () => {
+  afterEach(() => vi.useRealTimers());
+
   beforeEach(() => {
     vi.clearAllMocks();
     h.completionText = [];
+    h.payerCanFund.mockResolvedValue(true);
     h.userFindById.mockImplementation(async (id: string) => ({ id, isAdmin: false }));
     h.sessionUpdate.mockImplementation(async (_user: unknown, data: unknown) => data);
     h.questFindOne.mockResolvedValue({ id: 'quest-1', prompt: 'How do pulsars form?' });
@@ -121,6 +127,86 @@ describe('sessionTagging', () => {
     // Cleared explicitly, not omitted: an import overwrite reopens the gate by nulling `taggedAt`,
     // and a backoff left over from an earlier failure would hold the re-tag off for a full window.
     expect(written.tagLastAttemptAt).toBeNull();
+  });
+
+  it('bills once when a failed tag write is replayed', async () => {
+    h.session = { ...h.session, tags: [] };
+    h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+    h.sessionUpdate.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run()).rejects.toThrow('write failed');
+    expect(h.recordUsage).not.toHaveBeenCalled();
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(h.llmComplete).toHaveBeenCalledTimes(2);
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('bills once for a completion with no usable tags', async () => {
+    h.completionText = ['not json'];
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const completedAt = Date.now();
+    h.sessionUpdate.mockImplementationOnce(async (_user: unknown, data: unknown) => {
+      vi.setSystemTime(completedAt + 5_000);
+      return data;
+    });
+
+    await run();
+
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+    // latencyMs must time the model call only, not the session write that follows it.
+    expect(h.recordUsage.mock.calls[0][0].endTime).toBe(completedAt);
+    expect(Date.now()).toBeGreaterThan(completedAt);
+  });
+
+  it('bills once when a failed attempt stamp is replayed', async () => {
+    h.completionText = ['not json'];
+    h.sessionUpdate.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run()).rejects.toThrow('write failed');
+    expect(h.recordUsage).not.toHaveBeenCalled();
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('still bills a tag result dropped because the writer lost access', async () => {
+    h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+    h.sessionUpdate.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the generated tag names out of the logs', async () => {
+    h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+    await run();
+
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('pulsars');
+  });
+
+  it('spends nothing and writes nothing when the payer cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run({ sessionId: SESSION_ID, payerId: 'user-payer' });
+
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'user-payer' }));
+    expectNoOperationalSpend();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([OWNER, 'user-sharee', 'user-payer'])('skips queued tagging when %s is pending review', async heldId => {
+    h.userFindById.mockImplementation(async (id: string) => ({
+      id,
+      ...(id === heldId ? { riskScore: { reviewState: 'pending' } } : {}),
+    }));
+    const requesterId = heldId === OWNER ? undefined : 'user-sharee';
+    await run({ sessionId: SESSION_ID, requesterId, payerId: 'user-payer' });
+    expectNoOperationalSpend();
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
   });
 
   describe('write-time access re-check', () => {
@@ -214,9 +300,10 @@ describe('sessionTagging', () => {
     expect(written.taggedAt).toBeInstanceOf(Date);
   });
 
-  // The four inputs below all land in the same failure branch. The completion is already billed by
-  // the time it runs, so it stamps the retry backoff - but it must stamp ONLY that: none of these
-  // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
+  // The four inputs below all land in the same failure branch. A parse failure still spends (and
+  // bills) a completion, so it stamps the retry backoff - but it must stamp ONLY that: none of
+  // these is a verdict that the notebook has no tags, so none may clear tags or close the spider
+  // gate.
   // Asserting on the payload rather than on `h.session.tags`: the fixture object is what the
   // mocked `findById` handed back, so asserting it still holds its tags cannot fail.
   it.each([

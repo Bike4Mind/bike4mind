@@ -8,29 +8,151 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  */
 
 const mockFindById = vi.hoisted(() => vi.fn());
+const mockFindSession = vi.hoisted(() => vi.fn());
 const mockAssertAccountStateUsable = vi.hoisted(() => vi.fn());
+const mockIsImpersonatorAuthorized = vi.hoisted(() => vi.fn());
 
-vi.mock('@bike4mind/database', () => ({ User: { findById: mockFindById } }));
+vi.mock('@bike4mind/database', () => ({
+  User: { findById: mockFindById },
+  authSessionRepository: { findBySid: mockFindSession },
+}));
 vi.mock('@bike4mind/services', () => ({
   isTokenVersionCurrent: (payloadVersion?: number, userVersion?: number) =>
     (payloadVersion ?? 0) === (userVersion ?? 0),
   isTokenTypeAcceptable: (tokenType: unknown, expected: string) => tokenType === undefined || tokenType === expected,
 }));
-vi.mock('./assertAccountStateUsable', () => ({ assertAccountStateUsable: mockAssertAccountStateUsable }));
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: mockAssertAccountStateUsable,
+}));
+
+vi.mock('@bike4mind/server-utils/auth/impersonatorAccess', () => ({
+  isImpersonatorAuthorized: mockIsImpersonatorAuthorized,
+}));
 
 import { verifyJwtPayload } from './verifyJwtPayload';
 
 describe('verifyJwtPayload', () => {
   beforeEach(() => {
     mockFindById.mockReset();
+    mockFindSession.mockReset().mockResolvedValue({
+      userId: 'customer-1',
+      impersonatedBy: 'admin-9',
+      expiresAt: new Date(Date.now() + 60_000),
+      impersonationExpiresAt: new Date(Date.now() + 60_000),
+    });
     mockAssertAccountStateUsable.mockReset();
+    mockIsImpersonatorAuthorized.mockReset().mockResolvedValue(true);
+  });
+
+  describe('session liveness', () => {
+    const liveSession = () => ({ userId: 'user-1', impersonatedBy: null, expiresAt: new Date(Date.now() + 60_000) });
+
+    it('rejects the next request once the session behind the token is revoked', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      const session: { userId: string; impersonatedBy: null; expiresAt: Date; revokedAt?: Date } = liveSession();
+      mockFindSession.mockImplementation(async () => ({ ...session }));
+      const token = { id: 'user-1', sid: 'sid-1', tokenVersion: 0 };
+
+      const before = vi.fn();
+      await verifyJwtPayload(token, before);
+      expect(before).toHaveBeenCalledWith(null, expect.objectContaining({ id: 'user-1', sid: 'sid-1' }));
+
+      session.revokedAt = new Date();
+      const after = vi.fn();
+      await verifyJwtPayload(token, after);
+      expect(after).toHaveBeenCalledWith(null, false);
+      expect(mockFindSession).toHaveBeenCalledWith('sid-1');
+    });
+
+    it.each([
+      ['missing', null],
+      ['expired', { userId: 'user-1', expiresAt: new Date(0) }],
+      ['owned by another user', { userId: 'user-2', expiresAt: new Date(Date.now() + 60_000) }],
+    ])('rejects a token whose session is %s', async (_label, session) => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      mockFindSession.mockResolvedValue(session);
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', sid: 'sid-1', tokenVersion: 0 }, done);
+
+      expect(done).toHaveBeenCalledWith(null, false);
+    });
+
+    it('treats a session lookup error as an auth failure', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      mockFindSession.mockRejectedValue(new Error('ECONNRESET'));
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', sid: 'sid-1', tokenVersion: 0 }, done);
+
+      expect(done).toHaveBeenCalledWith(null, false);
+    });
+  });
+
+  describe('impersonating admin', () => {
+    const token = { id: 'customer-1', sid: 'support-sid', tokenVersion: 0, impersonatedBy: 'admin-9' };
+
+    it('rejects the next request once the admin loses impersonation access', async () => {
+      mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0, isSystem: false });
+
+      const before = vi.fn();
+      await verifyJwtPayload(token, before);
+      expect(before).toHaveBeenCalledWith(null, expect.objectContaining({ impersonatedBy: 'admin-9' }));
+
+      mockIsImpersonatorAuthorized.mockResolvedValue(false);
+      const after = vi.fn();
+      await verifyJwtPayload(token, after);
+      expect(after).toHaveBeenCalledWith(null, false);
+      expect(mockIsImpersonatorAuthorized).toHaveBeenLastCalledWith('admin-9');
+    });
+
+    it('rejects the next request once the support session is revoked', async () => {
+      mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0, isSystem: false });
+      const session: Record<string, unknown> = {
+        userId: 'customer-1',
+        impersonatedBy: 'admin-9',
+        expiresAt: new Date(Date.now() + 60_000),
+        impersonationExpiresAt: new Date(Date.now() + 60_000),
+      };
+      mockFindSession.mockImplementation(async () => ({ ...session }));
+
+      const before = vi.fn();
+      await verifyJwtPayload(token, before);
+      expect(before).toHaveBeenCalledWith(null, expect.objectContaining({ impersonatedBy: 'admin-9' }));
+
+      session.revokedAt = new Date();
+      const after = vi.fn();
+      await verifyJwtPayload(token, after);
+      expect(after).toHaveBeenCalledWith(null, false);
+    });
+
+    it('rejects an impersonated token that carries no sid without consulting the admin', async () => {
+      mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0, isSystem: false });
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'customer-1', tokenVersion: 0, impersonatedBy: 'admin-9' }, done);
+
+      expect(done).toHaveBeenCalledWith(null, false);
+      expect(mockIsImpersonatorAuthorized).not.toHaveBeenCalled();
+    });
+
+    it('does not consult the admin check for an ordinary session', async () => {
+      mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, isSystem: false });
+      mockFindSession.mockResolvedValue({ userId: 'user-1', expiresAt: new Date(Date.now() + 60_000) });
+      const done = vi.fn();
+
+      await verifyJwtPayload({ id: 'user-1', sid: 'sid-1', tokenVersion: 0 }, done);
+
+      expect(done).toHaveBeenCalledWith(null, expect.objectContaining({ id: 'user-1' }));
+      expect(mockIsImpersonatorAuthorized).not.toHaveBeenCalled();
+    });
   });
 
   it('propagates impersonatedBy onto the authenticated user', async () => {
     mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0, isSystem: false });
     const done = vi.fn();
 
-    await verifyJwtPayload({ id: 'customer-1', tokenVersion: 0, impersonatedBy: 'admin-9' }, done);
+    await verifyJwtPayload({ id: 'customer-1', sid: 'support-sid', tokenVersion: 0, impersonatedBy: 'admin-9' }, done);
 
     expect(done).toHaveBeenCalledWith(null, expect.objectContaining({ impersonatedBy: 'admin-9' }));
   });
@@ -43,6 +165,26 @@ describe('verifyJwtPayload', () => {
 
     const [, user] = done.mock.calls[0];
     expect((user as { impersonatedBy?: string }).impersonatedBy).toBeUndefined();
+    expect(mockFindSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { impersonationExpiresAt: new Date(0) },
+    { revokedAt: new Date() },
+    { impersonatedBy: 'different-admin' },
+    { userId: 'different-user' },
+  ])('rejects an expired, revoked or mismatched support session: %o', async override => {
+    mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0 });
+    mockFindSession.mockResolvedValue({
+      userId: 'customer-1',
+      impersonatedBy: 'admin-9',
+      expiresAt: new Date(Date.now() + 60_000),
+      impersonationExpiresAt: new Date(Date.now() + 60_000),
+      ...override,
+    });
+    const done = vi.fn();
+    await verifyJwtPayload({ id: 'customer-1', sid: 'sid', impersonatedBy: 'admin-9' }, done);
+    expect(done).toHaveBeenCalledWith(null, false);
   });
 
   it('exposes the token exp (seconds) as accessTokenExpiresAt in milliseconds', async () => {

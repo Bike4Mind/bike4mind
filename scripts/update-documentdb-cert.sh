@@ -1,4 +1,5 @@
 #!/bin/bash
+# Deprecated: AWS DocumentDB support will be removed in a future release, along with this script.
 # Script to download and prepare AWS DocumentDB certificate for embedding
 
 echo "🔧 DocumentDB Certificate Update Script"

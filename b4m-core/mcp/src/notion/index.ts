@@ -15,6 +15,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { registerSearchTools } from './tools/search.js';
 import { registerPageTools } from './tools/pages.js';
 import { debug } from './logger.js';
+import { createStderrLogger } from '../shared/stderrLog.js';
+
+const log = createStderrLogger('notion');
 
 const server = new McpServer({
   name: 'notion',
@@ -32,11 +35,11 @@ debug('Notion MCP Server connected via stdio');
 
 // Handle graceful shutdown
 const shutdown = async () => {
-  console.error('Notion MCP Server shutting down...');
+  log.info('shutting down');
   try {
     await server.close();
   } catch (error) {
-    console.error('Error during shutdown:', error);
+    log.error('error during shutdown', { error });
   }
   process.exit(0);
 };
@@ -47,11 +50,11 @@ process.on('SIGHUP', shutdown);
 
 // Handle uncaught errors
 process.on('uncaughtException', error => {
-  console.error('Uncaught exception in Notion MCP Server:', error);
+  log.error('uncaught exception', { error });
   shutdown();
 });
 
 process.on('unhandledRejection', reason => {
-  console.error('Unhandled rejection in Notion MCP Server:', reason);
+  log.error('unhandled rejection', { reason });
   shutdown();
 });

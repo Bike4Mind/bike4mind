@@ -1,9 +1,11 @@
 import {
+  CreditHolderType,
   CompletionApiUsageTransaction,
   DecisionUsageTransaction,
   GenericCreditDeductTransaction,
   ICreditHolder,
   ICreditHolderMethods,
+  ICreditTransactionDocument,
   ICreditTransactionRepository,
   ImageEditUsageTransaction,
   ImageGenerationUsageTransaction,
@@ -18,6 +20,8 @@ import {
   TransferCreditTransaction,
 } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
+import { notifyOrgEvent } from '../organizationService/orgEventObserver';
+import type { CreditLedgerWrite } from './ledgerWrite';
 import { z } from 'zod';
 
 export interface SubtractCreditsAdapters {
@@ -68,12 +72,13 @@ export const SubtractCreditsSchema = z.discriminatedUnion('type', [
 export type SubtractCreditsParameters = z.infer<typeof SubtractCreditsSchema>;
 
 /**
- * Subtract credits from a User or Organization and create a corresponding usage transaction record
+ * Subtract credits from a User or Organization and create a corresponding usage transaction record.
+ * Returns the holder and the id of the CreditTransaction row it wrote.
  */
-export async function subtractCredits(
+export async function subtractCreditsWithLedgerRow(
   parameters: SubtractCreditsParameters,
   { db, creditHolderMethods, skipBalanceUpdate, currentCreditHolder }: SubtractCreditsAdapters
-): Promise<ICreditHolder> {
+): Promise<CreditLedgerWrite> {
   const params = secureParameters(parameters, SubtractCreditsSchema);
   const { ownerId, ownerType, credits, type, description, metadata, source } = params;
 
@@ -87,9 +92,10 @@ export async function subtractCredits(
   // here, before the balance is decremented, so a retried webhook can never
   // over-claw-back. Callers catch the E11000 and treat it as a no-op.
   // When adding a new transaction type, add a handler here
+  let tx: ICreditTransactionDocument | null = null;
 
   if (type === 'generic_deduct') {
-    await db.creditTransactions.createTransaction('generic_deduct', {
+    tx = await db.creditTransactions.createTransaction('generic_deduct', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
@@ -103,21 +109,24 @@ export async function subtractCredits(
       userId: params.userId,
     });
   } else if (type === 'text_generation_usage') {
-    await db.creditTransactions.createTransaction('text_generation_usage', {
+    tx = await db.creditTransactions.createTransaction('text_generation_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
       description: description || 'Text generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'completion_api_usage') {
-    await db.creditTransactions.createTransaction('completion_api_usage', {
+    tx = await db.creditTransactions.createTransaction('completion_api_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
@@ -126,11 +135,14 @@ export async function subtractCredits(
       source,
       model: params.model,
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
+      sessionId: params.sessionId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'decision_usage') {
-    await db.creditTransactions.createTransaction('decision_usage', {
+    tx = await db.creditTransactions.createTransaction('decision_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
@@ -141,101 +153,111 @@ export async function subtractCredits(
       apiKeyId: params.apiKeyId, // Optional - present for API key auth, undefined for JWT
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
+      cacheReadTokens: params.cacheReadTokens,
+      cacheWriteTokens: params.cacheWriteTokens,
     });
   } else if (type === 'image_generation_usage') {
-    await db.creditTransactions.createTransaction('image_generation_usage', {
+    tx = await db.creditTransactions.createTransaction('image_generation_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
       description: description || 'Image generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
     });
   } else if (type === 'image_edit_usage') {
-    await db.creditTransactions.createTransaction('image_edit_usage', {
+    tx = await db.creditTransactions.createTransaction('image_edit_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
       description: description || 'Image editing usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
     });
   } else if (type === 'video_generation_usage') {
-    await db.creditTransactions.createTransaction('video_generation_usage', {
+    tx = await db.creditTransactions.createTransaction('video_generation_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
       description: description || 'Video generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
     });
   } else if (type === 'tool_usage') {
-    await db.creditTransactions.createTransaction('tool_usage', {
+    tx = await db.creditTransactions.createTransaction('tool_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits),
       description: description || 'Tool usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       questId: params.questId,
       sessionId: params.sessionId,
     });
   } else if (type === 'speech_to_text_usage') {
-    await db.creditTransactions.createTransaction('speech_to_text_usage', {
+    tx = await db.creditTransactions.createTransaction('speech_to_text_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits),
       description: description || 'Speech to text usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
   } else if (type === 'text_to_speech_usage') {
-    await db.creditTransactions.createTransaction('text_to_speech_usage', {
+    tx = await db.creditTransactions.createTransaction('text_to_speech_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits),
       description: description || 'Text to speech usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
   } else if (type === 'sound_effects_usage') {
-    await db.creditTransactions.createTransaction('sound_effects_usage', {
+    tx = await db.creditTransactions.createTransaction('sound_effects_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits),
       description: description || 'Sound effects usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
   } else if (type === 'music_generation_usage') {
-    await db.creditTransactions.createTransaction('music_generation_usage', {
+    tx = await db.creditTransactions.createTransaction('music_generation_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits),
       description: description || 'Music generation usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
   } else if (type === 'transfer_credit') {
-    await db.creditTransactions.createTransaction('transfer_credit', {
+    tx = await db.creditTransactions.createTransaction('transfer_credit', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
@@ -245,13 +267,14 @@ export async function subtractCredits(
       recipientType: params.recipientType,
     });
   } else {
-    await db.creditTransactions.createTransaction('realtime_voice_usage', {
+    tx = await db.creditTransactions.createTransaction('realtime_voice_usage', {
       ownerId,
       ownerType,
       credits: -Math.abs(credits), // Negative for usage
       description: description || 'Voice usage',
       metadata,
       source,
+      apiKeyId: params.apiKeyId,
       model: params.model,
       sessionId: params.sessionId,
     });
@@ -264,7 +287,8 @@ export async function subtractCredits(
     if (!currentCreditHolder) {
       throw new BadRequestError('currentCreditHolder is required when skipBalanceUpdate is true');
     }
-    return currentCreditHolder;
+    await notifyOrgDebit(ownerType, ownerId, currentCreditHolder);
+    return { creditHolder: currentCreditHolder, creditTransactionId: tx?.id };
   }
 
   const updatedEntity = await creditHolderMethods.incrementCredits(ownerId, -credits);
@@ -272,5 +296,21 @@ export async function subtractCredits(
     throw new BadRequestError('Failed to update credits');
   }
 
-  return updatedEntity;
+  await notifyOrgDebit(ownerType, ownerId, updatedEntity);
+  return { creditHolder: updatedEntity, creditTransactionId: tx?.id };
+}
+
+/** Raised after the ledger row and balance write; notifyOrgEvent swallows alert failures. */
+async function notifyOrgDebit(ownerType: string, ownerId: string, holder: ICreditHolder): Promise<void> {
+  if (ownerType !== CreditHolderType.Organization) return;
+  await notifyOrgEvent({ type: 'credit_debit', organizationId: ownerId, balanceAfter: Number(holder.currentCredits) });
+}
+
+/** subtractCredits for callers that need the ledger row id; see subtractCreditsWithLedgerRow. */
+export async function subtractCredits(
+  parameters: SubtractCreditsParameters,
+  adapters: SubtractCreditsAdapters
+): Promise<ICreditHolder> {
+  const { creditHolder } = await subtractCreditsWithLedgerRow(parameters, adapters);
+  return creditHolder;
 }

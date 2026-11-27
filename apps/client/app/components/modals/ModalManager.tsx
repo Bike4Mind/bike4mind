@@ -14,6 +14,7 @@ import { modalStorage, filterModals } from './modalHelpers';
 import { useFirstSignupSession } from '@client/app/hooks/useFirstSignupSession';
 import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { isAnyModalDialogOpen } from '@client/app/utils/anyDialogOpen';
+import { wasGearsDiscoveryShown } from './whatsNewSession';
 
 // Reducer types and function
 
@@ -283,7 +284,8 @@ const ModalManager: React.FC = () => {
       !isModalOpen &&
       !anyDialogOpen &&
       !isComposing &&
-      !modals.slidesPending;
+      !modals.slidesPending &&
+      !wasGearsDiscoveryShown();
 
     // Update banners (only if changed)
     if (banners.length !== newBanners.length || !banners.every((b, i) => b._id === newBanners[i]._id)) {

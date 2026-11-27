@@ -1,16 +1,20 @@
+import { RefusedFetchTargetError } from './errors';
 import { Logger } from '@bike4mind/observability';
+import type { ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
+import { FAILED_RESULT_SCORE } from '../../base/resultValidators';
 import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiKeyService';
-import { CitableSource, UnprocessableEntityError } from '@bike4mind/common';
+import { CitableSource, ExpectedToolError, UnprocessableEntityError } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { createFirecrawlApp, type FirecrawlClient, type FirecrawlScrapeParams } from './firecrawlApp';
-import { plainFetchScrape } from './plainFetch';
-import { UnsafeScrapeTargetError } from './errors';
-import { resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
+import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
+import { refuseFetch, resolveAndVetUrl, unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/workers researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
 export { createFirecrawlApp } from './firecrawlApp';
+export { RefusedFetchTargetError } from './errors';
+export { NoExtractableContentError } from './plainFetch';
 
 interface WebFetchParams {
   url: string;
@@ -36,6 +40,10 @@ interface WebFetchResult {
   durationMs: number;
   /** When set, the origin advertises an llms.txt/llms-full.txt worth suggesting for long-form content. */
   llmsTxtUrl?: string;
+  /** Hosted URL of a first-screen (viewport, not full-page) screenshot, exactly as Firecrawl returned
+   *  it. Only set when the caller asked for one and Firecrawl produced one; never on the PDF or
+   *  plain-fetch paths, so callers must treat absence as "use the text". */
+  screenshot?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -167,6 +175,18 @@ type FirecrawlFetchOptions = {
   onlyMainContent?: boolean;
   /** Fetch live and ask Firecrawl not to cache the result (maxAge 0, storeInCache false). */
   fresh?: boolean;
+  /** Also ask Firecrawl for a first-screen (viewport) screenshot, returned as WebFetchResult.screenshot.
+   *  Firecrawl-only: PDFs and the keyless plain-fetch fallback get none, and a scrape that comes back
+   *  without one simply has no `screenshot` field. */
+  screenshot?: boolean;
+  /** Render as a phone, so the screenshot is the mobile one. Only sent together with `screenshot`. */
+  mobile?: boolean;
+  /** Probe the page's origin for /llms-full.txt and /llms.txt after a first read that comes back
+   *  truncated, and return the one found as WebFetchResult.llmsTxtUrl (the web_fetch hint).
+   *  Defaults to true. Pass false when the caller never reads llmsTxtUrl: the probe is two direct
+   *  GETs to the site, with Node's default user agent and no robots.txt check, and the read waits up
+   *  to LLMS_TXT_PROBE_TIMEOUT_MS for them. */
+  llmsTxtHint?: boolean;
 };
 
 /**
@@ -181,6 +201,51 @@ export class UnsupportedScrapeTargetError extends UnprocessableEntityError {
   constructor(url: string, cause: Error) {
     super(`This site can't be fetched: the web scraper does not support ${new URL(url).hostname}.`);
     this.name = 'UnsupportedScrapeTargetError';
+    this.cause = cause;
+  }
+}
+
+// Firecrawl's wording for a URL that serves a file type it cannot parse (an image, a favicon, ...).
+// firecrawl-js keeps no error code, only the message; the status has been 500, so the text is the signal.
+const FIRECRAWL_UNSUPPORTED_FILE_TYPE = 'file type that firecrawl cannot process';
+
+function isUnsupportedFileTypeError(error: unknown): error is FirecrawlError {
+  return error instanceof FirecrawlError && error.message.toLowerCase().includes(FIRECRAWL_UNSUPPORTED_FILE_TYPE);
+}
+
+/**
+ * The URL serves a file type the scraper cannot read. Like UnsupportedScrapeTargetError, a property
+ * of the URL rather than a fault of ours: a 422 that /api/tools/web-fetch logs at warn, and a hint
+ * from the web_fetch tool.
+ */
+export class UnsupportedContentTypeError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error for the same reason as UnsupportedScrapeTargetError.
+  constructor(cause: Error) {
+    super("This URL can't be fetched: it serves a file type the web scraper cannot read, such as an image.");
+    this.name = 'UnsupportedContentTypeError';
+    this.cause = cause;
+  }
+}
+
+// Firecrawl's wording when every engine it tried (browser and retry) failed to load the page: the
+// site is down, blocks bots or the URL is wrong. Like the file-type case it comes as a 500 with no code.
+const FIRECRAWL_ALL_ENGINES_FAILED = 'all scraping engines failed';
+
+function isAllEnginesFailedError(error: unknown): error is FirecrawlError {
+  return error instanceof FirecrawlError && error.message.toLowerCase().includes(FIRECRAWL_ALL_ENGINES_FAILED);
+}
+
+/**
+ * No scraping engine could load the page. A property of the URL the model picked rather than a
+ * fault of ours: a 422 that /api/tools/web-fetch logs at warn, and a hint from the web_fetch tool.
+ */
+export class UnreachableScrapeTargetError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error for the same reason as UnsupportedScrapeTargetError.
+  constructor(cause: Error) {
+    super(
+      "This page can't be fetched: the web scraper could not load it. The site may be down or block automated access."
+    );
+    this.name = 'UnreachableScrapeTargetError';
     this.cause = cause;
   }
 }
@@ -220,13 +285,9 @@ export async function firecrawlFetch(
   // Checked before choosing a backend: a self-hosted Firecrawl (`apiUrl`) fetches from inside our
   // network, so handing it a private address is the same SSRF as fetching it ourselves. Same
   // handling as the guard inside the Firecrawl wrapper: a private or protocol refusal is permanent
-  // (`UnsafeScrapeTargetError`), a DNS hiccup is a plain Error so a retry wrapper still retries it.
+  // (`UnsafeScrapeTargetError`), a DNS hiccup is retryable (see refuseFetch).
   const vetted = await resolveAndVetUrl(new URL(url));
-  if (!vetted.safe) {
-    const message = `Refusing to fetch ${url}: ${vetted.reason}`;
-    if (vetted.retryable) throw new Error(message);
-    throw new UnsafeScrapeTargetError(message);
-  }
+  if (!vetted.safe) throw refuseFetch(url, vetted);
 
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
   // Callers with shorter Lambda lifetimes can cap via maxTimeoutMs.
@@ -243,19 +304,25 @@ export async function firecrawlFetch(
   if (!app) {
     const startedAt = Date.now();
     const { markdown, title } = await plainFetchScrape(url, { timeoutMs });
-    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt);
+    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt, {
+      llmsTxtHint: options?.llmsTxtHint,
+    });
   }
 
   Logger.globalInstance.log(
     `📥 WebFetch Tool: Scraping URL with Firecrawl${isPdf ? ' (PDF mode, extended timeout)' : ''}...`
   );
 
+  // PDFs get no screenshot: Firecrawl parses them directly, there is no page to render.
+  const wantScreenshot = !!options?.screenshot && !isPdf;
+
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = {
-    formats: ['markdown' as const],
+  const baseParams: FirecrawlScrapeParams = {
+    formats: wantScreenshot ? ['markdown', 'screenshot'] : ['markdown'],
     timeout: timeoutMs,
     ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
     ...(options?.fresh && { maxAge: 0, storeInCache: false }),
+    ...(wantScreenshot && options?.mobile && { mobile: true }),
   };
 
   const startedAt = Date.now();
@@ -266,6 +333,8 @@ export async function firecrawlFetch(
     if (scrapeError instanceof FirecrawlError && scrapeError.statusCode === 403) {
       throw new UnsupportedScrapeTargetError(url, scrapeError);
     }
+    if (isUnsupportedFileTypeError(scrapeError)) throw new UnsupportedContentTypeError(scrapeError);
+    if (isAllEnginesFailedError(scrapeError)) throw new UnreachableScrapeTargetError(scrapeError);
     throw scrapeError;
   }
   const durationMs = Date.now() - startedAt;
@@ -277,11 +346,13 @@ export async function firecrawlFetch(
   }
 
   if (!('markdown' in result) || !result.markdown) {
-    Logger.globalInstance.error('❌ WebFetch Tool: No markdown content returned');
-    throw new Error('No content could be extracted from the URL');
+    throw new NoExtractableContentError();
   }
 
-  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
+  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs, {
+    screenshot: wantScreenshot ? result.screenshot : undefined,
+    llmsTxtHint: options?.llmsTxtHint,
+  });
 }
 
 /**
@@ -300,7 +371,8 @@ async function buildWebFetchResult(
   title: string | undefined,
   url: string,
   rawOffset: number | undefined,
-  durationMs: number
+  durationMs: number,
+  { screenshot, llmsTxtHint = true }: { screenshot?: string; llmsTxtHint?: boolean } = {}
 ): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
@@ -323,8 +395,9 @@ async function buildWebFetchResult(
 
   // Probe for an llms.txt hint only on the FIRST truncated read (offset 0): that is the
   // long-form case where a curated source helps, and gating on offset avoids re-probing the
-  // same origin on every continuation call once the model is already paging.
-  const llmsTxtUrl = truncated && offset === 0 ? await probeLlmsTxt(url) : undefined;
+  // same origin on every continuation call once the model is already paging. A caller that opts out
+  // (llmsTxtHint: false) never reads the hint, so the origin gets no probe at all.
+  const llmsTxtUrl = llmsTxtHint && truncated && offset === 0 ? await probeLlmsTxt(url) : undefined;
 
   return {
     markdown,
@@ -336,8 +409,65 @@ async function buildWebFetchResult(
     cap: WEB_FETCH_CONTENT_CAP,
     durationMs,
     llmsTxtUrl,
+    ...(screenshot && { screenshot }),
   };
 }
+
+// Expected failures web_fetch returns as text rather than throwing, so the agent can carry on.
+// Firecrawl rethrows its 403 as UnsupportedScrapeTargetError.
+const FIRECRAWL_FAILURE_MESSAGES: Record<number, { userMessage: string; statusLabel: string }> = {
+  400: {
+    userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
+    statusLabel: 'actions not supported',
+  },
+  403: {
+    userMessage: `This site cannot be accessed by the web scraper \u2014 it blocks automated access or is not supported. Try using web_search to find the information instead.`,
+    statusLabel: 'site not supported',
+  },
+  408: {
+    userMessage: `The page timed out before loading completely \u2014 the site may be slow or require heavy JavaScript rendering. Try using web_search to find the information instead.`,
+    statusLabel: 'scrape timed out',
+  },
+  502: {
+    userMessage: `The website returned a Bad Gateway error \u2014 it may be temporarily unavailable. Try again later or use web_search to find the information instead.`,
+    statusLabel: 'bad gateway',
+  },
+  503: {
+    userMessage: `The website is temporarily unavailable (Service Unavailable). Try again later or use web_search to find the information instead.`,
+    statusLabel: 'service unavailable',
+  },
+  504: {
+    userMessage: `The website took too long to respond (Gateway Timeout). Try again later or use web_search to find the information instead.`,
+    statusLabel: 'gateway timeout',
+  },
+};
+
+const WEB_FETCH_PDF_TOO_LARGE_MSG =
+  'This PDF is too large to process via URL. Please download the file and upload it directly instead.';
+
+const WEB_FETCH_UNREACHABLE_MSG =
+  'The page could not be reached \u2014 the server may be down, unreachable, or blocking automated access. ' +
+  'Try using web_search to find the information instead.';
+
+const WEB_FETCH_NO_CONTENT_MSG =
+  'No readable content could be extracted from this page \u2014 it may be empty, need a login, or render ' +
+  'its text in a way the scraper cannot read. Try web_search, or ask the user for another URL.';
+
+const WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG =
+  'This URL points to a file type the scraper cannot read (for example an image or icon), so there is no ' +
+  'page text to fetch. Try a URL for an HTML page or a PDF, or use web_search instead.';
+
+const WEB_FETCH_FAILURE_MESSAGES = new Set([
+  ...Object.values(FIRECRAWL_FAILURE_MESSAGES).map(m => m.userMessage),
+  WEB_FETCH_PDF_TOO_LARGE_MSG,
+  WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG,
+  WEB_FETCH_UNREACHABLE_MSG,
+  WEB_FETCH_NO_CONTENT_MSG,
+]);
+
+/** Scores the failures web_fetch reports as text; a fetched page is left to the default score. */
+export const validateWebFetchResult: ToolResultValidator = result =>
+  WEB_FETCH_FAILURE_MESSAGES.has(result) ? FAILED_RESULT_SCORE : undefined;
 
 export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
@@ -400,34 +530,8 @@ export const webFetchTool: ToolDefinition = {
             : error instanceof FirecrawlError
               ? error.statusCode
               : undefined;
-        if (firecrawlStatus !== undefined && [400, 403, 408, 502, 503, 504].includes(firecrawlStatus)) {
-          const statusMessages: Record<number, { userMessage: string; statusLabel: string }> = {
-            400: {
-              userMessage: `This site requires advanced browser features that are not available. Try using web_search to find the information instead.`,
-              statusLabel: 'actions not supported',
-            },
-            403: {
-              userMessage: `This site cannot be accessed by the web scraper — it blocks automated access or is not supported. Try using web_search to find the information instead.`,
-              statusLabel: 'site not supported',
-            },
-            408: {
-              userMessage: `The page timed out before loading completely — the site may be slow or require heavy JavaScript rendering. Try using web_search to find the information instead.`,
-              statusLabel: 'scrape timed out',
-            },
-            502: {
-              userMessage: `The website returned a Bad Gateway error — it may be temporarily unavailable. Try again later or use web_search to find the information instead.`,
-              statusLabel: 'bad gateway',
-            },
-            503: {
-              userMessage: `The website is temporarily unavailable (Service Unavailable). Try again later or use web_search to find the information instead.`,
-              statusLabel: 'service unavailable',
-            },
-            504: {
-              userMessage: `The website took too long to respond (Gateway Timeout). Try again later or use web_search to find the information instead.`,
-              statusLabel: 'gateway timeout',
-            },
-          };
-          const { userMessage, statusLabel } = statusMessages[firecrawlStatus];
+        if (firecrawlStatus !== undefined && firecrawlStatus in FIRECRAWL_FAILURE_MESSAGES) {
+          const { userMessage, statusLabel } = FIRECRAWL_FAILURE_MESSAGES[firecrawlStatus];
           context.logger.warn('WebFetch expected Firecrawl failure', {
             url: params.url,
             statusCode: firecrawlStatus,
@@ -437,6 +541,31 @@ export const webFetchTool: ToolDefinition = {
           return userMessage;
         }
 
+        if (error instanceof NoExtractableContentError) {
+          context.logger.warn('WebFetch no extractable content', { url: params.url });
+          await context.statusUpdate({}, 'WebFetch: no readable content');
+          return WEB_FETCH_NO_CONTENT_MSG;
+        }
+
+        if (error instanceof UnsupportedContentTypeError) {
+          context.logger.warn('WebFetch unsupported file type', {
+            url: params.url,
+            error: errorMessage,
+            cause: error.cause instanceof Error ? error.cause.message : undefined,
+          });
+          await context.statusUpdate({}, 'WebFetch: unsupported file type');
+          return WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG;
+        }
+
+        if (error instanceof UnreachableScrapeTargetError) {
+          context.logger.warn('WebFetch page unreachable', {
+            url: params.url,
+            cause: error.cause instanceof Error ? error.cause.message : undefined,
+          });
+          await context.statusUpdate({}, 'WebFetch: page unreachable');
+          return WEB_FETCH_UNREACHABLE_MSG;
+        }
+
         // Firecrawl 500 with PDF page-count timeout hint - the PDF is too large to process
         if (error instanceof FirecrawlError && error.statusCode === 500 && errorMessage.includes('PDF')) {
           context.logger.warn('WebFetch PDF too large for Firecrawl', {
@@ -444,7 +573,7 @@ export const webFetchTool: ToolDefinition = {
             error: errorMessage,
           });
           await context.statusUpdate({}, 'WebFetch: PDF too large');
-          return `This PDF is too large to process via URL. Please download the file and upload it directly instead.`;
+          return WEB_FETCH_PDF_TOO_LARGE_MSG;
         }
 
         // Network-level errors (no response, connection reset, blocked redirect, ...) - return a
@@ -470,7 +599,19 @@ export const webFetchTool: ToolDefinition = {
             error: errorMessage,
           });
           await context.statusUpdate({}, 'WebFetch: network error');
-          return `The page could not be reached — the server may be down, unreachable, or blocking automated access. Try using web_search to find the information instead.`;
+          return WEB_FETCH_UNREACHABLE_MSG;
+        }
+
+        // Runs after the network-pattern return so a matching message keeps the friendly result.
+        // Still a failed tool call, so a Firecrawl outage stays visible to the model; only the log
+        // level changes. ExpectedToolError keeps the message and lets the adapter warn, not error.
+        if (error instanceof RefusedFetchTargetError || firecrawlStatus === 500) {
+          // Refused targets are already logged by the SSRF guard.
+          if (!(error instanceof RefusedFetchTargetError)) {
+            context.logger.warn('WebFetch expected upstream failure', { url: params.url, error: errorMessage });
+          }
+          await context.statusUpdate({}, `WebFetch failed: ${errorMessage}`);
+          throw new ExpectedToolError(errorMessage);
         }
 
         // Unexpected errors - log as error and rethrow
@@ -479,6 +620,7 @@ export const webFetchTool: ToolDefinition = {
         throw error;
       }
     },
+    validateResult: validateWebFetchResult,
     toolSchema: {
       name: 'web_fetch',
       description:

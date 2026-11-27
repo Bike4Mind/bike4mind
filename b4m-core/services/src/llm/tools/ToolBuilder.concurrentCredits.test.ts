@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { ImageModels, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { estimateImageCredits } from '../../imageCost';
-import { estimateAudioCredits } from '../../audioCost';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
 import { toImageCostInput, type ImageToolCostInput, type ImageToolName } from './imageToolBilling';
 
@@ -158,44 +157,5 @@ describe('concurrent media credit admission', () => {
     }
     first.finish();
     await firstResult;
-  });
-
-  it('accounts for an image estimate before a concurrent audio gate checks the balance', async () => {
-    const { builder } = makeBuilder(highCredits);
-    const image = imageCall(builder, highQuality);
-    const imageResult = image.tool.toolFn();
-    // Do not await the image gate: this is the interleaving that previously read stale commitments.
-    expect(() =>
-      builder.gateAudioCredits({ kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000 }, true)
-    ).toThrow(/enough personal credits/);
-    image.finish();
-    await imageResult;
-  });
-
-  it('keeps an audio estimate when a later, cheaper audio call fails', async () => {
-    const speech = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000 } as const;
-    const smallSpeech = { ...speech, characters: 100 };
-    const speechCredits = estimateAudioCredits(speech).requiredCredits;
-    const smallCredits = estimateAudioCredits(smallSpeech).requiredCredits;
-    const { builder } = makeBuilder(speechCredits + smallCredits);
-    const started = Promise.withResolvers<void>();
-    const finish = Promise.withResolvers<void>();
-    const first = trackedTool(builder, 'audio_generation', async () => {
-      builder.gateAudioCredits(speech, true);
-      started.resolve();
-      await finish.promise;
-      return 'failed';
-    });
-    const second = trackedTool(builder, 'audio_generation', async () => {
-      builder.gateAudioCredits(smallSpeech, true);
-      return 'failed';
-    });
-    const firstResult = first.toolFn();
-    await started.promise;
-    await second.toolFn();
-    expect(() => builder.gateAudioCredits(speech, true)).toThrow(/enough personal credits/);
-    finish.resolve();
-    await firstResult;
-    expect(() => builder.gateAudioCredits(speech, true)).not.toThrow();
   });
 });

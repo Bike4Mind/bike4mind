@@ -1,9 +1,22 @@
 import { z } from 'zod';
+import { PlatformAttribution, platformAccountingPayload } from './PlatformAccountingTypes';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
-import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
+import { NamedApiKeyUsage, ISourceUsage, ILedgerUsageTotal } from './CreditTransactionTypes';
 import { ApiKeyCompletionSource, COMPLETION_SOURCES, CompletionSource, IPlatformEndpointUsage } from '../analytics';
+import { COMPLETION_RUN_PURPOSES, COMPLETION_RUN_ROLES } from '../../constants/completionRuns';
+import type {
+  SpendActorScanParams,
+  SpendBreakdown,
+  SpendBreakdownParams,
+  SpendFeatureAggregate,
+  SpendFeaturesParams,
+  SpendFeatureUsersPage,
+  SpendFeatureUsersParams,
+  SpendTimelineParams,
+  SpendTimelineRow,
+} from './SpendExplorerTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -23,7 +36,7 @@ export const USAGE_EVENT_FEATURES = [
   'tool',
   // Operational-model spend the app incurs on the user's behalf outside a direct
   // chat turn (auto-naming, summarization, tagging, context summarization). Billed
-  // to the user/org only when the billOperationalUsage admin setting is on.
+  // to free-tier holders, and to everyone when the billOperationalUsage setting is on.
   'operations',
   // Query-embedding spend (e.g. every search_knowledge_base semantic search).
   'embedding',
@@ -41,6 +54,14 @@ export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal', 'degen
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
+/**
+ * Whose provider key paid for the call: the platform's (admin setting or self-host env) or the
+ * user's own stored key. Only the platform's draws down the platform's vendor plan.
+ */
+export const USAGE_KEY_SOURCES = ['platform', 'user'] as const;
+
+export type UsageKeySource = (typeof USAGE_KEY_SOURCES)[number];
+
 /** Where a UsageEvent's rates came from: a ModelPrice catalog row, or the adapter literal fallback. */
 export const USAGE_PRICE_SOURCES = ['catalog', 'literal'] as const;
 
@@ -54,6 +75,8 @@ export const UsageEventRates = z.object({
   output: z.number(),
   cacheRead: z.number().optional(),
   cacheWrite: z.number().optional(),
+  /** Stamped only on a row that wrote with the 1-hour TTL. */
+  cacheWrite1h: z.number().optional(),
 });
 
 export type IUsageEventRates = z.infer<typeof UsageEventRates>;
@@ -64,6 +87,7 @@ export const UsageEventTurn = z.object({
   outputTokens: z.number(),
   cacheReadTokens: z.number().optional(),
   cacheWriteTokens: z.number().optional(),
+  cacheWrite1hTokens: z.number().optional(),
   tierKey: z.number(),
 });
 
@@ -73,12 +97,96 @@ export type IUsageEventTurn = z.infer<typeof UsageEventTurn>;
 export const USAGE_EVENT_TURN_USAGE_CAP = 100;
 
 /**
+ * What funded the credits a usage event spent. `unknown` covers legacy-backfill lots and
+ * credits no lot accounts for (lot stamping is best-effort and an admin absolute-set
+ * balance can leave lots short of the real history).
+ */
+export const USAGE_FUNDING_SOURCES = ['granted', 'purchased', 'subscription', 'unknown'] as const;
+export type UsageFundingSource = (typeof USAGE_FUNDING_SOURCES)[number];
+
+/** Credits per funding source; the four values sum to the event's creditsCharged. */
+export const UsageFundingBreakdown = z.object({
+  granted: z.number(),
+  purchased: z.number(),
+  subscription: z.number(),
+  unknown: z.number(),
+});
+
+export type IUsageFundingBreakdown = z.infer<typeof UsageFundingBreakdown>;
+
+/**
+ * The background job behind a system-sourced operational row (see recordSessionOperationalUsage).
+ * Names the job on an admin usage receipt; never derived from the content the job read or wrote.
+ */
+export const USAGE_EVENT_OPERATIONS = [
+  'notebook_naming',
+  'notebook_summary',
+  'notebook_tagging',
+  'context_summary',
+  'memento',
+  'assistant_brief',
+  'delegated_item',
+  'document_obligation',
+  'org_feedback_summary',
+] as const;
+
+export type UsageEventOperation = (typeof USAGE_EVENT_OPERATIONS)[number];
+
+/**
+ * How a request was run, for the admin usage receipt. Metadata only by contract: never prompt or
+ * reply text, file names or titles. Absent on rows written before it existed.
+ */
+export const UsageEventRequestMeta = z.object({
+  /** The provider's finish reason, e.g. end_turn, max_tokens, tool_use. */
+  stopReason: z.string().max(64).optional(),
+  /** The output ceiling the request was sent with, before any credit cap. */
+  maxOutputTokens: z.number().optional(),
+  /** The lowest per-round output budget the balance cap set; present only when the cap bound. */
+  creditCapOutputTokens: z.number().optional(),
+  /** True when the turn was stopped because the balance could not pay for more. */
+  stoppedForCredits: z.boolean().optional(),
+  /** The reasoning effort asked for: the user's explicit choice, or auto plus the classified complexity. */
+  reasoningEffort: z.string().max(32).optional(),
+  /** The extended-thinking budget sent, when thinking was on. */
+  thinkingBudgetTokens: z.number().optional(),
+  /** Tool calls by tool name. */
+  toolCalls: z.array(z.object({ name: z.string().max(128), count: z.number() })).optional(),
+  attachmentCount: z.number().optional(),
+  /** Total size of the attachments, in bytes. */
+  attachmentBytes: z.number().optional(),
+  operation: z.enum(USAGE_EVENT_OPERATIONS).optional(),
+});
+
+export type IUsageEventRequestMeta = z.infer<typeof UsageEventRequestMeta>;
+
+/**
+ * The verified run a completion was attributed to (CompletionRunAttributionSchema, as sent).
+ * Stored as sent: an absent `purpose` reads as `turn`. Absent on rows not attributed to a run.
+ */
+export const UsageEventRun = z.object({
+  runId: z.string(),
+  role: z.enum(COMPLETION_RUN_ROLES),
+  purpose: z.enum(COMPLETION_RUN_PURPOSES).optional(),
+  taskId: z.string().optional(),
+  attemptId: z.string().optional(),
+  parentSessionId: z.string().optional(),
+  // The caller's untrusted, display-only session id; never an authorization input.
+  sessionId: z.string().max(128).optional(),
+});
+
+export type IUsageEventRun = z.infer<typeof UsageEventRun>;
+
+/**
  * One row per provider API call. Ties true COGS (costUsd, frozen
  * at write time) to what the user was debited (creditsCharged) so margin per
  * model/user is queryable. Dual-written at settlement time; never part of the
  * billing path itself.
  */
-export const UsageEvent = z.object({
+export const AttributedUsageEvent = z.object({
+  attribution: z.undefined().optional(),
+  providerCallId: z.undefined().optional(),
+  usageOccurredAt: z.undefined().optional(),
+  recordedAt: z.undefined().optional(),
   id: z.string().optional(), // MongoDB ObjectId
   /** App-level correlation id: questId for chat/image/video, session/run id otherwise. */
   requestId: z.string(),
@@ -87,6 +195,8 @@ export const UsageEvent = z.object({
   ownerId: z.string(),
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
+  /** Explicit project context validated against access and billing ownership at execution time. */
+  projectId: z.string().optional(),
   /**
    * Data lake this call is 1:1 attributable to (ingestion embeds and research-run judge calls -
    * a query embedding can span multiple lakes and is never attributed here). Unset for
@@ -98,6 +208,12 @@ export const UsageEvent = z.object({
   provider: z.string(),
   /** Exact model id string used for the call. */
   model: z.string(),
+  /**
+   * Admin-only: the provider/model that actually ran, set only when the restricted tier substituted it.
+   * provider/model above keep the requested ids; costUsd prices the executed model. Never return to users.
+   */
+  executedProvider: z.string().optional(),
+  executedModel: z.string().optional(),
 
   // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
   // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's
@@ -115,7 +231,10 @@ export const UsageEvent = z.object({
 
   /** True provider COGS in USD, computed and frozen at write time. */
   costUsd: z.number(),
-  /** Credits actually debited from the owner for this call. */
+  /**
+   * Full credit cost of this call, including any part written off below; what the owner was
+   * actually debited is creditsCharged - writtenOffCredits.
+   */
   creditsCharged: z.number(),
   /**
    * Credits written off by the zero-balance shortfall clamp (quest-level,
@@ -123,6 +242,17 @@ export const UsageEvent = z.object({
    * sum(creditsCharged) - sum(writtenOffCredits); absent means nothing written off.
    */
   writtenOffCredits: z.number().optional(),
+  /**
+   * The credit hold the settled turn reserved before it ran (chat settlement events only). Set so a
+   * turn that settled far above its hold can be found per account; absent on other events.
+   */
+  reservedCredits: z.number().optional(),
+  /**
+   * creditsCharged split by what funded it, stamped by UsageEventRepository.record() from
+   * the holder's credit lots (see attributeChargeToFundingSources). Absent on zero-credit
+   * rows and on rows written before stamping existed.
+   */
+  fundingBreakdown: UsageFundingBreakdown.optional(),
 
   status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
   latencyMs: z.number().optional(),
@@ -137,6 +267,8 @@ export const UsageEvent = z.object({
   source: z.enum(COMPLETION_SOURCES).optional(),
   /** API key that authed the call; present only for API-key-authed usage. */
   apiKeyId: z.string().optional(),
+  /** Whose provider key served the call. Set on vendor-quota paths (ElevenLabs); unset elsewhere and on older rows. */
+  keySource: z.enum(USAGE_KEY_SOURCES).optional(),
 
   // Price stamp, written at text-model settlement so a refund or audit can recompute the
   // charge from the rates actually applied. All optional: rows written before the stamp, and
@@ -165,22 +297,135 @@ export const UsageEvent = z.object({
   turnUsage: z.array(UsageEventTurn).optional(),
   /** True when turnUsage was capped: its last entry is the sum of every turn from there on. */
   turnUsageTruncated: z.boolean().optional(),
+  /** The part of cacheWriteTokens written with the 1-hour TTL, priced at rates.cacheWrite1h. Absent when none. */
+  cacheWrite1hTokens: z.number().optional(),
+  /** How the request ran, for the admin usage receipt (see UsageEventRequestMeta). */
+  requestMeta: UsageEventRequestMeta.optional(),
+  /** The completion run this call's spend belongs to (see UsageEventRun). */
+  run: UsageEventRun.optional(),
 
   createdAt: z.date(),
   updatedAt: z.date(),
 });
 
+export const PlatformUsageEvent = AttributedUsageEvent.omit({
+  attribution: true,
+  providerCallId: true,
+  usageOccurredAt: true,
+  recordedAt: true,
+})
+  .extend({
+    attribution: PlatformAttribution,
+    providerCallId: z.string().min(1).max(128),
+    usageOccurredAt: z.date(),
+    recordedAt: z.date(),
+    timestampSource: z.enum(['provider', 'dispatch']),
+    dispatchedAt: z.date(),
+    completedAt: z.date(),
+    providerRequestId: z.string().max(256).optional(),
+    userId: z.never().optional(),
+    ownerId: z.never().optional(),
+    ownerType: z.never().optional(),
+    sessionId: z.never().optional(),
+    projectId: z.never().optional(),
+    dataLakeId: z.never().optional(),
+    apiKeyId: z.never().optional(),
+    fundingBreakdown: z.never().optional(),
+    writtenOffCredits: z.never().optional(),
+    reservedCredits: z.never().optional(),
+    units: z.never().optional(),
+    turnUsage: z.never().optional(),
+    turnUsageTruncated: z.never().optional(),
+    requestMeta: z.never().optional(),
+    run: z.never().optional(),
+    latencyMs: z.number().finite().nonnegative().optional(),
+    feature: z.literal('operations'),
+    source: z.literal('system'),
+    keySource: z.literal('platform'),
+    creditsCharged: z.literal(0),
+    costUsd: z.number().finite().nonnegative(),
+    provider: z.string().min(1).max(128),
+    model: z.string().min(1).max(256),
+    providerInputTokens: z.number().int().nonnegative(),
+    providerOutputTokens: z.number().int().nonnegative(),
+    inputTokens: z.literal(0).default(0),
+    outputTokens: z.literal(0).default(0),
+    cachedInputTokens: z.number().int().nonnegative(),
+    cacheWriteTokens: z.number().int().nonnegative(),
+    cacheWrite1hTokens: z.number().int().nonnegative().optional(),
+    settledBasis: z.literal('provider'),
+    priceSource: z.enum(USAGE_PRICE_SOURCES),
+    executedProvider: z.never().optional(),
+    executedModel: z.never().optional(),
+    rates: UsageEventRates.extend({
+      tierKey: z.number().finite().nonnegative(),
+      input: z.number().finite().nonnegative(),
+      output: z.number().finite().nonnegative(),
+      cacheRead: z.number().finite().nonnegative().optional(),
+      cacheWrite: z.number().finite().nonnegative().optional(),
+      cacheWrite1h: z.number().finite().nonnegative().optional(),
+    }),
+  })
+  .strict()
+  .superRefine((event, ctx) => {
+    const oneHour = event.cacheWrite1hTokens ?? 0;
+    if (
+      oneHour > event.cacheWriteTokens ||
+      (event.cachedInputTokens > 0 && event.rates.cacheRead === undefined) ||
+      (event.cacheWriteTokens > oneHour && event.rates.cacheWrite === undefined) ||
+      (oneHour > 0 && event.rates.cacheWrite1h === undefined) ||
+      (event.priceSource === 'catalog' && !event.priceRowId)
+    ) {
+      ctx.addIssue({ code: 'custom', message: 'Incomplete platform pricing provenance' });
+    }
+    const expected =
+      event.providerInputTokens * event.rates.input +
+      event.providerOutputTokens * event.rates.output +
+      event.cachedInputTokens * (event.rates.cacheRead ?? 0) +
+      (event.cacheWriteTokens - oneHour) * (event.rates.cacheWrite ?? 0) +
+      oneHour * (event.rates.cacheWrite1h ?? 0);
+    if (Math.abs(expected - event.costUsd) > Math.max(1e-12, Math.abs(expected) * 1e-9)) {
+      ctx.addIssue({ code: 'custom', message: 'Platform cost does not match measured usage and rates' });
+    }
+    if (
+      event.requestId !== event.attribution.executionId ||
+      event.usageOccurredAt > event.completedAt ||
+      (event.timestampSource === 'dispatch' && event.usageOccurredAt.getTime() !== event.dispatchedAt.getTime()) ||
+      event.completedAt < event.dispatchedAt ||
+      event.recordedAt < event.completedAt
+    ) {
+      ctx.addIssue({ code: 'custom', message: 'Invalid platform accounting timestamps' });
+    }
+  });
+
+export const UsageEvent = z.union([PlatformUsageEvent, AttributedUsageEvent]);
+export type IAttributedUsageEvent = z.infer<typeof AttributedUsageEvent>;
+export type IPlatformUsageEvent = z.infer<typeof PlatformUsageEvent>;
 export type IUsageEvent = z.infer<typeof UsageEvent>;
+export type IAttributedUsageEventInput = Omit<IAttributedUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+export type IPlatformUsageEventInput = Omit<IPlatformUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+
+export function platformUsagePayload(event: IPlatformUsageEvent | IPlatformUsageEventInput): string {
+  const {
+    id: _id,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    recordedAt: _recordedAt,
+    ...fact
+  } = event as IPlatformUsageEvent;
+  return platformAccountingPayload(fact);
+}
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 
 /** Input for recording an event (server sets id/timestamps). */
-export type IUsageEventInput = Omit<IUsageEvent, 'id' | 'createdAt' | 'updatedAt'>;
+export type IUsageEventInput = IAttributedUsageEventInput;
+export type IAnyUsageEventInput = IAttributedUsageEventInput | IPlatformUsageEventInput;
 
 /** The price-stamp fields of a UsageEvent, as built by buildUsagePriceStamp. */
 export type UsagePriceStamp = Pick<
   IUsageEventInput,
-  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated'
+  'priceSource' | 'priceRowId' | 'rates' | 'turnUsage' | 'turnUsageTruncated' | 'cacheWrite1hTokens'
 >;
 
 /** One aggregation bucket of v_margin_by_model_day (schema-doc naming). */
@@ -188,6 +433,9 @@ export interface IModelDayMargin {
   day: string; // YYYY-MM-DD (UTC)
   provider: string;
   model: string;
+  // Equal to provider/model unless the request was served by a substitute model.
+  executedProvider?: string;
+  executedModel?: string;
   requests: number;
   cogsUsd: number;
   creditsCharged: number;
@@ -231,6 +479,26 @@ export interface ISettlementBreakdown {
   deltaSampleSize: number;
 }
 
+/**
+ * Provider cost and credits by funding source for one signup-week cohort over the report
+ * window (admin usage-margin view 'funding-cohort').
+ */
+export interface IFundingCohortCost {
+  /** Monday 00:00 UTC of the spending users' signup week; null when the user record is gone. */
+  cohortWeek: Date | null;
+  /** Distinct spending users in the cohort over the window. */
+  accounts: number;
+  /** Each row's costUsd split by its fundingBreakdown shares. */
+  costUsd: Record<UsageFundingSource, number>;
+  credits: Record<UsageFundingSource, number>;
+  /**
+   * Provider cost on rows without a fundingBreakdown: zero-credit calls, rows written before
+   * stamping, and rows whose funding lookup failed.
+   */
+  unattributedCostUsd: number;
+  platformCostUsd: number;
+}
+
 /** Shared spend totals for any owner-scoped usage aggregation bucket. */
 export interface IUsageSpendBucket {
   requests: number;
@@ -250,10 +518,21 @@ export interface IOwnerSpendMember extends IUsageSpendBucket {
   userId: string;
 }
 
+export interface IOwnerSpendProject extends IUsageSpendBucket {
+  /** Null means historical, missing or ambiguous attribution; never inferred from session membership. */
+  projectId: string | null;
+}
+
 /** Owner spend for one provider/model pair. */
 export interface IOwnerSpendModel extends IUsageSpendBucket {
   provider: string;
   model: string;
+}
+
+/** Admin-only spend row: executed* is the provider/model that actually ran (coalesced to requested). Never return to users. */
+export interface IAdminSpendModel extends IOwnerSpendModel {
+  executedProvider?: string;
+  executedModel?: string;
 }
 
 /** Owner spend for one product surface (chat, agent_execution, operations, embedding, ...). */
@@ -270,6 +549,7 @@ export interface IOwnerSpendFeature extends IUsageSpendBucket {
 export interface IOwnerUsageSummary {
   overTime: IOwnerSpendDay[];
   byMember: IOwnerSpendMember[];
+  byProject: IOwnerSpendProject[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
   totals: IUsageSpendBucket;
@@ -280,7 +560,7 @@ export interface IOwnerUsageSummary {
  * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
  * to any owner/curator/org-admin who can view a lake's spend.
  */
-export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember' | 'byProject'>;
 
 /** A member spend bucket with the user id resolved to a display name by the API. */
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
@@ -305,6 +585,31 @@ export type NamedPlatformConsumerUsage = IPlatformConsumerUsage & {
   ownerName?: string;
 };
 
+export interface IProviderUnitsParams {
+  provider: string;
+  from: Date;
+  to: Date;
+  /**
+   * A per-call units value the vendor prices flat (ElevenLabs bills an auto-duration sound effect per generation,
+   * and we record it as the default duration). Rows with exactly this value are bucketed apart, flagged atDefaultUnits.
+   */
+  defaultUnits?: number;
+}
+
+/** One bucket of providerUnitsBreakdown. keySource is null on rows written before it was recorded. */
+export interface IProviderUnitsRow {
+  day: string; // YYYY-MM-DD (UTC)
+  feature: UsageEventFeature;
+  model: string;
+  userId?: string;
+  keySource: UsageKeySource | null;
+  status: UsageEventStatus;
+  /** True for the bucket of rows whose units equal params.defaultUnits; always false without it. */
+  atDefaultUnits: boolean;
+  requests: number;
+  units: number;
+}
+
 /**
  * Optional platform-summary filters. `source` and `ownerType` are applied as the
  * same kind of $match addition - not separate query paths - so omitting either
@@ -325,7 +630,7 @@ export interface IPlatformUsageSummary {
   overTime: IOwnerSpendDay[];
   byFeature: IOwnerSpendFeature[];
   byConsumer: IPlatformConsumerUsage[];
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   totals: IUsageSpendBucket;
 }
 
@@ -349,6 +654,7 @@ export interface IUsageDashboardResponse {
   days: number;
   overTime: IOwnerSpendDay[];
   byMember: NamedOwnerSpendMember[];
+  byProject: IOwnerSpendProject[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
   /** API-token spend grouped by key (from the ledger; only completion_api_usage and decision_usage carry a key). */
@@ -359,6 +665,11 @@ export interface IUsageDashboardResponse {
    * spend, which can drift from `totals` - that comes from UsageEvent.
    */
   bySource: ISourceUsage[];
+  /**
+   * The owner's ledger spend for the same window. `totals` counts usage events only, so charges
+   * written to the ledger without one (e.g. app-specific charges) show up here and not there.
+   */
+  ledger: ILedgerUsageTotal;
   totals: IUsageSpendBucket;
 }
 
@@ -379,7 +690,7 @@ export interface IPlatformUsageDashboardResponse {
   overTime: IOwnerSpendDay[];
   byFeature: IOwnerSpendFeature[];
   byConsumer: NamedPlatformConsumerUsage[];
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   totals: IUsageSpendBucket;
 }
 
@@ -413,6 +724,9 @@ export interface ISessionQuestUsage extends IUsageSpendWithTokens {
 export interface ISessionModelUsage extends IUsageSpendWithTokens {
   provider: string;
   model: string;
+  /** Admin-only: the provider/model that actually ran. Present only when requested via includeExecuted. */
+  executedProvider?: string;
+  executedModel?: string;
 }
 
 /**
@@ -444,6 +758,10 @@ export interface ISpendSummaryFilters {
 export interface ISpendAccountBucket extends IUsageSpendBucket {
   ownerId: string;
   ownerType: CreditHolderType;
+  /** error + timeout events, the same fold as the window-level error rate. */
+  failures: number;
+  /** p95 latency in ms over this account's events; 0 when none carries latencyMs. */
+  p95LatencyMs: number;
 }
 
 /** COGS for one UTC day (Spend daily-cost line point). */
@@ -490,7 +808,7 @@ export interface ISpendSummary {
   activeAccounts: number;
   latency: ISpendLatency;
   status: ISpendStatusCounts;
-  byModel: IOwnerSpendModel[];
+  byModel: IAdminSpendModel[];
   byAccount: ISpendAccountBucket[];
   dailyCost: ISpendCostDay[];
 }
@@ -533,6 +851,22 @@ export interface SpendKpi {
   higherIsBetter: boolean;
 }
 
+/** A fixed limit an account crossed in the window (see SPEND_ACCOUNT_FLAG_THRESHOLDS). */
+export type SpendAccountFlag = 'dailyCost' | 'errorRate' | 'p95Latency';
+
+/**
+ * Fixed limits for flagging an account on the Spend tab. Cost is the window's
+ * average per day (estCost / window days, at least one day), not the peak day.
+ * The rate and latency flags need `minRequests` events so a handful of calls
+ * can't trip them. The tab prints these values, so a change here shows there.
+ */
+export const SPEND_ACCOUNT_FLAG_THRESHOLDS = {
+  dailyCostUsd: 50,
+  errorRate: 0.05,
+  p95LatencyMs: 120_000,
+  minRequests: 20,
+} as const;
+
 export interface SpendByAccountRow {
   accountId: string;
   accountName: string;
@@ -540,6 +874,11 @@ export interface SpendByAccountRow {
   requests: number;
   creditsUsed: number;
   costPerRequest: number;
+  /** (errors + timeouts) / requests, 0..1. */
+  errorRate: number;
+  p95LatencyMs: number;
+  /** Limits this account crossed; empty when none. */
+  flags: SpendAccountFlag[];
 }
 
 export interface CostByModelRow {
@@ -628,12 +967,50 @@ export interface ISessionUsageResponse {
   executions: ISessionAgentExecution[];
 }
 
+/** The settlement that most exceeded its hold, from largestSettlementOverHold. */
+export interface ISettlementOverHold {
+  reservedCredits: number;
+  settledCredits: number;
+  /** settledCredits / reservedCredits. */
+  ratio: number;
+}
+
+export interface IUserUsageActivity {
+  events: number;
+  completed: number;
+  failed: number;
+  credits: number;
+  latestAt: Date | null;
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
-  record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
+  record(event: IAttributedUsageEventInput): Promise<IUsageEventDocument | null>;
+  recordPlatform(event: IPlatformUsageEventInput): Promise<IPlatformUsageEvent & IMongoDocument>;
+  findPlatformCall(providerCallId: string): Promise<IPlatformUsageEvent | null>;
 
   /** Margin buckets per model per day since the given date (default 30 days back). */
   marginByModelDay(since?: Date): Promise<IModelDayMargin[]>;
+
+  /** Credits the user spent in [from, to); creditsCharged already includes any write-off. */
+  creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number>;
+
+  /**
+   * The user's usage in [from, to): event count, `ok` events, the rest (error/timeout/refusal/
+   * degenerate), credits charged (write-offs included), and the newest event's time (null when none).
+   * Reads at most `limit` of the newest events, so `events === limit` means the counts are a floor.
+   */
+  activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity>;
+
+  /** Credits each user has spent in total (write-offs included); users with none are absent. */
+  creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
+
+  /**
+   * Per user, the chat settlement since `since` that settled furthest above its hold: settled credits
+   * (creditsCharged, write-offs included) over reservedCredits. Only events that recorded a hold count; users
+   * with none are absent.
+   */
+  largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>>;
 
   /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
   marginByUser(days?: number): Promise<IUserMargin[]>;
@@ -652,8 +1029,29 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    */
   spendSummary(filters?: ISpendSummaryFilters): Promise<ISpendSummary>;
 
+  /**
+   * Admin Spend explorer: cost per (bucket, series key) over [from, to), one row per
+   * non-empty pair, ascending by bucket. The caller fills empty buckets and folds small series.
+   */
+  spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]>;
+
+  /** Admin Spend explorer: total, provider and segment cuts, and the top accounts over [from, to). */
+  spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown>;
+
+  /** Admin Spend explorer feature view: per-feature totals, distinct users and daily cost. */
+  spendFeatures(params: SpendFeaturesParams): Promise<SpendFeatureAggregate[]>;
+
+  /** Admin Spend explorer feature view: one page of a feature's acting users by cost. */
+  spendFeatureUsers(params: SpendFeatureUsersParams): Promise<SpendFeatureUsersPage>;
+
+  /** Distinct acting users over the feature view's scan window, for audience classification. */
+  spendActorIds(params: SpendActorScanParams): Promise<string[]>;
+
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
+
+  /** Provider cost by funding source per signup-week cohort over the trailing N days (default 30), newest cohort first. */
+  costByFundingCohort(days?: number): Promise<IFundingCohortCost[]>;
 
   /**
    * All spend for one credit holder (org/user/agent) over the trailing N days
@@ -672,15 +1070,24 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   platformUsageSummary(params?: IPlatformUsageParams): Promise<IPlatformUsageSummary>;
 
   /**
+   * One provider's usage over [from, to), summed per (UTC day, feature, model, user, key source,
+   * status): request count and `units` (characters, seconds, ...). Powers the vendor-plan views,
+   * which convert units to vendor credits (see ../../vendorQuota).
+   */
+  providerUnitsBreakdown(params: IProviderUnitsParams): Promise<IProviderUnitsRow[]>;
+
+  /**
    * One session's usage rolled up by quest and by model. Defaults to all events
    * for the session; pass `owner` to scope to a single credit holder - a session
    * can carry events billed to more than one owner (billing owner is resolved
    * per-request, not pinned to the session), so a non-admin caller must scope to
    * their org or they would see another owner's spend in the same session.
+   * `includeExecuted` splits byModel by the model that ran; admin callers only.
    */
   sessionUsageSummary(
     sessionId: string,
-    owner?: { ownerId: string; ownerType: CreditHolderType }
+    owner?: { ownerId: string; ownerType: CreditHolderType },
+    options?: { includeExecuted?: boolean }
   ): Promise<ISessionUsageSummary>;
 
   /**

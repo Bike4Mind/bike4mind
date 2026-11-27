@@ -1,5 +1,37 @@
 # @bike4mind/observability
 
+## 1.1.0
+
+### Minor Changes
+
+- [#6929](https://github.com/Bike4Mind/bike4mind/pull/6929) [`3deabf1`](https://github.com/Bike4Mind/bike4mind/commit/3deabf1fb5f5f1c86dc7399f06890db273ad773d) Thanks [@cgtorniado](https://github.com/cgtorniado)! - redact raw console output at process bootstrap
+
+## 1.0.3
+
+### Patch Changes
+
+- [#6690](https://github.com/Bike4Mind/bike4mind/pull/6690) [`a212b21`](https://github.com/Bike4Mind/bike4mind/commit/a212b21fc987e8d46f33f87490d95319dfbdbecc) Thanks [@onoya](https://github.com/onoya)! - redact contact fields and credentials in server logs
+
+## 1.0.2
+
+### Patch Changes
+
+- [#6213](https://github.com/Bike4Mind/bike4mind/pull/6213) [`70b2544`](https://github.com/Bike4Mind/bike4mind/commit/70b2544b9bb5725e5fe9a44dbd57aeb4b816d29c) Thanks [@jarlacut](https://github.com/jarlacut)! - scope request log context per request
+
+## 1.0.1
+
+### Patch Changes
+
+- [#5883](https://github.com/Bike4Mind/bike4mind/pull/5883) [`7461ef5`](https://github.com/Bike4Mind/bike4mind/commit/7461ef5ebac9784370371b9602af454912cb327f) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - log error.cause and retry Gemini fetch failures
+
+- [#5955](https://github.com/Bike4Mind/bike4mind/pull/5955) [`a295054`](https://github.com/Bike4Mind/bike4mind/commit/a2950546d13fbf978e70ee33156e6094db9aabcd) Thanks [@ken-b4m](https://github.com/ken-b4m)! - clear open Dependabot alerts with in-major overrides and bumps
+
+## 1.0.0
+
+### Major Changes
+
+- [#5257](https://github.com/Bike4Mind/bike4mind/pull/5257) [`068b941`](https://github.com/Bike4Mind/bike4mind/commit/068b941bead19a117b6902b57d9f9a121ed4ad90) Thanks [@onoya](https://github.com/onoya)! - protect stored credentials and private data
+
 ## 0.2.3
 
 ### Patch Changes

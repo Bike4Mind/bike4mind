@@ -20,9 +20,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 const { notify } = vi.hoisted(() => ({ notify: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: notify }));
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (fn: unknown) => fn }) }));
-vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: notify }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
     get MONGODB_URI() {
@@ -47,9 +45,8 @@ vi.mock('sst', () => ({
     websocket: { managementEndpoint: 'http://unused.invalid' },
   },
 }));
-// Cross-process integration proof starts at the backend API route; no UI is imported.
-// eslint-disable-next-line no-restricted-imports
-import curate from '@pages/api/notebooks/curate';
+// Cross-process integration proof starts at the service behind POST /api/notebooks/curate.
+import { startNotebookCuration } from '@bike4mind/server-utils/notebooks/startNotebookCuration';
 import * as storage from '@bike4mind/server-utils/utils/storage/index';
 import { S3Storage, createS3Client } from '@bike4mind/fab-pipeline';
 import { SelfHostWorker } from './selfHostWorker';
@@ -134,21 +131,13 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
       reply: 'Persisted through both local queues.',
       timestamp: new Date(),
     });
-    const req = { method: 'POST', body: { sessionIds: [sessionId] } };
-    let statusCode = 200;
-    let response: unknown;
-    const res = {
-      status(code: number) {
-        statusCode = code;
-        return this;
-      },
-      json(body: unknown) {
-        response = body;
-        return this;
-      },
-    };
-    Object.assign(req, { user: { id: userId }, logger });
-    await (curate as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    // Only the fields a JWT-authenticated transcript request reads; the full request type is the client's Express one.
+    const req = { user: { id: userId }, logger } as unknown as Parameters<typeof startNotebookCuration>[0];
+    const { status: statusCode, body: response } = await startNotebookCuration(req, userId, {
+      sessionIds: [sessionId],
+      curationType: 'transcript',
+      exportFormat: 'markdown',
+    });
     expect(statusCode).toBe(202);
     const jobId = (response as { data: { curationJobs: { curationJobId: string }[] } }).data.curationJobs[0]
       .curationJobId;

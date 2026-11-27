@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useHelpSuggestionSuppression } from '@client/app/hooks/useHelpSuggestionSuppression';
 import { persist } from 'zustand/middleware';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import HelpOutlineRoundedIcon from '@mui/icons-material/HelpOutlineRounded';
@@ -45,7 +46,9 @@ export default function HelpSuggestionBanner() {
   const dismissedPaths = useDismissedHelpSuggestions(state => state.dismissedPaths);
   const dismiss = useDismissedHelpSuggestions(state => state.dismiss);
 
-  if (!suggestion || dismissedPaths.includes(suggestion.path)) return null;
+  const suppressed = useHelpSuggestionSuppression(state => state.activeTokens.size > 0);
+
+  if (suppressed || !suggestion || dismissedPaths.includes(suggestion.path)) return null;
 
   const primaryHelpId = suggestion.helpIds[0];
 

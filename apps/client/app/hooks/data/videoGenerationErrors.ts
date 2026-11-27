@@ -13,7 +13,11 @@ const MESSAGES: Record<VideoGenerationApiErrorCode, string> = {
   unsupported_mode: 'This model does not support that mode.',
   missing_input_image: 'Choose an image to animate.',
   unexpected_input_image: 'Remove the image, or switch to image to video.',
+  unsupported_input_role: 'This model does not take that kind of image, or not that many. Remove one.',
   unsupported_audio_option: 'This model does not let you turn audio on or off.',
+  unsupported_keyframes: 'This model does not support keyframes.',
+  invalid_keyframes: 'Check the keyframe timestamps and image inputs.',
+  unsupported_draft: 'This model does not support drafts at that resolution.',
   invalid_request: 'The request was not valid. Check the form and try again.',
   model_disabled: 'This model has been turned off. Pick another model.',
   model_unavailable: 'This model is not available right now. Pick another model.',
@@ -21,6 +25,8 @@ const MESSAGES: Record<VideoGenerationApiErrorCode, string> = {
   input_image_not_found: 'The selected image was not found. Pick another image.',
   idempotency_key_reused: 'This request was already sent with different settings. Try again.',
   invalid_idempotency_key: 'The request could not be sent. Try again.',
+  run_not_found: 'The run this request belongs to was not found.',
+  run_budget_exhausted: 'The run does not have enough budget left for this video.',
 };
 
 export function describeVideoGenerationError(

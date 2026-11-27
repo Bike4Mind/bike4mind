@@ -139,7 +139,7 @@ export interface FakeCatalogView {
 }
 
 /**
- * The drivers' memoized catalog view (apps/client/server/modelDiscovery/adapters.ts)
+ * The drivers' memoized catalog view (packages/server-utils/src/modelDiscovery/adapters.ts)
  * in miniature: every source that asks within one pass shares a single read, and
  * refreshCatalogView drops the memo so the next convergence pass joins against
  * the rows the previous one appended.

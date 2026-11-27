@@ -10,14 +10,14 @@
  * `console.clear()` / `renderBanner()`, the interactive session/rewind selectors,
  * and the rewind input prefill.
  */
-import { v4 as uuidv4 } from 'uuid';
 import { ChatModels } from '@bike4mind/common';
 import { ReActAgent } from '@bike4mind/agents';
 import type { SessionStore, Session, Message } from '../storage';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
-import type { DecisionStore, BlockerStore, ReviewGateStore, TodoStore } from '../tools';
+import { resetTodoStore, type DecisionStore, type BlockerStore, type ReviewGateStore, type TodoStore } from '../tools';
 import { useCliStore } from '../store';
 import { logger } from '../utils/Logger';
+import { sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
 import { extractCompactInstructions } from '../utils';
 import { injectHandoffMessage, injectWorkflowStateMessage, formatHandoffOutput } from '../utils/handoff.js';
@@ -97,10 +97,10 @@ export function recalculateSessionMetadata(messages: Message[]): {
  */
 export async function createFreshSession(ctx: SessionLifecycleContext): Promise<Session> {
   const currentSession = useCliStore.getState().session;
-  const model = currentSession?.model || ctx.defaultModel || ChatModels.CLAUDE_4_5_SONNET;
+  const model = currentSession?.model || ctx.defaultModel || ChatModels.CLAUDE_5_5_SONNET;
   const clearPinnedId = process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID;
   const newSession: Session = {
-    id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : uuidv4(),
+    id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : crypto.randomUUID(),
     name: `Session ${new Date().toLocaleString()}`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -121,7 +121,7 @@ export async function createFreshSession(ctx: SessionLifecycleContext): Promise<
   // this reset is the only thing that clears the todo list on a session switch.
   ctx.decisionStore.decisions = [];
   ctx.blockerStore.blockers = [];
-  ctx.todoStore.todos = [];
+  resetTodoStore(ctx.todoStore);
 
   ctx.checkpointStore?.setSessionId(newSession.id);
 
@@ -162,7 +162,7 @@ export async function resumeSession(ctx: SessionLifecycleContext, selected: Sess
   const loadedSession = await ctx.sessionStore.load(selected.id);
 
   if (!loadedSession) {
-    console.log(`❌ Failed to load session: ${selected.name}`);
+    console.log(`\u274C Failed to load session: ${sanitizeTerminalText(selected.name)}`);
     console.log('   The session file may be corrupted or deleted.');
     return null;
   }
@@ -171,6 +171,8 @@ export async function resumeSession(ctx: SessionLifecycleContext, selected: Sess
   logger.debug('=== Session Resumed ===');
 
   ctx.checkpointStore?.setSessionId(loadedSession.id);
+  // Todos are never persisted, so the previous session's plan must not linger.
+  resetTodoStore(ctx.todoStore);
 
   // Surface prior-session continuity into the first-turn context. A handoff, when
   // present, is the richer synthesis and wins; otherwise fall back to the raw
@@ -188,7 +190,7 @@ export async function resumeSession(ctx: SessionLifecycleContext, selected: Sess
   useCliStore.getState().clearPendingMessages();
   ctx.onSessionReplaced();
 
-  console.log(`\n✅ Session resumed: "${sessionForState.name}"`);
+  console.log(`\n\u2705 Session resumed: "${sanitizeTerminalText(sessionForState.name)}"`);
   console.log(
     `📝 ${sessionForState.messages.length} messages | 🤖 ${sessionForState.model} | 📊 ${sessionForState.metadata.totalTokens.toLocaleString()} tokens\n`
   );
@@ -272,8 +274,8 @@ async function compactHeldSession(ctx: SessionLifecycleContext, options: { userI
     ctx.onSessionReplaced();
 
     console.log('✅ Conversation compacted');
-    console.log(`\u{1F4DD} New session: ${newSession.name}`);
-    console.log(`\u{1F4BE} Previous session preserved: ${oldSessionName}\n`);
+    console.log(`\u{1F4DD} New session: ${sanitizeTerminalText(newSession.name)}`);
+    console.log(`\u{1F4BE} Previous session preserved: ${sanitizeTerminalText(oldSessionName)}\n`);
   } finally {
     useCliStore.getState().setIsThinking(false);
   }

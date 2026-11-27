@@ -12,6 +12,7 @@ import {
   ModelCatalogRowInput,
   ModelCatalogRowRead,
 } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 
 /** The one source rowsInForce never collapses; see its docstring for why. */
 const OPERATOR_SOURCE: CatalogRowSource = 'operator';
@@ -111,9 +112,7 @@ export class ModelCatalogRepository
   async rowsInForce(at: Date = new Date()): Promise<IModelCatalogRow[]> {
     const { rows, rejected, rejectedModelIds } = await this.rowsInForceWithRejects(at);
     if (rejected > 0) {
-      console.error(
-        `[modelCatalog] CatalogRowsRejected=${rejected}: dropped unreadable rows for ${rejectedModelIds.join(', ')}`
-      );
+      Logger.error('[modelCatalog] CatalogRowsRejected: dropped unreadable rows', { rejected, rejectedModelIds });
     }
     return rows;
   }
@@ -143,6 +142,28 @@ export class ModelCatalogRepository
   async historyForModel(modelId: string): Promise<IModelCatalogRow[]> {
     const docs = await this.model.find({ modelId }).sort({ effectiveFrom: -1 }).lean();
     return parseRows(docs).rows;
+  }
+
+  /** Per model, its first discovery row and the first discovery row that made it active (the admin model list). */
+  async discoveryMilestones(): Promise<Map<string, { firstSeenAt: Date; activatedAt?: Date }>> {
+    const groups = await this.model.aggregate<{ _id: string; firstSeenAt: Date; activatedAt: Date | null }>([
+      { $match: { source: 'discovery' } },
+      { $project: { modelId: 1, effectiveFrom: 1, 'patch.lifecycle.status': 1 } },
+      {
+        $group: {
+          _id: '$modelId',
+          firstSeenAt: { $min: '$effectiveFrom' },
+          // $min skips nulls, so a model never activated by discovery gets null.
+          activatedAt: { $min: { $cond: [{ $eq: ['$patch.lifecycle.status', 'active'] }, '$effectiveFrom', null] } },
+        },
+      },
+    ]);
+    return new Map(
+      groups.map(group => [
+        group._id,
+        { firstSeenAt: group.firstSeenAt, ...(group.activatedAt ? { activatedAt: group.activatedAt } : {}) },
+      ])
+    );
   }
 }
 

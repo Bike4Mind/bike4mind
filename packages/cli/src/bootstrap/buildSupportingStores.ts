@@ -52,6 +52,8 @@ export interface BuildSupportingStoresInput {
    * Omitted in headless mode, which has no StatusBar to surface it in.
    */
   onSubagentUsage?: SubagentUsageCallback;
+  /** True once this session has ended; see WrapToolDeps.isCancelled. */
+  isCancelled?: () => boolean;
 }
 
 export interface SupportingStores {
@@ -98,6 +100,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     onBackgroundStatusChange,
     onGroupCompletion,
     onSubagentUsage,
+    isCancelled,
   } = input;
 
   // Generate CLI-friendly tools with permission wrapping, server routing, and observation tracking
@@ -114,7 +117,9 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     userQuestionFn,
     checkpointStore,
     sandboxOrchestrator,
-    additionalDirectories
+    additionalDirectories,
+    undefined, // interactionModeOverride
+    isCancelled
   );
 
   // Initialize MCP, agent store, and context files in parallel (all independent)
@@ -148,6 +153,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     apiClient,
     sandboxOrchestrator,
     allowedDirectories: additionalDirectories,
+    isCancelled,
   });
   // Partition B4M tools into "always loaded" (touched in most sessions)
   // and "deferred" (rarely used - load on demand via tool_search). The
@@ -213,6 +219,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     // Subagent bash_execute is sandboxed and directory-scoped like the main agent.
     sandboxOrchestrator,
     additionalDirectories,
+    isCancelled,
   });
 
   // Create background agent manager

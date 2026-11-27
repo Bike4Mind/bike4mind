@@ -266,3 +266,37 @@ describe('OrganizationModel.addMemberIfUnderCeiling (#1239, Stripe path)', () =>
     expect(fresh!.seats).toBe(3);
   });
 });
+
+describe('OrganizationModel.addMemberIfUnderCeiling with reserved seats (organization share links)', () => {
+  it('5 concurrent link joins with 1 seat left after reservations admit exactly 1', async () => {
+    // seats 4 = owner + member 'a' + 1 seat reserved for a pending named invite + 1 free seat.
+    const created = await Organization.create({ name: 'Acme', userId: 'owner', seats: 4, users: [member('a')] });
+    const joiners = Array.from({ length: 5 }, (_, i) => `link-${i}`);
+
+    const results = await Promise.all(
+      joiners.map(id => organizationRepository.addMemberIfUnderCeiling(created.id, member(id), 1))
+    );
+
+    expect(results.filter(r => r !== null)).toHaveLength(1);
+    const fresh = await readRaw(created.id);
+    expect(fresh!.users).toHaveLength(2);
+    expect(fresh!.seats).toBe(4);
+  });
+
+  it('refuses a link join when the reservations hold every free seat', async () => {
+    const created = await Organization.create({ name: 'Acme', userId: 'owner', seats: 3, users: [] });
+
+    const pre = await organizationRepository.addMemberIfUnderCeiling(created.id, member('link'), 2);
+
+    expect(pre).toBeNull();
+    expect((await readRaw(created.id))!.users).toHaveLength(0);
+  });
+
+  it('leaves the named-invite accept (no reservation) able to take that same seat', async () => {
+    const created = await Organization.create({ name: 'Acme', userId: 'owner', seats: 3, users: [member('a')] });
+
+    expect(await organizationRepository.addMemberIfUnderCeiling(created.id, member('link'), 1)).toBeNull();
+    expect(await organizationRepository.addMemberIfUnderCeiling(created.id, member('named'))).not.toBeNull();
+    expect((await readRaw(created.id))!.users.map(u => u.userId)).toEqual(['a', 'named']);
+  });
+});

@@ -1,9 +1,16 @@
 import type { SQSEvent } from 'aws-lambda';
-import { adminSettingsRepository, connectDB } from '@bike4mind/database';
+import {
+  AdminSettings,
+  adminSettingsRepository,
+  connectDB,
+  runSeedOnce,
+  seedSignupGrantPools,
+} from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { Logger } from '@bike4mind/observability';
+import { installConsoleRedaction, Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
 import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
@@ -17,29 +24,45 @@ import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imag
 import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
 import { dispatch as generationJobDispatch } from '@workers/queueHandlers/generationJob';
-import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
-import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
+import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@bike4mind/server-utils/modelDiscovery/scheduledRun';
+import { isDiscoveryDriver, startDiscoveryOnStartup } from '@bike4mind/server-utils/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { registerQuestExportQueue } from './questExportQueue';
+import { registerAccountDataExportQueue } from './accountDataExportQueue';
+import { registerAccountErasureQueue } from './accountErasureQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerRiskEvidenceQueue } from './riskEvidenceQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
+import { registerSignupIpRetention } from './signupIpRetention';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
+import { registerSpendReconciliation } from './spendReconciliation';
+import { registerCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
+import { registerBriefScheduleReconcile } from './briefScheduleReconcile';
 import { registerCreditHoldSweep } from './creditHoldSweep';
+import { registerReferralRewardRelease } from './referralRewardRelease';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerAdminAuditAlerts } from './adminAuditAlerts';
+import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
+import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
+import { registerAccountDeletionSweep } from './accountDeletionSweep';
+import { registerOrganizationRetention } from './organizationRetention';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
+import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerHelpDatalakeIngest } from './helpDatalakeIngest';
+import { registerDriveLakeResyncPoll } from './driveLakeResyncPoll';
+import { registerStorageReconciliation } from './storageReconciliation';
 import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { registerLakeConnectorOrphanReap } from './lakeConnectorOrphanReap';
 import { dispatchSelfHostEvent } from './eventDispatch';
@@ -54,6 +77,9 @@ import {
   GENERATION_JOB_MAX_RECEIVE_COUNT,
   GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
 } from '@bike4mind/server-utils/utils/sqsDelivery';
+import { registerOrgAlertObserver } from '@bike4mind/server-utils/organizations/registerOrgAlertObserver';
+
+registerOrgAlertObserver();
 
 /**
  * Self-host background worker entrypoint.
@@ -94,6 +120,7 @@ const CHUNK_SCAN_INTERVAL_MS = 60_000;
 const DRAIN_GRACE_MS = 20_000;
 
 async function main() {
+  installConsoleRedaction();
   // This process only makes sense in self-host: it uses the env-backed Resource shim and
   // ElasticMQ. Refuse to run elsewhere so it can never poll a real AWS queue by accident.
   if (process.env.B4M_SELF_HOST !== 'true') {
@@ -101,8 +128,14 @@ async function main() {
     process.exit(1);
   }
 
+  warnIfPlaintextSecretsOptOut(bootLogger);
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger);
   bootLogger.info('MongoDB connected');
+  // Self-host runs no packages/scripts migrations, so the pool seed the hosted migration
+  // writes happens here, once; on failure the pools read as missing (paused, admin alerted).
+  await runSeedOnce('signupGrantPools', () => seedSignupGrantPools(AdminSettings)).catch(err =>
+    bootLogger.error(`Could not seed the signup-grant pool settings; free signup grants stay paused: ${err}`)
+  );
 
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);
@@ -110,16 +143,29 @@ async function main() {
   registerGenerationJobSweep(worker);
   registerSkillMarketReviewSla(worker);
   registerAdminAuditAlerts(worker);
+  registerOauthAbuseAutoBlock(worker);
+  registerSignupGrantHeldRelease(worker);
+  registerAccountDeletionSweep(worker);
+  registerOrganizationRetention(worker);
   registerRealtimeConnectionSweep(worker);
+  registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
+  registerHelpDatalakeIngest(worker);
+  registerDriveLakeResyncPoll(worker);
+  registerStorageReconciliation(worker);
   registerGitHubLakeReconcile(worker);
   registerLakeConnectorOrphanReap(worker);
   registerTelemetryCleanup(worker);
+  registerSignupIpRetention(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);
+  registerSpendReconciliation(worker);
+  registerCreditPurchaseReconciliation(worker);
   registerVoiceHoldSweep(worker);
+  registerBriefScheduleReconcile(worker);
   registerCreditHoldSweep(worker);
+  registerReferralRewardRelease(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -207,9 +253,12 @@ async function main() {
   }
 
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+  registerRiskEvidenceQueue(worker, Resource.riskEvidenceQueue?.url, bootLogger);
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
   await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);
+  await registerAccountDataExportQueue(worker, Resource.accountDataExportQueue?.url, bootLogger);
+  await registerAccountErasureQueue(worker, Resource.accountErasureQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

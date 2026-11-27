@@ -13,7 +13,7 @@ const warn = vi.fn();
 
 // Steady state for the tests that don't care about spend: no data, not loading, not forbidden.
 // The spend-tab suite below overrides this per test via useDataLakeSpendMock.
-const useDataLakeSpendMock = vi.fn(() => ({
+const useDataLakeSpendMock = vi.fn((..._args: unknown[]) => ({
   data: undefined,
   isLoading: false,
   isFetching: false,
@@ -24,7 +24,7 @@ const useDataLakeSpendMock = vi.fn(() => ({
 
 // Steady state for the tests that don't care about the history tab. The history suite below
 // overrides it per test.
-const useLakeConfigHistoryMock = vi.fn(() => ({
+const useLakeConfigHistoryMock = vi.fn((..._args: unknown[]) => ({
   data: undefined,
   isLoading: false,
   isFetching: false,
@@ -34,7 +34,7 @@ const useLakeConfigHistoryMock = vi.fn(() => ({
 }));
 // Steady state for the tests that don't care about the acquisition queue: an empty queue. The
 // proposals suite below overrides it per test.
-const useDataLakeProposalsMock = vi.fn(() => ({
+const useDataLakeProposalsMock = vi.fn((..._args: unknown[]) => ({
   data: [] as unknown[],
   isLoading: false,
   isForbidden: false,
@@ -44,13 +44,13 @@ const reviewProposalMutate = vi.fn();
 
 // Steady state for the tests that don't care about the research tab: a manager with no saved
 // configuration yet and no run history. The research suite below overrides these per test.
-const useDataLakeResearchConfigsMock = vi.fn(() => ({
+const useDataLakeResearchConfigsMock = vi.fn((..._args: unknown[]) => ({
   data: [] as unknown[],
   isLoading: false,
   isForbidden: false,
   error: null,
 }));
-const useDataLakeResearchRunsMock = vi.fn(() => ({
+const useDataLakeResearchRunsMock = vi.fn((..._args: unknown[]) => ({
   data: [] as unknown[],
   isLoading: false,
   isForbidden: false,
@@ -61,7 +61,7 @@ const startResearchRunMutate = vi.fn();
 // Steady state for tests that don't exercise the "Test this lake" picker: two reachable lakes,
 // loaded. The Test-scope suite below overrides this per test.
 type MockPickerLake = { id: string; name: string; datalakeTag: string; isOwn?: boolean };
-const useGetDataLakesMock = vi.fn(() => ({
+const useGetDataLakesMock = vi.fn((..._args: unknown[]) => ({
   data: [
     { id: 'lake-1', name: 'Test Lake', datalakeTag: 'datalake:test-lake' },
     { id: 'lake-2', name: 'Open Lake', datalakeTag: 'datalake:open-lake' },
@@ -77,6 +77,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   serverRefusalMessage: (e: unknown) => (e instanceof Error ? e.message : undefined),
   useDataLakeSpend: (...args: unknown[]) => useDataLakeSpendMock(...args),
   useLakeConfigHistory: (...args: unknown[]) => useLakeConfigHistoryMock(...args),
+  useUndoLakeConfigChange: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
   useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
@@ -115,11 +116,17 @@ vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
 // options not-yet-arrived (data undefined, isLoading true) vs loaded. The seed/read-back bug
 // lives entirely in that timing, so the mock IS the seam under test.
 type MockActivatable = { promptId: string; name: string; description: string };
-let activatablePrompts: MockActivatable[] | undefined;
-let activatableLoading = false;
-let activatableError = false;
+const activatableState = vi.hoisted(() => ({
+  prompts: undefined as { promptId: string; name: string; description: string }[] | undefined,
+  loading: false,
+  error: false,
+}));
 vi.mock('@client/app/hooks/data/useActivatablePrompts', () => ({
-  useActivatablePrompts: () => ({ data: activatablePrompts, isLoading: activatableLoading, isError: activatableError }),
+  useActivatablePrompts: () => ({
+    data: activatableState.prompts,
+    isLoading: activatableState.loading,
+    isError: activatableState.error,
+  }),
 }));
 
 const TRIAGE_ROUTER: MockActivatable = {
@@ -156,13 +163,19 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+// Paste, not type: every keystroke re-renders the whole modal, and no test here is about per-key behaviour.
+const typeIn = async (user: ReturnType<typeof userEvent.setup>, el: Element, text: string) => {
+  await user.click(el);
+  await user.paste(text);
+};
+
 // Steady state for the tests that don't care about the picker: allowlist loaded, router present.
 // The preferred-prompt suite below overrides these per test to exercise the load-timing edges.
 beforeEach(() => {
   accountsState.value = { accounts: [], selectedAccount: null };
-  activatablePrompts = [TRIAGE_ROUTER];
-  activatableLoading = false;
-  activatableError = false;
+  activatableState.prompts = [TRIAGE_ROUTER];
+  activatableState.loading = false;
+  activatableState.error = false;
   startChatWithLakesMock.mockReset();
   useGetDataLakesMock.mockClear();
   useGetDataLakesMock.mockReturnValue({
@@ -251,7 +264,7 @@ const entitlementGatedLake = {
   isOwn: true,
 };
 
-describe('DataLakeSettingsModal — clearing an access gate', () => {
+describe('DataLakeSettingsModal \u2014 clearing an access gate', () => {
   beforeEach(() => {
     updateMutate.mockReset();
     warn.mockReset();
@@ -259,7 +272,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
 
   it('sends the empty clear-sentinel when the tag is blanked', async () => {
     const onClose = vi.fn();
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={gatedLake} onClose={onClose} />
@@ -277,7 +290,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
   });
 
   it('sends the empty clear-sentinel when the entitlement is blanked', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={entitlementGatedLake} onClose={vi.fn()} />
@@ -294,7 +307,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
   });
 
   it('warns in-form what clearing the gate leaves the lake reachable by', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
@@ -310,7 +323,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
   });
 
   it('clears the tag alongside another change in one save', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
@@ -320,7 +333,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     const nameInput = screen.getByTestId('datalake-settings-name').querySelector('input')!;
     await user.clear(nameInput);
-    await user.type(nameInput, 'Renamed Lake');
+    await typeIn(user, nameInput, 'Renamed Lake');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -328,7 +341,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
   });
 
   it('preserves an untouched gate on save', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
@@ -336,7 +349,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     );
 
     // A no-change Save closes without a PUT, so make an unrelated edit to reach the request.
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -344,12 +357,12 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
   });
 });
 
-describe('DataLakeSettingsModal — public visibility', () => {
+describe('DataLakeSettingsModal \u2014 public visibility', () => {
   beforeEach(() => {
     visibilityMutate.mockReset();
   });
 
-  it('disables the Public option for a gated lake (a gate can’t be exposed app-wide)', () => {
+  it('disables the Public option for a gated lake (a gate can\u2019t be exposed app-wide)', () => {
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
@@ -359,7 +372,7 @@ describe('DataLakeSettingsModal — public visibility', () => {
   });
 
   it('selecting Public opens an explicit confirm and does NOT publish until confirmed', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -377,7 +390,7 @@ describe('DataLakeSettingsModal — public visibility', () => {
   });
 
   it('cancelling the confirm leaves the lake unpublished', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -410,7 +423,7 @@ describe('DataLakeSettingsModal - Save beside a refused visibility change', () =
   };
 
   it('closes a Save with nothing changed without writing or toasting', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     render(
       <Wrapper>
@@ -427,7 +440,7 @@ describe('DataLakeSettingsModal - Save beside a refused visibility change', () =
   });
 
   it('keeps the refusal on screen and says visibility was not changed on a real save', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -437,7 +450,7 @@ describe('DataLakeSettingsModal - Save beside a refused visibility change', () =
     await refusePublish(user);
     expect(screen.getByTestId('datalake-settings-visibility-error')).toHaveTextContent('Clear the gate first.');
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
     act(() => updateMutate.mock.calls[0][1].onSuccess());
 
@@ -445,7 +458,7 @@ describe('DataLakeSettingsModal - Save beside a refused visibility change', () =
   });
 
   it('clears the refusal on the next attempt and keeps the plain toast for a normal save', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -458,7 +471,7 @@ describe('DataLakeSettingsModal - Save beside a refused visibility change', () =
     expect(screen.queryByTestId('datalake-settings-visibility-error')).toBeNull();
     act(() => visibilityMutate.mock.calls.at(-1)[1].onSettled());
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
     act(() => updateMutate.mock.calls[0][1].onSuccess());
 
@@ -466,7 +479,7 @@ describe('DataLakeSettingsModal - Save beside a refused visibility change', () =
   });
 });
 
-describe('DataLakeSettingsModal — per-lake system prompt', () => {
+describe('DataLakeSettingsModal \u2014 per-lake system prompt', () => {
   const promptedLake = { ...openLake, id: 'lake-4', systemPrompt: 'Always cite the source file.' };
   // What a NON-EDITOR receives: canManage false. The prompt text is carried here deliberately -
   // the server withholds it (listDataLakes only sends it to editors), so this fixture is the
@@ -485,7 +498,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
   });
 
   it('seeds the field from the lake and sends the trimmed value on save', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
@@ -496,7 +509,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     expect(textarea).toHaveValue('Always cite the source file.');
 
     await user.clear(textarea);
-    await user.type(textarea, '  Answer only from these documents.  ');
+    await typeIn(user, textarea, '  Answer only from these documents.  ');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -507,7 +520,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
   });
 
   it('sends the empty clear-sentinel when an editor blanks the prompt', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
@@ -521,7 +534,8 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     expect(updateMutate.mock.calls[0][0]).toMatchObject({ systemPrompt: '' });
   });
 
-  it('states that the org prompt wins and that the text is editors-only', () => {
+  // One render for every clause of the help copy; each block below is its own contract.
+  it('help copy: org prompt wins, editors-only text, the admitted audience, retrieval-scoped firing', () => {
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
@@ -531,9 +545,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     const help = screen.getByTestId('datalake-systemprompt-help');
     expect(help).toHaveTextContent(/organization's prompt stays authoritative/i);
     expect(help).toHaveTextContent(/only people who can manage this lake can read this text/i);
-  });
 
-  it('names the audience the injection gate actually admits, curators included', () => {
     // Mirrors getDataLakePrompts' trust rule. The two halves have to move together: the copy is
     // the only place a lake editor is told who their prompt reaches, so a widened gate with stale
     // copy understates it and a narrowed one promises reach that never happens.
@@ -541,13 +553,6 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     // Phrased as HOLDING a grant, not as the reader having issued one: today's only producers are
     // createDataLake's self-grant and transferLakeOwnership, so no path lets this reader appoint
     // anyone. The wording stays true when the member-management write path lands.
-    render(
-      <Wrapper>
-        <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
-      </Wrapper>
-    );
-
-    const help = screen.getByTestId('datalake-systemprompt-help');
     expect(help).toHaveTextContent(/anyone holding an owner or curator grant on this lake/i);
     // Since injectPromptForReaders (#reader opt-in): readers by tag/entitlement/reader-grant are
     // named as NOT reached by default, but the copy now also points at the opt-in toggle rather
@@ -555,16 +560,7 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     expect(help).toHaveTextContent(
       /users given read-only access by tag or entitlement don't get them unless you turn on "apply to readers"\. users with only a reader grant never get them/i
     );
-  });
 
-  it('states the retrieval-scoped condition, so the copy cannot regress to always-on wording', () => {
-    render(
-      <Wrapper>
-        <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
-      </Wrapper>
-    );
-
-    const help = screen.getByTestId('datalake-systemprompt-help');
     // The two halves of the real contract: fires on retrieval turns, never otherwise.
     expect(help).toHaveTextContent(/pull content from this lake/i);
     expect(help).toHaveTextContent(/never on turns that don't use it/i);
@@ -598,14 +594,14 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
   });
 
   it('omits systemPrompt from a non-editor save, so it cannot wipe an unseen prompt', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={readOnlyLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -643,16 +639,16 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
   // is left out of the payload ("leave as-is" server-side), so the binding cannot be cleared. The
   // fallback <Option> keeps the Select from resetting the value to '' (which would look changed).
   it('preserves the bound prompt on save when the allowlist has not loaded yet', async () => {
-    activatablePrompts = undefined;
-    activatableLoading = true;
-    const user = userEvent.setup();
+    activatableState.prompts = undefined;
+    activatableState.loading = true;
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -660,14 +656,14 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
   });
 
   it('omits an unchanged binding on save once the allowlist has loaded', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -679,15 +675,15 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
   // An untouched save must therefore omit the unchanged (now-delisted) id, so name/description/gate
   // still save and the binding is left intact.
   it('does not re-send a now-delisted binding, so other fields still save', async () => {
-    activatablePrompts = [];
-    const user = userEvent.setup();
+    activatableState.prompts = [];
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -696,7 +692,7 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
   });
 
   it('sends the empty clear-sentinel when an editor selects None', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
@@ -713,7 +709,7 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
   });
 
   it('binds a prompt when an editor picks one on a None lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -730,8 +726,8 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
   // finding 4: a failed allowlist fetch left an unbound editor staring at only "None" with no idea
   // why - the helper text now says the list failed and the existing binding is untouched.
   it('surfaces an error in the helper text when the allowlist fetch fails', () => {
-    activatablePrompts = undefined;
-    activatableError = true;
+    activatableState.prompts = undefined;
+    activatableState.error = true;
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -745,14 +741,14 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
 
   it('never sends preferredSystemPromptId from a non-editor save', async () => {
     const readerLake = { ...boundLake, id: 'lake-7', canManage: false };
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -782,7 +778,7 @@ describe('DataLakeSettingsModal \u2014 grounding mode', () => {
   });
 
   it('sends the chosen mode when an editor changes it', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -813,14 +809,14 @@ describe('DataLakeSettingsModal \u2014 grounding mode', () => {
 
   it('never sends groundingMode from a non-editor save', async () => {
     const readerLake = { ...inlineLake, id: 'lake-10', canManage: false };
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -860,7 +856,7 @@ describe('DataLakeSettingsModal - origin', () => {
   });
 
   it('sends the chosen origin when an editor changes it', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -890,14 +886,14 @@ describe('DataLakeSettingsModal - origin', () => {
 
   it('never sends origin from a non-editor save', async () => {
     const readerLake = { ...connectorFedLake, id: 'lake-origin-3', canManage: false };
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -919,18 +915,8 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
     expect(screen.queryByTestId('datalake-settings-tab-spend')).not.toBeInTheDocument();
   });
 
-  it('shows the Spend tab when embeddingSpendMicroUsd is present, even at 0', () => {
-    render(
-      <Wrapper>
-        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
-      </Wrapper>
-    );
-
-    expect(screen.getByTestId('datalake-settings-tab-spend')).toBeInTheDocument();
-  });
-
   it('does not fetch spend until the tab is actually clicked (lazy)', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -993,7 +979,7 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
       error: null,
       refetch: vi.fn(),
     });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1015,7 +1001,7 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
       error: null,
       refetch: vi.fn(),
     });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1055,16 +1041,6 @@ describe('DataLakeSettingsModal - History tab', () => {
     ],
   };
 
-  it('shows the History tab for a manager', () => {
-    render(
-      <Wrapper>
-        <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
-      </Wrapper>
-    );
-
-    expect(screen.getByTestId('datalake-settings-tab-history')).toBeInTheDocument();
-  });
-
   it('shows NO History tab to a non-manager - the history is editor-only, like the fields it describes', () => {
     render(
       <Wrapper>
@@ -1076,7 +1052,7 @@ describe('DataLakeSettingsModal - History tab', () => {
   });
 
   it('does not fetch the history until the tab is actually clicked (lazy)', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
@@ -1111,7 +1087,7 @@ describe('DataLakeSettingsModal - History tab', () => {
   });
 
   it('renders the recorded changes once the tab is open', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     useLakeConfigHistoryMock.mockReturnValue({
       data: historyView,
       isLoading: false,
@@ -1135,7 +1111,7 @@ describe('DataLakeSettingsModal - History tab', () => {
   });
 
   it('hides Save/Cancel on the read-only History tab, and restores them on Settings', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={managerLake} onClose={vi.fn()} />
@@ -1152,6 +1128,7 @@ describe('DataLakeSettingsModal - History tab', () => {
 
 // An EXPLICIT target is the sole trigger for convergence (isConvergeablePolicy), so without a
 // control for it the whole feature is unreachable from the app - which is how it shipped to QA.
+
 describe('DataLakeSettingsModal - required passage size', () => {
   beforeEach(() => {
     updateMutate.mockReset();
@@ -1159,14 +1136,14 @@ describe('DataLakeSettingsModal - required passage size', () => {
   });
 
   it('adopts an explicit target, which is what makes the lake convergeable', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-passage-target-input'), '512');
+    await typeIn(user, screen.getByTestId('datalake-passage-target-input'), '512');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-2', requiredPassageTokenTarget: 512 });
@@ -1175,7 +1152,7 @@ describe('DataLakeSettingsModal - required passage size', () => {
   // null is the server's CLEAR sentinel, and going back to inheriting is what turns convergence off
   // for a lake - so a blank field must send it rather than omit the key ("leave unchanged").
   it('sends null when the field is blanked, returning the lake to the inherited default', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={{ ...openLake, requiredPassageTokenTarget: 512 }} onClose={vi.fn()} />
@@ -1191,14 +1168,14 @@ describe('DataLakeSettingsModal - required passage size', () => {
   // Checked against the same bounds the request schema enforces: a 400 would reject the WHOLE
   // request, losing the name/description/gate edits sent alongside it.
   it('refuses to save an out-of-range target rather than losing the rest of the form to a 400', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-passage-target-input'), '99999');
+    await typeIn(user, screen.getByTestId('datalake-passage-target-input'), '99999');
 
     // Save is disabled rather than allowed-then-rejected, so the correction happens before the
     // request that would have thrown the rest of the form away.
@@ -1243,7 +1220,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
   // The Research tab says its results land "in the Proposals queue", so the queue must be findable
   // before the first proposal exists.
   it('shows the tab to a manager while the queue is empty, with a pointer to how proposals arrive', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1330,7 +1307,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
   it('records an approval through the review mutation', async () => {
     withQueue([queued()]);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1345,7 +1322,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
   it('hides the Settings form actions while the Proposals tab is open (nothing to save there)', async () => {
     withQueue([queued()]);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1363,7 +1340,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
   // unmount loses it.
   it('keeps a half-typed decline reason while the curator visits another tab', async () => {
     withQueue([queued()]);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1372,7 +1349,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
     await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
-    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+    await typeIn(user, screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
 
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
     await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
@@ -1382,7 +1359,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
   it('asks before discarding an unsaved decline reason', async () => {
     withQueue([queued()]);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     render(
       <Wrapper>
@@ -1392,7 +1369,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
     await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
-    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+    await typeIn(user, screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
     await user.click(screen.getByTestId('datalake-settings-close-btn'));
 
     expect(onClose).not.toHaveBeenCalled();
@@ -1401,7 +1378,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
 
   it('closes without asking when a decline was opened but no reason typed', async () => {
     withQueue([queued()]);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     render(
       <Wrapper>
@@ -1429,16 +1406,14 @@ describe('DataLakeSettingsModal - Research tab', () => {
     useDataLakeResearchRunsMock.mockReturnValue({ data: [], isLoading: false, isForbidden: false, error: null });
   });
 
-  // Shown even with nothing in it: it is where a configuration is CREATED, so hiding it while empty
-  // would hide the only way to make the first one.
-  it('offers the tab to a manager who has no configuration yet', () => {
+  it('keeps the tab list on one scrollable line so five tabs fit a phone', () => {
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    expect(screen.getByTestId('datalake-settings-tab-research')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-tablist')).toHaveStyle({ overflowX: 'auto', flexWrap: 'nowrap' });
   });
 
   it('never offers it to a caller who cannot manage the lake, and never reads on their behalf', () => {
@@ -1478,7 +1453,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
     );
     expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-1', { enabled: false });
 
-    await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('datalake-settings-tab-research'));
 
     await waitFor(() => expect(useDataLakeResearchConfigsMock).toHaveBeenCalledWith('lake-res-1', { enabled: true }));
   });
@@ -1494,7 +1469,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
 
     expect(screen.getByTestId('datalake-research-panel')).not.toBeVisible();
 
-    await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('datalake-settings-tab-research'));
 
     expect(await screen.findByTestId('datalake-research-panel')).toBeVisible();
     expect(screen.getByTestId('datalake-research-empty')).toBeInTheDocument();
@@ -1511,6 +1486,9 @@ describe('DataLakeSettingsModal - Research tab', () => {
           maxProposals: 5,
           minRelevance: 0.6,
           costCeilingMicroUsd: 250_000,
+          trustedDomains: [],
+          reviewDomains: [],
+          unlistedSources: 'review',
           allowedDomains: [],
           blockedDomains: [],
           proposedTags: [],
@@ -1526,8 +1504,8 @@ describe('DataLakeSettingsModal - Research tab', () => {
       </Wrapper>
     );
 
-    await userEvent.click(screen.getByTestId('datalake-settings-tab-research'));
-    await userEvent.click(await screen.findByTestId('datalake-research-run-btn'));
+    await userEvent.setup({ delay: null }).click(screen.getByTestId('datalake-settings-tab-research'));
+    await userEvent.setup({ delay: null }).click(await screen.findByTestId('datalake-research-run-btn-config-1'));
 
     expect(startResearchRunMutate).toHaveBeenCalledWith('config-1');
   });
@@ -1535,7 +1513,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
   // The draft lives in the panel's own state, so anything that unmounts the panel takes with it
   // work the curator never got the chance to save.
   it('keeps an unsaved configuration draft while the curator visits another tab', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1544,7 +1522,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-research'));
     await user.click(await screen.findByTestId('datalake-research-new-btn'));
-    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await typeIn(user, screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
 
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
     await user.click(screen.getByTestId('datalake-settings-tab-research'));
@@ -1556,7 +1534,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
   // The quieter half of the same bug: the panel reports its dirty state, so an unmount reported
   // clean and the close confirm stopped firing at the moment there was most to lose.
   it('still warns on close when an unsaved draft was left behind on another tab', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     render(
       <Wrapper>
@@ -1566,7 +1544,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-research'));
     await user.click(await screen.findByTestId('datalake-research-new-btn'));
-    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await typeIn(user, screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
     await user.click(screen.getByTestId('datalake-settings-tab-settings'));
 
     await user.click(screen.getByTestId('datalake-settings-close-btn'));
@@ -1578,7 +1556,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
   // The flip side of keeping the panel alive: a draft that outlived its own lake would be offered
   // for saving against the next one. Same seed-once-per-lake rule the settings form already holds.
   it('does not carry a draft over to a different lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const { rerender } = render(
       <Wrapper>
         <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
@@ -1587,7 +1565,7 @@ describe('DataLakeSettingsModal - Research tab', () => {
 
     await user.click(screen.getByTestId('datalake-settings-tab-research'));
     await user.click(await screen.findByTestId('datalake-research-new-btn'));
-    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await typeIn(user, screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
 
     rerender(
       <Wrapper>
@@ -1614,7 +1592,7 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
   it('opens the scope dialog pre-selecting the lake under test, and starts a scoped chat on confirm', async () => {
     startChatWithLakesMock.mockResolvedValue({ id: 'session-1' });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     render(
       <Wrapper>
@@ -1647,7 +1625,7 @@ describe('DataLakeSettingsModal - Test this lake', () => {
 
   it('surfaces a toast and keeps the dialog open when the session create fails', async () => {
     startChatWithLakesMock.mockRejectedValue(new Error('boom'));
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -1669,7 +1647,7 @@ describe('DataLakeSettingsModal - Test this lake', () => {
       message: 'Request failed with status code 403',
       response: { data: { error: 'You do not manage data lake lake-1' } },
     });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
@@ -1708,7 +1686,7 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
   });
 
   it('sends the toggled value only when the editor changes it', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-3' }} onClose={vi.fn()} />
@@ -1723,14 +1701,14 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
   });
 
   it('never sends lakeMemoryEnabled when the editor leaves it unchanged', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-mem-4' }} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -1773,7 +1751,7 @@ describe('DataLakeSettingsModal - reader-prompt toggle (injectPromptForReaders)'
   });
 
   it('sends injectPromptForReaders: true only when the editor toggles it and saves', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-3' }} onClose={vi.fn()} />
@@ -1788,14 +1766,14 @@ describe('DataLakeSettingsModal - reader-prompt toggle (injectPromptForReaders)'
   });
 
   it('never sends injectPromptForReaders when the editor leaves it unchanged', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(
       <Wrapper>
         <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-4' }} onClose={vi.fn()} />
       </Wrapper>
     );
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
@@ -1841,7 +1819,7 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   };
 
   it('closes straight away on Escape when nothing was edited', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
     await user.keyboard('{Escape}');
@@ -1851,10 +1829,10 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('asks before Escape discards an edit, and keeps the edit when the user backs out', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.keyboard('{Escape}');
 
     expect(onClose).not.toHaveBeenCalled();
@@ -1868,10 +1846,10 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('closes once the user confirms the discard', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
-    await user.type(screen.getByTestId('datalake-settings-name'), ' renamed');
+    await typeIn(user, screen.getByTestId('datalake-settings-name'), ' renamed');
     await user.click(screen.getByTestId('datalake-settings-close-btn'));
     await user.click(screen.getByTestId('datalake-discard-confirm-btn'));
 
@@ -1879,7 +1857,7 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('treats an edit that is typed back to the original as clean', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
     await user.type(screen.getByTestId('datalake-settings-name'), 'x');
@@ -1890,7 +1868,7 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('does not count a background refetch of the lake as an unsaved edit', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = vi.fn();
     const { rerender } = render(
       <Wrapper>
@@ -1909,7 +1887,7 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('lets Escape close an open listbox without closing the dialog', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
     await user.click(screen.getByTestId('datalake-grounding-mode-button'));
@@ -1923,7 +1901,7 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('offers a close button on a tab without Save/Cancel', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
     await user.click(screen.getByTestId('datalake-settings-tab-research'));
@@ -1935,12 +1913,12 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   });
 
   it('asks before discarding an unsaved research configuration', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const onClose = renderModal();
 
     await user.click(screen.getByTestId('datalake-settings-tab-research'));
     await user.click(screen.getByTestId('datalake-research-new-btn'));
-    await user.type(screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
+    await typeIn(user, screen.getByTestId('datalake-research-name-input'), 'Weekly sweep');
     await user.click(screen.getByTestId('datalake-settings-close-btn'));
 
     expect(onClose).not.toHaveBeenCalled();
@@ -1965,7 +1943,7 @@ describe('DataLakeSettingsModal - dialog width', () => {
   });
 
   it('is 44rem when tabs are shown, and stays 44rem on another tab', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     const lake = { ...openLake, id: 'lake-width-2', embeddingSpendMicroUsd: 0 };
     renderLake(lake);
     expect(maxWidthOf()).toBe('44rem');
@@ -1991,23 +1969,23 @@ describe('DataLakeSettingsModal - owner-only sharing changes', () => {
   });
 
   it('lets an owner add a tag to a private org-less lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake({ ...curator, isOwn: true });
-    await user.type(screen.getByTestId('datalake-settings-usertag'), 'Opti');
+    await typeIn(user, screen.getByTestId('datalake-settings-usertag'), 'Opti');
     expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
   });
 
   it('blocks a curator adding a tag to a private org-less lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake(curator);
-    await user.type(screen.getByTestId('datalake-settings-usertag'), 'Opti');
+    await typeIn(user, screen.getByTestId('datalake-settings-usertag'), 'Opti');
     expect(screen.getByTestId(msg)).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
   });
 
   it('allows a curator clearing a tag on a private org-less lake (narrowing)', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake(curatorTagged);
     await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
     expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
@@ -2015,7 +1993,7 @@ describe('DataLakeSettingsModal - owner-only sharing changes', () => {
   });
 
   it('blocks a curator clearing a tag on an org lake (widening)', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake(curatorOrg);
     await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
     expect(screen.getByTestId(msg)).toBeInTheDocument();
@@ -2072,7 +2050,7 @@ describe('DataLakeSettingsModal - owner-only sharing changes', () => {
   });
 
   it('lets an owner clear a tag on a gated org lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake({ ...curatorOrg, isOwn: true });
     await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
     expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
@@ -2080,15 +2058,15 @@ describe('DataLakeSettingsModal - owner-only sharing changes', () => {
   });
 
   it('blocks a curator adding an entitlement to a private org-less lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake(curator);
-    await user.type(within(screen.getByTestId('datalake-settings-entitlement')).getByRole('textbox'), 'product:pro');
+    await typeIn(user, within(screen.getByTestId('datalake-settings-entitlement')).getByRole('textbox'), 'product:pro');
     expect(screen.getByTestId(msg)).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
   });
 
   it('blocks a curator changing a tag on a private org-less lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake({ ...curator, requiredUserTag: 'a' });
     const input = within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox');
     await user.clear(input);
@@ -2098,11 +2076,77 @@ describe('DataLakeSettingsModal - owner-only sharing changes', () => {
   });
 
   it('lets a curator save a description edit on a gated lake', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderLake(curatorOrg);
-    await user.type(screen.getByLabelText('Description'), ' more');
+    await typeIn(user, screen.getByLabelText('Description'), ' more');
     expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
     expect(updateMutate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DataLakeSettingsModal - initialTab', () => {
+  const lake = { ...openLake, id: 'lake-init-1', canManage: true };
+  const reader = { ...openLake, id: 'lake-init-2', canManage: false, embeddingSpendMicroUsd: 0 };
+  const selected = (tab: string) =>
+    expect(screen.getByTestId(`datalake-settings-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
+
+  it('opens on the requested tab', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="proposals" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('proposals');
+  });
+
+  it('shows the research panel when opened on Research', async () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="research" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('research');
+    expect(await screen.findByTestId('datalake-research-panel')).toBeVisible();
+  });
+
+  it('opens on Settings when no tab is requested', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('settings');
+  });
+
+  it('falls back to Settings when the requested tab is not visible to the user', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={reader} initialTab="research" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-settings-tab-research')).toBeNull();
+    selected('settings');
+  });
+
+  it('applies the requested tab on each open, not just the first', () => {
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="research" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('research');
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={null} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} initialTab="proposals" onClose={vi.fn()} />
+      </Wrapper>
+    );
+    selected('proposals');
   });
 });

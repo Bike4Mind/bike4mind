@@ -1,39 +1,16 @@
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
 import { baseApi } from '@server/middlewares/baseApi';
-import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { firecrawlFetch, webFetchBody } from '@bike4mind/services/llm/tools/implementation/webfetch';
-import { z } from 'zod';
+import { ApiKeyScope, WebFetchToolRequestSchema } from '@bike4mind/common';
+import { toolRoutesRateLimit } from '@server/middlewares/toolRoutesRateLimit';
+import { runWebFetchTool } from '@server/tools/webToolRoutes';
 
-const WebFetchBodySchema = z.object({
-  url: z.url().refine(val => /^https?:\/\//i.test(val), {
-    error: 'URL must use http or https protocol',
-  }),
-  offset: z.coerce.number().int().min(0).optional(),
-});
-
-const handler = baseApi().post(async (req, res) => {
-  const { url, offset } = WebFetchBodySchema.parse(req.body);
-
-  const dbAdapters = {
-    db: {
-      apiKeys: apiKeyRepository,
-      adminSettings: adminSettingsRepository,
-    },
-  };
-
-  // Frontend Lambda has a 60s timeout. Cap Firecrawl below it AND reserve headroom for the
-  // llms.txt probe (up to LLMS_TXT_PROBE_TIMEOUT_MS, awaited after the scrape on a truncated
-  // first read) plus response serialization, so a slow-but-successful fetch cannot tip over 60s.
-  const result = await firecrawlFetch(dbAdapters, url, {
-    maxTimeoutMs: 52_000,
-    offset,
-  });
-
-  const body = webFetchBody(result);
-  const formattedResult = result.title ? `# ${result.title}\n\n${body}` : body;
-
-  return res.json({
-    result: formattedResult,
-  });
-});
+// The SPA-internal door (voice modal, desktop app). Its public twin is POST /api/v1/tools/web-fetch; both
+// share runWebFetchTool, this scope gate and one hourly budget (see toolRoutesRateLimit). Embed (confined) keys
+// hold neither scope, so they are refused. Each fetch is billed per call.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE] })
+  .use(toolRoutesRateLimit())
+  .post(outboundActionGate(), async (req, res) =>
+    res.json(await runWebFetchTool(req, WebFetchToolRequestSchema.parse(req.body)))
+  );
 
 export default handler;

@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { Logger } from '@bike4mind/observability';
@@ -7,9 +7,9 @@ import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { User, userRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getOAuthWorkspaceWithCredentials, buildUserLinkRedirectUri, verifyUserLinkStateToken } from '@bike4mind/slack';
-import { consumeStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
-import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
-import { encryptToken } from '@server/security/tokenEncryption';
+import { consumeStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
+import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { randomUUID } from 'crypto';
 
 const logger = new Logger();
@@ -75,12 +75,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     auditLogger.failure(stateResult.error || 'invalid_state');
     return res.redirect(`/profile?tab=integrations&slack_error=${stateResult.error}`);
   }
-  const { userId } = stateResult.payload;
+  const { userId, workspaceId } = stateResult.payload;
   auditLogger.setUserId(userId);
   const codePrefix = (code as string).substring(0, 10) + '...'; // Truncated for security
 
   try {
-    const workspaceResult = await getOAuthWorkspaceWithCredentials();
+    const workspaceResult = await getOAuthWorkspaceWithCredentials(workspaceId);
     if (!workspaceResult.success) {
       auditLogger.failure(workspaceResult.error || 'workspace_error');
       return res.redirect(`/profile?tab=integrations&slack_error=${workspaceResult.error}`);

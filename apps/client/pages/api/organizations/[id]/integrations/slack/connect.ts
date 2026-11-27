@@ -1,4 +1,4 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 /**
@@ -14,23 +14,23 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { BadRequestError } from '@bike4mind/utils';
-import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { verifyOrgPermission } from '@bike4mind/server-utils/utils/orgAccess';
 import {
   getSystemSlackAppCredentials,
   generateOrgSlackConnectStateToken,
   buildOrgSlackOAuthUrl,
 } from '@bike4mind/slack';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const handler = baseApi().post(
-  asyncHandler<{}, { url: string }, unknown, { id?: string }>(async (req, res) => {
+  asyncHandler<{}, { url: string }, unknown, { id?: string; workspaceId?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;
 
     // Owner-only, matching the sibling index.ts arms: connecting a workspace wires Slack to the
     // whole tenant. Behaviour is identical to the inline check this replaces apart from a
     // malformed id now answering 400 rather than 404.
-    const organization = await verifyOrgOwner(user, orgId);
+    const organization = await verifyOrgPermission(user, orgId, 'manageIntegrations');
 
     // Everything below keys off the CANONICAL id from the gated document, never the raw query
     // string - the same defect this PR closed in subscriptions/subscribe.ts. `isValidObjectId`
@@ -46,7 +46,9 @@ const handler = baseApi().post(
       throw new BadRequestError('A Slack workspace is already connected to this organization');
     }
 
-    const appCredentials = await getSystemSlackAppCredentials();
+    // The Slack app the request names; without one, the first active app with credentials.
+    const requestedWorkspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : undefined;
+    const appCredentials = await getSystemSlackAppCredentials(requestedWorkspaceId);
     if (!appCredentials) {
       throw new BadRequestError('Slack integration is not configured. Please contact support.');
     }
@@ -56,7 +58,8 @@ const handler = baseApi().post(
     const state = generateOrgSlackConnectStateToken(
       canonicalOrgId,
       user.id,
-      issueStateNonce(res, NONCE_SLOT.orgSlackConnect)
+      issueStateNonce(res, NONCE_SLOT.orgSlackConnect),
+      appCredentials.workspaceId
     );
 
     const baseUrl = `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;

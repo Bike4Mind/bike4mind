@@ -23,6 +23,7 @@ import type { BaseStorage } from '@bike4mind/utils';
 import type { B4MLLMTools as LlmTools, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { ToolContext, ToolDefinition } from './base/types';
 import type { IChatCompletionServiceOptions } from '../ChatCompletionFeatures';
+import { memoizeOperationalBillingCheck } from '../../billing/isOperationalBillingEnabled';
 
 export const generateTools = (
   userId: string,
@@ -34,6 +35,7 @@ export const generateTools = (
   // inputs should keep going here.
   {
     db,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -46,6 +48,7 @@ export const generateTools = (
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    governingOrgModelPolicy,
     authOrigin,
     apiKeyId,
     questId,
@@ -53,9 +56,11 @@ export const generateTools = (
     slackDestination,
     numberCitables,
     decide,
+    toLedgerModel,
     getAbortSignal,
   }: {
     db: ToolContext['db'];
+    getEntitlements?: ToolContext['getEntitlements'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
@@ -69,6 +74,7 @@ export const generateTools = (
     sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];
+    governingOrgModelPolicy?: ToolContext['governingOrgModelPolicy'];
     authOrigin: ToolContext['authOrigin'];
     apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
@@ -76,15 +82,16 @@ export const generateTools = (
     slackDestination?: ToolContext['slackDestination'];
     numberCitables?: ToolContext['numberCitables'];
     decide?: ToolContext['decide'];
+    toLedgerModel?: ToolContext['toLedgerModel'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
-  onStart: (toolName: string, data: any) => Promise<void>,
-  onFinish: (toolName: string, data: any) => Promise<void>,
+  onStart: (toolName: string, data: unknown) => Promise<void>,
+  onFinish: (toolName: string, data: unknown) => Promise<void>,
   llm: ICompletionBackend,
-  config: { [key in LlmTools]?: any },
+  config: { [key in LlmTools]?: unknown },
   model: string | undefined,
   imageProcessorLambdaName: string | undefined,
   // `tools` is required (no default): the previous `= b4mTools` default silently
@@ -97,7 +104,8 @@ export const generateTools = (
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
   availableModels?: import('@bike4mind/common').ModelInfo[],
-  onToolLlmUsage?: ToolContext['onToolLlmUsage']
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'],
+  servingModel?: ToolContext['servingModel']
 ): Record<string, ICompletionOptionTools> => {
   assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
   const context: ToolContext = {
@@ -119,6 +127,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    getEntitlements,
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
@@ -131,14 +140,20 @@ export const generateTools = (
     sessionIncludeLibraryFiles,
     sessionPreauthorizedLakeIds,
     organizationId,
+    governingOrgModelPolicy,
     authOrigin,
     apiKeyId,
     codeMinifier,
     availableModels,
     onToolLlmUsage,
+    operationalBillingCheck: db.operationalBilling
+      ? memoizeOperationalBillingCheck({ adminSettings: db.adminSettings }, logger)
+      : undefined,
     decide,
+    toLedgerModel,
     getAbortSignal,
     numberCitables,
+    servingModel,
   };
 
   return Object.entries(tools).reduce(
@@ -162,7 +177,7 @@ const SERVER_ONLY_MCP_ARG_KEYS: readonly string[] = ['_executeFromButton', '_con
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-function stripServerOnlyArgs(args: unknown): unknown {
+export function stripServerOnlyArgs(args: unknown): unknown {
   if (!isPlainObject(args)) return args;
   return Object.fromEntries(Object.entries(args).filter(([key]) => !SERVER_ONLY_MCP_ARG_KEYS.includes(key)));
 }
@@ -172,7 +187,9 @@ function stripServerOnlyArgs(args: unknown): unknown {
  * OpenAI requires 'properties' on object schemas - MCP tools like current_user
  * return { type: 'object' } without it, causing 400 errors.
  */
-function normalizeToolParameters(rest: Record<string, unknown>): ICompletionOptionTools['toolSchema']['parameters'] {
+export function normalizeToolParameters(
+  rest: Record<string, unknown>
+): ICompletionOptionTools['toolSchema']['parameters'] {
   const rawParameters = rest?.input_schema ?? rest?.inputSchema ?? rest?.parameters;
   if (isPlainObject(rawParameters)) {
     const properties = isPlainObject(rawParameters.properties)
@@ -238,6 +255,12 @@ export const generateMcpTools = async (
     if (errorName === 'AtlassianReconnectRequiredError') {
       Logger.globalInstance.warn(`Atlassian reconnection required during getTools for ${mcpData.serverName}`);
       // Return empty array - the real-time subscription will show toast to user
+      return [];
+    }
+    // From @bike4mind/mcp, matched by name as above: the server lacks a credential it needs to
+    // start, so this turn goes without its tools rather than failing.
+    if (errorName === 'McpServerConfigError') {
+      Logger.globalInstance.warn(`MCP server ${mcpData.serverName} is not configured: ${(error as Error).message}`);
       return [];
     }
     throw error;

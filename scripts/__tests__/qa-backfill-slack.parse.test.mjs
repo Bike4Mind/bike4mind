@@ -34,12 +34,18 @@ describe('parseSlackPost: E2E', () => {
   });
 
   it('maps the unnamed suite to Full and passes the tenant through', () => {
-    const run = parseSlackPost(e2ePost({ suite: null, trigger: 'Manual', credits: null }), { ...ctx, tenant: 'tenant-a' });
+    const run = parseSlackPost(e2ePost({ suite: null, trigger: 'Manual', credits: null }), {
+      ...ctx,
+      tenant: 'tenant-a',
+    });
     expect(run).toMatchObject({ suite: 'Full', trigger: 'Manual', tenant: 'tenant-a', metrics: [] });
   });
 
   it('keeps not-started counts so the server derives infra-error', () => {
-    const run = parseSlackPost(e2ePost({ results: { passed: 81, failed: 0, skipped: 0, notStarted: 5, total: 81 } }), ctx);
+    const run = parseSlackPost(
+      e2ePost({ results: { passed: 81, failed: 0, skipped: 0, notStarted: 5, total: 81 } }),
+      ctx
+    );
     expect(run.counts.not_started).toBe(5);
   });
 
@@ -58,7 +64,10 @@ describe('parseSlackPost: E2E', () => {
 
   it('takes ran from the suite lines, like the CI script, when a setup failure clamps skipped', () => {
     const run = parseSlackPost(
-      e2ePost({ results: { passed: 3, failed: 2, skipped: 0, notStarted: 0, total: 5 }, summary: [':red_circle: Suite A: 3/4'] }),
+      e2ePost({
+        results: { passed: 3, failed: 2, skipped: 0, notStarted: 0, total: 5 },
+        summary: [':red_circle: Suite A: 3/4'],
+      }),
       ctx
     );
     expect(run.counts).toMatchObject({ ran: 4, total: 5 });
@@ -101,7 +110,27 @@ describe('parseSlackPost: AI Latency', () => {
     const row = latencyRow('latency-spec-a', 'A Very Long Model Name Here', 'Pass', '3.20s / &lt;=7.5s');
     const run = parseSlackPost(latencyPost({ rows: [row] }), ctx);
     expect(run.metrics).toEqual([
-      { kind: 'latency', model: 'A Very Long Model Name Here', label: 'latency-spec-a', value: 3.2, unit: 's', threshold: 7.5 },
+      {
+        kind: 'latency',
+        model: 'A Very Long Model Name Here',
+        label: 'latency-spec-a',
+        value: 3.2,
+        unit: 's',
+        threshold: 7.5,
+      },
+    ]);
+  });
+
+  it('reads a median-era table, with the TTFT and retried-attempt annotations', () => {
+    const rows = [
+      latencyRow('latency-spec-a', 'model-x', 'Pass', '3.20s (TTFT 0.85s) / &lt;=5s'),
+      latencyRow('latency-spec-b', 'model-x', 'Fail', '9.10s (TTFT 2.40s) / &lt;=5s FAIL (2 retried attempt(s) kept)'),
+    ];
+    rows.push(latencyRow('latency-spec-c', 'model-x', '---', 'No Data (1 artifact-mode excluded)'));
+    const run = parseSlackPost(latencyPost({ rows, latencyColumn: 'Median Latency (TTFT)' }), ctx);
+    expect(run.metrics).toEqual([
+      { kind: 'latency', model: 'model-x', label: 'latency-spec-a', value: 3.2, unit: 's', threshold: 5 },
+      { kind: 'latency', model: 'model-x', label: 'latency-spec-b', value: 9.1, unit: 's', threshold: 5 },
     ]);
   });
 });
@@ -109,7 +138,10 @@ describe('parseSlackPost: AI Latency', () => {
 describe('classifySlackPost: everything else is logged, never guessed', () => {
   it('skips a preview run that could not start, as the CI ingest does', () => {
     const status = ':fast_forward: Skipped (E2E_CLEANUP_SECRET not configured)';
-    expect(classifySlackPost(e2ePost({ status }), ctx)).toEqual({ kind: 'skipped', reason: expect.stringMatching(/preview/) });
+    expect(classifySlackPost(e2ePost({ status }), ctx)).toEqual({
+      kind: 'skipped',
+      reason: expect.stringMatching(/preview/),
+    });
     expect(classifySlackPost(latencyPost({ status }), ctx).kind).toBe('skipped');
     expect(parseSlackPost(e2ePost({ status }), ctx)).toBeNull();
   });
@@ -118,15 +150,31 @@ describe('classifySlackPost: everything else is logged, never guessed', () => {
   renamed.blocks[0].text.text = 'Deploy finished (Run via Deployer)';
 
   const unparseable = [
-    ['a post with no blocks', { type: 'message', bot_id: 'B0TEST', ts: '1790000000.000100', text: 'deploy finished', blocks: [] }, /no header/],
+    [
+      'a post with no blocks',
+      { type: 'message', bot_id: 'B0TEST', ts: '1790000000.000100', text: 'deploy finished', blocks: [] },
+      /no header/,
+    ],
     ['an unknown header', renamed, /unknown header/],
     ['an older format without the run link', e2ePost({ runUrl: null }), /no Actions run link/],
     ['a run link that is not an Actions run', e2ePost({ runUrl: 'https://example.com/report' }), /no Actions run link/],
-    ['a changed Results line', e2ePost({ results: { passed: 'many', failed: 0, skipped: 0, notStarted: 0, total: 1 } }), /Results/],
+    [
+      'a changed Results line',
+      e2ePost({ results: { passed: 'many', failed: 0, skipped: 0, notStarted: 0, total: 1 } }),
+      /Results/,
+    ],
     ['a suite line in another shape', e2ePost({ summary: ['Suite A passed 3 of 4'] }), /bad suite line/],
     ['a credits line in another shape', e2ePost({ credits: ['model-x used 12 credits'] }), /bad credits line/],
-    ['a latency cell in another shape', latencyPost({ rows: [latencyRow('latency-spec-a', 'model-x', 'Pass', '3.2 seconds')] }), /bad latency cell/],
-    ['a latency row without a quality token', latencyPost({ rows: ['latency-spec-a model-x 3.20s'] }), /bad latency row/],
+    [
+      'a latency cell in another shape',
+      latencyPost({ rows: [latencyRow('latency-spec-a', 'model-x', 'Pass', '3.2 seconds')] }),
+      /bad latency cell/,
+    ],
+    [
+      'a latency row without a quality token',
+      latencyPost({ rows: ['latency-spec-a model-x 3.20s'] }),
+      /bad latency row/,
+    ],
     ['a latency table with no rows', latencyPost({ rows: [] }), /no rows/],
     ['a post missing its ts', { ...e2ePost(), ts: undefined }, /no message ts/],
   ];

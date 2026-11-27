@@ -1,20 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Stripe from 'stripe';
-import { subscriptionRepository } from '@server/models/Subscription';
+import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
 import { creditService, organizationService } from '@bike4mind/services';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import {
   handleOrganizationSubscriptionInvoice,
   handleUserSubscriptionInvoice,
   resolveSeatChangeFromInvoice,
 } from './serverUtils';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import type { Logger } from '@bike4mind/observability';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 
 // Vitest hoists these mocks above the imports.
-vi.mock('@server/models/Subscription', () => ({
+vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: vi.fn(),
     // The org duplicate guard must not read active-only, or a past_due row is invisible to it
@@ -31,10 +32,13 @@ vi.mock('@server/models/Subscription', () => ({
   Subscription: {},
 }));
 
-vi.mock('@bike4mind/database', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+// Covered in applyPlanStorageLimit.test.ts; here only when the invoice path calls it.
+const { mockApplyPlanStorageLimit } = vi.hoisted(() => ({ mockApplyPlanStorageLimit: vi.fn() }));
+vi.mock('./applyPlanStorageLimit', () => ({ applyPlanStorageLimit: mockApplyPlanStorageLimit }));
+
+vi.mock('@bike4mind/database', () => {
   return {
-    ...actual,
+    creditLotRepository: {},
     userRepository: {
       findById: vi.fn().mockResolvedValue({ id: 'u1', email: 'owner@acme.com' }),
       findByStripeCustomerId: vi.fn(),
@@ -55,7 +59,7 @@ vi.mock('@bike4mind/services', () => ({
   organizationService: { create: vi.fn() },
 }));
 
-vi.mock('@server/websocket/utils', () => ({
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -94,17 +98,114 @@ const buildSubscription = (): Stripe.Subscription =>
   ({
     id: 'sub_stripe_xyz',
     status: 'active',
+    customer: 'cus_test',
+    currency: 'usd',
+    cancel_at_period_end: false,
+    cancel_at: null,
+    trial_end: null,
     items: {
       data: [
         {
           quantity: 4,
-          price: { id: 'price_org' },
+          price: {
+            id: 'price_org',
+            unit_amount: 1500,
+            currency: 'usd',
+            recurring: { interval: 'month', interval_count: 1 },
+          },
           current_period_start: 1700000000,
           current_period_end: 1702592000,
         },
       ],
     },
   }) as unknown as Stripe.Subscription;
+
+// The mirror fields buildSubscription projects to (stripeMirrorFields).
+const orgMirror = {
+  unitAmount: 1500,
+  currency: 'usd',
+  interval: 'month',
+  intervalCount: 1,
+  cancelAtPeriodEnd: false,
+  cancelAt: null,
+  trialEndsAt: null,
+  stripeCustomerId: 'cus_test',
+  lastSyncedAt: expect.any(Date),
+};
+
+describe('organization invoice storage synchronization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue(null);
+  });
+
+  it.each(['subscription_create', 'subscription_cycle', 'subscription_update'] as const)(
+    'synchronizes %s from the persisted subscription owner',
+    async billing_reason => {
+      const sub = buildSubscription();
+      vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+        ownerType: SubscriptionOwnerType.Organization,
+        ownerId: 'stored-org',
+      } as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+      await handleOrganizationSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason },
+        sub,
+        { userId: 'u1', stage: 'test', ownerType: SubscriptionOwnerType.Organization },
+        logger
+      );
+      expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(sub, 'stored-org', logger, 'Organization');
+    }
+  );
+
+  it('does not adopt the storage of a refused subscription with no stored row', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue(null);
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+      },
+      logger
+    );
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+
+  it('does not retry a committed invoice when storage owner lookup fails', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockRejectedValueOnce(new Error('lookup failed'));
+    await expect(
+      handleOrganizationSubscriptionInvoice(
+        buildInvoice(),
+        buildSubscription(),
+        {
+          userId: 'u1',
+          stage: 'test',
+          ownerType: SubscriptionOwnerType.Organization,
+        },
+        logger
+      )
+    ).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalled();
+    expect(emitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'PlanStorageLimitFailed', 1, {
+      reason: 'owner_lookup_failed',
+    });
+  });
+
+  it('does not apply storage when the stored subscription belongs to a user', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      ownerType: SubscriptionOwnerType.User,
+      ownerId: 'stored-user',
+    } as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      { userId: 'u1', stage: 'test', ownerType: SubscriptionOwnerType.Organization },
+      logger
+    );
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
+  });
+});
 
 describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
   beforeEach(() => {
@@ -153,6 +254,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         priceId: 'price_org',
         status: 'active',
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
@@ -212,6 +314,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
         subscriptionId: 'sub_stripe_xyz',
         source: SubscriptionSource.Stripe,
         quantity: 4,
+        ...orgMirror,
       })
     );
     expect(subscriptionRepository.update).not.toHaveBeenCalled();
@@ -484,6 +587,95 @@ describe('handleOrganizationSubscriptionInvoice - new team on event redelivery',
   });
 });
 
+describe('handleOrganizationSubscriptionInvoice - purchaser no longer exists', () => {
+  const metadata = {
+    userId: 'u_gone',
+    stage: 'test',
+    ownerType: SubscriptionOwnerType.Organization,
+    organizationId: 'org_team',
+  } as unknown as Parameters<typeof handleOrganizationSubscriptionInvoice>[2];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(userRepository.findById).mockResolvedValue(null);
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue(null);
+    vi.mocked(subscriptionRepository.findNonTerminalSubscriptionsByOwner).mockResolvedValue([]);
+    vi.mocked(organizationRepository.findById).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findById>>);
+  });
+
+  afterEach(() => {
+    vi.mocked(userRepository.findById).mockResolvedValue({ id: 'u1', email: 'owner@acme.com' } as never);
+  });
+
+  it('still grants credits for an existing org when the subscription metadata names a deleted user', async () => {
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), metadata, logger);
+
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 4 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('notifies the current owner when it differs from the checkout purchaser', async () => {
+    vi.mocked(organizationRepository.findById).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      userId: 'u_current_owner',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findById>>);
+
+    await handleOrganizationSubscriptionInvoice(buildInvoice(), buildSubscription(), metadata, logger);
+
+    for (const queryKey of [['subscriptions'], ['organizations']]) {
+      expect(sendToClient).toHaveBeenCalledWith('u_current_owner', 'ws://test', {
+        action: 'invalidate_query',
+        queryKey,
+      });
+    }
+  });
+
+  it('grants renewal credits when the purchaser no longer exists', async () => {
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue({
+      id: 'org_team',
+      name: 'Team',
+      users: [],
+      seats: 4,
+    } as unknown as Awaited<ReturnType<typeof organizationRepository.findByStripeCustomerId>>);
+
+    await handleOrganizationSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildSubscription(),
+      metadata,
+      logger
+    );
+
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'org_team', credits: 4 * 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('does not create a new team for a purchaser that no longer exists', async () => {
+    vi.mocked(organizationRepository.findByStripeCustomerId).mockResolvedValue(null);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      { ...metadata, organizationId: undefined, newOrganizationName: 'Ghost Team' } as typeof metadata,
+      logger
+    );
+
+    expect(organizationService.create).not.toHaveBeenCalled();
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+});
+
 describe('handleOrganizationSubscriptionInvoice - seat increase credits', () => {
   const buildSeatChangeInvoice = (lines: Array<{ amount: number; quantity: number }>): Stripe.Invoice =>
     ({
@@ -604,10 +796,20 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     ({
       id: 'sub_user_xyz',
       status: 'active',
+      customer: 'cus_user',
+      currency: 'usd',
+      cancel_at_period_end: false,
+      cancel_at: null,
+      trial_end: 1700604800,
       items: {
         data: [
           {
-            price: { id: priceId },
+            price: {
+              id: priceId,
+              unit_amount: 2000,
+              currency: 'usd',
+              recurring: { interval: 'year', interval_count: 1 },
+            },
             current_period_start: 1700000000,
             current_period_end: 1702592000,
           },
@@ -619,6 +821,84 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     vi.clearAllMocks();
     (userRepository.findByStripeCustomerId as any).mockResolvedValue({ id: 'u1', email: 'owner@acme.com' });
     (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(null);
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValue(null);
+  });
+
+  it.each(['subscription_cycle', 'subscription_update'] as const)(
+    'honors the persisted custom grant on %s',
+    async billingReason => {
+      vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+        customCreditsPerCycle: 75000,
+      } as unknown as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+
+      await handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: billingReason } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      );
+
+      expect(subscriptionRepository.findByStripeSubscriptionId).toHaveBeenCalledWith('sub_user_xyz');
+      expect(creditService.addCredits).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'u1', credits: 75000 }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('uses default credits when the persisted row has no override', async () => {
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+    expect(creditService.addCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 50000 }),
+      expect.anything()
+    );
+  });
+
+  it('propagates an override lookup failure without issuing a default grant', async () => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockRejectedValueOnce(new Error('lookup failed'));
+    await expect(
+      handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      )
+    ).rejects.toThrow('lookup failed');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, NaN, Infinity])('rejects invalid persisted credits %s without granting', async credits => {
+    vi.mocked(subscriptionRepository.findByStripeSubscriptionId).mockResolvedValue({
+      customCreditsPerCycle: credits,
+    } as unknown as NonNullable<Awaited<ReturnType<typeof subscriptionRepository.findByStripeSubscriptionId>>>);
+    await expect(
+      handleUserSubscriptionInvoice(
+        { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+        buildUserSubscription('price_test_professional'),
+        metadata,
+        logger
+      )
+    ).rejects.toThrow('Invalid cycle credits for subscription sub_user_xyz');
+    expect(creditService.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('skips duplicate invoices before the override lookup or another grant', async () => {
+    vi.mocked(creditTransactionRepository.findByPaymentIntentId).mockResolvedValue({
+      id: 'already-granted',
+    } as unknown as NonNullable<Awaited<ReturnType<typeof creditTransactionRepository.findByPaymentIntentId>>>);
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+    expect(subscriptionRepository.findByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(creditService.addCredits).not.toHaveBeenCalled();
   });
 
   it('errors loudly and emits EntitlementSkipped when the price matches no plan — never a silent no-op', async () => {
@@ -652,6 +932,15 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         subscriptionId: 'sub_user_xyz',
         priceId: 'price_test_professional',
         source: SubscriptionSource.Stripe,
+        unitAmount: 2000,
+        currency: 'usd',
+        interval: 'year',
+        intervalCount: 1,
+        cancelAtPeriodEnd: false,
+        cancelAt: null,
+        trialEndsAt: new Date(1700604800 * 1000),
+        stripeCustomerId: 'cus_user',
+        lastSyncedAt: expect.any(Date),
       })
     );
     expect(creditService.addCredits).toHaveBeenCalledWith(
@@ -684,6 +973,25 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
         acquisition: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'email' } },
       })
     );
+  });
+
+  it('applies the plan storage limit to the user on the first payment', async () => {
+    const sub = buildUserSubscription('price_test_professional');
+
+    await handleUserSubscriptionInvoice(buildInvoice(), sub, metadata, logger);
+
+    expect(mockApplyPlanStorageLimit).toHaveBeenCalledWith(sub, 'u1', logger);
+  });
+
+  it('leaves the plan storage limit to the update event on a renewal', async () => {
+    await handleUserSubscriptionInvoice(
+      { ...buildInvoice(), billing_reason: 'subscription_cycle' } as Stripe.Invoice,
+      buildUserSubscription('price_test_professional'),
+      metadata,
+      logger
+    );
+
+    expect(mockApplyPlanStorageLimit).not.toHaveBeenCalled();
   });
 });
 

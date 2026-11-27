@@ -1,40 +1,21 @@
 import { connectDB as baseConnectDB } from '@bike4mind/db-core';
-import { setModelCatalogProvider, setModelPriceRowsProvider } from '@bike4mind/llm-adapters';
-import { configureSecretsAtRest } from '@bike4mind/utils/security';
-import { Resource } from 'sst';
+import {
+  setModelCatalogProvider,
+  setModelListRevisionProvider,
+  setModelPriceRowsProvider,
+} from '@bike4mind/llm-adapters';
 import { modelPriceRepository } from './models/billing/ModelPriceModel';
 import { ModelCatalog, modelCatalogRepository } from './models/ai/ModelCatalogModel';
 import { ModelDiscoveryState } from './models/ai/ModelDiscoveryStateModel';
 import { DataLakeModel } from './models/ai/DataLakeModel';
+import { readModelListRevision } from './modelListRevision';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
+import { Logger } from '@bike4mind/observability';
+import { loadKeyringInBackground } from './security/loadKeyringFromResource';
 
 let catalogWired = false;
 let catalogSeedSettled: Promise<boolean> | null = null;
-let secretsAtRestConfigured = false;
-
-/** Guarded read: an unlinked/unprovisioned SST secret throws in the getter itself. */
-function readSecretFromResource(name: string): string | undefined {
-  try {
-    return (Resource as unknown as Record<string, { value?: string } | undefined>)[name]?.value;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Register the at-rest encryption key from SST resources. Wiring this into connectDB (rather
- * than a single apps/client module) is what lets EVERY process that reaches Mongo decrypt
- * sensitive settings and per-user keys - API routes, queue/cron handlers, AND the
- * packages/scripts CLIs, which never import apps/client's Config. Idempotent and safe to call
- * with no key configured (reads then degrade to plaintext passthrough). Exported for tests.
- */
-export function configureSecretsAtRestFromResource(): void {
-  configureSecretsAtRest(
-    readSecretFromResource('SECRET_ENCRYPTION_KEY'),
-    readSecretFromResource('SECRET_ENCRYPTION_KEY_PREVIOUS')
-  );
-}
 
 /**
  * Resolves once the boot-time catalog seed has settled, to whether the CATALOG
@@ -75,7 +56,7 @@ async function ensureUniqueIndex(label: string, model: { init(): Promise<unknown
   try {
     await model.init();
   } catch (error) {
-    console.warn(`[${label}] unique index build failed; concurrent writers may duplicate rows`, error);
+    Logger.warn(`[${label}] unique index build failed; concurrent writers may duplicate rows`, { error });
   }
 }
 
@@ -105,17 +86,17 @@ async function seedCatalogs(): Promise<boolean> {
   let catalogSeeded = true;
   try {
     const catalog = await seedModelCatalog(modelCatalogRepository);
-    if (catalog.inserted > 0) console.info(`[modelCatalog] seeded ${catalog.inserted} catalog rows`);
+    if (catalog.inserted > 0) Logger.info('[modelCatalog] seeded catalog rows', { inserted: catalog.inserted });
   } catch (error) {
     catalogSeeded = false;
-    console.warn('[modelCatalog] catalog seeding failed; adapter tables remain the fallback', error);
+    Logger.warn('[modelCatalog] catalog seeding failed; adapter tables remain the fallback', { error });
   }
 
   try {
     const prices = await seedModelPrices(modelPriceRepository);
-    if (prices.inserted > 0) console.info(`[modelPriceCatalog] seeded ${prices.inserted} price rows`);
+    if (prices.inserted > 0) Logger.info('[modelPriceCatalog] seeded price rows', { inserted: prices.inserted });
   } catch (error) {
-    console.warn('[modelPriceCatalog] price seeding failed; adapter literals remain the fallback', error);
+    Logger.warn('[modelPriceCatalog] price seeding failed; adapter literals remain the fallback', { error });
   }
 
   return catalogSeeded;
@@ -143,19 +124,20 @@ async function seedCatalogs(): Promise<boolean> {
  */
 export const connectDB: typeof baseConnectDB = async (url, logger) => {
   const result = await baseConnectDB(url, logger);
-  if (!secretsAtRestConfigured) {
-    secretsAtRestConfigured = true;
-    configureSecretsAtRestFromResource();
-  }
+  // Every call: a no-op once loaded, and it retries a failed KMS unwrap. The static keys are set
+  // synchronously before the provider is touched, so the connection does not wait on KMS; a failure
+  // is logged, not thrown (v1/v2 reads keep working), and retried on the next connect.
+  loadKeyringInBackground(logger);
   if (!catalogWired) {
     catalogWired = true;
     setModelCatalogProvider(() => modelCatalogRepository.rowsInForce());
     setModelPriceRowsProvider(() => modelPriceRepository.rowsInForce());
+    setModelListRevisionProvider(readModelListRevision);
     // seedCatalogs catches per collection; this catch only keeps the
     // fire-and-forget promise from ever rejecting, which whenCatalogSeeded's
     // callers rely on.
     catalogSeedSettled = seedCatalogs().catch((error: unknown) => {
-      console.warn('[modelCatalog] seeding failed unexpectedly; adapter tables remain the fallback', error);
+      Logger.warn('[modelCatalog] seeding failed unexpectedly; adapter tables remain the fallback', { error });
       return false;
     });
   }

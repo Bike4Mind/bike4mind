@@ -1,17 +1,99 @@
-import { Box, LinearProgress, Sheet, Stack, Table, Typography, useTheme } from '@mui/joy';
-import dynamic from 'next/dynamic';
-import type { WafRangeInput } from '@/server/security/wafTraffic';
+import { Box, LinearProgress, Sheet, Stack, Typography } from '@mui/joy';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { DataTable } from '../shared';
+import type { WafRangeInput } from '@bike4mind/server-utils/security/wafTraffic';
 import type {
   SecurityDashboardWafLogsInsightsOverview,
   SecurityDashboardWafBlockedRequestsResult,
 } from '@/app/hooks/data/admin';
-import { useWafChartTheme } from './useWafChartTheme';
+import { ChartTooltipCard } from '@client/app/components/Charts/chartStyle';
+import { adminChartSeries, adminChartStyle } from '../EventMetrics/utils/chartTheme';
 import { WafBlockedRequestsTable } from './WafBlockedRequestsTable';
 import { formatRangeLabel } from './wafRangeLabel';
 
-const ResponsiveBarChart = dynamic(() => import('@nivo/bar').then(mod => mod.ResponsiveBar), {
-  ssr: false,
-});
+type TopItem = { name: string; count: number };
+
+/** Horizontal bars, largest at the top (the order the server sends). Fills its parent. */
+const TopItemsBarChart = ({
+  testId,
+  items,
+  color,
+  valueLegend,
+  nameLegend,
+  nameWidth,
+}: {
+  testId: string;
+  items: readonly TopItem[];
+  color: string;
+  valueLegend: string;
+  nameLegend: string;
+  /** Room for the name ticks and legend, in px. */
+  nameWidth: number;
+}) => {
+  const rows = items.map(x => ({ name: x.name, count: Math.round(x.count) }));
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      {/* recharts takes the gap on each side of a bar, so 17.5% leaves the bar 65% of its band. */}
+      <BarChart
+        data={rows}
+        layout="vertical"
+        margin={{ top: 10, right: 12, bottom: 0, left: 0 }}
+        barCategoryGap="17.5%"
+      >
+        <CartesianGrid
+          horizontal={false}
+          stroke={adminChartStyle.gridStroke}
+          strokeDasharray={adminChartStyle.gridDash}
+        />
+        <XAxis
+          type="number"
+          domain={[0, 'auto']}
+          height={40}
+          tick={adminChartStyle.tick}
+          tickLine={adminChartStyle.tickLine}
+          tickSize={5}
+          axisLine={false}
+          label={{ value: valueLegend, position: 'insideBottom', offset: 0, style: adminChartStyle.axisLabel }}
+        />
+        <YAxis
+          type="category"
+          dataKey="name"
+          interval={0}
+          width={nameWidth}
+          tick={adminChartStyle.tick}
+          tickLine={adminChartStyle.tickLine}
+          tickSize={5}
+          axisLine={false}
+          label={{
+            value: nameLegend,
+            angle: -90,
+            position: 'insideLeft',
+            offset: 10,
+            style: { ...adminChartStyle.axisLabel, textAnchor: 'middle' },
+          }}
+        />
+        <Tooltip
+          shared={false}
+          cursor={false}
+          content={({ active, payload }) => {
+            const row = payload?.[0]?.payload as TopItem | undefined;
+            if (!active || !row) return null;
+            return (
+              <ChartTooltipCard
+                testId={`${testId}-tooltip`}
+                color={color}
+                label={`count - ${row.name}`}
+                value={row.count}
+              />
+            );
+          }}
+        />
+        <Bar dataKey="count" fill={color} isAnimationActive={false} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+};
 
 interface WafLogsInsightsSectionProps {
   data?: SecurityDashboardWafLogsInsightsOverview;
@@ -23,6 +105,8 @@ interface WafLogsInsightsSectionProps {
   blockedRequestsLoading?: boolean;
   blockedRequestsError?: boolean;
   blockedRequestsErrorDetail?: unknown;
+  onRetry?(): void;
+  onRetryBlockedRequests?(): void;
 }
 
 /** WAF log insights charts sourced from CloudWatch Logs Insights queries. */
@@ -36,9 +120,10 @@ export const WafLogsInsightsSection = ({
   blockedRequestsLoading,
   blockedRequestsError,
   blockedRequestsErrorDetail,
+  onRetry = () => {},
+  onRetryBlockedRequests,
 }: WafLogsInsightsSectionProps) => {
-  const theme = useTheme();
-  const chartTheme = useWafChartTheme();
+  const [uriColor, ipColor] = adminChartSeries(2);
 
   return (
     <Box sx={{ mt: 2 }} data-testid="waf-logs-insights-section">
@@ -99,31 +184,13 @@ export const WafLogsInsightsSection = ({
                 </Typography>
               ) : (
                 <Box sx={{ height: 260 }} data-testid="waf-logs-top-blocked-uris-chart">
-                  <ResponsiveBarChart
-                    data={[...(data.trafficCharacteristics?.topBlockedUris ?? [])].reverse().map(x => ({
-                      name: x.name,
-                      count: Math.round(x.count),
-                    }))}
-                    keys={['count']}
-                    indexBy="name"
-                    layout="horizontal"
-                    margin={{ top: 10, right: 12, bottom: 40, left: 160 }}
-                    padding={0.35}
-                    colors={[theme.palette.primary[500]]}
-                    axisTop={null}
-                    axisRight={null}
-                    axisBottom={{
-                      legend: 'Block count',
-                      legendPosition: 'middle',
-                      legendOffset: 32,
-                    }}
-                    axisLeft={{
-                      legend: 'URI',
-                      legendPosition: 'middle',
-                      legendOffset: -135,
-                    }}
-                    enableLabel={false}
-                    theme={chartTheme}
+                  <TopItemsBarChart
+                    testId="waf-logs-top-blocked-uris-chart"
+                    items={data.trafficCharacteristics?.topBlockedUris ?? []}
+                    color={uriColor}
+                    valueLegend="Block count"
+                    nameLegend="URI"
+                    nameWidth={160}
                   />
                 </Box>
               )}
@@ -144,31 +211,13 @@ export const WafLogsInsightsSection = ({
                 </Typography>
               ) : (
                 <Box sx={{ height: 260 }} data-testid="waf-logs-top-client-ips-chart">
-                  <ResponsiveBarChart
-                    data={[...(data.trafficCharacteristics?.topClientIps ?? [])].reverse().map(x => ({
-                      name: x.name,
-                      count: Math.round(x.count),
-                    }))}
-                    keys={['count']}
-                    indexBy="name"
-                    layout="horizontal"
-                    margin={{ top: 10, right: 12, bottom: 40, left: 175 }}
-                    padding={0.35}
-                    colors={[theme.palette.warning[500] ?? '#9a5b13']}
-                    axisTop={null}
-                    axisRight={null}
-                    axisBottom={{
-                      legend: 'Requests',
-                      legendPosition: 'middle',
-                      legendOffset: 32,
-                    }}
-                    axisLeft={{
-                      legend: 'Location • IP',
-                      legendPosition: 'middle',
-                      legendOffset: -155,
-                    }}
-                    enableLabel={false}
-                    theme={chartTheme}
+                  <TopItemsBarChart
+                    testId="waf-logs-top-client-ips-chart"
+                    items={data.trafficCharacteristics?.topClientIps ?? []}
+                    color={ipColor}
+                    valueLegend="Requests"
+                    nameLegend={'Location \u{2022} IP'}
+                    nameWidth={175}
                   />
                 </Box>
               )}
@@ -197,71 +246,45 @@ export const WafLogsInsightsSection = ({
               </Typography>
             ) : (
               <Box sx={{ overflowX: 'auto' }} data-testid="waf-logs-rate-limit-list">
-                <Table
-                  size="sm"
-                  sx={{
-                    '& thead th': { fontWeight: 700, fontSize: '0.72rem', whiteSpace: 'nowrap' },
-                    '& tbody td': { fontSize: '0.72rem', verticalAlign: 'middle' },
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      <th style={{ width: 130 }}>IP</th>
-                      <th>URI</th>
-                      <th style={{ width: 160, textAlign: 'right' }}>Peak / Limit</th>
-                      <th style={{ width: 180 }}>Usage</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(data.managedRuleGroups?.rateLimitUsage?.topIps ?? []).map(item => {
-                      const limit = data.managedRuleGroups?.rateLimitUsage?.limitPerWindow ?? 10000;
-                      const peak = item.peakRequests ?? 0;
-                      const pct = Math.min(100, (peak / limit) * 100);
-                      const color = pct >= 80 ? 'danger' : pct >= 50 ? 'warning' : 'success';
-                      return (
-                        <tr key={`${item.ip}:${item.uri}`}>
-                          <td>
-                            <Typography level="body-xs" sx={{ fontFamily: 'monospace', fontWeight: 600 }}>
-                              {item.ip}
-                            </Typography>
-                          </td>
-                          <td>
-                            <Typography
-                              level="body-xs"
-                              sx={{
-                                color: 'neutral.600',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                maxWidth: 320,
-                              }}
-                              title={item.uri}
-                            >
-                              {item.uri}
-                            </Typography>
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            <Typography
-                              level="body-xs"
-                              sx={{ color: `${color}.500`, fontVariantNumeric: 'tabular-nums' }}
-                            >
-                              {peak.toLocaleString()} / {limit.toLocaleString()}
-                            </Typography>
-                          </td>
-                          <td>
-                            <LinearProgress
-                              determinate
-                              value={pct}
-                              color={color}
-                              size="sm"
-                              sx={{ borderRadius: 'sm' }}
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </Table>
+                <DataTable
+                  rows={data.managedRuleGroups?.rateLimitUsage?.topIps ?? []}
+                  getRowId={item => `${item.ip}:${item.uri}`}
+                  label="Rate limit usage"
+                  onRetry={onRetry}
+                  pageResetKey={JSON.stringify(range)}
+                  columns={[
+                    { id: 'ip', label: 'IP', render: item => item.ip },
+                    {
+                      id: 'uri',
+                      label: 'URI',
+                      wrap: true,
+                      render: item => <Typography sx={{ overflowWrap: 'anywhere' }}>{item.uri}</Typography>,
+                    },
+                    {
+                      id: 'peak',
+                      label: 'Peak / limit',
+                      numeric: true,
+                      render: item =>
+                        `${(item.peakRequests ?? 0).toLocaleString()} / ${(data.managedRuleGroups?.rateLimitUsage?.limitPerWindow ?? 10000).toLocaleString()}`,
+                    },
+                    {
+                      id: 'usage',
+                      label: 'Usage',
+                      render: item => (
+                        <LinearProgress
+                          determinate
+                          value={Math.min(
+                            100,
+                            ((item.peakRequests ?? 0) /
+                              (data.managedRuleGroups?.rateLimitUsage?.limitPerWindow ?? 10000)) *
+                              100
+                          )}
+                          color="neutral"
+                        />
+                      ),
+                    },
+                  ]}
+                />
               </Box>
             )}
           </Sheet>
@@ -271,6 +294,7 @@ export const WafLogsInsightsSection = ({
             isLoading={blockedRequestsLoading}
             isError={blockedRequestsError}
             error={blockedRequestsErrorDetail}
+            onRetry={onRetryBlockedRequests}
           />
         </>
       )}

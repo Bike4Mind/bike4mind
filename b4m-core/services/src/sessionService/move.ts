@@ -50,14 +50,21 @@ export const moveSession = async (userId: string, parameters: MoveSessionParamet
   // A session created before userSetFields existed carries none, so record what the source surface leaves
   // to the user before entering a workspace; otherwise the move back out would unset those values as owned.
   const userSetFields = userSetSessionFields(session, adapters.workspaceSessionSettings, session.userSetFields);
+  // A core tutorial marker sits only on main-surface sessions.
+  const clearTutorial = session.tutorial ? { tutorial: null } : {};
   const recordUserSet = userSetFields.some(field => !session.userSetFields?.includes(field));
   const updated =
     ownedFields.length > 0
       ? await db.sessions.update(
-          { id, surface: target, ...(recordUserSet ? { userSetFields } : {}) },
+          { id, surface: target, ...clearTutorial, ...(recordUserSet ? { userSetFields } : {}) },
           { unset: ownedFields }
         )
-      : await db.sessions.update({ id, surface: target, ...(recordUserSet ? { userSetFields } : {}) });
+      : await db.sessions.update({
+          id,
+          surface: target,
+          ...clearTutorial,
+          ...(recordUserSet ? { userSetFields } : {}),
+        });
   if (!updated) throw new NotFoundError('Session not found');
   return updated;
 };

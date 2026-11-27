@@ -6,21 +6,27 @@ import { useSelectedAccount } from '@client/app/components/Credits/AccountSelect
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useGetCreditTransactions } from '@client/app/hooks/data/credits';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
-import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
+import { useGetSeatPlan, useGetSubscriptions, useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
 import { useLowCreditsThreshold } from '@client/app/hooks/data/teamPlanSettings';
 import { useEffectiveCredits } from '@client/app/hooks/useEffectiveCredits';
 import { formatCreditAmount } from '@client/app/utils/formatCredits';
 import type { BillingView } from '@client/app/utils/billingDeepLink';
-import { isDelinquentSubscriptionStatus, pickDisplayedSubscription } from '@client/lib/subscriptions/types';
-import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import {
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+  SubscriptionOwnerType,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
+import { SUBSCRIPTION_PLANS_MAP, TEAM_PLAN } from '@bike4mind/server-utils/lib/userSubscriptions/constants';
 import { CreditsSection } from './CreditsSection';
 import CreditsExplanation from './CreditsExplanation';
 import { PlansSection, PlansSectionSkeleton } from './PlansSection';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { trackUpsell } from '@client/app/utils/funnelEvents';
+import { BILLING_PLANS_SURFACE } from './billingUpsell';
 import { consumeBillingCheckoutReturn } from '@client/app/utils/billingCheckoutReturn';
 
-export type BillingEntry = 'credits_chip' | 'credits_cta' | 'deep_link' | 'profile_menu' | 'unknown';
+export type BillingEntry = 'credits_chip' | 'credits_cta' | 'studio_header' | 'deep_link' | 'profile_menu' | 'unknown';
 
 interface BillingModalProps {
   open: boolean;
@@ -115,6 +121,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   const { t } = useTranslation();
   const transactions = useGetCreditTransactions({ enabled: open });
   const subscriptions = useGetSubscriptions({ enabled: open });
+  const seatPlanQuery = useGetSeatPlan({ enabled: open });
   const plans = useGetSubscriptionPlans({ enabled: open });
   const credits = useEffectiveCredits();
   const lowCreditsThreshold = useLowCreditsThreshold();
@@ -123,11 +130,16 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   // An org balance is topped up by the org, not from these personal packs, so its banner has no action.
   const { selectedAccount } = useSelectedAccount();
   const isOrgAccount = !!selectedAccount && !selectedAccount.personal;
+  const teamAccount = isOrgAccount ? selectedAccount : null;
+  const teamSubscriptions = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, teamAccount?.id ?? '', {
+    enabled: open && !!teamAccount,
+  });
   const { mutate: logEvent } = useLogEvent();
   const openedMetadataRef = useRef<{ entry: BillingEntry; focus: string; account: 'org' | 'personal' } | null>(null);
   const purchasedRef = useRef(false);
   const paymentPendingRef = useRef(false);
   const leftForUsageRef = useRef(false);
+  const impressionShownRef = useRef(false);
 
   // Abandonment is logged on the open -> closed transition, not in a close handler, so closes made
   // outside the modal (the `?billing=` host's Back/URL change) count too. The metadata is the one
@@ -137,11 +149,14 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       const opened = openedMetadataRef.current;
       if (opened && !purchasedRef.current && !paymentPendingRef.current && !leftForUsageRef.current) {
         logEvent({ type: FirstRunEvents.BILLING_CLOSED_WITHOUT_PURCHASE, metadata: opened });
+        if (impressionShownRef.current)
+          trackUpsell('dismiss', { surface: BILLING_PLANS_SURFACE, trigger: opened.entry });
       }
       openedMetadataRef.current = null;
       purchasedRef.current = false;
       paymentPendingRef.current = false;
       leftForUsageRef.current = false;
+      impressionShownRef.current = false;
       return;
     }
     if (openedMetadataRef.current) return;
@@ -161,15 +176,24 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
   // plans-first). Data from an earlier successful read is still the user's plan.
   const planUnknown = subscriptions.isError && !subscriptions.data;
   // A failed payment keeps plans on top: fixing the card is the action that matters.
-  const plansFirst = !planUnknown && (!currentSubscription || hasPaymentIssue);
+  // A plan held through an org seat stands in only when there is no personal one to show or fix.
+  const seatPlan = currentSubscription || planUnknown ? null : (seatPlanQuery.data ?? null);
+  const plansFirst = !planUnknown && !seatPlan && (!currentSubscription || hasPaymentIssue);
   // Waits for the plan prices too (PlansSection reads the same cached queries), so PlansSection never
   // swaps its own skeleton for cards after mount: a deep-link scroll to a section below the plans would
   // otherwise land on a position that moves. isLoading, not isPending: a disabled query stays pending.
-  const ready = !subscriptions.isPending && !plans.isLoading;
+  const ready = !subscriptions.isPending && !plans.isLoading && !seatPlanQuery.isLoading;
   // useGetSubscriptionPlans only fetches with enforceCredits on; a disabled query is pending forever, so
   // PlansSection would hold its skeleton for good. Without plans, Billing is the credit packs alone.
   const plansOffered = !(plans.isPending && plans.fetchStatus === 'idle');
-  const nudgeToCredits = !!currentSubscription || planUnknown || !plansOffered;
+  const plansLead = ready && plansOffered && plansFirst;
+  const nudgeToCredits = !!currentSubscription || !!seatPlan || planUnknown || !plansOffered;
+
+  useEffect(() => {
+    if (!open || !plansLead || impressionShownRef.current) return;
+    impressionShownRef.current = true;
+    trackUpsell('impression', { surface: BILLING_PLANS_SURFACE, trigger: entry });
+  }, [open, plansLead, entry]);
 
   const plansHeadingRef = useRef<HTMLHeadingElement>(null);
   const creditsHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -180,16 +204,41 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
     heading?.focus({ preventScroll: true });
   };
 
-  const planName = currentSubscription
-    ? (SUBSCRIPTION_PLANS_MAP[currentSubscription.priceId]?.name ?? t('billing.plan_fallback', 'Subscription'))
-    : t('billing.free_plan', 'Free');
-  const planDetail = !currentSubscription
-    ? t('billing.free_plan_detail', 'Pay as you go with credit packs')
-    : hasPaymentIssue
+  // The header's Plan stat follows the active account: with a team selected it is the team's plan, so
+  // the balance beside it and the plan describe the same payer. The sections below stay personal.
+  const teamSubscription = useMemo(
+    () => pickDisplayedSubscription(teamSubscriptions.data ?? []),
+    [teamSubscriptions.data]
+  );
+  const headerQuery = teamAccount ? teamSubscriptions : subscriptions;
+  const headerSubscription = teamAccount ? teamSubscription : currentSubscription;
+  const headerPlanUnknown = headerQuery.isError && !headerQuery.data;
+  const headerReady = teamAccount ? !teamSubscriptions.isPending : ready;
+  const headerPaymentIssue = !!headerSubscription && isDelinquentSubscriptionStatus(headerSubscription.status);
+
+  const planName = teamAccount
+    ? headerSubscription
+      ? t('billing.team_plan', TEAM_PLAN.name)
+      : t('billing.team_no_plan', 'No team plan')
+    : currentSubscription
+      ? (SUBSCRIPTION_PLANS_MAP[currentSubscription.priceId]?.name ?? t('billing.plan_fallback', 'Subscription'))
+      : seatPlan
+        ? seatPlan.planName
+        : t('billing.free_plan', 'Free');
+  const planDetail = !headerSubscription
+    ? teamAccount
+      ? t('billing.team_no_plan_detail', 'Credits are added by a team admin')
+      : seatPlan
+        ? t('billing.seat_plan_detail', 'Included with your seat in {{organization}}', {
+            organization: seatPlan.organizationName,
+          })
+        : t('billing.free_plan_detail', 'Pay as you go with credit packs')
+    : headerPaymentIssue
       ? t('billing.payment_failed', 'Payment failed')
-      : currentSubscription.canceledAt
-        ? t('subscriptions.expires_on', { date: dayjs(currentSubscription.periodEndsAt).format('MMM D, YYYY') })
-        : t('subscriptions.renews_on', { date: dayjs(currentSubscription.periodEndsAt).format('MMM D, YYYY') });
+      : headerSubscription.canceledAt
+        ? t('subscriptions.expires_on', { date: dayjs(headerSubscription.periodEndsAt).format('MMM D, YYYY') })
+        : t('subscriptions.renews_on', { date: dayjs(headerSubscription.periodEndsAt).format('MMM D, YYYY') });
+  const teamSeats = headerSubscription ? teamAccount?.seats : undefined;
 
   const plansSection = (
     <Section
@@ -200,7 +249,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
       title={
         planUnknown
           ? t('billing.plans_heading', 'Plans')
-          : currentSubscription
+          : currentSubscription || seatPlan
             ? t('billing.plans_change', 'Your plan')
             : t('billing.plans_upgrade', 'Upgrade')
       }
@@ -209,14 +258,27 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
           ? t('billing.plans_heading_sub', 'Monthly plans with a credit allowance.')
           : currentSubscription
             ? t('billing.plans_change_sub', 'Manage, change or cancel your subscription.')
-            : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
+            : seatPlan
+              ? t('billing.seat_plan_detail', 'Included with your seat in {{organization}}', {
+                  organization: seatPlan.organizationName,
+                })
+              : t('billing.plans_upgrade_sub', 'Get a monthly credit allowance instead of topping up by hand.')
       }
     >
-      <PlansSection
-        onSubscriptionChanged={() => {
-          purchasedRef.current = true;
-        }}
-      />
+      {seatPlan ? (
+        <Typography level="body-sm" data-testid="billing-seat-plan-notice">
+          {t(
+            'billing.seat_plan_notice',
+            'Your team covers your plan, so there is nothing to upgrade here. Credit packs still top up your personal balance.'
+          )}
+        </Typography>
+      ) : (
+        <PlansSection
+          onSubscriptionChanged={() => {
+            purchasedRef.current = true;
+          }}
+        />
+      )}
     </Section>
   );
   const creditsSection = (
@@ -281,34 +343,50 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
           </DialogTitle>
           <ModalClose data-testid="billing-modal-close" sx={{ top: { xs: 16, sm: 20 }, right: { xs: 16, sm: 24 } }} />
           <Box sx={{ display: 'flex', gap: { xs: 3, sm: 6 }, alignItems: 'flex-start' }}>
-            <Box data-testid="billing-balance">
+            {/* globals.css sets `* { min-width: 0 }`, which lifts a flex item's content-width floor. min-content
+                restores it here, so the plan box gives way first and the unit wraps instead of being overrun. */}
+            <Box data-testid="billing-balance" sx={{ minWidth: 'min-content' }}>
               <Typography level="body-xs" sx={statLabelSx}>
                 {t('billing.balance', 'Balance')}
               </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mt: 0.5 }}>
-                <CreditIcon
-                  aria-hidden
-                  data-testid="billing-balance-icon"
-                  sx={{
-                    alignSelf: 'center',
-                    fontSize: { xs: '1.5rem', sm: '1.875rem' },
-                    color: 'subscription.creditsModal.iconFill',
-                  }}
-                />
+              <Box
+                data-testid="billing-balance-row"
+                sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 0.75, mt: 0.5 }}
+              >
+                <Box
+                  data-testid="billing-balance-figure"
+                  sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0 }}
+                >
+                  <CreditIcon
+                    aria-hidden
+                    data-testid="billing-balance-icon"
+                    sx={{
+                      alignSelf: 'center',
+                      fontSize: { xs: '1.5rem', sm: '1.875rem' },
+                      color: 'subscription.creditsModal.iconFill',
+                    }}
+                  />
+                  <Typography
+                    component="span"
+                    data-testid="billing-balance-amount"
+                    sx={{
+                      fontSize: { xs: '1.75rem', sm: '2.25rem' },
+                      lineHeight: 1,
+                      fontWeight: 600,
+                      letterSpacing: '-0.02em',
+                      fontVariantNumeric: 'tabular-nums',
+                      color: noCredits ? 'danger.plainColor' : isLowCredits ? 'warning.plainColor' : 'text.primary',
+                    }}
+                  >
+                    {formatCreditAmount(credits)}
+                  </Typography>
+                </Box>
                 <Typography
                   component="span"
-                  sx={{
-                    fontSize: { xs: '1.75rem', sm: '2.25rem' },
-                    lineHeight: 1,
-                    fontWeight: 600,
-                    letterSpacing: '-0.02em',
-                    fontVariantNumeric: 'tabular-nums',
-                    color: noCredits ? 'danger.plainColor' : isLowCredits ? 'warning.plainColor' : 'text.primary',
-                  }}
+                  level="body-sm"
+                  data-testid="billing-balance-unit"
+                  sx={{ color: 'text.tertiary' }}
                 >
-                  {formatCreditAmount(credits)}
-                </Typography>
-                <Typography component="span" level="body-sm" sx={{ color: 'text.tertiary' }}>
                   {t('credits.unit', 'credits')}
                 </Typography>
               </Box>
@@ -317,7 +395,7 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
               <Typography level="body-xs" sx={statLabelSx}>
                 {t('billing.plan', 'Plan')}
               </Typography>
-              {planUnknown ? (
+              {headerPlanUnknown ? (
                 <Box sx={{ mt: 0.5 }} data-testid="billing-current-plan-unavailable">
                   <Typography level="title-md" sx={{ fontWeight: 600 }}>
                     {t('billing.plan_unavailable', 'Unavailable')}
@@ -330,22 +408,35 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
                       size="sm"
                       variant="plain"
                       data-testid="billing-current-plan-retry"
-                      loading={subscriptions.isFetching}
-                      onClick={() => void subscriptions.refetch()}
+                      loading={headerQuery.isFetching}
+                      onClick={() => void headerQuery.refetch()}
                       sx={{ minHeight: 0, py: 0, px: 0.5, fontSize: 'xs' }}
                     >
                       {t('billing.retry', 'Retry')}
                     </Button>
                   </Box>
                 </Box>
-              ) : ready ? (
+              ) : headerReady ? (
                 <Box sx={{ mt: 0.5 }}>
-                  <Typography level="title-md" sx={{ fontWeight: 600 }}>
+                  <Typography level="title-md" sx={{ fontWeight: 600 }} data-testid="billing-current-plan-name">
                     {planName}
                   </Typography>
-                  <Typography level="body-xs" sx={{ color: hasPaymentIssue ? 'danger.plainColor' : 'text.tertiary' }}>
+                  <Typography
+                    level="body-xs"
+                    data-testid="billing-current-plan-detail"
+                    sx={{ color: headerPaymentIssue ? 'danger.plainColor' : 'text.tertiary' }}
+                  >
                     {planDetail}
                   </Typography>
+                  {!!teamSeats && (
+                    <Typography
+                      level="body-xs"
+                      data-testid="billing-current-plan-seats"
+                      sx={{ color: 'text.tertiary' }}
+                    >
+                      {t('organization.x_seats', '{{count}} seats', { count: teamSeats })}
+                    </Typography>
+                  )}
                 </Box>
               ) : (
                 <Box sx={{ mt: 0.5 }}>
@@ -385,7 +476,13 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
                   ? t('billing.low_org', 'An organization admin can add credits to this account.')
                   : currentSubscription
                     ? t('billing.low_with_plan', 'Top up to keep working until your allowance renews.')
-                    : t('billing.low_without_plan', 'A plan adds credits every month; a pack tops you up now.')}
+                    : seatPlan
+                      ? t(
+                          'billing.low_seat_plan',
+                          "A pack tops you up now. Your team's credits are on the {{organization}} account.",
+                          { organization: seatPlan.organizationName }
+                        )
+                      : t('billing.low_without_plan', 'A plan adds credits every month; a pack tops you up now.')}
               </Typography>
               {ready && !isOrgAccount && (
                 <Button
@@ -421,9 +518,15 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
               !plansOffered ? (
                 creditsSection
               ) : plansFirst ? (
-                [plansSection, creditsSection]
+                <>
+                  {plansSection}
+                  {creditsSection}
+                </>
               ) : (
-                [creditsSection, plansSection]
+                <>
+                  {creditsSection}
+                  {plansSection}
+                </>
               )
             ) : (
               <Box aria-busy="true" sx={{ display: 'flex', flexDirection: 'column', gap: 5 }}>

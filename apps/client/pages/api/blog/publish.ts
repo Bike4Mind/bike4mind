@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { IUserDocument } from '@bike4mind/common';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { assertUrlAllowed, safeFetch, SsrfError } from '@bike4mind/server-utils/utils/ssrfProtection';
 
 interface BlogPublishParams {
@@ -131,10 +131,10 @@ const handler = baseApi().post(async (req, res) => {
     const message = error instanceof Error ? error.message : 'Failed to publish blog post';
     const isConfigError = message.includes('not configured') || message.startsWith('Blog integration baseUrl');
     if (isConfigError) {
-      console.warn('Blog publish config issue:', message);
+      req.logger.warn('Blog publish config issue', { error: message });
       return res.status(422).json({ success: false, message });
     }
-    console.error('Blog publish error:', error);
+    req.logger.error('Blog publish error', { error });
     return res.status(500).json({ success: false, message });
   }
 });

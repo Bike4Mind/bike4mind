@@ -1,20 +1,34 @@
 import mongoose, { Model, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
+  attributedUsageMatch,
+  effectiveUsageDate,
+  platformUsageExpression,
+  usageTimeMatch,
+} from './platformUsageReporting';
+import {
+  COMPLETION_RUN_PURPOSES,
+  COMPLETION_RUN_ROLES,
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
+  IFundingCohortCost,
   ILakeUsageSummary,
   IModelDayMargin,
+  ISettlementOverHold,
+  IUserUsageActivity,
   IOwnerSpendDay,
   IOwnerSpendFeature,
   IOwnerSpendMember,
+  IAdminSpendModel,
   IOwnerSpendModel,
   IOwnerUsageSummary,
   IPlatformConsumerUsage,
   IPlatformUsageParams,
   IPlatformUsageSummary,
   IProviderMonthCogs,
+  IProviderUnitsParams,
+  IProviderUnitsRow,
   ISessionModelUsage,
   ISessionQuestUsage,
   ISessionUsageSummary,
@@ -24,15 +38,41 @@ import {
   ISpendSummary,
   ISpendSummaryFilters,
   IUsageEvent,
-  IUsageEventInput,
+  IAttributedUsageEventInput,
+  IPlatformUsageEvent,
+  IPlatformUsageEventInput,
+  PlatformUsageEvent,
+  AttributedUsageEvent,
+  UsageEvent as UsageEventValidator,
+  platformUsagePayload,
+  PlatformAccountingConflictError,
   IUsageEventRepository,
   IUsageSpendBucket,
   IUsageSpendWithTokens,
   IUserMargin,
   USAGE_EVENT_FEATURES,
+  USAGE_EVENT_OPERATIONS,
   USAGE_EVENT_STATUSES,
+  USAGE_KEY_SOURCES,
+  USAGE_FUNDING_SOURCES,
   USAGE_PRICE_SOURCES,
+  attributeChargeToFundingSources,
+  type IUsageFundingBreakdown,
+  type SpendBreakdown,
+  type SpendBreakdownParams,
+  type SpendActorScanParams,
+  type SpendFeatureAggregate,
+  type SpendFeaturesParams,
+  type SpendFeatureUsersPage,
+  type SpendFeatureUsersParams,
+  type SpendFeatureTotals,
+  type SpendTimelineParams,
+  type SpendTimelineRow,
 } from '@bike4mind/common';
+import { EXECUTED_MODEL_GROUP_KEY, spendBreakdownPipeline, spendTimelinePipeline } from './spendExplorerPipelines';
+import { spendActorIdsPipeline, spendFeaturesPipeline, spendFeatureUsersPipeline } from './spendFeaturePipelines';
+import { loadCreditHolderFundingSnapshot, type LoadCreditHolderFundingSnapshot } from './creditHolderFundingSnapshot';
+import { Logger } from '@bike4mind/observability';
 
 export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 
@@ -41,9 +81,17 @@ export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 // spend spans many accounts.
 const SPEND_ACCOUNT_LIMIT = 50;
 
-// Same payload guard for the "by model" list: a catalog with many provider/model
-// variants would otherwise ship every one. Comfortably above a realistic catalog.
+// Same payload guard for the "by model" list, which has one row per requested/executed
+// model pair; without it a large catalog would ship every one.
 const SPEND_MODEL_LIMIT = 100;
+
+// Spend explorer scans can span a year of events; stop a runaway one instead of holding a connection.
+const SPEND_EXPLORER_MAX_TIME_MS = 20_000;
+
+const EXECUTED_MODEL_FIELDS = {
+  executedProvider: '$_id.executedProvider',
+  executedModel: '$_id.executedModel',
+} as const;
 
 /**
  * One row per provider API call: provider-side quantities and
@@ -53,14 +101,41 @@ const SPEND_MODEL_LIMIT = 100;
 const UsageEventSchema = new Schema<IUsageEventDocument>(
   {
     requestId: { type: String, required: true },
-    userId: { type: String, required: true },
-    ownerId: { type: String, required: true },
-    ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] as CreditHolderType[] },
+    userId: {
+      type: String,
+      required: function (this: IUsageEventDocument): boolean {
+        return this.attribution?.kind !== 'platform_operation';
+      },
+    },
+    ownerId: {
+      type: String,
+      required: function (this: IUsageEventDocument): boolean {
+        return this.attribution?.kind !== 'platform_operation';
+      },
+    },
+    ownerType: {
+      type: String,
+      required: function (this: IUsageEventDocument): boolean {
+        return this.attribution?.kind !== 'platform_operation';
+      },
+      enum: ['User', 'Organization', 'Agent'] as CreditHolderType[],
+    },
+    attribution: { type: Schema.Types.Mixed },
+    providerCallId: { type: String },
+    usageOccurredAt: { type: Date },
+    recordedAt: { type: Date },
+    timestampSource: { type: String, enum: ['provider', 'dispatch'] },
+    dispatchedAt: { type: Date },
+    completedAt: { type: Date },
+    providerRequestId: { type: String },
     sessionId: { type: String, required: false },
+    projectId: { type: String, required: false },
     dataLakeId: { type: String, required: false },
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
     model: { type: String, required: true },
+    executedProvider: { type: String, required: false },
+    executedModel: { type: String, required: false },
 
     inputTokens: { type: Number, required: true, default: 0 },
     outputTokens: { type: Number, required: true, default: 0 },
@@ -74,6 +149,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     costUsd: { type: Number, required: true },
     creditsCharged: { type: Number, required: true },
     writtenOffCredits: { type: Number, required: false },
+    reservedCredits: { type: Number, required: false },
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },
@@ -84,6 +160,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     // into the UNCLASSIFIED_SOURCE bucket in aggregation.
     source: { type: String, required: false, enum: [...COMPLETION_SOURCES] },
     apiKeyId: { type: String, required: false },
+    keySource: { type: String, enum: [...USAGE_KEY_SOURCES], required: false },
 
     // Price stamp (see UsageEventTypes). All optional: older rows and non-text features leave
     // them unset. turnUsage defaults to undefined, not [], so a single-turn row stays without it.
@@ -97,6 +174,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
           output: { type: Number, required: true },
           cacheRead: { type: Number, required: false },
           cacheWrite: { type: Number, required: false },
+          cacheWrite1h: { type: Number, required: false },
         },
         { _id: false }
       ),
@@ -110,6 +188,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
             outputTokens: { type: Number, required: true },
             cacheReadTokens: { type: Number, required: false },
             cacheWriteTokens: { type: Number, required: false },
+            cacheWrite1hTokens: { type: Number, required: false },
             tierKey: { type: Number, required: true },
           },
           { _id: false }
@@ -119,6 +198,63 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
       default: undefined,
     },
     turnUsageTruncated: { type: Boolean, required: false },
+    cacheWrite1hTokens: { type: Number, required: false },
+    fundingBreakdown: {
+      type: new Schema(
+        {
+          granted: { type: Number, required: true },
+          purchased: { type: Number, required: true },
+          subscription: { type: Number, required: true },
+          unknown: { type: Number, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    // Mirrors UsageEventRequestMeta: metadata only, never content.
+    requestMeta: {
+      type: new Schema(
+        {
+          stopReason: { type: String, required: false },
+          maxOutputTokens: { type: Number, required: false },
+          creditCapOutputTokens: { type: Number, required: false },
+          stoppedForCredits: { type: Boolean, required: false },
+          reasoningEffort: { type: String, required: false },
+          thinkingBudgetTokens: { type: Number, required: false },
+          toolCalls: {
+            type: [
+              new Schema(
+                { name: { type: String, required: true }, count: { type: Number, required: true } },
+                { _id: false }
+              ),
+            ],
+            required: false,
+            default: undefined,
+          },
+          attachmentCount: { type: Number, required: false },
+          attachmentBytes: { type: Number, required: false },
+          operation: { type: String, required: false, enum: [...USAGE_EVENT_OPERATIONS] },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+    // Mirrors UsageEventRun. No index yet: run totals are read by a later reader.
+    run: {
+      type: new Schema(
+        {
+          runId: { type: String, required: true },
+          role: { type: String, required: true, enum: [...COMPLETION_RUN_ROLES] },
+          purpose: { type: String, required: false, enum: [...COMPLETION_RUN_PURPOSES] },
+          taskId: { type: String, required: false, maxlength: 128 },
+          attemptId: { type: String, required: false, maxlength: 128 },
+          parentSessionId: { type: String, required: false, maxlength: 128 },
+          sessionId: { type: String, required: false, maxlength: 128 },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -127,6 +263,32 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
   }
 );
 
+UsageEventSchema.pre('validate', function () {
+  const { _id, __v: _version, ...raw } = this.toObject({ virtuals: false }) as Record<string, unknown>;
+  UsageEventValidator.parse({
+    ...raw,
+    id: _id?.toString(),
+    createdAt: raw.createdAt ?? new Date(),
+    updatedAt: raw.updatedAt ?? new Date(),
+  });
+});
+
+UsageEventSchema.index(
+  { providerCallId: 1 },
+  { unique: true, partialFilterExpression: { 'attribution.kind': 'platform_operation' } }
+);
+UsageEventSchema.index(
+  { usageOccurredAt: -1 },
+  { partialFilterExpression: { 'attribution.kind': 'platform_operation' } }
+);
+UsageEventSchema.index(
+  { provider: 1, model: 1, usageOccurredAt: -1 },
+  { partialFilterExpression: { 'attribution.kind': 'platform_operation' } }
+);
+UsageEventSchema.index(
+  { source: 1, usageOccurredAt: -1 },
+  { partialFilterExpression: { 'attribution.kind': 'platform_operation' } }
+);
 UsageEventSchema.index({ userId: 1, createdAt: -1 });
 UsageEventSchema.index({ provider: 1, model: 1, createdAt: -1 });
 UsageEventSchema.index({ createdAt: -1 });
@@ -138,6 +300,9 @@ UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s optional source filter over a time window.
 UsageEventSchema.index({ source: 1, createdAt: -1 });
+// Supports the hourly completion sequence/synchrony sweeps' 24h scan of completion_api rows.
+// Built via migration 20260921240075_ensure-usage-event-feature-status-index, not autoIndex.
+UsageEventSchema.index({ feature: 1, status: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
 // Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
@@ -152,25 +317,258 @@ UsageEventSchema.index(
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
+/** An account's spend from spendProfileByUsers. */
+export type IUserSpendProfile = {
+  firstSpendAt: Date;
+  totalCredits: number;
+  /** Largest first; `model` is null for spend recorded without one. */
+  byModel: { model: string | null; credits: number; events: number }[];
+};
+
 export class UsageEventRepository extends BaseRepository<IUsageEventDocument> implements IUsageEventRepository {
-  constructor(model: IUsageEventModel) {
+  /** `loadFundingSnapshot` is omitted only by tests that do not exercise the funding stamp. */
+  constructor(
+    model: IUsageEventModel,
+    private readonly loadFundingSnapshot?: LoadCreditHolderFundingSnapshot
+  ) {
     super(model);
   }
 
-  async record(event: IUsageEventInput): Promise<IUsageEventDocument | null> {
-    return this.create(event as IUsageEventDocument);
+  async record(event: IAttributedUsageEventInput): Promise<IUsageEventDocument | null> {
+    AttributedUsageEvent.parse({ ...event, createdAt: new Date(), updatedAt: new Date() });
+    const fundingBreakdown = event.fundingBreakdown ?? (await this.resolveFundingBreakdown(event));
+    return this.create({ ...event, fundingBreakdown } as IUsageEventDocument);
+  }
+
+  async recordPlatform(event: IPlatformUsageEventInput): Promise<IPlatformUsageEvent & IMongoDocument> {
+    const now = new Date();
+    const parsed = PlatformUsageEvent.parse({ ...event, recordedAt: now, createdAt: now, updatedAt: now });
+    let existing = await this.findPlatformCall(parsed.providerCallId);
+    if (!existing) {
+      try {
+        const created = await this.model.create(parsed);
+        return { ...parsed, id: created._id.toString() };
+      } catch (error) {
+        if ((error as { code?: number }).code !== 11000) throw error;
+        existing = await this.findPlatformCall(parsed.providerCallId);
+        if (!existing) throw error;
+      }
+    }
+    if (platformUsagePayload(existing) !== platformUsagePayload(parsed)) throw new PlatformAccountingConflictError();
+    return existing as IPlatformUsageEvent & IMongoDocument;
+  }
+
+  async findPlatformCall(providerCallId: string): Promise<IPlatformUsageEvent | null> {
+    const raw = await this.model.findOne({ providerCallId, 'attribution.kind': 'platform_operation' }).lean();
+    if (!raw) return null;
+    const { _id, __v: _version, ...fact } = raw as unknown as Record<string, unknown>;
+    return PlatformUsageEvent.parse({ ...fact, id: _id?.toString() });
+  }
+
+  /**
+   * Attribute the charge to the holder's credit lots as they stand now. Callers record after the
+   * debit, so the charge is already in the holder's consumption; a chat turn records before its
+   * final reconcile, so its slice can sit up to the unused reservation late, and events recorded
+   * in parallel for one holder read the same snapshot and claim the same slice. Both skew toward
+   * later-expiring lots only near a lot boundary. A lookup failure leaves the row unstamped
+   * rather than losing it.
+   */
+  private async resolveFundingBreakdown(
+    event: IAttributedUsageEventInput
+  ): Promise<IUsageFundingBreakdown | undefined> {
+    if (!this.loadFundingSnapshot || event.creditsCharged <= 0) {
+      return undefined;
+    }
+    try {
+      const { lots, currentCredits } = await this.loadFundingSnapshot(event.ownerId, event.ownerType);
+      return attributeChargeToFundingSources(lots, currentCredits, event.creditsCharged);
+    } catch (error) {
+      Logger.warn('[UsageEvent] Funding breakdown lookup failed; recording without it', {
+        ownerId: event.ownerId,
+        ownerType: event.ownerType,
+        error,
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Tokens a user's provider calls billed to the user themself (ownerType User) settled since
+   * `since`, and when the oldest of those calls landed. Input plus output, plus the cache buckets
+   * where they are separate: a 'chat' row's inputTokens is the estimate of the whole prompt, so its
+   * cache read and write tokens are already in it; every other feature records them disjointly
+   * (see `rates` in UsageEventTypes.ts). Timeout attempts are absorbed provider cost and do not
+   * consume the user's quota. Served by the { userId, createdAt } index.
+   */
+  async userTokensSince(userId: string, since: Date): Promise<{ tokens: number; oldestAt?: Date }> {
+    const [row] = await this.model.aggregate<{ tokens: number; oldestAt: Date }>([
+      { $match: { userId, ownerType: CreditHolderType.User, createdAt: { $gte: since }, status: { $ne: 'timeout' } } },
+      {
+        $group: {
+          _id: null,
+          tokens: {
+            $sum: {
+              $add: [
+                '$inputTokens',
+                '$outputTokens',
+                {
+                  $cond: [{ $eq: ['$feature', 'chat'] }, 0, { $add: ['$cachedInputTokens', '$cacheWriteTokens'] }],
+                },
+              ],
+            },
+          },
+          oldestAt: { $min: '$createdAt' },
+        },
+      },
+    ]);
+    return row ? { tokens: row.tokens, oldestAt: row.oldestAt } : { tokens: 0 };
+  }
+
+  async creditsSpentByUser(userId: string, from: Date, to: Date): Promise<number> {
+    const [row] = await this.model.aggregate<{ credits: number }>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      {
+        $group: {
+          _id: null,
+          credits: { $sum: '$creditsCharged' },
+        },
+      },
+    ]);
+    return row?.credits ?? 0;
+  }
+
+  async activitySummaryByUser(userId: string, from: Date, to: Date, limit: number): Promise<IUserUsageActivity> {
+    const [row] = await this.model.aggregate<IUserUsageActivity>([
+      { $match: { userId, createdAt: { $gte: from, $lt: to } } },
+      { $sort: { createdAt: -1 } },
+      { $limit: limit },
+      {
+        $group: {
+          _id: null,
+          events: { $sum: 1 },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'ok'] }, 1, 0] } },
+          credits: { $sum: '$creditsCharged' },
+          latestAt: { $max: '$createdAt' },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          events: 1,
+          completed: 1,
+          failed: { $subtract: ['$events', '$completed'] },
+          credits: 1,
+          latestAt: 1,
+        },
+      },
+    ]);
+    return row ?? { events: 0, completed: 0, failed: 0, credits: 0, latestAt: null };
+  }
+
+  async creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>> {
+    if (userIds.length === 0) return {};
+    // Lifetime spend on purpose; the {userId, createdAt} index serves it for a bounded id list.
+    const rows = await this.model.aggregate<{ _id: string; credits: number }>([
+      { $match: { userId: { $in: userIds } } },
+      {
+        $group: {
+          _id: '$userId',
+          credits: { $sum: '$creditsCharged' },
+        },
+      },
+    ]);
+    return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
+  /**
+   * Per account since `since`: when it first spent credits and its spend by model (largest first,
+   * at most `maxModels`). Served by {userId, createdAt}; ids with no spend are absent.
+   */
+  async spendProfileByUsers(userIds: string[], since: Date, maxModels = 5): Promise<Record<string, IUserSpendProfile>> {
+    if (userIds.length === 0) return {};
+    const credits = { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] };
+    const rows = await this.model
+      .aggregate<{
+        _id: { userId: string; model: string | null };
+        credits: number;
+        events: number;
+        firstAt: Date;
+      }>([
+        { $match: { userId: { $in: userIds }, createdAt: { $gte: since } } },
+        { $match: { $expr: { $gt: [credits, 0] } } },
+        {
+          $group: {
+            _id: { userId: '$userId', model: '$model' },
+            credits: { $sum: credits },
+            events: { $sum: 1 },
+            firstAt: { $min: '$createdAt' },
+          },
+        },
+      ])
+      .option({ maxTimeMS: 2000 });
+    const profiles: Record<string, IUserSpendProfile> = {};
+    for (const row of rows) {
+      const id = String(row._id.userId);
+      const profile = (profiles[id] ??= { firstSpendAt: row.firstAt, totalCredits: 0, byModel: [] });
+      if (row.firstAt < profile.firstSpendAt) profile.firstSpendAt = row.firstAt;
+      profile.totalCredits += row.credits;
+      profile.byModel.push({ model: row._id.model ?? null, credits: row.credits, events: row.events });
+    }
+    for (const profile of Object.values(profiles)) {
+      profile.byModel = profile.byModel
+        .sort((a, b) => {
+          const leftModel = a.model ?? '';
+          const rightModel = b.model ?? '';
+          const modelOrder = leftModel < rightModel ? -1 : leftModel > rightModel ? 1 : 0;
+          return b.credits - a.credits || modelOrder;
+        })
+        .slice(0, maxModels);
+    }
+    return profiles;
+  }
+
+  async largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>> {
+    if (userIds.length === 0) return {};
+    // The {userId, createdAt} index serves the match for a bounded id list and window.
+    const rows = await this.model.aggregate<{ _id: string } & ISettlementOverHold>([
+      { $match: { userId: { $in: userIds }, createdAt: { $gte: since }, reservedCredits: { $gt: 0 } } },
+      {
+        $project: {
+          userId: 1,
+          reservedCredits: 1,
+          settledCredits: '$creditsCharged',
+        },
+      },
+      { $addFields: { ratio: { $divide: ['$settledCredits', '$reservedCredits'] } } },
+      { $sort: { ratio: -1 } },
+      {
+        $group: {
+          _id: '$userId',
+          reservedCredits: { $first: '$reservedCredits' },
+          settledCredits: { $first: '$settledCredits' },
+          ratio: { $first: '$ratio' },
+        },
+      },
+    ]);
+    return Object.fromEntries(
+      rows.map(({ _id, reservedCredits, settledCredits, ratio }) => [
+        String(_id),
+        { reservedCredits, settledCredits, ratio },
+      ])
+    );
   }
 
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
     const from = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     return this.model.aggregate<IModelDayMargin>([
-      { $match: { createdAt: { $gte: from } } },
+      { $match: usageTimeMatch(from) },
       {
         $group: {
           _id: {
-            day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+            day: { $dateToString: { format: '%Y-%m-%d', date: effectiveUsageDate, timezone: 'UTC' } },
             provider: '$provider',
             model: '$model',
+            ...EXECUTED_MODEL_GROUP_KEY,
           },
           requests: { $sum: 1 },
           cogsUsd: { $sum: '$costUsd' },
@@ -183,19 +581,20 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           day: '$_id.day',
           provider: '$_id.provider',
           model: '$_id.model',
+          ...EXECUTED_MODEL_FIELDS,
           requests: 1,
           cogsUsd: 1,
           creditsCharged: 1,
         },
       },
-      { $sort: { day: -1, provider: 1, model: 1 } },
+      { $sort: { day: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
     ]);
   }
 
   async marginByUser(days: number = 30): Promise<IUserMargin[]> {
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     return this.model.aggregate<IUserMargin>([
-      { $match: { createdAt: { $gte: from } } },
+      { $match: { ...attributedUsageMatch, userId: { $type: 'string' }, createdAt: { $gte: from } } },
       {
         $group: {
           _id: '$userId',
@@ -231,17 +630,18 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     // return a silently truncated oldest month.
     const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
     return this.model.aggregate<IProviderMonthCogs>([
-      { $match: { createdAt: { $gte: from } } },
+      { $match: usageTimeMatch(from) },
       {
         $group: {
           _id: {
-            month: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone: 'UTC' } },
-            provider: '$provider',
+            month: { $dateToString: { format: '%Y-%m', date: effectiveUsageDate, timezone: 'UTC' } },
+            // Providers invoice the model that ran, which differs from the requested one when substituted.
+            provider: { $ifNull: ['$executedProvider', '$provider'] },
           },
           requests: { $sum: 1 },
           cogsUsd: { $sum: '$costUsd' },
-          inputTokens: { $sum: '$inputTokens' },
-          outputTokens: { $sum: '$outputTokens' },
+          inputTokens: { $sum: { $cond: [platformUsageExpression, '$providerInputTokens', '$inputTokens'] } },
+          outputTokens: { $sum: { $cond: [platformUsageExpression, '$providerOutputTokens', '$outputTokens'] } },
           cachedInputTokens: { $sum: '$cachedInputTokens' },
           cacheWriteTokens: { $sum: '$cacheWriteTokens' },
         },
@@ -263,24 +663,58 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
   }
 
+  // Served by the { provider, model, createdAt } index: the provider prefix bounds the scan and the
+  // createdAt range is checked on index keys.
+  async providerUnitsBreakdown({
+    provider,
+    from,
+    to,
+    defaultUnits,
+  }: IProviderUnitsParams): Promise<IProviderUnitsRow[]> {
+    return this.model.aggregate<IProviderUnitsRow>([
+      { $match: { provider, ...usageTimeMatch(from, to) } },
+      {
+        $group: {
+          _id: {
+            day: { $dateToString: { format: '%Y-%m-%d', date: effectiveUsageDate, timezone: 'UTC' } },
+            feature: '$feature',
+            model: '$model',
+            userId: '$userId',
+            keySource: { $ifNull: ['$keySource', null] },
+            status: '$status',
+            atDefaultUnits: defaultUnits === undefined ? { $literal: false } : { $eq: ['$units', defaultUnits] },
+          },
+          requests: { $sum: 1 },
+          units: { $sum: { $ifNull: ['$units', 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          day: '$_id.day',
+          feature: '$_id.feature',
+          model: '$_id.model',
+          userId: '$_id.userId',
+          keySource: '$_id.keySource',
+          status: '$_id.status',
+          atDefaultUnits: '$_id.atDefaultUnits',
+          requests: 1,
+          units: 1,
+        },
+      },
+      { $sort: { day: 1 } },
+    ]);
+  }
+
   // Requires MongoDB 7.0+ for the $percentile accumulator (latency facet) and uses
   // $facet like the sibling summaries here - both unsupported under DocumentDB
   // (USE_DOCUMENTDB_COMPATIBILITY), which those methods already assume against.
   async spendSummary(filters: ISpendSummaryFilters = {}): Promise<ISpendSummary> {
     const { from, to, userId, model } = filters;
 
-    const match: Record<string, unknown> = {};
-    if (from || to) {
-      // Half-open window [from, to): the upper bound is exclusive so adjacent
-      // windows (current vs the equal-length prior window, whose `to` is the
-      // current window's `from`) don't both count an event at the shared instant.
-      const createdAt: Record<string, Date> = {};
-      if (from) createdAt.$gte = from;
-      if (to) createdAt.$lt = to;
-      match.createdAt = createdAt;
-    }
+    const match: Record<string, unknown> = usageTimeMatch(from, to);
     if (userId) match.userId = userId;
-    if (model) match.model = model;
+    if (model) match.$and = [{ $or: [{ model }, { executedModel: model }] }];
 
     const spendSums = {
       requests: { $sum: 1 },
@@ -296,7 +730,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       activeAccounts: Array<{ count: number }>;
       latency: Array<{ values: number[] }>;
       status: Array<{ _id: string; count: number }>;
-      byModel: IOwnerSpendModel[];
+      byModel: IAdminSpendModel[];
       byAccount: ISpendAccountBucket[];
       dailyCost: ISpendCostDay[];
     }>([
@@ -304,7 +738,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       {
         $facet: {
           totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
-          activeAccounts: [{ $group: { _id: '$ownerId' } }, { $count: 'count' }],
+          activeAccounts: [
+            { $match: { ...attributedUsageMatch, ownerId: { $type: 'string' } } },
+            { $group: { _id: '$ownerId' } },
+            { $count: 'count' },
+          ],
           latency: [
             { $match: { latencyMs: { $ne: null } } },
             {
@@ -323,14 +761,42 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           // settlements, media), so a credit sort would truncate away real top cost
           // drivers. Secondary keys make the cap deterministic across equal-cost ties.
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...EXECUTED_MODEL_GROUP_KEY }, ...spendSums } },
+            {
+              $project: {
+                _id: 0,
+                provider: '$_id.provider',
+                model: '$_id.model',
+                ...EXECUTED_MODEL_FIELDS,
+                ...spendFields,
+              },
+            },
+            { $sort: { cogsUsd: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
             { $limit: SPEND_MODEL_LIMIT },
           ],
+          // failures and p95 feed the Spend tab's per-account threshold flags.
           byAccount: [
-            { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
-            { $project: { _id: 0, ownerId: '$_id.ownerId', ownerType: '$_id.ownerType', ...spendFields } },
+            { $match: { ...attributedUsageMatch, ownerId: { $type: 'string' } } },
+            {
+              $group: {
+                _id: { ownerId: '$ownerId', ownerType: '$ownerType' },
+                ...spendSums,
+                failures: { $sum: { $cond: [{ $in: ['$status', ['error', 'timeout']] }, 1, 0] } },
+                // $percentile skips non-numeric values, so rows without latencyMs drop out on their own.
+                // any: the operator postdates mongoose's typed AccumulatorOperator.
+                p95: { $percentile: { input: '$latencyMs', p: [0.95], method: 'approximate' } } as any,
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                ownerId: '$_id.ownerId',
+                ownerType: '$_id.ownerType',
+                ...spendFields,
+                failures: 1,
+                p95LatencyMs: { $round: [{ $ifNull: [{ $first: '$p95' }, 0] }, 0] },
+              },
+            },
             { $sort: { cogsUsd: -1, ownerId: 1 } },
             { $limit: SPEND_ACCOUNT_LIMIT },
           ],
@@ -340,7 +806,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           dailyCost: [
             {
               $group: {
-                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                _id: { $dateToString: { format: '%Y-%m-%d', date: effectiveUsageDate, timezone: 'UTC' } },
                 cogsUsd: { $sum: '$costUsd' },
               },
             },
@@ -374,19 +840,87 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     };
   }
 
+  async spendTimeline(params: SpendTimelineParams): Promise<SpendTimelineRow[]> {
+    return this.model
+      .aggregate<SpendTimelineRow>(spendTimelinePipeline(params))
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+  }
+
+  async spendBreakdown(params: SpendBreakdownParams): Promise<SpendBreakdown> {
+    const [result] = await this.model
+      .aggregate<{
+        totals: Array<{ costUsd: number }>;
+        byProvider: SpendBreakdown['byProvider'];
+        bySegment: SpendBreakdown['bySegment'];
+        topActors: SpendBreakdown['topActors'];
+      }>(spendBreakdownPipeline(params))
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return {
+      totalCostUsd: result?.totals?.[0]?.costUsd ?? 0,
+      byProvider: result?.byProvider ?? [],
+      bySegment: result?.bySegment ?? [],
+      topActors: result?.topActors ?? [],
+    };
+  }
+
+  async spendFeatures(params: SpendFeaturesParams): Promise<SpendFeatureAggregate[]> {
+    const [result] = await this.model
+      .aggregate<{
+        totals: Array<SpendFeatureTotals & { feature: string; distinctUsers: number }>;
+        daily: Array<{ feature: string; day: string; costUsd: number }>;
+      }>(spendFeaturesPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    const dailyByFeature = new Map<string, Array<{ day: string; costUsd: number }>>();
+    for (const row of result?.daily ?? []) {
+      const days = dailyByFeature.get(row.feature) ?? [];
+      days.push({ day: row.day, costUsd: row.costUsd });
+      dailyByFeature.set(row.feature, days);
+    }
+    return (result?.totals ?? []).map(row => ({
+      ...row,
+      daily: (dailyByFeature.get(row.feature) ?? []).sort((a, b) => a.day.localeCompare(b.day)),
+    }));
+  }
+
+  async spendFeatureUsers(params: SpendFeatureUsersParams): Promise<SpendFeatureUsersPage> {
+    const [result] = await this.model
+      .aggregate<{
+        summary: Array<{ users: number; costUsd: number }>;
+        page: SpendFeatureUsersPage['users'];
+      }>(spendFeatureUsersPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return {
+      users: result?.page ?? [],
+      totalUsers: result?.summary?.[0]?.users ?? 0,
+      featureCostUsd: result?.summary?.[0]?.costUsd ?? 0,
+    };
+  }
+
+  async spendActorIds(params: SpendActorScanParams): Promise<string[]> {
+    const rows = await this.model
+      .aggregate<{ _id: string }>(spendActorIdsPipeline(params))
+      .allowDiskUse(true)
+      .option({ maxTimeMS: SPEND_EXPLORER_MAX_TIME_MS });
+    return rows.map(row => row._id);
+  }
+
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     // Both provider counts must be real positive counts to compare against the
     // local estimate. A row settled 'local' can still carry a partial provider
     // report (one axis zero); gating on > 0 keeps those out of the delta.
+    // Timeout rows use zero quota sentinels rather than measured local estimates.
     const hasProviderCounts = {
       $and: [
+        { $ne: ['$status', 'timeout'] },
         { $gt: [{ $ifNull: ['$providerInputTokens', 0] }, 0] },
         { $gt: [{ $ifNull: ['$providerOutputTokens', 0] }, 0] },
       ],
     };
     return this.model.aggregate<ISettlementBreakdown>([
-      { $match: { createdAt: { $gte: from }, settledBasis: { $in: ['provider', 'local'] } } },
+      { $match: { ...attributedUsageMatch, createdAt: { $gte: from }, settledBasis: { $in: ['provider', 'local'] } } },
       {
         $group: {
           _id: '$settledBasis',
@@ -418,12 +952,79 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     ]);
   }
 
+  async costByFundingCohort(days: number = 30): Promise<IFundingCohortCost[]> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const creditsOf = (source: string) => ({ $ifNull: [`$fundingBreakdown.${source}`, 0] });
+    const hasBreakdown = { $gt: ['$fundingTotal', 0] };
+    const costShareOf = (source: string) => ({
+      $cond: [hasBreakdown, { $multiply: ['$costUsd', { $divide: [creditsOf(source), '$fundingTotal'] }] }, 0],
+    });
+    // Flat `cost_granted`-style fields between the two $group stages, nested per source in the output.
+    const fieldsPerSource = (prefix: string, build: (source: string) => unknown) =>
+      Object.fromEntries(USAGE_FUNDING_SOURCES.map(source => [`${prefix}${source}`, build(source)]));
+
+    return this.model.aggregate<IFundingCohortCost>([
+      { $match: usageTimeMatch(from) },
+      { $addFields: { fundingTotal: { $add: USAGE_FUNDING_SOURCES.map(creditsOf) } } },
+      // Per user first, so the users join runs once per spender rather than once per row.
+      {
+        $group: {
+          _id: { userId: { $ifNull: ['$userId', null] }, platform: platformUsageExpression },
+          ...fieldsPerSource('cost_', source => ({ $sum: costShareOf(source) })),
+          ...fieldsPerSource('credits_', source => ({ $sum: creditsOf(source) })),
+          unattributedCostUsd: { $sum: { $cond: [{ $or: [hasBreakdown, platformUsageExpression] }, 0, '$costUsd'] } },
+          platformCostUsd: { $sum: { $cond: [platformUsageExpression, '$costUsd', 0] } },
+        },
+      },
+      // userId is a free-form string; $convert (not $toObjectId) so one non-ObjectId value fails its own join only.
+      { $addFields: { userObjectId: { $convert: { input: '$_id.userId', to: 'objectId', onError: null } } } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userObjectId',
+          foreignField: '_id',
+          pipeline: [{ $project: { createdAt: 1 } }],
+          as: 'user',
+        },
+      },
+      {
+        $addFields: {
+          cohortWeek: { $dateTrunc: { date: { $first: '$user.createdAt' }, unit: 'week', startOfWeek: 'monday' } },
+        },
+      },
+      {
+        $group: {
+          _id: '$cohortWeek',
+          accounts: { $sum: { $cond: ['$_id.platform', 0, 1] } },
+          ...fieldsPerSource('cost_', source => ({ $sum: `$cost_${source}` })),
+          ...fieldsPerSource('credits_', source => ({ $sum: `$credits_${source}` })),
+          unattributedCostUsd: { $sum: '$unattributedCostUsd' },
+          platformCostUsd: { $sum: '$platformCostUsd' },
+        },
+      },
+      { $sort: { _id: -1 } },
+      {
+        $project: {
+          _id: 0,
+          cohortWeek: '$_id',
+          accounts: 1,
+          costUsd: fieldsPerSource('', source => `$cost_${source}`),
+          credits: fieldsPerSource('', source => `$credits_${source}`),
+          unattributedCostUsd: 1,
+          platformCostUsd: 1,
+        },
+      },
+    ]);
+  }
+
   async ownerUsageSummary(
     ownerId: string,
     ownerType: CreditHolderType,
     days: number = 30
   ): Promise<IOwnerUsageSummary> {
-    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // setDate, like the ledger queries, so both cuts of GET /api/usage share one cutoff.
+    const from = new Date();
+    from.setDate(from.getDate() - days);
 
     // Every breakdown shares the same three sums, so $group + $project them once.
     const spendSums = {
@@ -438,6 +1039,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     const [result] = await this.model.aggregate<{
       overTime: IOwnerSpendDay[];
       byMember: IOwnerSpendMember[];
+      byProject: IOwnerUsageSummary['byProject'];
       byModel: IOwnerSpendModel[];
       byFeature: IOwnerSpendFeature[];
       totals: IUsageSpendBucket[];
@@ -460,6 +1062,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $project: { _id: 0, userId: '$_id', ...spendFields } },
             { $sort: { creditsCharged: -1 } },
           ],
+          byProject: [
+            { $group: { _id: { $ifNull: ['$projectId', null] }, ...spendSums } },
+            { $project: { _id: 0, projectId: '$_id', ...spendFields } },
+            { $sort: { creditsCharged: -1, projectId: 1 } },
+          ],
           byModel: [
             { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
             { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
@@ -479,6 +1086,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return {
       overTime: result?.overTime ?? [],
       byMember: result?.byMember ?? [],
+      byProject: result?.byProject ?? [],
       byModel: result?.byModel ?? [],
       byFeature: result?.byFeature ?? [],
       // $facet yields totals as a 0- or 1-element array; unwrap to a scalar bucket.
@@ -500,7 +1108,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
     // source and ownerType are optional filters applied the same way - extra
     // $match predicates, never a separate query path. Omitting either spans all.
-    const match: Record<string, unknown> = { createdAt: { $gte: from } };
+    const match: Record<string, unknown> = usageTimeMatch(from);
     if (source) match.source = source;
     if (ownerType) match.ownerType = ownerType;
 
@@ -508,7 +1116,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       overTime: IOwnerSpendDay[];
       byFeature: IOwnerSpendFeature[];
       byConsumer: IPlatformConsumerUsage[];
-      byModel: IOwnerSpendModel[];
+      byModel: IAdminSpendModel[];
       totals: IUsageSpendBucket[];
     }>([
       { $match: match },
@@ -517,7 +1125,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           overTime: [
             {
               $group: {
-                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                _id: { $dateToString: { format: '%Y-%m-%d', date: effectiveUsageDate, timezone: 'UTC' } },
                 ...spendSums,
               },
             },
@@ -545,9 +1153,17 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
           ],
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { creditsCharged: -1 } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...EXECUTED_MODEL_GROUP_KEY }, ...spendSums } },
+            {
+              $project: {
+                _id: 0,
+                provider: '$_id.provider',
+                model: '$_id.model',
+                ...EXECUTED_MODEL_FIELDS,
+                ...spendFields,
+              },
+            },
+            { $sort: { creditsCharged: -1, provider: 1, model: 1, executedProvider: 1, executedModel: 1 } },
           ],
           totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
         },
@@ -566,8 +1182,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async sessionUsageSummary(
     sessionId: string,
-    owner?: { ownerId: string; ownerType: CreditHolderType }
+    owner?: { ownerId: string; ownerType: CreditHolderType },
+    options: { includeExecuted?: boolean } = {}
   ): Promise<ISessionUsageSummary> {
+    const executedKey = options.includeExecuted ? EXECUTED_MODEL_GROUP_KEY : {};
+    const executedFields = options.includeExecuted ? EXECUTED_MODEL_FIELDS : {};
     // Every cut shares the same sums (spend + token quantities), so define once.
     const sums = {
       requests: { $sum: 1 },
@@ -591,7 +1210,12 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: ISessionModelUsage[];
       totals: IUsageSpendWithTokens[];
     }>([
-      { $match: owner ? { sessionId, ownerId: owner.ownerId, ownerType: owner.ownerType } : { sessionId } },
+      {
+        $match: {
+          ...attributedUsageMatch,
+          ...(owner ? { sessionId, ownerId: owner.ownerId, ownerType: owner.ownerType } : { sessionId }),
+        },
+      },
       {
         $facet: {
           byQuest: [
@@ -600,8 +1224,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
           ],
           byModel: [
-            { $group: { _id: { provider: '$provider', model: '$model' }, ...sums } },
-            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...fields } },
+            { $group: { _id: { provider: '$provider', model: '$model', ...executedKey }, ...sums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...executedFields, ...fields } },
             { $sort: { creditsCharged: -1 } },
           ],
           totals: [{ $group: { _id: null, ...sums } }, { $project: { _id: 0, ...fields } }],
@@ -627,7 +1251,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   async sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean> {
     // Existence-only probe; the { sessionId, createdAt } index bounds the scan to
     // the session's events (ownerId/ownerType are then matched in memory).
-    const doc = await this.model.exists({ sessionId, ownerId, ownerType });
+    const doc = await this.model.exists({ ...attributedUsageMatch, sessionId, ownerId, ownerType });
     return doc !== null;
   }
 
@@ -651,7 +1275,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byFeature: IOwnerSpendFeature[];
       totals: IUsageSpendBucket[];
     }>([
-      { $match: { dataLakeId, createdAt: { $gte: from } } },
+      { $match: { ...attributedUsageMatch, dataLakeId, createdAt: { $gte: from } } },
       {
         $facet: {
           overTime: [
@@ -694,9 +1318,41 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async lakeResearchLifetimeUsd(dataLakeId: string): Promise<number> {
     const [result] = await this.model.aggregate<{ usd: number }>([
-      { $match: { dataLakeId, feature: 'operations' } },
+      { $match: { ...attributedUsageMatch, dataLakeId, feature: 'operations' } },
       { $group: { _id: null, usd: { $sum: '$costUsd' } } },
       { $project: { _id: 0, usd: 1 } },
+    ]);
+    return result?.usd ?? 0;
+  }
+
+  /**
+   * Personal credits spent since UTC midnight. writtenOffCredits is already part of
+   * creditsCharged, so adding it would double count. The cap's read-before-request
+   * check is non-atomic; concurrent requests may overshoot the allowance.
+   */
+  async findDailySpendByUser(userId: string, since: Date): Promise<number> {
+    // {ownerId, ownerType, createdAt} index covers this; ownerType: 'User' excludes org-billed turns.
+    const [result] = await this.model.aggregate<{ total: number }>([
+      { $match: { ownerId: userId, ownerType: 'User', createdAt: { $gte: since } } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$creditsCharged' },
+        },
+      },
+      { $project: { _id: 0, total: 1 } },
+    ]);
+    return result?.total ?? 0;
+  }
+
+  /**
+   * Provider cost (USD) of the system-sourced calls a user triggered since `since`, charged or not.
+   * Keyed on the acting user, not the billing owner, so org-billed system work still counts.
+   */
+  async systemCostUsdByUserSince(userId: string, since: Date): Promise<number> {
+    const [result] = await this.model.aggregate<{ usd: number }>([
+      { $match: { userId, source: 'system', createdAt: { $gte: since } } },
+      { $group: { _id: null, usd: { $sum: '$costUsd' } } },
     ]);
     return result?.usd ?? 0;
   }
@@ -705,4 +1361,4 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 export const UsageEvent =
   (mongoose.models['UsageEvent'] as unknown as IUsageEventModel) ??
   model<IUsageEventDocument>('UsageEvent', UsageEventSchema);
-export const usageEventRepository = new UsageEventRepository(UsageEvent);
+export const usageEventRepository = new UsageEventRepository(UsageEvent, loadCreditHolderFundingSnapshot);

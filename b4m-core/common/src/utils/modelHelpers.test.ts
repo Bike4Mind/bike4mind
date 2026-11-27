@@ -1,9 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels, type ModelInfo } from '../models';
+import { BFL_IMAGE_MODELS } from '../schemas/bfl';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
   filterRunnableModels,
+  getMaxEditReferenceImages,
+  getMaxReferenceImages,
+  supportsPromptUpsampling,
+  usesDiscreteImageDimensions,
+  isFlux3ImageModel,
+  takesBflInputImageList,
+  supportsBflSeed,
+  supportsBflOutputFormat,
   isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
@@ -16,6 +25,7 @@ import {
   isModelAccessible,
   isBflImageModel,
   supportsImageEdit,
+  supportsImageEditEndpoint,
 } from './modelHelpers';
 
 describe('requiresImageInput', () => {
@@ -163,16 +173,9 @@ describe('clampImageQualityForModel', () => {
 });
 
 describe('isBflImageModel', () => {
-  // Enumerate the full BFL set (Kontext members included) - the ResetButton `style:'vivid'`
-  // and BFL-panel branches depend on Kontext models counting as BFL.
-  it.each([
-    ImageModels.FLUX_PRO_1_1,
-    ImageModels.FLUX_PRO,
-    ImageModels.FLUX_PRO_ULTRA,
-    ImageModels.FLUX_PRO_FILL,
-    ImageModels.FLUX_KONTEXT_PRO,
-    ImageModels.FLUX_KONTEXT_MAX,
-  ])('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
+  // Derived from the list itself so the assertion always covers the full set - the ResetButton
+  // `style:'vivid'` and BFL-panel branches depend on Kontext models counting as BFL.
+  it.each(BFL_IMAGE_MODELS)('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
   it('false for a non-BFL image model', () => expect(isBflImageModel(ImageModels.GPT_IMAGE_1)).toBe(false));
   it('false for null/undefined/empty', () => {
     expect(isBflImageModel(null)).toBe(false);
@@ -350,5 +353,95 @@ describe('filterRunnableModels', () => {
   it('drops a model whose admin row is switched off, even for an admin', () => {
     const configs = [makeModel({ id: 'paused', enabled: false })];
     expect(filterRunnableModels([info('paused')], configs, [], true, [])).toEqual([]);
+  });
+});
+
+describe('getMaxReferenceImages', () => {
+  it.each([
+    [ImageModels.GPT_IMAGE_2, 15],
+    [ImageModels.FLUX_2_PRO, 8],
+    [ImageModels.FLUX_2_MAX, 8],
+    [ImageModels.FLUX_2_KLEIN_9B, 4],
+    [ImageModels.FLUX_2_KLEIN_4B, 4],
+    [ImageModels.FLUX_3_IMAGE, 10],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, 10],
+    [ImageModels.FLUX_PRO_1_1, 0],
+    [ImageModels.GEMINI_3_PRO_IMAGE, 0],
+  ])('%s accepts %s references', (model, limit) => {
+    expect(getMaxReferenceImages(model)).toBe(limit);
+  });
+});
+
+describe('getMaxEditReferenceImages', () => {
+  it.each([
+    [ImageModels.GPT_IMAGE_2, 15],
+    [ImageModels.FLUX_2_PRO, 7],
+    [ImageModels.FLUX_2_MAX, 7],
+    [ImageModels.FLUX_2_KLEIN_9B, 3],
+    [ImageModels.FLUX_2_KLEIN_4B, 3],
+    [ImageModels.FLUX_PRO_FILL, 0],
+    [ImageModels.GEMINI_3_PRO_IMAGE, 0],
+  ])('%s accepts %s references beside the source', (model, limit) => {
+    expect(getMaxEditReferenceImages(model)).toBe(limit);
+  });
+});
+
+describe('supportsImageEditEndpoint', () => {
+  it.each([
+    [ImageModels.FLUX_2_PRO, true],
+    [ImageModels.FLUX_2_KLEIN_4B, true],
+    [ImageModels.FLUX_3_IMAGE, true],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, true],
+    [ImageModels.FLUX_PRO_FILL, true],
+    [ImageModels.GPT_IMAGE_2, true],
+    [ImageModels.GEMINI_3_PRO_IMAGE, true],
+    [ImageModels.FLUX_PRO_1_1, false],
+    [undefined, false],
+  ])('%s -> %s', (model, expected) => {
+    expect(supportsImageEditEndpoint(model)).toBe(expected);
+  });
+});
+
+describe('supportsPromptUpsampling', () => {
+  it.each([
+    [ImageModels.FLUX_2_MAX, true],
+    [ImageModels.FLUX_2_PRO, true],
+    [ImageModels.FLUX_2_PRO_PREVIEW, true],
+    [ImageModels.FLUX_2_FLEX, true],
+    [ImageModels.FLUX_2_KLEIN_9B, false],
+    [ImageModels.FLUX_2_KLEIN_9B_PREVIEW, false],
+    [ImageModels.FLUX_2_KLEIN_4B, false],
+    [ImageModels.FLUX_3_IMAGE, false],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, false],
+    [ImageModels.FLUX_PRO_1_1, true],
+    [ImageModels.GPT_IMAGE_2, false],
+  ])('%s exposes a prompt enhancement control: %s', (model, supported) => {
+    expect(supportsPromptUpsampling(model)).toBe(supported);
+  });
+});
+
+describe('FLUX 3 request-schema predicates', () => {
+  it.each([
+    [ImageModels.FLUX_3_IMAGE, { flux3: true, inputList: true, seed: false, outputFormat: false }],
+    [ImageModels.FLUX_3_IMAGE_KLEIN, { flux3: true, inputList: true, seed: true, outputFormat: true }],
+    [ImageModels.FLUX_2_PRO, { flux3: false, inputList: true, seed: true, outputFormat: true }],
+    [ImageModels.FLUX_PRO_1_1, { flux3: false, inputList: false, seed: true, outputFormat: true }],
+    [ImageModels.GPT_IMAGE_2, { flux3: false, inputList: false, seed: false, outputFormat: false }],
+  ])('%s', (model, expected) => {
+    expect({
+      flux3: isFlux3ImageModel(model),
+      inputList: takesBflInputImageList(model),
+      seed: supportsBflSeed(model),
+      outputFormat: supportsBflOutputFormat(model),
+    }).toEqual(expected);
+  });
+
+  it('does not treat other FLUX 3 endpoints as image models', () => {
+    expect(isFlux3ImageModel('flux-3-video')).toBe(false);
+  });
+
+  it('sizes FLUX 3 by width and height', () => {
+    expect(usesDiscreteImageDimensions(ImageModels.FLUX_3_IMAGE)).toBe(true);
+    expect(usesDiscreteImageDimensions(ImageModels.FLUX_3_IMAGE_KLEIN)).toBe(true);
   });
 });

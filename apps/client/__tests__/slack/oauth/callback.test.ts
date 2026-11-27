@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { NextApiRequest, NextApiResponse } from 'next';
 
 // Mock slackPackageInit to prevent transitive imports of @bike4mind/database and @server/*
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({
   initializeSlackPackage: vi.fn(),
 }));
 
@@ -20,26 +20,33 @@ vi.mock('@bike4mind/observability', () => {
 // Mock the installer module
 const mockHandleCallback = vi.fn();
 const mockBinding = vi.fn();
+const mockProviderOptions = vi.fn();
+const mockGetWorkspaceIdFromState = vi.fn((..._args: unknown[]): string | undefined => undefined);
 let createProviderError: Error | undefined;
 let onInstallCompleteCallback:
   ((metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void) | undefined;
 
 vi.mock('@bike4mind/slack', () => ({
   createInstallProvider: (
-    onInstallComplete?: (metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void,
+    options?: {
+      workspaceId?: string;
+      onInstallComplete?: (metadata: { isReinstall: boolean; teamName: string; teamId: string }) => void;
+    },
     binding?: { expectedNonceHash?: string }
   ) => {
-    onInstallCompleteCallback = onInstallComplete;
+    onInstallCompleteCallback = options?.onInstallComplete;
+    mockProviderOptions(options);
     mockBinding(binding);
     if (createProviderError) return Promise.reject(createProviderError);
     return {
       handleCallback: mockHandleCallback,
     };
   },
+  getWorkspaceIdFromInstallState: (...args: unknown[]) => mockGetWorkspaceIdFromState(...args),
 }));
 
 import handler from '@pages/api/slack/oauth/callback';
-import { readStateNonceHash, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { readStateNonceHash, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const NONCE_COOKIE = 'b4m_oauth_nonce_slack-app-install=cookie-value';
 const COOKIE_HASH = readStateNonceHash({ headers: { cookie: NONCE_COOKIE } }, NONCE_SLOT.slackAppInstall);
@@ -192,6 +199,28 @@ describe('Slack OAuth Callback', () => {
       expect(res.redirect).toHaveBeenCalledWith('/integrations/slack/error?reason=access_denied');
     });
 
+    it('maps a message that merely contains the word code to a server error', async () => {
+      req.query = { code: 'test-code', state: 'test-state' };
+
+      mockHandleCallback.mockRejectedValue(new Error('Unknown promo code table failure'));
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(res.redirect).toHaveBeenCalledWith('/integrations/slack/error?reason=server_error');
+    });
+
+    it('maps a failure callback message that merely contains the word code to a server error', async () => {
+      req.query = { code: 'test-code', state: 'test-state' };
+
+      mockHandleCallback.mockImplementation(async (_req, _res, options) => {
+        options.failure(new Error('Source code unavailable'), {}, _req, _res);
+      });
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(res.redirect).toHaveBeenCalledWith('/integrations/slack/error?reason=server_error');
+    });
+
     it('should handle generic server error', async () => {
       req.query = { code: 'test-code', state: 'test-state' };
 
@@ -244,6 +273,47 @@ describe('Slack OAuth Callback', () => {
       await handler(req as NextApiRequest, res as NextApiResponse);
 
       expect(mockBinding).toHaveBeenCalledWith({ expectedNonceHash: expected });
+    });
+
+    it('builds the provider for the workspace named in the verified state', async () => {
+      req.query = { code: 'c', state: 'signed-state' };
+      mockGetWorkspaceIdFromState.mockReturnValue('ws-second');
+      mockHandleCallback.mockResolvedValue(undefined);
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(mockGetWorkspaceIdFromState).toHaveBeenCalledWith('signed-state', COOKIE_HASH);
+      expect(mockProviderOptions).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws-second' }));
+    });
+
+    it('passes no workspace id when the state carries none, so the provider falls back', async () => {
+      req.query = { code: 'c', state: 'old-state' };
+      mockGetWorkspaceIdFromState.mockReturnValue(undefined);
+      mockHandleCallback.mockResolvedValue(undefined);
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(mockProviderOptions).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: undefined }));
+      expect(mockHandleCallback).toHaveBeenCalled();
+    });
+
+    it('passes the null nonce hash through when the cookie is absent', async () => {
+      req.query = { code: 'c', state: 'signed-state' };
+      req.headers = {};
+      mockHandleCallback.mockResolvedValue(undefined);
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(mockGetWorkspaceIdFromState).toHaveBeenCalledWith('signed-state', null);
+    });
+
+    it('treats a repeated state param as absent', async () => {
+      req.query = { code: 'c', state: ['a', 'b'] };
+      mockHandleCallback.mockResolvedValue(undefined);
+
+      await handler(req as NextApiRequest, res as NextApiResponse);
+
+      expect(mockGetWorkspaceIdFromState).toHaveBeenCalledWith(undefined, COOKIE_HASH);
     });
 
     it('burns the nonce and redirects to the error page when handleCallback rejects', async () => {

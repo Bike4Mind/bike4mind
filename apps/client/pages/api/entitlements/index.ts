@@ -1,4 +1,4 @@
-import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
+import { getUserEntitlements, toEntitlementUser } from '@bike4mind/server-utils/entitlements/index';
 import { baseApi } from '@server/middlewares/baseApi';
 
 /**

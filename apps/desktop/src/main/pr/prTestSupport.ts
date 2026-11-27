@@ -47,6 +47,7 @@ export function check(name: string, bucket: PrCheck['bucket'], required = true):
 /** A PrGithub whose answers the test sets, recording every call. */
 export function fakeGithub(initial: PrSnapshot = snapshot()) {
   let next: PrSnapshot | Error = initial;
+  let branchPr: string | null = null;
   const calls: string[] = [];
   const batches: number[] = [];
   const github = {
@@ -66,7 +67,7 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
     },
     findOpenForBranch: async (_cwd: string, branch: string) => {
       calls.push(`branch:${branch}`);
-      return null as string | null;
+      return branchPr;
     },
     enableAutoMerge: async (_ref: PrRef, method: PrMergeMethod) => {
       calls.push(`enable-auto:${method}`);
@@ -88,6 +89,9 @@ export function fakeGithub(initial: PrSnapshot = snapshot()) {
     batches,
     answer(value: PrSnapshot | Error) {
       next = value;
+    },
+    answerBranch(url: string | null) {
+      branchPr = url;
     },
   };
 }
@@ -138,6 +142,10 @@ export class TrackedMonitor extends PrMonitor {
 
   protected override lookUpBranch(sessionId: string): Promise<void> {
     return this.track(super.lookUpBranch(sessionId));
+  }
+
+  protected override lookUpAfterShell(sessionId: string): Promise<void> {
+    return this.track(super.lookUpAfterShell(sessionId));
   }
 
   protected override evaluateAutoFix(sessionId: string, snapshot: PrSnapshot): Promise<void> {

@@ -1,6 +1,18 @@
 import { z, ZodError } from 'zod';
-import type { ApiErrorCode } from './apiErrorCodes';
+import { UPGRADE_REQUIRED_ERROR_CODE, type ApiErrorCode } from './apiErrorCodes';
 import type { IFabFileDocument } from './types/entities/FabFileTypes';
+
+/** A recoverable tool refusal returned to the model so it can correct its request. */
+export class ExpectedToolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExpectedToolError';
+  }
+}
+
+export function isExpectedToolError(error: unknown): error is ExpectedToolError {
+  return error instanceof ExpectedToolError || (error instanceof Error && error.name === 'ExpectedToolError');
+}
 
 // ---------- HTTP errors (canonical location) ----------
 
@@ -14,6 +26,7 @@ export enum HttpStatus {
   MethodNotAllowed = 405,
   Conflict = 409,
   UnprocessableEntity = 422,
+  UpgradeRequired = 426,
   TooManyRequests = 429,
   InternalServerError = 500,
   BadGateway = 502,
@@ -76,6 +89,29 @@ export class BadRequestError extends HTTPError {
     super(HttpStatus.BadRequest, message, additionalInfo);
     this.name = 'BadRequestError';
   }
+}
+
+/**
+ * An outbound fetch refused by the SSRF guard. Still a 400, but its message can name the resolved
+ * address, so callers that echo a BadRequestError to end users must exclude it with
+ * `isUrlBlockedError`.
+ */
+export class UrlBlockedError extends BadRequestError {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'UrlBlockedError';
+  }
+}
+
+/**
+ * The one exclusion every echo site shares, so a new site cannot drop it by writing its own check.
+ * Name-matched as well as `instanceof`, like `isZodError`, because the error is thrown in one
+ * package and caught in another across a possible module-realm split. Returns boolean rather than a
+ * type guard: UrlBlockedError adds no members to BadRequestError, so a guard would narrow the
+ * negated branch at the call sites to `never`.
+ */
+export function isUrlBlockedError(err: unknown): boolean {
+  return Boolean(err && (err instanceof UrlBlockedError || (err as Error).name === 'UrlBlockedError'));
 }
 
 /** Narrows API_ERROR_CODES to the storage refusals (CONVENTIONS.md section 1). */
@@ -212,6 +248,12 @@ export class ForbiddenError extends HTTPError {
   }
 }
 
+/**
+ * A 403 raised by a tool when the account lost AI access mid-turn. Terminal for the tool loop
+ * (`isTerminalToolError`, `@bike4mind/llm-adapters`): it ends the turn instead of going back to the model.
+ */
+export class AiAccessRefusedError extends ForbiddenError {}
+
 /** 405: the route exists but does not serve this HTTP method. Set an `Allow` header before throwing. */
 export class MethodNotAllowedError extends HTTPError {
   constructor(
@@ -300,6 +342,22 @@ export class TooManyRequestsError extends HTTPError {
   }
 }
 
+/**
+ * 426: the request declared (X-Client-Name + X-Client-Version) a client build older than
+ * the minimum configured for that client. The body names the minimum so the client can
+ * tell its user exactly what to install (CONVENTIONS.md section 9).
+ */
+export class UpgradeRequiredError extends HTTPError {
+  constructor(clientName: string, clientVersion: string, minimumVersion: string) {
+    super(
+      HttpStatus.UpgradeRequired,
+      `${clientName} ${clientVersion} is no longer supported. Upgrade to ${minimumVersion} or later.`,
+      { errorCode: UPGRADE_REQUIRED_ERROR_CODE, client_name: clientName, minimum_version: minimumVersion }
+    );
+    this.name = 'UpgradeRequiredError';
+  }
+}
+
 export class CorruptedFileError extends HTTPError {
   constructor(
     fileName: string,
@@ -311,6 +369,33 @@ export class CorruptedFileError extends HTTPError {
     super(HttpStatus.UnprocessableEntity, message, additionalInfo);
     this.name = 'CorruptedFileError';
   }
+}
+
+/** User-facing; persisted as `FabFile.error` and shown in chat notices. */
+export const PASSWORD_PROTECTED_PDF_MESSAGE =
+  'This PDF is password-protected. Remove the password and upload it again.';
+
+/**
+ * A PDF that cannot be opened without a password. An expected user outcome, not a fault: callers
+ * record the message on the file, log at warn and do not retry.
+ */
+export class PasswordProtectedFileError extends HTTPError {
+  constructor() {
+    super(HttpStatus.UnprocessableEntity, PASSWORD_PROTECTED_PDF_MESSAGE);
+    this.name = 'PasswordProtectedFileError';
+  }
+}
+
+/**
+ * Matches pdf.js's `PasswordException` (unpdf surfaces it unwrapped) and the mapped
+ * `PasswordProtectedFileError`, by name rather than message text. pdf.js's `code` (a
+ * PasswordResponses value) is not used: it is not unique across pdf.js exceptions.
+ */
+export function isPasswordProtectedPdfError(err: unknown): boolean {
+  if (err instanceof PasswordProtectedFileError) return true;
+  if (!err || typeof err !== 'object') return false;
+  const { name } = err as { name?: unknown };
+  return name === 'PasswordException' || name === 'PasswordProtectedFileError';
 }
 
 /**
@@ -340,6 +425,52 @@ export function isChunkClaimLostError(err: unknown): err is ChunkClaimLostError 
 
 export function isZodError(err: unknown): err is ZodError {
   return Boolean(err && (err instanceof ZodError || (err as ZodError).name === 'ZodError'));
+}
+
+const ZOD_IDENTIFIER = /[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*/u;
+
+function zodPathKey(key: PropertyKey): string {
+  return typeof key === 'symbol' ? (key.description ?? '') : String(key);
+}
+
+function formatZodPath(path: readonly PropertyKey[]): string {
+  if (path.length === 1) return zodPathKey(path[0]) || '""';
+  return path.reduce<string>((acc, key) => {
+    if (typeof key === 'number') return `${acc}[${key}]`;
+    const name = zodPathKey(key);
+    if (name.includes('"')) return `${acc}["${name.replace(/"/g, '\\"')}"]`;
+    if (!ZOD_IDENTIFIER.test(name)) return `${acc}["${name}"]`;
+    return acc.length === 0 ? name : `${acc}.${name}`;
+  }, '');
+}
+
+function formatZodIssue(issue: z.core.$ZodIssue): string {
+  if (issue.code === 'invalid_union' && issue.errors.length > 0) {
+    const branches = issue.errors.map(branch =>
+      branch.map(sub => formatZodIssue({ ...sub, path: issue.path.concat(sub.path) })).join('; ')
+    );
+    return Array.from(new Set(branches)).join(' or ');
+  }
+  let text = issue.message.charAt(0).toUpperCase() + issue.message.slice(1);
+  if (issue.path.length > 0) {
+    const first = issue.path[0];
+    text +=
+      issue.path.length === 1 && typeof first === 'number'
+        ? ` at index ${first}`
+        : ` at "${formatZodPath(issue.path)}"`;
+  }
+  return text;
+}
+
+/**
+ * A ZodError as one line: `Validation error: ` then each issue as `<Message> at "<path>"`, joined by `; `,
+ * at most `maxIssues` of them. A union issue lists each distinct branch, joined by ` or `. API callers and
+ * tests match on this text, so keep it stable.
+ */
+export function formatZodError(error: ZodError, { maxIssues = 99 }: { maxIssues?: number } = {}): string {
+  if (error.issues.length === 0) return error.message;
+  const message = error.issues.slice(0, maxIssues).map(formatZodIssue).join('; ');
+  return message.length > 0 ? `Validation error: ${message}` : 'Validation error';
 }
 
 /**

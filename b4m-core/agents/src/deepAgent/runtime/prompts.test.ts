@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Charter, DriveVector, Episode } from '../schemas';
-import { buildActSystemPrompt, renderCharter, renderRecentEpisodes } from './prompts';
+import { buildActSystemPrompt, renderCharter, renderHandoff, renderRecentEpisodes } from './prompts';
 
 const NEUTRAL: DriveVector = {
   curiosity: 0.5,
@@ -53,6 +53,25 @@ function charter(overrides: Partial<Charter> = {}): Charter {
     ...overrides,
   };
 }
+
+describe('renderHandoff', () => {
+  const base = {
+    agentId: 'a',
+    lastWakeAt: '2026-06-08T12:00:00.000Z',
+    lastActionSummary: 'did a thing',
+    nextIntendedAction: 'do the next thing',
+    openBlockers: [],
+    updatedAt: '2026-06-08T12:00:00.000Z',
+  };
+
+  it('renders a seeded never-woken handoff (wakeCount 0) as a first wake', () => {
+    expect(renderHandoff({ ...base, wakeCount: 0 })).toBe(renderHandoff(null));
+  });
+
+  it('renders a real prior wake', () => {
+    expect(renderHandoff({ ...base, wakeCount: 2 })).toContain('Last wake (#2): did a thing');
+  });
+});
 
 describe('renderCharter', () => {
   it('includes identity, goal, tier, subgoals, and memory', () => {

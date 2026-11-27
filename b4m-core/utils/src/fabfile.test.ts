@@ -1,5 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
-import { AI_EDIT_VERSION_RETENTION_DEFAULT, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import {
+  AI_EDIT_VERSION_RETENTION_DEFAULT,
+  PASSWORD_PROTECTED_PDF_MESSAGE,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
 import type { BaseStorage } from '@bike4mind/fab-pipeline';
 import type { Logger } from '@bike4mind/observability';
 
@@ -197,5 +201,38 @@ describe('getFileContent PDF extraction', () => {
     mockAxiosGet.mockResolvedValue({ data: pdf });
 
     await expect(getFileContent(pdfFile, { storage, logger })).resolves.toContain('Invoice total 42');
+  });
+});
+
+describe('getFileContent password-protected PDF', () => {
+  const storage = {
+    getSignedUrl: vi.fn().mockResolvedValue('https://signed.example/file.pdf'),
+  } as unknown as BaseStorage;
+  const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn() } as unknown as Logger;
+  const pdfFile = { fileName: 'locked.pdf', filePath: 'k.pdf', mimeType: SupportedFabFileMimeTypes.PDF };
+
+  afterEach(() => {
+    vi.doUnmock('unpdf');
+    vi.resetModules();
+  });
+
+  it("maps pdf.js's PasswordException to PasswordProtectedFileError", async () => {
+    // The shape pdf.js (through unpdf) throws: an Error named PasswordException with a
+    // PasswordResponses code (1 = NEED_PASSWORD).
+    const passwordException = Object.assign(new Error('No password given'), { name: 'PasswordException', code: 1 });
+    vi.resetModules();
+    vi.doMock('unpdf', () => ({
+      getDocumentProxy: vi.fn().mockRejectedValue(passwordException),
+      extractText: vi.fn(),
+    }));
+    mockAxiosGet.mockResolvedValue({ data: Buffer.from('%PDF-1.7') });
+    const { getFileContent: freshGetFileContent } = await import('./fabfile');
+
+    const read = freshGetFileContent(pdfFile, { storage, logger });
+
+    await expect(read).rejects.toMatchObject({
+      name: 'PasswordProtectedFileError',
+      message: PASSWORD_PROTECTED_PDF_MESSAGE,
+    });
   });
 });

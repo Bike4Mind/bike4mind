@@ -1,6 +1,12 @@
 import type { IModelPrice, IModelPriceTier } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { classifyPriceRow, describePriceRows, planPriceWrites, type PricePlanInput } from './pricePlan';
+import {
+  classifyPriceRow,
+  consensusPricedModelIds,
+  describePriceRows,
+  planPriceWrites,
+  type PricePlanInput,
+} from './pricePlan';
 import type { DiscoveredModel, DiscoveredPrice, SourceContribution } from './types';
 
 const RUN_AT = new Date('2026-07-26T10:00:00Z');
@@ -380,7 +386,7 @@ describe('planPriceWrites guardrails', () => {
   it('drops an all-zero observation rather than writing a free row', () => {
     const result = plan({ contributions: [provider({ inputPerMTok: 0, outputPerMTok: 0 })] });
 
-    expect(result).toEqual({ rows: [], flags: [], overrides: [], skipped: [] });
+    expect(result).toEqual({ rows: [], flags: [], overrides: [], longContextGaps: [], skipped: [] });
   });
 });
 
@@ -938,6 +944,118 @@ describe('planPriceWrites tier ladders', () => {
   });
 });
 
+describe('planPriceWrites long-context gaps', () => {
+  /** A provider page that publishes a higher rate above 272K, like OpenAI's long-context models. */
+  const LADDER: DiscoveredPrice = {
+    inputPerMTok: 5,
+    outputPerMTok: 25,
+    brackets: [{ aboveTokens: 272_000, inputPerMTok: 10, outputPerMTok: 37.5 }],
+  };
+
+  it('reports a ladder the first flat row cannot bill, without flagging it', () => {
+    const result = plan({ contributions: [provider(LADDER)] });
+
+    expect(perMTok(result.rows[0].pricing)).toEqual({ '0': { input: 5, output: 25 } });
+    expect(result.flags).toEqual([]);
+    expect(result.longContextGaps).toEqual([
+      {
+        modelId: 'gpt-6',
+        source: 'openai',
+        base: { inputPerMTok: 5, outputPerMTok: 25 },
+        brackets: [{ aboveTokens: 272_000, inputPerMTok: 10, outputPerMTok: 37.5 }],
+        detail: expect.stringContaining('prompts above 272000 tokens bill at the base rate'),
+      },
+    ]);
+  });
+
+  it('keeps reporting it once the flat row already holds the base rate', () => {
+    // The steady state: nothing is appended, and the missing ladder is still the news.
+    const result = plan({ contributions: [provider(LADDER)], rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE })] });
+
+    expect(result.rows).toEqual([]);
+    expect(result.skipped).toEqual([{ modelId: 'gpt-6', reason: 'unchanged' }]);
+    expect(result.longContextGaps.map(gap => gap.modelId)).toEqual(['gpt-6']);
+  });
+
+  it('counts a bracket that starts below a seed row keyed at the context window', () => {
+    const result = plan({
+      contributions: [provider(LADDER)],
+      rowsInForce: [inForce({ '1050000': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    expect(result.longContextGaps[0].brackets.map(bracket => bracket.aboveTokens)).toEqual([272_000]);
+  });
+
+  it('ignores a bracket at or past the flat row key, which no prompt can reach', () => {
+    const result = plan({
+      contributions: [
+        provider({
+          ...LADDER,
+          brackets: [
+            { aboveTokens: 272_000, inputPerMTok: 10, outputPerMTok: 37.5 },
+            { aboveTokens: 400_000, inputPerMTok: 20, outputPerMTok: 50 },
+          ],
+        }),
+      ],
+      rowsInForce: [inForce({ '272000': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    expect(result.longContextGaps).toEqual([]);
+  });
+
+  it('reports only the reachable brackets of a longer ladder', () => {
+    const result = plan({
+      contributions: [
+        provider({
+          ...LADDER,
+          brackets: [
+            { aboveTokens: 272_000, inputPerMTok: 10, outputPerMTok: 37.5 },
+            { aboveTokens: 400_000, inputPerMTok: 20, outputPerMTok: 50 },
+          ],
+        }),
+      ],
+      rowsInForce: [inForce({ '400000': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    expect(result.longContextGaps[0].brackets.map(bracket => bracket.aboveTokens)).toEqual([272_000]);
+  });
+
+  it('raises none for a source that publishes one flat rate', () => {
+    const result = plan({ contributions: [provider({ inputPerMTok: 5, outputPerMTok: 25 })] });
+
+    expect(result.longContextGaps).toEqual([]);
+  });
+
+  it('raises none for an operator row, whose shape the operator chose', () => {
+    const result = plan({
+      contributions: [provider(LADDER)],
+      rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE }, 'set by ops')],
+    });
+
+    expect(result.longContextGaps).toEqual([]);
+  });
+
+  it('raises none for a tiered row the ladder reprices', () => {
+    const result = plan({
+      contributions: [provider(LADDER)],
+      rowsInForce: [inForce({ '272000': FIVE_AND_TWENTY_FIVE, '1050000': { input: 10e-6, output: 37.5e-6 } })],
+    });
+
+    expect(result.flags).toEqual([]);
+    expect(result.longContextGaps).toEqual([]);
+  });
+
+  it('leaves a band-exceeded flat row to its flag', () => {
+    const result = plan({
+      contributions: [provider({ ...LADDER, inputPerMTok: 50, outputPerMTok: 250 })],
+      rowsInForce: [inForce({ '0': FIVE_AND_TWENTY_FIVE })],
+    });
+
+    expect(result.flags[0]).toMatchObject({ kind: 'band-exceeded' });
+    expect(result.longContextGaps).toEqual([]);
+  });
+});
+
 describe('planPriceWrites idempotence and carry-forward', () => {
   const asInForce = (row: {
     modelId: string;
@@ -1259,5 +1377,31 @@ describe('planPriceWrites adapter literal rows', () => {
 
   it('writes nothing when no ladders are supplied, which is every caller that predates it', () => {
     expect(plan().rows).toEqual([]);
+  });
+});
+
+describe('consensusPricedModelIds', () => {
+  const PRICE: DiscoveredPrice = { inputPerMTok: 2, outputPerMTok: 8 };
+  const FAR: DiscoveredPrice = { inputPerMTok: 20, outputPerMTok: 80 };
+
+  it('names exactly the models planPriceWrites would write a first row for', () => {
+    const cases: Array<[string, SourceContribution[]]> = [
+      ['provider-alone', [provider(PRICE, 'provider-alone')]],
+      ['provider-corroborated', [provider(PRICE, 'provider-corroborated'), litellm(PRICE, 'provider-corroborated')]],
+      ['provider-dissented', [provider(PRICE, 'provider-dissented'), litellm(FAR, 'provider-dissented')]],
+      ['aggregators-agree', [modelsDev(PRICE, 'aggregators-agree'), litellm(PRICE, 'aggregators-agree')]],
+      ['aggregator-lone', [litellm(PRICE, 'aggregator-lone')]],
+    ];
+    const contributions = cases.flatMap(([, entries]) => entries);
+    const written = plan({ contributions, knownModelIds: new Set(cases.map(([modelId]) => modelId)) }).rows.map(
+      row => row.modelId
+    );
+
+    expect([...consensusPricedModelIds(contributions)].sort()).toEqual([
+      'aggregators-agree',
+      'provider-alone',
+      'provider-corroborated',
+    ]);
+    expect(written.sort()).toEqual(['aggregators-agree', 'provider-alone', 'provider-corroborated']);
   });
 });

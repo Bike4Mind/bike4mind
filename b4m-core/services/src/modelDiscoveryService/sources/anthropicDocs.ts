@@ -117,6 +117,10 @@ export interface AnthropicPriceRow {
   slug: string;
   inputPerMTok: number;
   outputPerMTok: number;
+  /** "Cache hits and refreshes". */
+  cacheReadPerMTok?: number;
+  /** "5m cache writes": the TTL settlement bills every write at. */
+  cacheWritePerMTok?: number;
   /** Inclusive last day this row's rate applies, from a "through <date>" note. */
   validUntil?: string;
   /** First day this row's rate applies, from a "starting <date>" note. */
@@ -169,6 +173,15 @@ export function parseAnthropicPricing(markdown: string): ParseResult<AnthropicPr
 
   const inputColumn = table.headers.findIndex(header => /base input/i.test(header));
   const outputColumn = table.headers.findIndex(header => /output tokens/i.test(header));
+  const cacheReadColumn = table.headers.findIndex(header => /cache hits/i.test(header));
+  const cacheWriteColumn = table.headers.findIndex(header => /5m cache writes?/i.test(header));
+
+  // A model's first price row takes its cache rates from this page alone, and a row
+  // without them settles cached reads at input * CACHE_READ_MULTIPLIER (4x the real
+  // rate on Claude Fable 5.1). A renamed cache column must fail loudly, not drop them.
+  if (cacheReadColumn < 0 || cacheWriteColumn < 0) {
+    return { ok: false, error: 'pricing.md model table is missing a cache rate column' };
+  }
 
   const rows: AnthropicPriceRow[] = [];
   for (const row of table.rows) {
@@ -176,7 +189,15 @@ export function parseAnthropicPricing(markdown: string): ParseResult<AnthropicPr
     const inputPerMTok = parseRate(row[inputColumn] ?? '');
     const outputPerMTok = parseRate(row[outputColumn] ?? '');
     if (!parsed || inputPerMTok === undefined || outputPerMTok === undefined) continue;
-    rows.push({ ...parsed, inputPerMTok, outputPerMTok });
+    const cacheReadPerMTok = parseRate(row[cacheReadColumn] ?? '');
+    const cacheWritePerMTok = parseRate(row[cacheWriteColumn] ?? '');
+    rows.push({
+      ...parsed,
+      inputPerMTok,
+      outputPerMTok,
+      ...(cacheReadPerMTok !== undefined ? { cacheReadPerMTok } : {}),
+      ...(cacheWritePerMTok !== undefined ? { cacheWritePerMTok } : {}),
+    });
   }
 
   if (rows.length === 0) return { ok: false, error: 'pricing.md model table yielded zero rows' };

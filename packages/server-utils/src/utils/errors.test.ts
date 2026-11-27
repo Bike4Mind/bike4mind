@@ -26,6 +26,10 @@ describe('ensureTavernAccess', () => {
     expect(() => ensureTavernAccess({ tags: ['Tavern'] })).not.toThrow();
   });
 
+  it('passes for a developer-tagged user', () => {
+    expect(() => ensureTavernAccess({ isAdmin: false, tags: ['Developer'] })).not.toThrow();
+  });
+
   it('throws ForbiddenError for a non-admin without the tavern tag', () => {
     expect(() => ensureTavernAccess({ isAdmin: false, tags: [] })).toThrow(ForbiddenError);
     expect(() => ensureTavernAccess({ isAdmin: false, tags: ['Analyst'] })).toThrow(ForbiddenError);
@@ -64,5 +68,9 @@ describe('parseOrBadRequest', () => {
     } catch (err) {
       expect((err as BadRequestError).statusCode).toBe(400);
     }
+  });
+
+  it('names the field after a Validation error prefix', () => {
+    expect(() => parseOrBadRequest(schema, { name: '' })).toThrow(/^Validation error: [\s\S]*\bname\b/);
   });
 });

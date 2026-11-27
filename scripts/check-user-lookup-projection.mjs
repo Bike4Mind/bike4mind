@@ -19,21 +19,15 @@
 //  - the `password: 0` check runs over the whole file, not just projection blocks.
 // Tighten to an AST scope if these edge cases start hiding real regressions.
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ROOTS = ['apps/client/pages', 'apps/client/server', 'apps/workers', 'b4m-core', 'packages'];
 const ALLOWLIST_FILE = 'scripts/user-lookup-projection-allowlist.txt';
 const SKIP_DIRS = new Set(['node_modules', 'dist', '__tests__', '__test__']);
 
-const allow = new Set(
-  readFileSync(ALLOWLIST_FILE, 'utf8')
-    .split('\n')
-    .map(l => l.replace(/#.*/, '').trim())
-    .filter(Boolean)
-);
-
-function* walk(dir) {
+export function* walk(dir) {
   let entries;
   try {
     entries = readdirSync(dir);
@@ -43,7 +37,15 @@ function* walk(dir) {
   for (const name of entries) {
     if (SKIP_DIRS.has(name)) continue;
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) yield* walk(p);
+    let stat;
+    try {
+      stat = statSync(p);
+    } catch (err) {
+      // Broken or looping symlinks cannot be scanned; skip them.
+      if (err.code === 'ENOENT' || err.code === 'ELOOP') continue;
+      throw err;
+    }
+    if (stat.isDirectory()) yield* walk(p);
     else if (p.endsWith('.ts') && !p.endsWith('.test.ts')) yield p;
   }
 }
@@ -63,34 +65,46 @@ function extractBlock(text, openBraceIdx) {
 
 const lineOf = (text, idx) => text.slice(0, idx).split('\n').length;
 
-const violations = [];
-for (const root of ROOTS) {
-  for (const file of walk(root)) {
-    if (allow.has(file)) continue;
-    const text = readFileSync(file, 'utf8');
+function main() {
+  const allow = new Set(
+    readFileSync(ALLOWLIST_FILE, 'utf8')
+      .split('\n')
+      .map(l => l.replace(/#.*/, '').trim())
+      .filter(Boolean)
+  );
 
-    if (/password\s*:\s*0\b/.test(text)) {
-      violations.push(`${file}: has a { password: 0 } exclusion projection -- use an inclusion allowlist instead`);
-    }
+  const violations = [];
+  for (const root of ROOTS) {
+    for (const file of walk(root)) {
+      if (allow.has(file)) continue;
+      const text = readFileSync(file, 'utf8');
 
-    const re = /\$lookup\s*:\s*\{/g;
-    let m;
-    while ((m = re.exec(text))) {
-      const braceIdx = m.index + m[0].length - 1;
-      const block = extractBlock(text, braceIdx);
-      if (!/from\s*:\s*['"]users['"]/.test(block)) continue;
-      if (/\$project/.test(block)) continue; // has an inner projection -> safe by construction
-      violations.push(`${file}:${lineOf(text, m.index)}: $lookup from 'users' has no inner $project (attaches the full user doc)`);
+      if (/password\s*:\s*0\b/.test(text)) {
+        violations.push(`${file}: has a { password: 0 } exclusion projection -- use an inclusion allowlist instead`);
+      }
+
+      const re = /\$lookup\s*:\s*\{/g;
+      let m;
+      while ((m = re.exec(text))) {
+        const braceIdx = m.index + m[0].length - 1;
+        const block = extractBlock(text, braceIdx);
+        if (!/from\s*:\s*['"]users['"]/.test(block)) continue;
+        if (/\$project/.test(block)) continue; // has an inner projection -> safe by construction
+        violations.push(`${file}:${lineOf(text, m.index)}: $lookup from 'users' has no inner $project (attaches the full user doc)`);
+      }
     }
   }
+
+  if (violations.length) {
+    console.error("\u274c Unprojected user $lookup(s) / exclusion projection(s) found:\n");
+    for (const v of violations) console.error('  ' + v);
+    console.error('\nFix: add an inner $project to the $lookup sub-pipeline (reuse SAFE_USER_LOOKUP_PROJECT');
+    console.error('from @bike4mind/common, spreading it and adding only the extra non-secret fields needed),');
+    console.error(`or add the file to ${ALLOWLIST_FILE} with a comment explaining why it is safe.`);
+    process.exit(1);
+  }
+  console.log('\u2705 All user $lookups project safe fields (or are allowlisted).');
 }
 
-if (violations.length) {
-  console.error("❌ Unprojected user $lookup(s) / exclusion projection(s) found:\n");
-  for (const v of violations) console.error('  ' + v);
-  console.error('\nFix: add an inner $project to the $lookup sub-pipeline (reuse SAFE_USER_LOOKUP_PROJECT');
-  console.error('from @bike4mind/common, spreading it and adding only the extra non-secret fields needed),');
-  console.error(`or add the file to ${ALLOWLIST_FILE} with a comment explaining why it is safe.`);
-  process.exit(1);
-}
-console.log('✅ All user $lookups project safe fields (or are allowlisted).');
+const invoked = process.argv[1];
+if (invoked && realpathSync(invoked) === fileURLToPath(import.meta.url)) main();

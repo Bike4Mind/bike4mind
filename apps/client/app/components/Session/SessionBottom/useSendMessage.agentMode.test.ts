@@ -18,10 +18,18 @@ describe('useSendMessage - agentMode reaches both dispatch paths', () => {
     return source.slice(start, source.indexOf('});', start));
   };
 
-  it.each(['return await handleCommand(commandHandlers,', 'return await handleLLMCommand({'])(
+  it.each(['return await dispatchSend(commandHandlers, imageSendMode,', 'return await handleLLMCommand({'])(
     'forwards the routed effectiveAgentMode on %s',
     opener => {
       expect(callSite(opener)).toMatch(/^\s*agentMode: effectiveAgentMode,\s*$/m);
     }
   );
+
+  it('forwards thinking as-is on agent dispatch so enabled:false reaches the executor', () => {
+    expect(callSite('agentExecution.start({')).toMatch(/^\s*thinking: sentThinking,\s*$/m);
+  });
+
+  it('derives sentThinking through thinkingForSend so always-on models send none', () => {
+    expect(source).toMatch(/const sentThinking = thinkingForSend\(thinking, currentModelInfo\);/);
+  });
 });

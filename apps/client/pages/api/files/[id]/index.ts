@@ -1,5 +1,5 @@
 import { signBrowserFileResponse } from '@server/files/signBrowserFileResponse';
-import { ApiKeyScope, IFabFile, KnowledgeType } from '@bike4mind/common';
+import { ApiKeyScope, IFabFile, KnowledgeType, fabFileResponseSchema } from '@bike4mind/common';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -8,23 +8,24 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import { respond } from '@server/utils/respond';
 import { deleteFileForUser } from '@server/files/deleteFileForUser';
 import { updateFileForUser } from '@server/files/updateFileForUser';
-import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
+import { loadAccessibleFabFile } from '@bike4mind/server-utils/files/loadAccessibleFabFile';
 import {
   assertFilesReadScope,
   assertFilesWriteScope,
   FILES_READ_OR_WRITE_OR_GENERATE_SCOPES,
   FILES_READ_SCOPES,
   isBareGenerateUpload,
-} from '@server/files/fileScopes';
+} from '@bike4mind/server-utils/files/fileScopes';
 import { loadGenerateUploadFile } from '@server/files/loadGenerateUploadFile';
 import { assertGenerateUploadDeletable } from '@server/files/assertGenerateUploadDeletable';
-import { holdsApiKeyScope } from '@server/middlewares/apiKeyScopeGate';
+import { holdsApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { Request } from 'express';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { toAccessContext } from '@bike4mind/server-utils/dataLakes/toAccessContext';
+import { assertDataLakeTagWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 
 // baseApi's scope gate is per route, so it admits either files scope (and ai:generate, for the
 // narrow GET and DELETE below) and each method asserts its own.
@@ -37,7 +38,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
       return res.json(await loadGenerateUploadFile(req, req.query.id));
     }
     assertFilesReadScope(req);
-    return res.json(await loadAccessibleFabFile(req, req.query.id));
+    return res.json(await loadAccessibleFabFile(req, req.query.id, { browser: true }));
   })
   /**
    * Update FabFile by ID
@@ -55,8 +56,9 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
     }
 
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
-    // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
-    // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    // WRITE into that lake, so gate it with the same manage check the remove path uses -
+    // otherwise a read-only member could inject files via Send-to-Data-Lake. File ownership
+    // (canColdAddFileToLake) is enforced further in, by reconcileLakeTags.
     //
     // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
     // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is
@@ -112,7 +114,7 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_OR_GENERATE_SCOPES
     const responseFile = holdsApiKeyScope(req, FILES_READ_SCOPES)
       ? await signBrowserFileResponse(updatedFabFile)
       : { ...updatedFabFile, fileUrl: undefined, fileUrlExpireAt: undefined };
-    return res.json(responseFile);
+    return respond(res, fabFileResponseSchema, responseFile);
   })
   /**
    * Delete FabFile by ID

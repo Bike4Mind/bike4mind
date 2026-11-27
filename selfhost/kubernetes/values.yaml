@@ -1,3 +1,7 @@
+# full: the whole self-host stack (app, workers, Mongo, object store, SQS, mail) plus any opt-in roles.
+# renderWorkerOnly: only the render worker (and its ServiceAccount and KEDA objects) against hosted AWS resources;
+# requires renderWorker.enabled and renderWorker.aws.mode podIdentity, and existingSecret holding MONGODB_URI.
+mode: full
 existingSecret: ''
 externalMongo:
   enabled: false
@@ -16,6 +20,55 @@ imagePullSecrets: []
 agentExecutor:
   enabled: false
   image: ''
+# Studio render worker (apps/workers/src/render/main.ts, image built from apps/workers/Dockerfile.renderworker).
+# Long-polls RENDER_JOB_QUEUE and encodes with ffmpeg.
+renderWorker:
+  enabled: false
+  image: ''
+  # Fixed replica count; ignored when keda.enabled (KEDA owns the count then).
+  replicas: 1
+  aws:
+    # selfhost: the release's in-cluster SQS/object store, shared config and static keys from existingSecret.
+    # podIdentity: real AWS through the ServiceAccount (IRSA or EKS Pod Identity); no shared config, no static
+    # keys. env must then carry RENDER_JOB_QUEUE, GENERATION_JOB_QUEUE, FAB_FILE_BUCKET, GENERATED_IMAGES_BUCKET
+    # AWS_REGION, APP_STAGE and APP_NAME, and existingSecret must hold MONGODB_URI. APP_STAGE is required because a
+    # hosted MONGODB_URI contains %STAGE%, which the worker fills from it (unset it falls back to "selfhost").
+    mode: selfhost
+  # Extra or overriding plain environment for the worker; values may use templates. Never secrets.
+  env: {}
+  # On SIGTERM the worker aborts the encode and hands its message back after 90s (RENDER_DRAIN_GRACE_MS); an
+  # encode is capped at 30 minutes, so it is not waited for. 150 adds upload and hand-back headroom.
+  terminationGracePeriodSeconds: 150
+  # Inputs, intermediates and the output MP4 live here during an encode.
+  tmpSizeLimit: 50Gi
+  podAnnotations: {}
+  resources:
+    requests: { cpu: '2', memory: 4Gi, ephemeral-storage: 10Gi }
+    limits: { cpu: '2', memory: 4Gi, ephemeral-storage: 55Gi }
+  serviceAccount:
+    create: true
+    # Defaults to <release>-renderworker.
+    name: ''
+    # e.g. eks.amazonaws.com/role-arn for IRSA; Pod Identity needs none (the association is made on the cluster).
+    annotations: {}
+  # Queue-depth scaling with KEDA (the KEDA CRDs must be installed; needs aws.mode podIdentity). Off: the plain
+  # `replicas` count above. Scale-in does NOT spare a busy pod: when the target drops, the Deployment may delete a
+  # replica mid-encode (scaleOnInFlight only keeps the target high while jobs run). The job is handed back and
+  # retried, which consumes one of its 3 receives. For production keep minReplicaCount (or fixed replicas) at the
+  # steady-state load, or run renders as KEDA ScaledJobs (not provided by this chart).
+  keda:
+    enabled: false
+    # Warm floor; 0 scales to zero when the queue is empty.
+    minReplicaCount: 0
+    maxReplicaCount: 4
+    # Messages (waiting + in flight) per replica.
+    queueLength: 1
+    pollingInterval: 30
+    cooldownPeriod: 600
+    queueURL: ''
+    awsRegion: ''
+    # keda: the KEDA operator's own role reads the queue depth; workload: KEDA assumes this worker's role.
+    identityOwner: keda
 storage:
   className: null
   mongo: 10Gi

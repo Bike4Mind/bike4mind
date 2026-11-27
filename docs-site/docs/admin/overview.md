@@ -13,22 +13,41 @@ The Bike4Mind admin dashboard is the central hub for platform administration. It
 
 The admin panel is organized as a full-screen view with three main areas:
 
-| Area | Description |
-|------|-------------|
+| Area                   | Description                                                            |
+| ---------------------- | ---------------------------------------------------------------------- |
 | **Environment Banner** | A color-coded sticky bar at the top indicating the current environment |
-| **Left Sidebar** | An accordion-based navigation menu for switching between admin tabs |
-| **Main Content Area** | The active tab's content, occupying the majority of the screen |
+| **Left Sidebar**       | An accordion-based navigation menu for switching between admin tabs    |
+| **Main Content Area**  | The active tab's content, occupying the majority of the screen         |
+
+## Keyboard commands
+
+On the admin page or a user profile, press Cmd/Ctrl+K to open **Admin commands**. Use ArrowUp and ArrowDown to select a command, Enter to run it, and Escape to close the palette. You can navigate to Users, Organizations, settings or the audit log, or paste a user ID to open its profile. **Open Help Center** opens the existing help panel; `?` now shows the shortcut list instead. Use the Users or Organizations page search for name and email lookup.
+
+| Key        | Action                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| `/`        | Focus the current page's supported search field, or the sidebar filter when the page has none               |
+| `x`        | Toggle selection of a focused selectable shared-table row or Slim Users row/card                            |
+| `c`        | Open Overview and focus Credit balance on a user profile; use Update with a reason to save                  |
+| `s`        | Open an audited suspension preview for the user whose profile is open                                       |
+| Cmd/Ctrl+S | On Admin Settings, save all staged changes across sections; in standalone editors, save the current setting |
+| `?`        | Open shortcut help                                                                                          |
+
+The profile also offers **Revoke API keys**. Suspension and key revocation require an eligibility preview and a reason before you apply them. These flows exclude paid, admin, system and organization accounts, and do not claw back credits. Suspension also revokes API keys and signs the user out.
+
+### If a shortcut does nothing
+
+Single-key shortcuts (`/`, `x`, `c`, `s`, `?`) do not run while you type in an input or editable text. No shortcut runs while a menu or dialog is open. Close the popup, or Tab out of the field to the intended row first. On Settings, Cmd/Ctrl+S saves staged edits across sections. Scoped overrides, uploads and command actions use their own controls; standalone bespoke forms keep their own Save controls. A disabled save button still needs a valid change. If `/` does nothing, use the page's search control directly.
 
 ## Environment Banner
 
 The environment banner is always visible at the top of the admin panel. It uses color coding to clearly indicate which environment you are working in, reducing the risk of unintended changes in production.
 
-| Environment | Color | Hostname Pattern |
-|-------------|-------|-----------------|
-| Local Development | Green | `localhost` |
-| Staging | Blue | Contains `staging` |
-| Production | Red | `app.bike4mind.com` |
-| Unknown | Yellow | Any other hostname |
+| Environment       | Color  | Hostname Pattern    |
+| ----------------- | ------ | ------------------- |
+| Local Development | Green  | `localhost`         |
+| Staging           | Blue   | Contains `staging`  |
+| Production        | Red    | `app.bike4mind.com` |
+| Unknown           | Yellow | Any other hostname  |
 
 The banner includes a close button on the right side that navigates back to the previous page.
 
@@ -47,11 +66,11 @@ This sample shows a busy day alongside earlier dates, including days with no eve
 
 ![Seven UTC dates remain visible even when the latest day has more than 1,000 events](./admin-activity-full-window.png)
 
-Help icons across the landing page explain client types, events, categories, AI model response times, costs, and the activity summary's coverage. The three activity charts also have help: **Events Over Time** counts all recorded events by UTC date on the landing page, **Events by Category** groups related actions, and **Top 10 Events** ranks event names by frequency. These charts count recorded events, not distinct people. Recent activity uses UTC dates and includes zero-activity days; today is incomplete. Detailed Event Metrics uses the browser's time zone and shows dates with loaded events. Hover over, focus, or tap a help icon to read its explanation.
+Help icons across the landing page explain client types, events, categories, AI model response times, costs, and the activity summary's coverage. The three activity charts also have help: **Events over time** counts all recorded events by UTC date on the landing page, **Events by category** groups related actions, and **Top 10 events** ranks event names by frequency. These charts count recorded events, not distinct people. Recent activity uses UTC dates and includes zero-activity days; today is incomplete. Detailed Event Metrics uses the browser's time zone and shows dates with loaded events. Hover over, focus, or tap a help icon to read its explanation.
 
 The example below uses sample events to show the chart help:
 
-![Top 10 Events chart with help explaining that event frequency does not rank features by distinct users](./admin-dashboard-event-help.png)
+![Top 10 events chart with help explaining that event frequency does not rank features by distinct users](./admin-dashboard-event-help.png)
 
 ## Sidebar Navigation
 
@@ -61,54 +80,53 @@ The **Dashboard** button stays above the collapsible sidebar sections, so you ca
 
 The User Ops section contains tabs focused on user and account management:
 
-| Tab | Description |
-|-----|-------------|
-| Users | Search, view, edit, and manage user accounts |
-| Email Verification | Monitor and manage email verification status |
-| Feedback | Review and triage user-submitted feedback |
-| Migration | Bulk migrate users into the platform (conditional, requires feature flag) |
-| Analytics | View user activity reports and analytics |
-| Invite Codes | Manage registration invite codes |
-| Subscribers | View and manage newsletter subscribers (shows a badge count for waiting subscribers) |
-| Email Marketing | Email marketing campaigns |
-| Subscriptions | Manage user subscriptions |
-| Organizations | Manage organizations |
-| Credit Analytics | Analyze credit usage across the platform |
-| Bulk Import | Import users in bulk |
-| Team | Manage team members |
+| Tab                | Description                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| Users              | Search, view, edit, and manage user accounts                                                       |
+| Email Verification | Monitor and manage email verification status                                                       |
+| Feedback           | Review and triage user-submitted feedback                                                          |
+| Migration          | Bulk migrate users into the platform (conditional, requires feature flag)                          |
+| Analytics          | View user activity reports and analytics                                                           |
+| Invite Codes       | Manage registration invite codes                                                                   |
+| Waitlist           | View waitlist requests and generate invites (shows a badge count for people waiting for an invite) |
+| Email Marketing    | Email marketing campaigns                                                                          |
+| Subscriptions      | Manage user subscriptions                                                                          |
+| Organizations      | Manage organizations                                                                               |
+| Credit Analytics   | Analyze credit usage across the platform                                                           |
+| Bulk Import        | Import users in bulk                                                                               |
+| Team               | Manage team members                                                                                |
 
 ### General Ops
 
 The General Ops section contains tabs for system configuration and operational tools:
 
-| Tab | Description |
-|-----|-------------|
-| Admin Settings | Platform-wide configuration settings |
-| System Health | Monitor system health status |
-| LLM Dashboard | Large language model configuration and monitoring |
-| Tool Definitions | Manage tool definitions available to AI |
-| Rapid Reply | Configure rapid reply templates |
-| System Prompts | Manage system-level prompts |
-| Agent Operations | Monitor and manage AI agent operations |
-| Documentation | Internal documentation management |
-| Modals | Configure application modals |
-| What's New | Manage "What's New" announcement modals |
-| LiveOps Triage | Live operations triage (conditional, hidden on fork production environments) |
-| Secrets Rotation | Manage secret rotation schedules |
-| System Secrets | View and manage system secrets |
-| Identity Providers | Configure identity provider integrations |
-| Slack Workspaces | Manage Slack workspace connections |
-| Model Metrics | View model performance metrics |
-| Event Metrics | Track system event metrics |
-| Slack Metrics | Monitor Slack integration metrics |
-| Security Dashboard | Security monitoring dashboard |
+| Tab                | Description                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------ |
+| Admin Settings     | Platform-wide configuration settings                                                       |
+| System Health      | Monitor system health status                                                               |
+| Models             | Which AI models users can pick, their provider prices, model discovery, and model settings |
+| Tool Definitions   | Manage tool definitions available to AI                                                    |
+| Rapid Reply        | Configure rapid reply templates                                                            |
+| System Prompts     | Manage system-level prompts                                                                |
+| Agent Operations   | Monitor and manage AI agent operations                                                     |
+| Documentation      | Internal documentation management                                                          |
+| Modals             | Configure application modals                                                               |
+| What's New         | Manage "What's New" announcement modals                                                    |
+| Secrets Rotation   | Manage secret rotation schedules                                                           |
+| System Secrets     | View and manage system secrets                                                             |
+| Identity Providers | Configure identity provider integrations                                                   |
+| Slack Workspaces   | Manage Slack workspace connections                                                         |
+| Model Metrics      | View model performance metrics                                                             |
+| Event Metrics      | Track system event metrics                                                                 |
+| Slack Metrics      | Monitor Slack integration metrics                                                          |
+| Security Dashboard | Security monitoring dashboard                                                              |
 
 ### Advanced
 
 The Advanced section contains specialized tools:
 
-| Tab | Description |
-|-----|-------------|
+| Tab        | Description                                   |
+| ---------- | --------------------------------------------- |
 | World Time | View current time across different time zones |
 
 ## Tab System
@@ -121,7 +139,7 @@ The admin panel uses a vertical tab system where clicking a sidebar button activ
 
 ## Notification Badges
 
-The Subscribers tab displays a red notification badge when there are waiting subscribers. The badge shows the count of pending subscribers and can be dismissed. This badge is only visible when the count is greater than zero and the notification has not been hidden.
+The Waitlist tab displays a notification badge when people are waiting for an invite. The badge shows the count of people waiting and can be dismissed. This badge is only visible when the count is greater than zero and the notification has not been hidden.
 
 ## Best Practices
 

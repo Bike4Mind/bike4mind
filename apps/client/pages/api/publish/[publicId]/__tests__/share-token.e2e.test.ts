@@ -23,9 +23,14 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
  * `revokedAt` field counts as live, and the compare-and-set preconditions really do make a
  * racing writer lose. Two defects found in review came from exactly this gap.
  *
- * Only `baseApi` (the middleware chain) and `generateShareToken` (so tokens are predictable)
- * are mocked; the database is real.
+ * `baseApi` (the middleware chain) and `generateShareToken` (so tokens are predictable) are
+ * mocked. The rotation race delays collection writes at a barrier, then runs them against Mongo.
  */
+
+vi.mock('@server/auth/assertOutboundActionAllowed', () => ({
+  outboundActionGate: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  assertOutboundActionAllowed: async () => undefined,
+}));
 
 let tokenCounter = 0;
 
@@ -47,7 +52,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@server/services/publish', () => ({ generateShareToken: () => `TOK${++tokenCounter}` }));
 
-import handler from '../share-token';
+import handler, { MAX_LIVE_SHARE_LINKS, MAX_SHARE_TOKEN_ENTRIES } from '../share-token';
 
 let mongoServer: MongoMemoryServer;
 
@@ -60,6 +65,7 @@ afterAll(async () => {
   await mongoServer?.stop();
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await PublishedArtifact.deleteMany({});
 });
 
@@ -116,8 +122,8 @@ describe('share-token route against real storage', () => {
       await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(added.body.shareToken) })
     ).not.toBeNull();
 
-    // The entry is stamped, never pulled: the token stays claimed in the unique index so it can
-    // never be re-minted, and its view count survives.
+    // The entry is stamped, not pulled: the token stays claimed in the unique index and its view
+    // count survives (until the history cap prunes it).
     const afterOne = await raw();
     expect(afterOne.shareTokens).toHaveLength(2);
     expect(afterOne.shareTokens[0].revokedAt).toBeInstanceOf(Date);
@@ -150,9 +156,36 @@ describe('share-token route against real storage', () => {
     expect((await raw()).shareTokens).toHaveLength(3);
   });
 
+  it('mints a fresh link when every existing entry has expired, and rotates only live entries', async () => {
+    const expired = new Date(Date.now() - 60_000);
+    await seed({
+      shareTokens: [
+        { _id: new mongoose.Types.ObjectId(), token: 'EXPIRED', createdAt: new Date(), expiresAt: expired },
+      ],
+    });
+    expect((await call({ method: 'GET' })).body.shareLinks).toEqual([]);
+
+    // Expired entries must not satisfy the "a live entry exists" side of the mint precondition.
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const minted = await call({ body: { expiresAt } });
+    expect(minted.status).toBe(200);
+    expect(minted.body.shareToken).not.toBe('EXPIRED');
+    const stored = (await raw()).shareTokens;
+    expect(stored).toHaveLength(2);
+    expect(stored[1].expiresAt.toISOString()).toBe(expiresAt);
+
+    const rotated = await call({ body: { regenerate: true } });
+    expect(rotated.status).toBe(200);
+    const after = (await raw()).shareTokens;
+    // The expired entry was not live, so the rotate leaves it unstamped; the minted one is revoked.
+    expect(after[0].revokedAt ?? null).toBeNull();
+    expect(after[1].revokedAt).toBeInstanceOf(Date);
+    expect(after[2].expiresAt).toBeNull();
+  });
+
   it('treats an entry with NO revokedAt field as live', async () => {
     // The backfill writes an explicit null, but a hand-edited or older row may simply omit it,
-    // and IS_LIVE has to read the same way liveShareTokens does.
+    // and isLive has to read the same way liveShareTokens does.
     await seed({
       shareTokens: [{ _id: new mongoose.Types.ObjectId(), token: 'NOFIELD', createdAt: new Date(), viewCount: 0 }],
     });
@@ -210,8 +243,21 @@ describe('share-token route against real storage', () => {
   it('lets a rotate win over a concurrent rotate without either caller holding a dead link', async () => {
     await seed();
     await call();
+    const update = PublishedArtifact.collection.findOneAndUpdate.bind(PublishedArtifact.collection);
+    const bothRotationsReady = Promise.withResolvers<void>();
+    let pendingRotations = 0;
+    // Hold both writes until both requests have read the old link. Without this barrier,
+    // the second request can read the first rotation and legitimately revoke its new link.
+    vi.spyOn(PublishedArtifact.collection, 'findOneAndUpdate').mockImplementation(async (...args) => {
+      pendingRotations += 1;
+      if (pendingRotations === 2) bothRotationsReady.resolve();
+      await bothRotationsReady.promise;
+      return update(...args);
+    });
     const [x, y] = await Promise.all([call({ body: { regenerate: true } }), call({ body: { regenerate: true } })]);
 
+    expect(pendingRotations).toBe(2);
+    expect(x.body.shareToken).toBe(y.body.shareToken);
     // Both callers get 200, and each returned token must be one that actually resolves - the
     // loser is handed the persisted token rather than the one whose write lost.
     for (const result of [x, y]) {
@@ -222,5 +268,131 @@ describe('share-token route against real storage', () => {
     }
     // A rotate revokes every outstanding link, so exactly one survives.
     expect(liveShareTokens((await raw()) as never)).toHaveLength(1);
+  });
+
+  it('revokes the previous rotation when a later request reads the new link', async () => {
+    await seed();
+    await call();
+
+    const first = await call({ body: { regenerate: true } });
+    const second = await call({ body: { regenerate: true } });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.shareToken).not.toBe(first.body.shareToken);
+    expect(await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(first.body.shareToken) })).toBeNull();
+    expect(
+      await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(second.body.shareToken) })
+    ).not.toBeNull();
+    expect(liveShareTokens((await raw()) as never)).toHaveLength(1);
+  });
+
+  describe('shareTokens[] cap', () => {
+    const CAP = MAX_SHARE_TOKEN_ENTRIES;
+    const resolves = async (token: string) =>
+      (await PublishedArtifact.findOne({ deletedAt: null, ...shareTokenFilter(token) })) !== null;
+    const deadEntry = (n: number) => ({
+      _id: new mongoose.Types.ObjectId(),
+      token: `DEAD${n}`,
+      createdAt: new Date(Date.now() - 1_000_000 + n),
+      revokedAt: new Date(),
+      expiresAt: null,
+      viewCount: 0,
+      lastViewedAt: null,
+    });
+    const liveEntry = (n: number) => ({ ...deadEntry(n), token: `LIVE${n}`, revokedAt: null });
+
+    it('repeated rotation holds the array at the cap with exactly the newest link live', async () => {
+      await seed();
+      const first = await call();
+      let last = first;
+      for (let i = 0; i < CAP + 10; i++) last = await call({ body: { regenerate: true } });
+
+      const doc = await raw();
+      expect(doc.shareTokens).toHaveLength(CAP);
+      const live = liveShareTokens(doc as never);
+      expect(live).toHaveLength(1);
+      expect(doc.shareTokens[CAP - 1].token).toBe(last.body.shareToken);
+      // The pruned first token and a kept revoked one both stop resolving; the newest does.
+      expect(doc.shareTokens.some((e: { token: string }) => e.token === first.body.shareToken)).toBe(false);
+      expect(await resolves(first.body.shareToken)).toBe(false);
+      expect(await resolves(doc.shareTokens[0].token)).toBe(false);
+      expect(await resolves(last.body.shareToken)).toBe(true);
+    });
+
+    it('repeated revoke-by-id plus additional holds the array at the cap', async () => {
+      await seed();
+      await call();
+      let newest = await call({ body: { additional: true } });
+      for (let i = 0; i < CAP + 10; i++) {
+        expect((await call({ method: 'DELETE', query: { id: newest.body.id } })).status).toBe(200);
+        newest = await call({ body: { additional: true } });
+        expect(newest.status).toBe(200);
+      }
+      const doc = await raw();
+      expect(doc.shareTokens).toHaveLength(CAP);
+      expect(liveShareTokens(doc as never)).toHaveLength(2);
+      expect(await resolves(newest.body.shareToken)).toBe(true);
+    });
+
+    it('prunes a legacy row of accumulated revoked entries to the cap in one write', async () => {
+      await seed({ shareTokens: Array.from({ length: 200 }, (_, n) => deadEntry(n)) });
+      const minted = await call();
+      expect(minted.status).toBe(200);
+      const doc = await raw();
+      expect(doc.shareTokens).toHaveLength(CAP);
+      // Oldest dead entries go first; the newest dead ones and the new link stay, in order.
+      expect(doc.shareTokens[0].token).toBe(`DEAD${200 - (CAP - 1)}`);
+      expect(doc.shareTokens[CAP - 1].token).toBe(minted.body.shareToken);
+    });
+
+    it('refuses additional on a legacy row with more live entries than the cap, and rotates it down', async () => {
+      const over = CAP + 5;
+      await seed({ shareTokens: [deadEntry(0), ...Array.from({ length: over }, (_, n) => liveEntry(n))] });
+      const added = await call({ body: { additional: true } });
+      expect(added.status).toBe(400);
+      expect(added.body.code).toBe('SHARE_LINK_LIMIT');
+      expect(liveShareTokens((await raw()) as never)).toHaveLength(over);
+
+      const rotated = await call({ body: { regenerate: true } });
+      expect(rotated.status).toBe(200);
+      const doc = await raw();
+      // The rotate revokes every old live entry in the same write, so the pruning sees them dead.
+      expect(doc.shareTokens).toHaveLength(CAP);
+      expect(liveShareTokens(doc as never).map(e => e.token)).toEqual([rotated.body.shareToken]);
+    });
+
+    it('lets only one of several concurrent adds take the last live slot', async () => {
+      await seed({ shareTokens: Array.from({ length: MAX_LIVE_SHARE_LINKS - 1 }, (_, n) => liveEntry(n)) });
+      const update = PublishedArtifact.collection.findOneAndUpdate.bind(PublishedArtifact.collection);
+      const allReady = Promise.withResolvers<void>();
+      let pending = 0;
+      // Hold every write until every request has passed the snapshot limit check.
+      vi.spyOn(PublishedArtifact.collection, 'findOneAndUpdate').mockImplementation(async (...args) => {
+        pending += 1;
+        if (pending === 5) allReady.resolve();
+        await allReady.promise;
+        return update(...args);
+      });
+      const results = await Promise.all(Array.from({ length: 5 }, () => call({ body: { additional: true } })));
+
+      expect(pending).toBe(5);
+      expect(results.filter(r => r.status === 200)).toHaveLength(1);
+      for (const r of results.filter(r => r.status !== 200)) {
+        expect(r.status).toBe(400);
+        expect(r.body.code).toBe('SHARE_LINK_LIMIT');
+      }
+      expect(liveShareTokens((await raw()) as never)).toHaveLength(MAX_LIVE_SHARE_LINKS);
+    });
+
+    it('does not count a token-less entry toward the live limit', async () => {
+      const { token: _token, ...tokenless } = liveEntry(99);
+      await seed({
+        shareTokens: [...Array.from({ length: MAX_LIVE_SHARE_LINKS - 1 }, (_, n) => liveEntry(n)), tokenless],
+      });
+      const added = await call({ body: { additional: true } });
+      expect(added.status).toBe(200);
+      expect(liveShareTokens((await raw()) as never)).toHaveLength(MAX_LIVE_SHARE_LINKS);
+    });
   });
 });

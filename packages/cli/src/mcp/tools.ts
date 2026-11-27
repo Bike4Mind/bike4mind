@@ -1,25 +1,31 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { open, realpath } from 'node:fs/promises';
+import { basename, resolve, sep } from 'node:path';
 import { z } from 'zod';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification } from '@modelcontextprotocol/sdk/types.js';
 import {
+  ApiKeyScope,
   ArtifactTypeSchema,
   CreateArtifactRequestSchema,
   DEFAULT_TTS_PROVIDER,
-  GENERATED_IMAGE_EXTENSION_RE,
   ImageModels,
-  ImagePromptResolutionSchema,
   joinReplySlots,
   PROMPT_TEXT_MAX,
   PublishVisibilitySchema,
   questReplyText,
   SLUG_OWNED_BY_OTHER,
+  SOUND_EFFECTS_MAX_INPUT_CHARS,
   ttsRequestSchema,
   type GeneratedAudioResponse,
   type TTSRequest,
   type UploadUrlRequest,
   type UploadUrlResponse,
+  type PublicImageJob,
 } from '@bike4mind/common';
+import { resolveSupportedMimeType } from '@bike4mind/utils';
+import { B4mApiError } from '@bike4mind/sdk';
 import {
   apiErrorCode,
   apiErrorRetryAfterSeconds,
@@ -38,6 +44,8 @@ import {
   type RawProject,
   NOTEBOOK_ID_PATTERN,
 } from './b4mApiClient.js';
+import { RESEARCH_TOOL_META, registerResearchTools } from './researchTools.js';
+import { FUNCTION_TOOL_META, registerFunctionTools } from './functionTools.js';
 import { logger } from '../utils/Logger.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -124,7 +132,8 @@ export const TOOL_META: ToolMeta[] = [
     name: 'list_lakes',
     title: 'List data lakes',
     description:
-      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it.",
+      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it. " +
+      'The research config and proposal tools need canManage: true on the lake.',
     scope: 'datalake:read',
   },
   { name: 'list_files', title: 'List files', description: "Search the caller's files.", scope: 'files:read' },
@@ -133,6 +142,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Get file',
     description: "Fetch a file's metadata and a signed download URL.",
     scope: 'files:read',
+  },
+  {
+    name: 'upload_file',
+    title: 'Upload file',
+    description:
+      'Upload a local file or base64 bytes to the file browser. path reads a file the MCP server process can access, except hidden files and anything under a hidden directory; files over 100 MB are refused. Returns its id and pending ingestion state; indexing runs asynchronously. Optional projectId adds it to a project (also requires projects:write).',
+    scope: 'files:write',
   },
   {
     name: 'generate_sound_effect',
@@ -152,7 +168,7 @@ export const TOOL_META: ToolMeta[] = [
     name: 'generate_image',
     title: 'Generate image',
     description:
-      "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
+      'Generate an image from a text prompt and wait for the render. The prompt is sent as written. The image is saved to your Files; returns the job id, the file id and a signed download URL (valid about 15 minutes).',
     scope: 'ai:generate',
   },
   {
@@ -167,8 +183,7 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Publish artifact',
     description:
       "Publish an artifact you own to a shareable /p/... link and return its absolute URL. Republishing an artifact updates its existing page and keeps that page's visibility unless you pass one; a first publish defaults to public.",
-    // The publish routes declare no required scope; this is only the hint a 403 names.
-    scope: 'files:write',
+    scope: 'artifacts:publish',
   },
   {
     name: 'bob_read_site',
@@ -219,9 +234,68 @@ export const TOOL_META: ToolMeta[] = [
       "How many Bob runs the key owner can start now under the daily limit, when the next one frees up, and whether the account's credits cover a full read. A comparison uses two runs.",
     scope: 'bob:read',
   },
+  ...RESEARCH_TOOL_META,
+  ...FUNCTION_TOOL_META,
 ];
 
 export const TOOL_NAMES = TOOL_META.map(t => t.name);
+
+const KEY_SCOPES_TIMEOUT_MS = 5 * 1000;
+
+/** Other scopes that also admit a tool's scope; must match what each route method the tool calls accepts. */
+const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
+  'notebooks:read': ['notebooks:write'],
+  'datalake:read': ['datalake:write', 'datalake:query'],
+  'artifacts:publish': [ApiKeyScope.ADMIN],
+  'bob:read': ['bob:run', ApiKeyScope.ADMIN],
+  'bob:run': [ApiKeyScope.ADMIN],
+};
+
+/**
+ * Per-tool alternates that override the scope's: get_file's route also admits ai:generate keys, list_files' does not;
+ * send_message's chat and quest-poll routes both admit ai:generate; the notebook list alone also admits admin:*.
+ */
+const TOOL_ALTERNATES: Record<string, readonly string[]> = {
+  get_file: ['ai:generate'],
+  send_message: ['ai:generate'],
+  list_notebooks: [...SCOPE_ALTERNATES['notebooks:read'], ApiKeyScope.ADMIN],
+};
+
+/** Tools whose calls reach a second route: the key must also hold one of these, beside the tool's own scope. */
+const TOOL_ALSO_NEEDS_ONE_OF: Record<string, readonly string[]> = {
+  publish_artifact: ['notebooks:read', 'notebooks:write'],
+};
+
+/** The tools registerTools put on each server, by name, so they can be taken back off the list. */
+const toolHandles = new WeakMap<McpServer, Map<string, RegisteredTool>>();
+
+/**
+ * Stops listing the tools the API key's scopes do not cover, so a functions-only key sees the function tools alone.
+ * When the scopes cannot be read, or the key cannot be told apart from another, every tool stays listed and each
+ * route still enforces its own scope.
+ */
+export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApiClient): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Axios timeouts do not cover credential loading or OAuth refresh in its interceptors.
+  const stalled = new Promise<undefined>(resolve => {
+    timer = setTimeout(() => resolve(undefined), KEY_SCOPES_TIMEOUT_MS);
+  });
+  const scopes = await Promise.race([client.getOwnKeyScopes().catch(() => undefined), stalled]).finally(() =>
+    clearTimeout(timer)
+  );
+  if (!scopes || scopes.length === 0) return;
+  const wanted = new Map(TOOL_META.map(t => [t.name, t.scope]));
+  for (const [name, handle] of toolHandles.get(server) ?? []) {
+    const scope = wanted.get(name);
+    const alternates = TOOL_ALTERNATES[name] ?? SCOPE_ALTERNATES[scope ?? ''] ?? [];
+    if (!scope) continue;
+    const alsoNeeds = TOOL_ALSO_NEEDS_ONE_OF[name];
+    const holdsScope = [scope, ...alternates].some(accepted => scopes.includes(accepted));
+    if (!holdsScope || (alsoNeeds && !alsoNeeds.some(needed => scopes.includes(needed)))) {
+      handle.disable();
+    }
+  }
+}
 
 const listNotebooksShape = {
   search: z.string().optional().describe('Filter notebooks by name/content'),
@@ -313,10 +387,22 @@ const getFileShape = {
   fileId: z.string().describe('The file id'),
 };
 
+const uploadFileShape = {
+  path: z.string().min(1).optional().describe('Local path on the machine running the MCP server'),
+  base64: z.string().min(1).optional().describe('Base64-encoded file bytes; use instead of path'),
+  name: z.string().min(1).optional().describe('File name; defaults to the basename of path'),
+  contentType: z.string().min(1).optional().describe('MIME type; otherwise inferred from the file name'),
+  projectId: z.string().min(1).optional().describe('Project to add the uploaded file to; requires projects:write'),
+};
+
 // Bounds mirror `soundEffectsRequestSchema` (@bike4mind/common) and the ElevenLabs
 // sound-generation limits; keep in sync with the route's parse.
 const generateSoundEffectShape = {
-  text: z.string().min(1).max(1000).describe('Text description of the sound effect to generate'),
+  text: z
+    .string()
+    .min(1)
+    .max(SOUND_EFFECTS_MAX_INPUT_CHARS)
+    .describe('Text description of the sound effect to generate'),
   provider: z.enum(['elevenlabs']).default('elevenlabs').describe('Sound-generation provider'),
   durationSeconds: z
     .number()
@@ -337,11 +423,6 @@ const generateImageShape = {
   prompt: z.string().min(1).describe('Text description of the image to generate'),
   model: z.string().default(ImageModels.GPT_IMAGE_2).describe('Image model id, e.g. gpt-image-2'),
   size: z.string().optional().describe("Image size as 'widthxheight', e.g. 1024x1024; omit for the model default"),
-  notebookId: z.string().optional().describe('Notebook to add the image to; omit to create a new one'),
-  projectId: z.string().optional().describe('Project for the new notebook when notebookId is omitted'),
-  promptResolution: ImagePromptResolutionSchema.optional().describe(
-    "'auto' (default) rewrites the prompt against the notebook history; 'literal' sends it as written"
-  ),
 };
 
 // A new page publishes at the user tier, where 'project' is not allowed (SCOPE_POLICY.user)
@@ -465,6 +546,7 @@ function lakeSummary(l: RawDataLake) {
     builtIn: l.built_in,
     status: l.status,
     fileCount: l.file_count,
+    canManage: l.can_manage,
   };
 }
 
@@ -597,6 +679,84 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
 }
 
+// Local memory guard; the server still enforces its own admin MaxFileSize.
+const UPLOAD_FILE_MAX_BYTES = 100 * 1024 * 1024;
+
+export async function uploadFile(
+  client: B4mApiClient,
+  args: { path?: string; base64?: string; name?: string; contentType?: string; projectId?: string }
+) {
+  if (Boolean(args.path) === Boolean(args.base64)) throw new Error('Provide exactly one of path or base64');
+  const fileName = args.name ?? (args.path ? basename(args.path) : undefined);
+  if (!fileName || fileName === '.' || fileName === '..') throw new Error('A file name is required');
+  const tooLarge = () => new Error(`File exceeds the ${UPLOAD_FILE_MAX_BYTES / (1024 * 1024)} MB upload limit`);
+  let bytes: Buffer;
+  if (args.path) {
+    const target = await realpath(args.path);
+    const isHidden = (p: string) => p.split(sep).some(seg => seg.startsWith('.') && seg !== '.' && seg !== '..');
+    // Checked before and after symlinks so neither a dot-path nor a link into one is read.
+    if (isHidden(resolve(args.path)) || isHidden(target)) {
+      throw new Error(`${args.path} is a hidden file or inside a hidden directory; upload_file does not read those`);
+    }
+    // A FIFO must not block open before the same-handle regular-file check can reject it.
+    const file = await open(target, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const info = await file.stat();
+      if (!info.isFile()) throw new Error(`${args.path} is not a regular file`);
+      if (info.size > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+      bytes = await file.readFile();
+      if (bytes.length > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+    } finally {
+      await file.close();
+    }
+  } else {
+    let b64 = args.base64!.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    if (b64.length % 4 === 2 || b64.length % 4 === 3) b64 += '='.repeat(4 - (b64.length % 4));
+    if (b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(b64)) {
+      throw new Error('File bytes must be nonempty and valid base64');
+    }
+    const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+    if ((b64.length / 4) * 3 - padding > UPLOAD_FILE_MAX_BYTES) throw tooLarge();
+    bytes = Buffer.from(b64, 'base64');
+  }
+  if (!bytes.length) throw new Error('File bytes must be nonempty and valid base64');
+  // Same resolution as the presign route, which refuses an unsupported type; keeping the PUT's
+  // type equal to the stored record keeps the S3 object consistent with it.
+  const resolved = resolveSupportedMimeType(fileName, args.contentType);
+  if (!resolved.supported) {
+    throw new Error(
+      `Unsupported file type for ${fileName}` +
+        (fileName.includes('.') ? '' : '; pass contentType for a name without an extension')
+    );
+  }
+  const mimeType = resolved.mimeType;
+  if (args.projectId) {
+    // A failed lookup must not block the upload; the project route still enforces the scope.
+    const scopes = await client.getOwnKeyScopes().catch(() => undefined);
+    if (scopes && !scopes.includes(ApiKeyScope.WRITE_PROJECTS)) {
+      throw new Error('projectId requires an API key with the projects:write scope');
+    }
+  }
+  const response = await client.requestFileUpload({ fileName, fileSize: bytes.length, mimeType });
+  const upload = response.files[0];
+  if (!upload?.fileId || !upload.url) throw new Error('File upload request returned no upload URL');
+  const fileId = upload.fileId;
+  try {
+    await client.uploadFileBytes(upload.url, bytes, mimeType);
+  } catch (err) {
+    await client.deleteFile(fileId).catch(() => {});
+    throw new Error(`Upload for file ${fileId} failed: ${mapApiError(err, client.baseURL, 'files:write')}`);
+  }
+  try {
+    if (args.projectId) await client.attachFileToProject(fileId, args.projectId);
+  } catch (err) {
+    throw new Error(
+      `File ${fileId} was uploaded but association failed: ${mapApiError(err, client.baseURL, 'projects:write')}`
+    );
+  }
+  return { fileId, ingestionState: 'pending' as const };
+}
+
 export async function generateSoundEffect(
   client: B4mApiClient,
   args: { text: string; provider: string; durationSeconds?: number; promptInfluence?: number; format?: string }
@@ -621,7 +781,7 @@ export interface PollOptions<T = QuestResponse> {
 }
 
 const IMAGE_POLL_INTERVAL_MS = 2000;
-// Renders typically finish well under a minute; the cap only stops a wedged quest from
+// Renders typically finish well under a minute; the cap only stops a wedged job from
 // holding the tool call open indefinitely.
 const IMAGE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const CHAT_POLL_INTERVAL_MS = 2000;
@@ -642,13 +802,24 @@ const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(res
 const chatPollInterval = (elapsedMs: number, intervalMs: number) =>
   elapsedMs < CHAT_POLL_FAST_WINDOW_MS ? intervalMs : Math.max(intervalMs, CHAT_POLL_SLOW_INTERVAL_MS);
 
+/**
+ * Only a cancel stops the job. A running one refuses with a 409 and finishes, which is expected; any other failure
+ * leaves a job running that the caller aborted, so it is logged.
+ */
+async function cancelImageJobAfterAbort(client: B4mApiClient, jobId: string, ref: string): Promise<void> {
+  try {
+    await client.cancelImageJob(jobId);
+  } catch (err) {
+    if (err instanceof B4mApiError && err.status === 409) return;
+    logger.warn(
+      `mcp: cancelling the aborted image job failed (${ref}): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 // A failed dispatch (ChatCompletionInvoke) writes `type: 'error'` without touching `status`, which
 // stays 'running', so the type check is what ends the poll on it.
 const isSettled = (q: QuestResponse) => q.status === 'done' || q.status === 'stopped' || q.type === 'error';
-
-// `status` is optional on the poll response; a render that already carries its images is
-// finished whatever its status says.
-const isImageSettled = (q: QuestResponse) => isSettled(q) || (!q.status && !!q.images?.length);
 
 // Derived here rather than read from the poll's `reply` because older servers return the stored
 // scalar, which can be a stale rapid-reply prefix of the streamed slots.
@@ -760,49 +931,64 @@ async function pollQuest(
   return outcome.value;
 }
 
+const TERMINAL_IMAGE_FAILURES = new Set(['failed', 'blocked', 'cancelled']);
+
+// A succeeded job whose saved file is still being scanned has no url yet, so keep polling past it.
+const isImageJobSettled = (job: PublicImageJob) =>
+  TERMINAL_IMAGE_FAILURES.has(job.state) || (job.state === 'succeeded' && job.output?.availability !== 'pending_scan');
+
 /**
- * Queue an image render and poll its quest to completion. A failed render still
- * resolves `status: 'done'`, so `type: 'error'` (reason in `reply`) is the failure signal.
- * Generated images are not FabFiles, so there is no file id: the quest id is the handle,
- * and each image is its generated-file name plus the URL the quest poll resolves for it
- * (`fileUrl` is a short-lived presigned URL, valid for about an hour).
+ * Create an image job and poll it to completion. The image lands in the user's Files, so the
+ * handle is the job id plus the file id and a short-lived signed URL.
  */
 export async function generateImage(
   client: B4mApiClient,
-  args: Parameters<B4mApiClient['generateImage']>[0],
-  { intervalMs = IMAGE_POLL_INTERVAL_MS, timeoutMs = IMAGE_POLL_TIMEOUT_MS, ...poll }: PollOptions = {}
+  args: Parameters<B4mApiClient['createImageJob']>[0],
+  {
+    intervalMs = IMAGE_POLL_INTERVAL_MS,
+    timeoutMs = IMAGE_POLL_TIMEOUT_MS,
+    baseURL = '',
+    ...poll
+  }: PollOptions<PublicImageJob> = {}
 ) {
-  const ack = await client.generateImage(args);
-  const questId = ack.quest.id;
-  const ref = questRef(questId, ack.quest.sessionId);
-  const quest = await pollQuest(
-    client,
-    { questId, ref, task: 'image generation', scope: 'ai:generate', isFinished: isImageSettled },
-    { ...poll, timeoutMs, interval: () => intervalMs }
-  );
-
-  if (quest.status === 'stopped') {
-    throw new Error(`image generation was stopped (${ref})`);
+  const created = await client.createImageJob(args, randomUUID());
+  const ref = `image job ${created.id}`;
+  let outcome: Awaited<ReturnType<typeof pollUntil<PublicImageJob>>>;
+  try {
+    outcome = await pollUntil(
+      {
+        read: () => client.getImageJob(created.id),
+        ref,
+        task: 'image generation',
+        isFinished: isImageJobSettled,
+        describeError: err => mapApiError(err, baseURL, 'ai:generate'),
+      },
+      { ...poll, timeoutMs, interval: () => intervalMs }
+    );
+  } catch (err) {
+    if (poll.signal?.aborted) await cancelImageJobAfterAbort(client, created.id, ref);
+    throw err;
   }
-  if (quest.type === 'error') {
-    const code = quest.errorCode ? `${quest.errorCode}: ` : '';
-    throw new Error(`${code}${quest.reply || 'image generation failed'} (${ref})`);
+  if (!outcome.finished) {
+    throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
   }
 
-  const urls = new Map((quest.files ?? []).map(f => [f.name, f.url]));
-  const images = (quest.images ?? [])
-    .filter(name => GENERATED_IMAGE_EXTENSION_RE.test(name))
-    .map(name => ({ fileName: name, fileUrl: urls.get(name) }));
-  if (images.length === 0) {
-    throw new Error(`${quest.reply || 'image generation finished without producing an image'} (${ref})`);
+  const job = outcome.value;
+  if (TERMINAL_IMAGE_FAILURES.has(job.state)) {
+    const code = job.error?.code ? `${job.error.code}: ` : '';
+    throw new Error(`${code}${job.error?.message || `image generation ${job.state}`} (${ref})`);
+  }
+  const output = job.output;
+  if (!output || output.availability !== 'ready' || !output.url) {
+    throw new Error(`image generation finished but the image is not available to download (${ref})`);
   }
 
   return {
-    notebookId: quest.sessionId ?? ack.quest.sessionId,
-    questId,
-    model: args.model,
-    enhancedPrompt: ack.enhancedPrompt,
-    images,
+    jobId: job.id,
+    model: job.model,
+    fileId: output.file_id,
+    url: output.url,
+    contentType: output.content_type,
   };
 }
 
@@ -876,14 +1062,16 @@ export async function publishArtifact(
   const artifactType = ArtifactTypeSchema.safeParse(artifact.type);
   if (!artifactType.success)
     throw new Error(`artifact ${artifact.id} has an unsupported type (${String(artifact.type)})`);
-  if (typeof artifact.userId !== 'string') throw new Error(`artifact ${artifact.id} has no owner to publish under`);
 
   const storedTitle = typeof artifact.title === 'string' ? artifact.title : '';
   const title = (args.title ?? storedTitle).trim().slice(0, PUBLISH_TITLE_MAX) || PUBLISH_FALLBACK_TITLE;
   const existing = await client.findPublishedArtifact(artifact.id);
+  // A reader without a grant gets no userId; they can only republish a page they already own.
+  const ownerScope = existing?.scopeId ?? artifact.userId;
+  if (typeof ownerScope !== 'string') throw new Error(`artifact ${artifact.id} can only be published by its owner`);
   const request: UploadUrlRequest = {
     tier: existing?.tier ?? 'user',
-    scopeId: existing?.scopeId ?? artifact.userId,
+    scopeId: ownerScope,
     slug: existing?.slug ?? artifactSlug(title, artifact.id),
     title,
     visibility: args.visibility ?? existing?.visibility ?? PUBLISH_DEFAULT_VISIBILITY,
@@ -897,7 +1085,7 @@ export async function publishArtifact(
 
   const upload = draft.uploadUrls.find(u => u.path === PUBLISH_INDEX_PATH);
   if (!upload) throw new Error(`publish draft ${draft.draftId} returned no upload URL for ${PUBLISH_INDEX_PATH}`);
-  await client.uploadPublishDraftFile(upload.url, body, PUBLISH_INDEX_MIME);
+  await client.uploadPublishDraftFile(upload, body, PUBLISH_INDEX_MIME);
 
   const published = await client.finalizePublish(draft.draftId);
   return {
@@ -1239,7 +1427,22 @@ export async function bobRunsLeft(client: B4mApiClient, args: { organizationId?:
  * API failure becomes a structured `isError` result carrying a friendly message
  * (see {@link mapApiError}) rather than throwing across the transport.
  */
-export function registerTools(server: McpServer, client: B4mApiClient): void {
+export function registerTools(mcpServer: McpServer, client: B4mApiClient): void {
+  const handles = new Map<string, RegisteredTool>();
+  toolHandles.set(mcpServer, handles);
+  const server = new Proxy(mcpServer, {
+    get(target, prop) {
+      if (prop === 'registerTool') {
+        return (name: string, ...rest: unknown[]) => {
+          const handle = (target.registerTool as (...args: unknown[]) => RegisteredTool)(name, ...rest);
+          handles.set(name, handle);
+          return handle;
+        };
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
   const baseURL = client.baseURL;
   const meta = (name: string) => TOOL_META.find(t => t.name === name)!;
 
@@ -1371,6 +1574,12 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
   );
 
   server.registerTool(
+    'upload_file',
+    { title: meta('upload_file').title, description: meta('upload_file').description, inputSchema: uploadFileShape },
+    args => run('files:write', () => uploadFile(client, args))
+  );
+
+  server.registerTool(
     'generate_sound_effect',
     {
       title: meta('generate_sound_effect').title,
@@ -1436,7 +1645,7 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       description: meta('publish_artifact').description,
       inputSchema: publishArtifactShape,
     },
-    args => run('files:write', () => publishArtifact(client, args))
+    args => run('artifacts:publish', () => publishArtifact(client, args))
   );
 
   // Bob's routes enforce their scopes, so these map errors with mapBobApiError.
@@ -1529,4 +1738,7 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     },
     args => runBob('bob:read', () => bobRunsLeft(client, args))
   );
+
+  registerResearchTools(server, client, run);
+  registerFunctionTools(server, client);
 }

@@ -1,17 +1,18 @@
+import { SELF_HOST_SETTINGS_HINT } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { userRepository, withTransaction } from '@bike4mind/database';
+import { userRepository } from '@bike4mind/database';
+import { withTransactionThenEmail } from '@server/utils/withTransactionThenEmail';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userService } from '@bike4mind/services';
-import { EmailEvents } from '@server/utils/eventBus';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import {
   generateVerificationLink,
   getLogoUrl,
   buildEmailLogoImg,
   escapeHtml,
 } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
-import { logAuditEvent, EmailAuditEvents } from '@server/utils/auditLog';
-import { MailService } from '@server/utils/mailer';
+import { logAuditEvent, EmailAuditEvents } from '@bike4mind/server-utils/utils/auditLog';
+import { loadMailConfigStatus } from '@bike4mind/server-utils/utils/mailer/sender';
 
 // Requires authentication - users resend verification to themselves
 const handler = baseApi({ auth: true })
@@ -23,16 +24,16 @@ const handler = baseApi({ auth: true })
   )
   .post(
     asyncHandler(async (req, res) => {
-      // Check if email service is configured before attempting to send
-      const mailService = new MailService();
-      const emailConfig = mailService.getConfigStatus();
+      const emailConfig = await loadMailConfigStatus();
 
       if (!emailConfig.configured) {
         // Return different error messages based on user role
         if (req.user?.isAdmin) {
           return res.status(503).json({
             error: 'Email service not configured',
-            message: `Email service is not properly configured. Missing secrets: ${emailConfig.missingSecrets.join(', ')}. Configure these in your SST secrets.`,
+            message: `Email service is not properly configured. Missing secrets: ${emailConfig.missingSecrets.join(', ')}. ${
+              process.env.B4M_SELF_HOST === 'true' ? SELF_HOST_SETTINGS_HINT : 'Configure these in your SST secrets.'
+            }`,
             isConfigError: true,
             missingSecrets: emailConfig.missingSecrets,
           });
@@ -45,7 +46,7 @@ const handler = baseApi({ auth: true })
         }
       }
 
-      await withTransaction(async () => {
+      await withTransactionThenEmail(async queueEmail => {
         await userService.resendEmailVerification(
           { userId: req.user.id },
           {
@@ -104,7 +105,7 @@ const handler = baseApi({ auth: true })
           </body>
         </html>
       `;
-                await EmailEvents.Send.publish({
+                queueEmail({
                   to: user.email!,
                   subject: 'Verify Your Email Address',
                   body: emailBody,
@@ -124,9 +125,9 @@ const handler = baseApi({ auth: true })
           },
           req.logger
         );
-
-        return res.json({ message: 'Verification email resent successfully' });
       });
+
+      return res.json({ message: 'Verification email resent successfully' });
     })
   );
 

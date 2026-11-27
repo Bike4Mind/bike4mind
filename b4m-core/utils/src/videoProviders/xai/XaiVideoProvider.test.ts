@@ -176,7 +176,7 @@ describe('XaiVideoProvider specifics', () => {
     );
     await new XaiVideoProvider().submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(sent.image).toEqual({ url: `data:image/png;base64,${Buffer.from('png').toString('base64')}` });
@@ -187,7 +187,7 @@ describe('XaiVideoProvider specifics', () => {
     const provider = new XaiVideoProvider();
     const handle = await provider.submit(
       request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      { images: [{ role: 'first_frame', bytes: Buffer.from('png'), mimeType: 'image/png' }] },
       ctx()
     );
     expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'running' });
@@ -558,13 +558,13 @@ describe('XaiVideoProvider specifics', () => {
         { kind: 'url', url: 'http://vidgen.x.ai/clip.mp4', requiresAuth: false },
         ctx()
       )
-    ).rejects.toThrow('xai_untrusted_output_url');
+    ).rejects.toThrow('untrusted_output_url');
     server.use(
       http.get(VIDEO_URL, () => new HttpResponse(null, { status: 302, headers: { location: 'http://evil.example/x' } }))
     );
     await expect(
       new XaiVideoProvider().fetchOutput({ kind: 'url', url: VIDEO_URL, requiresAuth: false }, ctx())
-    ).rejects.toThrow('xai_untrusted_output_url');
+    ).rejects.toThrow('untrusted_output_url');
   });
 
   it.each([403, 404, 410])('fetchOutput throws ProviderOutputUnavailableError on %i (expired link)', async status => {
@@ -580,7 +580,7 @@ describe('XaiVideoProvider specifics', () => {
     server.use(http.get(VIDEO_URL, () => new HttpResponse(null, { status: 502 })));
     await expect(
       new XaiVideoProvider().fetchOutput({ kind: 'url', url: VIDEO_URL, requiresAuth: false }, ctx())
-    ).rejects.toThrow('xai_download_http_502');
+    ).rejects.toThrow('download_http_502');
   });
 
   it('never logs the api key', async () => {

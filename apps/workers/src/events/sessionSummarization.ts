@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { SessionEvents } from '@server/utils/eventBus';
+import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
 import {
   adminSettingsRepository,
   scopedSettingsRepository,
@@ -13,7 +13,7 @@ import {
   organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { OperationsModelService } from '@client/services/operationsModelService';
+import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import {
   AiEvents,
   ChatModelName,
@@ -26,9 +26,11 @@ import { BadRequestError, isStoppedBeforeReply } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
   const body = SessionEvents.Summarize.schema.parse(event.properties);
@@ -42,7 +44,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   if (!sessionId) {
-    logger.error(`Invalid message: ${body}`);
+    logger.error('Invalid message: sessionId is required');
     return;
   }
 
@@ -86,6 +88,12 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
+  const accessDenial = aiAccessDeniedMessage(requester ?? user) ?? aiAccessDeniedMessage(payer);
+  if (accessDenial) {
+    logger.warn(`Skipping summarization for session ${sessionId}: ${accessDenial}`);
+    return;
+  }
+
   // Before the LLM call, so a requester revoked while the job sat in the queue does not bill the
   // owner for a summary that the write below would refuse anyway.
   if (requester && !(await sessionRepository.shareable.findUpdateAccessById(requester, sessionId, writeOpts))) {
@@ -95,7 +103,7 @@ export const handler = withEventContext(async (event, logger) => {
 
   logger.info(`Handling summarization job for session ${sessionId} (as user ${userId ?? session.userId})`);
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel({ endUserId: user.id });
   logger.info(`Using operations model for summarizing: ${modelInfo.name} (${modelInfo.backend})`);
 
   const modelHasChanged = session.summaryModelId && session.summaryModelId !== modelId;
@@ -141,6 +149,9 @@ export const handler = withEventContext(async (event, logger) => {
     logger.debug(`No replayable quests to summarize for session ${sessionId}`);
     return;
   }
+
+  // After the nothing-to-summarize exits, so an idle notebook costs no billing reads.
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session summarization', logger }))) return;
 
   const content = replayableQuests
     .map(quest =>
@@ -192,41 +203,54 @@ export const handler = withEventContext(async (event, logger) => {
     if (completionInfo) lastCompletionInfo = completionInfo;
   });
 
-  await recordSessionOperationalUsage({
+  const completionEndTime = Date.now();
+  // Billed after the session write (or a terminal no-write exit), not before: a write that throws
+  // retries the event with a fresh model call, which would otherwise bill twice.
+  const usageArgs = {
+    operation: 'notebook_summary',
     user: payer,
     sessionId,
     modelId,
     modelInfo,
     completionInfo: lastCompletionInfo,
     startTime: completionStartTime,
+    endTime: completionEndTime,
     logger,
-  });
+  } as const;
 
   const summaryText = completionBuffers
     .map(text => text?.trim())
     .filter((text): text is string => Boolean(text))
     .join('\n');
 
+  // A completed call with no text (e.g. the model declined the content) is an outcome of this
+  // input, not a fault: retrying it reproduces it and parks the event in the session-enrichment
+  // DLQ. Keep the previous summary and stop here, before the session is mutated.
+  if (!summaryText) {
+    logger.warn(`Model returned no summary text for notebook ${session.id}; keeping the previous summary`, {
+      modelId,
+      stopReason: lastCompletionInfo?.stopReason ?? null,
+      outputTokens: lastCompletionInfo?.outputTokens ?? null,
+      hadPreviousSummary: Boolean(session.summary),
+    });
+    await recordSessionOperationalUsage(usageArgs);
+    return;
+  }
+
   session.summary = summaryText;
   session.summaryAt = new Date();
   session.summaryModelId = modelId as ChatModelName;
   session.summaryTrigger = trigger;
 
-  const summaryContent = session.summary;
-
-  if (!summaryContent) {
-    throw new Error(`Failed to generate summary for notebook ${session.id}`);
-  }
-
-  logger.info(`Summary: ${summaryContent}`);
+  logger.info('Summary generated', { sessionId: session.id, summaryLength: summaryText.length });
 
   // Create a FabFile for the summary so we can chunk and vectorize it to be
   // used for RAG prompting
   const fabFileData = {
     userId: session.userId,
     fileName: `[Automatic summary] ${session.name || 'Notebook'}.txt`,
-    fileContent: summaryContent,
-    fileSize: Buffer.byteLength(summaryContent),
+    fileContent: summaryText,
+    fileSize: Buffer.byteLength(summaryText),
     mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
     isPublic: false,
     type: KnowledgeType.FILE,
@@ -251,6 +275,7 @@ export const handler = withEventContext(async (event, logger) => {
   // Re-checks update access and not-deleted, so a revoke or delete during the completion drops the
   // result - and with it the FabFile, upload and tag job below.
   const written = await sessionRepository.updateWithUpdateAccess(writer, summaryFields, writeOpts);
+  await recordSessionOperationalUsage(usageArgs);
   if (!written) {
     logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summary write`);
     return;
@@ -390,13 +415,14 @@ export const handler = withEventContext(async (event, logger) => {
                 expiresIn: expireInSeconds,
               }),
           },
+          serverUpload: true,
         });
 
         if (!newFabFile.filePath) {
           throw new Error(`Failed to generate file path for notebook ${session.id} summary`);
         }
 
-        await getFilesStorage().upload(summaryContent, newFabFile.filePath, { ContentType: newFabFile.mimeType });
+        await getFilesStorage().upload(summaryText, newFabFile.filePath, { ContentType: newFabFile.mimeType });
       }
     });
   } catch (error) {

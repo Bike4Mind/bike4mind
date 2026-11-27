@@ -2,12 +2,17 @@ import z from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
-import { ApiErrorSchema, BillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { CompletionRunAttributionSchema } from './schemas/cliCompletions';
+import { ApiErrorSchema, MeteredBillingOrganizationForbiddenErrorSchema } from './schemas/chat';
+import { EndUserIdSchema } from './schemas/endUserId';
 import {
   extendGeneratedAudioResponseSchema,
   generatedAudioRequestFields,
   generatedAudioTooLargeSchema,
 } from './generatedAudio';
+
+// Conversational voice is configured remotely; this is its billing and admission identifier.
+export const CONVERSATIONAL_VOICE_MODEL_ID = 'elevenlabs';
 
 // Providers supported by the unified TTS API. Mirrors supportedImageGenerationVendor.
 export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
@@ -25,6 +30,18 @@ export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
   openai: 'OpenAI',
   elevenlabs: 'ElevenLabs',
 };
+
+/**
+ * When one spoken word (a whitespace-separated token of the input text) starts and ends, in ms from the start of
+ * the generated clip. Recorded on a speech job when its provider reports alignment (ElevenLabs does).
+ */
+export const SpeechWordTimingSchema = z.object({
+  text: z.string().min(1),
+  startMs: z.number().int().nonnegative(),
+  endMs: z.number().int().nonnegative(),
+});
+
+export type SpeechWordTiming = z.infer<typeof SpeechWordTimingSchema>;
 
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
@@ -45,10 +62,13 @@ export const VOICE_VENDOR_SUPPORTED_FORMATS: Record<VoiceGenerationVendor, Voice
   elevenlabs: ['mp3', 'pcm', 'opus'],
 };
 
-// Per-provider max input length (characters). OpenAI hard-caps at 4096;
-// ElevenLabs accepts more (model-dependent, up to 10k on multilingual v2). Each
-// vendor service enforces its own limit so no provider is needlessly throttled
-// to another's ceiling.
+// Per-provider max input length (characters). OpenAI: tts-1 hard-caps at 4096
+// chars; gpt-4o-mini-tts caps at 2000 tokens, which 4096 chars stays under for
+// most scripts (English is ~700 tokens). A char cap cannot express a token
+// limit, so dense scripts (long CJK) are left to OpenAI to reject rather than
+// capping every caller below what tts-1 accepts. ElevenLabs accepts more
+// (model-dependent, up to 10k on multilingual v2). Each vendor service enforces
+// its own limit so no provider is needlessly throttled to another's ceiling.
 export const TTS_MAX_INPUT_CHARS: Record<VoiceGenerationVendor, number> = {
   openai: 4096,
   elevenlabs: 10000,
@@ -96,10 +116,29 @@ export const ttsRequestSchema = z.object({
         "organization: omit this or set it to the key's organization; any other value, null included, is " +
         'rejected with a 403 (`errorCode: billing_organization_mismatch`).'
     ),
+  end_user_id: EndUserIdSchema.optional(),
+  run: CompletionRunAttributionSchema.optional().describe(
+    "The completion run this call is made for. Its cost is claimed against that run's budget before the " +
+      'provider is called, and the call is refused with 422 `run_budget_exhausted` when it does not fit.'
+  ),
   ...generatedAudioRequestFields,
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
+
+/** A speech job's request: the synthesis fields of ttsRequestSchema, without a route's delivery and billing options. */
+export const speechJobRequestSchema = ttsRequestSchema.pick({
+  text: true,
+  provider: true,
+  model: true,
+  voice: true,
+  format: true,
+  stability: true,
+  similarityBoost: true,
+  languageCode: true,
+});
+
+export type SpeechJobRequest = z.infer<typeof speechJobRequestSchema>;
 
 /**
  * JSON body of `POST /api/ai/tts` for `encoding: 'base64'`: the shared generated-audio
@@ -124,16 +163,23 @@ export type TtsBase64Response = z.infer<typeof ttsBase64ResponseSchema>;
  * `insufficient_credits` rides the 422 and means the same thing it does on
  * /api/ai/music and every other credit-metered endpoint. The two provider codes
  * are easy to invert: `provider_not_configured` means WE have no usable key,
- * `provider_rejected` means the provider REFUSED the key we sent.
+ * `provider_rejected` means the provider REFUSED the key we sent. A call sent with a `run` adds
+ * `run_not_found` (404) and `run_budget_exhausted` (422, the run's budget has no room for the hold).
  */
 export const TTS_ERROR_CODES = [
   'insufficient_credits',
   'provider_not_configured',
   'provider_rejected',
+  'end_user_id_not_allowed',
+  'invalid_end_user_id',
+  // The 504 of a clip that outlasted the request and could never be retrieved (unretrievableAudioResponse).
+  'request_timeout',
+  'run_not_found',
+  'run_budget_exhausted',
 ] as const satisfies readonly ApiErrorCode[];
 
 /**
- * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429 and 502; the 413
+ * Error body for `POST /api/ai/tts`, shared by the 401, 422, 429, 502 and 504; the 413
  * has a shape of its own (`ttsResponseTooLargeSchema`). `errorCode` is present only
  * on the conditions that carry a classifier; an ordinary validation 422 has none.
  *
@@ -159,13 +205,16 @@ export const TTS_ERROR_CODES = [
  * enshrine in a schema.
  */
 /** 403 body: the `ai:generate` scope refusal (`required_scopes`), or a billing refusal. */
-export const ttsForbiddenResponseSchema = BillingOrganizationForbiddenErrorSchema.extend({
+export const ttsForbiddenResponseSchema = MeteredBillingOrganizationForbiddenErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
 });
 
 export const ttsErrorResponseSchema = ApiErrorSchema.extend({
   provider: supportedVoiceGenerationVendor.optional(),
   errorCode: z.enum(TTS_ERROR_CODES).optional(),
+  /** The job a 504 left running (see unretrievableAudioResponse). */
+  jobId: z.string().optional(),
+  message: z.string().optional(),
 });
 
 /**
@@ -196,7 +245,8 @@ export type TtsVoiceOption = {
 
 // Voices selectable for OpenAI TTS synthesis. Single source of truth reused by
 // the Settings voice audition and the in-app audio generator. These are the
-// realtime-API voices, a subset shared with the TTS API (both accept them).
+// realtime-API voices; the TTS API accepts them all only on gpt-4o-mini-tts
+// (tts-1 rejects cedar and marin), see TTS_DEFAULT_MODEL in voicePricing.ts.
 // ElevenLabs resolves its voice server-side from the user's stored voiceId, so
 // this list is OpenAI-only.
 export const AVAILABLE_TTS_VOICES: readonly TtsVoiceOption[] = [
@@ -206,3 +256,14 @@ export const AVAILABLE_TTS_VOICES: readonly TtsVoiceOption[] = [
   { value: 'marin', label: 'Marin', description: 'Natural and expressive (Female)' },
   { value: 'shimmer', label: 'Shimmer', description: 'Energetic and vibrant (Female)' },
 ] as const;
+
+/** What every pre-recorded voice sample says. */
+export const TTS_VOICE_SAMPLE_TEXT =
+  "Hello! This is how my voice sounds. I'm ready to help you with anything you need.";
+
+/**
+ * Where the client serves an OpenAI voice's pre-recorded sample (apps/client/public). OpenAI hosts
+ * no sample clips, so they are generated once by `pnpm --filter @bike4mind/scripts
+ * voice-samples:generate`; re-run it after adding a voice or changing TTS_DEFAULT_MODEL.openai.
+ */
+export const openAiVoiceSamplePath = (voice: string) => `/audio/voice-samples/openai/${voice}.mp3`;

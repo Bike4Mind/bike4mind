@@ -8,8 +8,11 @@ import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { orgSchema } from '../helpers/schemas.js';
-import { getErrorInfo } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { errorLogFields, getErrorInfo } from '../helpers/errors.js';
 import { TOOL_LIST_ORG_ISSUE_TYPES } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 export function registerIssueTypeTools(server: McpServer) {
   // LIST ORGANIZATION ISSUE TYPES - List available issue types for an organization
@@ -21,8 +24,6 @@ export function registerIssueTypeTools(server: McpServer) {
     },
     async ({ org }) => {
       try {
-        console.error(`[${TOOL_LIST_ORG_ISSUE_TYPES}] Fetching issue types for org: ${org}`);
-
         const result = await octokit.orgs.listIssueTypes({
           org,
         });
@@ -32,7 +33,7 @@ export function registerIssueTypeTools(server: McpServer) {
         });
       } catch (error) {
         const errorInfo = getErrorInfo(error);
-        console.error(`[${TOOL_LIST_ORG_ISSUE_TYPES}] Error:`, errorInfo.message);
+        log.error('failed', { toolName: TOOL_LIST_ORG_ISSUE_TYPES, ...errorLogFields(error) });
 
         return createErrorResponse(error, {
           organization: org,

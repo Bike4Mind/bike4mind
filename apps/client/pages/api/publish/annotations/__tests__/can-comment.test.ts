@@ -9,6 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => ({
   artifactLean: vi.fn(),
   loadLiveOwner: vi.fn(),
+  annotationLean: vi.fn(),
+  user: vi.fn(),
+  find: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -21,11 +24,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/optionalAuth', () => ({ optionalAuth: () => {} }));
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: () => ({ select: () => ({ lean: mocks.artifactLean }) }) },
+  Annotation: { find: mocks.find },
 }));
 vi.mock('@server/services/publish', () => ({
   checkVisibility: vi.fn(async () => ({ ok: true })),
   canAnnotate: () => false,
-  toPublishUser: () => undefined,
+  toPublishUser: mocks.user,
   requestHasGateProof: () => false,
   loadLiveOwner: mocks.loadLiveOwner,
 }));
@@ -71,6 +75,9 @@ describe('GET can-comment - owner check', () => {
       commentPolicy: 'open',
       accessGate: null,
     });
+    mocks.user.mockReturnValue(undefined);
+    mocks.annotationLean.mockResolvedValue([]);
+    mocks.find.mockReturnValue({ select: () => ({ lean: mocks.annotationLean }) });
   });
 
   it('answers for a live owner', async () => {
@@ -79,7 +86,20 @@ describe('GET can-comment - owner check', () => {
     const res = await run();
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ commentPolicy: 'open', canComment: false });
+    expect(res.body).toEqual({ commentPolicy: 'open', canComment: false, mineIds: [] });
+    expect(mocks.annotationLean).not.toHaveBeenCalled();
+  });
+
+  it("returns only the current viewer's annotation IDs without exposing author IDs", async () => {
+    mocks.loadLiveOwner.mockResolvedValue({ name: 'Owner' });
+    mocks.user.mockReturnValue({ id: 'u1' });
+    mocks.annotationLean.mockResolvedValue([{ _id: 'a1' }]);
+
+    const res = await run();
+
+    expect(res.body).toEqual({ commentPolicy: 'open', canComment: false, mineIds: ['a1'] });
+    expect(res.statusCode).toBe(200);
+    expect(mocks.find).toHaveBeenCalledWith({ publicId: 'pub1', authorId: 'u1', deletedAt: null });
   });
 
   it('404s when the owner account is gone, banned or suspended', async () => {

@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
+import { describe, it, expect, vi } from 'vitest';
 import { mathTool } from './index';
 
 const evaluate = mathTool.implementation().toolFn;
@@ -179,4 +180,45 @@ describe('math_evaluate', () => {
       expect(await failure('values = [3, 9, 4]; max(...values)')).toContain('Failed to evaluate math expression');
     });
   });
+});
+
+it.each(['m = [1,2,3]; m(1:3)', 'sin([1,2])', '[1,2;3]', '1 m + 2'])(
+  'returns a recoverable tool failure for invalid mathjs input: %s',
+  async expression => {
+    await expect(evaluate({ expression })).rejects.toBeInstanceOf(ExpectedToolError);
+  }
+);
+
+it('keeps a throw from the tool itself out of the expected failures', async () => {
+  vi.resetModules();
+  vi.doMock('mathjs', async importOriginal => {
+    const actual = await importOriginal<typeof import('mathjs')>();
+    return {
+      ...actual,
+      create: (...args: Parameters<typeof actual.create>) => ({
+        ...actual.create(...args),
+        evaluate: () => 1,
+        typeOf: () => {
+          throw new TypeError('formatter defect');
+        },
+      }),
+    };
+  });
+  try {
+    const { mathTool: isolated } = await import('./index');
+    const error = await isolated
+      .implementation()
+      .toolFn({ expression: '1 + 1' })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+    expect(error).toBeInstanceOf(Error);
+    // Fresh module graph: compare by name, as the adapters do, not by class identity.
+    expect(isExpectedToolError(error)).toBe(false);
+    expect((error as Error).message).toContain('formatter defect');
+  } finally {
+    vi.doUnmock('mathjs');
+    vi.resetModules();
+  }
 });

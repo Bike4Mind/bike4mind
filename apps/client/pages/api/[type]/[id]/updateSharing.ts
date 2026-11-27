@@ -2,7 +2,8 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { sharingService } from '@bike4mind/services';
-import { sessionRepository, fabFileRepository } from '@bike4mind/database';
+import { sessionRepository, fabFileRepository, organizationRepository } from '@bike4mind/database';
+import { browserFileStorage } from '@bike4mind/server-utils/files/browserFileSigner';
 import { z } from 'zod';
 
 interface SharingParams {
@@ -28,11 +29,14 @@ const handler = baseApi().put(
       throw new NotFoundError(`Unrecognized type ${type}`);
     }
 
-    // Write-access authorization lives in the service (shareable.findUpdateAccessById).
+    // Authorization lives in the service: share access, plus update access to change isGlobalWrite.
     const updatedDocument = await sharingService.updateDocumentSharing(
       req.user,
       { id, type, isGlobalRead, isGlobalWrite },
-      { db: { sessions: sessionRepository, fabFiles: fabFileRepository } }
+      {
+        db: { sessions: sessionRepository, fabFiles: fabFileRepository, organizations: organizationRepository },
+        storage: browserFileStorage(),
+      }
     );
 
     return res.json(updatedDocument);

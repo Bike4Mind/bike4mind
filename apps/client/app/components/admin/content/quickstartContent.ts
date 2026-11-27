@@ -71,8 +71,9 @@ const quickstartLines = (baseUrl: string): string[] => [
   '  -H "Content-Type: application/json" \\',
   '  -d \'{ "file_name": "report.pdf", "mime_type": "application/pdf", "file_size": 482133 }\'',
   '',
-  '# Upload to the returned URL (no Authorization header; the URL signature is the credential)',
-  'curl -X PUT "<upload_url>" -H "Content-Type: application/pdf" --data-binary @report.pdf',
+  '# Upload to the returned URL (no Authorization header; the URL signature is the credential).',
+  '# `If-None-Match: *` is required: the URL only creates the file, so a PUT without it gets 403',
+  'curl -X PUT "<upload_url>" -H "Content-Type: application/pdf" -H "If-None-Match: *" --data-binary @report.pdf',
   '',
   '# Check status: chunking + vectorization start on upload, and the file is',
   '# searchable once `chunkEmbeddingModelStampedAt` is set. /api/v1/files/$FILE_ID has no',
@@ -166,8 +167,8 @@ const quickstartLines = (baseUrl: string): string[] => [
   '## Full Reference',
   '',
   'For complete endpoint documentation and advanced recipes,',
-  'see the generated API docs at `/api/v1/docs` (request/response schemas), the **API Reference**',
-  'tab in the Admin panel (authentication, scopes, rate limits) or the API Cookbook.',
+  'see the generated API docs at `/api/v1/docs` (request/response schemas), the **API reference**',
+  'tab in the Admin panel (authentication, scopes, rate limits) or the API cookbook.',
 ];
 
 export const getQuickstartContent = (baseUrl: string): string => quickstartLines(baseUrl).join('\n');

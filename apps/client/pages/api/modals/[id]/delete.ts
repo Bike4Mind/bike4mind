@@ -1,13 +1,10 @@
 import { ModalModel } from '@bike4mind/database/social';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { modalAuditTitle } from '@client/server/tools/modalOperations';
+import { recordModalChanges } from '@client/server/tools/recordModalChanges';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { WhatsNewDistributionService } from '@server/services/whatsNewDistribution';
-import { emitModalGenerationMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { Logger } from '@bike4mind/observability';
-
-const logger = new Logger({ metadata: { service: 'modals/delete' } });
 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id: string | string[] }>(async (req, res) => {
@@ -19,34 +16,22 @@ const handler = baseApi().delete(
     if (!req.ability) throw new ForbiddenError('Ability not found');
     if (!req.ability.can('delete', ModalModel)) throw new ForbiddenError('Permission denied');
 
-    // Capture metadata before delete for S3 sync
-    const modal = isValidObjectId(id) ? await ModalModel.findById(id) : null;
-    if (!modal) throw new NotFoundError('Modal not found');
-
-    const isWhatsNewModal = modal.tags?.includes('whats-new');
-    const generatedDate = modal.generationMetadata?.generatedDate;
+    // Guard the cast: an invalid ObjectId would otherwise surface as a 500, not a 404.
+    if (!isValidObjectId(id)) throw new NotFoundError('Modal not found');
 
     const deletedModal = await ModalModel.findOneAndDelete({ _id: id });
     if (!deletedModal) throw new NotFoundError('Modal not found');
-
-    // Sync deletion to S3 distribution for What's New modals (non-critical)
-    // Must await to prevent Lambda from freezing before the operation completes
-    if (isWhatsNewModal && generatedDate) {
-      const key = `production/${generatedDate}.json`;
-
-      try {
-        await WhatsNewDistributionService.deleteModal(id, key);
-      } catch (error) {
-        logger.warn('Failed to sync modal deletion to S3 distribution', {
-          error: error instanceof Error ? error.message : String(error),
-          modalId: id,
-        });
-        // Awaited for the same reason as the S3 sync above.
-        await emitModalGenerationMetrics([
-          { name: 'S3SyncFailure', value: 1, dimensions: { operation: 'delete', modalId: id } },
-        ]);
-      }
-    }
+    await recordModalChanges(
+      req,
+      [
+        {
+          kind: 'deleted',
+          id: String(deletedModal._id),
+          title: modalAuditTitle(deletedModal),
+        },
+      ],
+      'admin-modals'
+    );
 
     return res.status(200).json(deletedModal);
   })

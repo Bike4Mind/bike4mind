@@ -1,18 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import AdminApiKeysModal from './AdminApiKeysModal';
 import { toast } from 'sonner';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const h = vi.hoisted(() => ({
   keys: [] as Record<string, unknown>[],
   hookArgs: [] as unknown[],
   liveUsage: {} as Record<string, { minute: number; day: number; minuteResetAt?: number; dayResetAt?: number }>,
   resetMutate: vi.fn(),
-  // Auto-invokes onOk so the confirm-then-mutate flow runs synchronously;
-  // individual tests override the implementation to model a dismissal.
-  confirmRun: vi.fn((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.()),
+  loading: false,
+  error: null as Error | null,
+  refetch: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
@@ -20,16 +21,12 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
     h.hookArgs = args;
     return {
       data: { apiKeys: h.keys, liveUsage: h.liveUsage },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
+      isLoading: h.loading,
+      error: h.error,
+      refetch: h.refetch,
     };
   },
-  useAdminResetApiKeyRateLimit: () => ({ mutate: h.resetMutate, isPending: false }),
-}));
-
-vi.mock('@client/app/hooks/useConfirmation', () => ({
-  useConfirmation: () => h.confirmRun,
+  useAdminResetApiKeyRateLimit: () => ({ mutateAsync: h.resetMutate, isPending: false }),
 }));
 
 vi.mock('sonner', () => ({
@@ -65,8 +62,11 @@ beforeEach(() => {
   h.keys = [];
   h.liveUsage = {};
   h.resetMutate.mockReset();
-  h.confirmRun.mockClear();
-  h.confirmRun.mockImplementation((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.());
+  h.resetMutate.mockResolvedValue({ success: true, id: 'k1' });
+  h.loading = false;
+  h.error = null;
+  h.refetch.mockClear();
+  useUser.setState({ currentUser: { id: 'admin1', isAdmin: true } as never });
   // Without this, a test asserting a bare toast string can pass on a PRIOR test's stale call
   // instead of its own - vi.mock's module-level toast object is shared across every test in
   // this file and is otherwise never reset.
@@ -79,6 +79,13 @@ afterEach(() => {
 });
 
 describe('AdminApiKeysModal', () => {
+  const confirmReset = async () => {
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-reason-input-preset-0'));
+    await act(async () => fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')));
+    expect(h.resetMutate).toHaveBeenCalled();
+  };
+
   it('renders each key with its live counters', () => {
     h.keys = [KEY, { ...KEY, id: 'k2', name: 'idle key', status: 'disabled' }];
     h.liveUsage = { k1: { minute: 3, day: 42 }, k2: { minute: 0, day: 0 } };
@@ -90,6 +97,18 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-k1').textContent).toContain('42/1000 per day');
     expect(screen.getByTestId('admin-api-key-status-k1').textContent).toBe('Active');
     expect(screen.getByTestId('admin-api-key-status-k2').textContent).toBe('Disabled');
+  });
+
+  it('summarizes long scope lists without expanding the table row', () => {
+    h.keys = [{ ...KEY, scopes: ['notebooks:read', 'files:read', 'projects:write'] }];
+    renderModal();
+
+    expect(screen.getByTestId('admin-api-key-scopes-k1')).toHaveTextContent('3 scopes');
+    expect(screen.getByTestId('admin-api-key-scopes-k1')).toHaveAttribute(
+      'title',
+      'notebooks:read, files:read, projects:write'
+    );
+    expect(screen.getByTestId('admin-api-key-row-k1')).not.toHaveTextContent('projects:write');
   });
 
   it('shows the reset time for each open window', () => {
@@ -153,6 +172,13 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-usage-day-k1').textContent).not.toContain('resets in');
   });
 
+  it('retries a failed key list through the table action', () => {
+    h.error = new Error('Request failed');
+    renderModal();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(h.refetch).toHaveBeenCalledOnce();
+  });
+
   it('flags an active key whose live counter sits at its limit as rate limited', () => {
     h.keys = [KEY];
     h.liveUsage = { k1: { minute: 60, day: 500 } };
@@ -161,125 +187,131 @@ describe('AdminApiKeysModal', () => {
     expect(screen.getByTestId('admin-api-key-status-k1').textContent).toBe('Rate limited');
   });
 
-  it('confirms with a danger dialog and resets the right key on OK', () => {
+  it('requires an audited reason and sends it with the reset, without offering Undo', async () => {
     h.keys = [KEY];
     renderModal();
 
     fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
-
-    expect(h.confirmRun).toHaveBeenCalledWith(expect.objectContaining({ type: 'danger' }));
+    expect(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')).toBeDisabled();
+    expect(screen.getByTestId('admin-api-keys-reset-dialog')).not.toHaveTextContent('Not stored yet');
+    expect(screen.getByTestId('admin-api-keys-reset-dialog')).toHaveTextContent('cannot be undone');
+    fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-reason-input-preset-0'));
+    await act(async () => fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')));
     expect(h.resetMutate).toHaveBeenCalledTimes(1);
-    expect(h.resetMutate.mock.calls[0][0]).toBe('k1');
+    expect(h.resetMutate).toHaveBeenCalledWith({ keyId: 'k1', reason: 'Support request' });
+    expect(screen.queryByTestId('undo-toast-undo-btn')).toBeNull();
   });
 
-  it('shows a bare success toast when neither counter was at its ceiling', () => {
+  it('composes a note with the selected reason for the audit trail', async () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({
-        success: true,
-        id: 'k1',
-        lockout: {
-          request: { minuteAtLimit: false, dayAtLimit: false },
-          management: { minuteAtLimit: false, dayAtLimit: false },
-        },
-      })
-    );
+    renderModal();
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-reason-input-preset-1'));
+    fireEvent.change(screen.getByTestId('admin-api-keys-reset-dialog-reason-input'), {
+      target: { value: 'owner confirmed the lockout' },
+    });
+    await act(async () => fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')));
+    expect(h.resetMutate).toHaveBeenCalledWith({
+      keyId: 'k1',
+      reason: 'Key locked out: owner confirmed the lockout',
+    });
+  });
+
+  it('shows a bare success toast when neither counter was at its ceiling', async () => {
+    h.keys = [KEY];
+    h.resetMutate.mockResolvedValue({
+      success: true,
+      id: 'k1',
+      lockout: {
+        request: { minuteAtLimit: false, dayAtLimit: false },
+        management: { minuteAtLimit: false, dayAtLimit: false },
+      },
+    });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    await confirmReset();
 
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
   });
 
-  it('names the counter that caused the lockout in the success toast', () => {
+  it('names the counter that caused the lockout in the success toast', async () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({
-        success: true,
-        id: 'k1',
-        lockout: {
-          request: { minuteAtLimit: true, dayAtLimit: false },
-          management: { minuteAtLimit: false, dayAtLimit: false },
-        },
-      })
-    );
+    h.resetMutate.mockResolvedValue({
+      success: true,
+      id: 'k1',
+      lockout: {
+        request: { minuteAtLimit: true, dayAtLimit: false },
+        management: { minuteAtLimit: false, dayAtLimit: false },
+      },
+    });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    await confirmReset();
 
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
       'Rate limit reset for "pipeline key" - request counter was at its ceiling'
     );
   });
 
-  it('names the management counter alone when only it was at its ceiling', () => {
+  it('names the management counter alone when only it was at its ceiling', async () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({
-        success: true,
-        id: 'k1',
-        lockout: {
-          request: { minuteAtLimit: false, dayAtLimit: false },
-          management: { minuteAtLimit: false, dayAtLimit: true },
-        },
-      })
-    );
+    h.resetMutate.mockResolvedValue({
+      success: true,
+      id: 'k1',
+      lockout: {
+        request: { minuteAtLimit: false, dayAtLimit: false },
+        management: { minuteAtLimit: false, dayAtLimit: true },
+      },
+    });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    await confirmReset();
 
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
       'Rate limit reset for "pipeline key" - management counter was at its ceiling'
     );
   });
 
-  it('flags a counter that failed to clear as unverified, distinct from one confirmed clear', () => {
+  it('flags a counter that failed to clear as unverified, distinct from one confirmed clear', async () => {
     // An undefined entry means clearing that counter itself failed - it must not read as
     // "confirmed not at its ceiling", which would hide a clear failure behind a clean-looking
     // toast.
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({
-        success: true,
-        id: 'k1',
-        lockout: { request: undefined, management: { minuteAtLimit: false, dayAtLimit: false } },
-      })
-    );
+    h.resetMutate.mockResolvedValue({
+      success: true,
+      id: 'k1',
+      lockout: { request: undefined, management: { minuteAtLimit: false, dayAtLimit: false } },
+    });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    await confirmReset();
 
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
       'Rate limit reset for "pipeline key" - request counter could not be verified'
     );
   });
 
-  it('shows a bare success toast without throwing when the response has no lockout field (deploy skew)', () => {
+  it('shows a bare success toast without throwing when the response has no lockout field (deploy skew)', async () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({ success: true, id: 'k1' })
-    );
     renderModal();
 
-    expect(() => fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'))).not.toThrow();
+    await confirmReset();
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
   });
 
-  it('names both counters when both were at their ceiling', () => {
+  it('names both counters when both were at their ceiling', async () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({
-        success: true,
-        id: 'k1',
-        lockout: {
-          request: { minuteAtLimit: false, dayAtLimit: true },
-          management: { minuteAtLimit: true, dayAtLimit: false },
-        },
-      })
-    );
+    h.resetMutate.mockResolvedValue({
+      success: true,
+      id: 'k1',
+      lockout: {
+        request: { minuteAtLimit: false, dayAtLimit: true },
+        management: { minuteAtLimit: true, dayAtLimit: false },
+      },
+    });
     renderModal();
 
-    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    await confirmReset();
 
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
       'Rate limit reset for "pipeline key" - request and management counters were at their ceilings'
@@ -288,19 +320,81 @@ describe('AdminApiKeysModal', () => {
 
   it('does not reset when the confirmation is dismissed', () => {
     h.keys = [KEY];
-    h.confirmRun.mockImplementation(() => undefined);
     renderModal();
 
     fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    fireEvent.click(screen.getByTestId('admin-api-keys-reset-dialog-cancel-btn'));
+    expect(screen.queryByTestId('admin-api-keys-reset-dialog')).toBeNull();
+    expect(h.resetMutate).not.toHaveBeenCalled();
+  });
 
-    expect(h.confirmRun).toHaveBeenCalled();
+  it('keeps a failed reset open for retry', async () => {
+    h.keys = [KEY];
+    h.resetMutate.mockRejectedValue(new Error('reset failed'));
+    renderModal();
+    await confirmReset();
+    expect(screen.getByTestId('admin-api-keys-reset-dialog')).toBeTruthy();
+    expect(screen.getByTestId('admin-api-keys-reset-dialog-confirm-btn')).toBeEnabled();
+    expect(h.resetMutate).toHaveBeenCalledWith({ keyId: 'k1', reason: 'Support request' });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('renders skeletons while loading and an actionable error on failure', () => {
+    h.keys = [KEY];
+    h.loading = true;
+    const view = renderModal();
+    expect(screen.getAllByTestId('admin-table-skeleton-row').length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('admin-api-key-row-k1')).toBeNull();
+    h.loading = false;
+    h.error = new Error('unavailable');
+    view.rerender(
+      <CssVarsProvider theme={appTheme}>
+        <AdminApiKeysModal open onClose={vi.fn()} user={USER} />
+      </CssVarsProvider>
+    );
+    expect(screen.getByText('Failed to load API keys.')).toBeTruthy();
+    expect(screen.queryByTestId('admin-api-key-row-k1')).toBeNull();
+    fireEvent.click(screen.getByText('Try again'));
+    expect(h.refetch).toHaveBeenCalled();
+  });
+
+  it('enables a users:moderate delegate to reset an ordinary target key', () => {
+    h.keys = [KEY];
+    useUser.setState({
+      currentUser: { id: 'delegate', isAdmin: false, adminPermissions: ['users:moderate'] } as never,
+    });
+    renderModal();
+    expect(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+    expect(screen.getByTestId('admin-api-keys-reset-dialog')).toBeInTheDocument();
+  });
+
+  it('disables reset without users:moderate or on a protected admin target', () => {
+    h.keys = [KEY];
+    useUser.setState({ currentUser: { id: 'delegate', isAdmin: false, adminPermissions: ['support:read'] } as never });
+    const view = renderModal();
+    expect(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1')).toBeDisabled();
+    expect(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1').parentElement).toHaveAttribute(
+      'aria-label',
+      'Missing permission: users:moderate'
+    );
+    view.unmount();
+    useUser.setState({
+      currentUser: { id: 'delegate', isAdmin: false, adminPermissions: ['users:moderate'] } as never,
+    });
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <AdminApiKeysModal open onClose={vi.fn()} user={{ ...USER, isAdmin: true }} />
+      </CssVarsProvider>
+    );
+    expect(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1')).toBeDisabled();
     expect(h.resetMutate).not.toHaveBeenCalled();
   });
 
   it('shows the empty state for a user with no keys', () => {
     renderModal();
 
-    expect(screen.getByTestId('admin-api-keys-empty')).toBeTruthy();
+    expect(screen.getByTestId('admin-empty-state')).toHaveTextContent('This user has no API keys.');
     expect(screen.queryByTestId('admin-api-key-row-k1')).toBeNull();
   });
 });

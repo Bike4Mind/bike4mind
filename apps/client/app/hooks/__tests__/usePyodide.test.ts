@@ -28,6 +28,7 @@ vi.mock('@client/app/utils/pyodideManager', () => {
         plots: [],
         executionTime: 100,
       }),
+      callFunction: vi.fn().mockResolvedValue({ success: true, output: '', executionTime: 1 }),
       interrupt: vi.fn(),
       detectPackages: vi.fn((code: string) => {
         const packages: string[] = [];
@@ -75,13 +76,13 @@ describe('usePyodide', () => {
     const { pyodideManager } = await import('@client/app/utils/pyodideManager');
     publicConfigRef.current = { pyodideBaseUrl: 'http://mirror.local/pyodide/' };
     const { usePyodide } = await import('../usePyodide');
-    renderHook(() => usePyodide());
+    renderHook(() => usePyodide('artifact-a'));
     expect(pyodideManager.configure).toHaveBeenCalledWith('http://mirror.local/pyodide/');
   });
 
   it('should return initial state', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(result.current.isLoading).toBe(false);
     expect(result.current.loadProgress).toBe(0);
@@ -91,7 +92,7 @@ describe('usePyodide', () => {
 
   it('should provide initialize function', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(typeof result.current.initialize).toBe('function');
   });
@@ -99,7 +100,7 @@ describe('usePyodide', () => {
   it('should call pyodideManager.initialize when initialize is called', async () => {
     const { pyodideManager } = await import('@client/app/utils/pyodideManager');
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     await act(async () => {
       await result.current.initialize();
@@ -110,14 +111,14 @@ describe('usePyodide', () => {
 
   it('should provide execute function', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(typeof result.current.execute).toBe('function');
   });
 
   it('should provide interrupt function', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(typeof result.current.interrupt).toBe('function');
   });
@@ -125,7 +126,7 @@ describe('usePyodide', () => {
   it('should call pyodideManager.interrupt when interrupt is called', async () => {
     const { pyodideManager } = await import('@client/app/utils/pyodideManager');
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     act(() => {
       result.current.interrupt();
@@ -147,7 +148,7 @@ describe('usePyodide', () => {
 
     vi.mocked(pyodideManager.execute).mockResolvedValue(expectedResult);
 
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     let executionResult: typeof expectedResult | undefined;
 
@@ -158,9 +159,43 @@ describe('usePyodide', () => {
     expect(executionResult).toEqual(expectedResult);
   });
 
+  it('runs and calls as its owner, and as the new owner once the artifact changes', async () => {
+    const { pyodideManager } = await import('@client/app/utils/pyodideManager');
+    const { usePyodide } = await import('../usePyodide');
+    const { result, rerender } = renderHook(({ owner }) => usePyodide(owner), {
+      initialProps: { owner: 'artifact-a' },
+    });
+
+    await act(async () => {
+      await result.current.initialize();
+      await result.current.execute('print(1)', []);
+      await result.current.callFunction('code', { n: 1 }, []);
+    });
+    expect(pyodideManager.initialize).toHaveBeenLastCalledWith('artifact-a');
+    expect(pyodideManager.execute).toHaveBeenLastCalledWith('artifact-a', 'print(1)', []);
+    expect(pyodideManager.callFunction).toHaveBeenLastCalledWith(
+      'artifact-a',
+      'code',
+      [],
+      { n: 1 },
+      undefined,
+      undefined
+    );
+
+    rerender({ owner: 'artifact-b' });
+    await act(async () => {
+      await result.current.initialize();
+      await result.current.execute('print(2)', []);
+      await result.current.callFunction('code', null, []);
+    });
+    expect(pyodideManager.initialize).toHaveBeenLastCalledWith('artifact-b');
+    expect(pyodideManager.execute).toHaveBeenLastCalledWith('artifact-b', 'print(2)', []);
+    expect(pyodideManager.callFunction).toHaveBeenLastCalledWith('artifact-b', 'code', [], null, undefined, undefined);
+  });
+
   it('should detect packages from code', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     const packages = result.current.detectPackages('import numpy as np\nimport pandas as pd');
 
@@ -170,7 +205,7 @@ describe('usePyodide', () => {
 
   it('should provide isReady function', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(typeof result.current.isReady).toBe('function');
     expect(result.current.isReady()).toBe(false);
@@ -178,7 +213,7 @@ describe('usePyodide', () => {
 
   it('should provide getSupportedPackages function', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     const packages = result.current.getSupportedPackages();
 
@@ -191,7 +226,7 @@ describe('usePyodide', () => {
     const { pyodideManager } = await import('@client/app/utils/pyodideManager');
     const { usePyodide } = await import('../usePyodide');
 
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     await act(async () => {
       await result.current.execute('import numpy as np');
@@ -201,28 +236,28 @@ describe('usePyodide', () => {
     expect(pyodideManager.detectPackages).toHaveBeenCalledWith('import numpy as np');
 
     // execute should have been called with detected packages
-    expect(pyodideManager.execute).toHaveBeenCalledWith('import numpy as np', ['numpy']);
+    expect(pyodideManager.execute).toHaveBeenCalledWith('artifact-a', 'import numpy as np', ['numpy']);
   });
 
   it('should use provided packages if specified', async () => {
     const { pyodideManager } = await import('@client/app/utils/pyodideManager');
     const { usePyodide } = await import('../usePyodide');
 
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     await act(async () => {
       await result.current.execute('x = 1', ['scipy']);
     });
 
     // execute should have been called with provided packages
-    expect(pyodideManager.execute).toHaveBeenCalledWith('x = 1', ['scipy']);
+    expect(pyodideManager.execute).toHaveBeenCalledWith('artifact-a', 'x = 1', ['scipy']);
   });
 
   it('should subscribe to state changes on mount', async () => {
     const { pyodideManager } = await import('@client/app/utils/pyodideManager');
     const { usePyodide } = await import('../usePyodide');
 
-    renderHook(() => usePyodide());
+    renderHook(() => usePyodide('artifact-a'));
 
     expect(pyodideManager.subscribe).toHaveBeenCalled();
   });
@@ -234,7 +269,7 @@ describe('usePyodide', () => {
     const unsubscribeMock = vi.fn();
     vi.mocked(pyodideManager.subscribe).mockReturnValue(unsubscribeMock);
 
-    const { unmount } = renderHook(() => usePyodide());
+    const { unmount } = renderHook(() => usePyodide('artifact-a'));
 
     unmount();
 
@@ -243,14 +278,14 @@ describe('usePyodide', () => {
 
   it('should expose loadedPackages from state', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(result.current.loadedPackages).toBeInstanceOf(Set);
   });
 
   it('should expose isExecuting from state', async () => {
     const { usePyodide } = await import('../usePyodide');
-    const { result } = renderHook(() => usePyodide());
+    const { result } = renderHook(() => usePyodide('artifact-a'));
 
     expect(typeof result.current.isExecuting).toBe('boolean');
     expect(result.current.isExecuting).toBe(false);

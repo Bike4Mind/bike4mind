@@ -1,21 +1,26 @@
+import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
-import { eventBus } from './eventBus';
+import { completionEventsDeadLetter, eventBus } from './eventBus';
 import { slackQuestProcessor } from './functions';
 import { allSecrets } from './secrets';
+import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 import { lambdaVpc } from './vpc';
+import { websocketApi } from './websocket';
 
 // Web-originated completions ('completion.started') are no longer handled by a Lambda.
 // They are processed by the always-on ChatCompletion (see infra/chatCompletion.ts),
 // which the frontend reaches directly over HTTP. Slack-originated completions still route
 // through EventBridge -> slackQuestProcessor below, matched by their own detail type.
 
-eventBus.subscribe('slack-completion-start', slackQuestProcessor.arn, {
+// The function-side dead letter for SlackQuestProcessor is set on it in infra/functions.ts.
+const slackCompletionStartSubscription = eventBus.subscribe('slack-completion-start', slackQuestProcessor.arn, {
   pattern: {
     detailType: ['slack.completion.started'],
   },
+  transform: completionEventsDeadLetter.ruleTarget,
 });
 
-eventBus.subscribe(
+const createMementoSubscription = eventBus.subscribe(
   'create-memento',
   {
     handler: 'apps/workers/src/events/createMemento.handler',
@@ -29,12 +34,47 @@ eventBus.subscribe(
         actions: ['bedrock:*'],
         resources: ['*'],
       },
+      completionEventsDeadLetter.sendPermission,
     ],
     vpc: lambdaVpc,
+    transform: completionEventsDeadLetter.functionTarget,
   },
   {
     pattern: {
       detailType: ['completion.completed'],
     },
+    transform: completionEventsDeadLetter.ruleTarget,
   }
 );
+
+const slackQuickAskSubscription = eventBus.subscribe(
+  'slack-quick-ask',
+  {
+    handler: 'apps/workers/src/events/slackQuickAsk.handler',
+    runtime: 'nodejs24.x',
+    // initializeSlackPackage() reads the file/image buckets and websocket endpoint at cold start.
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, websocketApi, eventBus],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    // Admission claims prevent duplicate work; partial failures need inspection, not automatic replay.
+    retries: 0,
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...mailBodyEnvironment(appFilesBucket),
+    },
+    permissions: [completionEventsDeadLetter.sendPermission, mailBodyPutPermission(appFilesBucket)],
+    transform: completionEventsDeadLetter.functionTarget,
+  },
+  {
+    pattern: {
+      detailType: ['slack.quickAsk.requested'],
+    },
+    transform: completionEventsDeadLetter.ruleTarget,
+  }
+);
+
+completionEventsDeadLetter.allowRules([
+  slackCompletionStartSubscription,
+  createMementoSubscription,
+  slackQuickAskSubscription,
+]);

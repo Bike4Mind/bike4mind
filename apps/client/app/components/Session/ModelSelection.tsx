@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
+  Button,
   Typography,
   Radio,
   Stack,
@@ -14,13 +15,11 @@ import {
   IconButton,
   Tooltip,
 } from '@mui/joy';
-import {
-  Chat as ChatIcon,
-  Image as ImageIcon,
-  Videocam as VideoIcon,
-  StarRounded,
-  StarBorderRounded,
-} from '@mui/icons-material';
+import ChatIcon from '@mui/icons-material/Chat';
+import ImageIcon from '@mui/icons-material/Image';
+import VideoIcon from '@mui/icons-material/Videocam';
+import StarRounded from '@mui/icons-material/StarRounded';
+import StarBorderRounded from '@mui/icons-material/StarBorderRounded';
 import ClearIcon from '@mui/icons-material/Clear';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -37,20 +36,26 @@ import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 import { adminTabToSlug } from '@client/app/components/admin/adminTabSlugs';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
+import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
+import LockedModelsSection from './LockedModelsSection';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import FilterAltIcon from '@mui/icons-material/FilterAlt';
-import { ModelName, ModelInfo, ModelBackend, SpeechToTextModels, isModelDeprecated } from '@bike4mind/common';
+import {
+  ModelName,
+  ModelInfo,
+  ModelBackend,
+  SpeechToTextModels,
+  SELF_HOSTED_PICKER_GROUP,
+  isModelDeprecated,
+  pickerProviderGroup,
+} from '@bike4mind/common';
 import SearchIcon from '@mui/icons-material/Search';
 import { sortModelsForPicker } from '@client/app/utils/modelRanking';
 import { useTheme } from '@mui/joy';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import {
-  getModelPriceTier,
-  isOpenAIModel,
-  getModelSpeedFromStats,
-  isNewModel,
-} from '@client/app/utils/aiSettingsUtils';
+import { getModelPriceTier, getModelSpeedFromStats, isNewModel } from '@client/app/utils/aiSettingsUtils';
 import MetadataChip from './AISettings/MetaDataChips';
 import {
   BEDROCK_BADGE_BG,
@@ -110,6 +115,12 @@ const BACKEND_LOGOS: Record<string, string> = {
 // Function to get backend logo path
 const getBackendLogo = (backend: string): string | null => BACKEND_LOGOS[backend] || null;
 
+// Shared by the accessible and locked sections so one query filters both the same way.
+const modelMatchesSearch = (candidate: ModelInfo, searchLower: string) =>
+  !searchLower ||
+  candidate.name.toLowerCase().includes(searchLower) ||
+  !!candidate.description?.toLowerCase().includes(searchLower);
+
 // Global image cache to prevent re-requests
 const imageCache = new Map<string, string>();
 
@@ -161,76 +172,12 @@ interface ModelSelectionProps {
   stickyHeader?: React.ReactNode;
 }
 
-// Section label for models running on the operator's own hardware (self-host).
-export const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
+export const SELF_HOSTED_BACKEND = SELF_HOSTED_PICKER_GROUP;
 
-// Function to determine backend from model name/ID. Exported for grouping tests.
-export const getModelBackend = (model: ModelInfo): string => {
-  // Self-host: Ollama (text) and the local Stable-Diffusion backend (image) both
-  // run on the operator's hardware, so group them in a dedicated "Local /
-  // Self-Hosted" section rather than "Other". In the hosted product the same
-  // Ollama backend is remote, so this only applies when the bundle was built with
-  // B4M_SELF_HOST (inlined by next.config.mjs) - which is also the only context a
-  // local image model is enumerated in.
-  if (
-    (model.backend === ModelBackend.Ollama || model.backend === ModelBackend.LocalImage) &&
-    process.env.B4M_SELF_HOST === 'true'
-  ) {
-    return SELF_HOSTED_BACKEND;
-  }
-
-  const modelName = model.name.toLowerCase();
-  const modelId = model.id.toLowerCase();
-
-  // OpenAI models
-  if (isOpenAIModel(modelName)) {
-    return 'OpenAI';
-  }
-
-  // Anthropic models
-  if (modelName.includes('claude') || modelId.includes('claude')) {
-    return 'Anthropic';
-  }
-
-  // Google models
-  if (modelName.includes('gemini') || modelName.includes('bard') || modelId.includes('gemini')) {
-    return 'Google';
-  }
-
-  // Meta models
-  if (modelName.includes('llama') || modelId.includes('llama')) {
-    return 'Meta';
-  }
-
-  // xAI models
-  if (modelName.includes('grok') || modelId.includes('grok')) {
-    return 'xAI';
-  }
-
-  // Flux/BFL models
-  if (modelName.includes('flux') || modelId.includes('flux')) {
-    return 'Black Forest Labs';
-  }
-
-  // Moonshot models. Matches the Bedrock-served ids (moonshot./moonshotai.) too,
-  // so the direct and Bedrock copies group together under one maker.
-  if (modelName.includes('kimi') || modelId.includes('kimi') || modelId.startsWith('moonshot')) {
-    return 'Moonshot';
-  }
-
-  // DeepSeek models: first-party (deepseek-flash, deepseek-v4-pro) and the
-  // Bedrock-served rows (us.deepseek.r1-v1:0, deepseek.v3-v1:0) all contain
-  // "deepseek" in id/name. The Ollama-hosted deepseek-r1:latest also does, so it
-  // is excluded by backend here rather than by string, and is caught by the
-  // self-host branch above (or has no vendor grouping to speak of if a hosted
-  // deployment ever surfaced a remote Ollama model).
-  if (model.backend !== ModelBackend.Ollama && (modelName.includes('deepseek') || modelId.includes('deepseek'))) {
-    return 'DeepSeek';
-  }
-
-  // Default to "Other" if no match found
-  return 'Other';
-};
+// Section a model is filed under. Exported for grouping tests. B4M_SELF_HOST is read here because
+// next.config.mjs inlines it into this bundle.
+export const getModelBackend = (model: ModelInfo): string =>
+  pickerProviderGroup(model, process.env.B4M_SELF_HOST === 'true');
 
 // Display order of the provider sections. Anything absent sorts alphabetically after these.
 // Exported for the ordering test - the next provider added here gets a signal if it's forgotten.
@@ -687,8 +634,12 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     accessibleTextModels,
     accessibleImageModels,
     accessibleVideoModels,
+    lockedModels,
     isLoading: isConfigsLoading,
   } = useAccessibleModels();
+  const { openView: openBillingView } = useBillingView();
+  // The billing modal only mounts with credits enforced (BillingDeepLinkModals), so the CTA would open nothing otherwise.
+  const isBillingEnabled = !!useGetSettingsValue('enforceCredits');
   const theme = useTheme();
   const mode = theme.palette.mode;
   const isAdmin = useUser(s => s.isAdmin);
@@ -718,6 +669,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   const [userToggledBackends, setUserToggledBackends] = useState<Set<string>>(
     new Set(['Recommended', 'Favorites', 'OpenAI', 'Anthropic'])
   );
+
+  const [expandedOlderBackends, setExpandedOlderBackends] = useState<Set<string>>(new Set());
 
   // Memoize backend logos to prevent unnecessary re-renders and network requests
   const backendLogos = useMemo(() => {
@@ -764,120 +717,90 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     [favoriteModelIds, storedRecommendedIds, defaultModelId]
   );
 
-  const { filteredModels, hiddenPinnedModels, maxContextWindow, maxTokens, modelsByBackend, modelsByBackendAndType } =
-    useMemo(() => {
-      // Start with accessible models instead of all models
-      let availableModels: ModelInfo[] = [];
+  const { filteredModels, hiddenPinnedModels, maxContextWindow, maxTokens, modelsByBackend } = useMemo(() => {
+    // Start with accessible models instead of all models
+    let availableModels: ModelInfo[] = [];
 
-      if (showAllModels) {
-        availableModels = accessibleModels;
-      } else if (modelFilter === 'video') {
-        availableModels = accessibleVideoModels;
-      } else {
-        availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
-      }
+    if (showAllModels) {
+      availableModels = accessibleModels;
+    } else if (modelFilter === 'video') {
+      availableModels = accessibleVideoModels;
+    } else {
+      availableModels = imageModel ? accessibleImageModels : accessibleTextModels;
+    }
 
-      // Filter out excluded models
-      const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
+    // Filter out excluded models
+    const withoutExcluded = availableModels.filter(m => !EXCLUDED_MODEL_IDS.includes(m.id));
 
-      // Filter out deprecated models (e.g., models with deprecationDate in the past)
-      const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
+    // Filter out deprecated models (e.g., models with deprecationDate in the past)
+    const withoutDeprecated = withoutExcluded.filter(m => !isModelDeprecated(m));
 
-      // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
-      const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
+    // Bedrock profiles, dated snapshots and unavailable rows collapse to one usable row per model.
+    const deduped = dedupeModelsForPicker(withoutDeprecated, preferredModelIds, model);
 
-      const searchLower = debouncedSearchQuery.toLowerCase();
-      const matchesSearch = (candidate: ModelInfo) =>
-        !searchLower ||
-        candidate.name.toLowerCase().includes(searchLower) ||
-        !!candidate.description?.toLowerCase().includes(searchLower);
-      const searchFiltered = deduped.filter(matchesSearch);
+    const searchLower = debouncedSearchQuery.toLowerCase();
+    const matchesSearch = (candidate: ModelInfo) => modelMatchesSearch(candidate, searchLower);
+    const searchFiltered = deduped.filter(matchesSearch);
 
-      // Pinned sections can still show their exact ids when an enabled active twin wins the
-      // provider row. Keep their own access, availability and search filters in step.
-      const hiddenPinnedModels = withoutDeprecated.filter(
-        candidate =>
-          preferredModelIds.has(String(candidate.id)) &&
-          !deduped.includes(candidate) &&
-          (!candidate.disabled || candidate.id === model) &&
-          matchesSearch(candidate)
-      );
+    // Pinned sections can still show their exact ids when an enabled active twin wins the
+    // provider row. Keep their own access, availability and search filters in step.
+    const hiddenPinnedModels = withoutDeprecated.filter(
+      candidate =>
+        preferredModelIds.has(String(candidate.id)) &&
+        !deduped.includes(candidate) &&
+        (!candidate.disabled || candidate.id === model) &&
+        matchesSearch(candidate)
+    );
 
-      // Group models by backend for accordion view
-      const grouped = searchFiltered.reduce(
-        (acc, model) => {
-          const backend = getModelBackend(model);
-          if (!acc[backend]) {
-            acc[backend] = [];
-          }
-          acc[backend].push(model);
-          return acc;
-        },
-        {} as Record<string, ModelInfo[]>
-      );
+    // Group models by backend for accordion view
+    const grouped = searchFiltered.reduce(
+      (acc, model) => {
+        const backend = getModelBackend(model);
+        if (!acc[backend]) {
+          acc[backend] = [];
+        }
+        acc[backend].push(model);
+        return acc;
+      },
+      {} as Record<string, ModelInfo[]>
+    );
 
-      // Sort within each backend by curated rank, then recency (see modelRanking.ts)
-      Object.keys(grouped).forEach(backend => {
-        grouped[backend] = sortModelsForPicker(grouped[backend]);
-      });
+    // Sort within each backend by curated rank, then recency (see modelRanking.ts)
+    Object.keys(grouped).forEach(backend => {
+      grouped[backend] = sortModelsForPicker(grouped[backend]);
+    });
 
-      // Group models by backend and then by type for "All Models" view
-      const groupedByBackendAndType = searchFiltered.reduce(
-        (acc, model) => {
-          const backend = getModelBackend(model);
-          // Ensure consistent type categorization
-          const type = model.type === 'image' ? 'image' : model.type === 'video' ? 'video' : 'text';
+    // Flatten the sorted models
+    const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
 
-          if (!acc[backend]) {
-            acc[backend] = { text: [], image: [], video: [] };
-          }
+    // Find maximum values
+    let maxCtx = 0;
+    let maxTok = 0;
 
-          // Only add the model to the appropriate type section
-          acc[backend][type].push(model);
-          return acc;
-        },
-        {} as Record<string, { text: ModelInfo[]; image: ModelInfo[]; video: ModelInfo[] }>
-      );
+    searchFiltered.forEach(m => {
+      if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
+      if (m.max_tokens > maxTok) maxTok = m.max_tokens;
+    });
 
-      // Sort models within each backend and type by capability
-      Object.keys(groupedByBackendAndType).forEach(backend => {
-        groupedByBackendAndType[backend].text = sortModelsForPicker(groupedByBackendAndType[backend].text);
-        groupedByBackendAndType[backend].image = sortModelsForPicker(groupedByBackendAndType[backend].image);
-        groupedByBackendAndType[backend].video = sortModelsForPicker(groupedByBackendAndType[backend].video);
-      });
-
-      // Flatten the sorted models
-      const sorted = sortBackendsByPriority(Object.keys(grouped)).flatMap(backend => grouped[backend]);
-
-      // Find maximum values
-      let maxCtx = 0;
-      let maxTok = 0;
-
-      searchFiltered.forEach(m => {
-        if (m.contextWindow > maxCtx) maxCtx = m.contextWindow;
-        if (m.max_tokens > maxTok) maxTok = m.max_tokens;
-      });
-
-      return {
-        filteredModels: sorted,
-        hiddenPinnedModels,
-        maxContextWindow: maxCtx,
-        maxTokens: maxTok,
-        modelsByBackend: grouped,
-        modelsByBackendAndType: groupedByBackendAndType,
-      };
-    }, [
-      imageModel,
-      accessibleModels,
-      accessibleTextModels,
-      accessibleImageModels,
-      accessibleVideoModels,
-      modelFilter,
-      debouncedSearchQuery,
-      showAllModels,
-      preferredModelIds,
-      model,
-    ]);
+    return {
+      filteredModels: sorted,
+      hiddenPinnedModels,
+      maxContextWindow: maxCtx,
+      maxTokens: maxTok,
+      modelsByBackend: grouped,
+    };
+  }, [
+    imageModel,
+    accessibleModels,
+    accessibleTextModels,
+    accessibleImageModels,
+    accessibleVideoModels,
+    modelFilter,
+    debouncedSearchQuery,
+    showAllModels,
+    preferredModelIds,
+    model,
+  ]);
 
   // Auto-expand the selected model's backend when it changes
   useEffect(() => {
@@ -929,6 +852,34 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
   // lastUsedTextModel / lastUsedImageModel now ride along in buildModelSelectionPatch, which
   // setModel applies - see aiSettingsUtils.
+  const handleUpgrade = useCallback(() => {
+    onSelectionComplete?.();
+    openBillingView('plans');
+  }, [onSelectionComplete, openBillingView]);
+
+  // The free-tier gate locks every modality, so the locked group follows the type the list shows
+  // (same choice as `availableModels` above).
+  const shownLockedType: ModelInfo['type'] | null = showAllModels
+    ? null
+    : modelFilter === 'video'
+      ? 'video'
+      : imageModel
+        ? 'image'
+        : 'text';
+  const lockedPickerModels = useMemo(() => {
+    if (!lockedModels) return [];
+    const searchLower = debouncedSearchQuery.toLowerCase();
+    const shown = lockedModels.filter(
+      candidate =>
+        (shownLockedType === null || candidate.type === shownLockedType) &&
+        !isModelDeprecated(candidate) &&
+        !EXCLUDED_MODEL_IDS.includes(candidate.id) &&
+        modelMatchesSearch(candidate, searchLower)
+    );
+    // Same dedupe as the main list: drops disabled models (no plan unlocks them) and collapses twins.
+    return sortModelsForPicker(dedupeModelsForPicker(shown, new Set(), model));
+  }, [shownLockedType, lockedModels, debouncedSearchQuery, model]);
+
   const handleModelSelect = useCallback(
     (selectedModel: ModelInfo) => {
       setModel(selectedModel.id);
@@ -941,9 +892,9 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   // other, and a bare /admin would strip ?tab= if the page is already mounted. The picker
   // lives in a modal that would otherwise stay mounted over the admin page, hence the close callback.
   const handleManageModels = useCallback(() => {
-    setAdminTab(AdminTab.LLMDashboard);
+    setAdminTab(AdminTab.Models);
     onSelectionComplete?.();
-    navigate({ to: '/admin', search: { tab: adminTabToSlug(AdminTab.LLMDashboard) } });
+    navigate({ to: '/admin', search: { tab: adminTabToSlug(AdminTab.Models) } });
   }, [navigate, onSelectionComplete, setAdminTab]);
 
   // Scroll the currently-selected model card into view on first paint so the
@@ -1138,6 +1089,87 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           </Box>
           {renderModelCards(bedrock)}
         </Box>
+      </Box>
+    );
+  };
+
+  const renderProviderTypes = (backend: string, cards: ModelInfo[], section: string) => (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {(
+        [
+          ['text', 'Text Models', ChatIcon],
+          ['image', 'Image Generation Models', ImageIcon],
+          ['video', 'Video Generation Models', VideoIcon],
+        ] as const
+      ).map(([type, label, Icon]) => {
+        const typeModels = cards.filter(candidate =>
+          type === 'text' ? candidate.type !== 'image' && candidate.type !== 'video' : candidate.type === type
+        );
+        if (typeModels.length === 0) return null;
+        return (
+          <Box key={type}>
+            <Typography
+              level="h4"
+              sx={{
+                color: 'text.primary50',
+                fontSize: '14px',
+                fontWeight: '400',
+                mt: '8px',
+                ml: '8px',
+                mb: 2,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+              }}
+            >
+              <Icon sx={{ fontSize: '14px', color: 'text.primary50' }} />
+              {label}
+            </Typography>
+            {renderProviderModels(backend, typeModels, section === 'current' ? type : `${section}-${type}`)}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+
+  const renderProviderContent = (backend: string) => {
+    const cards = modelsByBackend[backend];
+    const currentModels = cards.filter(candidate => !candidate.isSuperseded);
+    const olderModels = cards.filter(candidate => candidate.isSuperseded);
+    const olderExpanded = !!debouncedSearchQuery || expandedOlderBackends.has(backend);
+    const selectedOlderModels = olderModels.filter(candidate => candidate.id === model);
+    return (
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {currentModels.length > 0 && renderProviderTypes(backend, currentModels, 'current')}
+        {olderModels.length > 0 && (
+          <Box data-testid={`older-models-section-${backend}`}>
+            <Button
+              variant="plain"
+              color="neutral"
+              data-testid={`older-models-toggle-${backend}`}
+              disabled={!!debouncedSearchQuery}
+              aria-expanded={olderExpanded}
+              aria-controls={`older-models-content-${backend}`}
+              endDecorator={<ExpandMoreIcon sx={{ transform: olderExpanded ? 'rotate(180deg)' : 'none' }} />}
+              onClick={() =>
+                setExpandedOlderBackends(previous => {
+                  const next = new Set(previous);
+                  if (next.has(backend)) next.delete(backend);
+                  else next.add(backend);
+                  return next;
+                })
+              }
+            >
+              Older models ({olderModels.length})
+            </Button>
+            <Box id={`older-models-content-${backend}`} hidden={!olderExpanded}>
+              {olderExpanded && renderProviderTypes(backend, olderModels, 'older')}
+            </Box>
+            {!olderExpanded && selectedOlderModels.length > 0 && (
+              <Box sx={{ mt: 2 }}>{renderModelCards(selectedOlderModels)}</Box>
+            )}
+          </Box>
+        )}
       </Box>
     );
   };
@@ -1390,7 +1422,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
           </Tooltip>
 
           {isAdmin && (
-            <Tooltip title="Manage models in the LLM Dashboard">
+            <Tooltip title="Manage models in Admin > Models">
               <IconButton
                 data-testid="model-selection-manage-models-btn"
                 onClick={handleManageModels}
@@ -1419,8 +1451,8 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
 
       {/* Models Grid */}
       {/* No access to any models */}
-      {!hasVisibleModels && !debouncedSearchQuery && (
-        <Box sx={{ padding: '32px', textAlign: 'center' }}>
+      {!hasVisibleModels && lockedPickerModels.length === 0 && !debouncedSearchQuery && (
+        <Box data-testid="model-selection-no-access" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-md" sx={{ color: 'text.primary', fontWeight: 500, mb: 1 }}>
             You don&apos;t have access to any AI models.
           </Typography>
@@ -1431,7 +1463,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       )}
 
       {/* No models found for search query */}
-      {!hasVisibleModels && debouncedSearchQuery && (
+      {!hasVisibleModels && lockedPickerModels.length === 0 && debouncedSearchQuery && (
         <Box data-testid="model-selection-no-results" sx={{ padding: '32px', textAlign: 'center' }}>
           <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
             No models found for &quot;{searchQuery}&quot;
@@ -1556,92 +1588,13 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                   }}
                 />
               </AccordionSummary>
-              <AccordionDetails>
-                {expandedBackends.has(backend) &&
-                  (modelsByBackendAndType[backend] ? (
-                    // Always show text/image sections within each backend
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {/* Text Models Section */}
-                      {modelsByBackendAndType[backend].text && modelsByBackendAndType[backend].text.length > 0 && (
-                        <Box>
-                          <Typography
-                            level="h4"
-                            sx={{
-                              color: 'text.primary50',
-                              fontSize: '14px',
-                              fontWeight: '400',
-                              mt: '8px',
-                              ml: '8px',
-                              mb: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                            }}
-                          >
-                            <ChatIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
-                            Text Models
-                          </Typography>
-                          {renderProviderModels(backend, modelsByBackendAndType[backend].text, 'text')}
-                        </Box>
-                      )}
-
-                      {/* Image Generation Models Section */}
-                      {modelsByBackendAndType[backend].image && modelsByBackendAndType[backend].image.length > 0 && (
-                        <Box>
-                          <Typography
-                            level="h4"
-                            sx={{
-                              color: 'text.primary50',
-                              fontSize: '14px',
-                              fontWeight: '400',
-                              mt: '8px',
-                              ml: '8px',
-                              mb: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                            }}
-                          >
-                            <ImageIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
-                            Image Generation Models
-                          </Typography>
-                          {renderProviderModels(backend, modelsByBackendAndType[backend].image, 'image')}
-                        </Box>
-                      )}
-
-                      {/* Video Generation Models Section */}
-                      {modelsByBackendAndType[backend].video && modelsByBackendAndType[backend].video.length > 0 && (
-                        <Box>
-                          <Typography
-                            level="h4"
-                            sx={{
-                              color: 'text.primary50',
-                              fontSize: '14px',
-                              fontWeight: '400',
-                              mt: '8px',
-                              ml: '8px',
-                              mb: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                            }}
-                          >
-                            <VideoIcon sx={{ fontSize: '14px', color: 'text.primary50' }} />
-                            Video Generation Models
-                          </Typography>
-                          {renderProviderModels(backend, modelsByBackendAndType[backend].video, 'video')}
-                        </Box>
-                      )}
-                    </Box>
-                  ) : (
-                    // Fallback to normal single-type view if grouping data is not available
-                    renderProviderModels(backend, modelsByBackend[backend], 'all')
-                  ))}
-              </AccordionDetails>
+              <AccordionDetails>{expandedBackends.has(backend) && renderProviderContent(backend)}</AccordionDetails>
             </Accordion>
           ))}
         </Box>
       )}
+
+      <LockedModelsSection models={lockedPickerModels} onUpgrade={isBillingEnabled ? handleUpgrade : undefined} />
     </Box>
   );
 };

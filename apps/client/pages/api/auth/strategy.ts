@@ -2,7 +2,7 @@ import { AuthStrategy, type IAuthProviders } from '@bike4mind/common';
 import { userRepository, identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isE2EEnabled } from '@bike4mind/server-utils/utils/config';
 
 // This endpoint's response necessarily varies by account existence (it routes
@@ -151,7 +151,7 @@ const handler = baseApi({ auth: false })
         requiresRedirect: false,
       });
     } catch (error) {
-      console.error('Auth strategy lookup error:', error);
+      req.logger.error('Auth strategy lookup error', { error });
       return res.status(500).json({ error: 'Internal server error' });
     }
   });

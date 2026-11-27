@@ -10,29 +10,46 @@ import {
   FormHelperText,
   FormLabel,
   Input,
+  Link,
   Option,
   Select,
   Stack,
+  Switch,
   Textarea,
   ToggleButtonGroup,
   Typography,
 } from '@mui/joy';
 import type {
-  IDataLakeResearchConfigDocument,
+  IDataLakeResearchConfigResponse,
   IDataLakeResearchRunDocument,
   ResearchPreset,
+  ResearchItemRuleAction,
+  ResearchDropBucket,
   ResearchPresetId,
+  ResearchRunLevers,
   ResearchRunTotals,
+  ResearchSource,
   ResearchScheduleCadence,
   ResearchScheduleOutcome,
   ResearchScheduleSkipReason,
+  ResearchUnlistedSources,
 } from '@bike4mind/common';
 import {
+  feedLabel,
+  cleanResearchItemRuleCondition,
   isResearchRunInFlight,
   RESEARCH_CONFIG_NAME_MAX_CHARS,
   RESEARCH_CONFIG_QUERY_MAX_CHARS,
+  RESEARCH_DROP_REASONS,
+  RESEARCH_FEED_URL_MAX_CHARS,
+  RESEARCH_ITEM_RULE_ACTIONS,
+  RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS,
+  RESEARCH_ITEM_RULES_MAX,
+  researchItemRuleKey,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
   RESEARCH_COST_CEILING_MICRO_USD_LIMIT,
+  RESEARCH_MAX_AUTO_ADMITS_DEFAULT,
+  RESEARCH_MAX_AUTO_ADMITS_LIMIT,
   RESEARCH_MAX_PROPOSALS_DEFAULT,
   RESEARCH_MAX_PROPOSALS_LIMIT,
   RESEARCH_MAX_RESULTS_DEFAULT,
@@ -45,12 +62,14 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
   RESEARCH_SCHEDULE_CADENCES,
+  normalizeDomainEntry,
+  upgradeLegacyResearchLevers,
 } from '@bike4mind/common';
 import type { ResearchConfigInput } from '@client/app/hooks/data/dataLakes';
 import type { ResearchModelOption } from '@client/app/utils/researchJudgeModels';
 
 export interface DataLakeResearchPanelProps {
-  configs: IDataLakeResearchConfigDocument[] | undefined;
+  configs: IDataLakeResearchConfigResponse[] | undefined;
   runs: IDataLakeResearchRunDocument[] | undefined;
   isLoading: boolean;
   error: unknown;
@@ -75,26 +94,80 @@ export interface DataLakeResearchPanelProps {
   onStartRun: (configId: string) => void;
   /** Whether the open create/edit form holds edits not yet saved, so the host can confirm before closing. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Absent, the held line shows no link: the host has no Proposals tab to open. */
+  onReviewProposals?: () => void;
 }
 
-/** Every field a string, because that is what a form holds; conversion happens once, at submit. */
+interface ItemRuleDraft {
+  condition: string;
+  action: ResearchItemRuleAction;
+}
+
+const ITEM_RULE_ACTION_LABEL: Record<ResearchItemRuleAction, string> = {
+  block: 'Block',
+  review: 'Send to review',
+};
+
+/** Every field a string (item rules are rows of strings), because that is what a form holds; conversion happens once, at submit. */
 interface ConfigDraft {
   name: string;
+  source: ResearchSource;
+  feedUrl: string;
   query: string;
   model: string;
   maxResults: string;
   maxProposals: string;
   recencyDays: string;
+  /** The percent as typed. Stored values are 0-1; see `minRelevanceFromDraft`. */
   minRelevance: string;
+  /** The stored value and how it displayed, so an unedited field saves the stored value untouched. */
+  minRelevanceBase: { text: string; value: number };
   costCeilingUsd: string;
-  allowedDomains: string;
+  trustedDomains: string;
+  autoAdmitTrusted: boolean;
+  maxAutoAdmits: string;
+  reviewDomains: string;
+  unlistedSources: ResearchUnlistedSources;
   blockedDomains: string;
+  itemRules: ItemRuleDraft[];
   proposedTags: string;
   cadence: ResearchScheduleCadence;
   reviewBacklogLimit: string;
 }
 
 const microUsdToUsdInput = (micro: number): string => (micro / 1_000_000).toFixed(2);
+
+/** Fixed one-decimal percent for the form field, so the same stored value always renders the same text. */
+const relevanceToPercentText = (value: number): string => (value * 100).toFixed(1);
+
+/** The percent in running text: no trailing ".0". */
+const relevanceToPercentLabel = (value: number): string => `${Number((value * 100).toFixed(1))}%`;
+
+const relevanceBase = (value: number): ConfigDraft['minRelevanceBase'] => ({
+  text: relevanceToPercentText(value),
+  value,
+});
+
+/** Unedited text keeps the stored value, so an API-set 0.123456 never drifts on an unrelated save. */
+const minRelevanceFromDraft = (draft: ConfigDraft): number => {
+  const trimmed = draft.minRelevance.trim();
+  if (trimmed === draft.minRelevanceBase.text) return draft.minRelevanceBase.value;
+  const percent = parseNumber(trimmed, RESEARCH_MIN_RELEVANCE_DEFAULT * 100);
+  return Math.round(percent * 10) / 1000;
+};
+
+const MIN_RELEVANCE_RANGE_ERROR = 'Enter a percent from 0 to 100.';
+const MIN_RELEVANCE_SCALE_ERROR = 'Enter a percent, for example 60';
+
+const minRelevanceError = (draft: ConfigDraft): string | undefined => {
+  const trimmed = draft.minRelevance.trim();
+  if (!trimmed || trimmed === draft.minRelevanceBase.text) return undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) return MIN_RELEVANCE_RANGE_ERROR;
+  // A fraction below 1 is the old 0-1 scale ("0.6"), which would silently save as 0.6 percent.
+  if (parsed < 1 && !Number.isInteger(parsed)) return MIN_RELEVANCE_SCALE_ERROR;
+  return undefined;
+};
 
 /**
  * Full precision, unlike `microUsdToUsdInput`: a saved ceiling can be sub-cent (e.g. $0.004), and
@@ -115,11 +188,20 @@ const formatCeiling = (micro: number): string =>
     ? `$${microUsdToUsdInput(micro)}`
     : formatSpend(micro);
 
+/** Approximate ceiling on runs per month; an hourly retry can carry one extra run across a month boundary. */
+const MAX_RUNS_PER_MONTH: Record<Exclude<ResearchScheduleCadence, 'off'>, number> = {
+  daily: 31,
+  weekly: 5,
+  monthly: 1,
+};
+
 const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>
   `${count} ${count === 1 ? singular : plural}`;
 
 const emptyDraft = (): ConfigDraft => ({
   name: '',
+  source: 'search',
+  feedUrl: '',
   query: '',
   model: '',
   // Seeded from the shared constants rather than hardcoded, so the form's idea of a default and the
@@ -127,32 +209,52 @@ const emptyDraft = (): ConfigDraft => ({
   maxResults: String(RESEARCH_MAX_RESULTS_DEFAULT),
   maxProposals: String(RESEARCH_MAX_PROPOSALS_DEFAULT),
   recencyDays: '',
-  minRelevance: String(RESEARCH_MIN_RELEVANCE_DEFAULT),
+  minRelevance: relevanceToPercentText(RESEARCH_MIN_RELEVANCE_DEFAULT),
+  minRelevanceBase: relevanceBase(RESEARCH_MIN_RELEVANCE_DEFAULT),
   costCeilingUsd: microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_DEFAULT),
-  allowedDomains: '',
+  trustedDomains: '',
+  autoAdmitTrusted: false,
+  maxAutoAdmits: String(RESEARCH_MAX_AUTO_ADMITS_DEFAULT),
+  reviewDomains: '',
+  unlistedSources: 'review',
   blockedDomains: '',
+  itemRules: [],
   proposedTags: '',
   cadence: 'off',
   reviewBacklogLimit: String(RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
 
-const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft => ({
-  name: config.name,
-  query: config.query,
-  model: config.model ?? '',
-  maxResults: String(config.maxResults),
-  maxProposals: String(config.maxProposals),
-  recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
-  minRelevance: String(config.minRelevance),
-  costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
-  allowedDomains: config.allowedDomains.join('\n'),
-  blockedDomains: config.blockedDomains.join('\n'),
-  proposedTags: config.proposedTags.join(', '),
-  // A config saved before this feature carries neither field on the wire - read that as off/default
-  // rather than leaving the form blank.
-  cadence: config.cadence ?? 'off',
-  reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
-});
+const draftFromConfig = (config: IDataLakeResearchConfigResponse): ConfigDraft => {
+  // A response from a server that predates the tiers carries only `allowedDomains`; the upgrader
+  // applies the same mapping the migration does, so the form shows the restriction that is in force.
+  const { trustedDomains, reviewDomains, unlistedSources, autoAdmitTrusted, maxAutoAdmits } =
+    upgradeLegacyResearchLevers(config);
+  return {
+    name: config.name,
+    source: config.source ?? 'search',
+    feedUrl: config.feedUrl ?? '',
+    query: config.query,
+    model: config.model ?? '',
+    maxResults: String(config.maxResults),
+    maxProposals: String(config.maxProposals),
+    recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
+    minRelevance: relevanceToPercentText(config.minRelevance),
+    minRelevanceBase: relevanceBase(config.minRelevance),
+    costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
+    trustedDomains: trustedDomains.join('\n'),
+    autoAdmitTrusted,
+    maxAutoAdmits: String(maxAutoAdmits),
+    reviewDomains: reviewDomains.join('\n'),
+    unlistedSources,
+    blockedDomains: config.blockedDomains.join('\n'),
+    itemRules: (config.itemRules ?? []).map(rule => ({ condition: rule.condition, action: rule.action })),
+    proposedTags: config.proposedTags.join(', '),
+    // A config saved before this feature carries neither field on the wire - read that as off/default
+    // rather than leaving the form blank.
+    cadence: config.cadence ?? 'off',
+    reviewBacklogLimit: String(config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
+  };
+};
 
 const parseList = (value: string): string[] =>
   value
@@ -203,8 +305,41 @@ const rangeError = (
 
 const costCeilingLimitUsd = RESEARCH_COST_CEILING_MICRO_USD_LIMIT / 1_000_000;
 
+const isHttpUrl = (value: string): boolean => {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+/** Row index -> index of the earlier row with the same rule (the server merges them, so a row would vanish). */
+const duplicateRuleRows = (rules: readonly ItemRuleDraft[]): Map<number, number> => {
+  const firstByKey = new Map<string, number>();
+  const duplicates = new Map<number, number>();
+  rules.forEach((rule, index) => {
+    if (!cleanResearchItemRuleCondition(rule.condition)) return;
+    const key = researchItemRuleKey(rule);
+    const first = firstByKey.get(key);
+    if (first === undefined) firstByKey.set(key, index);
+    else duplicates.set(index, first);
+  });
+  return duplicates;
+};
+
+/** Rules that will be saved: distinct and non-empty after cleaning. Invisible-only rows do not count. */
+const distinctRuleCount = (rules: readonly ItemRuleDraft[]): number =>
+  new Set(rules.filter(rule => cleanResearchItemRuleCondition(rule.condition)).map(rule => researchItemRuleKey(rule)))
+    .size;
+
 const validateDraft = (draft: ConfigDraft): DraftErrors => {
   const errors: DraftErrors = {
+    // A blank address is a missing field (see `missingRequired`), not an error shown on a fresh form.
+    feedUrl:
+      draft.source === 'feed' && draft.feedUrl.trim() && !isHttpUrl(draft.feedUrl.trim())
+        ? 'Enter a full address starting with http:// or https://.'
+        : undefined,
     maxResults: rangeError(draft.maxResults, {
       min: 1,
       max: RESEARCH_MAX_RESULTS_LIMIT,
@@ -223,12 +358,7 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       integer: true,
       message: `Enter a whole number of days from 1 to ${RESEARCH_RECENCY_DAYS_LIMIT}, or leave blank.`,
     }),
-    minRelevance: rangeError(draft.minRelevance, {
-      min: 0,
-      max: 1,
-      integer: false,
-      message: 'Enter a number from 0 to 1.',
-    }),
+    minRelevance: minRelevanceError(draft),
     costCeilingUsd: rangeError(draft.costCeilingUsd, {
       // The server floors the ceiling at 1 micro-USD; anything that rounds below it is not a ceiling.
       min: 0.000001,
@@ -236,6 +366,14 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       integer: false,
       message: `Enter an amount above $0 and up to $${microUsdToUsdInput(RESEARCH_COST_CEILING_MICRO_USD_LIMIT)}.`,
     }),
+    maxAutoAdmits: draft.autoAdmitTrusted
+      ? rangeError(draft.maxAutoAdmits, {
+          min: 1,
+          max: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+          integer: true,
+          message: `Enter a whole number from 1 to ${RESEARCH_MAX_AUTO_ADMITS_LIMIT}.`,
+        })
+      : undefined,
     reviewBacklogLimit: rangeError(draft.reviewBacklogLimit, {
       min: 1,
       max: RESEARCH_REVIEW_BACKLOG_LIMIT_MAX,
@@ -243,26 +381,86 @@ const validateDraft = (draft: ConfigDraft): DraftErrors => {
       message: `Enter a whole number from 1 to ${RESEARCH_REVIEW_BACKLOG_LIMIT_MAX}.`,
     }),
   };
+  if (
+    draft.itemRules.some(
+      rule => cleanResearchItemRuleCondition(rule.condition).length > RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS
+    )
+  ) {
+    errors.itemRules = `Keep each rule to ${RESEARCH_ITEM_RULE_CONDITION_MAX_CHARS} characters or fewer.`;
+  } else if (duplicateRuleRows(draft.itemRules).size > 0) {
+    errors.itemRules = 'Remove the repeated rules.';
+  } else if (distinctRuleCount(draft.itemRules) > RESEARCH_ITEM_RULES_MAX) {
+    errors.itemRules = `Keep to ${RESEARCH_ITEM_RULES_MAX} rules or fewer.`;
+  }
+  // Ignoring other sites with nothing listed would ignore every result.
+  if (draft.unlistedSources === 'drop' && parseList(draft.reviewDomains).length === 0) {
+    errors.unlistedSources = 'List at least one site to review, or send other sites to review.';
+  }
   return Object.fromEntries(Object.entries(errors).filter(([, message]) => message)) as DraftErrors;
+};
+
+const STOPS_NOW_NOTICE = 'Saved. Runs in progress stop adding results from removed or disabled sites now.';
+const NEXT_RUN_NOTICE = 'Saved. This applies from the next run.';
+
+/** What a save changes about auto-admit, split by when it takes effect on a run already in progress. */
+const autoAdmitTimingNotice = (before: ConfigDraft, after: ResearchConfigInput): string | null => {
+  const sites = (list: string[]) => new Set(list.map(normalizeDomainEntry));
+  const added = (previous: Set<string>, next: Set<string>) => [...next].some(site => !previous.has(site));
+  const wasOn = before.autoAdmitTrusted && parseList(before.trustedDomains).length > 0;
+  const nowOn = after.autoAdmitTrusted;
+  const oldTrusted = sites(parseList(before.trustedDomains));
+  const newTrusted = sites(after.trustedDomains ?? []);
+  // Only narrowing changes reach a running run: off, a removed trusted site, or a site newly
+  // blocked or sent to review.
+  const stopsNow =
+    wasOn &&
+    (!nowOn ||
+      added(newTrusted, oldTrusted) ||
+      added(sites(parseList(before.blockedDomains)), sites(after.blockedDomains ?? [])) ||
+      added(sites(parseList(before.reviewDomains)), sites(after.reviewDomains ?? [])));
+  const startsLater =
+    nowOn && (!wasOn || added(oldTrusted, newTrusted) || parseNumber(before.maxAutoAdmits, 0) !== after.maxAutoAdmits);
+  if (stopsNow && startsLater) return `${STOPS_NOW_NOTICE} ${NEXT_RUN_NOTICE.replace('Saved. ', '')}`;
+  if (stopsNow) return STOPS_NOW_NOTICE;
+  return startsLater ? NEXT_RUN_NOTICE : null;
 };
 
 const draftToInput = (draft: ConfigDraft): ResearchConfigInput => ({
   name: draft.name.trim(),
+  source: draft.source,
+  feedUrl: draft.source === 'feed' ? draft.feedUrl.trim() : null,
   query: draft.query.trim(),
   model: draft.model.trim() || null,
   maxResults: parseNumber(draft.maxResults, RESEARCH_MAX_RESULTS_DEFAULT),
   maxProposals: parseNumber(draft.maxProposals, RESEARCH_MAX_PROPOSALS_DEFAULT),
   recencyDays: parseNullableNumber(draft.recencyDays),
-  minRelevance: parseNumber(draft.minRelevance, RESEARCH_MIN_RELEVANCE_DEFAULT),
+  minRelevance: minRelevanceFromDraft(draft),
   costCeilingMicroUsd: Math.round(
     parseNumber(draft.costCeilingUsd, RESEARCH_COST_CEILING_MICRO_USD_DEFAULT / 1_000_000) * 1_000_000
   ),
-  allowedDomains: parseList(draft.allowedDomains),
+  trustedDomains: parseList(draft.trustedDomains),
+  // An empty trusted list leaves nothing to trust, so the switch cannot be on with it.
+  autoAdmitTrusted: draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0,
+  maxAutoAdmits: parseNumber(draft.maxAutoAdmits, RESEARCH_MAX_AUTO_ADMITS_DEFAULT),
+  reviewDomains: parseList(draft.reviewDomains),
+  unlistedSources: draft.unlistedSources,
   blockedDomains: parseList(draft.blockedDomains),
+  itemRules: draft.itemRules
+    .map(rule => ({ condition: cleanResearchItemRuleCondition(rule.condition), action: rule.action }))
+    .filter(rule => rule.condition),
   proposedTags: parseList(draft.proposedTags),
   cadence: draft.cadence,
   reviewBacklogLimit: parseNumber(draft.reviewBacklogLimit, RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT),
 });
+
+/** The proposal limit also bounds auto-admits (they are proposals first), so the lower number wins. */
+const autoAdmitCapHint = (cap: string, proposalLimit: string): string => {
+  const capValue = parseNumber(cap, RESEARCH_MAX_AUTO_ADMITS_DEFAULT);
+  const limitValue = parseNumber(proposalLimit, RESEARCH_MAX_PROPOSALS_DEFAULT);
+  return capValue > limitValue
+    ? `Up to ${limitValue} per run; the proposal limit applies.`
+    : `Up to ${capValue} per run.`;
+};
 
 const PRESET_LABEL: Record<ResearchPresetId, string> = {
   quick: 'Quick',
@@ -328,8 +526,13 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
   const pick = ({
     recencyDays,
     minRelevance,
-    allowedDomains,
+    trustedDomains,
+    autoAdmitTrusted,
+    maxAutoAdmits,
+    reviewDomains,
+    unlistedSources,
     blockedDomains,
+    itemRules,
     proposedTags,
     reviewBacklogLimit,
     cadence,
@@ -337,8 +540,13 @@ const hasNonPresetLeverSet = (draft: ConfigDraft): boolean => {
     JSON.stringify([
       recencyDays,
       minRelevance,
-      allowedDomains,
+      trustedDomains,
+      autoAdmitTrusted,
+      autoAdmitTrusted ? maxAutoAdmits : null,
+      reviewDomains,
+      unlistedSources,
       blockedDomains,
+      itemRules,
       proposedTags,
       // Only rendered with a schedule, so it cannot be the reason to unfold an unscheduled config.
       cadence === 'off' ? null : reviewBacklogLimit,
@@ -350,13 +558,14 @@ const presetSummary = (
   id: ResearchPresetId,
   offered: ReadonlyMap<string, string>,
   modelsLoading: boolean,
-  defaultModelLabel: string
+  defaultModelLabel: string,
+  source: ResearchSource
 ): string => {
   const preset = RESEARCH_PRESETS[id];
   const model = presetDraftModel(preset, offered, modelsLoading);
   return (
     `${model ? (offered.get(model) ?? model) : defaultModelLabel} judge \u00b7 up to ` +
-    `${pluralize(preset.maxResults, 'search result')} and ${pluralize(preset.maxProposals, 'proposal')} ` +
+    `${source === 'feed' ? pluralize(preset.maxResults, 'feed item') : pluralize(preset.maxResults, 'search result')} and ${pluralize(preset.maxProposals, 'proposal')} ` +
     `per run \u00b7 ${formatCeiling(preset.costCeilingMicroUsd)} ceiling`
   );
 };
@@ -376,12 +585,93 @@ const RUN_STATUS_COLOR = {
  * exception is `judge_unavailable`, which the run records as `failed`.
  */
 const STOP_REASON_LABEL = {
-  exhausted: 'Reviewed every search result',
-  cost_ceiling: 'Stopped at the cost ceiling',
-  proposal_limit: 'Reached the proposal limit',
-  time_budget: 'Stopped at the time budget',
-  judge_unavailable: 'Stopped: the relevance judge was unavailable',
+  exhausted: 'Went through every search result',
+  cost_ceiling: 'Stopped at the cost ceiling for one run. Raise Cost ceiling in Advanced settings to check more.',
+  proposal_limit: 'Reached the proposals limit for one run. Raise Proposals per run in Advanced settings to see more.',
+  time_budget: 'Stopped at the time limit for one run. The rest are checked next run.',
+  judge_unavailable: 'Stopped because the relevance judge was unavailable. No setting applies. Try again later.',
 } as const;
+
+/** The status chip in words. A completed run that hit a limit says so; `abandoned` is a run that stopped without settling. */
+const runStatusWord = (run: IDataLakeResearchRunDocument): string => {
+  const state = runStateLabel(run);
+  if (state === 'abandoned') return 'Did not finish';
+  if (state === 'completed') return run.stopReason && run.stopReason !== 'exhausted' ? 'Stopped early' : 'Finished';
+  return { queued: 'Queued', running: 'Running', failed: 'Failed' }[state];
+};
+
+const isFeedRun = (run: IDataLakeResearchRunDocument): boolean => run.levers.source === 'feed';
+
+const stopReasonLabel = (run: IDataLakeResearchRunDocument, reason: keyof typeof STOP_REASON_LABEL): string =>
+  reason === 'exhausted' && isFeedRun(run) ? 'Went through every new feed item' : STOP_REASON_LABEL[reason];
+
+/** The panel's name for each lever a drop bucket can point at, and how to show the value the run used. */
+const DROP_LEVER_NOUN: Partial<
+  Record<keyof ResearchRunLevers, { label: string; value?: (levers: IDataLakeResearchRunDocument['levers']) => string }>
+> = {
+  minRelevance: { label: 'Minimum relevance', value: levers => relevanceToPercentLabel(levers.minRelevance) },
+  blockedDomains: { label: 'Never these sites' },
+  unlistedSources: {
+    label: 'Other sites',
+    value: levers => (levers.unlistedSources === 'drop' ? 'Ignore' : 'Send to review'),
+  },
+  itemRules: { label: 'Item rules' },
+};
+
+const FOCUS_LEVER_TEST_ID = {
+  minRelevance: 'datalake-research-min-relevance-input',
+  blockedDomains: 'datalake-research-blocked-input',
+  unlistedSources: 'datalake-research-unlisted-select',
+  itemRules: 'datalake-research-rule-add',
+  costCeilingMicroUsd: 'datalake-research-cost-ceiling-input',
+  maxProposals: 'datalake-research-max-proposals-input',
+} as const;
+type FocusLever = keyof typeof FOCUS_LEVER_TEST_ID;
+
+const DROP_HINT_VERB = { raise: 'Raise', lower: 'Lower', edit_list: 'Check' } as const;
+
+/**
+ * One line for the run's largest drop bucket, naming the setting that explains it and the value the
+ * run actually used. Null when nothing was dropped or the largest bucket has no setting to point at.
+ */
+const runDropHintParts = (
+  run: IDataLakeResearchRunDocument
+): { text: string; lever: keyof ResearchRunLevers } | null => {
+  // The breaker sweep counts source drops that no setting explains, and the stop line already says so.
+  if (run.stopReason === 'judge_unavailable') return null;
+  const { totals } = run;
+  let top: ResearchDropBucket | null = null;
+  let topCount = 0;
+  for (const key of Object.keys(RESEARCH_DROP_REASONS) as ResearchDropBucket[]) {
+    const count = totals[key] ?? 0;
+    if (count > topCount) {
+      top = key;
+      topCount = count;
+    }
+  }
+  if (!top) return null;
+  // A run stored before the split counts both source drops in filteredBySource, so it cannot name one list.
+  if (top === 'filteredBySource' && totals.unlistedDropped === undefined) return null;
+  // filteredBySource also counts URLs with no usable host, which the Never list cannot explain when empty.
+  if (top === 'filteredBySource' && !run.levers.blockedDomains?.length) return null;
+  const { lever, direction, reason } = RESEARCH_DROP_REASONS[top];
+  const noun = lever ? DROP_LEVER_NOUN[lever] : undefined;
+  if (!lever || !direction || !noun) return null;
+  const value = noun.value ? ` (${noun.value(run.levers)})` : '';
+  const tail = direction === 'lower' ? ' to keep more' : '';
+  return { text: `${reason} ${DROP_HINT_VERB[direction]} ${noun.label}${value} in Advanced settings${tail}.`, lever };
+};
+
+const runDropHint = (run: IDataLakeResearchRunDocument): string | null => runDropHintParts(run)?.text ?? null;
+
+/** The form field a run row's "Adjust settings" should land on: the hinted lever, else the lever a stop reason names. */
+const runFocusLever = (run: IDataLakeResearchRunDocument): FocusLever | undefined => {
+  const hinted = runDropHintParts(run)?.lever;
+  if (hinted && hinted in FOCUS_LEVER_TEST_ID) return hinted as FocusLever;
+  if (run.stopReason === 'cost_ceiling') return 'costCeilingMicroUsd';
+  if (run.stopReason === 'proposal_limit') return 'maxProposals';
+  return undefined;
+};
 
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
 const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.startedAt ?? run.createdAt;
@@ -416,31 +706,41 @@ const SCHEDULE_CADENCE_LABEL: Record<Exclude<ResearchScheduleCadence, 'off'>, st
   monthly: 'monthly',
 };
 
+/** "Tue 3 Dec": a schedule slot is a day, and the clock time is noise on a card. */
+const formatNextRun = (value: Date | string | null | undefined): string => {
+  if (!value) return 'when you save a schedule';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+};
+
 /** A config saved before this feature carries neither field on the wire. */
-const configCadence = (config: IDataLakeResearchConfigDocument): ResearchScheduleCadence => config.cadence ?? 'off';
-const configReviewBacklogLimit = (config: IDataLakeResearchConfigDocument): number =>
+const configCadence = (config: IDataLakeResearchConfigResponse): ResearchScheduleCadence => config.cadence ?? 'off';
+const configReviewBacklogLimit = (config: IDataLakeResearchConfigResponse): number =>
   config.reviewBacklogLimit ?? RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT;
 
 /** Why the scheduler skipped a tick, in the manager's terms. No entry for `review_backlog` - the
- *  paused line above already covers that reason, and repeating it here would say the same thing twice. */
+ *  held line above already covers that reason, and repeating it here would say the same thing twice. */
 const SCHEDULE_SKIP_LABEL: Partial<Record<ResearchScheduleSkipReason, string>> = {
   run_in_progress: 'another run was in progress',
   daily_cap: 'the lake reached its daily run limit',
   insufficient_credits: 'the lake owner did not have enough credits',
   lake_inactive: 'the data lake is not active',
+  spend_frozen: 'spending is paused for the lake owner',
+  schedule_paused: 'the schedule was paused',
 };
 
 /**
  * The one line a config card shows for what the scheduler did the last time this config came due.
  * Null when there is nothing worth a separate line: a `started` tick needs no comment, and a
- * `review_backlog` skip is already the paused line above.
+ * `review_backlog` skip is already the held line above, and a `schedule_paused` skip is the Paused line.
  */
 const scheduleOutcomeMessage = (
   outcome: ResearchScheduleOutcome | null | undefined
 ): { text: string; color: 'danger' | 'neutral' } | null => {
   if (!outcome) return null;
   if (outcome.outcome === 'failed') return { text: outcome.error, color: 'danger' };
-  if (outcome.outcome === 'skipped' && outcome.reason !== 'review_backlog') {
+  if (outcome.outcome === 'skipped' && outcome.reason !== 'review_backlog' && outcome.reason !== 'schedule_paused') {
     return {
       text: `Last scheduled run was skipped: ${SCHEDULE_SKIP_LABEL[outcome.reason]}. It will be retried in about an hour.`,
       color: 'neutral',
@@ -454,7 +754,10 @@ const scheduleOutcomeMessage = (
  * Stops at the first non-failure, so one bad run sandwiched between two good ones reads as zero -
  * this is a "something is still broken" signal, not a lifetime failure tally.
  */
-const trailingScheduledFailureCount = (configId: string, runs: IDataLakeResearchRunDocument[] | undefined): number => {
+const trailingScheduledFailures = (
+  configId: string,
+  runs: IDataLakeResearchRunDocument[] | undefined
+): { count: number; lastError: string | null } => {
   const periodic = (runs ?? [])
     .filter(run => run.configId === configId && run.trigger === 'periodic')
     .sort((a, b) => new Date(runStartedAt(b)).getTime() - new Date(runStartedAt(a)).getTime());
@@ -463,7 +766,14 @@ const trailingScheduledFailureCount = (configId: string, runs: IDataLakeResearch
     if (run.status !== 'failed') break;
     count++;
   }
-  return count;
+  return { count, lastError: count > 0 ? (periodic[0].error ?? null) : null };
+};
+
+/** The failure line: how many scheduled runs failed in a row, and why the newest did. */
+const scheduledFailureText = (count: number, lastError: string | null): string => {
+  const head = count === 1 ? 'Last scheduled run failed' : `Last ${count} scheduled runs failed`;
+  if (!lastError) return head;
+  return count === 1 ? `${head}: ${lastError}` : `${head}. The latest: ${lastError}`;
 };
 
 /**
@@ -480,8 +790,14 @@ const runStateLabel = (run: IDataLakeResearchRunDocument): keyof typeof RUN_STAT
  * new drop bucket to the shared type fails THIS file to compile rather than silently vanishing from
  * the only place a manager can see it.
  */
-const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed'>, string> = {
-  filteredBySource: 'blocked by source rules',
+const DROP_REASON_LABEL: Record<
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'proposed' | 'autoAdmitted' | 'autoAdmitSkipped' | 'reviewedByRule'>,
+  string
+> = {
+  filteredBySource: 'on your Never these sites list',
+  unlistedDropped: 'from sites not on your lists (Other sites: Ignore)',
+  unresolvedRedirect: 'search link never revealed its site (skipped; usually clears on the next run)',
+  blockedByRule: 'blocked by an item rule',
   belowRelevance: 'below the relevance floor',
   judgeFailed: 'could not be judged (the model call failed)',
   alreadyInLake: 'already in the lake',
@@ -500,7 +816,7 @@ const DROP_REASON_LABEL: Record<Exclude<keyof ResearchRunTotals, 'searchHits' | 
  */
 const runConfigLabel = (
   run: IDataLakeResearchRunDocument,
-  configById: Map<string, IDataLakeResearchConfigDocument>
+  configById: Map<string, IDataLakeResearchConfigResponse>
 ): string => configById.get(run.configId)?.name || run.levers.query || 'Deleted configuration';
 
 /**
@@ -510,11 +826,24 @@ const runConfigLabel = (
  */
 const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
   const { totals } = run;
-  const parts: string[] = [`${totals.searchHits} found`, `${totals.proposed} proposed`];
+  const feedRun = isFeedRun(run);
+  const parts: string[] = [
+    feedRun ? pluralize(totals.searchHits, 'new item') : `${totals.searchHits} found`,
+    `${totals.proposed} proposed`,
+  ];
+  // Sub-counts of "proposed", not drops: the rule's own result, shown so a manager sees what it did.
+  if (totals.autoAdmitted > 0) parts.push(`${totals.autoAdmitted} added automatically`);
+  if (totals.autoAdmitSkipped > 0) parts.push(`${totals.autoAdmitSkipped} trusted, not added automatically`);
+  if (totals.reviewedByRule > 0) parts.push(`${totals.reviewedByRule} sent to review by a rule`);
   for (const [key, label] of Object.entries(DROP_REASON_LABEL)) {
     const count = totals[key as keyof ResearchRunTotals];
-    if (count > 0) parts.push(`${count} ${label}`);
+    // A run stored before the split has no unlistedDropped, and its filteredBySource counts both drops.
+    const text =
+      key === 'filteredBySource' && totals.unlistedDropped === undefined ? 'blocked by your site lists' : label;
+    if ((count ?? 0) > 0) parts.push(`${count} ${text}`);
   }
+  // Not a totals bucket: a waiting item has had no outcome yet.
+  if (feedRun && (run.feedBacklog ?? 0) > 0) parts.push(`${run.feedBacklog} waiting`);
   return parts.join(' \u00b7 ');
 };
 
@@ -525,10 +854,22 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
  * placed here or excluded.
  */
 const JUDGED_BUCKETS: Record<
-  Exclude<keyof ResearchRunTotals, 'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged'>,
+  Exclude<
+    keyof ResearchRunTotals,
+    | 'searchHits'
+    | 'filteredBySource'
+    | 'unlistedDropped'
+    | 'unresolvedRedirect'
+    | 'judgeFailed'
+    | 'notJudged'
+    | 'autoAdmitted'
+    | 'autoAdmitSkipped'
+    | 'reviewedByRule'
+  >,
   true
 > = {
   belowRelevance: true,
+  blockedByRule: true,
   fetchFailed: true,
   proposed: true,
   duplicatePending: true,
@@ -541,7 +882,7 @@ const JUDGED_BUCKETS: Record<
 const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
   if (!run.judgeModel) return null;
   const { totals } = run;
-  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => (totals[key as keyof ResearchRunTotals] ?? 0) > 0);
   if (judged) return `judged by ${run.judgeModel}`;
   if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
   return null;
@@ -575,17 +916,43 @@ export function DataLakeResearchPanel({
   onDelete,
   onStartRun,
   onDirtyChange,
+  onReviewProposals,
 }: DataLakeResearchPanelProps) {
   // null = the form is closed; '' = creating; an id = editing that config.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
   const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
   // Bumped each time the form opens, so a save settling late can tell whether its own session is still
   // the one on screen. `editingId` cannot: every create is '', and re-editing a row reuses its id.
   const formSession = useRef(0);
-  const isDirty =
-    editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
+  const [formOpenCount, setFormOpenCount] = useState(0);
+  const focusLever = useRef<FocusLever | undefined>(undefined);
+  const formRef = useRef<HTMLDivElement>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const isDirty = editingId !== null && JSON.stringify(draft) !== JSON.stringify(draftBaseline);
+  // The one shared form renders below every config card, so opening it from a card high in the list
+  // would otherwise change nothing on screen.
+  useEffect(() => {
+    if (editingId === null) return;
+    let target = focusLever.current
+      ? formRef.current?.querySelector<HTMLElement>(`[data-testid="${FOCUS_LEVER_TEST_ID[focusLever.current]}"]`)
+      : null;
+    // Add rule is disabled at the cap, so land on the first rule instead; with no rule to land on,
+    // fall through to Name. Joy sets the `disabled` attribute only after mount, hence the class.
+    const isDisabled = (el: HTMLElement) => el.matches(':disabled, .Mui-disabled');
+    if (target && isDisabled(target) && focusLever.current === 'itemRules') {
+      target = formRef.current?.querySelector<HTMLElement>('[data-testid="datalake-research-rule-condition-0"]');
+    }
+    if (target && !isDisabled(target)) {
+      target.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      target.focus({ preventScroll: true });
+      return;
+    }
+    formRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    nameInputRef.current?.focus({ preventScroll: true });
+  }, [editingId, formOpenCount]);
   // Cleanup reports clean so a dismissed panel cannot leave the host confirming edits that no
   // longer exist. Must stay in sync with DataLakeSettingsModal: it passes `keepMounted` on this
   // panel's TabPanel, because an unmount takes the draft with it.
@@ -596,7 +963,8 @@ export function DataLakeResearchPanel({
 
   // Age-bounded on purpose: this mirrors the server's own active-run count, so the button unlocks
   // for exactly the lakes a POST would be accepted for rather than staying dead on an abandoned row.
-  const runInFlight = useMemo(() => (runs ?? []).some(run => isResearchRunInFlight(run)), [runs]);
+  const activeRun = useMemo(() => (runs ?? []).find(run => isResearchRunInFlight(run)), [runs]);
+  const runInFlight = !!activeRun;
   const configById = useMemo(() => new Map((configs ?? []).map(config => [config.id, config])), [configs]);
   const modelLabelById = useMemo(() => new Map(modelOptions.map(option => [option.id, option.label])), [modelOptions]);
   // The config's own `lastRunAt` is stamped when the run is queued; the newest run row, when this
@@ -613,23 +981,52 @@ export function DataLakeResearchPanel({
   const setField = (field: keyof ConfigDraft) => (value: string) => {
     setDraft(prev => ({ ...prev, [field]: value }));
     // Only advanced fields are validated; pinning the section open stops it folding the moment an error is fixed.
-    if (field !== 'name' && field !== 'query') setAdvancedOpen(true);
+    if (field !== 'name' && field !== 'query' && field !== 'source' && field !== 'feedUrl') setAdvancedOpen(true);
+  };
+
+  const setItemRule = (index: number, patch: Partial<ItemRuleDraft>) => {
+    setDraft(prev => ({
+      ...prev,
+      itemRules: prev.itemRules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)),
+    }));
+    setAdvancedOpen(true);
+  };
+  const addItemRule = () => {
+    setDraft(prev => ({ ...prev, itemRules: [...prev.itemRules, { condition: '', action: 'review' }] }));
+    setAdvancedOpen(true);
+  };
+  const removeItemRule = (index: number) => {
+    setDraft(prev => ({ ...prev, itemRules: prev.itemRules.filter((_, i) => i !== index) }));
+    setAdvancedOpen(true);
   };
 
   const openCreate = () => {
+    focusLever.current = undefined;
+    setSaveNotice(null);
     setDraft(emptyDraft());
     setDraftBaseline(emptyDraft());
     setAdvancedOpen(false);
     setEditingId('');
     formSession.current += 1;
+    setFormOpenCount(count => count + 1);
   };
-  const openEdit = (config: IDataLakeResearchConfigDocument) => {
+  const openEdit = (
+    config: IDataLakeResearchConfigResponse,
+    options: { forceAdvanced?: boolean; focusLever?: FocusLever } = {}
+  ) => {
+    focusLever.current = options.focusLever;
+    setSaveNotice(null);
     const loaded = draftFromConfig(config);
     setDraft(loaded);
     setDraftBaseline(loaded);
-    setAdvancedOpen(matchingPreset(loaded, modelLabelById, modelsLoading) === null || hasNonPresetLeverSet(loaded));
+    setAdvancedOpen(
+      options.forceAdvanced === true ||
+        matchingPreset(loaded, modelLabelById, modelsLoading) === null ||
+        hasNonPresetLeverSet(loaded)
+    );
     setEditingId(config.id);
     formSession.current += 1;
+    setFormOpenCount(count => count + 1);
   };
   const closeForm = () => setEditingId(null);
 
@@ -645,8 +1042,11 @@ export function DataLakeResearchPanel({
       // The mutation toasts its own refusal; staying open keeps the draft for a retry.
       return;
     }
-    // Only close the form this save came from: it may have been cancelled, or another opened, meanwhile.
-    if (formSession.current === session) closeForm();
+    // Only touch the form this save came from: it may have been cancelled, or another opened, meanwhile.
+    if (formSession.current === session) {
+      setSaveNotice(submittedId ? autoAdmitTimingNotice(draftBaseline, input) : null);
+      closeForm();
+    }
   };
 
   if (isLoading) {
@@ -668,7 +1068,9 @@ export function DataLakeResearchPanel({
   const formOpen = editingId !== null;
   const saveBusy = editingId ? savingConfigId === editingId : !!isCreating;
   const errors = validateDraft(draft);
-  const missingRequired = !draft.name.trim() || !draft.query.trim();
+  const duplicateRows = duplicateRuleRows(draft.itemRules);
+  const missingRequired =
+    !draft.name.trim() || !draft.query.trim() || (draft.source === 'feed' && !draft.feedUrl.trim());
   const canSave = !missingRequired && Object.keys(errors).length === 0;
   const editedConfig = editingId ? configById.get(editingId) : undefined;
   // A run reads the SAVED config, so running mid-edit would run something other than what is on screen.
@@ -678,18 +1080,34 @@ export function DataLakeResearchPanel({
   const orphanModelId = draft.model && !modelLabelById.has(draft.model) ? draft.model : null;
   const activePreset = matchingPreset(draft, modelLabelById, modelsLoading);
   // Every validated field lives in the advanced section, so an error must never be folded out of sight.
-  const hasErrors = Object.keys(errors).length > 0;
+  const hasErrors = Object.keys(errors).some(key => key !== 'feedUrl');
+  const monthlyCostText =
+    draft.cadence !== 'off' && !errors.costCeilingUsd
+      ? `Roughly up to ${formatCeiling(
+          Math.round(
+            parseNumber(draft.costCeilingUsd, RESEARCH_COST_CEILING_MICRO_USD_DEFAULT / 1_000_000) *
+              1_000_000 *
+              MAX_RUNS_PER_MONTH[draft.cadence]
+          )
+        )} a month at this schedule.`
+      : null;
   // An orphan is only a verdict once the catalog has loaded; before that it would unfold and then refold.
   const showAdvanced = advancedOpen || hasErrors || (!!orphanModelId && !modelsLoading);
   const presetSummaryText = activePreset
-    ? presetSummary(activePreset, modelLabelById, modelsLoading, defaultModelLabel)
+    ? presetSummary(activePreset, modelLabelById, modelsLoading, defaultModelLabel, draft.source)
     : 'Custom settings. Adjust them under Advanced settings.';
 
   return (
     <Stack spacing={2} data-testid="datalake-research-panel">
+      {saveNotice && (
+        <Alert color="success" size="sm" data-testid="datalake-research-save-timing-notice">
+          {saveNotice}
+        </Alert>
+      )}
       <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-help">
-        A research run searches the web with the settings below and puts what it finds in the Proposals queue. Nothing
-        reaches this lake until you approve it.
+        A research run searches the web, or reads a feed, with the settings below and puts what it finds in the
+        Proposals queue. Results wait there for your approval, unless a site you list as trusted is set to be added
+        automatically. Nothing is ever added because of a relevance score.
       </Typography>
 
       {!configs?.length && !formOpen && (
@@ -706,10 +1124,11 @@ export function DataLakeResearchPanel({
         const unsaved = editingId === config.id && hasUnsavedEdits;
         const cadence = configCadence(config);
         const reviewBacklogLimit = configReviewBacklogLimit(config);
-        // Same comparison the scheduler makes, so "paused" here always means the scheduler agrees.
+        // Same comparison the scheduler makes, so "held" here always means the scheduler agrees.
         const atOrOverBacklogLimit = pendingProposals !== undefined && pendingProposals >= reviewBacklogLimit;
-        const scheduleOutcome = scheduleOutcomeMessage(config.lastScheduledOutcome);
-        const trailingFailures = trailingScheduledFailureCount(config.id, runs);
+        const schedulePaused = cadence !== 'off' && config.schedulePaused === true;
+        const scheduleOutcome = schedulePaused ? null : scheduleOutcomeMessage(config.lastScheduledOutcome);
+        const trailingFailures = trailingScheduledFailures(config.id, runs);
         return (
           <Box
             key={config.id}
@@ -725,9 +1144,24 @@ export function DataLakeResearchPanel({
                   {`Up to ${pluralize(config.maxProposals, 'proposal')} \u00b7 ${formatCeiling(config.costCeilingMicroUsd)} ceiling`}
                 </Chip>
               </Stack>
+              {config.source === 'feed' && config.feedUrl && (
+                <Typography level="body-xs" sx={{ wordBreak: 'break-all' }} data-testid="datalake-research-config-feed">
+                  {`Feed: ${feedLabel(config.feedUrl)}`}
+                </Typography>
+              )}
               <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap' }} data-testid="datalake-research-config-query">
                 {config.query}
               </Typography>
+              {config.autoAdmitTrusted === true && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-auto-admit">
+                  {`Adds trusted results automatically, up to ${config.maxAutoAdmits ?? RESEARCH_MAX_AUTO_ADMITS_DEFAULT} per run`}
+                </Typography>
+              )}
+              {(config.itemRules ?? []).length > 0 && (
+                <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-rules">
+                  {pluralize((config.itemRules ?? []).length, 'item rule')}
+                </Typography>
+              )}
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-model">
                 {`Model: ${config.model ? (modelLabelById.get(config.model) ?? config.model) : defaultModelLabel}`}
               </Typography>
@@ -745,33 +1179,56 @@ export function DataLakeResearchPanel({
                   ))}
                 </Stack>
               )}
+              {config.source === 'feed' && config.feedStatus?.current && config.feedStatus.newestPublishedAt && (
+                <Typography
+                  level="body-xs"
+                  textColor="text.tertiary"
+                  data-testid="datalake-research-config-feed-newest"
+                >
+                  {`Newest item seen ${formatWhen(config.feedStatus.newestPublishedAt)}`}
+                </Typography>
+              )}
               <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-config-last-run">
                 {`Last run ${formatWhen(lastRunAtByConfig.get(config.id) ?? config.lastRunAt)}`}
               </Typography>
               {cadence !== 'off' && (
                 <>
-                  <Typography level="body-xs" textColor="text.tertiary" data-testid="research-config-schedule">
-                    {`Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)} \u00b7 pauses at ${reviewBacklogLimit}`}
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-schedule">
+                    {schedulePaused
+                      ? `Paused. Runs ${SCHEDULE_CADENCE_LABEL[cadence]} when resumed.`
+                      : `Runs ${SCHEDULE_CADENCE_LABEL[cadence]}. Next run: ${formatNextRun(config.nextRunAt)}. Held while ${reviewBacklogLimit} or more proposals are waiting.`}
                   </Typography>
-                  {atOrOverBacklogLimit && (
-                    <Typography level="body-xs" color="warning" data-testid="research-config-schedule-paused">
-                      {`${pendingProposals} pending (pauses at ${reviewBacklogLimit}). They resume once the queue is below ${reviewBacklogLimit}.`}
+                  {atOrOverBacklogLimit && !schedulePaused && (
+                    <Typography level="body-xs" color="warning" data-testid="datalake-research-schedule-held">
+                      {`Held: ${pendingProposals} proposals are waiting. Scheduled runs resume when fewer than ${reviewBacklogLimit} are waiting.`}
+                      {onReviewProposals && (
+                        <>
+                          {' '}
+                          <Link
+                            component="button"
+                            type="button"
+                            level="body-xs"
+                            onClick={onReviewProposals}
+                            data-testid="datalake-research-review-proposals-link"
+                          >
+                            Review proposals
+                          </Link>
+                        </>
+                      )}
                     </Typography>
                   )}
                   {scheduleOutcome && (
                     <Typography
                       level="body-xs"
                       color={scheduleOutcome.color}
-                      data-testid="research-config-schedule-outcome"
+                      data-testid="datalake-research-schedule-outcome"
                     >
                       {scheduleOutcome.text}
                     </Typography>
                   )}
-                  {trailingFailures > 0 && (
-                    <Typography level="body-xs" color="danger" data-testid="research-config-schedule-failures">
-                      {trailingFailures === 1
-                        ? 'Last scheduled run failed'
-                        : `Last ${trailingFailures} scheduled runs failed`}
+                  {trailingFailures.count > 0 && (
+                    <Typography level="body-xs" color="danger" data-testid="datalake-research-schedule-failures">
+                      {scheduledFailureText(trailingFailures.count, trailingFailures.lastError)}
                     </Typography>
                   )}
                 </>
@@ -785,9 +1242,15 @@ export function DataLakeResearchPanel({
                   // rather than letting a click earn a refusal toast.
                   disabled={busy || runInFlight || unsaved}
                   onClick={() => onStartRun(config.id)}
-                  data-testid="datalake-research-run-btn"
+                  data-testid={`datalake-research-run-btn-${config.id}`}
                 >
-                  {runInFlight ? 'Run in progress' : unsaved ? 'Save changes to run' : 'Run now'}
+                  {runInFlight
+                    ? activeRun?.configId === config.id
+                      ? 'Run in progress'
+                      : 'Another run in progress'
+                    : unsaved
+                      ? 'Save changes to run'
+                      : 'Run now'}
                 </Button>
                 <Button
                   size="sm"
@@ -795,17 +1258,35 @@ export function DataLakeResearchPanel({
                   color="neutral"
                   disabled={busy}
                   onClick={() => openEdit(config)}
-                  data-testid="datalake-research-edit-btn"
+                  data-testid={`datalake-research-edit-btn-${config.id}`}
                 >
                   Edit
                 </Button>
+                {cadence !== 'off' && (
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    disabled={busy}
+                    title={
+                      schedulePaused
+                        ? 'Start scheduled runs again on the same schedule.'
+                        : 'Stop scheduled runs and keep the schedule. Run now still works.'
+                    }
+                    // The mutation toasts its own refusal; nothing else to do with a rejection here.
+                    onClick={() => void onUpdate(config.id, { schedulePaused: !schedulePaused }).catch(() => undefined)}
+                    data-testid={`datalake-research-pause-btn-${config.id}`}
+                  >
+                    {schedulePaused ? 'Resume schedule' : 'Pause schedule'}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="plain"
                   color="danger"
                   loading={deletingConfigId === config.id}
                   onClick={() => onDelete(config.id)}
-                  data-testid="datalake-research-delete-btn"
+                  data-testid={`datalake-research-delete-btn-${config.id}`}
                 >
                   Delete
                 </Button>
@@ -825,6 +1306,7 @@ export function DataLakeResearchPanel({
 
       {formOpen ? (
         <Box
+          ref={formRef}
           data-testid="datalake-research-form"
           sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 'sm', p: 1.5 }}
         >
@@ -835,7 +1317,11 @@ export function DataLakeResearchPanel({
                 value={draft.name}
                 onChange={e => setField('name')(e.target.value)}
                 slotProps={{
-                  input: { 'data-testid': 'datalake-research-name-input', maxLength: RESEARCH_CONFIG_NAME_MAX_CHARS },
+                  input: {
+                    ref: nameInputRef,
+                    'data-testid': 'datalake-research-name-input',
+                    maxLength: RESEARCH_CONFIG_NAME_MAX_CHARS,
+                  },
                 }}
               />
               <FormHelperText data-testid="datalake-research-name-count">
@@ -843,8 +1329,40 @@ export function DataLakeResearchPanel({
               </FormHelperText>
             </FormControl>
 
+            <FormControl size="sm">
+              <FormLabel>Source</FormLabel>
+              <Select
+                value={draft.source}
+                onChange={(_, value) => value && setField('source')(value)}
+                slotProps={{ button: { 'data-testid': 'datalake-research-source-select' } }}
+              >
+                <Option value="search">Web search</Option>
+                <Option value="feed">Feed</Option>
+              </Select>
+            </FormControl>
+
+            {draft.source === 'feed' && (
+              <FormControl size="sm" required error={!!errors.feedUrl}>
+                <FormLabel>Feed address</FormLabel>
+                <Input
+                  value={draft.feedUrl}
+                  onChange={e => setField('feedUrl')(e.target.value)}
+                  placeholder="https://example.com/feed.xml"
+                  slotProps={{
+                    input: {
+                      'data-testid': 'datalake-research-feed-url-input',
+                      maxLength: RESEARCH_FEED_URL_MAX_CHARS,
+                    },
+                  }}
+                />
+                <FormHelperText data-testid="datalake-research-feed-url-help">
+                  {errors.feedUrl ?? 'An RSS or Atom feed. Each run looks only at items it has not seen before.'}
+                </FormHelperText>
+              </FormControl>
+            )}
+
             <FormControl size="sm" required>
-              <FormLabel>What to look for</FormLabel>
+              <FormLabel>{draft.source === 'feed' ? 'Topic' : 'What to look for'}</FormLabel>
               <Textarea
                 minRows={2}
                 value={draft.query}
@@ -857,7 +1375,7 @@ export function DataLakeResearchPanel({
                 }}
               />
               <FormHelperText data-testid="datalake-research-query-count">
-                {`Used both as the web search and as the question each result is judged against. ${draft.query.length}/${RESEARCH_CONFIG_QUERY_MAX_CHARS}`}
+                {`${draft.source === 'feed' ? 'Each new feed item is judged against this.' : 'Used both as the web search and as the question each result is judged against.'} ${draft.query.length}/${RESEARCH_CONFIG_QUERY_MAX_CHARS}`}
               </FormHelperText>
             </FormControl>
 
@@ -956,14 +1474,17 @@ export function DataLakeResearchPanel({
                   ))}
                 </Select>
                 <FormHelperText>
-                  Judges each search result before it is fetched. Models are listed in recommended order, not by price.
-                  A cheaper model costs less per run and reads less carefully.
+                  {draft.source === 'feed'
+                    ? 'Judges each new feed item.'
+                    : 'Judges each search result before it is fetched.'}{' '}
+                  Models are listed in recommended order, not by price. A cheaper model costs less per run and reads
+                  less carefully.
                 </FormHelperText>
               </FormControl>
 
               {draft.cadence !== 'off' && (
                 <FormControl size="sm" error={!!errors.reviewBacklogLimit}>
-                  <FormLabel>Pause scheduled runs at</FormLabel>
+                  <FormLabel>Hold scheduled runs at</FormLabel>
                   <Input
                     type="number"
                     value={draft.reviewBacklogLimit}
@@ -987,7 +1508,7 @@ export function DataLakeResearchPanel({
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
                 <FormControl size="sm" error={!!errors.maxResults} sx={{ flex: 1 }}>
-                  <FormLabel>Search results</FormLabel>
+                  <FormLabel>{draft.source === 'feed' ? 'Feed items per run' : 'Search results'}</FormLabel>
                   <Input
                     type="number"
                     value={draft.maxResults}
@@ -1047,12 +1568,13 @@ export function DataLakeResearchPanel({
                     type="number"
                     value={draft.minRelevance}
                     onChange={e => setField('minRelevance')(e.target.value)}
+                    endDecorator="%"
                     slotProps={{
-                      input: { 'data-testid': 'datalake-research-min-relevance-input', min: 0, max: 1, step: 0.05 },
+                      input: { 'data-testid': 'datalake-research-min-relevance-input', min: 0, max: 100, step: 1 },
                     }}
                   />
                   <FormHelperText>
-                    {errors.minRelevance ?? '0 to 1. Below this, a result is never fetched or proposed.'}
+                    {errors.minRelevance ?? '0 to 100. Below this, a result is never fetched or proposed.'}
                   </FormHelperText>
                 </FormControl>
               </Stack>
@@ -1075,26 +1597,92 @@ export function DataLakeResearchPanel({
                 />
                 <FormHelperText>
                   {errors.costCeilingUsd ??
-                    `Judgement spend for one run. The run stops when it would exceed this. Maximum $${microUsdToUsdInput(
+                    `Judgement spend for one run, paid from the lake owner's credits (their organization's pool if they belong to one). The run stops when it would exceed this. Approving a proposal also costs indexing. Maximum $${microUsdToUsdInput(
                       RESEARCH_COST_CEILING_MICRO_USD_LIMIT
                     )}.`}
                 </FormHelperText>
+                {monthlyCostText && (
+                  <FormHelperText data-testid="datalake-research-monthly-cost">{monthlyCostText}</FormHelperText>
+                )}
               </FormControl>
 
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-                <FormControl size="sm" sx={{ flex: 1 }}>
-                  <FormLabel>Only these sites</FormLabel>
+              <Stack spacing={1.5} data-testid="datalake-research-sites-group">
+                <Typography level="title-sm">Which sites to use</Typography>
+                <FormControl size="sm">
+                  <FormLabel>Trusted sites</FormLabel>
                   <Textarea
                     minRows={2}
                     placeholder="example.com"
-                    value={draft.allowedDomains}
-                    onChange={e => setField('allowedDomains')(e.target.value)}
-                    slotProps={{ textarea: { 'data-testid': 'datalake-research-allowed-input' } }}
+                    value={draft.trustedDomains}
+                    onChange={e => setField('trustedDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-trusted-input' } }}
                   />
-                  <FormHelperText>One per line, subdomains included. Leave blank to allow any site.</FormHelperText>
+                  <FormHelperText>
+                    One per line, subdomains included. List only sites whose content you control or vouch for, never
+                    hosts where anyone can publish.
+                  </FormHelperText>
                 </FormControl>
 
-                <FormControl size="sm" sx={{ flex: 1 }}>
+                <FormControl size="sm" error={!!errors.maxAutoAdmits}>
+                  <Switch
+                    checked={draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0}
+                    disabled={parseList(draft.trustedDomains).length === 0}
+                    onChange={e => setDraft(prev => ({ ...prev, autoAdmitTrusted: e.target.checked }))}
+                    endDecorator="Add trusted results automatically"
+                    slotProps={{ input: { 'data-testid': 'datalake-research-auto-admit-toggle' } }}
+                  />
+                  {parseList(draft.trustedDomains).length === 0 && (
+                    <FormHelperText data-testid="datalake-research-auto-admit-disabled-reason">
+                      Add a trusted site above to turn this on.
+                    </FormHelperText>
+                  )}
+                  <FormHelperText>
+                    A first-time result from a trusted site joins the lake without your approval. Anything you declined
+                    before, and every other site, still waits for review. Pages are checked again after the fetch, and
+                    the lake owner is recorded as the owner of the file.
+                  </FormHelperText>
+                  <FormHelperText data-testid="datalake-research-auto-admit-timing-help">
+                    Turning this off, or removing a trusted site, stops a run already in progress from adding more.
+                    Turning it on, adding sites or changing the limit applies from the next run.
+                  </FormHelperText>
+                </FormControl>
+
+                {draft.autoAdmitTrusted && parseList(draft.trustedDomains).length > 0 && (
+                  <FormControl size="sm" error={!!errors.maxAutoAdmits}>
+                    <FormLabel>Added automatically per run</FormLabel>
+                    <Input
+                      type="number"
+                      value={draft.maxAutoAdmits}
+                      onChange={e => setField('maxAutoAdmits')(e.target.value)}
+                      slotProps={{
+                        input: {
+                          'data-testid': 'datalake-research-auto-admit-cap',
+                          min: 1,
+                          max: RESEARCH_MAX_AUTO_ADMITS_LIMIT,
+                        },
+                      }}
+                    />
+                    <FormHelperText>
+                      {errors.maxAutoAdmits ?? autoAdmitCapHint(draft.maxAutoAdmits, draft.maxProposals)}
+                    </FormHelperText>
+                  </FormControl>
+                )}
+
+                <FormControl size="sm">
+                  <FormLabel>Sites to review</FormLabel>
+                  <Textarea
+                    minRows={2}
+                    placeholder="example.com"
+                    value={draft.reviewDomains}
+                    onChange={e => setField('reviewDomains')(e.target.value)}
+                    slotProps={{ textarea: { 'data-testid': 'datalake-research-review-input' } }}
+                  />
+                  <FormHelperText>
+                    One per line, subdomains included. This only narrows results when other sites are ignored.
+                  </FormHelperText>
+                </FormControl>
+
+                <FormControl size="sm">
                   <FormLabel>Never these sites</FormLabel>
                   <Textarea
                     minRows={2}
@@ -1103,9 +1691,94 @@ export function DataLakeResearchPanel({
                     onChange={e => setField('blockedDomains')(e.target.value)}
                     slotProps={{ textarea: { 'data-testid': 'datalake-research-blocked-input' } }}
                   />
-                  <FormHelperText>One per line, subdomains included. Wins over the allow list.</FormHelperText>
+                  <FormHelperText>One per line, subdomains included. Wins over every other setting.</FormHelperText>
+                </FormControl>
+                <FormControl size="sm" error={!!errors.unlistedSources}>
+                  <FormLabel>Other sites</FormLabel>
+                  <Select
+                    value={draft.unlistedSources}
+                    onChange={(_e, value) => setDraft(prev => ({ ...prev, unlistedSources: value ?? 'review' }))}
+                    slotProps={{ button: { 'data-testid': 'datalake-research-unlisted-select' } }}
+                  >
+                    <Option value="review">Send to review</Option>
+                    <Option value="drop">Ignore</Option>
+                  </Select>
+                  <FormHelperText data-testid={errors.unlistedSources ? 'datalake-research-unlisted-error' : undefined}>
+                    {errors.unlistedSources ?? 'What happens to a result from a site that is not in the lists above.'}
+                  </FormHelperText>
                 </FormControl>
               </Stack>
+
+              <FormControl size="sm" error={!!errors.itemRules}>
+                <FormLabel>Item rules</FormLabel>
+                <Stack spacing={1}>
+                  {draft.itemRules.map((rule, index) => (
+                    <Stack
+                      key={index}
+                      direction="row"
+                      spacing={1}
+                      sx={{ alignItems: 'flex-start', flexWrap: 'wrap', rowGap: 1 }}
+                      data-testid={`datalake-research-rule-row-${index}`}
+                    >
+                      <Box sx={{ flex: 1, minWidth: '12rem' }}>
+                        <Input
+                          size="sm"
+                          error={duplicateRows.has(index)}
+                          placeholder="For example: the author works for a named company"
+                          value={rule.condition}
+                          onChange={e => setItemRule(index, { condition: e.target.value })}
+                          slotProps={{ input: { 'data-testid': `datalake-research-rule-condition-${index}` } }}
+                        />
+                        {duplicateRows.has(index) && (
+                          <FormHelperText data-testid={`datalake-research-rule-error-${index}`}>
+                            {`Same as rule ${(duplicateRows.get(index) ?? 0) + 1}`}
+                          </FormHelperText>
+                        )}
+                      </Box>
+                      <Select
+                        size="sm"
+                        value={rule.action}
+                        onChange={(_e, value) => value && setItemRule(index, { action: value })}
+                        slotProps={{ button: { 'data-testid': `datalake-research-rule-action-${index}` } }}
+                      >
+                        {RESEARCH_ITEM_RULE_ACTIONS.map(action => (
+                          <Option key={action} value={action}>
+                            {ITEM_RULE_ACTION_LABEL[action]}
+                          </Option>
+                        ))}
+                      </Select>
+                      <Button
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        onClick={() => removeItemRule(index)}
+                        data-testid={`datalake-research-rule-remove-${index}`}
+                      >
+                        Remove
+                      </Button>
+                    </Stack>
+                  ))}
+                  <Box>
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="neutral"
+                      disabled={distinctRuleCount(draft.itemRules) >= RESEARCH_ITEM_RULES_MAX}
+                      onClick={addItemRule}
+                      data-testid="datalake-research-rule-add"
+                    >
+                      Add rule
+                    </Button>
+                  </Box>
+                </Stack>
+                {errors.itemRules ? (
+                  <FormHelperText data-testid="datalake-research-rules-error">{errors.itemRules}</FormHelperText>
+                ) : (
+                  <FormHelperText>
+                    Checked by a model against each item before it is proposed. A rule can only block or send to review.
+                  </FormHelperText>
+                )}
+              </FormControl>
 
               <FormControl size="sm">
                 <FormLabel>Tags to propose</FormLabel>
@@ -1175,7 +1848,7 @@ export function DataLakeResearchPanel({
                     color={RUN_STATUS_COLOR[runStateLabel(run)]}
                     data-testid="datalake-research-run-status"
                   >
-                    {runStateLabel(run)}
+                    {runStatusWord(run)}
                   </Chip>
                   {run.trigger === 'periodic' && (
                     <Chip size="sm" variant="soft" color="neutral" data-testid="research-run-trigger-scheduled">
@@ -1206,10 +1879,34 @@ export function DataLakeResearchPanel({
                     {runOutcomeSummary(run)}
                   </Typography>
                 )}
+                {(run.status === 'completed' || (run.status === 'failed' && run.totals.judgeFailed > 0)) &&
+                  (() => {
+                    const hint = runDropHint(run);
+                    return hint ? (
+                      <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-hint">
+                        {hint}
+                      </Typography>
+                    ) : null;
+                  })()}
                 {run.stopReason && (
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-stop-reason">
-                    {STOP_REASON_LABEL[run.stopReason]}
+                    {stopReasonLabel(run, run.stopReason)}
                   </Typography>
+                )}
+                {configById.has(run.configId) && (
+                  <Box>
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      disabled={savingConfigId === run.configId || deletingConfigId === run.configId}
+                      onClick={() =>
+                        openEdit(configById.get(run.configId)!, { forceAdvanced: true, focusLever: runFocusLever(run) })
+                      }
+                      data-testid={`datalake-research-run-adjust-${run.id}`}
+                    >
+                      Adjust settings
+                    </Button>
+                  </Box>
                 )}
               </Stack>
             </Box>

@@ -1,7 +1,13 @@
-import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
-import { timingSafeEqual, createHash } from 'crypto';
-import { IUserDocument, IMFAConfig, MFA_MAX_FAILED_ATTEMPTS } from '@bike4mind/common';
+import { timingSafeEqual, createHash, randomBytes } from 'crypto';
+import { TOTP_STEP_SECONDS, encodeBase32, generateTOTPSecret, totpAuthUrl, totpCode } from './totp';
+import {
+  IUserDocument,
+  IMFAConfig,
+  MFA_MAX_FAILED_ATTEMPTS,
+  canAccessAdmin,
+  isMfaForcedForUser,
+} from '@bike4mind/common';
 
 export interface TOTPSetupData {
   secret: string;
@@ -15,49 +21,47 @@ export interface TOTPVerificationResult {
 }
 
 /**
- * Generate TOTP setup data including secret and QR code
+ * Generate TOTP setup data including secret and QR code. Pass `existingSecret` (base32) to
+ * re-render the QR code for a secret already issued instead of minting a new one.
  */
 export async function generateTOTPSetup(
   userEmail: string,
-  appName: string = process.env.APP_NAME || ''
+  appName: string = process.env.APP_NAME || '',
+  existingSecret?: string
 ): Promise<TOTPSetupData> {
   // No brand fallback: when APP_NAME is unconfigured, label the TOTP entry with just
   // the user's email rather than emitting a stray "(email)" with a leading space.
-  const secret = speakeasy.generateSecret({ name: appName ? `${appName} (${userEmail})` : userEmail });
-  const qrCodeUrl = await QRCode.toDataURL(secret.otpauth_url!);
+  const label = appName ? `${appName} (${userEmail})` : userEmail;
+  const secret = existingSecret || generateTOTPSecret();
+  const qrCodeUrl = await QRCode.toDataURL(totpAuthUrl(secret, label));
   return {
-    secret: secret.base32,
+    secret,
     qrCodeUrl,
-    manualEntryKey: secret.base32,
+    manualEntryKey: secret,
   };
 }
 
-const TOTP_STEP_SECONDS = 30;
-
 /**
- * Match a TOTP token against a secret and return the time step it belongs to, or null.
- * The window of 1 step either side absorbs minor clock drift (industry standard). Callers that
- * accept a code must also claim the step (see claimTOTPCode) so the code cannot be replayed.
+ * Match a TOTP token against a secret and return the time step it belongs to, or null. The window
+ * of 1 step either side absorbs minor clock drift (industry standard); the earliest matching step
+ * wins. Callers that accept a code must also claim the step (see claimTOTPCode) so the code cannot
+ * be replayed.
  */
 export function matchTOTPStep(secret: string, token: string, window = 1, nowMs = Date.now()): number | null {
   // An empty key is public, so anyone could compute its codes. decryptAtRest returns '' when a
   // stored secret cannot be decrypted, which must fail closed rather than verify.
-  if (!secret) return null;
-  const time = Math.floor(nowMs / 1000);
-  const match = speakeasy.totp.verifyDelta({
-    secret,
-    encoding: 'base32',
-    token,
-    window,
-    time,
-    step: TOTP_STEP_SECONDS,
-  });
-  return match ? Math.floor(time / TOTP_STEP_SECONDS) + match.delta : null;
+  if (!secret || !/^\d{6}$/.test(token)) return null;
+  const current = Math.floor(nowMs / 1000 / TOTP_STEP_SECONDS);
+  const provided = Buffer.from(token);
+  for (let step = current - window; step <= current + window; step++) {
+    if (timingSafeEqual(Buffer.from(totpCode(secret, step)), provided)) return step;
+  }
+  return null;
 }
 
 /**
  * Hash a backup code for at-rest storage.
- * Codes are high-entropy random strings (speakeasy base32, ~50 bits), so a
+ * Codes are high-entropy random strings (10 base32 characters, 50 bits), so a
  * fast SHA-256 is appropriate - no dictionary attack risk, and the migration
  * backfill over thousands of users stays instantaneous.
  */
@@ -71,11 +75,7 @@ export function hashBackupCode(code: string): string {
  * hashing them (via hashBackupCode) before storing in the database.
  */
 export function generateBackupCodes(count: number = 10): string[] {
-  return Array.from({ length: count }, () => {
-    // crypto.randomBytes-backed CSPRNG via speakeasy
-    const secret = speakeasy.generateSecret({ length: 20 });
-    return secret.base32.substring(0, 10).toUpperCase();
-  });
+  return Array.from({ length: count }, () => encodeBase32(randomBytes(7)).slice(0, 10));
 }
 
 /**
@@ -110,20 +110,33 @@ export function verifyBackupCode(userBackupCodes: string[], providedCode: string
 }
 
 /**
- * Check if a user requires MFA based on enforcement settings
- * When MFA is enforced, it applies to ALL users
+ * Test personas never owe MFA enrollment: they exist to exercise the rest of the platform, and MFA
+ * has its own e2e coverage. Shared by userRequiresMFA and the server gate (isMfaEnrollmentOwed).
+ * A persona holding any admin access is not exempt, matching isPersonaAccount in the persona module.
  */
+export function isMfaEnforcementExempt(
+  user: Pick<IUserDocument, 'isPersona' | 'isAdmin' | 'adminPermissions' | 'adminRoleIds'>
+): boolean {
+  return user.isPersona === true && !user.isAdmin && !canAccessAdmin(user);
+}
+
+/** When MFA is enforced it applies to every user except the exempt ones (isMfaEnforcementExempt). */
 export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return enforceMFASetting; // Enforcement applies to all users
+  return (enforceMFASetting || isMfaForcedForUser(user)) && !isMfaEnforcementExempt(user);
 }
 
 /**
- * Check if a user has MFA configured
+ * True when the user has at least one second factor: an authenticator app or a passkey. Both
+ * flags are NOT select:false, so this works even when the user was loaded without the secrets
+ * (e.g. OTC login). Every "is MFA on" check must go through here so the factors stay in step.
  */
 export function userHasMFAConfigured(user: IUserDocument): user is IUserDocument & { mfa: IMFAConfig } {
-  // totpEnabled is the source of truth and is NOT select:false - so this works even
-  // when the user was loaded without the (select:false) totpSecret (e.g. OTC login).
-  return !!(user.mfa && user.mfa.totpEnabled);
+  return !!(user.mfa && (user.mfa.totpEnabled || user.mfa.passkeyEnabled));
+}
+
+/** True when the user can answer with an authenticator-app code (not just a passkey or backup code). */
+export function userHasTotpConfigured(user: IUserDocument): boolean {
+  return !!user.mfa?.totpEnabled;
 }
 
 export const MAX_FAILED_ATTEMPTS = MFA_MAX_FAILED_ATTEMPTS;
@@ -165,5 +178,5 @@ export function userEligibleForMFA(user: IUserDocument): boolean {
  * When MFA is enforced, NO user can disable it
  */
 export function userCanDisableMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return !enforceMFASetting;
+  return !enforceMFASetting && !isMfaForcedForUser(user);
 }

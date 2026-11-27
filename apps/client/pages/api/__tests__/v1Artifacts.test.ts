@@ -14,14 +14,18 @@ import {
   ApiKeyScope,
   ArtifactResourceSchema,
   ArtifactVersionSchema,
+  ListArtifactTypesResponseSchema,
   ListArtifactsResponseSchema,
   ListArtifactVersionsResponseSchema,
   createArtifactContract,
+  createArtifactVersionContract,
   deleteArtifactContract,
   getArtifactContract,
   getArtifactVersionContract,
+  listArtifactTypesContract,
   listArtifactVersionsContract,
   listArtifactsContract,
+  searchArtifactsContract,
   updateArtifactContract,
 } from '@bike4mind/common';
 import { NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -34,10 +38,14 @@ const {
   mockDelete,
   mockProjectGet,
   mockListOwned,
+  mockSearch,
   mockListVersions,
   mockFindByVersion,
   mockFindContent,
   mockLatestContent,
+  mockFindPointedVersion,
+  mockFindPointedContent,
+  mockFindContentByVersion,
   mockCanRead,
   mockCanUpdateSession,
   baseApiOptions,
@@ -48,10 +56,14 @@ const {
   mockDelete: vi.fn(),
   mockProjectGet: vi.fn(),
   mockListOwned: vi.fn(),
+  mockSearch: vi.fn(),
   mockListVersions: vi.fn(),
   mockFindByVersion: vi.fn(),
   mockFindContent: vi.fn(),
   mockLatestContent: vi.fn(),
+  mockFindPointedVersion: vi.fn(),
+  mockFindPointedContent: vi.fn(),
+  mockFindContentByVersion: vi.fn(),
   mockCanRead: vi.fn(),
   mockCanUpdateSession: vi.fn(),
   baseApiOptions: [] as { allowedMethods?: string[]; exemptReadsFromDailyRateLimit?: boolean }[],
@@ -60,8 +72,12 @@ const {
 // Strip the middleware chain but keep next-connect's registrar shape, so
 // nextRouteForContract's prelude (validation + drift check) still composes and runs.
 vi.mock('@server/middlewares/baseApi', () => ({
-  methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
-    res.status(405).end(),
+  methodNotAllowedHandler:
+    (allowed: readonly string[]) =>
+    (_req: unknown, res: { setHeader: (k: string, v: string) => void; status: (n: number) => { end: () => void } }) => {
+      res.setHeader('Allow', allowed.join(', '));
+      res.status(405).end();
+    },
   baseApi: (options: (typeof baseApiOptions)[number]) => {
     baseApiOptions.push(options);
     const compose =
@@ -84,10 +100,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
 vi.mock('@bike4mind/services', () => ({
   artifactService: {
     get: mockGet,
@@ -99,9 +115,18 @@ vi.mock('@bike4mind/services', () => ({
   projectService: { get: mockProjectGet },
 }));
 vi.mock('@bike4mind/database', () => ({
-  artifactRepository: { listOwnedBeforeId: mockListOwned, findOne: vi.fn() },
-  artifactContentRepository: { findById: mockFindContent, findLatestContent: mockLatestContent },
-  artifactVersionRepository: { listByArtifactAfterVersion: mockListVersions, findByVersion: mockFindByVersion },
+  artifactRepository: { listOwnedBeforeId: mockListOwned, searchOwnedBeforeId: mockSearch, findOne: vi.fn() },
+  artifactContentRepository: {
+    findById: mockFindContent,
+    findLatestContent: mockLatestContent,
+    findOne: mockFindPointedContent,
+    findByArtifactVersion: mockFindContentByVersion,
+  },
+  artifactVersionRepository: {
+    listByArtifactAfterVersion: mockListVersions,
+    findByVersion: mockFindByVersion,
+    findOne: mockFindPointedVersion,
+  },
   projectRepository: {},
   questRepository: {},
   userRepository: {},
@@ -112,13 +137,15 @@ const { default: listOrCreate } = await import('@pages/api/v1/artifacts/index');
 const { default: byId } = await import('@pages/api/v1/artifacts/[id]/index');
 const { default: listVersions } = await import('@pages/api/v1/artifacts/[id]/versions/index');
 const { default: getVersion } = await import('@pages/api/v1/artifacts/[id]/versions/[version]');
+const { default: searchArtifacts } = await import('@pages/api/v1/artifacts/search');
+const { default: listTypes } = await import('@pages/api/v1/artifacts/types');
 
 const ARTIFACT_ID = 'mermaid-signup-flow-1';
 const MONGO_ID = '65a000000000000000000001';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
 function fire(
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   { query = {}, body }: { query?: Record<string, string>; body?: Record<string, unknown> } = {}
 ) {
   const { req, res } = createMocks({ method, query, body });
@@ -146,6 +173,7 @@ function artifactDoc(overrides: Record<string, unknown> = {}) {
     type: 'mermaid',
     title: 'Signup flow',
     version: 1,
+    currentVersionId: 'v1',
     status: 'draft',
     tags: [],
     visibility: 'private',
@@ -165,10 +193,14 @@ beforeEach(() => {
   mockUpdate.mockResolvedValue({ artifact: artifactDoc() });
   mockDelete.mockResolvedValue({ success: true });
   mockListOwned.mockResolvedValue({ data: [], hasMore: false });
+  mockSearch.mockResolvedValue({ data: [], hasMore: false });
   mockListVersions.mockResolvedValue({ data: [], hasMore: false });
   mockFindByVersion.mockResolvedValue({ version: 1, contentId: 'c1', createdAt: new Date('2026-10-01T12:00:00Z') });
   mockFindContent.mockResolvedValue({ content: 'graph TD; A-->B' });
-  mockLatestContent.mockResolvedValue({ content: 'graph TD; A-->B' });
+  mockLatestContent.mockResolvedValue({ content: 'unpointed newer row' });
+  mockFindPointedVersion.mockResolvedValue({ version: 1, contentId: 'c1' });
+  mockFindPointedContent.mockResolvedValue({ content: 'graph TD; A-->B' });
+  mockFindContentByVersion.mockResolvedValue({ content: 'graph TD; A-->B' });
   mockCanRead.mockReturnValue(true);
   mockCanUpdateSession.mockResolvedValue({ id: 's1' });
   mockProjectGet.mockResolvedValue({ id: 'p1' });
@@ -176,7 +208,12 @@ beforeEach(() => {
 
 describe('artifact contracts', () => {
   it('gate writes on notebooks:write and reads on either notebooks scope', () => {
-    for (const contract of [createArtifactContract, updateArtifactContract, deleteArtifactContract]) {
+    for (const contract of [
+      createArtifactContract,
+      updateArtifactContract,
+      deleteArtifactContract,
+      createArtifactVersionContract,
+    ]) {
       expect(contract.scopes).toEqual([ApiKeyScope.WRITE_NOTEBOOKS]);
     }
     for (const contract of [
@@ -184,6 +221,8 @@ describe('artifact contracts', () => {
       getArtifactContract,
       listArtifactVersionsContract,
       getArtifactVersionContract,
+      searchArtifactsContract,
+      listArtifactTypesContract,
     ]) {
       expect(contract.scopes).toEqual([ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS]);
     }
@@ -193,9 +232,9 @@ describe('artifact contracts', () => {
     const gets = baseApiOptions.filter(o => o.allowedMethods?.[0] === 'get');
     const writes = baseApiOptions.filter(o => o.allowedMethods?.[0] !== 'get');
 
-    expect(gets).toHaveLength(4);
+    expect(gets).toHaveLength(6);
     for (const options of gets) expect(options.exemptReadsFromDailyRateLimit).toBe(true);
-    expect(writes).toHaveLength(3);
+    expect(writes).toHaveLength(4);
     for (const options of writes) expect(options.exemptReadsFromDailyRateLimit).toBeUndefined();
   });
 });
@@ -340,6 +379,20 @@ describe('GET /api/v1/artifacts/{id}', () => {
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
+  it('answers a public stranger from the viewer shape with null session and project ids', async () => {
+    const { userId, permissions, sessionId, projectId, _id, ...viewer } = artifactDoc({ visibility: 'public' });
+    mockGet.mockResolvedValue({ access: 'public', artifact: viewer, content: { content: 'graph TD; A-->B' } });
+    const { req, res } = fire('GET', { query: { id: ARTIFACT_ID } });
+
+    await call(byId, req, res);
+
+    const body = res._getJSONData();
+    expect(ArtifactResourceSchema.safeParse(body).success).toBe(true);
+    expect(body.session_id).toBeNull();
+    expect(body.project_id).toBeNull();
+    expect(JSON.stringify(body)).not.toContain('u1');
+  });
+
   it('rethrows a fault that is not an access denial unchanged instead of hiding it as 404', async () => {
     const fault = new Error('db down');
     mockGet.mockRejectedValue(fault);
@@ -361,6 +414,10 @@ describe('GET /api/v1/artifacts/{id}', () => {
 
 describe('PATCH /api/v1/artifacts/{id}', () => {
   it('passes only the present fields and answers with the sent content', async () => {
+    mockUpdate.mockResolvedValue({
+      artifact: artifactDoc({ version: 2, currentVersionId: 'v2' }),
+      version: { version: 2 },
+    });
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { content: 'new' } });
 
     await call(byId, req, res);
@@ -373,7 +430,7 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
     expect(mockLatestContent).not.toHaveBeenCalled();
   });
 
-  it('answers the latest stored content to a caller who can read the artifact', async () => {
+  it('answers the pointed stored content to a caller who can read the artifact', async () => {
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Renamed' } });
 
     await call(byId, req, res);
@@ -381,7 +438,19 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ content: 'graph TD; A-->B' });
     expect(mockCanRead).toHaveBeenCalledWith('u1', expect.objectContaining({ id: ARTIFACT_ID }));
-    expect(mockLatestContent).toHaveBeenCalledWith(ARTIFACT_ID);
+    expect(mockFindPointedVersion).toHaveBeenCalledWith({ _id: 'v1', artifactId: ARTIFACT_ID, version: 1 });
+    expect(mockFindPointedContent).toHaveBeenCalledWith({ _id: 'c1', artifactId: ARTIFACT_ID, version: 1 });
+    expect(mockLatestContent).not.toHaveBeenCalled();
+  });
+
+  it('reads the captured numeric version for a legacy artifact without a pointer', async () => {
+    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ version: 4, currentVersionId: undefined }) });
+    mockFindContentByVersion.mockResolvedValue({ content: 'version four' });
+    const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Legacy metadata' } });
+    await call(byId, req, res);
+    expect(res._getJSONData()).toMatchObject({ version: 4, content: 'version four' });
+    expect(mockFindContentByVersion).toHaveBeenCalledWith(ARTIFACT_ID, 4);
+    expect(mockLatestContent).not.toHaveBeenCalled();
   });
 
   // update admits permissions.canWrite but get only canRead, so a read-gated re-read would 404 a
@@ -402,7 +471,10 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
 
   it('echoes the sent content to a write-only sharee', async () => {
     mockCanRead.mockReturnValue(false);
-    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ userId: 'owner' }) });
+    mockUpdate.mockResolvedValue({
+      artifact: artifactDoc({ userId: 'owner', version: 2, currentVersionId: 'v2' }),
+      version: { version: 2 },
+    });
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { content: 'new' } });
 
     await call(byId, req, res);
@@ -543,5 +615,139 @@ describe('GET /api/v1/artifacts/{id}/versions/{version}', () => {
 
     expect(await statusOf(call(getVersion, req, res))).toBe(404);
     expect(mockFindByVersion).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v1/artifacts/{id}/versions', () => {
+  const BODY = { content: 'graph TD; A-->B-->C', change_description: 'Added C', version_tag: 'v2' };
+
+  it('creates a version from the present fields and answers 201 with the sent content', async () => {
+    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ version: 2, versionTag: 'v2' }) });
+    const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body: BODY });
+
+    await call(listVersions, req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    const body = res._getJSONData();
+    expect(ArtifactResourceSchema.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({ version: 2, version_tag: 'v2', content: BODY.content });
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'u1',
+      { id: ARTIFACT_ID, content: BODY.content, createNewVersion: true, versionTag: 'v2', versionMessage: 'Added C' },
+      expect.anything()
+    );
+  });
+
+  it('leaves omitted optional fields absent', async () => {
+    const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body: { content: 'x' } });
+
+    await call(listVersions, req, res);
+
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'u1',
+      { id: ARTIFACT_ID, content: 'x', createNewVersion: true },
+      expect.anything()
+    );
+  });
+
+  it.each([{}, { content: '' }, { content: 'x', versionTag: 'v2' }, { content: 'x', visibility: 'public' }])(
+    'rejects body %j before writing',
+    async body => {
+      const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body });
+      await expect(call(listVersions, req, res)).rejects.toThrow();
+      expect(mockUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('answers 404 for an artifact the caller cannot edit', async () => {
+    mockUpdate.mockRejectedValue(new UnauthorizedError('no'));
+    const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body: BODY });
+    expect(await statusOf(call(listVersions, req, res))).toBe(404);
+  });
+
+  it.each([
+    ['a read-only sharee', 'Write access denied'],
+    ['a public artifact the caller does not own', 'Only the owner or a writer can edit this artifact'],
+  ])('answers 404 for %s', async (_label, message) => {
+    mockUpdate.mockRejectedValue(new UnauthorizedError(message));
+    const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body: BODY });
+    expect(await statusOf(call(listVersions, req, res))).toBe(404);
+  });
+
+  it('answers 405 with an Allow header for an unsupported method', async () => {
+    const { req, res } = fire('PUT', { query: { id: ARTIFACT_ID }, body: BODY });
+
+    await call(listVersions, req, res);
+
+    expect(res._getStatusCode()).toBe(405);
+    expect(res.getHeader('Allow')).toBe('GET, POST');
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/artifacts/search', () => {
+  const doc = (id: string, title = 'Signup flow') => artifactDoc({ _id: id, id, title });
+
+  it('returns a content-free page scoped to the caller and carries a cursor when more remain', async () => {
+    mockSearch.mockResolvedValue({ data: [doc('65a000000000000000000003')], hasMore: true });
+    const { req, res } = fire('GET', { query: { q: 'signup', type: 'mermaid', limit: '1' } });
+
+    await call(searchArtifacts, req, res);
+
+    const body = res._getJSONData();
+    expect(ListArtifactsResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.data[0]).toMatchObject({ id: '65a000000000000000000003', content: null });
+    expect(body.next_cursor).toBe(encodeCursor('v1.artifacts.search', '65a000000000000000000003'));
+    expect(mockSearch).toHaveBeenCalledWith('u1', 'signup', { type: 'mermaid', beforeId: undefined, limit: 1 });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('resumes before the id a cursor carries and ends with a null cursor', async () => {
+    mockSearch.mockResolvedValue({ data: [doc('65a000000000000000000001')], hasMore: false });
+    const cursor = encodeCursor('v1.artifacts.search', '65a000000000000000000003');
+    const { req, res } = fire('GET', { query: { q: 'signup', limit: '5', cursor } });
+
+    await call(searchArtifacts, req, res);
+
+    expect(res._getJSONData().next_cursor).toBeNull();
+    expect(mockSearch).toHaveBeenCalledWith('u1', 'signup', {
+      type: undefined,
+      beforeId: '65a000000000000000000003',
+      limit: 5,
+    });
+  });
+
+  it.each([{}, { q: 'x', type: 'nope' }, { q: '' }])('rejects query %j before searching', async query => {
+    const { req, res } = fire('GET', { query });
+    await expect(call(searchArtifacts, req, res)).rejects.toThrow();
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    encodeCursor('v1.artifacts', '65a000000000000000000003'),
+    'junk',
+    encodeCursor('v1.artifacts.search', 'nope'),
+  ])('answers 422 for a foreign or malformed cursor %s', async cursor => {
+    const { req, res } = fire('GET', { query: { q: 'x', cursor } });
+    expect(await statusOf(call(searchArtifacts, req, res))).toBe(422);
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/artifacts/types', () => {
+  it('publishes every registered type in snake_case with its categories', async () => {
+    const { req, res } = fire('GET');
+
+    await call(listTypes, req, res);
+
+    const body = res._getJSONData();
+    expect(ListArtifactTypesResponseSchema.safeParse(body).success).toBe(true);
+    expect(body.types.find((t: { type: string }) => t.type === 'mermaid')).toMatchObject({
+      name: 'Mermaid Diagram',
+      category: 'visualization',
+      mime_type: 'text/plain',
+    });
+    expect(body.categories).toContain('visualization');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });

@@ -57,6 +57,12 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(all(obj['metadata']['annotations']['helm.sh/resource-policy'] == 'keep' for obj in claims))
         self.assertTrue(all(obj['spec']['type'] == 'ClusterIP' for obj in objects if obj['kind'] == 'Service'))
         self.assertTrue(all('helm.sh/hook' not in obj['metadata'].get('annotations', {}) for obj in objects))
+        # The browser-facing ws Service never carries the management port; that has its own Service.
+        services = {obj['metadata']['name']: obj for obj in objects if obj['kind'] == 'Service'}
+        self.assertEqual([port['port'] for port in services['test-ws']['spec']['ports']], [3001])
+        self.assertEqual([port['port'] for port in services['test-ws-management']['spec']['ports']], [3002])
+        config = next(obj for obj in objects if obj['kind'] == 'ConfigMap' and obj['metadata']['name'] == 'test-config')
+        self.assertEqual(config['data']['WEBSOCKET_MANAGEMENT_ENDPOINT'], 'http://test-ws-management:3002')
 
     def test_mongo_guard_precedes_mongod_and_can_resolve_unready_self(self):
         objects = self.render()
@@ -104,13 +110,21 @@ class PackageTests(unittest.TestCase):
 
     def test_declared_secret_rotation_restarts_all_runtime_roles(self):
         original = self.render()
-        before = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in original if obj['kind'] in ['Deployment', 'StatefulSet']}
+        before = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in original if obj['kind'] in ['Deployment', 'StatefulSet'] and obj['metadata']['name'] != 'test-mail'}
         for change in [{'initializationRevision': 'rotation-2'}, {'existingSecret': 'replacement-runtime'}]:
             with self.subTest(change=change):
-                after = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in self.render(change) if obj['kind'] in ['Deployment', 'StatefulSet']}
+                after = {obj['metadata']['name']: obj['spec']['template']['metadata']['annotations']['checksum/config'] for obj in self.render(change) if obj['kind'] in ['Deployment', 'StatefulSet'] and obj['metadata']['name'] != 'test-mail'}
                 self.assertEqual(set(before), set(after))
                 for name in before:
                     self.assertNotEqual(before[name], after[name], name)
+
+    def test_mail_pod_does_not_roll_on_config_or_secret_changes(self):
+        def mail_template(objects):
+            return next(obj for obj in objects if obj['kind'] == 'Deployment' and obj['metadata']['name'] == 'test-mail')['spec']['template']['metadata']
+        before = mail_template(self.render())
+        for change in [{'initializationRevision': 'rotation-2'}, {'existingSecret': 'replacement-runtime'}, {'config': {'MAIL_FROM': 'noreply@example.com'}}]:
+            with self.subTest(change=change):
+                self.assertEqual(mail_template(self.render(change)), before)
 
     def test_fanout_stage_references_configured_application_stage(self):
         objects = self.render({'config': {'APP_STAGE': 'evaluation'}})
@@ -286,6 +300,204 @@ class PackageTests(unittest.TestCase):
             with self.subTest(overrides=overrides):
                 result = self.render(overrides, success=False)
                 self.assertRegex(result.stderr, reason)
+
+    RENDER_IMAGE = 'example/render-worker:tested'
+    HOSTED_RENDER_ENV = {
+        'RENDER_JOB_QUEUE': 'https://sqs.example.invalid/queue/render',
+        'GENERATION_JOB_QUEUE': 'https://sqs.example.invalid/queue/generation',
+        'FAB_FILE_BUCKET': 'fab-files',
+        'GENERATED_IMAGES_BUCKET': 'generated-images',
+        'AWS_REGION': 'us-east-1',
+        'APP_STAGE': 'example-stage',
+        'APP_NAME': 'bike4mind',
+    }
+
+    def render_worker_objects(self, objects):
+        return [obj for obj in objects if obj['metadata']['name'].startswith('test-renderworker')]
+
+    def render_worker_deployment(self, objects):
+        return next(obj for obj in objects if obj['kind'] == 'Deployment' and obj['metadata']['name'] == 'test-renderworker')
+
+    def test_render_worker_is_opt_in(self):
+        objects = self.render()
+        self.assertEqual(self.render_worker_objects(objects), [])
+        self.assertFalse(any(obj['apiVersion'].startswith('keda.sh/') for obj in objects))
+
+    def test_render_worker_without_keda_uses_fixed_replicas(self):
+        objects = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'replicas': 2, 'terminationGracePeriodSeconds': 4000}})
+        self.assertFalse(any(obj['apiVersion'].startswith('keda.sh/') for obj in objects))
+        worker = self.render_worker_deployment(objects)
+        self.assertEqual(worker['spec']['replicas'], 2)
+        pod = worker['spec']['template']['spec']
+        self.assertEqual(pod['terminationGracePeriodSeconds'], 4000)
+        self.assertEqual(pod['serviceAccountName'], 'test-renderworker')
+        self.assertEqual(pod['volumes'], [{'name': 'render-tmp', 'emptyDir': {'sizeLimit': '50Gi'}}])
+        container = pod['containers'][0]
+        self.assertEqual(container['image'], self.RENDER_IMAGE)
+        self.assertNotIn('command', container)
+        self.assertEqual(container['volumeMounts'], [{'name': 'render-tmp', 'mountPath': '/tmp'}])
+        self.assertEqual(container['resources']['limits']['cpu'], '2')
+        self.assertEqual(container['resources']['limits']['memory'], '4Gi')
+        self.assertEqual(container['envFrom'], [{'configMapRef': {'name': 'test-config'}}])
+        names = [entry['name'] for entry in container['env']]
+        self.assertIn('AWS_ACCESS_KEY_ID', names)
+        self.assertIn('MONGODB_URI', names)
+        config = next(obj for obj in objects if obj['kind'] == 'ConfigMap' and obj['metadata']['name'] == 'test-config')
+        self.assertEqual(config['data']['RENDER_JOB_QUEUE'], 'http://test-sqs:9324/000000000000/renderJobQueue')
+        self.assertEqual(config['data']['RENDER_JOB_QUEUE_DLQ'], 'http://test-sqs:9324/000000000000/renderJobQueueDLQ')
+
+    def test_render_queue_env_is_absent_unless_the_worker_is_enabled(self):
+        config = next(obj for obj in self.render() if obj['kind'] == 'ConfigMap' and obj['metadata']['name'] == 'test-config')
+        self.assertNotIn('RENDER_JOB_QUEUE', config['data'])
+        self.assertNotIn('RENDER_JOB_QUEUE_DLQ', config['data'])
+
+    def test_render_worker_default_grace_period_covers_drain_not_a_full_encode(self):
+        pod = self.render_worker_deployment(self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE}}))['spec']['template']['spec']
+        self.assertEqual(pod['terminationGracePeriodSeconds'], 150)
+
+    def test_render_worker_keda_requires_pod_identity(self):
+        keda = {'enabled': True, 'queueURL': 'https://sqs.example.invalid/queue/render', 'awsRegion': 'us-east-1'}
+        result = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'aws': {'mode': 'selfhost'}, 'keda': keda}}, success=False)
+        self.assertRegex(result.stderr, 'keda.enabled requires renderWorker.aws.mode podIdentity')
+
+    def test_render_worker_with_keda_scales_on_the_queue(self):
+        keda = {'enabled': True, 'queueURL': 'https://sqs.example.invalid/queue/render', 'awsRegion': 'us-east-1', 'maxReplicaCount': 6}
+        objects = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'aws': {'mode': 'podIdentity'}, 'env': self.HOSTED_RENDER_ENV, 'keda': keda}})
+        worker = self.render_worker_deployment(objects)
+        self.assertNotIn('replicas', worker['spec'])
+        scaled = next(obj for obj in objects if obj['kind'] == 'ScaledObject')
+        self.assertEqual(scaled['spec']['scaleTargetRef'], {'name': 'test-renderworker'})
+        self.assertEqual(scaled['spec']['minReplicaCount'], 0)
+        self.assertEqual(scaled['spec']['maxReplicaCount'], 6)
+        trigger = scaled['spec']['triggers'][0]
+        self.assertEqual(trigger['type'], 'aws-sqs-queue')
+        self.assertEqual(trigger['metadata']['queueURL'], keda['queueURL'])
+        self.assertEqual(trigger['metadata']['queueLength'], '1')
+        self.assertEqual(trigger['authenticationRef'], {'name': 'test-renderworker'})
+        auth = next(obj for obj in objects if obj['kind'] == 'TriggerAuthentication')
+        self.assertEqual(auth['spec']['podIdentity'], {'provider': 'aws', 'identityOwner': 'keda'})
+        for missing in ['queueURL', 'awsRegion']:
+            with self.subTest(missing=missing):
+                partial = {key: value for key, value in keda.items() if key != missing}
+                result = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'aws': {'mode': 'podIdentity'}, 'env': self.HOSTED_RENDER_ENV, 'keda': partial}}, success=False)
+                self.assertRegex(result.stderr, 'renderWorker.keda.' + missing)
+
+    def test_render_worker_service_account_carries_annotations(self):
+        annotations = {'eks.amazonaws.com/role-arn': 'role-placeholder'}
+        objects = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'serviceAccount': {'create': True, 'name': 'render', 'annotations': annotations}}})
+        account = next(obj for obj in objects if obj['kind'] == 'ServiceAccount')
+        self.assertEqual(account['metadata']['name'], 'render')
+        self.assertEqual(account['metadata']['annotations'], annotations)
+        self.assertEqual(self.render_worker_deployment(objects)['spec']['template']['spec']['serviceAccountName'], 'render')
+        external = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'serviceAccount': {'create': False, 'name': 'existing'}}})
+        self.assertFalse(any(obj['kind'] == 'ServiceAccount' for obj in external))
+        self.assertEqual(self.render_worker_deployment(external)['spec']['template']['spec']['serviceAccountName'], 'existing')
+
+    def test_render_worker_pod_identity_mode_uses_no_shared_config_or_static_keys(self):
+        objects = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'aws': {'mode': 'podIdentity'}, 'env': self.HOSTED_RENDER_ENV}})
+        container = self.render_worker_deployment(objects)['spec']['template']['spec']['containers'][0]
+        self.assertNotIn('envFrom', container)
+        env = {entry['name']: entry for entry in container['env']}
+        self.assertNotIn('AWS_ACCESS_KEY_ID', env)
+        self.assertNotIn('AWS_SECRET_ACCESS_KEY', env)
+        self.assertEqual(env['MONGODB_URI']['valueFrom']['secretKeyRef'], {'name': 'runtime', 'key': 'MONGODB_URI'})
+        self.assertEqual(env['RENDER_JOB_QUEUE']['value'], self.HOSTED_RENDER_ENV['RENDER_JOB_QUEUE'])
+        for missing in ['GENERATION_JOB_QUEUE', 'APP_STAGE', 'APP_NAME']:
+            with self.subTest(missing=missing):
+                partial = {key: value for key, value in self.HOSTED_RENDER_ENV.items() if key != missing}
+                result = self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'aws': {'mode': 'podIdentity'}, 'env': partial}}, success=False)
+                self.assertRegex(result.stderr, missing)
+
+    def test_render_worker_rejects_floating_image_and_secret_env(self):
+        cases = [
+            ({'renderWorker': {'enabled': True, 'image': 'example/render-worker:latest'}}, r'renderWorker'),
+            ({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE, 'env': {'MONGODB_URI': 'mongodb://inline'}}}, r'MONGODB_URI'),
+        ]
+        for overrides, reason in cases:
+            with self.subTest(overrides=overrides):
+                result = self.render(overrides, success=False)
+                self.assertRegex(result.stderr, reason)
+
+    def render_raw(self, values, success=True):
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as config:
+            json.dump(values, config)
+            config.flush()
+            result = subprocess.run(['helm', 'template', 'test', str(CHART), '-f', config.name], text=True, capture_output=True)
+        if not success:
+            self.assertNotEqual(result.returncode, 0)
+            return result
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [obj for obj in yaml.load_all(result.stdout, Loader=UniqueLoader) if obj]
+
+    def worker_only_values(self, **render_worker):
+        example = yaml.safe_load((CHART / 'render-worker-only.example.yaml').read_text())
+        example['renderWorker'].update(render_worker)
+        return example
+
+    def test_worker_only_mode_renders_just_the_render_worker(self):
+        objects = self.render_raw(self.worker_only_values())
+        self.assertEqual(sorted(obj['kind'] for obj in objects), ['Deployment', 'ScaledObject', 'ServiceAccount', 'TriggerAuthentication'])
+        self.assertTrue(all(obj['metadata']['name'] == 'test-renderworker' for obj in objects))
+        container = self.render_worker_deployment(objects)['spec']['template']['spec']['containers'][0]
+        self.assertNotIn('envFrom', container)
+        env = {entry['name']: entry for entry in container['env']}
+        self.assertEqual(env['MONGODB_URI']['valueFrom']['secretKeyRef'], {'name': 'bike4mind-render-runtime', 'key': 'MONGODB_URI'})
+        self.assertNotIn('AWS_ACCESS_KEY_ID', env)
+        without_keda = self.render_raw(self.worker_only_values(keda={'enabled': False}))
+        self.assertEqual(sorted(obj['kind'] for obj in without_keda), ['Deployment', 'ServiceAccount'])
+        self.assertEqual(self.render_worker_deployment(without_keda)['spec']['replicas'], 1)
+
+    def test_worker_only_mode_restarts_on_its_own_env_change(self):
+        def checksum(values):
+            return self.render_worker_deployment(self.render_raw(values))['spec']['template']['metadata']['annotations']['checksum/config']
+        base = self.worker_only_values()
+        changed = self.worker_only_values()
+        changed['renderWorker']['env'] = {**changed['renderWorker']['env'], 'AWS_REGION': 'eu-west-1'}
+        self.assertNotEqual(checksum(base), checksum(changed))
+
+    def test_worker_only_mode_requires_an_enabled_pod_identity_worker(self):
+        cases = [
+            (self.worker_only_values(enabled=False), r'renderWorker/enabled'),
+            (self.worker_only_values(aws={'mode': 'selfhost'}), r'renderWorker/aws/mode'),
+            ({**self.worker_only_values(), 'existingSecret': ''}, r'existingSecret'),
+            ({**self.worker_only_values(), 'mode': 'workerOnly'}, r'mode'),
+        ]
+        for values, reason in cases:
+            with self.subTest(reason=reason):
+                result = self.render_raw(values, success=False)
+                self.assertRegex(result.stderr, reason)
+
+    def test_render_worker_values_do_not_rerun_bucket_initialization(self):
+        def job_name(objects):
+            return next(obj['metadata']['name'] for obj in objects if obj['kind'] == 'Job')
+        self.assertEqual(job_name(self.render()), job_name(self.render({'renderWorker': {'enabled': True, 'image': self.RENDER_IMAGE}})))
+
+    def test_validate_secrets_runs_shared_validator_strict(self):
+        objects = self.render()
+        worker = next(o for o in objects if o['kind'] == 'Deployment' and o['metadata']['name'] == 'test-worker')
+        init = next(c for c in worker['spec']['template']['spec']['initContainers'] if c['name'] == 'validate-secrets')
+        command = init['command']
+        self.assertEqual(command[:2], ['node', '-e'])
+        self.assertEqual(len(command), 3)
+        source = command[2]
+        self.assertIn('SECRET_ENCRYPTION_KEY_PREVIOUS', source)
+        self.assertIn('not-configured', source)
+        if not shutil.which('node'):
+            self.skipTest('node is required')
+        env = {'PATH': os.environ['PATH'], 'MINIO_ROOT_USER': 'minio-user', 'MINIO_ROOT_PASSWORD': 'p' * 20}
+        for name in ['JWT_SECRET', 'SESSION_SECRET', 'INTERNAL_WS_SECRET', 'INTERNAL_S3_WEBHOOK_SECRET', 'CHAT_COMPLETION_INTERNAL_SECRET']:
+            env[name] = 'x' * 40
+        def run(extra):
+            return subprocess.run(['node', '-e', source], env={**env, **extra}, text=True, capture_output=True)
+        valid = {'SECRET_ENCRYPTION_KEY': 'a' * 64}
+        self.assertEqual(run(valid).returncode, 0)
+        bad_previous = run({**valid, 'SECRET_ENCRYPTION_KEY_PREVIOUS': 'b' * 63})
+        self.assertNotEqual(bad_previous.returncode, 0)
+        self.assertIn('SECRET_ENCRYPTION_KEY_PREVIOUS', bad_previous.stderr)
+        # The plaintext opt-out is Compose-only: the chart stays strict.
+        strict = run({'B4M_ALLOW_PLAINTEXT_SECRETS': 'true', 'SECRET_ENCRYPTION_KEY': 'change-me'})
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertNotIn('B4M_ALLOW_PLAINTEXT_SECRETS', strict.stderr)
 
 if __name__ == '__main__':
     unittest.main()

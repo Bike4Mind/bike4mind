@@ -22,9 +22,11 @@ describe('isDriveLakePollScheduled', () => {
     expect(await isDriveLakePollScheduled()).toBe(false);
   });
 
-  it('is off on self-host, which never schedules the poll cron, whatever the flags say', async () => {
+  it('follows the flags on self-host too, whose worker runner schedules the poll', async () => {
     vi.stubEnv('B4M_SELF_HOST', 'true');
     flags({ EnableDataLakes: true, EnableDataLakeDrivePoll: true });
+    expect(await isDriveLakePollScheduled()).toBe(true);
+    flags({ EnableDataLakes: true });
     expect(await isDriveLakePollScheduled()).toBe(false);
   });
 });

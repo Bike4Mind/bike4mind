@@ -7,6 +7,7 @@ import { browserTabShortcut } from '@shared/browserTabs';
 import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState, BrowserTabAction } from '@shared/ipc';
 import { BrowserNavbar } from './BrowserNavbar';
 import { BrowserTabStrip } from './BrowserTabStrip';
+import { browserTabUse, closeOrder } from './browserTabClose';
 import {
   BROWSER_PANE_WIDTH,
   coveredByOverlay,
@@ -88,10 +89,18 @@ export function BrowserPane({
   sessionId,
   suspended,
   conversation,
+  historyEnabled,
+  onHistory,
+  agentTurn = false,
 }: {
   sessionId: string | null;
   suspended: boolean;
   conversation: RefObject<HTMLElement | null>;
+  /** See BrowserMenu. */
+  historyEnabled: boolean | null;
+  onHistory: (enabled: boolean) => void;
+  /** A reply is running in this conversation; a tab the agent uses during it counts as in use. */
+  agentTurn?: boolean;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const pane = useRef<HTMLDivElement | null>(null);
@@ -161,6 +170,33 @@ export function BrowserPane({
       if (sessionId) drive(window.b4m.browser.tab({ sessionId, action, tabId }));
     },
     [sessionId, drive]
+  );
+
+  // When the running reply began, read when a close is asked for. 0 for one already running when
+  // this pane first saw the conversation, so every tab the agent has used counts.
+  const turnStartedAt = useRef<number | null>(agentTurn ? 0 : null);
+  const turnSession = useRef(sessionId);
+  useEffect(() => {
+    const switched = turnSession.current !== sessionId;
+    turnSession.current = sessionId;
+    if (!agentTurn) turnStartedAt.current = null;
+    else if (switched) turnStartedAt.current = 0;
+    else if (turnStartedAt.current === null) turnStartedAt.current = Date.now();
+  }, [agentTurn, sessionId]);
+
+  const closeTabs = useCallback(
+    (ids: number[]) => {
+      if (!sessionId || ids.length === 0) return;
+      const order = closeOrder(ids, state.activeTabId);
+      drive(
+        (async () => {
+          let next = NO_PAGE;
+          for (const tabId of order) next = await window.b4m.browser.tab({ sessionId, action: 'close', tabId });
+          return next;
+        })()
+      );
+    },
+    [sessionId, drive, state.activeTabId]
   );
 
   const newTab = useCallback(() => {
@@ -405,6 +441,8 @@ export function BrowserPane({
         onSelect={id => tab('select', id)}
         onClose={id => tab('close', id)}
         onNew={newTab}
+        inUse={entry => browserTabUse(entry, turnStartedAt.current)}
+        onCloseTabs={closeTabs}
       />
       <BrowserNavbar
         state={state}
@@ -413,6 +451,8 @@ export function BrowserPane({
         onNavigate={navigate}
         onGo={go}
         onCookieState={setCookies}
+        historyEnabled={historyEnabled}
+        onHistory={onHistory}
       />
       <Box ref={ref} sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
         {still && (

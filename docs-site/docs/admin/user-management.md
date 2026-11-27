@@ -7,89 +7,284 @@ tags: [admin, users, management]
 
 # User Management
 
-The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It provides search, filtering, multiple display modes, inline editing, and bulk export capabilities. User management state (search terms, pagination, sort preferences, and filters) is persisted across sessions via local storage.
+## Reviewing detections and watching accounts
+
+The AI advisory also lists **linked accounts to review** separately from accounts with an AI abuse judgment. These candidates share an exact signup or login IP with a flagged account in the recent observation window. Each entry links to the account and explains which signup or login observation matched. Connections are one hop only, common addresses are discounted, and coverage warnings appear when a scan is capped or fails. A connection does not give the candidate its neighbour's AI verdict or probability.
+
+In a user's Overview, **Signup classification** explains the Users table's **Suspected** label. It shows the matched signal names, plain-language explanations, classification rule, evaluation time and selected signup-chart window. Use the range selector to match the Users chart you are investigating. This is the chart's current heuristic classification, not a historical saved verdict or the AI advisory. Missing classification and incomplete scans are shown explicitly.
+
+In **Risk evidence**, **Observed** means the source returned data. It is not a safe-account judgment. In Sign-ins, matching JA4 values are described as TLS fingerprint matches; they do not prove the same device or operator.
+
+The AI assessment can show an account profile with signup-method and network flags, email-shape signals, time to two-factor setup and first spend, model spending shares, and counts of other accounts sharing recorded traits. Missing profiles or linked-account data remain unknown. Shared network, JA4 or mail-domain counts do not establish common ownership.
+
+**Factors identified by the model** lists up to three fixed evidence statements and the model's confidence that each statement describes the input. These percentages are not each factor's contribution to the overall verdict. A missing factor list does not clear the account; older assessments and unknown results may have none.
+
+In Admin > Detections, start with **Review evidence**. Inspect the linked accounts and their Activity before recording a judgment. A suggested response describes the detector's recommendation; recording a review does not apply that response to account access. The **How this page works** guide combines these steps with the shadow-mode and verdict explanations. You can dismiss it and restore it from the button with the same name.
+
+Use **Group detections by account** to review related rows together. Selecting rows opens a bulk verdict action; the dialog can also grade other loaded, unreviewed detections for the same single account. Group counts distinguish the current page from all loaded rows. **Save and next** follows the displayed order. Revision conflicts and failed writes remain visible, and confirmed successful writes are retained when a later request fails. A verdict and its history show the reviewing admin when available.
+
+If you need more time, choose **Watch** or **Watch campaign** on a campaign detection (or **Watch these accounts** on the dashboard's AI advisory) and give the watch a name and reason. The watch saves the exact group you selected. You can find open watches on the admin dashboard and in Detections even after the AI advisory expires, changes verdict, or is reviewed. Groups with omitted participants cannot be saved as a watch; open an individual detection with a complete group instead. A capped activity scan can still be watched when its selected participant list is complete.
+
+Open a watch to see its owner, current account status and credits, profile and Activity links, and the last manual check. Choose **Refresh account data** to reload the details, **Mark checked** after reviewing activity, or **Assign to me** to take ownership. Close the watch when monitoring is complete; the Closed list lets you reopen it later.
+
+Watches are manual: they do not send automatic alerts, run an AI assessment, change a verdict, or suspend an account. Membership does not expand when new detections arrive. Deleted accounts are removed, and a deleted owner's assignment is cleared. Watches remain until explicitly closed and their records do not expire automatically.
+
+Watches are available only to full administrators, because a watch shows each member's credits and suspension state. Delegated permissions such as `support:read` or `users:moderate` do not open, create or change a watch. Every change requires an audit reason.
+
+The Users tab is the primary interface for administering user accounts on the Bike4Mind platform. It is a single server-driven table with search, filters, built-in views, column sorting, grouping by email domain, and CSV export. The header shows the total number of accounts and how many were active this week.
+
+The view, filters, sort, grouping, page, and page size are kept in the URL, so reloading the page or sharing the link restores the same list. The search text is not put in the URL, because it often holds an email address.
+
+### Coordinated API completions
+
+The Detections filter **Coordinated API completions** surfaces repeated ordered groups in retained successful API-completion settlements. The hourly observation job reads the preceding 24 hours, with bounded results and processing. It can discover accounts outside an existing flagged group. The evidence explains the number of participants, repeated rounds, and incomplete coverage when a cap is reached.
+
+Start with **Review evidence**, open each participant's Activity, and use **Watch** for follow-up. Repeated ordering supports coordination; team schedulers can produce it too. Settlement order is not request start order, and this source does not cover failed requests or all API routes. The observation alone does not establish abuse or a shared operator. These detections cannot trigger automatic containment or change automatic risk-review approval. Human review remains available. Their summary shows **Review only** with no progress bar toward automatic enforcement.
+
+The same ordered group updates its unreviewed observation within a UTC activity day. Reviewed observations remain unchanged; a later activity day can produce a new observation. Use a watch to keep the exact group accessible across observations.
+
+### Synchronized API calls
+
+Choose **Synchronized API calls** in Detections to review accounts with repeated closely timed API-key requests and shared requested-model changes. The scan searches the platform's retained request metadata rather than starting only from existing flagged accounts. Repeated subsets can be found even when unrelated requests overlap. These observations support coordination, not proof of a shared person, matching prompts or misuse; legitimate team schedulers can look similar.
+
+Open **Review evidence** to see participant counts, matched bursts, requested-model switches, completed calls, daily-cap refusals and unknown or interrupted outcomes. Cohort spending is a snapshot for the scan's 24-hour API-completion window, separate from requests in matched bursts. Grant-funded credits include rewards and other grants; missing attribution remains unknown. Capped spending and unavailable data are explicit.
+
+In a profile's **API keys > Recent API requests**, you can inspect the correlation id, requested model and completion outcome for newly captured requests. HTTP transport status is separate from completion outcome: HTTP 200 does not prove a successful stream. **No response recorded** means the request start was captured without a terminal response; it does not establish an active request or a failure. Older records show **Not captured** for missing completion metadata.
+
+Use **Watch campaign** for follow-up. If your review supports stopping additional grants, **Review blocking future grants** opens the existing manual dry run for the exact selected accounts. The preview and an audit reason are required before confirmation. This blocks further signup grants and pauses queued rewards; already-paid credits and account access remain unchanged. Watching, grading or AI assessment does not perform this action automatically.
 
 ## Search
 
-The search bar at the top of the Users tab allows you to find users by name, username, or email. Search is debounced to avoid excessive API calls while typing. When a search term is entered, the results automatically reset to page 1.
+The search box at the top of the Users tab finds users by name, username, email, user ID, or LLM provider identifier (see [Tracing an LLM provider safety notice to an account](#tracing-an-llm-provider-safety-notice-to-an-account)). Search is debounced to avoid excessive API calls while typing, and it returns to page 1. Press `/` anywhere in the admin panel to focus it.
 
-## Display Modes
+### Resolving a provider safety notice
 
-The Users tab supports four distinct view modes, selectable from the **View Mode** dropdown:
+AI providers receive a 64-character lowercase hex identifier for each end user instead of the user's ID or email (OpenAI `safety_identifier`, Anthropic `metadata.user_id`, and the `user` field on image-generation requests). When a provider sends a safety or abuse notice that names one of these identifiers, you can resolve it to an account:
 
-| Mode | Description |
-|------|-------------|
-| **Slim** (default) | Compact table view showing Name, User ID, Email, Logins, Storage usage bar, Security (MFA status), Recent Activity, and action buttons |
-| **Full** | Expanded card view with inline editing for all user fields, organized into sections: User Details, Permissions, Subscription, B4M Settings, Admin Actions, and Activity & Profile |
-| **User Journey** | Chronological view of a user's lifecycle on the platform |
-| **Recent Activity** | Focused view of recent user activity across the platform |
+1. Open the **Users** tab in the admin panel.
+2. Paste the full 64-character value into the search box. Upper or lower case both work.
+3. The matching account appears in the list. Open it to review the profile and activity.
 
-### Slim View Columns
+The same lookup is available as `GET /api/admin/users/by-provider-id?id=<64 hex>`. For an account's own identifier it returns `kind: "user"` with the account's ID, name, username, and email. The Users tab needs full admin access; the API also accepts a delegate holding `support:read` (see [Delegated permissions](./delegated-permissions.md)). It responds with 400 if the value is not 64 hex characters and 404 if no account matches.
+
+### End users of a platform key
+
+A key granted the `ai:end-user-id` scope serves the end users of another product and names each one with `end_user_id` (see [End users of your product](../api/completions/reference.md#end-users-of-your-product)). The provider then receives a separate identifier for each of those end users. Bike4Mind records each one the first time it is used, so you can resolve it the same way:
+
+- In the Users tab search, the value finds the account that owns the key.
+- The API returns `kind: "platformEndUser"` with `account` (the key owner's ID, name, username, and email), `endUserId` (the product's own identifier for its end user), `apiKeyId` (the key most recently used for that end user), `firstSeenAt`, and `lastSeenAt`. Ask the account owner about the end user it names; Bike4Mind holds no other details about that person.
+- `end_user_id` on text-to-speech requests is validated but not sent to any provider, so an end user who only uses text-to-speech has no lookup record and the lookup returns not found for them.
+
+### Granting the platform scope
+
+A full administrator grants `ai:end-user-id` in one of two ways:
+
+- When generating a key for a user, tick **AI: Platform End Users** under **Platform key**, alongside the AI scopes the key needs.
+- On an existing key, call `POST /api/admin/user-api-keys/<key id>/end-user-id` with `{ "enabled": true, "reason": "..." }`. Send `"enabled": false` to withdraw it. The change is recorded in the audit log. A key holding a dedicated-flow scope (embed, ingest) cannot take it.
+
+If nothing matches, the account may have been deleted, or the identifier may come from a different deployment. Check that you pasted the whole value without extra characters.
+
+## Views
+
+The tabs above the table are built-in views. Each one clears the filters and applies its own:
+
+| View | Shows |
+|------|-------|
+| **All** (default) | Every user |
+| **New this week** | Users who signed up in the last 7 days |
+| **High risk** | Users whose signup risk assessment is high |
+| **Suspended** | Banned users |
+
+Each tab shows its count. If you set filters by hand that match a view exactly, that view's tab is highlighted.
+
+### Saved views
+
+To keep a combination of filters, sort, page size and grouping, click **Save view** and give it a name. The view appears as its own tab after the built-in ones and is stored on the server, so it follows you to any device. Tick **Share with all admins** to show it to every admin; only you can change or delete it.
+
+Each saved tab you own has a **...** menu with **Rename**, **Share with all admins** (or **Make personal**) and **Delete**. Opening a saved view always starts at page 1. You can keep up to 50 views.
+
+## Signup risk review
+
+Open **Risk review** in the admin sidebar to review accounts flagged by signup risk scoring.
+Accounts whose signup credits are held by the signup grant risk policy are listed too, marked
+**Credits held**. AI access is automatically held while a review is pending, including free models and AI requests
+through API keys. These users can still sign in and access their existing data. The AI refusal
+message directs them to contact support to request a review.
+
+Choose **Approve** for a legitimate account to lift its signup review hold. Approval does not
+remove a separate manual AI restriction or suspension. **Undo**, available for 30 seconds,
+restores the review hold. Approving an account marked **Credits held** also pays its held signup
+credits; **Undo** does not take them back. Later rescores update the evidence but never clear a pending hold or
+overturn an approval. Choose **Suspend** for an abusive account to block account access.
+
+Existing pending reviews also hold AI access. If an approved user still cannot use AI, check for
+separate restrictions, suspension, and normal plan or credit limits. Signup-domain credit holds
+are independent of account risk reviews.
+
+## Columns
 
 | Column | Details |
 |--------|---------|
-| Name | Truncated to 15 characters with tooltip for full name |
-| User ID | Monospaced font, displayed in a compact format |
-| Email | Full email address |
-| Logins | Login count indicator |
-| Storage | Progress bar showing used vs. allocated storage with percentage and color coding (green/yellow/red based on usage threshold) |
-| Security | MFA status badge |
-| Recent Activity | Latest activity timestamp and action name |
-| Actions | "Admin" button to open the full user view modal, plus a profile button |
+| User | Avatar, name (or username or email), and email |
+| Status | **Suspended** (banned), **Restricted** (moderated), **New** (recently created), or **Active** |
+| Plan | User level |
+| Signed up | Account creation date |
+| Last active | Most recent activity |
+| Credits | Current credit balance |
+| 30d spend | Credits spent in the last 30 days |
+| API keys | Number of live API keys |
+| Risk | Signup risk band: High, Medium, or Low |
 
-### Full View Sections
+Click a row to open the user's [profile page](#user-profile-page). The row's **...** menu has **Open profile** and **Copy user ID**; using it does not open the row.
 
-Each user card in Full view contains the following sections:
+### Selecting rows
 
-| Section | Contents |
-|---------|----------|
-| **User Details** | Editable fields for name, username, email, and other profile information |
-| **Permissions** | User level button (cycles through DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser), Super Admin checkbox, predefined user tags, and custom tag input |
-| **Subscription** | Current subscription status and details |
-| **B4M Settings** | Platform-specific settings including credits, storage limit, and referral availability |
-| **Admin Actions** | Ban, Moderate, and Delete user controls |
-| **Activity & Profile** | Login details and admin profile view |
+Use the checkboxes to select rows. Shift-click selects a range, and `x` toggles the focused row. Changing a filter, the view, or the search clears the selection; moving between pages keeps it. Once every row on the page is selected, **Select all N matching** extends the selection to every user that matches the current filters.
+
+### Bulk actions
+
+While rows are selected, a bar under the table offers these actions (on a narrow screen they sit in one **Actions** menu):
+
+| Action | Effect |
+|--------|--------|
+| **Suspend** | Blocks sign-in, ends live sessions and disables their API keys |
+| **Restrict** | Turns off AI features; users can still sign in and reach their data |
+| **Adjust credits** | Sets, adds or removes credits; every change is written to the credit ledger |
+| **Revoke API keys** | Disables every active API key the users own |
+| **Add tag** | Adds a tag to users who do not have it yet |
+| **Contain** | Suspends the users, sets their credits to 0 and revokes their API keys, together for each user. Optionally also blocks new signups from their email domains |
+
+Each action opens a dialog with a dry run: how many users will change, who is excluded (you and other admins are never included), and how many API keys and credits are affected. A reason is required and is recorded in the audit log for every user.
+
+- A batch is limited to 500 users. If more match, narrow the filters first.
+- **Block email domains** (Contain only) adds the users' email domains to the blocked email domains setting before any user is changed. The dry run lists every domain it would block and the ones already blocked. Well-known public mail domains such as gmail.com are skipped, but the list is not exhaustive, so check the domains before you confirm. It needs permission to edit admin settings.
+- If the matching users change between the dry run and the confirm, nothing is applied and the dialog shows the new count to confirm again.
+- After a bulk action, an **Undo** button is shown for 30 seconds. It restores the whole batch and unblocks the email domains the batch added (domains that were already blocked stay blocked). Sessions that were ended stay ended.
+
+### Recent activity
+
+The **Recent activity** button shows a panel of recent user activity across the platform.
+
+## User Profile Page
+
+Each user has a full-page profile at `/admin/users/<userId>`, opened by clicking the user's row in the Users tab or **Open profile** in the row menu. It is admin-only, like the rest of the admin panel. The **Users** button at the top returns to the Users tab.
+
+The header shows the user's name, email, avatar, account status, user level, organization, signup method, and created and last-active dates. **Adjust credits** and **Suspend** are quick actions; **More** contains the other account actions.
+
+To edit the user's name or email, open **More > Edit profile**. The username is displayed read-only. Change the fields in the modal and click **Save Changes**. Wait for the success notification before closing the modal; the profile header refreshes after a successful save. If saving fails, keep the modal open, correct any validation error, and retry.
+
+The page has six tabs. The selected tab is kept in the URL, for example `?tab=activity` or `?tab=admin` (Overview is the default and has no parameter), so a link can open a specific tab.
+
+| Tab | Contents |
+|-----|----------|
+| **Overview** | Account details, access, subscription, recent activity, and internal notes |
+| **Activity** | The user's recent activity, including recorded API requests |
+| **Credits** | Credit ledger and spending |
+| **API keys** | The user's API keys and recent recorded requests |
+| **Sign-ins** | Sign-in history and sessions |
+| **Admin log** | Administrative actions recorded for the user |
+
+Use **More** for role, product-access, subscription, compliance, restriction, and deletion actions (see [Admin Actions](#admin-actions-ban-moderate-delete)).
+
+Old links of the form `/admin?userId=<userId>` redirect to the user's profile page. An unknown or malformed user id shows **User not found**; any other loading error shows a retry button.
+
+### Recorded API requests
+
+Open **API keys > Recent API requests** to inspect each recorded call's time, method,
+endpoint, response status, latency, IP and key. Filter by key and UTC date range, use
+**Load more requests** for older records, or **Refresh** to check for new activity.
+**All keys** also includes retained requests from deleted keys. Endpoint query strings
+and fragments are omitted from this view.
+
+The **API** filter in **Activity** shows these same requests alongside the other
+timeline sources. Adjacent matching calls within a minute are grouped; the count
+covers loaded activity. Click a request to open **API keys** for individual records.
+A failed response is marked for attention; it does not establish abuse.
+
+Records are retained for 90 days and cover only recorded API-key requests. An empty
+result does not establish that no requests were attempted. If a read fails, use the
+retry action rather than treating the error as inactivity. Check the selected key,
+UTC date range and retention window when a request is missing.
+
+## Risk flags
+
+Under the profile statistics, named risk badges show activity that needs a closer look.
+Click a badge to see its rule, the exact UTC window, and the counts or values behind it.
+There is no combined risk score, and a flag does not automatically restrict the account.
+
+| Badge | Rule |
+|-------|------|
+| **Repeated failed sign-ins** | At least 5 failed identity checks or blocked sessions in 24 hours. Failed passwords are not included in this audit source. |
+| **New IP or device** | A successful sign-in in the last 7 days uses an IP or browser and operating system combination absent from earlier retained successful sign-ins. At least 3 earlier successes are required. |
+| **Credit spend spike** | Spending over the current UTC day and 6 previous days reaches 3 times the preceding 30-day average rate. The baseline needs at least 7 active days and 100 credits, and recent spend must reach 200 credits. |
+| **Prior moderation** | At least 1 image moderation incident in 30 days, excluding incidents reviewed as false positives. |
+
+For sign-in flags, **View in timeline** opens the Activity tab filtered to sign-ins
+and the UTC calendar days covering the evidence window. **View credits** opens
+the Credits tab for a spend spike. **Open compliance** opens the moderation history.
+Sign-in comparisons use retained audit history, so they cannot establish whether an
+address or device appeared before that history.
+
+**No risk flags** means none of these rules fired. It does not establish that the account
+is safe or that every kind of sign-in failure was recorded. If the flags cannot be loaded,
+use **Try again**; a read failure is shown separately from an empty result. Access requires
+an administrator session; API keys cannot read the IP evidence.
+
+## Internal notes and profile tags
+
+On a user's profile, **Overview > Internal notes** stores plain-text support context.
+Reading requires `support:read`; adding, editing, and deleting require
+`users:moderate`. Full administrators have both permissions (see
+[Delegated Admin Permissions](./delegated-permissions.md)). Notes show their
+original author and time, and **View history** shows attributed revisions.
+Deletion hides a note while retaining its history; the Undo notification restores
+it. Legacy inline notes remain visible but read-only. Impersonated sessions cannot
+write notes.
+
+In **Access > Tags > Edit**, add or remove free-form tags with suggestions from
+existing tags. Saving requires `settings:manage`. Tags are limited to 100 distinct
+values of 1 to 64 characters. Role and product-access grants use their dedicated
+actions and cannot be changed through the free-form tag editor. Successful saves
+refresh the user list and tag filters. Activity and Admin log record note actions
+without note bodies, and tag actions with before/after values.
+
+If the notes card is missing, check the signed-in administrator's `support:read`
+permission. Use **Reload notes** or **Reload history** after a read failure. A stale
+note version or tag snapshot is rejected: reload the profile and reapply the change
+to the current state. If a tag is too long or duplicates another tag, correct it
+before saving.
 
 ## Filtering
 
-### Organization Filter
+Click **Filter** to add a filter chip. Each chip shows its current value; click it to change the value, or remove it. **Clear filters** removes them all.
 
-A multi-select dropdown for filtering users by organization. Options include:
+| Filter | Values |
+|--------|--------|
+| Status | Active, Suspended, Restricted |
+| Plan | DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser |
+| Risk | High, Medium, Low (users with no risk assessment match none of these) |
+| Signed up | Last hour, day, week, or month |
+| Sign-in method | Email, Google, GitHub, Facebook, Okta, SAML |
+| Email verified | Verified, Not verified |
+| API keys | Has keys, No keys |
+| Organization | One or more organizations, or **No organization** |
+| Tags | One or more tags, including **Admin** for super admins |
 
-- **All** - Shows users from all organizations (default)
-- **Unassigned** - Shows users not assigned to any organization
-- Individual organizations listed from the system
+The **Signed up** column shows the first provider linked to the account, or Email when none is linked. The **Sign-in method** filter matches any linked provider, and Email matches only accounts with no linked provider. An account created with an email code that later linked Google shows as Google, and appears under the Google filter but not Email.
 
-Multiple organizations can be selected simultaneously. Selecting "All" clears other selections.
+Filters are applied on the server, so they cover every user, not just the current page. Changing a filter returns to page 1.
 
-### Tag Filter
+## Grouping by email domain
 
-A multi-select dropdown for filtering users by tags. Available tags include:
-
-- **Admin** - Always present as a predefined tag
-- **Predefined User Tags** - System-defined tags imported from `@bike4mind/common`
-- **Custom Tags** - Additional tags retrieved from the API
-
-Multiple tags can be selected to narrow results.
+Set **Group by** to **Email domain** to list users under a header per email domain, with the user count for each. **Show only this domain** on a header filters the list to that domain (subdomains included).
 
 ## Sorting
 
-| Control | Options |
-|---------|---------|
-| **Sort By** | `Created At` (default), `Name` |
-| **Order** | Toggle button switching between `A -> Z` (ascending) and `Z -> A` (descending) |
-
-Changing the sort field or order resets to page 1.
+Click the **User**, **Signed up**, **Last active**, or **Credits** column header to sort by it; click again to reverse the order. The default is **Signed up**, newest first. Changing the sort returns to page 1.
 
 ## Pagination
 
-Pagination controls appear both above and below the user list. Options include:
-
-| Setting | Values |
-|---------|--------|
-| Items per page | 5, 10 (default), 20 |
-| Navigation | Previous / Next buttons with current page and total pages display |
-| Total count | Displayed as "Total Users: N" |
+The footer below the table shows the range of rows on the page (for example "1 to 25 of 1,234"), a **Rows per page** selector (25, 50, or 100; 25 is the default), and previous and next page buttons.
 
 ## Creating a User
 
@@ -135,7 +330,7 @@ Available editable fields include:
 
 ### Login as User
 
-The Full view includes a **Login as User** button that allows an admin to impersonate the selected user for debugging purposes.
+The user profile page header has a **Login as User** button that allows an admin to impersonate the selected user for debugging purposes.
 
 ### Send System Message
 
@@ -147,7 +342,7 @@ Bike4Mind uses passwordless email authentication. When a user logs in, a one-tim
 
 ## User Permissions
 
-The Permissions section in Full view provides:
+The **Roles** section on the profile page's Overview tab provides:
 
 | Control | Description |
 |---------|-------------|
@@ -156,19 +351,24 @@ The Permissions section in Full view provides:
 | **Predefined Tags** | Checkboxes for system-defined tags |
 | **Custom Tags** | Text input to add comma-separated custom tags, with remove buttons for each custom tag |
 
+To give a user part of the admin area without making them a Super Admin, edit their **Admin permissions** on the Access card. See [Delegated Admin Permissions](./delegated-permissions.md#granting-permissions).
+
 ## Admin Actions (Ban, Moderate, Delete)
 
-The Admin Actions section provides destructive user operations:
+Destructive user operations live in the **Danger zone** on the Admin tab of the user profile page:
 
 | Action | Description |
 |--------|-------------|
 | **Ban** | Checkbox toggle. Bans the user without deleting their account. |
 | **Moderate** | Checkbox toggle. Moderated users cannot use AI features. |
-| **Delete** | Requires typing "DELETE" in a text field, then clicking the Delete button. A confirmation modal appears before the deletion is executed. This action cannot be undone. |
+| **Delete** | Requires typing "DELETE" in a text field, then clicking the Delete button. A confirmation modal appears before the deletion is executed. This action cannot be undone. Deleting from the profile page returns you to the Users tab. |
+| **Compliance** | Opens the user's compliance details. |
+
+Ban and moderation changes are staged like any other field. When you click **Update** with a ban or moderation change pending, a confirmation dialog names the change before anything is saved; **Cancel** saves nothing.
 
 ## Export
 
-The **Download** button exports all users matching the current search and filter criteria as a CSV file named `users.csv`. The CSV includes the following columns:
+The **Export CSV** button exports all users matching the current search and filter criteria as a CSV file named `users.csv`. The CSV includes the following columns:
 
 | Column | Description |
 |--------|-------------|
@@ -182,15 +382,15 @@ The **Download** button exports all users matching the current search and filter
 | Is Admin | Yes/No |
 | Is Banned | Yes/No |
 
-The export fetches all matching users (not just the current page) before generating the CSV.
+The export includes all matching users, not just the current page, up to 15,000 rows. If the export hits that cap, a warning asks you to narrow the filters to export the rest.
 
 ## Best Practices
 
-- Use **Slim** view for quick scanning and **Full** view for detailed user administration.
+- Use the list for quick scanning and the user's profile page for detailed administration.
 - When creating external users, assign the **Customer** tag to provide appropriate model access.
 - Prefer **banning** over **deleting** users to preserve audit trails. Deletion is permanent.
 - Always confirm the environment banner color before performing destructive actions like user deletion.
-- Use the **Download** feature to maintain offline records of user lists before making bulk changes.
+- Use **Export CSV** to maintain offline records of user lists before making bulk changes.
 - Use organization and tag filters together to narrow down to specific user cohorts.
 - Review user permissions regularly and grant only the minimum necessary access.
 - Notify users before making major changes to their accounts.
@@ -199,10 +399,20 @@ The export fetches all matching users (not just the current page) before generat
 
 ### Upgrading a User
 
-1. Switch to **Full** view mode to access inline editing.
+1. Open the user's profile page by clicking their row.
 2. Click the **User Level** button to cycle through levels (DemoUser, PaidUser, VIPUser, ManagerUser, AdminUser).
 3. Alternatively, add specific permission tags for fine-grained access control.
 4. Click **Update** to save changes.
+
+### Tracing an LLM provider safety notice to an account
+
+Requests to Anthropic and OpenAI carry an opaque per-user identifier: a 64-character hex SHA-256 of the user ID, sent as Anthropic `metadata.user_id` and OpenAI `safety_identifier`. When a provider sends a safety notice that quotes this identifier:
+
+1. Press Cmd/Ctrl+K on the admin page to open **Admin commands**. Full admins only.
+2. Paste the 64-character identifier. The matching account is listed with its masked email and account status: `active`, `throttled`, `suspend_pending` (the suspension threshold was reached and is waiting for an admin to confirm), `suspended` (also shown for an account suspended from its profile) or `deleted`.
+3. Select it to open the user profile, where you see the full email and can act on the account.
+
+Each lookup in **Admin commands** is recorded in the admin audit log without the identifier itself. You can also paste the identifier into the Users tab search. No result means the identifier does not belong to a user on this deployment.
 
 ### Handling Support Requests
 
@@ -258,4 +468,5 @@ The export fetches all matching users (not just the current page) before generat
 - [Admin Dashboard Overview](./overview.md) - Overall admin panel navigation
 - [Email Verification](./email-verification.md) - Managing email verification status
 - [User Migration](./user-migration.md) - Bulk user migration
+- [Delegated Admin Permissions](./delegated-permissions.md) - Permission model for delegated admins
 - [Analytics](./analytics.md) - User activity analytics

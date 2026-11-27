@@ -50,6 +50,11 @@ export const COMMANDS: CommandDefinition[] = [
     aliases: ['sessions'],
   },
   {
+    name: 'peers',
+    description: 'Discover and message local CLI sessions (opt-in)',
+    args: '<on|off|list|send|reply|inbox|status|cancel|accept|hold|refuse|release|delete>',
+  },
+  {
     name: 'config',
     description: 'Open interactive configuration editor',
   },
@@ -289,7 +294,7 @@ export function isBuiltInCommand(name: string): boolean {
  * hearth); a drift guard in commands.test.ts derives the names from those modules
  * and fails if this list drifts.
  */
-export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'quest', 'hearth'];
+export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'hearth'];
 
 /**
  * Checks if a command name is reserved (a built-in OR a first-party feature command).

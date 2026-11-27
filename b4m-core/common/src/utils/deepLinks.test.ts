@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADMIN_DLQ_REPLAY_TAB_SLUG,
   ADMIN_FEEDBACK_TAB_SLUG,
+  ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_TAB_PARAM,
   ADMIN_USERS_TAB_SLUG,
   AUDIT_ENTRY_ID_PARAM,
+  DLQ_QUEUE_PARAM,
   FEEDBACK_ID_PARAM,
   MODERATION_INCIDENT_ID_PARAM,
   QUEST_ID_PARAM,
   adminAuditLogPath,
+  adminDlqReplayPath,
   adminFeedbackRecordPath,
   adminModerationIncidentPath,
+  adminUserProfilePath,
   sessionPath,
   sessionTurnPath,
   toAbsoluteUrl,
@@ -24,10 +29,17 @@ describe('deepLinks', () => {
     expect(url.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1');
   });
 
+  it('addresses the Dead letters tab, optionally on one queue', () => {
+    expect(adminDlqReplayPath()).toBe(`/admin?${ADMIN_TAB_PARAM}=${ADMIN_DLQ_REPLAY_TAB_SLUG}`);
+    const url = new URL(adminDlqReplayPath('fab-file-chunk'), 'https://app.example');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_DLQ_REPLAY_TAB_SLUG);
+    expect(url.searchParams.get(DLQ_QUEUE_PARAM)).toBe('fab-file-chunk');
+  });
+
   it('addresses a moderation incident by tab slug and id', () => {
     const url = new URL(adminModerationIncidentPath('inc-1'), 'https://app.example');
     expect(url.pathname).toBe('/admin');
-    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_MODERATION_INCIDENTS_TAB_SLUG);
     expect(url.searchParams.get(MODERATION_INCIDENT_ID_PARAM)).toBe('inc-1');
   });
 
@@ -53,6 +65,17 @@ describe('deepLinks', () => {
     const record = new URL(adminFeedbackRecordPath('fb-1&tab=users'), 'https://app.example');
     expect(record.searchParams.get(FEEDBACK_ID_PARAM)).toBe('fb-1&tab=users');
     expect(record.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_FEEDBACK_TAB_SLUG);
+  });
+
+  it('opens one user on the admin Users tab', () => {
+    const url = new URL(adminUserProfilePath('abc123'), 'https://app.example');
+    expect(url.pathname).toBe('/admin');
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get('userId')).toBe('abc123');
+
+    const crafted = new URL(adminUserProfilePath('x&tab=billing'), 'https://app.example');
+    expect(crafted.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(crafted.searchParams.get('userId')).toBe('x&tab=billing');
   });
 
   it('joins an origin whether or not it carries a trailing slash', () => {

@@ -7,6 +7,16 @@ import type { SQSEvent } from 'aws-lambda';
 // (apps/workers/src/selfhost/selfHostWorker.ts) - keep all three in sync.
 export const FAB_FILE_CHUNK_MAX_RECEIVE_COUNT = 3; // mirrors fabFileChunkQueue.dlq.retry
 export const FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT = 3; // mirrors fabFileVectorizeQueue.dlq.retry
+export const FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC = 360; // mirrors fabFileVectorizeQueue.visibilityTimeout
+/**
+ * Shortest redelivery delay for a vectorize message handed back on a rate-window denial
+ * (returnRecordForRedelivery). A thrown failure waits out the visibility timeout, so the delivery
+ * budget spans (MAX_RECEIVE_COUNT - 1) x VISIBILITY_TIMEOUT_SEC of rate windows (2 x 6 = 12 minutes).
+ * Redelivering on the window's own reset would burn the same deliveries in a few minutes and fail
+ * files under exactly the saturated ingest that path is for, so a handed-back delivery waits at
+ * least as long as a thrown one. Derived from the visibility timeout, so it follows infra/queues.ts.
+ */
+export const FAB_FILE_VECTORIZE_RATE_DENIAL_MIN_REDELIVERY_SEC = FAB_FILE_VECTORIZE_VISIBILITY_TIMEOUT_SEC;
 // Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
 export const GENERATION_CALLBACK_MAX_RECEIVE_COUNT = 5; // mirrors generationCallbackQueue.dlq.retry
 // Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).

@@ -4,7 +4,8 @@ import ResearchAgentList from './List';
 import ResearchAgentContent from './Content';
 import ResearchAgentForm from './Form';
 import { IResearchAgent } from '@bike4mind/common';
-import { ArrowBack, Close } from '@mui/icons-material';
+import ArrowBack from '@mui/icons-material/ArrowBack';
+import Close from '@mui/icons-material/Close';
 import {
   useCreateResearchAgent,
   useDeleteResearchAgent,

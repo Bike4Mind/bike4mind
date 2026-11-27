@@ -1,7 +1,7 @@
 // apps/client/server/utils/skillAccess.ts
 import { organizationRepository } from '@bike4mind/database/infra';
 import { ISkill, IUserShare, IGroupShare, Permission, canAdministerOrganization } from '@bike4mind/common';
-import { skillContentHash } from '@server/skillMarket/contentHash';
+import { skillContentHash } from '@bike4mind/server-utils/skillMarket/contentHash';
 
 /**
  * Centralized access predicates for a skill, shared by every skill endpoint so

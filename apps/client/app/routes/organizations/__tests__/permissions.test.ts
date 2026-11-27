@@ -1,143 +1,32 @@
 import { describe, it, expect } from 'vitest';
 import { Permission, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import {
+  canManageOrgConnectors,
+  canManageOrgDomains,
   canManageOrgIntegrations,
+  canManageOrgSettings,
+  IntegrationSections,
+  LEGACY_INTEGRATION_TABS,
+  resolveIntegrationSection,
+  visibleIntegrationSections,
   canViewOrgAnalysis,
   canViewOrgBilling,
   canViewOrgUsage,
   OrganizationTabs,
+  ORG_TAB_AUDIENCE,
+  isOrgTabLocked,
   resolveAccessibleTab,
+  resolveOrgTabView,
 } from '../orgTabAccess';
 
 /**
  * Tests the organization permission logic from /routes/organizations/$id.tsx.
  */
 describe('Organization Permissions', () => {
-  // Helper function to simulate the permission checking logic
-  const getUserPermissions = (
-    currentUser: { id: string; isAdmin?: boolean } | null,
-    organization: { userId: string; users: Array<{ userId: string; permissions: Permission[] }> } | null
-  ): Permission[] => {
-    if (!currentUser || !organization) return [];
-    if (currentUser.isAdmin) return [Permission.read, Permission.update, Permission.share];
-    if (currentUser.id === organization.userId) return [Permission.read, Permission.update, Permission.share];
-    const memberDetails = organization.users.find(u => u.userId === currentUser.id);
-    return memberDetails?.permissions || []; // No permissions for non-members
-  };
-
-  const mockOrganization = {
-    userId: 'owner123',
-    users: [
-      { userId: 'owner123', permissions: [Permission.read, Permission.update, Permission.share] },
-      { userId: 'member456', permissions: [Permission.read, Permission.update] },
-      { userId: 'viewer789', permissions: [Permission.read] },
-    ],
-  };
-
-  describe('Owner Permissions', () => {
-    it('should grant full permissions to organization owner', () => {
-      const currentUser = { id: 'owner123' };
-      const permissions = getUserPermissions(currentUser, mockOrganization);
-
-      expect(permissions).toEqual([Permission.read, Permission.update, Permission.share]);
-    });
-
-    it('should grant full permissions to owner even if not in users array', () => {
-      const orgWithoutOwnerInUsers = {
-        userId: 'owner999',
-        users: [{ userId: 'member456', permissions: [Permission.read] }],
-      };
-      const currentUser = { id: 'owner999' };
-      const permissions = getUserPermissions(currentUser, orgWithoutOwnerInUsers);
-
-      expect(permissions).toEqual([Permission.read, Permission.update, Permission.share]);
-    });
-  });
-
-  describe('Admin Permissions', () => {
-    it('should grant full permissions to system admin', () => {
-      const currentUser = { id: 'admin123', isAdmin: true };
-      const permissions = getUserPermissions(currentUser, mockOrganization);
-
-      expect(permissions).toEqual([Permission.read, Permission.update, Permission.share]);
-    });
-
-    it('should grant member-level permissions to regular member (not admin)', () => {
-      const currentUser = { id: 'member456' }; // Regular member without admin
-      const permissions = getUserPermissions(currentUser, mockOrganization);
-
-      expect(permissions).toEqual([Permission.read, Permission.update]); // Member permissions
-    });
-  });
-
-  describe('Member Permissions', () => {
-    it('should grant member-level permissions from organization.users', () => {
-      const currentUser = { id: 'member456' };
-      const permissions = getUserPermissions(currentUser, mockOrganization);
-
-      expect(permissions).toEqual([Permission.read, Permission.update]);
-    });
-
-    it('should grant read-only permissions to viewer', () => {
-      const currentUser = { id: 'viewer789' };
-      const permissions = getUserPermissions(currentUser, mockOrganization);
-
-      expect(permissions).toEqual([Permission.read]);
-    });
-
-    it('should grant no permissions to non-member (security fix)', () => {
-      const currentUser = { id: 'stranger999' };
-      const permissions = getUserPermissions(currentUser, mockOrganization);
-
-      expect(permissions).toEqual([]); // No permissions for non-members
-    });
-  });
-
-  describe('Edge Cases', () => {
-    it('should return empty array when currentUser is null', () => {
-      const permissions = getUserPermissions(null, mockOrganization);
-
-      expect(permissions).toEqual([]);
-    });
-
-    it('should return empty array when organization is null', () => {
-      const currentUser = { id: 'user123' };
-      const permissions = getUserPermissions(currentUser, null);
-
-      expect(permissions).toEqual([]);
-    });
-  });
-
-  describe('canManageOrg Helper', () => {
-    const canManageOrg = (permissions: Permission[]): boolean => {
-      return permissions.includes(Permission.share) || permissions.includes(Permission.update);
-    };
-
-    it('should allow management with share permission', () => {
-      const permissions = [Permission.read, Permission.share];
-      expect(canManageOrg(permissions)).toBe(true);
-    });
-
-    it('should allow management with update permission', () => {
-      const permissions = [Permission.read, Permission.update];
-      expect(canManageOrg(permissions)).toBe(true);
-    });
-
-    it('should not allow management with only read permission', () => {
-      const permissions = [Permission.read];
-      expect(canManageOrg(permissions)).toBe(false);
-    });
-
-    it('should allow management with full permissions', () => {
-      const permissions = [Permission.read, Permission.update, Permission.share];
-      expect(canManageOrg(permissions)).toBe(true);
-    });
-  });
-
   describe('canViewOrgAnalysis', () => {
     // The predicate $id.tsx runs, imported rather than re-declared: a copy here would pass whether
     // or not the page still agreed with it. Must match the feedback-report routes' server gate
-    // (orgAccess.ts, verifyOrgAccess) - admin, org owner, or any manager.
+    // (orgAccess.ts, verifyOrgPermission 'manageContent') - admin, org owner, or any manager.
     const org = {
       userId: 'owner123',
       adminUserIds: ['orgManager789'],
@@ -158,7 +47,7 @@ describe('Organization Permissions', () => {
 
     it('denies a plain member with manage permissions but no owner/manager role', () => {
       // A member can hold share/update (canManageOrg true) yet not be owner/manager;
-      // verifyOrgAccess would 404 them, so the tab must stay hidden.
+      // verifyOrgPermission 'manageContent' would 404 them, so the tab must stay hidden.
       expect(canViewOrgAnalysis({ id: 'member456' }, { userId: 'owner123' })).toBe(false);
     });
 
@@ -168,12 +57,23 @@ describe('Organization Permissions', () => {
     });
   });
 
-  // Usage (credit spend) and the Integrations / GitHub API / Webhooks tabs share the
-  // verifyOrgOwner tier: owner or platform admin, never a manager.
-  describe.each([
-    ['canViewOrgUsage', canViewOrgUsage],
-    ['canManageOrgIntegrations', canManageOrgIntegrations],
-  ])('%s', (_name, gate) => {
+  describe('canViewOrgUsage', () => {
+    const org = { userId: 'owner', adminUserIds: ['manager', 'lapsed'], users: [{ userId: 'manager' }] };
+    it('admits current managers to usage but not billing', () => {
+      expect(canViewOrgUsage({ id: 'manager' }, org)).toBe(true);
+      expect(canViewOrgBilling({ id: 'manager' }, org)).toBe(false);
+    });
+    it('admits a billing manager', () => {
+      const withBilling = { ...org, billingManagerUserIds: ['billing'], users: [...org.users, { userId: 'billing' }] };
+      expect(canViewOrgUsage({ id: 'billing' }, withBilling)).toBe(true);
+    });
+    it('denies former managers and unrelated users', () => {
+      expect(canViewOrgUsage({ id: 'lapsed' }, org)).toBe(false);
+      expect(canViewOrgUsage({ id: 'stranger' }, org)).toBe(false);
+    });
+  });
+
+  describe.each([['canManageOrgIntegrations', canManageOrgIntegrations]])('%s', (_name, gate) => {
     const org = {
       userId: 'owner123',
       adminUserIds: ['orgManager789'],
@@ -223,11 +123,9 @@ describe('Organization Permissions', () => {
       expect(canViewOrgBilling({ id: 'manager456' }, org)).toBe(false);
     });
 
-    // Narrower than canViewOrgUsage on purpose: portal.ts has no admin bypass, so an admin who is
-    // not the owner would get a Billing Portal button that rejects them. Admin -> Organizations is
-    // where a platform admin acts on an org's billing.
-    it('denies a platform admin who is not the owner', () => {
-      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(false);
+    // Every billing route gates on manageBilling, which a platform admin holds.
+    it('allows a platform admin who is not the owner', () => {
+      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
     });
 
     it('denies a stranger', () => {
@@ -343,6 +241,9 @@ describe('resolveAccessibleTab', () => {
     canManageIntegrations: true,
     canManageGroups: true,
     canViewBilling: true,
+    canManageConnectors: true,
+    canManageApiKeys: true,
+    canManageDomains: true,
   };
 
   it('leaves a tab the caller may see alone', () => {
@@ -356,10 +257,10 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
-  // A manager: Analysis is open to them, Usage (credit spend) is owner-only.
-  it('bounces Usage but keeps Analysis for a manager', () => {
-    const manager = { ...all, canViewUsage: false, canManageIntegrations: false, canViewBilling: false };
-    expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Overview);
+  it('keeps Usage and Analysis but bounces Billing for a manager', () => {
+    const manager = { ...all, canViewUsage: true, canManageIntegrations: false, canViewBilling: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Usage, manager)).toBe(OrganizationTabs.Usage);
+    expect(resolveAccessibleTab(OrganizationTabs.Billing, manager)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Analysis, manager)).toBe(OrganizationTabs.Analysis);
   });
 
@@ -377,22 +278,24 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
-  // Same shape for the Integrations, GitHub API and Webhooks tabs: every route behind them is
-  // verifyOrgOwner.
-  it('bounces Integrations, GitHub API and Webhooks for a caller who may manage the org but is not its owner', () => {
-    const managing = { ...all, canManageIntegrations: false };
-    expect(resolveAccessibleTab(OrganizationTabs.Integrations, managing)).toBe(OrganizationTabs.Overview);
-    expect(resolveAccessibleTab(OrganizationTabs.GitHub, managing)).toBe(OrganizationTabs.Overview);
-    expect(resolveAccessibleTab(OrganizationTabs.Webhooks, managing)).toBe(OrganizationTabs.Overview);
+  // GitHub, Slack and Webhooks need manageIntegrations, which a manager does not hold; Connectors
+  // needs managePolicies, which a manager does. The Integrations tab stands while any one of its sections does.
+  it('bounces Integrations only when the caller may see none of its sections', () => {
+    const none = { ...all, canManageIntegrations: false, canManageConnectors: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, none)).toBe(OrganizationTabs.Overview);
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, { ...none, canManageConnectors: true })).toBe(
+      OrganizationTabs.Integrations
+    );
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, { ...none, canManageIntegrations: true })).toBe(
+      OrganizationTabs.Integrations
+    );
   });
 
-  it.each([OrganizationTabs.Integrations, OrganizationTabs.GitHub, OrganizationTabs.Webhooks])(
-    'keeps %s reachable for the owner, keyed on canManageIntegrations alone',
-    tab => {
-      expect(resolveAccessibleTab(tab, all)).toBe(tab);
-      expect(resolveAccessibleTab(tab, { ...all, canManageOrg: false })).toBe(tab);
-    }
-  );
+  it('keeps Integrations reachable for the owner whether or not canManageOrg holds', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, { ...all, canManageOrg: false })).toBe(
+      OrganizationTabs.Integrations
+    );
+  });
 
   it('keeps Settings reachable for that same caller', () => {
     const managing = { ...all, canViewBilling: false, canManageIntegrations: false };
@@ -408,16 +311,278 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
+  it('opens the API Keys tab only with manageKeys', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.ApiKeys, all)).toBe(OrganizationTabs.ApiKeys);
+    expect(resolveAccessibleTab(OrganizationTabs.ApiKeys, { ...all, canManageApiKeys: false })).toBe(
+      OrganizationTabs.Overview
+    );
+  });
+
   it('never bounces the tabs every member may see', () => {
     const none = {
       canManageOrg: false,
       canViewUsage: false,
       canViewAnalysis: false,
       canManageIntegrations: false,
+      canManageDomains: false,
+      canManageConnectors: false,
       canManageGroups: false,
       canViewBilling: false,
     };
     expect(resolveAccessibleTab(OrganizationTabs.Overview, none)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Members, none)).toBe(OrganizationTabs.Members);
+  });
+});
+
+describe('canManageOrgConnectors', () => {
+  // The Connectors tab fronts organizations/[id]/custom-mcp/*, which verifyOrgPermission 'managePolicies' gates to the
+  // owner, a current manager or a platform admin.
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'lapsed1'],
+    users: [
+      { userId: 'manager1', permissions: [Permission.read] },
+      { userId: 'member1', permissions: [Permission.read, Permission.update] },
+    ],
+  };
+
+  it('admits the owner, a current manager and a platform admin', () => {
+    expect(canManageOrgConnectors({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgConnectors({ id: 'manager1' }, org)).toBe(true);
+    expect(canManageOrgConnectors({ id: 'stranger', isAdmin: true }, org)).toBe(true);
+  });
+
+  it('refuses a member with update permission, a manager no longer on the roster, and a stranger', () => {
+    expect(canManageOrgConnectors({ id: 'member1' }, org)).toBe(false);
+    expect(canManageOrgConnectors({ id: 'lapsed1' }, org)).toBe(false);
+    expect(canManageOrgConnectors({ id: 'stranger' }, org)).toBe(false);
+  });
+
+  it('fails closed while the user or org is loading', () => {
+    expect(canManageOrgConnectors(null, org)).toBe(false);
+    expect(canManageOrgConnectors({ id: 'owner1' }, undefined)).toBe(false);
+  });
+
+  it('offers the Connectors section to a manager and the owner-only sections to the owner', () => {
+    expect(visibleIntegrationSections({ canManageIntegrations: false, canManageConnectors: true })).toEqual([
+      IntegrationSections.Connectors,
+    ]);
+    expect(visibleIntegrationSections({ canManageIntegrations: true, canManageConnectors: true })).toEqual([
+      IntegrationSections.Slack,
+      IntegrationSections.GitHub,
+      IntegrationSections.Webhooks,
+      IntegrationSections.Connectors,
+    ]);
+  });
+});
+
+describe('resolveIntegrationSection', () => {
+  const owner = { canManageIntegrations: true, canManageConnectors: true };
+  const manager = { canManageIntegrations: false, canManageConnectors: true };
+
+  it('honours a requested section the caller may see', () => {
+    expect(resolveIntegrationSection('webhooks', owner)).toBe(IntegrationSections.Webhooks);
+  });
+
+  it('falls back to the first visible section for a missing, unknown or hidden one', () => {
+    expect(resolveIntegrationSection(undefined, owner)).toBe(IntegrationSections.Slack);
+    expect(resolveIntegrationSection('nope', owner)).toBe(IntegrationSections.Slack);
+    expect(resolveIntegrationSection('github', manager)).toBe(IntegrationSections.Connectors);
+  });
+
+  it('resolves to nothing when no section is visible', () => {
+    expect(resolveIntegrationSection('github', { canManageIntegrations: false, canManageConnectors: false })).toBe(
+      undefined
+    );
+  });
+});
+
+describe('LEGACY_INTEGRATION_TABS', () => {
+  it('maps every pre-merge integration tab onto its section', () => {
+    expect(LEGACY_INTEGRATION_TABS).toEqual({
+      github: IntegrationSections.GitHub,
+      webhooks: IntegrationSections.Webhooks,
+      connectors: IntegrationSections.Connectors,
+    });
+  });
+});
+
+describe('canManageOrgSettings', () => {
+  // Mirrors organizationService.update: owner, current manager or platform admin. A sharing-ACL
+  // row never opens it.
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'gone1'],
+    users: [
+      { userId: 'manager1', permissions: [Permission.read] },
+      { userId: 'editor1', permissions: [Permission.read, Permission.update, Permission.share] },
+      { userId: 'reader1', permissions: [Permission.read] },
+    ],
+  };
+
+  it('admits the owner, a current manager and a platform admin', () => {
+    expect(canManageOrgSettings({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgSettings({ id: 'manager1' }, org)).toBe(true);
+    expect(canManageOrgSettings({ id: 'admin9', isAdmin: true }, org)).toBe(true);
+  });
+
+  it('refuses a member holding update or share on the ACL row', () => {
+    expect(canManageOrgSettings({ id: 'editor1' }, org)).toBe(false);
+  });
+
+  it('refuses a read-only member, a stale manager, a stranger, and a caller while loading', () => {
+    expect(canManageOrgSettings({ id: 'reader1' }, org)).toBe(false);
+    expect(canManageOrgSettings({ id: 'gone1' }, org)).toBe(false);
+    expect(canManageOrgSettings({ id: 'stranger' }, org)).toBe(false);
+    expect(canManageOrgSettings(null, org)).toBe(false);
+    expect(canManageOrgSettings({ id: 'owner1' }, undefined)).toBe(false);
+  });
+});
+
+describe('canManageOrgDomains', () => {
+  // The Domains tab fronts organizations/[id]/domains/*, gated by canAdministerOrganization.
+  const org = {
+    userId: 'owner1',
+    adminUserIds: ['manager1', 'lapsed1'],
+    users: [
+      { userId: 'manager1', permissions: [Permission.read] },
+      { userId: 'member1', permissions: [Permission.read, Permission.update] },
+    ],
+  };
+
+  it('admits the owner, a current manager and a platform admin', () => {
+    expect(canManageOrgDomains({ id: 'owner1' }, org)).toBe(true);
+    expect(canManageOrgDomains({ id: 'manager1' }, org)).toBe(true);
+    expect(canManageOrgDomains({ id: 'stranger', isAdmin: true }, org)).toBe(true);
+  });
+
+  it('refuses a plain member, a manager no longer on the roster, a stranger, and a still-loading page', () => {
+    expect(canManageOrgDomains({ id: 'member1' }, org)).toBe(false);
+    expect(canManageOrgDomains({ id: 'lapsed1' }, org)).toBe(false);
+    expect(canManageOrgDomains({ id: 'stranger' }, org)).toBe(false);
+    expect(canManageOrgDomains(null, org)).toBe(false);
+    expect(canManageOrgDomains({ id: 'owner1' }, undefined)).toBe(false);
+  });
+
+  it('hides the tab on a personal organization, even for its owner or a platform admin', () => {
+    const personal = { ...org, personal: true };
+    expect(canManageOrgDomains({ id: 'owner1' }, personal)).toBe(false);
+    expect(canManageOrgDomains({ id: 'stranger', isAdmin: true }, personal)).toBe(false);
+    expect(canManageOrgDomains({ id: 'owner1' }, { ...org, personal: false })).toBe(true);
+  });
+
+  it('bounces a ?tab=domains deep link to Overview for a caller who may not manage domains', () => {
+    const access = {
+      canManageOrg: true,
+      canViewUsage: false,
+      canViewAnalysis: true,
+      canManageIntegrations: false,
+      canManageGroups: false,
+      canViewBilling: false,
+      canManageConnectors: false,
+      canManageDomains: false,
+    };
+    expect(resolveAccessibleTab(OrganizationTabs.Domains, access)).toBe(OrganizationTabs.Overview);
+    expect(resolveAccessibleTab(OrganizationTabs.Domains, { ...access, canManageDomains: true })).toBe(
+      OrganizationTabs.Domains
+    );
+  });
+});
+
+describe('resolveOrgTabView', () => {
+  const manager = {
+    canManageOrg: true,
+    canViewUsage: true,
+    canViewAnalysis: true,
+    canManageIntegrations: false,
+    canManageGroups: true,
+    canViewBilling: false,
+    canManageConnectors: true,
+    canManageDomains: true,
+    canViewAudit: true,
+    seesLockedTabs: true,
+  };
+  const member = {
+    ...manager,
+    canViewUsage: false,
+    canViewAnalysis: false,
+    canManageGroups: false,
+    canManageConnectors: false,
+    canManageDomains: false,
+    canViewAudit: false,
+    seesLockedTabs: false,
+  };
+
+  it('keeps Billing selected but locked for a manager', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, manager)).toEqual({
+      tab: OrganizationTabs.Billing,
+      locked: true,
+    });
+  });
+
+  it('opens Billing unlocked for the owner', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, { ...manager, canViewBilling: true })).toEqual({
+      tab: OrganizationTabs.Billing,
+      locked: false,
+    });
+  });
+
+  it('reports the refused tab for a plain member, who gets no locked entries', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Billing, member)).toEqual({
+      tab: OrganizationTabs.Overview,
+      locked: false,
+      denied: OrganizationTabs.Billing,
+    });
+    expect(resolveOrgTabView(OrganizationTabs.Usage, member).denied).toBe(OrganizationTabs.Usage);
+  });
+
+  it('reports nothing for a tab the caller may open', () => {
+    expect(resolveOrgTabView(OrganizationTabs.Members, member)).toEqual({
+      tab: OrganizationTabs.Members,
+      locked: false,
+    });
+  });
+});
+
+describe('ORG_TAB_AUDIENCE', () => {
+  it('pins the audience of every gated tab and leaves the open tabs out', () => {
+    expect(ORG_TAB_AUDIENCE).toEqual({
+      [OrganizationTabs.Groups]: 'managers',
+      [OrganizationTabs.Usage]: 'managers',
+      [OrganizationTabs.Analysis]: 'managers',
+      [OrganizationTabs.Integrations]: 'managers',
+      [OrganizationTabs.Domains]: 'managers',
+      [OrganizationTabs.ApiKeys]: 'managers',
+      [OrganizationTabs.Audit]: 'managers',
+      [OrganizationTabs.Settings]: 'managers',
+      [OrganizationTabs.Billing]: 'owner',
+    });
+    for (const open of [OrganizationTabs.Overview, OrganizationTabs.Library, OrganizationTabs.Members]) {
+      expect(ORG_TAB_AUDIENCE[open]).toBeUndefined();
+    }
+  });
+});
+
+describe('isOrgTabLocked for a platform admin who is not the owner', () => {
+  const org = { userId: 'owner1', adminUserIds: [] as string[] };
+  const staff = { id: 'staff1', isAdmin: true };
+
+  // Built the way $id.tsx builds it.
+  const access = {
+    canManageOrg: true,
+    canViewUsage: true,
+    canViewAnalysis: true,
+    canManageIntegrations: false,
+    canManageGroups: true,
+    canViewBilling: canViewOrgBilling(staff, org),
+    canManageConnectors: true,
+    canManageDomains: true,
+    canViewAudit: true,
+    seesLockedTabs: isOrgOwnerOrCurrentAdmin(staff, org),
+  };
+
+  it('shows the real Billing tab, not a locked entry', () => {
+    expect(access.canViewBilling).toBe(true);
+    expect(isOrgTabLocked(OrganizationTabs.Billing, access)).toBe(false);
   });
 });

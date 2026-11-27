@@ -26,7 +26,10 @@ describe('startQuestHeartbeat', () => {
     const quest = { id: 'q1', status: 'running' };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural test double for the repo
     const stop = await startQuestHeartbeat(db as any, quest, makeLogger(), 'test');
-    expect(db.quests.update).toHaveBeenCalledWith({ id: 'q1', status: 'running' });
+    expect(db.quests.updateMany).toHaveBeenCalledWith(
+      { _id: 'q1', status: { $nin: ['done', 'stopped'] } },
+      { status: 'running' }
+    );
     stop();
   });
 
@@ -36,7 +39,7 @@ describe('startQuestHeartbeat', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural test double for the repo
     const stop = await startQuestHeartbeat(db as any, quest, makeLogger(), 'test');
     await vi.advanceTimersByTimeAsync(QUEST_HEARTBEAT_INTERVAL_MS * 2);
-    expect(db.quests.updateMany).toHaveBeenCalledTimes(2);
+    expect(db.quests.updateMany).toHaveBeenCalledTimes(3);
     expect(db.quests.updateMany).toHaveBeenCalledWith({ _id: 'q1', status: 'running' }, { status: 'running' });
     stop();
   });
@@ -48,7 +51,7 @@ describe('startQuestHeartbeat', () => {
     const stop = await startQuestHeartbeat(db as any, quest, makeLogger(), 'test');
     stop();
     await vi.advanceTimersByTimeAsync(QUEST_HEARTBEAT_INTERVAL_MS * 3);
-    expect(db.quests.updateMany).not.toHaveBeenCalled();
+    expect(db.quests.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it('skips the write once the quest is no longer running (terminal write won the race)', async () => {
@@ -58,13 +61,13 @@ describe('startQuestHeartbeat', () => {
     const stop = await startQuestHeartbeat(db as any, quest, makeLogger(), 'test');
     quest.status = 'done';
     await vi.advanceTimersByTimeAsync(QUEST_HEARTBEAT_INTERVAL_MS * 2);
-    expect(db.quests.updateMany).not.toHaveBeenCalled();
+    expect(db.quests.updateMany).toHaveBeenCalledTimes(1);
     stop();
   });
 
   it('escalates warn -> error after sustained consecutive failures', async () => {
     const db = makeDb();
-    db.quests.updateMany.mockRejectedValue(new Error('db down'));
+    db.quests.updateMany.mockResolvedValueOnce(undefined).mockRejectedValue(new Error('db down')); // first call is the initial write
     const logger = makeLogger();
     const quest = { id: 'q1', status: 'running' };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural test double for the repo
@@ -78,6 +81,7 @@ describe('startQuestHeartbeat', () => {
   it('resets the failure counter after a successful write (no premature escalation)', async () => {
     const db = makeDb();
     db.quests.updateMany
+      .mockResolvedValueOnce(undefined) // initial write
       .mockRejectedValueOnce(new Error('blip'))
       .mockRejectedValueOnce(new Error('blip'))
       .mockResolvedValueOnce(undefined) // success resets the counter

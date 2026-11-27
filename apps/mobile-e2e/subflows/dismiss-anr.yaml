@@ -1,0 +1,11 @@
+appId: com.bike4mind.app
+---
+# Cold CI emulators sometimes raise "<system app> isn't responding" over the app under test; keep waiting.
+- runFlow:
+    when:
+      platform: Android
+      visible:
+        id: android:id/aerr_wait
+    commands:
+      - tapOn:
+          id: android:id/aerr_wait

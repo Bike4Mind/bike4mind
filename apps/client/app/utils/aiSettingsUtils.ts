@@ -1,10 +1,13 @@
-import { CREDITS_PER_USD_COST, FIXED_TEMPERATURE_MODELS, ModelInfo, pricingTierForTokens } from '@bike4mind/common';
+import {
+  CREDITS_PER_USD_COST,
+  FIXED_TEMPERATURE_MODELS,
+  ModelInfo,
+  isOpenAIModelName,
+  pricingTierForTokens,
+} from '@bike4mind/common';
 import dayjs from 'dayjs';
 
-export const isOpenAIModel = (modelName: string): boolean => {
-  const lowerName = modelName.toLowerCase();
-  return ['gpt', 'o1', 'o3', 'o4'].some(pattern => lowerName.includes(pattern));
-};
+export const isOpenAIModel = isOpenAIModelName;
 
 // Metadata Chip Types
 export type ChipVariant = 'default' | 'blue' | 'green' | 'yellow' | 'red' | 'purple' | 'blue-filled';
@@ -207,6 +210,10 @@ export const getPriceTierTooltip = (priceTier: string, model?: ModelInfo): strin
   if (!rates) return tierText;
   return `${tierText}: ${rates.input} credits per 1M input tokens, ${rates.output} per 1M output`;
 };
+
+// Space thousands separators: the Max output tokens read-out and the notices about that setting
+// share it, so one screen never shows "8 192" beside "8,192".
+export const formatTokenBudget = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
 
 // Smallest default we ever hand a large-context model, so the headroom share below can only
 // raise the old flat cap, never lower it.

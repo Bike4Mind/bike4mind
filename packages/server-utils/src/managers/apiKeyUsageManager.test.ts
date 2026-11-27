@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType } from '@bike4mind/common';
 
-const { createMock } = vi.hoisted(() => ({ createMock: vi.fn() }));
-vi.mock('@bike4mind/database/auth', () => ({ apiKeyUsageLogRepository: { create: createMock } }));
+const { createMock, beginMock, finishMock } = vi.hoisted(() => ({
+  createMock: vi.fn(),
+  beginMock: vi.fn(),
+  finishMock: vi.fn(),
+}));
+vi.mock('@bike4mind/database/auth', () => ({
+  apiKeyUsageLogRepository: {
+    create: createMock,
+    beginCompletionObservation: beginMock,
+    finishCompletionObservation: finishMock,
+  },
+}));
 
 import { ApiKeyUsageManager } from './apiKeyUsageManager';
 
@@ -22,6 +32,51 @@ describe('ApiKeyUsageManager.logUsage', () => {
     createMock.mockResolvedValue({ id: 'log-1' });
   });
 
+  it('persists a start then updates the same terminal row without creating a duplicate', async () => {
+    beginMock.mockResolvedValue('start-id');
+    const completionObservation = {
+      requestId: 'synthetic-request',
+      requestedModel: 'model-alpha',
+      startedAt: '2026-01-01T12:00:00Z',
+      outcome: 'unknown' as const,
+    };
+    expect(
+      await ApiKeyUsageManager.beginCompletionUsage({
+        ...baseParams,
+        source: 'api',
+        ownerType: CreditHolderType.User,
+        completionObservation,
+      })
+    ).toBe('start-id');
+    await ApiKeyUsageManager.logUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      completionObservation: { ...completionObservation, outcome: 'completed' },
+      existingLogId: 'start-id',
+    });
+    expect(finishMock).toHaveBeenCalledWith(
+      'start-id',
+      'user-1',
+      expect.objectContaining({ completionObservation: expect.objectContaining({ outcome: 'completed' }) })
+    );
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('resolves undefined and warns when the start write fails', async () => {
+    beginMock.mockRejectedValue(new Error('db down'));
+    const warn = vi.fn();
+    await expect(
+      ApiKeyUsageManager.beginCompletionUsage({
+        ...baseParams,
+        source: 'api',
+        ownerType: CreditHolderType.User,
+        logger: { warn } as never,
+      })
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it('persists source and ownerType on the usage log row', async () => {
     await ApiKeyUsageManager.logUsage({ ...baseParams, source: 'cli', ownerType: CreditHolderType.Organization });
 
@@ -36,5 +91,34 @@ describe('ApiKeyUsageManager.logUsage', () => {
     await expect(
       ApiKeyUsageManager.logUsage({ ...baseParams, source: 'api', ownerType: CreditHolderType.User })
     ).resolves.toBeUndefined();
+  });
+
+  it('stamps the app and standing on both writers for an exchange key', async () => {
+    const attribution = { oauthClientId: 'app-1', payerStanding: 'paid' as const };
+    await ApiKeyUsageManager.logUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      ...attribution,
+    });
+    await ApiKeyUsageManager.beginCompletionUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      ...attribution,
+    });
+    expect(createMock).toHaveBeenCalledWith(expect.objectContaining(attribution));
+    expect(beginMock).toHaveBeenCalledWith(expect.objectContaining(attribution));
+  });
+
+  it('drops a standing that has no app and stamps nothing for a personal key', async () => {
+    await ApiKeyUsageManager.logUsage({
+      ...baseParams,
+      source: 'api',
+      ownerType: CreditHolderType.User,
+      payerStanding: 'paid',
+    });
+    expect(createMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('payerStanding');
+    expect(createMock.mock.calls.at(-1)?.[0]).not.toHaveProperty('oauthClientId');
   });
 });

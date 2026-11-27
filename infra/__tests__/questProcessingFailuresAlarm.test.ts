@@ -40,6 +40,7 @@ describe('questProcessingFailures alarm', () => {
   });
 
   it('is fed the literal Surface value by the /process route', () => {
-    expect(ROUTE_SOURCE).toMatch(/emitProcessingFailed\('\/process'/);
+    expect(ROUTE_SOURCE).toMatch(/handleQuestProcessingFailure\([^)]*surface: '\/process'/);
+    expect(ROUTE_SOURCE).toMatch(/emitProcessingFailed\(surface,/);
   });
 });

@@ -24,6 +24,11 @@ const payload = {
   model: 'local',
 };
 describe('executor admission', () => {
+  it.each(['', '   ', 'change-me-openssl-rand-hex-32'])('refuses to start with secret %j', secret => {
+    expect(() => createExecutorApp({ secret, ready: () => true, enqueue: vi.fn() })).toThrow(
+      /AGENT_EXECUTOR_INTERNAL_SECRET is not configured/
+    );
+  });
   it('accepts only after the queue acknowledges durable handoff', async () => {
     const { url, enqueue } = await start();
     const response = await fetch(`${url}/execute`, {

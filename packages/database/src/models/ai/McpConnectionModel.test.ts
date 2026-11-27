@@ -8,12 +8,18 @@ import {
   McpConnectionProtectedFieldError,
   McpConnectionSlugConflictError,
   McpToolVersionConflictError,
+  PLATFORM_MCP_OWNER,
   toMcpConnectionPublic,
   type IMcpConnectionDocument,
   type IMcpConnectionTool,
 } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { McpConnection, mcpConnectionRepository, measureStoredMcpToolsBytes } from './McpConnectionModel';
+import {
+  McpConnection,
+  MCP_REFRESH_LEASE_TTL_MS,
+  mcpConnectionRepository,
+  measureStoredMcpToolsBytes,
+} from './McpConnectionModel';
 
 type CreateInput = Omit<IMcpConnectionDocument, 'id' | 'createdAt' | 'updatedAt'>;
 
@@ -338,6 +344,19 @@ describe('McpConnectionModel', () => {
       expect(await mcpConnectionRepository.setStatus(key.id, 'connected')).toMatchObject({ status: 'connected' });
     });
 
+    it('a failure status and a pending challenge are pinned to the access token the call went out on', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, { accessTokenEnc: 'enc:new' });
+      const failure = { code: 'auth_required', message: 'rejected' };
+      expect(
+        await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, undefined, 'enc:old')
+      ).toBeNull();
+      expect(await mcpConnectionRepository.setPendingAuth(created.id, { message: 'sign in' }, 'enc:old')).toBeNull();
+      expect(
+        await mcpConnectionRepository.setStatus(created.id, 'needs_reconnect', failure, undefined, 'enc:new')
+      ).toMatchObject({ status: 'needs_reconnect' });
+    });
+
     it('still requires the URL and API key ciphertext on write', async () => {
       await expect(mcpConnectionRepository.create(baseConnection({ urlEnc: undefined }))).rejects.toThrow(/urlEnc/);
       await expect(
@@ -511,6 +530,28 @@ describe('McpConnectionModel', () => {
       ]);
       expect(await mcpConnectionRepository.countForUser('user-1')).toBe(3);
       expect((await mcpConnectionRepository.listForOrg('org-1')).map(c => c.slug)).toEqual(['orgdef']);
+    });
+
+    it('listForUser returns connections oldest first whatever order they were stored in', async () => {
+      const at = (day: number) => new Date(Date.UTC(2026, 0, day));
+      for (const [slug, day] of [
+        ['newest', 3],
+        ['oldest', 1],
+        ['middle', 2],
+      ] as const) {
+        await McpConnection.collection.insertOne({
+          ...baseConnection({ slug }),
+          urlEnc: `enc:url-${slug}`,
+          createdAt: at(day),
+          updatedAt: at(day),
+        });
+      }
+
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.slug)).toEqual([
+        'oldest',
+        'middle',
+        'newest',
+      ]);
     });
 
     it('findByIdForOwner and deleteForOwner refuse another owner', async () => {
@@ -724,6 +765,40 @@ describe('McpConnectionModel', () => {
       ).toBeNull();
     });
 
+    it('updateSettings sets and clears the description without touching a tool, its review hash or the revision', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.updateDiscovery(created.id, {
+        tools: [tool('a', { versionHash: 'v-a1' }), tool('b', { versionHash: 'v-b1' })],
+        fingerprint: 'fp-1',
+        expectedFingerprint: null,
+        expectedRevision: 0,
+      });
+      await mcpConnectionRepository.updateSettings(created.id, OWNER, {
+        tools: [{ name: 'a', versionHash: 'v-a1', enabled: true, state: 'active' }],
+      });
+      const before = await mcpConnectionRepository.findById(created.id);
+
+      const described = await mcpConnectionRepository.updateSettings(created.id, OWNER, {
+        description: 'Searches the team handbook.',
+      });
+      expect(described?.description).toBe('Searches the team handbook.');
+      const cleared = await mcpConnectionRepository.updateSettings(created.id, OWNER, { description: '' });
+      expect(cleared?.description).toBeUndefined();
+      const raw = await McpConnection.collection.findOne({ _id: new mongoose.Types.ObjectId(created.id) });
+      expect(raw).not.toHaveProperty('description');
+      for (const after of [described, cleared, await mcpConnectionRepository.findById(created.id)]) {
+        expect(after?.tools).toEqual(before?.tools);
+        expect(after?.tools.map(t => t.versionHash)).toEqual(['v-a1', 'v-b1']);
+        expect(after).toMatchObject({ toolsRevision: before?.toolsRevision, toolsFingerprint: 'fp-1' });
+      }
+      expect(
+        await mcpConnectionRepository.updateSettings(created.id, OTHER_USER_OWNER, { description: 'Hijacked' })
+      ).toBeNull();
+      await expect(
+        mcpConnectionRepository.create(baseConnection({ slug: 'long_note', description: 'x'.repeat(301) }))
+      ).rejects.toThrow(/description/);
+    });
+
     it('rename and setEnabled only reach the owner', async () => {
       const created = await mcpConnectionRepository.create(baseConnection());
       const stranger = { ownerType: 'user' as const, ownerKey: 'user-2' };
@@ -852,11 +927,23 @@ describe('McpConnectionModel', () => {
       );
       await mcpConnectionRepository.create(baseConnection({ ownerKey: 'user-3', userId: 'user-3' }));
 
-      const all = await mcpConnectionRepository.listMemberConnections('org-1');
+      const members = ['user-1', 'user-2', 'user-3'];
+      const all = await mcpConnectionRepository.listMemberConnections('org-1', members);
       expect(all.map(c => c.userId).sort()).toEqual(['user-1', 'user-2']);
-      const linear = await mcpConnectionRepository.listMemberConnections('org-1', { urlHost: 'MCP.LINEAR.APP' });
+      const linear = await mcpConnectionRepository.listMemberConnections('org-1', members, {
+        urlHost: 'MCP.LINEAR.APP',
+      });
       expect(linear.map(c => c.userId)).toEqual(['user-1']);
       for (const doc of all) expect(secretValues(doc)).toEqual([]);
+    });
+
+    it('listMemberConnections leaves out a connection whose owner is no longer a member', async () => {
+      await mcpConnectionRepository.create(member('user-1'));
+      await mcpConnectionRepository.create(member('user-left', { slug: 'left' }));
+
+      const listed = await mcpConnectionRepository.listMemberConnections('org-1', ['user-1']);
+      expect(listed.map(c => c.userId)).toEqual(['user-1']);
+      expect(await mcpConnectionRepository.listMemberConnections('org-1', [])).toEqual([]);
     });
 
     it('finds and cascades by definition, leaving the definition and other connections', async () => {
@@ -1055,6 +1142,24 @@ describe('McpConnectionModel', () => {
       expect(done?.refreshLease).toBeUndefined();
       const withCreds = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
       expect(withCreds?.auth.oauth).toMatchObject({ accessTokenEnc: 'enc:access-2', refreshTokenEnc: 'enc:refresh-2' });
+    });
+
+    it('setNeedsReconnectIfHolder writes only while the caller holds the lease', async () => {
+      const created = await mcpConnectionRepository.create(baseConnection());
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'slow');
+      await McpConnection.updateOne({ _id: created.id }, { $set: { 'refreshLease.until': new Date(Date.now() - 1) } });
+      await mcpConnectionRepository.acquireRefreshLease(created.id, OWNER, 'successor');
+      const lastError = { code: 'invalid_grant', message: 'sign in again' };
+
+      expect(await mcpConnectionRepository.setNeedsReconnectIfHolder(created.id, 'slow', lastError)).toBeNull();
+      expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.status).not.toBe('needs_reconnect');
+
+      const done = await mcpConnectionRepository.setNeedsReconnectIfHolder(created.id, 'successor', lastError);
+      expect(done).toMatchObject({ status: 'needs_reconnect', lastError: { code: 'invalid_grant' } });
+    });
+
+    it('gives the lease clear headroom over an OAuth request timeout', () => {
+      expect(MCP_REFRESH_LEASE_TTL_MS).toBeGreaterThanOrEqual(2 * 10_000);
     });
 
     it('a stale holder cannot write after a successor took the expired lease', async () => {
@@ -1280,6 +1385,107 @@ describe('McpConnectionModel', () => {
       expect(await mcpConnectionRepository.setApiKey(oauth.id, OWNER, rotation)).toBeNull();
     });
 
+    describe('setOAuthConfig', () => {
+      const config = {
+        resource: 'https://mcp.example.com/mcp',
+        issuer: 'https://auth.example.com',
+        authorizationServerUrl: 'https://auth.example.com',
+        tokenEndpoint: 'https://auth.example.com/token',
+        revocationEndpoint: 'https://auth.example.com/revoke',
+        scopes: ['read'],
+        clientMode: 'dcr' as const,
+        clientRegistrationId: 'reg-1',
+      };
+
+      it('flips a none connection to oauth for its owner only', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ auth: { kind: 'none' }, slug: 'plain' }));
+        expect(await mcpConnectionRepository.setOAuthConfig(created.id, OTHER_USER_OWNER, config)).toBeNull();
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        expect(updated?.auth).toMatchObject({ kind: 'oauth', oauth: { ...config } });
+        expect(updated?.status).toBe('pending_auth');
+      });
+
+      it('changes scopes and registration only for the OAuth connection owner', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'reconfigured' }));
+        await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        const changed = { ...config, scopes: ['write'], clientRegistrationId: 'reg-2' };
+
+        expect(await mcpConnectionRepository.setOAuthConfig(created.id, OTHER_USER_OWNER, changed)).toBeNull();
+        expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.auth.oauth).toMatchObject({
+          scopes: ['read'],
+          clientRegistrationId: 'reg-1',
+        });
+
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, changed);
+        expect(updated?.auth.oauth).toMatchObject({ scopes: ['write'], clientRegistrationId: 'reg-2' });
+        expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.auth.oauth).toMatchObject({
+          scopes: ['write'],
+          clientRegistrationId: 'reg-2',
+        });
+      });
+
+      it('refuses a non-user owner even when the owner key matches', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'non_user_owner' }));
+        await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        const changed = { ...config, scopes: ['write'], clientRegistrationId: 'reg-2' };
+
+        expect(
+          await mcpConnectionRepository.setOAuthConfig(
+            created.id,
+            { ownerType: 'org', ownerKey: OWNER.ownerKey },
+            changed
+          )
+        ).toBeNull();
+        expect((await mcpConnectionRepository.findByIdForOwner(created.id, OWNER))?.auth.oauth).toMatchObject({
+          scopes: ['read'],
+          clientRegistrationId: 'reg-1',
+        });
+      });
+
+      it('does not leave a connected none connection offered once it has no token', async () => {
+        const created = await mcpConnectionRepository.create(
+          baseConnection({ auth: { kind: 'none' }, slug: 'was_open' })
+        );
+        await McpConnection.updateOne({ _id: created.id }, { $set: { status: 'connected' } });
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        expect(updated?.status).toBe('pending_auth');
+      });
+
+      it('keeps a connected OAuth connection with a token connected', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'keeps' }));
+        await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, { accessTokenEnc: 'enc:access' });
+        await McpConnection.updateOne({ _id: created.id }, { $set: { status: 'connected' } });
+        const updated = await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        expect(updated?.status).toBe('connected');
+      });
+
+      it('refuses an api_key connection', async () => {
+        const created = await mcpConnectionRepository.create(apiKeyConnection());
+        expect(await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config)).toBeNull();
+      });
+
+      it('leaves tokens alone and clears optional fields it is not given', async () => {
+        const created = await mcpConnectionRepository.create(baseConnection({ slug: 'signed_in' }));
+        await mcpConnectionRepository.setInitialOAuthTokens(created.id, OWNER, {
+          accessTokenEnc: 'enc:access',
+          refreshTokenEnc: 'enc:refresh',
+        });
+        await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, config);
+        const { revocationEndpoint: _dropped, clientRegistrationId: _also, ...rest } = config;
+        await mcpConnectionRepository.setOAuthConfig(created.id, OWNER, { ...rest, clientMode: 'cimd' });
+
+        const stored = await mcpConnectionRepository.findByIdWithCredentials(created.id, OWNER);
+        expect(stored?.auth.oauth).toMatchObject({
+          clientMode: 'cimd',
+          accessTokenEnc: 'enc:access',
+          refreshTokenEnc: 'enc:refresh',
+          hasAccessToken: true,
+        });
+        expect(stored?.auth.oauth?.revocationEndpoint).toBeUndefined();
+        expect(stored?.auth.oauth?.clientRegistrationId).toBeUndefined();
+      });
+    });
+
     it('setPendingAuth records the challenge and the reason, and drops an over-long URL', async () => {
       const created = await mcpConnectionRepository.create(baseConnection({ auth: { kind: 'none' }, status: 'error' }));
       const updated = await mcpConnectionRepository.setPendingAuth(created.id, {
@@ -1388,8 +1594,183 @@ describe('McpConnectionModel', () => {
         null,
       ],
       ['setPendingAuth', () => mcpConnectionRepository.setPendingAuth(BAD_ID, { message: 'm' }), null],
+      [
+        'setOAuthConfig',
+        () =>
+          mcpConnectionRepository.setOAuthConfig(BAD_ID, OWNER, {
+            resource: 'r',
+            issuer: 'i',
+            authorizationServerUrl: 'a',
+            scopes: [],
+            clientMode: 'dcr',
+          }),
+        null,
+      ],
     ])('%s returns its empty value for a malformed id without throwing', async (_name, call, expected) => {
       expect(await call()).toBe(expected);
+    });
+  });
+
+  describe('platform connectors', () => {
+    const ADMIN_OWNER = { ownerType: 'user' as const, ownerKey: 'admin-1' };
+    const platformConnection = (overrides: Partial<CreateInput> = {}): CreateInput =>
+      apiKeyConnection({
+        ...PLATFORM_MCP_OWNER,
+        userId: 'admin-1',
+        slug: 'docs',
+        displayName: 'Docs',
+        displayUrl: 'https://mcp.example.com/mcp',
+        urlHost: 'mcp.example.com',
+        ...overrides,
+      });
+
+    it.each([
+      ['another owner key', platformConnection({ ownerKey: 'admin-1' })],
+      ['an organization', platformConnection({ organizationId: 'org-1' })],
+      ['OAuth sign-in', baseConnection({ ...PLATFORM_MCP_OWNER, userId: 'admin-1' })],
+    ])('refuses a platform connection with %s', async (_label, input) => {
+      await expect(mcpConnectionRepository.create(input)).rejects.toThrow(/platform connection/);
+    });
+
+    it('is offered to a user who switched it on, after their own connections', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
+      const on = { platformIds: [shared.id] };
+
+      expect((await mcpConnectionRepository.listForUser('user-1', on)).map(c => c.slug)).toEqual(['mine', 'docs']);
+      expect((await mcpConnectionRepository.listForUser('user-2', on)).map(c => c.id)).toEqual([shared.id]);
+      expect(
+        (await mcpConnectionRepository.listForUser('user-2', { ...on, slugs: ['mine'] })).map(c => c.slug)
+      ).toEqual([]);
+      expect(
+        (await mcpConnectionRepository.listForUser('user-2', { ...on, slugs: ['docs'] })).map(c => c.slug)
+      ).toEqual(['docs']);
+    });
+
+    it('is offered to no user who has not switched it on, and not after it is recreated', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
+
+      expect((await mcpConnectionRepository.listForUser('user-1')).map(c => c.slug)).toEqual(['mine']);
+      expect(await mcpConnectionRepository.listForUser('user-2')).toEqual([]);
+      expect(await mcpConnectionRepository.listForUser('user-2', { platformIds: [] })).toEqual([]);
+      expect(await mcpConnectionRepository.listForUser('user-2', { platformIds: ['not-an-id'] })).toEqual([]);
+
+      await mcpConnectionRepository.deleteForOwner(shared.id, PLATFORM_MCP_OWNER);
+      const recreated = await mcpConnectionRepository.create(platformConnection());
+      expect(await mcpConnectionRepository.listForUser('user-2', { platformIds: [shared.id] })).toEqual([]);
+      expect((await mcpConnectionRepository.listForUser('user-2', { platformIds: [recreated.id] })).length).toBe(1);
+    });
+
+    it('is not offered while switched off or not connected, and is again once switched back on', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const on = { platformIds: [shared.id] };
+      await mcpConnectionRepository.setEnabled(shared.id, PLATFORM_MCP_OWNER, false);
+      expect(await mcpConnectionRepository.listForUser('user-2', on)).toEqual([]);
+
+      await mcpConnectionRepository.setEnabled(shared.id, PLATFORM_MCP_OWNER, true);
+      expect((await mcpConnectionRepository.listForUser('user-2', on)).map(c => c.id)).toEqual([shared.id]);
+
+      await mcpConnectionRepository.setStatus(shared.id, 'needs_reconnect', { code: 'auth_failed', message: 'm' });
+      expect(await mcpConnectionRepository.listForUser('user-2', on)).toEqual([]);
+    });
+
+    it('gives way to a user connection with the same slug, even one that is switched off', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const own = await mcpConnectionRepository.create(apiKeyConnection({ slug: 'docs' }));
+      const on = { platformIds: [shared.id] };
+
+      expect((await mcpConnectionRepository.listForUser('user-1', on)).map(c => c.id)).toEqual([own.id]);
+      await mcpConnectionRepository.setEnabled(own.id, OWNER, false);
+      expect(await mcpConnectionRepository.listForUser('user-1', on)).toEqual([]);
+      expect((await mcpConnectionRepository.listForUser('user-2', on)).map(c => c.ownerType)).toEqual(['platform']);
+    });
+
+    it('records a use at most once a minute, while a user connection records every use', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const own = await mcpConnectionRepository.create(apiKeyConnection({ slug: 'mine' }));
+      const lastUsed = async (id: string) => (await McpConnection.findById(id))?.lastUsedAt?.getTime();
+      const setLastUsed = (id: string, at: Date) => McpConnection.updateOne({ _id: id }, { $set: { lastUsedAt: at } });
+
+      await mcpConnectionRepository.markUsed(shared.id);
+      expect(await lastUsed(shared.id)).toEqual(expect.any(Number));
+
+      const recent = new Date(Date.now() - 10_000);
+      await setLastUsed(shared.id, recent);
+      await setLastUsed(own.id, recent);
+      await mcpConnectionRepository.markUsed(shared.id);
+      await mcpConnectionRepository.markUsed(own.id);
+      expect(await lastUsed(shared.id)).toBe(recent.getTime());
+      expect(await lastUsed(own.id)).toBeGreaterThan(recent.getTime());
+
+      const old = new Date(Date.now() - 61_000);
+      await setLastUsed(shared.id, old);
+      await mcpConnectionRepository.markUsed(shared.id);
+      expect(await lastUsed(shared.id)).toBeGreaterThan(old.getTime());
+    });
+
+    it('keeps platform slugs unique among themselves and lists them', async () => {
+      await mcpConnectionRepository.create(platformConnection());
+      await mcpConnectionRepository.create(platformConnection({ slug: 'wiki' }));
+      await expect(mcpConnectionRepository.create(platformConnection())).rejects.toBeInstanceOf(
+        McpConnectionSlugConflictError
+      );
+
+      expect((await mcpConnectionRepository.listPlatformSlugs()).sort()).toEqual(['docs', 'wiki']);
+      const listed = await mcpConnectionRepository.listPlatform();
+      expect(listed.map(c => c.slug)).toEqual(['docs', 'wiki']);
+      for (const path of MCP_CONNECTION_SECRET_PATHS) expect(listed[0]).not.toHaveProperty(path);
+    });
+
+    it('is in none of the per-user reads or deletes, not even those of the admin who created it', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+
+      expect(await mcpConnectionRepository.listAllForUser('admin-1')).toEqual([]);
+      expect(await mcpConnectionRepository.countForUser('admin-1')).toBe(0);
+      expect(await mcpConnectionRepository.listMemberConnections('org-1', ['admin-1'])).toEqual([]);
+      expect(await mcpConnectionRepository.deleteAllForUser('admin-1')).toBe(0);
+      expect(await mcpConnectionRepository.findByIdForOwner(shared.id, PLATFORM_MCP_OWNER)).not.toBeNull();
+    });
+
+    it('cannot be read or written through a user owner, including its creator', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const key = { headerName: 'Authorization', scheme: 'Bearer' as const, valueEnc: 'enc:other', last4: 'zzzz' };
+
+      for (const owner of [OWNER, ADMIN_OWNER]) {
+        expect(await mcpConnectionRepository.findByIdForOwner(shared.id, owner)).toBeNull();
+        expect(await mcpConnectionRepository.findByIdWithCredentials(shared.id, owner)).toBeNull();
+        expect(await mcpConnectionRepository.setApiKey(shared.id, owner, key)).toBeNull();
+        expect(await mcpConnectionRepository.updateSettings(shared.id, owner, { enabled: false })).toBeNull();
+        expect(await mcpConnectionRepository.rename(shared.id, owner, 'Renamed')).toBeNull();
+        expect(await mcpConnectionRepository.deleteForOwner(shared.id, owner)).toBe(false);
+      }
+
+      const stored = await mcpConnectionRepository.findByIdWithCredentials(shared.id, PLATFORM_MCP_OWNER);
+      expect(stored).toMatchObject({ displayName: 'Docs', enabled: true });
+      expect(stored?.auth.apiKey).toMatchObject({ valueEnc: 'enc:key', last4: 'abcd' });
+    });
+
+    it('rotates its key under the platform owner and never becomes an OAuth connection', async () => {
+      const shared = await mcpConnectionRepository.create(platformConnection());
+      const key = { headerName: 'X-Api-Key', scheme: 'raw' as const, valueEnc: 'enc:rotated', last4: 'wxyz' };
+
+      expect((await mcpConnectionRepository.setApiKey(shared.id, PLATFORM_MCP_OWNER, key))?.auth.apiKey?.last4).toBe(
+        'wxyz'
+      );
+      expect(
+        await mcpConnectionRepository.setOAuthConfig(shared.id, PLATFORM_MCP_OWNER, {
+          resource: 'r',
+          issuer: 'i',
+          authorizationServerUrl: 'a',
+          scopes: [],
+          clientMode: 'dcr',
+        })
+      ).toBeNull();
+      expect(await mcpConnectionRepository.acquireRefreshLease(shared.id, PLATFORM_MCP_OWNER, 'h')).toEqual({
+        outcome: 'not_found',
+      });
+      const stored = await mcpConnectionRepository.findByIdWithCredentials(shared.id, PLATFORM_MCP_OWNER);
+      expect(stored?.auth).toMatchObject({ kind: 'api_key', apiKey: { valueEnc: 'enc:rotated' } });
     });
   });
 });

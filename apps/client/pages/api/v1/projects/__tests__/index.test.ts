@@ -44,11 +44,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@server/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin: () => 60 }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: mockLogEvent }));
 vi.mock('@bike4mind/database', () => ({
   Project: {},
   projectRepository: { listAccessibleAfterId: mockListAccessibleAfterId, create: mockCreate },
@@ -110,8 +110,8 @@ const SENSITIVE_MARKERS = ['someone-else', 'g1', 'systemPrompts', 'isGlobalRead'
 beforeEach(() => {
   vi.clearAllMocks();
   mockLogEvent.mockResolvedValue(undefined);
-  mockFindFiles.mockImplementation(async (_actor: unknown, ids: string[]) => ids.map(id => ({ id })));
-  mockFindSessions.mockImplementation(async (_actor: unknown, ids: string[]) => ids.map(id => ({ id })));
+  mockFindFiles.mockImplementation(async (_actor: unknown, ids: string[]) => ids.map(id => ({ id, userId: 'u1' })));
+  mockFindSessions.mockImplementation(async (_actor: unknown, ids: string[]) => ids.map(id => ({ id, userId: 'u1' })));
   mockCreate.mockImplementation(async (data: Record<string, unknown>) => projectDoc('65a0000000000000000000ff', data));
 });
 
@@ -242,6 +242,15 @@ describe('POST /api/v1/projects', () => {
     mockFindFiles.mockResolvedValue([]);
     const error = await errorOf({ method: 'POST', body });
     expect(error.statusCode).toBe(400);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('answers 403 and creates nothing when a listed file is readable but not shareable', async () => {
+    mockFindFiles.mockImplementation(async (_actor: unknown, ids: string[]) =>
+      ids.map(id => ({ id, userId: 'someone-else', users: [{ userId: 'u1', permissions: ['read'] }] }))
+    );
+    const error = await errorOf({ method: 'POST', body });
+    expect(error.statusCode).toBe(403);
     expect(mockCreate).not.toHaveBeenCalled();
   });
 

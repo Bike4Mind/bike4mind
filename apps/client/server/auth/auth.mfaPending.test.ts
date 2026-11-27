@@ -1,4 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
+vi.mock('@bike4mind/server-utils/utils/organizationAudit', () => ({
+  recordOrganizationAuditEvent: vi.fn(),
+  recordOrganizationAuditEventSafe: vi.fn(),
+}));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { EventEmitter } from 'events';
 import { createMocks, type RequestMethod } from 'node-mocks-http';
 import nc from 'next-connect';
@@ -16,13 +23,13 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/infra', () => ({
   secretRotationRepository: { findBySecretName: vi.fn() },
 }));
-vi.mock('@server/auth/ability', () => ({ default: vi.fn() }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { GOOGLE_CLIENT_ID: '', GITHUB_CLIENT_ID: '', JWT_SECRET: 'test-secret' },
 }));
 
 const mockIsMfaEnrollmentOwed = vi.fn(async (_user: unknown, _opts?: unknown) => false);
-vi.mock('@server/auth/mfaEnforcement', () => ({
+vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
   isMfaEnrollmentOwed: (user: unknown, opts?: unknown) => mockIsMfaEnrollmentOwed(user, opts),
   MFA_ENROLLMENT_REQUIRED_MESSAGE: 'MFA enrollment required.',
 }));
@@ -53,6 +60,7 @@ describe('auth middleware: mfaPending allowlist', () => {
     '/api/logout',
     '/api/auth/mfa/verify-setup',
     '/api/auth/mfa/cancel-setup',
+    '/api/auth/mfa/enrollment-abandoned',
     '/api/auth/mfa/status',
     '/api/auth/mfa/passkey/authenticate-options',
     '/api/settings/fetch',
@@ -115,7 +123,7 @@ const callAsMfaPending = async (method: RequestMethod, url: string) => {
   );
   const route = nc<any, any>().use(auth).all(handlerFn);
   await route(req as any, res as any);
-  return { res, handlerFn };
+  return { res, handlerFn, logger: (req as any).logger as { info: ReturnType<typeof vi.fn> } };
 };
 
 describe('auth middleware: mfaPending sign-in token', () => {
@@ -132,6 +140,14 @@ describe('auth middleware: mfaPending sign-in token', () => {
     expect(handlerFn).not.toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(401);
     expect(res._getJSONData()).toMatchObject({ mfaPending: true });
+  });
+
+  it('keeps admin search queries out of the blocked-request log', async () => {
+    const { res, logger } = await callAsMfaPending('GET', '/api/admin/search?q=SECRETVALUE');
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(logger.info).toHaveBeenCalled();
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('SECRETVALUE');
   });
 
   it('still admits the sign-in enrollment and verification routes', async () => {

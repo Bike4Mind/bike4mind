@@ -1,10 +1,14 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository } from '@bike4mind/database/infra';
 import { mergeManifest, extractBaseUrl } from '@bike4mind/slack';
-import { isSlackUserValidationError } from '@server/integrations/slack/slackExportErrors';
+import {
+  isSlackConfigTokenAuthError,
+  STORED_CONFIG_TOKEN_REJECTED_MESSAGE,
+} from '@server/integrations/slack/slackConfigTokenErrors';
+import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 
 /**
  * POST /api/admin/slack-app/update-manifest
@@ -18,11 +22,10 @@ const UpdateManifestSchema = z.object({
   workspaceId: z.string().min(1, 'workspaceId is required'),
 });
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Unauthorized. Admin access required.');
-  }
-
+const handler = adminApi({
+  adminPermissions: { POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+}).post(async (req, res) => {
   const result = UpdateManifestSchema.safeParse(req.body);
   if (!result.success) {
     throw new BadRequestError(result.error.issues[0]?.message || 'Invalid request body');
@@ -62,9 +65,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   if (!exportData.ok) {
     const slackError = exportData.error as string;
 
-    if (isSlackUserValidationError(slackError || '')) {
-      req.logger.warn('Slack manifest export auth error (user validation)', { error: slackError, workspaceId });
-      throw new BadRequestError('Configuration token is invalid or expired. Please reconnect before updating.');
+    if (isSlackConfigTokenAuthError(slackError)) {
+      req.logger.warn('Slack rejected the stored config token (apps.manifest.export)', {
+        error: slackError,
+        workspaceId,
+      });
+      throw new BadRequestError(STORED_CONFIG_TOKEN_REJECTED_MESSAGE);
     }
 
     req.logger.error('Failed to export manifest from Slack', { error: slackError, workspaceId });
@@ -116,9 +122,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   if (!updateData.ok) {
     const slackError = updateData.error as string;
 
-    if (isSlackUserValidationError(slackError || '')) {
-      req.logger.warn('Slack manifest update auth error (user validation)', { error: slackError, workspaceId });
-      throw new BadRequestError('Configuration token is invalid or expired. Please reconnect before updating.');
+    if (isSlackConfigTokenAuthError(slackError)) {
+      req.logger.warn('Slack rejected the stored config token (apps.manifest.update)', {
+        error: slackError,
+        workspaceId,
+      });
+      throw new BadRequestError(STORED_CONFIG_TOKEN_REJECTED_MESSAGE);
     }
 
     req.logger.error('Failed to update manifest on Slack', {
@@ -136,6 +145,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     workspaceId,
     appId: workspace.slackAppId,
     adminUserId: req.user?.id,
+  });
+
+  await recordAdminActionFromRequest(req, {
+    action: 'integration.slack_app.manifest_updated',
+    target: { kind: 'settings', id: workspaceId, displayName: workspace.name || workspace.slackAppId },
+    summary: `updated slack app manifest for ${workspace.slackAppId}`,
+    details: { appId: workspace.slackAppId },
   });
 
   return res.status(200).json({

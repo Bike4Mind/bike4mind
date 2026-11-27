@@ -5,7 +5,7 @@ Background work that used to live under `apps/client/server`, moved here one cat
 | Path | What | Runs as |
 |---|---|---|
 | `src/events/` | EventBridge event handlers (session naming, summarization, tagging, spider, Slack alarm forwarders, Stripe events) | Lambdas declared in `infra/*.ts` by handler path |
-| `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the LiveOps/SecOps triage SQS workers | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
+| `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports) and the SecOps triage SQS worker | Lambdas declared in `infra/cron.ts` and `infra/queues.ts`; some sweeps also run as self-host scheduled tasks |
 | `src/jobs/` | DataSyncer: seeds a preview stage with staging config on its first deploy | Lambda declared in `infra/dataSyncer.ts` |
 | `src/emailIngestion/` | Inbound email parser and analyzer SQS consumers | Lambdas declared in `infra/emailIngestion.ts` |
 | `src/queueHandlers/` | SQS queue handlers: comms/ops, data-lake pipeline, What's New, image generation, quest export, lake ingest, the agent executor, and the Slack quest processor | Lambdas declared in `infra/*.ts` by handler path; the agent executor also runs self-host through `src/agentExecutor/` |
@@ -19,13 +19,13 @@ Background work that used to live under `apps/client/server`, moved here one cat
 
 ## Interim bridge into apps/client
 
-Most of the code these handlers call still lives in `apps/client/server`. Until it is extracted into a shared package, `tsconfig.json` and `vitest.config.mts` map `@server/*`, `@client/*` and the other client aliases into `../client`. The dependency is one-way:
+Handlers no longer import `apps/client/server` through the `@server/*` alias; shared server code lives in `packages/server-utils`. `tsconfig.json` and `vitest.config.mts` still map some client aliases into `../client`. The dependency is one-way:
 
 - `apps/workers` may import `apps/client/server` code through those aliases.
 - The self-host `worker` and `agentexecutor` services run under `tsconfig.selfhost.json`, which extends `tsconfig.json` and also includes `../client/**/*.ts`. tsx applies compilerOptions only to included files, so without it the bridged client files would transpile outside strict mode. It is runtime-only; `tsc` never reads it.
 - `apps/client` must never import `apps/workers` (`@workers/*`). ESLint enforces this, and also stops workers from importing UI code (`@client/app/*`, React, Next, MUI).
 
-Code that both a client route and a worker need belongs on the client side of the bridge (for example `apps/client/server/utils/eventBus.ts` and `apps/client/server/utils/sqsDelivery.ts`), not here. Code that only workers reach lives here, even when it is a helper rather than a handler (for example `src/utils/eventContext.ts` and `src/s3/chunkScan.ts`).
+Code that both a client route and a worker need belongs in `packages/server-utils` (for example `packages/server-utils/src/utils/eventBus.ts` and `packages/server-utils/src/utils/sqsDelivery.ts`), not here. Code that only workers reach lives here, even when it is a helper rather than a handler (for example `src/utils/eventContext.ts` and `src/s3/chunkScan.ts`).
 
 ## Tests
 
@@ -35,4 +35,4 @@ pnpm --filter @bike4mind/workers test:integration  # real-Mongo *.e2e.test.ts su
 pnpm --filter @bike4mind/workers typecheck
 ```
 
-Tests reuse `apps/client/vitest.setup.ts`. CI runs the unit lane in the `misc` test shard and the integration lane in its own `workers-integration` leg.
+Tests reuse `apps/client/vitest.setup.ts`. CI runs the unit lane in the `cli-workers` test shard and the integration lane in the `services-workers-integration` leg.

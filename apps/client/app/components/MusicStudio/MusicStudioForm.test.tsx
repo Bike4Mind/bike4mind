@@ -37,6 +37,15 @@ beforeEach(() => {
   useSelectedAccount.setState({ selectedAccount: null });
 });
 
+// Opens the model panel on every model (the shortlist hides the rest), then finds one model's option.
+const modelOption = (suffix: string) => {
+  if (!screen.queryByTestId('music-form-model-panel'))
+    fireEvent.click(screen.getByTestId('music-form-model-change-btn'));
+  const showAll = screen.queryByTestId('music-form-model-show-all-btn');
+  if (showAll?.textContent?.startsWith('Show all')) fireEvent.click(showAll);
+  return screen.getByTestId(`music-form-model-option-${suffix}`);
+};
+
 describe('MusicStudioForm submit', () => {
   it('is disabled until there is a prompt', () => {
     render(tree([musicV2, clip]));
@@ -110,5 +119,29 @@ describe('music form payer note', () => {
     select('Acme', false);
     render(tree([musicV2, clip]));
     expect(screen.queryByTestId('music-form-payer-note')).not.toBeInTheDocument();
+  });
+});
+
+describe('MusicStudioForm in Create v2', () => {
+  const v2Tree = (models: readonly [PublicMusicModel, ...PublicMusicModel[]]) => (
+    <CssVarsProvider theme={appTheme}>
+      <MusicStudioForm models={models} isSubmitting={false} onSubmit={onSubmit} createV2 />
+    </CssVarsProvider>
+  );
+
+  it('keeps the duration on a switch to a fixed-length model, marks it, and submits after the fix', () => {
+    render(v2Tree([musicV2, clip]));
+    expect(screen.queryByTestId('music-form-model-select')).not.toBeInTheDocument();
+    typePrompt('a happy tune');
+    fireEvent.click(modelOption(`${clip.id}-radio`));
+
+    expect(modelOption(`${clip.id}`)).toHaveAttribute('data-selected', 'true');
+    expect(screen.queryByTestId('music-form-changes')).not.toBeInTheDocument();
+    expect(screen.getByTestId('music-form-duration-invalid')).not.toBeEmptyDOMElement();
+    expect(screen.getByTestId('music-form-submit-btn')).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId('music-form-duration-fix-btn'));
+    fireEvent.click(screen.getByTestId('music-form-submit-btn'));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ model: 'lyria-3-clip-preview' }));
   });
 });

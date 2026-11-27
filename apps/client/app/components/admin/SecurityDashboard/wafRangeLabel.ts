@@ -1,4 +1,4 @@
-import type { WafRangeInput } from '@/server/security/wafSharedHelpers';
+import type { WafRangeInput } from '@bike4mind/server-utils/security/wafSharedHelpers';
 
 /**
  * Format a WafRangeInput for chart/table headers.

@@ -12,6 +12,11 @@ import {
   WithOrgRef,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import {
+  isApprovalPending,
+  notifyApprovalSubmitted,
+  type ApprovalPendingResponse,
+} from '@client/app/hooks/data/adminApprovals';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import { useUser } from '@client/app/contexts/UserContext';
 import { ErrorResponse } from '@client/app/utils/error';
@@ -85,9 +90,12 @@ export function useGetUsers(params: IGetUsersParams, options?: Partial<UseQueryO
   });
 }
 
+/** The key `useGetUser` caches a user under; the admin profile dialogs refetch it by this key. */
+export const userQueryKey = (id: string | null | undefined) => ['users', id] as const;
+
 export function useGetUser(id: string | null | undefined) {
   return useQuery({
-    queryKey: ['users', id],
+    queryKey: userQueryKey(id),
     queryFn: async () => {
       if (!id) return;
       const { data } = await api.get<WithOrgRef<IUserDocument>>(`/api/users/${id}`);
@@ -98,11 +106,13 @@ export function useGetUser(id: string | null | undefined) {
   });
 }
 
+export type UserByEmail = { id: string; name?: string };
+
 export function useGetUserByEmail(email: string, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['users', 'by-email', email],
     queryFn: async () => {
-      const { data } = await api.get<WithOrgRef<IUserDocument>>(`/api/users/by-email/${email}`);
+      const { data } = await api.get<UserByEmail | null>(`/api/users/by-email/${encodeURIComponent(email)}`);
       return data;
     },
     staleTime: 1000 * 60 * 3, // 3 minutes
@@ -135,6 +145,11 @@ export function useUpdateUser(options: { onSuccess?: () => void; onSettled?: () 
       // invalidation, a profile name change stays stale in the switcher until a hard
       // refresh. Invalidating triggers a refetch that repopulates the context store.
       queryClient.invalidateQueries({ queryKey: ['identify'] });
+      // An admin editing through Edit profile: the timeline and other profile cards key under
+      // ['admin', 'users', id] (see useAdminUserUpdate). Product access keys separately and
+      // derives grants from the email domain. A no-op when no admin view is mounted.
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', id] });
 
       if (onSuccess) onSuccess();
       // A partial write must not read as a clean save -- the whole point of the route
@@ -181,12 +196,21 @@ export function useDeleteUser() {
       const { data } = await api.delete(`/api/users/${id}/delete`, { data: { reason } });
       return data;
     },
-    onSuccess: () => {
-      toast.success('User deleted successfully');
+    onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
+      if (data?.queued === false) {
+        toast.warning('Deletion started, but the erasure could not be queued and will run with the daily sweep');
+      } else {
+        toast.success('Deletion started');
+      }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
-    onError: error => toast.error('Failed to delete user'),
+    onError: error => {
+      if (isStepUpCancelled(error)) return;
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to delete user');
+    },
   });
 }
 
@@ -236,6 +260,12 @@ export function useUserRevokeSharing(
   });
 }
 
+interface ClientSessionTeardown {
+  setCurrentUser: (user: IUserDocument | null) => void;
+  resetTokens: () => void;
+  queryClient: QueryClient;
+}
+
 /**
  * Client-side teardown shared by every sign-out path (this-device logout, log-out-all-devices):
  * drop the in-memory user + tokens, wipe client persistence, purge queries (keeping only the
@@ -243,11 +273,19 @@ export function useUserRevokeSharing(
  * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
  * and is done by the caller BEFORE this runs.
  */
-async function tearDownClientSession(opts: {
-  setCurrentUser: (user: IUserDocument | null) => void;
-  resetTokens: () => void;
-  queryClient: QueryClient;
-}): Promise<void> {
+export async function tearDownClientSession(opts: ClientSessionTeardown): Promise<void> {
+  await clearClientSession(opts);
+
+  // Hard reload to /login to destroy all in-memory state (React components,
+  // query subscriptions, WebSocket connections). Matches the pattern used by
+  // loginAs/returnToAdmin flows which also use window.location.replace().
+  const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+  const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
+  window.location.replace(`/login${qs}`);
+}
+
+/** tearDownClientSession without the reload, for a sign-out page that navigates on its own (/oauth/logout). */
+export async function clearClientSession(opts: ClientSessionTeardown): Promise<void> {
   opts.setCurrentUser(null);
   opts.resetTokens();
   // Clear all client-side persistence (IndexedDB: React Query, Dexie, TagCache,
@@ -259,13 +297,6 @@ async function tearDownClientSession(opts: {
   opts.queryClient.removeQueries({
     predicate: query => query.queryKey[0] !== 'server-config-public',
   });
-
-  // Hard reload to /login to destroy all in-memory state (React components,
-  // query subscriptions, WebSocket connections). Matches the pattern used by
-  // loginAs/returnToAdmin flows which also use window.location.replace().
-  const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-  const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
-  window.location.replace(`/login${qs}`);
 }
 
 export function useUserLogout() {
@@ -290,10 +321,41 @@ export function useUserLogout() {
   });
 }
 
-const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
+/** Queues an export of the caller's account data; the download link arrives by email. Step-up gated, 1 per hour. */
+export function useRequestAccountDataExport() {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ exportJobId: string }>('/api/users/me/data-export');
+      return res.data;
+    },
+  });
+}
+
+export interface AccountDataExportDownload {
+  url: string;
+  filename: string;
+  expiresAt: string;
+}
+
+/** A fresh short-lived download link for an export the caller requested. Never retried: 404/410 are answers. */
+export function useAccountDataExportDownload(jobId: string) {
+  return useQuery({
+    queryKey: ['users', 'me', 'data-export', jobId],
+    queryFn: async () => {
+      const res = await api.get<AccountDataExportDownload>(`/api/users/me/data-export/${encodeURIComponent(jobId)}`);
+      return res.data;
+    },
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
 /** The caller's own active auth sessions (devices), newest-active first. Powers the
- *  Active Sessions list in Settings -> Security. */
+ *  Active Sessions list in the profile Security tab. */
 export function useGetActiveSessions() {
   return useQuery({
     queryKey: ACTIVE_SESSIONS_KEY,
@@ -425,14 +487,26 @@ export function useLoginAsUser() {
   const { setCurrentUser } = useUser();
 
   return useMutation({
-    mutationFn: async ({ id, mfaToken, reason }: { id: string; mfaToken: string; reason: string }) => {
-      const { data } = await api.post<{ user: IUserDocument; accessToken: string }>(`/api/users/${id}/loginAs`, {
-        mfaToken,
-        reason,
-      });
+    mutationFn: async ({
+      id,
+      mfaToken,
+      reason,
+      approvalId,
+    }: {
+      id: string;
+      mfaToken: string;
+      reason: string;
+      approvalId?: string;
+    }) => {
+      const { data } = await api.post<{ user: IUserDocument; accessToken: string } | ApprovalPendingResponse>(
+        `/api/users/${id}/loginAs`,
+        { mfaToken, reason, ...(approvalId && { approvalId }) }
+      );
       return data;
     },
     onSuccess: async data => {
+      // Impersonating an admin waits for a second admin; nothing about this session changes yet.
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       // Cancel any in-flight queries (e.g. the app-wide admin-settings query) BEFORE
       // clearing caches, so a request dispatched under the admin token can't resolve
       // and re-persist admin data into IndexedDB after clearClientCaches() deletes it.

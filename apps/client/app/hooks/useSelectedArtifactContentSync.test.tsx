@@ -17,6 +17,8 @@ vi.mock('@client/app/hooks/useSessionLayout', () => {
 });
 
 import { useSelectedArtifactContentSync } from './useSelectedArtifactContentSync';
+import type { ReactArtifactGroupRole } from '@client/app/utils/reactArtifactGroup';
+import type { ArtifactData } from './useSessionLayout';
 
 // Card is selected and showing '<old/>' for id 'a1'.
 const selectedState = () => ({
@@ -70,5 +72,48 @@ describe('useSelectedArtifactContentSync (#457 guard)', () => {
     // Simulate scrolling the old v1 card into view: a brand-new mount with older content.
     render('a1', 'html', '<v1/>', { id: 'a1', content: '<v1/>' });
     expect(setSessionLayout).not.toHaveBeenCalled();
+  });
+
+  it('syncs sibling and dependency changes without replacing saved entry edits, and clears removed grouping', () => {
+    const savedContent: ArtifactData['content'] = 'saved entry edits';
+    const initialGroup: ReactArtifactGroupRole = {
+      role: 'entry',
+      files: {},
+      dependencies: [],
+      siblings: [],
+    };
+    getState.mockImplementation(() => ({
+      selectedArtifactId: 'a1',
+      artifactData: { type: 'react', id: 'a1', content: savedContent, reactGroup: initialGroup },
+    }));
+    const { rerender } = renderHook(
+      ({ group }: { group: ReactArtifactGroupRole | undefined }) =>
+        useSelectedArtifactContentSync('a1', 'react', 'unchanged entry', 'unchanged entry', group),
+      { initialProps: { group: initialGroup as ReactArtifactGroupRole | undefined } }
+    );
+    expect(setSessionLayout).not.toHaveBeenCalled();
+
+    const withSibling: ReactArtifactGroupRole = {
+      role: 'entry',
+      files: { Counter: 'first sibling' },
+      dependencies: ['lodash'],
+      siblings: [{ identifier: 'Counter', title: 'Counter' }],
+    };
+    rerender({ group: withSibling });
+    expect(setSessionLayout).toHaveBeenLastCalledWith({
+      artifactData: { type: 'react', id: 'a1', content: savedContent, reactGroup: withSibling },
+    });
+    const editedSibling = { ...withSibling, files: { Counter: 'updated sibling' } };
+    rerender({ group: editedSibling });
+    expect(setSessionLayout).toHaveBeenLastCalledWith({
+      artifactData: { type: 'react', id: 'a1', content: savedContent, reactGroup: editedSibling },
+    });
+    rerender({ group: { ...editedSibling } });
+    expect(setSessionLayout).toHaveBeenCalledTimes(2);
+
+    rerender({ group: undefined });
+    expect(setSessionLayout).toHaveBeenLastCalledWith({
+      artifactData: { type: 'react', id: 'a1', content: savedContent, reactGroup: undefined },
+    });
   });
 });

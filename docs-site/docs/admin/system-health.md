@@ -26,7 +26,9 @@ A manual **Refresh** button is available in the header to force an immediate sta
 The email configuration card shows:
 
 - **Overall Status** -- A chip indicating whether email is configured or missing
-- **Required Secrets Status** -- A grid showing each email-related secret and whether it is present
+- **Delivery** -- Whether mail is sent through Amazon SES or an SMTP server
+- **Required Secrets Status** -- A grid showing each email setting the delivery method needs, in plain words with its setting name, and whether it is present
+- **Sender** -- The Sender address entry says whether system emails are sent from the System Email Sender (`mailFrom`) admin setting or from the `MAIL_FROM` secret, without showing the address. Email counts as configured when either one holds a sender.
 
 When email is not configured, a warning alert explains the impact: users will not receive one-time login codes, invitation emails, or other system notifications.
 
@@ -154,4 +156,4 @@ The bottom of the page includes a help card with general troubleshooting tips:
 ## Related Articles
 
 - [Admin Settings](./admin-settings.md)
-- [LLM Dashboard](./llm-dashboard.md)
+- [Models](./models.md)

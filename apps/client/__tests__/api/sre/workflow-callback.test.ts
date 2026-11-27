@@ -66,14 +66,14 @@ vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({
   decryptSecret: (...args: unknown[]) => mockDecryptSecret(...args),
 }));
 
-vi.mock('@server/integrations/slack/sreSlackApproval', () => ({
+vi.mock('@bike4mind/server-utils/integrations/slack/sreSlackApproval', () => ({
   postSreFixSuccessMessage: (...args: unknown[]) => mockPostSreFixSuccessMessage(...args),
   postSreFixFailureMessage: (...args: unknown[]) => mockPostSreFixFailureMessage(...args),
   postSreAlreadyFixedMessage: (...args: unknown[]) => mockPostSreAlreadyFixedMessage(...args),
   postSreCiRetryMessage: (...args: unknown[]) => mockPostSreCiRetryMessage(...args),
 }));
 
-vi.mock('@server/services/githubService', () => ({
+vi.mock('@bike4mind/server-utils/services/githubService', () => ({
   GitHubService: {
     forSystem: vi.fn(async () => ({
       hasCommentWithMarker: (...args: unknown[]) => mockHasCommentWithMarker(...args),
@@ -100,6 +100,9 @@ vi.mock('@bike4mind/observability', () => {
 
 // Import after mocks
 import handler from '../../../pages/api/sre/workflow-callback';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 function createMockReqRes(body: Record<string, unknown>, token = 'valid-token') {
   const req = {

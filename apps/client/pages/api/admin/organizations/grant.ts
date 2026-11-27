@@ -1,158 +1,43 @@
-import {
-  creditLotRepository,
-  creditTransactionRepository,
-  organizationRepository,
-  userRepository,
-  withTransaction,
-} from '@bike4mind/database';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
-import { organizationService, creditService } from '@bike4mind/services';
-import { ApiKeyScope, CreditHolderType, dayjs, TEAM_PLAN_SEATS_HARD_LIMIT } from '@bike4mind/common';
-import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
-import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
-import { subscriptionRepository } from '@server/models/Subscription';
-import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope } from '@bike4mind/common';
+import { requestApproval } from '@server/admin/approvals/service';
+import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
+import { GrantOrgSchema, grantOrg, validateGrantOrg } from '@server/admin/creditGrants/grantOrg';
+import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
+import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sendToClient } from '@server/websocket/utils';
-import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { z } from 'zod';
-import { Resource } from 'sst';
-import { randomUUID } from 'crypto';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
+import type { Request } from 'express';
 
-// Admin grants carry a `periodEndsAt` 12 months out for accounting / UI
-// labelling. It is informational - there is NO cron that flips status to
-// `canceled` when the date elapses. Revocation is an explicit admin action
-// via /api/admin/organizations/:id/revoke. If automated expiry becomes a
-// requirement, wire a sweeper in infra/cron.ts.
-const GRANT_DURATION_MONTHS = 12;
-// Sanity cap on initial credits - protects against admin typos (extra zero).
-const MAX_INITIAL_CREDITS = 10_000_000;
-
-const GrantOrgSchema = z.object({
-  name: z.string().min(1).max(120),
-  ownerEmail: z.string().email(),
-  // Absolute rail; the configured teamPlanMaxSeats ceiling is checked in the handler.
-  seats: z.number().int().min(1).max(TEAM_PLAN_SEATS_HARD_LIMIT),
-  initialCredits: z.number().int().min(0).max(MAX_INITIAL_CREDITS),
-});
-
-// requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
-// before req.user is set, so a key issued for a narrow integration can't create
-// an org with an initial credit grant just because its owner is an admin.
-// JWT/browser admins skip that check and still pass the isAdmin gate below.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
+const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Unauthorized. Admin access required.');
-    }
-
     const { name, ownerEmail, seats, initialCredits } = GrantOrgSchema.parse(req.body);
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
-    const { maxSeats } = await getTeamPlanSettings();
-    if (seats > maxSeats) {
-      throw new BadRequestError(`Seats cannot exceed ${maxSeats}`);
-    }
-
-    const owner = await userRepository.findByEmail(ownerEmail);
-    if (!owner) {
-      throw new NotFoundError(`No user with email ${ownerEmail}. Invite the user first, then grant the org.`);
-    }
-
-    const now = dayjs();
-    const periodStartsAt = now.toDate();
-    const periodEndsAt = now.add(GRANT_DURATION_MONTHS, 'months').toDate();
-
-    // All writes inside a single transaction so a downstream failure (sub
-    // create or credit grant) rolls back the org creation. Without this, a
-    // transient DB hiccup could leave an orphaned organization with no
-    // subscription record.
-    //
-    // (Double-click duplicate guard is handled by the UI mutation-pending
-    // disabled state, not by a DB check - admins may legitimately want two
-    // orgs with the same name across different owners.)
-    const organization = await withTransaction(async () => {
-      const org = await organizationService.create(
-        owner,
+    const params = { name, ownerEmail, seats, initialCredits, reason };
+    const request = req as unknown as Request;
+    const owner = await validateGrantOrg(params);
+    const heldSelfGrant = isHeldSelfGrant(req.user, isSelfOrImpersonator(req.user, owner.id));
+    const gate = await creditGrantNeedsApproval(initialCredits, req.user.id, { heldSelfGrant });
+    if (gate.policy) {
+      await assertDelegateCanCreditUser(req.user, owner.id, 'grant an organization to');
+      const pending = await requestApproval(
+        request,
         {
-          name,
-          seats,
-          personal: false,
-          stripeCustomerId: null,
+          action: 'org.credits.grant',
+          params,
+          summary: `Grant org ${name} with ${initialCredits} credits`,
+          reason,
+          ...(heldSelfGrant ? SELF_GRANT_APPROVAL : { requiredPermission: 'credits:adjust', requiresFullAdmin: false }),
         },
-        {
-          db: { organizations: organizationRepository, users: userRepository },
-          logger: req.logger,
-        }
+        gate.policy
       );
-
-      if (!org) {
-        throw new BadRequestError('Failed to create organization');
-      }
-
-      await subscriptionRepository.create({
-        ownerType: SubscriptionOwnerType.Organization,
-        ownerId: org.id,
-        // Sentinel id for admin grants - not a Stripe subscription, but the
-        // unique index on subscriptionId is non-sparse (DocumentDB constraint),
-        // so every row needs a real value. The `admin_grant_` prefix is the
-        // discriminator separate from Stripe's `sub_` ids.
-        subscriptionId: `admin_grant_${randomUUID()}`,
-        priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
-        status: 'active',
-        source: SubscriptionSource.AdminGrant,
-        grantedBy: req.user!.id,
-        grantedReason: reason,
-        periodStartsAt,
-        periodEndsAt,
-        canceledAt: null,
-        quantity: seats,
-      });
-
-      if (initialCredits > 0) {
-        await creditService.addCredits(
-          {
-            ownerId: org.id,
-            ownerType: CreditHolderType.Organization,
-            credits: initialCredits,
-            type: 'subscription',
-            metadata: { source: SubscriptionSource.AdminGrant, reason },
-          },
-          {
-            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-            creditHolderMethods: organizationRepository,
-          }
-        );
-      }
-
-      await recordAdminActionFromRequest(req, {
-        action: 'org.credits.granted',
-        target: { kind: 'organization', id: org.id, displayName: org.name },
-        summary: `granted org with ${seats} seats and ${initialCredits} initial credits`,
-        reason,
-        details: { ownerId: owner.id, seats, initialCredits, credits: initialCredits },
-      });
-
-      return org;
-    });
-
-    if (!organization) {
-      throw new BadRequestError('Failed to create organization');
+      return res.status(202).json(pending);
     }
-
-    await sendToClient(owner.id, Resource.websocket.managementEndpoint, {
-      action: 'invalidate_query',
-      queryKey: ['organizations'],
-    });
-
-    return res.status(201).json({
-      organizationId: organization.id,
-      name: organization.name,
-      seats,
-      initialCredits,
-      ownerId: owner.id,
-    });
+    try {
+      return res.status(201).json(await grantOrg(request, params));
+    } finally {
+      await gate.release();
+    }
   })
 );
 

@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { configureSlackPackage, createInstallProvider } from '@bike4mind/slack';
+import { configureSlackPackage, createInstallProvider, getWorkspaceIdFromInstallState } from '@bike4mind/slack';
 import type { ISlackServerDependencies, ISlackDatabaseDependencies } from '@bike4mind/slack';
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-jwt-secret-for-state-store' } }));
 
-import { createStateToken, verifyStateToken, validateJwtSecret } from '@server/auth/jwtStateStore';
+import { createStateToken, verifyStateToken, validateJwtSecret } from '@bike4mind/server-utils/auth/jwtStateStore';
 
 const installOptions = { scopes: ['chat:write'], redirectUri: 'https://example.com/cb' };
 
@@ -47,5 +47,19 @@ describe('install state binding against the real jwt state store', () => {
     const state = await mint('hash-x');
     const provider = await createInstallProvider('ws-1');
     await expect(provider.stateStore!.verifyStateParam(new Date(), state)).rejects.toThrow();
+  });
+
+  it('round-trips the workspace id the callback needs, under the same nonce binding', async () => {
+    const provider = await createInstallProvider('ws-1', { nonceHash: 'hash-x' });
+    const state = await provider.stateStore!.generateStateParam({ ...installOptions, metadata: 'ws-1' }, new Date());
+
+    expect(getWorkspaceIdFromInstallState(state, 'hash-x')).toBe('ws-1');
+    expect(getWorkspaceIdFromInstallState(state, 'hash-y')).toBeUndefined();
+    expect(getWorkspaceIdFromInstallState(state, null)).toBeUndefined();
+    expect(getWorkspaceIdFromInstallState('not-a-token', 'hash-x')).toBeUndefined();
+  });
+
+  it('reads no workspace id from a state minted without one', async () => {
+    expect(getWorkspaceIdFromInstallState(await mint('hash-x'), 'hash-x')).toBeUndefined();
   });
 });

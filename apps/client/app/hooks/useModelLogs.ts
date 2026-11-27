@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
+import { isValidSupportCase } from '@client/shared/supportCase';
 
 export interface ModelLog {
   id: string;
@@ -68,40 +69,68 @@ export interface ModelLog {
   };
 }
 
+/** One row of the paginated list: only what a card renders. The full log is {@link ModelLog}. */
+export interface ModelLogSummary {
+  id: string;
+  timestamp: string;
+  modelName?: string;
+  totalResponseTime?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  attachedFileCount: number;
+  messageHistoryLength?: number;
+  completedStepCount: number;
+  failedStepCount: number;
+  artifacts: Array<{ type: string }>;
+}
+
 interface UseModelLogsOptions {
   startDate?: string;
   endDate?: string;
   model?: string;
   search?: string;
+  /** Sent with `search` only: a prompt-text search is a support read and needs a case. */
+  supportCase?: string;
+  page: number;
+  limit: number;
 }
 
-interface ModelLogsResponse {
-  logs: ModelLog[];
+export interface ModelLogsResponse {
+  logs: ModelLogSummary[];
   total: number;
+  page: number;
+  limit: number;
 }
 
-export function useModelLogs(options: UseModelLogsOptions = {}) {
+export function useModelLogs(options: UseModelLogsOptions) {
   return useQuery<ModelLogsResponse>({
     queryKey: ['modelLogs', options],
     queryFn: async () => {
-      try {
-        console.log('Fetching model logs with options:', options);
-        const params = new URLSearchParams();
-        if (options.startDate) params.append('startDate', options.startDate);
-        if (options.endDate) params.append('endDate', options.endDate);
-        if (options.model) params.append('model', options.model);
-        if (options.search) params.append('search', options.search);
-
-        const url = `/api/admin/model-logs?${params.toString()}`;
-        console.log('Requesting URL:', url);
-
-        const response = await api.get(url);
-        console.log('Model logs response:', response.data);
-        return response.data;
-      } catch (error) {
-        console.error('Error fetching model logs:', error);
-        throw error;
+      const params = new URLSearchParams({ page: String(options.page), limit: String(options.limit) });
+      if (options.startDate) params.append('startDate', options.startDate);
+      if (options.endDate) params.append('endDate', options.endDate);
+      if (options.model) params.append('model', options.model);
+      if (options.search) {
+        params.append('search', options.search);
+        if (options.supportCase) params.append('supportCase', options.supportCase);
       }
+
+      const response = await api.get(`/api/admin/model-logs?${params.toString()}`);
+      return response.data;
     },
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** The full promptMeta is a support read: the server records it against `supportCase`. */
+export function useModelLogDetail(id: string, supportCase: string, enabled: boolean) {
+  return useQuery<ModelLog>({
+    queryKey: ['modelLogDetail', id, supportCase],
+    queryFn: async () => {
+      const params = new URLSearchParams({ supportCase });
+      const response = await api.get(`/api/admin/model-logs/${encodeURIComponent(id)}?${params.toString()}`);
+      return response.data;
+    },
+    enabled: enabled && isValidSupportCase(supportCase),
   });
 }

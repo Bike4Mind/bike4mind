@@ -11,6 +11,10 @@ const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools, string>> = {
   image_generation: 'Image Gen',
   music_generation: 'Music Gen',
   audio_generation: 'Audio Gen',
+  production_storyboard: 'Storyboard production',
+  production_generate_shot: 'Generate production shots',
+  production_add_audio: 'Add production audio',
+  production_assemble: 'Assemble production',
   mermaid_chart: 'Diagram',
   recharts: 'Chart',
   dice_roll: 'Dice',
@@ -22,9 +26,6 @@ const TOOL_DISPLAY_NAMES: Partial<Record<B4MLLMTools, string>> = {
   search_knowledge_base: 'Knowledge Base',
   decide: 'Decisions',
   retrieve_knowledge_content: 'Knowledge Retrieve',
-  optihashi_formulate: 'Problem Formulation',
-  optihashi_edit_problem: 'Problem Edit',
-  optihashi_schedule: 'Optimization Solver',
   navigate_view: 'Navigate View',
 };
 
@@ -189,26 +190,6 @@ const TOOL_PATTERNS: ToolPattern[] = [
       /\bclassif(y|ication)\b[^.]{0,40}\bprobabilit(y|ies)\b/i,
       /\bscore\s+(this|it)\b[^.]{0,20}\b(1|one)\s*(-|to)\s*(5|five)\b/i,
       /\bdecision\s+(call|with)\b[^.]{0,20}\bprobabilit(y|ies)\b/i,
-    ],
-  },
-  {
-    tool: 'optihashi_formulate',
-    patterns: [
-      /\b(formulate|model|structure)\s+.{0,30}(problem|scenario|situation)\b/i,
-      /\b(factory|workshop|plant|warehouse|fleet|hospital|clinic|bakery|restaurant)\b/i,
-      /\b(machines?|workers?|vehicles?|trucks?|shifts?|nurses?|orders?)\s+.{0,20}(schedul|optimi|assign|rout)\b/i,
-      /\b(job\s*shop|flow\s*shop|open\s*shop)\b/i,
-      /\b(supply\s+chain|logistics|manufacturing|production\s+line)\b/i,
-    ],
-  },
-  {
-    tool: 'optihashi_schedule',
-    patterns: [
-      /\b(optimi[sz]e|schedule|minimize|maximize)\b/i,
-      /\b(makespan|throughput|utilization|bottleneck)\b/i,
-      /\b(solver|heuristic|metaheuristic|simulated\s+annealing|tabu|genetic\s+algorithm)\b/i,
-      /\b(constraint|objective\s+function|decision\s+variable)\b/i,
-      /\b(NP[- ]hard|combinatorial|integer\s+programming)\b/i,
     ],
   },
 ];

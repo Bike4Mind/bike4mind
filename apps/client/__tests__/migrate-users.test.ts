@@ -5,6 +5,7 @@ const mockCreateUser = vi.fn();
 const mockFindByEmail = vi.fn();
 const mockUpdate = vi.fn();
 const mockAddMember = vi.fn();
+const mockFindOrganizationById = vi.fn();
 const mockLogEvent = vi.fn();
 const mockPublish = vi.fn();
 
@@ -29,17 +30,32 @@ vi.mock('@bike4mind/database/auth', () => ({
 }));
 
 vi.mock('@bike4mind/database/infra', () => ({
-  organizationRepository: {},
+  organizationRepository: {
+    findById: (...args: unknown[]) => mockFindOrganizationById(...args),
+  },
 }));
 
-vi.mock('@server/utils/analyticsLog', () => ({
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({
   logEvent: (...args: unknown[]) => mockLogEvent(...args),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (handler: (...args: unknown[]) => unknown) => handler,
-  }),
+  baseApi: () => {
+    type Handler = (req: unknown, res: unknown, next?: () => void) => unknown;
+    let guard: Handler;
+    const chain = {
+      use: (middleware: Handler) => ((guard = middleware), chain),
+      post: (handler: Handler) => async (req: unknown, res: unknown) => {
+        guard({ method: 'POST', ...(req as object) }, res, () => {});
+        return handler(req, res);
+      },
+    };
+    return chain;
+  },
 }));
 
 vi.mock('@bike4mind/server-utils/utils/errors', () => ({
@@ -57,7 +73,7 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
   },
 }));
 
-vi.mock('@server/utils/eventBus', () => ({
+vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   EmailEvents: {
     Send: {
       publish: (...args: unknown[]) => mockPublish(...args),
@@ -79,7 +95,8 @@ vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async () => ({
     logoUrl ? `<img src="${logoUrl}" alt="${brand} Logo" class="logo" />` : '',
 }));
 
-vi.mock('@bike4mind/common', async () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   RegInviteEvents: {
     MIGRATE_REGINVITE: 'Migration Email Sent',
   },
@@ -97,6 +114,7 @@ describe('/api/reg-invites/migrate', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockFindOrganizationById.mockResolvedValue(null);
     mockLogo.url = 'https://example.com/logo.png';
 
     mockRes = {
@@ -107,6 +125,7 @@ describe('/api/reg-invites/migrate', () => {
     mockReq = {
       user: { id: 'admin-123', isAdmin: true },
       ability: {},
+      logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
     };
 
     // Dynamic import to apply mocks
@@ -118,7 +137,7 @@ describe('/api/reg-invites/migrate', () => {
     mockReq.user = { id: 'user-1', isAdmin: false };
     mockReq.body = { usersData: [{ email: 'test@test.com', name: 'Test' }], sendEmail: true };
 
-    await expect(handler(mockReq, mockRes)).rejects.toThrow('Only admins can perform user migration');
+    await expect(handler(mockReq, mockRes)).rejects.toThrow('Missing permission: settings:manage');
   });
 
   it('creates a new user when email does not exist', async () => {
@@ -280,6 +299,10 @@ describe('/api/reg-invites/migrate', () => {
       mockReq.user,
       { organizationId: 'org-456', userId: 'new-user-4', force: true },
       expect.objectContaining({ db: expect.any(Object) })
+    );
+    expect(mockFindOrganizationById).toHaveBeenCalledWith('org-456');
+    expect(mockRes.json).toHaveBeenCalledWith(
+      expect.objectContaining({ createdUsers: [{ name: 'Charlie', email: 'charlie@example.com' }] })
     );
   });
 

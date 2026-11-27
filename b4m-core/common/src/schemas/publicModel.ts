@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
+import { supportsAssistantPrefill, supportsToolChanges, supportsToolSearch } from '../claudeToolCapabilities';
+import { imageModelProfile } from '../image/profiles';
 import { ModelBackend, type ModelInfo } from '../models';
 import { getTextModelCreditsPer1M } from '../pricing';
 import type { ReasoningEffort } from '../types/common';
@@ -18,7 +19,8 @@ import { paginatedResponseSchema } from './pagination';
  * SPA and CLI. Wire fields are snake_case (CONVENTIONS.md section 2).
  */
 
-const PublicImageSizingSchema = z.discriminatedUnion('kind', [
+// Shared with GET /api/v1/image-models (schemas/imageModels.ts).
+export const PublicImageSizingSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('presets'),
     presets: z.array(z.string()).describe('Accepted `size` values, as `WxH`.'),
@@ -65,7 +67,10 @@ export const PublicImageCapabilitiesSchema = z.object({
     max_reference_images: z
       .number()
       .int()
-      .describe('Most `referenceImageFabFileIds` honoured; 0 when the model takes none.'),
+      .describe(
+        'Most `referenceImageFabFileIds` honoured on generation; 0 when the model takes none. ' +
+          'FLUX.2 edits take one fewer, as the source uses a slot.'
+      ),
     edit: z.boolean().describe('Accepted by `POST /api/v1/image-edits`.'),
     requires_input_image: z.boolean(),
   }),
@@ -89,6 +94,20 @@ export const PublicModelSchema = z.object({
   type: z.enum(['text', 'image', 'speech-to-text', 'video']),
   backend: z.enum(ModelBackend).describe('The provider that serves the model.'),
   description: z.string().nullable(),
+  blurb: z
+    .string()
+    .nullable()
+    .describe(
+      'How Studio introduces the model on its card: one line on what it is best at. Display text; may change. ' +
+        'Set on catalog image models; null otherwise.'
+    ),
+  provider_label: z
+    .string()
+    .nullable()
+    .describe(
+      'The provider as shown to people (`OpenAI`, `Black Forest Labs`), where `backend` is the id. Display text. ' +
+        'Set on catalog image models; null otherwise.'
+    ),
   context_window: z.number().int().describe('Input context, in tokens.'),
   max_output_tokens: z.number().int(),
   supports_streaming: z.boolean(),
@@ -115,16 +134,23 @@ export const PublicModelSchema = z.object({
     .describe(
       'Whether the model accepts the tool search server tool and `defer_loading: true` on tool definitions, ' +
         'so a large tool catalog is searched on demand instead of loaded into context up front. Describes the ' +
-        'model: `/api/ai/v1/completions` honours it only for models whose `backend` is `anthropic`. A `bedrock` ' +
-        'model with this flag set is not served with tool search there yet: a `serverTool` entry is refused with ' +
-        '`errorCode: "tool_search_unsupported"` and `defer_loading` is ignored.'
+        'model: `/api/ai/v1/completions` honours it for every model with this flag set, whether its `backend` is ' +
+        '`anthropic` or `bedrock`.'
     ),
   supports_tool_changes: z
     .boolean()
     .describe(
       'Whether a system-role message can carry `tool_addition` and `tool_removal` blocks, which add or ' +
-        'remove a declared tool mid-conversation. Describes the model only: `/api/ai/v1/completions` does not ' +
-        'accept these blocks yet, and will accept them first for models whose `backend` is `anthropic`.'
+        'remove a declared tool mid-conversation. Describes the model: `/api/ai/v1/completions` honours it only for ' +
+        'models whose `backend` is `anthropic`; a `bedrock` model with this flag set is refused there with ' +
+        '`errorCode: "tool_changes_unsupported"`.'
+    ),
+  supports_assistant_prefill: z
+    .boolean()
+    .describe(
+      'Whether `/api/ai/v1/completions` accepts a final assistant message for the model to continue. When false, ' +
+        'a text prefill returns `400` with `errorCode: "assistant_prefill_unsupported"`; server-tool continuations are allowed. On Claude models that accept ' +
+        'assistant prefill, it cannot be combined with `thinking`.'
     ),
   supports_vision: z.boolean(),
   deprecation_date: z.string().nullable().describe('`YYYY-MM-DD`; null when no retirement is scheduled.'),
@@ -144,9 +170,9 @@ export type PublicImageCapabilities = z.infer<typeof PublicImageCapabilitiesSche
 export type PublicModel = z.infer<typeof PublicModelSchema>;
 export type PublicModelCreditsPer1MTokens = z.infer<typeof PublicModelCreditsPer1MTokensSchema>;
 
-type PublicImageSizing = PublicImageCapabilities['sizing'];
+export type PublicImageSizing = z.infer<typeof PublicImageSizingSchema>;
 
-function toPublicImageSizing(sizing: ImageSizing): PublicImageSizing {
+export function toPublicImageSizing(sizing: ImageSizing): PublicImageSizing {
   switch (sizing.kind) {
     case 'presets':
       return { kind: 'presets', presets: [...sizing.presets], default_size: sizing.defaultSize };
@@ -212,12 +238,15 @@ export interface PublicModelReasoning {
 }
 
 export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning): PublicModel {
+  const profile = imageModelProfile(model.id);
   return {
     id: model.id,
     name: model.name,
     type: model.type,
     backend: model.backend,
     description: model.description ?? null,
+    blurb: profile?.blurb ?? null,
+    provider_label: profile?.providerLabel ?? null,
     context_window: model.contextWindow,
     max_output_tokens: model.max_tokens,
     supports_streaming: model.can_stream ?? false,
@@ -227,6 +256,7 @@ export function toPublicModel(model: ModelInfo, reasoning: PublicModelReasoning)
     supports_tools: model.supportsTools ?? false,
     supports_tool_search: supportsToolSearch(model),
     supports_tool_changes: supportsToolChanges(model),
+    supports_assistant_prefill: supportsAssistantPrefill(model),
     supports_vision: model.supportsVision ?? false,
     deprecation_date: model.deprecationDate ?? null,
     replaced_by: model.replacedBy ?? null,

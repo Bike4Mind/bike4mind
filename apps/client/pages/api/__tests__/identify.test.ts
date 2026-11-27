@@ -28,12 +28,18 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it.
   ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -85,7 +91,7 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 
 // The per-user throttle is backed by the `caches` collection; this test has no Mongo.
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
   rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));
@@ -157,7 +163,7 @@ describe('GET /api/identify', () => {
 
   describe('api-key caller', () => {
     it('mints no session, returns no accessToken and sets no refresh cookie', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.ME_READ]);
       const { req, res } = fire({ apiKey: VALID_KEY });
       await handler(req, res);
 
@@ -168,7 +174,7 @@ describe('GET /api/identify', () => {
     });
 
     it('returns a whoami stripped of every secret field', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.ME_READ]);
       const { req, res } = fire({ apiKey: VALID_KEY });
       await handler(req, res);
 
@@ -191,7 +197,7 @@ describe('GET /api/identify', () => {
     });
 
     it('does not echo a bearer back when the request also carries one', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.ME_READ]);
       const { req, res } = fire({ apiKey: VALID_KEY, bearer: 'someone-elses-jwt' });
       await handler(req, res);
 

@@ -4,10 +4,17 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { B4MLLMTools, BRIEFCASE_DISALLOWED_TOOLS, isToolHiddenBySurface } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { useConfig } from '@client/app/hooks/data/settings';
 import { useHiddenSurfaceIds } from '@client/app/hooks/useHiddenSurfaces';
 import type { LLMSettings } from '@client/app/components/commands/LLMCommand';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
-import { isToolDenied } from '@client/app/utils/toolMapping';
+import { isToolDenied, isToolKeyMissing } from '@client/app/utils/toolMapping';
+
+/**
+ * Offered on every Smart-mode send (when usable), so the model decides whether a prompt needs the
+ * web instead of a keyword regex deciding for it.
+ */
+const ALWAYS_OFFERED_WEB_TOOLS: readonly B4MLLMTools[] = ['web_search', 'web_fetch'];
 
 export interface AssembleSettingsParams {
   /** Whether the send streams chunks (forwarded straight into the payload). */
@@ -39,8 +46,9 @@ export interface ResolveToolsParams {
    */
   activeSurface?: string | null;
   /**
-   * The session's `disabledTools`. Only shapes the "Smart tools" toast, so it never names a tool
-   * the server will withhold. The payload is untouched on purpose: the server denylist is the gate.
+   * The session's `disabledTools`. Shapes the "Smart tools" toast so it never names a tool the
+   * server will withhold, and keeps the always-offered web tools off the send. Tools already in the
+   * payload are untouched on purpose: the server denylist is the gate.
    */
   deniedTools?: readonly string[];
 }
@@ -75,6 +83,8 @@ export function useLLMSettingsAssembly(): {
     useShallow(s => [s.temperature, s.top_p, s.n, s.toolMode, s.tools])
   );
   const hiddenSurfaces = useHiddenSurfaceIds();
+  const { data: config } = useConfig();
+  const toolAvailability = config?.toolAvailability;
 
   const assembleSettings = useCallback(
     ({ stream, safeMaxTokens }: AssembleSettingsParams): LLMSettings => ({
@@ -142,14 +152,17 @@ export function useLLMSettingsAssembly(): {
           const names = autoSelected.map(r => r.reason).join(', ');
           toast.info(`Smart tools: ${names}`);
         }
-        return { effectiveTools: mergeTools(recommendations, tools).filter(visible), refused: false };
+        const webTools = ALWAYS_OFFERED_WEB_TOOLS.filter(
+          t => !isToolDenied(t, deniedTools) && !isToolKeyMissing(t, toolAvailability)
+        );
+        return { effectiveTools: mergeTools(recommendations, [...tools, ...webTools]).filter(visible), refused: false };
       }
       if (toolMode === 'fast') {
         return { effectiveTools: [], refused: false };
       }
       return { effectiveTools: tools, refused: false };
     },
-    [tools, toolMode, hiddenSurfaces]
+    [tools, toolMode, hiddenSurfaces, toolAvailability]
   );
 
   return { assembleSettings, resolveTools };

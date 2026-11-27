@@ -10,10 +10,15 @@
  * each one is logged twice and network-class errors still reach error severity.
  */
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
+import { installConsoleRedaction } from '@bike4mind/observability';
 import { logExpiringModels, getAvailableModels } from '@bike4mind/llm-adapters';
+import { warnIfPlaintextSecretsOptOut } from '@bike4mind/server-utils/security/plaintextSecretsOptOut';
+import { Logger } from '@bike4mind/observability';
 
 export function register() {
+  installConsoleRedaction();
   registerProcessErrorHandlers(undefined, 'NextServer');
+  warnIfPlaintextSecretsOptOut(new Logger({ metadata: { service: 'NextServer' } }));
 
   // Log any models approaching or past their deprecation date. This runs before the DB
   // wires the model catalog, so it sees only the static adapter tables and sunset map.

@@ -50,6 +50,12 @@ For each variable, the system tries environment-specific variables first, then f
 - `STAGING_CACHE_POLICY_ID`: Staging-specific cache policy ID (overrides `CACHE_POLICY_ID`)
 - `PROD_CACHE_POLICY_ID`: Production-specific cache policy ID (overrides `CACHE_POLICY_ID`)
 
+- `AUTH_NETWORK_ORIGIN_REQUEST_POLICY_ID`: Optional shared origin request policy for the authentication routes. Set it so stages stop creating one each; see `docs/ja4-forwarding.md`
+
+- `PREVIEW_CHAT_ORIGIN_CERT_ARN`: Optional certificate that preview stages share for the ChatCompletion load balancer instead of requesting one each; see `infra/preview-shared-origin-certificate.md`
+
+- `PREVIEW_CHAT_SHARED_LISTENER_ARN`: Optional HTTPS listener of a load balancer that preview stages share for the ChatCompletion service instead of creating one each; see `infra/preview-shared-chat-origin-alb.md`
+
 ## Required Secrets
 
 These secrets are sensitive and should be configured in your repository settings under Settings → Secrets and variables → Actions → Secrets.

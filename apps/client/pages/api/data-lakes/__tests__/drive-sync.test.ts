@@ -9,7 +9,7 @@ const orgAOwner: LakeConnectionOwner = { kind: 'organization', organizationId: '
 const h = vi.hoisted(() => ({
   claimTryAcquire: vi.fn(async () => ({ acquired: true })),
   claimRelease: vi.fn(async () => true),
-  verifyOrgAccess: vi.fn(),
+  verifyOrgPermission: vi.fn(),
   decryptToken: vi.fn(),
   isEncrypted: vi.fn(),
   sendToQueue: vi.fn(),
@@ -27,8 +27,11 @@ const h = vi.hoisted(() => ({
   connUpdateHealth: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   gatedFlags: [] as string[],
+  assertLakePlanAllowed: vi.fn(),
 }));
 
+// The plan gate has its own tests (server/entitlements/lakePlanGate.test.ts).
+vi.mock('@server/entitlements/lakePlanGate', () => ({ assertLakePlanAllowed: h.assertLakePlanAllowed }));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
@@ -44,20 +47,20 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@bike4mind/server-utils/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgPermission: h.verifyOrgPermission }));
 // common.ts reads Config at import (needs a real SST Resource), so importOriginal crashes: take the real
 // isTerminalDriveGrantError from its Config-free module instead.
-vi.mock('@server/integrations/google/drive/common', async () => ({
+vi.mock('@bike4mind/server-utils/integrations/google/drive/common', async () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
   isTerminalDriveGrantError: (
-    await vi.importActual<typeof import('@server/integrations/google/drive/driveGrantErrors')>(
-      '@server/integrations/google/drive/driveGrantErrors'
+    await vi.importActual<typeof import('@bike4mind/server-utils/integrations/google/drive/driveGrantErrors')>(
+      '@bike4mind/server-utils/integrations/google/drive/driveGrantErrors'
     )
   ).isTerminalDriveGrantError,
 }));
 // Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
-vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
-  const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
+vi.mock('@bike4mind/server-utils/integrations/google/drive/driveClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/server-utils/integrations/google/drive/driveClient')>();
   return {
     ...actual,
     createDriveClient: h.createDriveClient,
@@ -65,7 +68,7 @@ vi.mock('@server/integrations/google/drive/driveClient', async importOriginal =>
     probeConnectedFolder: h.probeConnectedFolder,
   };
 });
-vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
+vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@bike4mind/server-utils/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'queue-url' } } }));
@@ -100,7 +103,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
 });
 
 import handler from '../drive-sync';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 
 const FOLDER_ID = 'Folder_Abc-123';
 
@@ -119,7 +122,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     // origin: 'connector-fed' so these unrelated tests clear the origin gate; its own polarity is
     // pinned separately below (curated / no-origin-stored / connector-fed cases).
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', status: 'active', origin: 'connector-fed' });
-    h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgPermission.mockResolvedValue({ id: 'orgA' });
     h.userFindById.mockResolvedValue({ googleDrive: { refreshToken: 'enc-refresh' } });
     h.isEncrypted.mockReturnValue(true);
     h.decryptToken.mockReturnValue('plain-refresh');
@@ -135,6 +138,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.dlClearPendingConnector.mockResolvedValue(undefined);
     h.sendToQueue.mockResolvedValue(undefined);
+    h.assertLakePlanAllowed.mockResolvedValue(undefined);
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -154,7 +158,37 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1' });
     expect(status).toHaveBeenCalledWith(202);
     // The gate is checked against the LAKE's org, never a caller-supplied one.
-    expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
+    expect(h.verifyOrgPermission).toHaveBeenCalledWith(expect.anything(), 'orgA', 'manageContent');
+  });
+
+  it('checks the paid plan against the lake organization', async () => {
+    const req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID });
+    await run(req, makeRes().res);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(req, 'orgA');
+  });
+
+  it('checks the paid plan with no organization id for a personal lake', async () => {
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      organizationId: undefined,
+      status: 'active',
+      origin: 'connector-fed',
+      createdByUserId: 'u1',
+    });
+    const req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID });
+    await run(req, makeRes().res);
+    expect(h.assertLakePlanAllowed).toHaveBeenCalledWith(req, undefined);
+  });
+
+  it('rejects with the plan error before any credential read or connection write when the gate refuses', async () => {
+    const refusal = new ForbiddenError('Data lakes need a paid plan', { code: 'DATA_LAKE_PLAN_REQUIRED' });
+    h.assertLakePlanAllowed.mockRejectedValueOnce(refusal);
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), makeRes().res)).rejects.toBe(refusal);
+    expect(h.userFindById).not.toHaveBeenCalled();
+    expect(h.getValidUserDriveAccessToken).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.connUpdateCredential).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('refuses to claim a folder the connecting user cannot read (anti-squat gate)', async () => {
@@ -432,8 +466,8 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.connCreate).not.toHaveBeenCalled();
   });
 
-  it('gates on org owner/manager - a denied verifyOrgAccess stops the connect', async () => {
-    h.verifyOrgAccess.mockRejectedValue(new Error('Organization not found'));
+  it('gates on org owner/manager - a denied verifyOrgPermission stops the connect', async () => {
+    h.verifyOrgPermission.mockRejectedValue(new Error('Organization not found'));
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /organization not found/i
@@ -453,7 +487,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     const { res, status } = makeRes();
     await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
 
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     expect(h.connCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         driveFolderId: FOLDER_ID,
@@ -479,7 +513,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     const { res } = makeRes();
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not found/i);
 
-    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.verifyOrgPermission).not.toHaveBeenCalled();
     expect(h.getFolderAccess).not.toHaveBeenCalled();
     expect(h.connCreate).not.toHaveBeenCalled();
   });

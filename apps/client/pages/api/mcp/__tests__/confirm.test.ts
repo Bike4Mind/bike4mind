@@ -10,12 +10,12 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@server/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
+vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@server/utils/mcpServerFlag', () => ({ assertMcpServerEnabled: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn() },
-  Quest: { findById: vi.fn(), findByIdAndUpdate: vi.fn() },
+  Quest: { findById: vi.fn(), findByIdAndUpdate: vi.fn(), updateOne: vi.fn() },
   fabFileRepository: { shareable: { findAccessibleById: vi.fn() } },
 }));
 
@@ -24,9 +24,23 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => {
   return { getFilesStorage: () => storage };
 });
 
-vi.mock('@server/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
-vi.mock('@server/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
-vi.mock('@server/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpAccess', () => ({ assertCustomMcpEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({
+  customMcpToolHost: { callTool: vi.fn() },
+  isCustomToolStillOffered: vi.fn(),
+}));
+vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({ assertCallableFunctionsEnabled: vi.fn() }));
+vi.mock('@bike4mind/server-utils/callableFunctions/functionToolHost', () => {
+  const host = { listConnections: vi.fn(), callTool: vi.fn() };
+  return {
+    FUNCTION_CONNECTION_ID: '_fn',
+    createFunctionToolHost: vi.fn(() => host),
+    isFunctionToolStillOffered: vi.fn(),
+  };
+});
+vi.mock('@bike4mind/server-utils/utils/invokeMcpHandler', () => ({ invokeMcpHandler: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/downloadAttachmentUrl', () => ({ downloadAttachmentUrl: vi.fn() }));
+vi.mock('@bike4mind/server-utils/utils/pendingActionExecutor', () => ({ claimPendingAction: vi.fn() }));
 vi.mock('@bike4mind/server-utils/integrations/github/github-repo-helper', () => ({
   getSelectedRepositoriesForMcp: vi.fn(),
 }));
@@ -35,18 +49,31 @@ vi.mock('@bike4mind/slack', () => {
   class StubResource {
     getMcpEnvVariables = vi.fn().mockResolvedValue([]);
   }
-  return { GitHubResource: StubResource, JiraResource: StubResource, ConfluenceResource: StubResource };
+  return {
+    GitHubResource: StubResource,
+    JiraResource: StubResource,
+    ConfluenceResource: StubResource,
+    TOKEN_EXPIRATION_MS: 15 * 60 * 1000,
+  };
 });
 
 import { fabFileRepository, Quest, Session } from '@bike4mind/database';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
-import { downloadAttachmentUrl } from '@server/utils/downloadAttachmentUrl';
+import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
+import { downloadAttachmentUrl } from '@bike4mind/server-utils/utils/downloadAttachmentUrl';
 import { JIRA_UPLOAD_ATTACHMENT } from '@bike4mind/mcp/atlassian/constants';
-import { claimPendingAction } from '@server/utils/pendingActionExecutor';
+import { claimPendingAction } from '@bike4mind/server-utils/utils/pendingActionExecutor';
 import { getSelectedRepositoriesForMcp } from '@bike4mind/server-utils/integrations/github/github-repo-helper';
 import { assertMcpServerEnabled } from '@server/utils/mcpServerFlag';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { customMcpToolHost, isCustomToolStillOffered } from '@bike4mind/server-utils/mcpConnections/customMcpToolHost';
+import { assertCustomMcpEnabled } from '@bike4mind/server-utils/mcpConnections/customMcpAccess';
+import { RemoteMcpProtocolError } from '@bike4mind/mcp/remote';
+import { assertCallableFunctionsEnabled } from '@bike4mind/server-utils/callableFunctions/access';
+import {
+  createFunctionToolHost,
+  isFunctionToolStillOffered,
+} from '@bike4mind/server-utils/callableFunctions/functionToolHost';
 import handler from '../confirm';
 
 const SESSION_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -85,7 +112,7 @@ describe('POST /api/mcp/confirm', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'approved');
     expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].toolArgs).toMatchObject({ _executeFromButton: true });
     expect(vi.mocked(invokeMcpHandler).mock.calls[0][0].userId).toBe('user-1');
@@ -349,7 +376,7 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(500);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'approved');
   });
 
   it('claims the stored action on cancel without invoking the tool', async () => {
@@ -357,8 +384,46 @@ describe('POST /api/mcp/confirm', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true });
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  describe('an action staged by another user in the shared notebook', () => {
+    beforeEach(() => {
+      vi.mocked(Quest.findById).mockResolvedValue({
+        sessionId: SESSION_ID,
+        promptMeta: { session: { userId: 'sharee-2' } },
+        pendingAction: { tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: pendingActionTs },
+      } as never);
+    });
+
+    it('refuses Confirm by the session owner without claiming or invoking', async () => {
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(403);
+      expect(claimPendingAction).not.toHaveBeenCalled();
+      expect(invokeMcpHandler).not.toHaveBeenCalled();
+    });
+
+    it('still lets the session owner cancel it', async () => {
+      const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
+    });
+  });
+
+  it('runs an action the session owner staged on their own turn', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      promptMeta: { session: { userId: 'user-1' } },
+      pendingAction: { tool: 'create_issue', params: { owner: 'o', repo: 'r', title: 't' }, ts: pendingActionTs },
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(invokeMcpHandler).toHaveBeenCalledTimes(1);
   });
 
   it('returns 409 on cancel when the claim is lost', async () => {
@@ -391,7 +456,7 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: expiredTs });
 
     expect(res._getStatusCode()).toBe(400);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, expiredTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, expiredTs, 'lapsed');
     expect(Quest.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(invokeMcpHandler).not.toHaveBeenCalled();
   });
@@ -481,7 +546,306 @@ describe('POST /api/mcp/confirm', () => {
     const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs });
 
     expect(res._getStatusCode()).toBe(200);
-    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, pendingActionTs, 'denied');
     expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/mcp/confirm - custom connector actions', () => {
+  let ts: number;
+  const customAction = () => ({
+    tool: 'create',
+    params: { title: 't' },
+    ts,
+    customConnector: { connectionId: 'c1', slug: 'acme', displayName: 'Acme', urlHost: 'mcp.acme.test' },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ts = Date.now();
+    vi.mocked(Session.findById).mockResolvedValue({ userId: 'user-1' } as never);
+    vi.mocked(Quest.findById).mockResolvedValue({ sessionId: SESSION_ID, pendingAction: customAction() } as never);
+    vi.mocked(claimPendingAction).mockResolvedValue(true);
+    vi.mocked(customMcpToolHost.callTool).mockResolvedValue({ result: { content: [] } });
+    vi.mocked(isCustomToolStillOffered).mockResolvedValue(true);
+  });
+
+  it('Confirm claims the action and calls the host with approved: true, the stored params and the card connector as switched on', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getJSONData()).toMatchObject({ success: true });
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'approved');
+    expect(customMcpToolHost.callTool).toHaveBeenCalledWith({
+      connectionId: 'c1',
+      userId: 'user-1',
+      toolName: 'create',
+      args: { title: 't' },
+      approved: true,
+      platformConnectionIds: ['c1'],
+      deadline: expect.any(Number),
+    });
+    expect(invokeMcpHandler).not.toHaveBeenCalled();
+  });
+
+  it('Cancel claims the action and never calls the host', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: false, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'denied');
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses Confirm of an action another user staged, with no host call', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      promptMeta: { session: { userId: 'sharee-2' } },
+      pendingAction: customAction(),
+    } as never);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses a replaced action with 409 and no host call', async () => {
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts - 1 });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('a second Confirm that loses the claim does not call the host', async () => {
+    vi.mocked(claimPendingAction).mockResolvedValue(false);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('reports an app-side refusal as a failed action with its own fixed text', async () => {
+    vi.mocked(customMcpToolHost.callTool).mockRejectedValue(
+      new ForbiddenError('Your organization allows only read-only tools from custom connectors')
+    );
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getJSONData()).toMatchObject({
+      success: false,
+      message: 'Your organization allows only read-only tools from custom connectors',
+    });
+  });
+
+  it('never shows a protocol error message the remote server wrote', async () => {
+    vi.mocked(customMcpToolHost.callTool).mockRejectedValue(
+      new RemoteMcpProtocolError('Error POSTing to endpoint: the create succeeded, nothing was changed')
+    );
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    const body = res._getJSONData();
+    expect(body.success).toBe(false);
+    expect(body.message).toBe('The server did not respond as an MCP server');
+    expect(JSON.stringify(body)).not.toContain('nothing was changed');
+  });
+
+  it('collapses an unrecognised error to a generic line', async () => {
+    vi.mocked(customMcpToolHost.callTool).mockRejectedValue(new Error('connect ECONNREFUSED 10.0.0.5:6379'));
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getJSONData()).toEqual({ success: false, message: 'Action failed' });
+  });
+
+  it('reports a connector-reported error as a failure, not a success', async () => {
+    vi.mocked(customMcpToolHost.callTool).mockResolvedValue({ result: { isError: true, content: [] } });
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getJSONData()).toMatchObject({ success: false });
+  });
+
+  it('rejects before the claim or any host work when custom connectors are disabled', async () => {
+    vi.mocked(assertCustomMcpEnabled).mockRejectedValueOnce(new ForbiddenError('Custom MCP connectors are disabled'));
+
+    await expect(
+      post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts })
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(isCustomToolStillOffered).not.toHaveBeenCalled();
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('leaves the action in place when the connection or tool is no longer offered', async () => {
+    vi.mocked(isCustomToolStillOffered).mockResolvedValue(false);
+
+    const res = await post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(isCustomToolStillOffered).toHaveBeenCalledWith('user-1', 'c1', 'create');
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/mcp/confirm - function actions', () => {
+  let ts: number;
+  const functionHost = createFunctionToolHost('chat');
+  const functionAction = () => ({
+    tool: 'beam_midspan_deflection',
+    params: { load: 1, span: 2 },
+    ts,
+    customConnector: { connectionId: '_fn', slug: '_fn', displayName: 'Functions', urlHost: 'functions' },
+  });
+  const confirm = () => post({ questId: QUEST_ID, sessionId: SESSION_ID, confirmed: true, pendingActionTs: ts });
+  const held = (returnValue = 'Awaiting your approval: beam_midspan_deflection') => ({
+    name: '_fn__beam_midspan_deflection',
+    returnValue,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ts = Date.now();
+    vi.mocked(Session.findById).mockResolvedValue({ userId: 'user-1' } as never);
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: functionAction(),
+      promptMeta: { functionCalls: [held()] },
+    } as never);
+    vi.mocked(claimPendingAction).mockResolvedValue(true);
+    vi.mocked(functionHost.callTool).mockResolvedValue({ result: { content: [] } });
+    vi.mocked(isFunctionToolStillOffered).mockResolvedValue(true);
+    // Custom connectors off: a function card must not depend on them.
+    vi.mocked(assertCustomMcpEnabled).mockRejectedValue(new ForbiddenError('Custom MCP connectors are disabled'));
+  });
+
+  it('runs through the function host under the functions setting, with custom connectors off', async () => {
+    const res = await confirm();
+
+    expect(res._getJSONData()).toEqual({
+      success: true,
+      message: 'Functions: beam_midspan_deflection completed',
+      output: '',
+    });
+    expect(assertCallableFunctionsEnabled).toHaveBeenCalledWith({ id: 'user-1' });
+    expect(assertCustomMcpEnabled).not.toHaveBeenCalled();
+    expect(isFunctionToolStillOffered).toHaveBeenCalledWith('user-1', 'beam_midspan_deflection');
+    expect(isCustomToolStillOffered).not.toHaveBeenCalled();
+    expect(claimPendingAction).toHaveBeenCalledWith(QUEST_ID, ts, 'approved');
+    expect(functionHost.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: '_fn',
+        userId: 'user-1',
+        toolName: 'beam_midspan_deflection',
+        args: { load: 1, span: 2 },
+        approved: true,
+      })
+    );
+    // The web function's turn budget, counted from the confirm request.
+    expect(vi.mocked(functionHost.callTool).mock.calls[0]![0].deadline).toBeGreaterThan(Date.now() + 40_000);
+    expect(customMcpToolHost.callTool).not.toHaveBeenCalled();
+  });
+
+  const STAMP = { function_id: 'f1', trust_label: 'unverified', surface: 'chat' };
+  const structured = (output: Record<string, unknown>) => ({
+    result: { content: [], structuredContent: output, meta: STAMP, label: 'unverified' },
+  });
+
+  it('returns the output and stamp on the card and replays them in place of the held call', async () => {
+    vi.mocked(functionHost.callTool).mockResolvedValue(structured({ deflection: 0.000406901 }));
+
+    const res = await confirm();
+
+    const body = res._getJSONData();
+    expect(body).toMatchObject({ success: true, message: 'Functions: beam_midspan_deflection completed' });
+    expect(JSON.parse(body.output)).toEqual({ output: { deflection: 0.000406901 }, stamp: STAMP });
+    expect(Quest.updateOne).toHaveBeenCalledWith(
+      { _id: QUEST_ID, 'promptMeta.functionCalls.0.returnValue': { $regex: '^Awaiting your approval:' } },
+      {
+        $set: {
+          'promptMeta.functionCalls.0.returnValue':
+            '<untrusted_tool_result connector="_fn" host="functions" label="unverified">\n' +
+            `${body.output}\n</untrusted_tool_result>`,
+          'promptMeta.functionCalls.0.success': true,
+        },
+      },
+      { runValidators: true }
+    );
+  });
+
+  it('writes into the held call it ran when the turn holds the same function twice', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: functionAction(),
+      promptMeta: {
+        functionCalls: [
+          held('Awaiting your approval: first'),
+          { name: '_fn__other', returnValue: 'Awaiting your approval: other' },
+          held('Awaiting your approval: second'),
+        ],
+      },
+    } as never);
+    vi.mocked(functionHost.callTool).mockResolvedValue(structured({ deflection: 2 }));
+
+    await confirm();
+
+    const [filter, update] = vi.mocked(Quest.updateOne).mock.calls[0]! as unknown as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    expect(filter).toEqual({
+      _id: QUEST_ID,
+      'promptMeta.functionCalls.2.returnValue': { $regex: '^Awaiting your approval:' },
+    });
+    expect(Object.keys(update.$set)).toEqual([
+      'promptMeta.functionCalls.2.returnValue',
+      'promptMeta.functionCalls.2.success',
+    ]);
+  });
+
+  it('skips a same-named call that already has its output when picking the held one', async () => {
+    vi.mocked(Quest.findById).mockResolvedValue({
+      sessionId: SESSION_ID,
+      pendingAction: functionAction(),
+      promptMeta: { functionCalls: [held('Awaiting your approval: first'), held('<untrusted_tool_result>done')] },
+    } as never);
+
+    await confirm();
+
+    expect(vi.mocked(Quest.updateOne).mock.calls[0]![0]).toHaveProperty('promptMeta.functionCalls.0.returnValue');
+  });
+
+  it('refuses an output over the cap whole, on the card and in the replay', async () => {
+    vi.mocked(functionHost.callTool).mockResolvedValue(structured({ note: 'a'.repeat(30_000) }));
+
+    const body = (await confirm())._getJSONData();
+
+    expect(body.success).toBe(false);
+    expect(JSON.parse(body.output)).toEqual({ outcome: 'output_too_large', max_chars: 30_000 });
+    const update = vi.mocked(Quest.updateOne).mock.calls[0]![1] as { $set: Record<string, unknown> };
+    expect(update.$set['promptMeta.functionCalls.0.returnValue']).toContain('"outcome":"output_too_large"');
+    expect(update.$set['promptMeta.functionCalls.0.success']).toBe(false);
+  });
+
+  it('refuses before the claim when callable functions are off', async () => {
+    vi.mocked(assertCallableFunctionsEnabled).mockRejectedValueOnce(
+      new ForbiddenError('Callable functions are disabled')
+    );
+
+    await expect(confirm()).rejects.toBeInstanceOf(ForbiddenError);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(functionHost.callTool).not.toHaveBeenCalled();
+  });
+
+  it('leaves the action in place when the function is no longer offered', async () => {
+    vi.mocked(isFunctionToolStillOffered).mockResolvedValue(false);
+
+    const res = await confirm();
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(claimPendingAction).not.toHaveBeenCalled();
+    expect(functionHost.callTool).not.toHaveBeenCalled();
   });
 });

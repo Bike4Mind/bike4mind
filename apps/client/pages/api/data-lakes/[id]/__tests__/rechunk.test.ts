@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   isFallbackLake: vi.fn(() => false),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
+  adminSettings: {},
   detectUnderChunkedFiles: vi.fn(),
   detectStaleEmbeddingSpaceFiles: vi.fn(),
   countFailedLakeFiles: vi.fn(),
@@ -62,10 +63,10 @@ vi.mock('@bike4mind/database', () => ({
     resetChunkStateByIds: h.resetChunkStateByIds,
   },
   fabFileChunkRepository: {},
-  adminSettingsRepository: {},
+  adminSettingsRepository: h.adminSettings,
   scopedSettingsRepository: {},
 }));
-vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@bike4mind/server-utils/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 vi.mock('@bike4mind/server-utils/dataLakes/convergenceKillSwitch', () => ({
@@ -132,7 +133,11 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
       staleEmbeddingSpaceCount: 1,
       embeddingSpaceResolved: true,
     });
-    expect(h.assertLakeAccess).toHaveBeenCalled();
+    expect(h.assertLakeAccess).toHaveBeenCalledWith(
+      'lake1',
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ settings: h.adminSettings }) })
+    );
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
   });
@@ -198,6 +203,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
 
   it('resolves the path lake by id only', async () => {
     await invoke('POST');
+    expect(h.assertLakeRebuildAccess.mock.calls[0][2].db).not.toHaveProperty('settings');
     // By id only: a slug skips a deleted lake and would resolve the next lake sharing it.
     expect(h.assertLakeRebuildAccess.mock.calls[0][3]).toEqual({ idOnly: true });
     expect(h.assertLakeRebuildAccess.mock.calls[1][3]).toEqual({ idOnly: true });

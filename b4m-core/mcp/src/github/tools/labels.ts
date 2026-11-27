@@ -3,9 +3,12 @@ import type { McpServer } from '../types.js';
 import { octokit } from '../client.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { ownerSchema, repoSchema, confirmationParams } from '../helpers/schemas.js';
-import { getErrorMessage } from '../helpers/errors.js';
+import { createStderrLogger } from '../../shared/stderrLog.js';
+import { errorLogFields } from '../helpers/errors.js';
 import { createPreviewResponse } from '../../shared/confirmation-helpers.js';
 import { TOOL_CREATE_LABEL, TOOL_UPDATE_LABEL, TOOL_DELETE_LABEL, TOOL_LIST_LABELS } from '../constants.js';
+
+const log = createStderrLogger('github');
 
 export function registerLabelTools(server: McpServer) {
   // CREATE LABEL
@@ -51,7 +54,6 @@ export function registerLabelTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually create the label
-      console.error(`[${TOOL_CREATE_LABEL}] Attempting to create label: ${name} in ${fullRepoName}`);
 
       try {
         const result = await octokit.issues.createLabel({
@@ -62,7 +64,7 @@ export function registerLabelTools(server: McpServer) {
           description,
         });
 
-        console.error(`[${TOOL_CREATE_LABEL}] SUCCESS: Created label ${result.data.name}`);
+        log.info('succeeded', { toolName: TOOL_CREATE_LABEL });
 
         return createSuccessResponse({
           name: result.data.name,
@@ -71,7 +73,7 @@ export function registerLabelTools(server: McpServer) {
           url: result.data.url,
         });
       } catch (error) {
-        console.error(`[${TOOL_CREATE_LABEL}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_CREATE_LABEL, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -126,7 +128,6 @@ export function registerLabelTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually update the label
-      console.error(`[${TOOL_UPDATE_LABEL}] Attempting to update label: ${current_name} in ${fullRepoName}`);
 
       try {
         // octokit.issues.updateLabel takes the current name as `name` and the rename as `new_name`.
@@ -140,7 +141,7 @@ export function registerLabelTools(server: McpServer) {
           description,
         });
 
-        console.error(`[${TOOL_UPDATE_LABEL}] SUCCESS: Updated label ${result.data.name}`);
+        log.info('succeeded', { toolName: TOOL_UPDATE_LABEL });
 
         return createSuccessResponse({
           old_name: current_name,
@@ -150,7 +151,7 @@ export function registerLabelTools(server: McpServer) {
           url: result.data.url,
         });
       } catch (error) {
-        console.error(`[${TOOL_UPDATE_LABEL}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_UPDATE_LABEL, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -189,7 +190,6 @@ export function registerLabelTools(server: McpServer) {
       }
 
       // CONFIRMED: Actually delete the label
-      console.error(`[${TOOL_DELETE_LABEL}] Attempting to delete label: ${name} in ${fullRepoName}`);
 
       try {
         await octokit.issues.deleteLabel({
@@ -198,7 +198,7 @@ export function registerLabelTools(server: McpServer) {
           name,
         });
 
-        console.error(`[${TOOL_DELETE_LABEL}] SUCCESS: Deleted label ${name}`);
+        log.info('succeeded', { toolName: TOOL_DELETE_LABEL });
 
         return createSuccessResponse({
           deleted: true,
@@ -206,7 +206,7 @@ export function registerLabelTools(server: McpServer) {
           repository: fullRepoName,
         });
       } catch (error) {
-        console.error(`[${TOOL_DELETE_LABEL}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_DELETE_LABEL, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }
@@ -242,7 +242,7 @@ export function registerLabelTools(server: McpServer) {
           })),
         });
       } catch (error) {
-        console.error(`[${TOOL_LIST_LABELS}] ERROR: ${getErrorMessage(error)}`);
+        log.error('failed', { toolName: TOOL_LIST_LABELS, ...errorLogFields(error) });
         return createErrorResponse(error);
       }
     }

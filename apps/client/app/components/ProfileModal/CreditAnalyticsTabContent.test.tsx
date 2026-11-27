@@ -50,25 +50,27 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
-const line = vi.hoisted(() => ({ series: [] as Array<{ id: string; data: Array<{ x: string; y: number }> }> }));
-vi.mock('@nivo/line', () => ({
-  ResponsiveLine: ({ data }: { data: typeof line.series }) => {
-    line.series = data;
+const line = vi.hoisted(() => ({
+  series: [] as ReadonlyArray<{ id: string; data: Array<{ x: string; y: number }> }>,
+}));
+vi.mock('./CreditUsageChart', () => ({
+  CreditUsageChart: ({ series }: { series: typeof line.series }) => {
+    line.series = series;
     return null;
   },
 }));
-const pie = vi.hoisted(() => ({ data: [] as unknown[] }));
-vi.mock('@nivo/pie', () => ({
-  ResponsivePie: ({ data }: { data: unknown[] }) => {
+const pie = vi.hoisted(() => ({ data: [] as readonly unknown[] }));
+vi.mock('@client/app/components/Charts/DonutChart', () => ({
+  DonutChart: ({ data }: { data: readonly unknown[] }) => {
     pie.data = data;
     return null;
   },
 }));
 // Records the props the tab passes down; also keeps the real dashboard (and its react-query
 // hooks, which would need a QueryClientProvider) out of this suite.
-const dashboard = vi.hoisted(() => ({ props: null as { ownerType: unknown; ownerId?: string } | null }));
+const dashboard = vi.hoisted(() => ({ props: null as { ownerType: unknown; ownerId?: string; days?: number } | null }));
 vi.mock('@client/app/components/admin/CreditAnalysis/components/UsageDashboard', () => ({
-  UsageDashboard: (props: { ownerType: unknown; ownerId?: string }) => {
+  UsageDashboard: (props: { ownerType: unknown; ownerId?: string; days?: number }) => {
     dashboard.props = props;
     return <div data-testid="usage-dashboard" />;
   },
@@ -228,11 +230,26 @@ describe('CreditAnalyticsTabContent spend breakdown', () => {
     dashboard.props = null;
   });
 
-  it('mounts the usage-event breakdown for the signed-in user', async () => {
+  it('mounts the breakdown for the signed-in user on the default 30-day window', async () => {
     render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
 
     expect(await screen.findByTestId('usage-dashboard')).toBeTruthy();
-    expect(dashboard.props).toEqual({ ownerType: CreditHolderType.User, ownerId: 'user_1' });
+    expect(dashboard.props).toEqual({
+      ownerType: CreditHolderType.User,
+      ownerId: 'user_1',
+      days: 30,
+      reconcileLedger: true,
+    });
+  });
+
+  it('follows the ledger period toggle', async () => {
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+
+    const [periodSelect] = screen.getAllByRole('combobox');
+    fireEvent.mouseDown(periodSelect);
+    fireEvent.click(screen.getByText('time.last_7_days'));
+
+    expect(dashboard.props?.days).toBe(7);
   });
 
   it('omits the breakdown when there is no user id', () => {
@@ -240,5 +257,42 @@ describe('CreditAnalyticsTabContent spend breakdown', () => {
     render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
 
     expect(screen.queryByTestId('usage-spend-breakdown')).toBeNull();
+  });
+});
+
+describe('CreditAnalyticsTabContent referral rewards', () => {
+  afterEach(() => {
+    hoisted.transactions = [];
+    line.series = [];
+  });
+
+  const showCreditsAdded = () => {
+    const [, viewModeSelect] = screen.getAllByRole('combobox');
+    fireEvent.mouseDown(viewModeSelect);
+    fireEvent.click(screen.getByText('Credits Added'));
+  };
+  const total = (id: string) => line.series.find(s => s.id === id)?.data.reduce((sum, point) => sum + point.y, 0);
+
+  it('charts referral rewards as their own series, apart from the other credits added', () => {
+    const at = new Date(Date.now() - 3_600_000);
+    hoisted.transactions = [
+      { type: 'purchase', credits: 5000, createdAt: at },
+      { type: 'generic_add', credits: 200, createdAt: at, reason: 'admin_grant' },
+      { type: 'generic_add', credits: 6000, createdAt: at, reason: 'referral_reward' },
+    ];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+    showCreditsAdded();
+
+    expect(line.series.map(series => series.id)).toEqual(['credits_added', 'referral_rewards']);
+    expect(total('credits_added')).toBe(5200);
+    expect(total('referral_rewards')).toBe(6000);
+  });
+
+  it('adds no referral series when there are no referral rewards', () => {
+    hoisted.transactions = [{ type: 'purchase', credits: 5000, createdAt: new Date(Date.now() - 3_600_000) }];
+    render(<CreditAnalyticsTabContent />, { wrapper: TestWrapper });
+    showCreditsAdded();
+
+    expect(line.series.map(series => series.id)).toEqual(['credits_added']);
   });
 });

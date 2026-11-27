@@ -187,9 +187,27 @@ class PreflightTests(unittest.TestCase):
                 model['services']['app']['environment'][key] = value
                 self.assertIn('app.secrets', check_config(model))
 
+    def test_previous_encryption_key_accepts_the_documented_unset_forms(self):
+        for value in ('', 'not-configured', 'b' * 64):
+            with self.subTest(value=value):
+                model = configured_stack()
+                model['services']['app']['environment']['SECRET_ENCRYPTION_KEY_PREVIOUS'] = value
+                self.assertNotIn('app.secrets', check_config(model))
+
     def test_memory_key_must_match_every_worker(self):
         model = configured_stack()
         model['services']['chatcompletion']['environment']['MEMORY_KEY_SECRET'] = 'a-different-memory-key'
+        self.assertIn('internal.shared-secrets', check_config(model))
+
+    def test_matching_previous_memory_key_passes(self):
+        model = configured_stack()
+        for service in ('app', 'chatcompletion'):
+            model['services'][service]['environment']['MEMORY_KEY_SECRET_PREVIOUS'] = 'an-outgoing-memory-key'
+        self.assertNotIn('internal.shared-secrets', check_config(model))
+
+    def test_previous_memory_key_must_match_every_worker(self):
+        model = configured_stack()
+        model['services']['chatcompletion']['environment']['MEMORY_KEY_SECRET_PREVIOUS'] = 'an-outgoing-memory-key'
         self.assertIn('internal.shared-secrets', check_config(model))
 
     def test_placeholder_table(self):
@@ -282,7 +300,7 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ['docker', 'compose', '-f', 'base.yaml', '-f', 'prod.yaml',
                                                '--env-file', 'prod.env', '--profile', 'proxy',
                                                'config', '--format', 'json'])
-        self.assertIn('preflight checks passed; live TLS/mail/auth/restore not proven', output.getvalue())
+        self.assertIn('preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)', output.getvalue())
         self.assertNotIn('private-warning', output.getvalue())
         self.assertNotIn('smtp-password', output.getvalue())
 

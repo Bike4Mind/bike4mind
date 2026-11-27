@@ -123,6 +123,12 @@ const REASONING_MODEL_INFO = {
   thinkingStyle: 'adaptive',
 } as unknown as ModelInfo;
 
+// The free-tier gate reads settings these fixtures do not model; llm/modelAdmission.test.ts covers it.
+vi.mock('./llm/modelAdmission', async importOriginal => ({
+  ...(await importOriginal<typeof import('./llm/modelAdmission')>()),
+  loadFreeTierAllowedModels: async () => undefined,
+}));
+
 vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
@@ -184,6 +190,7 @@ function buildDb(org?: Record<string, unknown>) {
       creditTransactions: {} as any,
       users: users as any,
       usageEvents: { record: vi.fn().mockResolvedValue(undefined) } as any,
+      spendFreezes: { findActiveForSubject: vi.fn().mockResolvedValue(null) },
       organizations: organizations as any,
     },
     users,
@@ -454,10 +461,36 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it('prices the first round (no assistant message) fully uncached', async () => {
+    it('prices a first round (no assistant message) flagged prefix at cache_write, since nothing is cached yet', async () => {
       const { db, users } = buildDb();
       const messages = [
         { role: 'system' as const, content: text(10_000), cache: true },
+        { role: 'user' as const, content: text(20_000) },
+      ];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 20_000, OUTPUT, 0, 10_000));
+      const uncached = usdToCredits(getTextModelCost(MODEL_INFO, 30_000, OUTPUT));
+      expect(expected).toBeGreaterThan(uncached);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('prices the cache write the server strategy places on a CLI first round the client did not flag', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'system' as const, content: text(10_000) },
+        { role: 'user' as const, content: text(20_000) },
+      ];
+      await executeCompletion({ ...roundParams, source: 'cli', db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 0, 30_000));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('keeps an unflagged one-shot API first round uncached, since the server does not cache it', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'system' as const, content: text(10_000) },
         { role: 'user' as const, content: text(20_000) },
       ];
       await executeCompletion({ ...roundParams, db, messages });

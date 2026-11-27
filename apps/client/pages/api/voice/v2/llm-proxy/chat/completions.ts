@@ -5,7 +5,8 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
-import { DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
+import { DATA_LAKE_TOOL_NAMES, isTerminalCreditRefusal, NotFoundError, questGenerationJobs } from '@bike4mind/common';
+import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { adminSettingsRepository, questRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -16,7 +17,7 @@ import {
 } from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
 import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
-import { type Logger } from '@bike4mind/observability';
+import { type Logger, describeErrorCause } from '@bike4mind/observability';
 import {
   buildClientToolPassthrough,
   currentTurnUserMessage,
@@ -30,9 +31,18 @@ import {
   type CapturedToolCall,
   type OpenAIChatRequest,
 } from '@bike4mind/voice';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+} from '@bike4mind/server-utils/utils/chatCompletionDefaults';
 import { baseApi } from '@server/middlewares/baseApi';
-import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
+import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import '@bike4mind/server-utils/navigation/registerContributedViews';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
+import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audioJobWiring';
+import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
 
@@ -40,7 +50,8 @@ import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voic
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
 // weather, and math. Deliberately excludes image generation, deep_research,
 // jupyter/excel, and delegate_to_agent - those run out-of-process. `navigate_view`
-// is auto-added by ChatCompletionProcess regardless.
+// is auto-added by ChatCompletionProcess regardless. `video_generation` is added per
+// turn (see runFullPipeline): it only enqueues a job, and the clip arrives later in the chat.
 const VOICE_BUILTIN_TOOLS = [
   'web_search',
   'search_knowledge_base',
@@ -52,7 +63,8 @@ const VOICE_BUILTIN_TOOLS = [
 ];
 
 // No-op queue: satisfies the ChatCompletionProcess option type without ever
-// dispatching to SQS. Voice turns run fully in-process; nothing should enqueue,
+// dispatching to SQS. Voice turns run fully in-process; nothing should enqueue on this
+// chat queue (a video job enqueues on its own generation queue, which this does not touch),
 // and if some path tries, this swallows it instead of hitting the queue.
 const noopQueue: IQueueService = {
   async sendMessage() {
@@ -64,18 +76,39 @@ const noopQueue: IQueueService = {
 // retries a slow voice turn within seconds, so a short window is plenty.
 const DUPLICATE_LOOKBACK_MS = 60_000;
 
+type DuplicateTurn = 'in-flight' | 'video-started';
+
 /**
- * True if this turn is already being processed. ElevenLabs retries a slow turn
+ * Whether this turn repeats one already handled. ElevenLabs retries a slow turn
  * (the proxy buffers the whole reply, and tools add latency), and each retry
  * would otherwise run a fresh ChatCompletionProcess and create a duplicate
  * quest. A quest is marked `running` the moment it's created and only flips to
  * `done` when the reply is ready, so a still-running quest in this session with
  * the same prompt means the original turn is mid-flight - drop the retry.
+ *
+ * A dropped connection marks the quest `stopped` but leaves any video job its
+ * tool call already created (and billed) running, and a retry gets a fresh quest
+ * so the job's idempotency key never matches. A recent quest with the same prompt
+ * that is `stopped` yet already started a video job therefore also counts as a
+ * duplicate. The video claim is taken before the job is created, so a retry
+ * during the tool call still sees it. A normally `done` turn does not: a user may repeat the sentence to
+ * ask for another clip.
  */
-async function isDuplicateInFlightTurn(sessionId: string, message: string): Promise<boolean> {
+async function findDuplicateTurn(sessionId: string, message: string): Promise<DuplicateTurn | null> {
   const cutoff = new Date(Date.now() - DUPLICATE_LOOKBACK_MS);
   const recent = await questRepository.findAllBySessionIdAndGreaterThanOrEqualToTimestamp(sessionId, cutoff);
-  return recent.some(q => q.status === 'running' && q.prompt === message);
+  const sameTurn = recent.filter(q => q.prompt === message);
+  if (sameTurn.some(q => q.status === 'running')) return 'in-flight';
+  if (
+    sameTurn.some(
+      q =>
+        q.status === 'stopped' &&
+        (questGenerationJobs(q).some(job => job.kind === 'video') || (q.agentVideoClipsClaimed ?? 0) > 0)
+    )
+  ) {
+    return 'video-started';
+  }
+  return null;
 }
 
 /**
@@ -100,8 +133,9 @@ async function runFullPipeline(
   // the pipeline so it offers them to the model and we can echo the calls back.
   clientTools: Record<string, ToolDefinition>
 ): Promise<string> {
-  const user = await userRepository.findById(sessionCtx.userId);
-  if (!user) throw new Error(`Voice v2: user not found for id ${sessionCtx.userId}`);
+  const storedUser = await userRepository.findById(sessionCtx.userId);
+  if (!storedUser) throw new Error(`Voice v2: user not found for id ${sessionCtx.userId}`);
+  const user = sessionCtx.adminRoleWithheld ? withholdAdminRole(storedUser) : storedUser;
 
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
@@ -109,9 +143,14 @@ async function runFullPipeline(
   );
   const embeddingModel = getSettingsValue('defaultEmbeddingModel', settings);
   const organizationId = sessionCtx.organizationId || undefined;
+  const videoToolConfigResolver = getVoiceVideoToolConfigResolver(sessionCtx, userId =>
+    buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() })
+  );
 
   const chatCompletionOptions = {
     ...getDefaultChatCompletionOptions(),
+    // As chat.ts: audio_generation runs its job inline in this turn, so it stays in-process.
+    audioToolJobs: buildAudioToolJobs(),
     queue: noopQueue,
     tokenizer: getSharedTokenizer(logger),
     user,
@@ -127,6 +166,14 @@ async function runFullPipeline(
     // whole completion happens synchronously here.
     invokeLambda: async () => {},
   };
+  // A tool that re-reads the owner by id must see the same withheld role as `user`. Kept out of the
+  // literal above so it still spreads getDefaultChatCompletionOptions() (see sessionSystemPromptWiring.repo.test.ts).
+  if (sessionCtx.adminRoleWithheld) {
+    chatCompletionOptions.db = {
+      ...chatCompletionOptions.db,
+      users: ownerWithheldUsers(sessionCtx.userId, chatCompletionOptions.db.users),
+    };
+  }
 
   const invokeBody = {
     sessionId: sessionCtx.sessionId,
@@ -137,18 +184,22 @@ async function runFullPipeline(
     organizationId,
     // stream:true so the model emits tokens incrementally - ChatCompletionProcess
     // fires onReplyStream on each chunk, and the proxy relays SSE deltas.
-    params: { model: sessionCtx.reasoningModelId, max_tokens: 4096, stream: true },
+    // No max_tokens: ChatCompletionProcess sizes it per model, so a reasoning model keeps room to answer.
+    params: { model: sessionCtx.reasoningModelId, stream: true },
     promptMeta: { session: { id: sessionCtx.sessionId, userId: sessionCtx.userId, organizationId } },
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
     // client tools for this turn. Without the builtins the agent can't search the
-    // web. QuestMaster, Agents (subagent Lambda handoff), and Mementos (async
+    // web. Agents (subagent Lambda handoff) and Mementos (async
     // creation) stay off so the whole voice turn runs in-process - no separate
-    // Lambda or SQS dispatch.
-    tools: [...VOICE_BUILTIN_TOOLS, ...Object.keys(clientTools)],
+    // Lambda or SQS dispatch. The one exception is video_generation, which only enqueues a job.
+    tools: [
+      ...VOICE_BUILTIN_TOOLS,
+      ...(videoToolConfigResolver ? ['video_generation'] : []),
+      ...Object.keys(clientTools),
+    ],
     // The save-intent gate would otherwise offer the data-lake tools past the list above.
     deniedTools: [...DATA_LAKE_TOOL_NAMES],
-    enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
     // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
@@ -158,12 +209,16 @@ async function runFullPipeline(
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),
   };
 
+  const contributedToolNames = new Set(Object.keys(premiumLlmTools));
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
   const quest = await invokeService.invoke({
     body: invokeBody,
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    fileInputsAllowed: sessionCtx.fileInputsAllowed,
+    apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
+    contributedToolNames,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -173,16 +228,18 @@ async function runFullPipeline(
   await processService.process({
     body: {
       ...invokeBody,
+      ...(invokeService.autoNameDispatched ? { autoNameDispatched: true } : {}),
       questId: quest.id,
       userId: sessionCtx.userId,
       // From the verified token, never the request body. process() reads the tool context's auth
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      fileInputsAllowed: sessionCtx.fileInputsAllowed,
+      apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,
-      questMaster: undefined,
       researchMode: undefined,
       imageConfig: undefined,
     },
@@ -194,11 +251,17 @@ async function runFullPipeline(
     // executors only capture the call; ElevenLabs runs the real side effect.
     // Premium overlay tool implementations merge first so client tools win.
     externalTools: { ...premiumLlmTools, ...clientTools },
+    contributedToolNames,
+    videoToolConfigResolver,
   });
 
   // process() mutates the quest in place. Use the last reply item (the visible
   // answer after any thinking reply) to match what onReplyStream forwarded.
-  return stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  const reply = stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
+  // A settled budget error resolves without throwing and its reply never went through onReplyStream,
+  // so speak it here rather than leave the caller in silence.
+  if (processService.terminalError) onReplyStream(reply);
+  return reply;
 }
 
 export const config = {
@@ -208,7 +271,10 @@ export const config = {
   },
 };
 
-const handler = baseApi({ auth: false }).post(async (req, res) => {
+// Anonymous by design (the voice session token is the auth), so it opts into the network block itself.
+const ipGatedApi = baseApi({ auth: false }).use(checkBlockedIP({ surface: 'app' }));
+
+const handler = ipGatedApi.post(async (req, res) => {
   const body = req.body as OpenAIChatRequest & {
     elevenlabs_extra_body?: { b4m_session?: unknown };
   };
@@ -274,9 +340,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   // Drop duplicate turns: if the original quest for this exact prompt is still
   // running, ElevenLabs is retrying a slow turn - don't create a second quest.
   // Close the stream with no spoken content; the original turn's stream speaks.
-  if (await isDuplicateInFlightTurn(sessionCtx.sessionId, message)) {
-    req.logger.info({ sessionId: sessionCtx.sessionId }, '[voice-v2/llm-proxy] duplicate in-flight turn — skipping');
-    writeStaticCompletion(res, model, '');
+  // If that turn already started a video job the original stream may be gone, so
+  // say so instead of staying silent - and never start a second billed job.
+  const duplicate = await findDuplicateTurn(sessionCtx.sessionId, message);
+  if (duplicate) {
+    req.logger.info({ sessionId: sessionCtx.sessionId, duplicate }, '[voice-v2/llm-proxy] duplicate turn - skipping');
+    writeStaticCompletion(
+      res,
+      model,
+      duplicate === 'video-started' ? 'Your video is already being made and will show up in the chat.' : ''
+    );
     return;
   }
 
@@ -377,7 +450,20 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       if (!res.writableEnded) res.end();
       return;
     }
-    req.logger.error({ err }, '[voice-v2/llm-proxy] full pipeline failed');
+    // Flat strings next to `err`: the alert sink prints each field with `${value}`, which turned
+    // the nested error object into `[object Object]`.
+    // A credit refusal or a missing session is an expected outcome, not a pipeline fault; the spoken fallback below still runs.
+    const failureFields = {
+      err,
+      errorName: err instanceof Error ? err.name : typeof err,
+      errorMessage: err instanceof Error ? err.message : String(err),
+      errorCause: describeErrorCause(err),
+    };
+    if (isTerminalCreditRefusal(err) || err instanceof NotFoundError) {
+      req.logger.warn(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
+    } else {
+      req.logger.error(failureFields, '[voice-v2/llm-proxy] full pipeline failed');
+    }
     try {
       if (res.writableEnded) return;
       // Only speak the fallback if nothing was streamed yet - otherwise the agent

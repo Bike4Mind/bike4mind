@@ -33,6 +33,7 @@ import {
   useDataLakeSpend,
   useDeleteDataLakeResearchConfig,
   useLakeConfigHistory,
+  useUndoLakeConfigChange,
   useReviewDataLakeProposal,
   reviewProposalFailureMessage,
   serverRefusalMessage,
@@ -68,7 +69,7 @@ import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
 /** The modal's tabs. Settings is always present; the other four are each permission-gated - see
  *  showSpendTab / showHistoryTab / showProposalsTab / showResearchTab. */
-type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals' | 'research';
+export type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals' | 'research';
 
 /** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
 const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
@@ -190,7 +191,16 @@ const formSeed = (lake: EditableLake) => ({
 
 const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
 
-export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
+export function DataLakeSettingsModal({
+  lake,
+  onClose,
+  initialTab,
+}: {
+  lake: EditableLake | null;
+  onClose: () => void;
+  /** Tab to open on when the lake changes. A tab the user cannot see falls back to Settings. */
+  initialTab?: DataLakeSettingsTab;
+}) {
   // Save toasts per call so it can say when a visibility change made in this modal was refused.
   const updateLake = useUpdateDataLake({ notifySuccess: false });
   const setVisibility = useSetLakeVisibility();
@@ -206,6 +216,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // The config history is manage-gated server-side, so the tab follows `canManage` and retracts on a
   // rejection - same derive-at-render shape as the spend tab, for the same reason (no error paint).
   const history = useLakeConfigHistory(lake?.id ?? null, !!lake?.canManage && tab === 'history');
+  const undoChange = useUndoLakeConfigChange(lake?.id ?? null);
   const showHistoryTab = !!lake?.canManage && !history.isForbidden;
   // Fetched whenever a manager opens the modal, unlike spend (whose tab is decided by a field the
   // lake list already carries): there is no precomputed "has proposals" signal, and a queue tab
@@ -367,7 +378,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setLakeMemoryEnabled(initial.lakeMemoryEnabled);
       setRequiredPassageTokenTarget(initial.requiredPassageTokenTarget);
     }
-    setTab('settings');
+    setTab(initialTab ?? 'settings');
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lake?.id]);
@@ -838,7 +849,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 onChange={(_e, value) => setTab(value as DataLakeSettingsTab)}
                 sx={{ mt: 1, background: 'transparent' }}
               >
-                <TabList sx={{ mb: 2 }}>
+                <TabList sx={{ mb: 2, overflowX: 'auto', flexWrap: 'nowrap' }} data-testid="datalake-settings-tablist">
                   <Tab value="settings" data-testid="datalake-settings-tab-settings">
                     Settings
                   </Tab>
@@ -884,6 +895,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     view={history.data}
                     isLoading={history.isLoading}
                     error={history.isForbidden ? null : history.error}
+                    onUndo={eventId =>
+                      undoChange.mutateAsync(eventId).catch((err: unknown) => {
+                        throw new Error(serverRefusalMessage(err) ?? 'Could not undo this change.');
+                      })
+                    }
                   />
                 </TabPanel>
                 {/* Kept mounted, guarded and keyed like the Research panel below, because a
@@ -948,6 +964,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       onDelete={confirmDeleteResearchConfig}
                       onStartRun={configId => startResearchRun.mutate(configId)}
                       onDirtyChange={setResearchDirty}
+                      onReviewProposals={showProposalsTab ? () => setTab('proposals') : undefined}
                     />
                   </TabPanel>
                 )}

@@ -3,7 +3,7 @@ import { dataLakeRepository, slackDevWorkspaceRepository } from '@bike4mind/data
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
 import { SlackClient, escapeSlackMrkdwn } from '@bike4mind/slack';
 import { Logger } from '@bike4mind/observability';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 
 /**
  * Posts a threaded Slack reply when a Slack-ingested FabFile finishes indexing - closing the

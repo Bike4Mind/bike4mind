@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { ApiKeyScope } from '@bike4mind/common';
-import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { adminApi } from '@server/middlewares/adminApi';
+import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import {
   integrationHealthCheckRepository,
   integrationAuditLogRepository,
@@ -11,10 +11,11 @@ import {
   RateLimitSnapshot,
 } from '@bike4mind/database';
 import type { IntegrationName } from '@bike4mind/database';
-import { getHealthSummary, runAllProbes, runProbe } from '@server/services/integrationHealthService';
+import { getHealthSummary, runAllProbes, runProbe } from '@bike4mind/server-utils/services/integrationHealthService';
 import { getStatus } from '@bike4mind/server-utils/services/integrationCircuitBreaker';
-import { flushBreakerMetrics, getAllBreakerStates } from '@server/services/mcpCircuitBreakers';
-import { rateLimit } from '@server/middlewares/rateLimit';
+import { flushBreakerMetrics, getAllBreakerStates } from '@bike4mind/server-utils/services/mcpCircuitBreakers';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
+import { recordIntegrationProbe } from '@server/utils/integrationProbeAudit';
 
 const timeRangeSchema = z.enum(['24h', '7d', '30d']).default('24h');
 const probeBodySchema = z.object({
@@ -47,12 +48,11 @@ function buildHealthToAuditMap(): Record<IntegrationName, string[]> {
 
 const HEALTH_TO_AUDIT = buildHealthToAuditMap();
 
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  adminPermissions: { GET: 'support:read', POST: 'settings:manage' },
+  requiredScopes: [ApiKeyScope.ADMIN],
+})
   .get(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const parseResult = timeRangeSchema.safeParse(req.query.timeRange);
     if (!parseResult.success) {
       throw new BadRequestError(`Invalid timeRange: must be one of 24h, 7d, 30d`);
@@ -68,6 +68,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     const integrations = await Promise.all(
       healthSummaries.map(async summary => {
+        const lastCheckedAt = summary.lastCheckedAt?.toISOString() ?? null;
         try {
           const [circuitBreaker, rateLimitSnaps, auditErrors] = await Promise.all([
             getStatus(summary.integration),
@@ -133,7 +134,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             name: summary.integration,
             status: summary.status,
             latencyMs: summary.latencyMs,
-            lastCheckedAt: summary.lastCheckedAt.toISOString(),
+            lastCheckedAt,
             successRate: summary.successRate,
             consecutiveFailures: summary.consecutiveFailures,
             error: summary.error,
@@ -156,7 +157,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
             name: summary.integration,
             status: summary.status,
             latencyMs: summary.latencyMs,
-            lastCheckedAt: summary.lastCheckedAt.toISOString(),
+            lastCheckedAt,
             successRate: summary.successRate,
             consecutiveFailures: summary.consecutiveFailures,
             error: summary.error || 'Failed to load integration details',
@@ -173,7 +174,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       })
     );
 
-    res.setHeader('Cache-Control', 'private, max-age=25');
+    // Mutations immediately refetch this dashboard; the browser must not reuse a pre-write response.
+    res.setHeader('Cache-Control', 'private, no-store');
     return res.json({
       generatedAt: new Date().toISOString(),
       timeRangeHours: hours,
@@ -181,7 +183,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
       inMemoryBreakerStates,
     });
   })
-  // Rate limit between GET and POST - baseApi applies middleware in declaration order
+  // Rate limit between GET and POST - adminApi applies middleware in declaration order
   .use(
     rateLimit({
       limit: 5,
@@ -189,10 +191,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     })
   )
   .post(async (req: Request, res: Response) => {
-    if (!req.user?.isAdmin) {
-      throw new ForbiddenError('Admin access required');
-    }
-
     const parseResult = probeBodySchema.safeParse(req.body);
     if (!parseResult.success) {
       throw new BadRequestError(`Invalid request body: ${parseResult.error.issues[0]?.message}`);
@@ -202,6 +200,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
 
     if (integration) {
       const result = await runProbe(integration as IntegrationName);
+      await recordIntegrationProbe(req, result);
       return res.json({
         integration: result.integration,
         status: result.status,
@@ -213,6 +212,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     }
 
     const results = await runAllProbes(logger);
+    await recordIntegrationProbe(req, results);
     return res.json({
       results: results.map(r => ({
         integration: r.integration,

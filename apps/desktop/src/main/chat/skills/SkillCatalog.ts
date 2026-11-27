@@ -62,6 +62,7 @@ export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
   private readonly inFlight = new Map<string, Promise<CustomCommand[]>>();
   private readonly fileCache = new Map<string, CachedCommandFile>();
+  private readonly aiVisible = new WeakMap<CustomCommand[], readonly CustomCommand[]>();
   private readonly globalWatchers: FSWatcher[] = [];
   /** Trusted project root -> its watchers, least recently scanned first. */
   private readonly projectWatchers = new Map<string, FSWatcher[]>();
@@ -117,11 +118,20 @@ export class SkillCatalog {
    * Distinct from `state`, which answers the composer's question: a skill may be the user's to
    * invoke and not the model's (`disable-model-invocation`), or the model's and not the
    * picker's (`user-invocable: false`).
+   *
+   * The same array for as long as one scan is cached, so SkillsPromptCache can build the prompt
+   * section once per scan rather than once per session.
    */
-  async forModel(projectRoot: string | null): Promise<CustomCommand[]> {
+  async forModel(projectRoot: string | null): Promise<readonly CustomCommand[]> {
     const root = projectRoot ? resolve(projectRoot) : null;
     const trusted = root ? await this.trust.isTrusted(root) : false;
-    return filterAIVisibleSkills(await this.load(root, trusted));
+    const all = await this.load(root, trusted);
+    let visible = this.aiVisible.get(all);
+    if (!visible) {
+      visible = filterAIVisibleSkills(all);
+      this.aiVisible.set(all, visible);
+    }
+    return visible;
   }
 
   /** One skill by name, for the send path. Undefined when it does not exist or is withheld. */
@@ -133,14 +143,17 @@ export class SkillCatalog {
 
   /**
    * Record a trust decision and drop the cached scans, so the next read reflects it rather than
-   * whichever posture happened to be cached seconds ago.
+   * whichever posture happened to be cached seconds ago. Resolves to the folder the decision was
+   * recorded against: the main checkout for an app worktree (see ProjectTrustStore.recordedPath).
    */
-  async setTrusted(projectRoot: string, trusted: boolean): Promise<void> {
+  async setTrusted(projectRoot: string, trusted: boolean): Promise<string> {
     const root = resolve(projectRoot);
+    const recorded = await this.trust.recordedPath(root);
     if (trusted) await this.trust.trust(root);
     else await this.trust.revoke(root);
     this.invalidate();
     this.changes++;
+    return recorded;
   }
 
   /**

@@ -91,7 +91,6 @@ export default function GitHubRepositoryPickerModal() {
     [installations]
   );
   const installButtonLabel = installations.length === 0 ? 'Install the GitHub app' : 'Install on another account';
-  const hasOrganizationInstallation = installations.some(installation => installation.accountType === 'Organization');
 
   const filteredInstallations = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -407,12 +406,12 @@ export default function GitHubRepositoryPickerModal() {
               >
                 {installButtonLabel}
               </Button>
-              {!hasOrganizationInstallation && (
-                <Typography level="body-xs" color="neutral">
-                  An organization repository needs an owner to install the App on that organization. Use &quot;
-                  {installButtonLabel}&quot; to pick the org and request it.
-                </Typography>
-              )}
+              <Typography level="body-xs" color="neutral" data-testid="github-repo-picker-install-hint">
+                An organization repository needs an owner to install the App on that organization. If the App was
+                uninstalled from an account, its repositories will not appear here until the owner reinstalls it. Use
+                &quot;{installButtonLabel}&quot; to pick the account and install or request it; Refresh list cannot
+                restore an uninstalled App.
+              </Typography>
             </Stack>
 
             <Divider sx={{ my: 1 }} />

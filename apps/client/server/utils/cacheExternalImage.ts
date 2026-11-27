@@ -3,9 +3,22 @@ import { createS3Client } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
-import { validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { fetchPinned, validateTargetUrl } from '@bike4mind/server-utils/utils/ssrfProtection';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'cacheExternalImage' } });
+
+// Host only: the full URL can carry signed query strings.
+const urlHost = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'invalid-url';
+  }
+};
 
 const s3Client = createS3Client();
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 // Generate a deterministic key from the URL for caching
 function generateCacheKey(url: string): string {
@@ -30,10 +43,10 @@ export async function cacheExternalImage(url: string): Promise<string> {
     return url;
   }
 
-  // SSRF protection: block private/internal/metadata URLs (async resolves DNS to catch rebinding)
+  // SSRF protection: block private/internal/metadata URLs; the download re-checks the dialed address
   const ssrfCheck = await validateTargetUrl(url);
   if (!ssrfCheck.valid) {
-    console.warn(`[SSRF] Blocked image fetch to unsafe URL: ${url} (${ssrfCheck.error})`);
+    logger.warn('[SSRF] Blocked image fetch to unsafe URL', { urlHost: urlHost(url), reason: ssrfCheck.error });
     return url;
   }
 
@@ -52,7 +65,7 @@ export async function cacheExternalImage(url: string): Promise<string> {
 
       // Image exists, return S3 URL
       const s3Url = `${process.env.NEXT_PUBLIC_CDN_URL}/${cacheKey}`;
-      console.log(`Image already cached in S3: ${cacheKey}`);
+      logger.debug('Image already cached in S3', { cacheKey });
       return s3Url;
     } catch (headError: any) {
       // Image doesn't exist, continue to download and upload
@@ -65,7 +78,7 @@ export async function cacheExternalImage(url: string): Promise<string> {
     // policy lives in the shared `withRetry` helper - exponential backoff with jitter
     // and a wider transient set - instead of a hand-rolled loop. SSRF was already checked above
     // (the URL is immutable across attempts), so it correctly stays outside the retry.
-    console.log(`Downloading external image from: ${url}`);
+    logger.debug('Downloading external image', { urlHost: urlHost(url), cacheKey });
     let response: Response;
     try {
       const { result, attempts } = await withRetry<Response>(
@@ -76,13 +89,17 @@ export async function cacheExternalImage(url: string): Promise<string> {
           const timeoutId = setTimeout(() => controller.abort(), 10000);
           const brand = process.env.APP_NAME || '';
           try {
-            return await fetch(url, {
-              headers: {
-                'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
-                Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            return await fetchPinned(
+              url,
+              {
+                headers: {
+                  'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
+                  Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                },
+                signal: controller.signal,
               },
-              signal: controller.signal,
-            });
+              { allowHttp: true, maxBodyBytes: MAX_IMAGE_BYTES }
+            );
           } finally {
             clearTimeout(timeoutId);
           }
@@ -95,29 +112,30 @@ export async function cacheExternalImage(url: string): Promise<string> {
           // isRetryableError's 'aborted'/'timeout' patterns - retrying it would just race a slow
           // upstream over and over (the behavior the original loop deliberately avoided).
           isRetryable: error => error.name !== 'AbortError' && isRetryableError(error),
-          logger: {
-            info: (msg, meta) => console.info(msg, meta),
-            warn: (msg, meta) => console.warn(msg, meta),
-          },
+          logger,
         }
       );
       response = result;
       if (attempts > 0) {
-        console.info(`Fetch succeeded for ${url} after ${attempts} retr${attempts === 1 ? 'y' : 'ies'}`);
+        logger.info('Image fetch succeeded after retries', { urlHost: urlHost(url), retries: attempts });
       }
     } catch (fetchError) {
       // Terminal failure (per-attempt timeout, or transient retries exhausted) - degrade
       // gracefully to the original URL, exactly as before.
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        console.error(`Timeout fetching image from ${url} after 10s`);
+        logger.error('Timeout fetching image after 10s', { urlHost: urlHost(url) });
       } else {
-        console.error(`Failed to fetch image from ${url}:`, fetchError);
+        logger.error('Failed to fetch image', { urlHost: urlHost(url), error: fetchError });
       }
       return url;
     }
 
     if (!response.ok) {
-      console.error(`Failed to fetch image from ${url}: ${response.status} ${response.statusText}`);
+      logger.error('Failed to fetch image', {
+        urlHost: urlHost(url),
+        status: response.status,
+        statusText: response.statusText,
+      });
       // Return original URL if download fails
       return url;
     }
@@ -125,7 +143,7 @@ export async function cacheExternalImage(url: string): Promise<string> {
     const contentType = response.headers.get('content-type') || 'image/jpeg';
     const buffer = await response.arrayBuffer();
 
-    console.log(`Downloaded image: ${buffer.byteLength} bytes, uploading to S3...`);
+    logger.debug('Downloaded image, uploading to S3', { bytes: buffer.byteLength, cacheKey });
 
     // Upload to S3 - bucket policy grants public read for proxied-images/* prefix
     await s3Client.send(
@@ -140,10 +158,10 @@ export async function cacheExternalImage(url: string): Promise<string> {
 
     // Return S3 URL
     const s3Url = `https://${bucketName}.s3.${process.env.AWS_REGION || 'us-east-2'}.amazonaws.com/${cacheKey}`;
-    console.log(`Image uploaded to S3: ${cacheKey}`);
+    logger.debug('Image uploaded to S3', { cacheKey });
     return s3Url;
   } catch (error) {
-    console.error('Error caching external image:', error);
+    logger.error('Error caching external image', { urlHost: urlHost(url), error });
     // Return original URL if caching fails
     return url;
   }

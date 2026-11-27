@@ -1,9 +1,42 @@
 /**
  * Pure spec builder for the standard per-DLQ CloudWatch alarm pair (message
  * count + message age). Extracts the alarm-shape knowledge from each product's
- * dlqAlarms.ts builder loop; the product supplies only the resource-bound
- * pieces (queue dimensions, SNS alarm actions) when constructing
- * `new aws.cloudwatch.MetricAlarm(spec.resourceName, { ...spec.args, ... })`.
+ * dlqAlarms.ts builder loop; the product supplies the SNS alarm actions and
+ * binds its queue by spreading `bindDlqAlarmDimensions(spec, dimensions)`:
+ *
+ *   new aws.cloudwatch.MetricAlarm(spec.resourceName, {
+ *     ...spec.args,
+ *     ...bindDlqAlarmDimensions(spec, { QueueName: dlq.queue.nodes.queue.name }),
+ *     alarmActions: [topic.arn],
+ *     okActions: [topic.arn],
+ *   });
+ *
+ * An age spec is metric math, and CloudWatch rejects the alarm-level metric fields alongside
+ * `metricQueries`, so its dimensions belong on the input queries only - the helper puts them
+ * wherever the spec's kind needs them.
+ *
+ * Missing data is `'ignore'`, which holds the current alarm state. `'notBreaching'` scored a
+ * skipped SQS datapoint as a passing period, so a gap flipped ALARM to OK and the next real
+ * datapoint re-fired it, re-paging the same dead letter; `'missing'` is no better, because a
+ * range with no datapoints at all still leaves ALARM for INSUFFICIENT_DATA and back.
+ *
+ * SQS publishes ApproximateAgeOfOldestMessage only while the queue holds a message, so the age
+ * alarm reads it through metric math, `IF(visible > 0, age, 0)`. SQS reports metrics while a
+ * queue is active, so a recently-drained DLQ normally reports 0 visible and the alarm reaches OK;
+ * the post-deploy drain check is what confirms that on a real queue. A range with no datapoint at
+ * all drops the expression, which `'ignore'` holds.
+ *
+ * Two known residuals, one per direction of a partial gap:
+ * - `visible > 0` with no `age`: IF's documented missing-data rule scores the true branch 0, a
+ *   passing datapoint, so the age alarm can still walk ALARM -> OK -> ALARM and re-page on the
+ *   next age datapoint.
+ * - `age` present with no `visible`: IF drops its output when the condition series has no
+ *   datapoint, so that period is not evaluated and `'ignore'` holds whatever state the alarm was
+ *   in - an alarm in ALARM stays there, but one in OK does not see the breach until the condition
+ *   returns.
+ * Closing either direction needs `FILL(age, REPEAT)`, whose documented delayed-publish behaviour
+ * can pin an evaluation-periods-1 alarm unless it also moves to M-of-N; not worth that trade for
+ * these narrower gaps.
  */
 
 export interface DlqAlarmDefaults {
@@ -52,37 +85,116 @@ export interface DlqAlarmNaming {
   stage: string;
 }
 
-export type DlqAlarmKind = 'messages' | 'age';
+/**
+ * One query of an alarm's metric math (structurally a Pulumi MetricAlarmMetricQuery).
+ * `Dimension` is the dimension value type a consumer binds, so Pulumi outputs pass through
+ * without a cast; the unbound spec in `buildDlqAlarmSpecs` uses the `string` default.
+ */
+export interface DlqAlarmMetricQuery<Dimension = string> {
+  id: string;
+  label?: string;
+  expression?: string;
+  returnData?: boolean;
+  metric?: {
+    namespace: string;
+    metricName: string;
+    /** Bound by `bindDlqAlarmDimensions`, because only the product knows its queue. */
+    dimensions?: Record<string, Dimension>;
+    period: number;
+    stat: 'Maximum';
+  };
+}
+
+interface DlqAlarmBaseArgs {
+  name: string;
+  alarmDescription: string;
+  comparisonOperator: 'GreaterThanThreshold';
+  evaluationPeriods: number;
+  threshold: number;
+  /** Holds the current state across an SQS metric gap instead of resolving the alarm. */
+  treatMissingData: 'ignore';
+  tags: {
+    Application: string;
+    Severity: 'Critical' | 'High';
+    MonitoringType: 'DLQ';
+  };
+}
 
 /** Everything about the alarm derivable without touching cloud resources. */
-export interface DlqAlarmSpec {
-  kind: DlqAlarmKind;
-  /** Pulumi/SST logical resource name, e.g. 'dlq-image-generation-messages'. */
-  resourceName: string;
-  /** MetricAlarm args minus the resource-bound fields (dimensions, actions). */
-  args: {
-    name: string;
-    alarmDescription: string;
-    comparisonOperator: 'GreaterThanThreshold';
-    evaluationPeriods: number;
-    metricName: 'ApproximateNumberOfMessagesVisible' | 'ApproximateAgeOfOldestMessage';
-    namespace: 'AWS/SQS';
-    period: number;
-    statistic: 'Maximum';
-    threshold: number;
-    treatMissingData: 'notBreaching';
-    tags: {
-      Application: string;
-      Severity: 'Critical' | 'High';
-      MonitoringType: 'DLQ';
+export type DlqAlarmSpec =
+  | {
+      kind: 'messages';
+      /** Pulumi/SST logical resource name, e.g. 'dlq-image-generation-messages'. */
+      resourceName: string;
+      /** MetricAlarm args minus the resource-bound fields (dimensions, actions). */
+      args: DlqAlarmBaseArgs & {
+        metricName: 'ApproximateNumberOfMessagesVisible';
+        namespace: 'AWS/SQS';
+        period: number;
+        statistic: 'Maximum';
+      };
+    }
+  | {
+      kind: 'age';
+      resourceName: string;
+      args: DlqAlarmBaseArgs & {
+        metricQueries: DlqAlarmMetricQuery[];
+      };
     };
+
+/** Derived from the spec union, so a new kind cannot leave this union behind. */
+export type DlqAlarmKind = DlqAlarmSpec['kind'];
+
+/**
+ * Binds the owning queue to the fields a spec's shape keeps its dimensions in: a flat messages
+ * alarm takes alarm-level `dimensions`, a metric-math age alarm takes them on every input metric.
+ * Spread the result into the MetricAlarm args. `Dimension` is generic so a product can pass the
+ * Pulumi outputs its queue exposes (`Output<string>`) exactly as it can pass plain strings.
+ */
+export function bindDlqAlarmDimensions<Dimension>(
+  spec: DlqAlarmSpec,
+  dimensions: Record<string, Dimension>
+): { dimensions: Record<string, Dimension> } | { metricQueries: DlqAlarmMetricQuery<Dimension>[] } {
+  if (spec.kind === 'messages') return { dimensions };
+  return {
+    metricQueries: spec.args.metricQueries.map(({ metric, ...query }) =>
+      metric ? { ...query, metric: { ...metric, dimensions } } : query
+    ),
   };
 }
 
 /**
+ * The age alarm's metric math, `IF(visible > 0, age, 0)` (see the file header for why and its
+ * residuals). Shared by the fleet spec and the out-of-band DLQ alarms in infra/dlqAlarms.ts and
+ * infra/waf.ts; pass `dimensions` to bind the queue directly, or leave them for
+ * `bindDlqAlarmDimensions`.
+ */
+export function buildDlqAgeMetricQueries<Dimension = string>(
+  period: number,
+  dimensions?: Record<string, Dimension>
+): DlqAlarmMetricQuery<Dimension>[] {
+  const input = (id: string, metricName: string): DlqAlarmMetricQuery<Dimension> => ({
+    id,
+    metric: { namespace: 'AWS/SQS', metricName, ...(dimensions && { dimensions }), period, stat: 'Maximum' },
+    returnData: false,
+  });
+  return [
+    input('visible', 'ApproximateNumberOfMessagesVisible'),
+    input('age', 'ApproximateAgeOfOldestMessage'),
+    {
+      id: 'oldest',
+      label: 'Oldest message age (0 when the queue is empty)',
+      expression: 'IF(visible > 0, age, 0)',
+      returnData: true,
+    },
+  ];
+}
+
+/**
  * Builds the standard [message-count, message-age] alarm spec pair for one DLQ.
- * Names and thresholds match the shape long deployed from infra/dlqAlarms.ts,
- * so adopting this builder is a zero-diff refactor for existing alarms.
+ * Names and thresholds match the shape long deployed from infra/dlqAlarms.ts. The age spec is
+ * metric math, so a consumer must bind its queue with `bindDlqAlarmDimensions` (see the file
+ * header) rather than spreading alarm-level `dimensions`.
  */
 export function buildDlqAlarmSpecs(
   dlq: DlqAlarmDescriptor,
@@ -106,7 +218,7 @@ export function buildDlqAlarmSpecs(
         period: defaults.messagePeriod,
         statistic: 'Maximum',
         threshold: dlq.messageThreshold ?? defaults.messageThreshold,
-        treatMissingData: 'notBreaching',
+        treatMissingData: 'ignore',
         tags: {
           Application: dlq.application,
           Severity: 'Critical',
@@ -122,12 +234,9 @@ export function buildDlqAlarmSpecs(
         alarmDescription: `${dlq.displayName} DLQ has message stuck for >1 hour`,
         comparisonOperator: 'GreaterThanThreshold',
         evaluationPeriods: defaults.ageEvalPeriods,
-        metricName: 'ApproximateAgeOfOldestMessage',
-        namespace: 'AWS/SQS',
-        period: defaults.agePeriod,
-        statistic: 'Maximum',
         threshold: dlq.ageThreshold ?? defaults.ageThreshold,
-        treatMissingData: 'notBreaching',
+        treatMissingData: 'ignore',
+        metricQueries: buildDlqAgeMetricQueries(defaults.agePeriod),
         tags: {
           Application: dlq.application,
           Severity: 'High',

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -36,6 +38,50 @@ const resolvedRetryByProject = (clientTestLane: string | undefined): Record<stri
   // this round-trip cannot turn a real 2 into a false negative or vice versa.
   return JSON.parse(stdout.trim().split('\n').at(-1) ?? '{}');
 };
+
+const VITEST_BIN = path.join(path.dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
+
+// Package-relative paths of the files vitest collects in a lane, across both projects.
+const collectedFiles = (clientTestLane: string | undefined): string[] => {
+  const stdout = execFileSync(process.execPath, [VITEST_BIN, 'list', '--filesOnly', '--json'], {
+    cwd: PACKAGE_ROOT,
+    env: { ...process.env, CLIENT_TEST_LANE: clientTestLane ?? '' },
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const entries: unknown = JSON.parse(stdout.slice(stdout.indexOf('[')));
+  if (!Array.isArray(entries)) throw new Error('vitest list --json did not print an array');
+  return entries.map(entry => path.relative(PACKAGE_ROOT, (entry as { file: string }).file)).sort();
+};
+
+// An fs walk rather than `git ls-files`: this file runs in the cached unit lane, where the guard in
+// scripts/__tests__/turbo-test-cache.test.mjs forbids git scans. Skips the dirs vitest never collects.
+const packageFiles = (directory: string = PACKAGE_ROOT): string[] =>
+  readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) return [];
+    const fullPath = path.join(directory, entry.name);
+    return entry.isDirectory() ? packageFiles(fullPath) : [path.relative(PACKAGE_ROOT, fullPath)];
+  });
+
+const packageFilesMatching = (pattern: RegExp): string[] =>
+  packageFiles()
+    .filter(file => pattern.test(file))
+    .sort();
+
+// Pairs with REPO_LANE_FILE in scripts/__tests__/turbo-test-cache.test.mjs: a file the guard treats
+// as uncached must never be collected by a cached lane, and each lane must keep its own files.
+describe('the client test lanes', () => {
+  it('collects every *.repo.test.* file in the repo lane and nowhere else', { timeout: 60_000 }, () => {
+    const repoFiles = packageFilesMatching(/\.repo\.test\.[cm]?[jt]sx?$/);
+    const e2eFiles = packageFilesMatching(/\.e2e\.test\.ts$/);
+    expect(repoFiles.length).toBeGreaterThan(0);
+    expect(collectedFiles('repo')).toEqual(repoFiles);
+    expect(collectedFiles('integration')).toEqual(e2eFiles);
+    const unit = new Set(collectedFiles(undefined));
+    expect(unit.size).toBeGreaterThan(1000);
+    expect([...repoFiles, ...e2eFiles].filter(file => unit.has(file))).toEqual([]);
+  });
+});
 
 describe('the client-integration lane retry gate', () => {
   it('retries both projects only in the integration lane', () => {

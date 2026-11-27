@@ -1,6 +1,8 @@
 import axios from 'axios';
+import { z } from 'zod';
 import { VoiceOutputFormat, TTS_DEFAULT_MODEL, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
 import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSynthesisResult } from './AIVoiceService';
+import { CharacterAlignmentSchema, wordTimingsFromCharacterAlignment } from './speechAlignment';
 
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const VOICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -28,6 +30,13 @@ export const ELEVENLABS_OUTPUT_FORMAT: Partial<Record<VoiceOutputFormat, string>
   pcm: 'pcm_44100',
   opus: 'opus_48000_128',
 };
+
+// The /with-timestamps variant answers JSON: the audio as base64 plus the alignment of the text as sent. The
+// alignment is checked on its own so a malformed one costs only the timings, not the audio.
+const TimestampedSpeechSchema = z.object({
+  audio_base64: z.string().min(1),
+  alignment: z.unknown(),
+});
 
 export class ElevenLabsVoiceService extends AIVoiceService {
   async synthesize(text: string, options: VoiceSynthesisOptions = {}): Promise<VoiceSynthesisResult> {
@@ -72,10 +81,26 @@ export class ElevenLabsVoiceService extends AIVoiceService {
       };
     }
 
+    const request = { voiceId, body, outputFormat, signal: options.signal };
+    const { audio, wordTimings } = options.withTimestamps
+      ? await this.synthesizeWithTimestamps(request)
+      : { audio: await this.synthesizeAudio(request), wordTimings: undefined };
+    return {
+      audio,
+      contentType: CONTENT_TYPE_BY_FORMAT[format],
+      format,
+      model: options.model ?? DEFAULT_BILLING_MODEL,
+      characters: text.length,
+      ...(wordTimings && { wordTimings }),
+    };
+  }
+
+  private async synthesizeAudio({ voiceId, body, outputFormat, signal }: ElevenLabsSpeechRequest): Promise<Buffer> {
     const response = await axios.post(`${BASE_URL}${voiceId}`, body, {
       headers: { 'Content-Type': 'application/json', 'xi-api-key': this.apiKey },
       params: { output_format: outputFormat },
       responseType: 'arraybuffer',
+      signal,
     });
 
     // Checked before returning, since callers bill on a successful result.
@@ -83,14 +108,39 @@ export class ElevenLabsVoiceService extends AIVoiceService {
     if (NON_AUDIO_CONTENT_TYPE.test(responseType)) {
       throw new Error(`ElevenLabs returned non-audio content (${responseType})`);
     }
+    return Buffer.from(response.data, 'binary');
+  }
 
-    const audio = Buffer.from(response.data, 'binary');
-    return {
-      audio,
-      contentType: CONTENT_TYPE_BY_FORMAT[format],
-      format,
-      model: options.model ?? DEFAULT_BILLING_MODEL,
-      characters: text.length,
-    };
+  /** Same audio, plus word timings. A missing or malformed alignment loses only the timings, never the clip. */
+  private async synthesizeWithTimestamps({ voiceId, body, outputFormat, signal }: ElevenLabsSpeechRequest) {
+    const response = await axios.post(`${BASE_URL}${voiceId}/with-timestamps`, body, {
+      headers: { 'Content-Type': 'application/json', 'xi-api-key': this.apiKey },
+      params: { output_format: outputFormat },
+      responseType: 'json',
+      signal,
+    });
+    const parsed = TimestampedSpeechSchema.safeParse(response.data);
+    if (!parsed.success) {
+      throw new Error('ElevenLabs returned an unexpected with-timestamps response');
+    }
+    const audio = Buffer.from(parsed.data.audio_base64, 'base64');
+    if (audio.length === 0) throw new Error('ElevenLabs returned empty audio');
+    const alignment = CharacterAlignmentSchema.safeParse(parsed.data.alignment);
+    const wordTimings = alignment.success ? wordTimingsFromCharacterAlignment(alignment.data) : undefined;
+    if (!wordTimings) {
+      this.logger.warn('elevenlabs_speech_alignment_unusable', {
+        voiceId,
+        hasAlignment: parsed.data.alignment != null,
+        malformed: parsed.data.alignment != null && !alignment.success,
+      });
+    }
+    return { audio, wordTimings };
   }
 }
+
+type ElevenLabsSpeechRequest = {
+  voiceId: string;
+  body: Record<string, unknown>;
+  outputFormat: string;
+  signal?: AbortSignal;
+};

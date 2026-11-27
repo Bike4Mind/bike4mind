@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 import {
   clearSecretCache,
   getSecret,
@@ -6,6 +7,7 @@ import {
   getSecretsBatch,
   TIER1_SECRETS,
   RESOLVABLE_SECRETS,
+  getResolvableSecrets,
 } from './systemSecretsManager';
 
 vi.mock('@bike4mind/database', () => ({
@@ -38,12 +40,14 @@ import { decryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/sec
 
 describe('systemSecretsManager', () => {
   beforeEach(() => {
+    configureSecretsAtRest('a'.repeat(64));
     vi.clearAllMocks();
     clearSecretCache();
   });
 
   afterEach(() => {
     vi.resetAllMocks();
+    vi.unstubAllEnvs();
   });
 
   describe('TIER1_SECRETS', () => {
@@ -74,6 +78,28 @@ describe('systemSecretsManager', () => {
         expect(config.description).toBeDefined();
         expect(typeof config.description).toBe('string');
       }
+    });
+  });
+
+  describe('getResolvableSecrets', () => {
+    const SMTP_ONLY = ['MAIL_HOST', 'MAIL_PORT', 'MAIL_USERNAME', 'MAIL_PASSWORD'];
+
+    it('leaves out the SMTP settings on SES and keeps the sender', () => {
+      const names = Object.keys(getResolvableSecrets('ses'));
+      for (const name of SMTP_ONLY) expect(names).not.toContain(name);
+      expect(names).toContain('MAIL_FROM');
+      expect(names).toHaveLength(Object.keys(RESOLVABLE_SECRETS).length - SMTP_ONLY.length);
+    });
+
+    it('keeps every secret on SMTP', () => {
+      expect(getResolvableSecrets('smtp')).toEqual(RESOLVABLE_SECRETS);
+    });
+
+    it('follows the stage transport, and self-host stays on SMTP', () => {
+      vi.stubEnv('MAIL_STATUS_TRANSPORT', 'ses');
+      expect(Object.keys(getResolvableSecrets())).not.toContain('MAIL_PASSWORD');
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      expect(getResolvableSecrets()).toEqual(RESOLVABLE_SECRETS);
     });
   });
 

@@ -1,5 +1,5 @@
 import { Alert, Typography } from '@mui/joy';
-import prettyBytes from 'pretty-bytes';
+import { prettyBytes } from '@client/app/utils/prettyBytes';
 import { isAxiosError } from 'axios';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useUser } from '@client/app/contexts/UserContext';

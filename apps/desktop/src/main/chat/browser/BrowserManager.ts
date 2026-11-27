@@ -1,13 +1,17 @@
 import {
   BrowserWindow,
+  nativeImage,
   WebContentsView,
   session as electronSession,
   type BaseWindow,
+  type NativeImage,
   type Session,
   type WebContents,
 } from 'electron';
+import { paneDocument } from '@shared/artifactPaneDocument';
 import type { CookieImportState } from '@shared/browserCookies';
-import type { ChatMedia } from '@shared/chat';
+import { browserSnapshotSchema, type BrowserSnapshot } from '@shared/browserPage';
+import type { ChatArtifact, ChatMedia } from '@shared/chat';
 import { browserTabShortcut, MAX_BROWSER_TABS, type BrowserTabShortcut } from '@shared/browserTabs';
 import { normalizeUrl } from '@shared/browserUrl';
 import type {
@@ -18,6 +22,8 @@ import type {
   BrowserTabSummary,
 } from '@shared/ipc';
 import { markAgentBrowserWindow } from '../../windows';
+import { ArtifactViewRegistry, serveArtifactView } from '../artifacts/artifactViews';
+import { ARTIFACT_SCHEME } from '../artifacts/sandboxProtocol';
 import type { BrowserContext, BrowserPage, BrowserProvider, BrowserTabInfo } from '../tools/types';
 import { CookieImporter } from './cookies/CookieImporter';
 import {
@@ -28,7 +34,6 @@ import {
   SNAPSHOT_PAGE,
   type ElementOutcome,
   type ScrollTarget,
-  type SnapshotResult,
 } from './pageScripts';
 
 /**
@@ -50,6 +55,9 @@ const EVALUATE_TIMEOUT_MS = 30_000;
 /** How long a script held by a load gets to run once that load is stopped. Measured at under 10ms. */
 const STOP_RELEASE_MS = 2_000;
 const CAPTURE_TIMEOUT_MS = 15_000;
+const CAPTURE_FAILED =
+  'Could not capture a screenshot of this page. browser_snapshot still reads its text and elements; ' +
+  "if a picture is needed, ask the user to open this conversation's browser pane, then try browser_screenshot again.";
 /** A freeze-frame later than this is drawn after the hide it was for has usually ended. */
 const STILL_TIMEOUT_MS = 1_000;
 const STILL_JPEG_QUALITY = 80;
@@ -70,6 +78,7 @@ type TabBarState = Omit<BrowserPaneState, 'tabs' | 'activeTabId'>;
 interface TabHooks {
   onClosed: () => void;
   onChanged: () => void;
+  onSnapshot: (snapshot: BrowserSnapshot) => void;
   /** A popup or `target=_blank` asked for `url`. `fromAgent` when one of the agent's own steps caused it. */
   onWindowOpen: (url: string, fromAgent: boolean, background: boolean) => void;
   onShortcut: (shortcut: BrowserTabShortcut) => void;
@@ -122,8 +131,8 @@ function consoleEntry(args: ConsoleArgs): { level: string; message: string; sour
  * A `WebContentsView` rather than a window of its own, because that is the only thing Electron
  * can put INSIDE the app window as a pane. It is always the child of some window: the app
  * window while the user is looking at it, and otherwise the hidden one created alongside it.
- * That hidden window is what keeps a parked page composited, so `capturePage` still has
- * something to return - a view belonging to no window at all paints nothing.
+ * That hidden window keeps a parked page alive and laid out at the viewport, but it is never
+ * shown, so it gives the page no surface for `capturePage` to read; see {@link capture}.
  */
 class ElectronPage implements BrowserPage {
   /** Where the view sits when it is not in the pane. Also the page's keep-alive; see above. */
@@ -139,11 +148,23 @@ class ElectronPage implements BrowserPage {
   private lastError = '';
   /** Main-frame navigations committed so far; tells a load that showed nothing from one that showed a page. */
   private commits = 0;
+  /** Any frame navigation invalidates a capture, even if that frame detaches before capture resolves. */
+  private frameGeneration = 0;
   /** Set by close(), so the host's own 'closed' does not run the teardown a second time. */
   private closing = false;
+  /** In the app window but hidden for a moment; see hold(). */
+  private held = false;
+  /**
+   * Live screenshots using the debugger, and whether they own its attachment. A timeout
+   * releases only its own use so overlapping captures can finish within their deadlines.
+   */
+  private debuggerUsers = 0;
+  private attachedDebugger = false;
   /** Agent steps running in this page right now; a popup opened during one is the agent's. */
   private acting = 0;
   private actedAt = 0;
+  /** When an agent tool last took this tab, so the strip can tell a tab the model is using. */
+  private agentUsedAt = 0;
   inflight = 0;
   lastNetworkAt = 0;
 
@@ -204,6 +225,12 @@ class ElectronPage implements BrowserPage {
       if (!shortcut) return;
       event.preventDefault();
       this.hooks.onShortcut(shortcut);
+    });
+    contents.on('did-start-navigation', () => {
+      this.frameGeneration += 1;
+    });
+    contents.on('did-frame-navigate', () => {
+      this.frameGeneration += 1;
     });
     contents.on('did-navigate', (_event, url, status) => {
       this.commits += 1;
@@ -288,6 +315,7 @@ class ElectronPage implements BrowserPage {
     this.moveTo(window);
     this.view.setBounds(bounds);
     this.view.setVisible(true);
+    this.held = false;
   }
 
   /**
@@ -295,11 +323,14 @@ class ElectronPage implements BrowserPage {
    * to the parked viewport and back for every menu, and {@link still} captures it as it looked.
    */
   hold(): void {
-    if (!this.gone) this.view.setVisible(false);
+    if (this.gone) return;
+    this.view.setVisible(false);
+    this.held = true;
   }
 
   /** Take the view back out of the app window, at the size every tool has always seen. */
   park(): void {
+    this.held = false;
     if (this.host.isDestroyed()) {
       this.detach();
       return;
@@ -357,7 +388,12 @@ class ElectronPage implements BrowserPage {
       title: this.title(),
       url: hasContent(url) ? url : '',
       loading: !this.webContents.isDestroyed() && this.webContents.isLoading(),
+      agentUsedAt: this.agentUsedAt,
     };
+  }
+
+  markAgentUse(): void {
+    this.agentUsedAt = Date.now();
   }
 
   /** Load without waiting, for a tab opened from a popup: its failures arrive as state and events. */
@@ -442,7 +478,10 @@ class ElectronPage implements BrowserPage {
 
   private async runScript<T>(code: string, what: string, userGesture: boolean, timeoutMs: number): Promise<T> {
     const contents = this.contents;
-    const run = contents.executeJavaScript(code, userGesture) as Promise<T>;
+    // Chromium may defer execution until a navigation finishes; bind the code to this call's origin.
+    const origin = new URL(contents.getURL()).origin;
+    const guarded = `(() => { if (location.origin !== ${JSON.stringify(origin)}) throw new Error("The page changed origin before this step could run. Read the new page before retrying."); return (${code}); })()`;
+    const run = contents.executeJavaScript(guarded, userGesture) as Promise<T>;
     const first = await within(run, timeoutMs);
     if (first !== TIMED_OUT) return first;
     if (!contents.isDestroyed() && contents.isLoadingMainFrame()) {
@@ -464,8 +503,11 @@ class ElectronPage implements BrowserPage {
     history.goBack();
   }
 
-  async snapshot(maxChars: number, inView = false): Promise<SnapshotResult> {
-    return this.script<SnapshotResult>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+  async snapshot(maxChars: number, inView = false): Promise<BrowserSnapshot> {
+    const snapshot = await this.script<unknown>(pageCall(SNAPSHOT_PAGE, maxChars, inView), 'Reading the page');
+    const parsed = browserSnapshotSchema.parse(snapshot);
+    this.hooks.onSnapshot(parsed);
+    return parsed;
   }
 
   async scroll(target: ScrollTarget): Promise<string> {
@@ -488,6 +530,7 @@ class ElectronPage implements BrowserPage {
 
   async press(key: string): Promise<void> {
     const contents = this.contents;
+    const origin = new URL(contents.getURL()).origin;
     // A parked page holds no OS focus, so Enter would not reach a form: submit it directly.
     if (key === 'Enter') {
       const submitted = await this.script<boolean>(
@@ -495,6 +538,9 @@ class ElectronPage implements BrowserPage {
         'Pressing Enter'
       );
       if (submitted) return;
+    }
+    if (new URL(contents.getURL()).origin !== origin) {
+      throw new Error('The page changed origin before this key could be sent. Read the new page before retrying.');
     }
     await this.asAgent(async () => {
       contents.focus();
@@ -505,16 +551,89 @@ class ElectronPage implements BrowserPage {
   }
 
   async screenshot(): Promise<Buffer> {
-    const image = await within(this.contents.capturePage(), CAPTURE_TIMEOUT_MS);
-    if (image === TIMED_OUT) {
-      throw new Error(
-        `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
-      );
+    const controller = new AbortController();
+    const frameGeneration = this.frameGeneration;
+    try {
+      const image = await within(this.capture(controller.signal), CAPTURE_TIMEOUT_MS);
+      if (image === TIMED_OUT) {
+        throw new Error(
+          `The page did not paint a frame to capture within ${seconds(CAPTURE_TIMEOUT_MS)}; it is not responding.`
+        );
+      }
+      if (frameGeneration !== this.frameGeneration) {
+        throw new Error(
+          'A frame changed while the screenshot was being captured. Read the settled page before retrying.'
+        );
+      }
+      if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
+      // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
+      const { width } = image.getSize();
+      return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+    } finally {
+      controller.abort();
     }
-    if (image.isEmpty()) throw new Error('The page rendered nothing to capture yet. Try again once it has loaded.');
-    // A Retina capture is twice the viewport; the extra pixels only cost the model image tokens.
-    const { width } = image.getSize();
-    return (width > VIEWPORT.width ? image.resize({ width: VIEWPORT.width, quality: 'best' }) : image).toPNG();
+  }
+
+  /**
+   * `capturePage` reads the compositor surface, which only a view on screen in the pane has. A
+   * parked view's host is never shown: one never in the pane rejects with "Current display
+   * surface not available for capture" however long it waits, and one parked since rejects with
+   * a viz error or returns a frame from before it was parked. DevTools draws a fresh frame
+   * without a surface, so it takes every page off screen, and any the pane fails to capture.
+   */
+  private async capture(signal: AbortSignal): Promise<NativeImage> {
+    const contents = this.contents;
+    let failure: unknown = 'off screen';
+    if (this.parent !== this.host && !this.held) {
+      try {
+        const image = await contents.capturePage();
+        if (!image.isEmpty()) return image;
+        failure = 'an empty frame';
+      } catch (err) {
+        failure = err;
+      }
+    }
+    // capturePage can settle after its caller has timed out; do not start more work then.
+    signal.throwIfAborted();
+    try {
+      return await this.captureWithDevTools(contents, signal);
+    } catch (err) {
+      signal.throwIfAborted();
+      console.warn(`BROWSER: could not capture ${this.currentUrl()}: ${String(failure)}; DevTools: ${String(err)}`);
+      throw new Error(CAPTURE_FAILED);
+    }
+  }
+
+  /** Attached for this capture only. A debugger something else attached is used and left attached. */
+  private async captureWithDevTools(contents: WebContents, signal: AbortSignal): Promise<NativeImage> {
+    const cdp = contents.debugger;
+    if (!cdp.isAttached()) {
+      cdp.attach('1.3');
+      this.attachedDebugger = true;
+    }
+    this.debuggerUsers += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      signal.removeEventListener('abort', release);
+      this.debuggerUsers -= 1;
+      if (this.debuggerUsers === 0) this.releaseDebugger();
+    };
+    signal.addEventListener('abort', release, { once: true });
+    try {
+      const { data } = (await cdp.sendCommand('Page.captureScreenshot', { format: 'png' })) as { data: string };
+      return nativeImage.createFromBuffer(Buffer.from(data, 'base64'));
+    } finally {
+      release();
+    }
+  }
+
+  /** Detaching the last live capture also rejects commands abandoned after their deadline. */
+  private releaseDebugger(): void {
+    if (!this.attachedDebugger) return;
+    this.attachedDebugger = false;
+    if (!this.webContents.isDestroyed() && this.webContents.debugger.isAttached()) this.webContents.debugger.detach();
   }
 
   async evaluate(expression: string): Promise<unknown> {
@@ -599,6 +718,9 @@ export class BrowserManager implements BrowserProvider {
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
   /** Placement failures already logged, so a wedged page logs once rather than on every event. */
   private readonly warned = new Set<string>();
+  private readonly artifactViews = new ArtifactViewRegistry();
+  /** The artifact each tab was opened on, so asking for it again can switch back instead of duplicating it. */
+  private readonly artifactTabs = new WeakMap<ElectronPage, { key: string; content: string; url: string }>();
 
   /**
    * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
@@ -608,7 +730,9 @@ export class BrowserManager implements BrowserProvider {
 
   constructor(
     private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined,
-    onCookieState: (state: CookieImportState) => void = () => undefined
+    onCookieState: (state: CookieImportState) => void = () => undefined,
+    private readonly onSnapshot: (sessionId: string, snapshot: BrowserSnapshot) => void | Promise<void> = () =>
+      undefined
   ) {
     this.cookies = new CookieImporter(() => this.session(), onCookieState);
   }
@@ -617,17 +741,26 @@ export class BrowserManager implements BrowserProvider {
     sessionId: string,
     keepScreenshot: (bytes: Buffer, caption: string) => Promise<ChatMedia | undefined>
   ): BrowserContext {
+    // Every agent tool reaches a tab through here, so this is where a tab becomes one in use.
+    const used = (tab: ElectronPage): ElectronPage => {
+      tab.markAgentUse();
+      this.push(sessionId);
+      return tab;
+    };
     const named = (id: number): ElectronPage => {
       const tab = this.sessions.get(sessionId)?.list.find(candidate => candidate.id === id);
       if (!tab) throw new Error(`There is no tab ${id}. browser_tabs with action "list" shows the open ones.`);
       return tab;
     };
     return {
-      page: async () => this.activeTab(sessionId),
+      page: async () => used(this.activeTab(sessionId)),
       tabs: () => this.tabInfo(sessionId),
-      newTab: async () => this.openTab(sessionId, true) ?? null,
+      newTab: async () => {
+        const tab = this.openTab(sessionId, true);
+        return tab ? used(tab) : null;
+      },
       selectTab: async id => {
-        const tab = named(id);
+        const tab = used(named(id));
         this.activate(sessionId, tab);
         return this.infoOf(sessionId, tab);
       },
@@ -698,6 +831,67 @@ export class BrowserManager implements BrowserProvider {
     return this.stateOf(sessionId);
   }
 
+  /**
+   * Show an HTML artifact full-size, from the "Open in browser" button on its card.
+   *
+   * The one way a `b4m-artifact:` page gets into this browser. It skips {@link navigate}'s
+   * http/https rule because main mints the url here, for content the renderer already shows in
+   * its sandboxed frame; typed addresses and the agent's tools still refuse the scheme. Opens a
+   * new tab when the active one is showing a page, so the agent's place is not lost.
+   *
+   * With a `key`, a tab still showing that same artifact is brought forward instead. A tab that
+   * has since navigated away, or was opened on different content, does not count.
+   */
+  async openArtifact(sessionId: string, title: string, content: string, key?: string): Promise<BrowserPaneState> {
+    this.session();
+    const open = key ? this.artifactTab(sessionId, key, content) : undefined;
+    if (open) {
+      this.activate(sessionId, open);
+      return this.stateOf(sessionId);
+    }
+    const url = this.artifactViews.add(title, content);
+    const current = this.sessions.get(sessionId)?.active;
+    const page = current?.showable ? (this.openTab(sessionId, true) ?? current) : this.activeTab(sessionId);
+    if (key) this.artifactTabs.set(page, { key, content, url });
+    try {
+      await page.navigate(url);
+    } catch (err) {
+      page.fail(err instanceof Error ? err.message : String(err));
+    }
+    this.apply();
+    return this.stateOf(sessionId);
+  }
+
+  /**
+   * Show a reply's updated artifacts in the tabs of `sessionId` still on an older version of them,
+   * matched by the model's identifier. Each tab reloads where it is: none is opened, activated or
+   * focused, and an artifact no tab is showing is left alone.
+   *
+   * The page is rebuilt with the same paneDocument the renderer opens it with, so the recorded
+   * content still matches when the updated version is picked again.
+   */
+  refreshArtifacts(sessionId: string, artifacts: readonly ChatArtifact[]): void {
+    const tabs = this.sessions.get(sessionId)?.list ?? [];
+    for (const artifact of artifacts) {
+      if (!artifact.identifier) continue;
+      const content = paneDocument(artifact);
+      for (const tab of tabs) {
+        const opened = this.artifactTabs.get(tab);
+        if (opened?.key !== artifact.identifier || tab.currentUrl() !== opened.url) continue;
+        if (!this.artifactViews.replace(opened.url, artifact.title, content)) continue;
+        opened.content = content;
+        tab.go('reload');
+      }
+    }
+  }
+
+  private artifactTab(sessionId: string, key: string, content: string): ElectronPage | undefined {
+    return this.sessions.get(sessionId)?.list.find(tab => {
+      const opened = this.artifactTabs.get(tab);
+      return opened?.key === key && opened.content === content && tab.currentUrl() === opened.url;
+    });
+  }
+
   /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */
   go(sessionId: string, action: BrowserGoAction): BrowserPaneState {
     const page = this.sessions.get(sessionId)?.active;
@@ -733,6 +927,7 @@ export class BrowserManager implements BrowserProvider {
   }
 
   closeAll(): void {
+    this.artifactViews.clear();
     this.pane = undefined;
     this.shown = undefined;
     const all = [...this.sessions.values()].flatMap(tabs => tabs.list);
@@ -859,6 +1054,10 @@ export class BrowserManager implements BrowserProvider {
         this.push(sessionId);
         this.apply();
       },
+      onSnapshot: snapshot => {
+        // A script can settle after its tab closed or an account switch closed every tab.
+        if (this.sessions.get(sessionId)?.list.includes(tab)) void this.recordSnapshot(sessionId, snapshot);
+      },
       onWindowOpen: (url, fromAgent, background) => this.openFromPage(sessionId, tab, url, fromAgent, background),
       // Out of the input event first: Cmd+W destroys the very contents that is dispatching it.
       onShortcut: shortcut => setImmediate(() => void this.onShortcut(sessionId, shortcut)),
@@ -868,6 +1067,14 @@ export class BrowserManager implements BrowserProvider {
     if (activate || !tabs.active) this.activate(sessionId, tab);
     else this.push(sessionId);
     return tab;
+  }
+
+  private async recordSnapshot(sessionId: string, snapshot: BrowserSnapshot): Promise<void> {
+    try {
+      await this.onSnapshot(sessionId, snapshot);
+    } catch (error) {
+      console.warn('BROWSER: could not index page snapshot:', error);
+    }
   }
 
   /**
@@ -963,6 +1170,8 @@ export class BrowserManager implements BrowserProvider {
     partition.on('will-download', event => {
       event.preventDefault();
     });
+    // Only what openArtifact registered; see artifacts/artifactViews.
+    partition.protocol.handle(ARTIFACT_SCHEME, request => serveArtifactView(this.artifactViews, request.url));
 
     const pageOf = (id: number | undefined) => (id === undefined ? undefined : this.byContents.get(id));
     partition.webRequest.onBeforeRequest((details, callback) => {

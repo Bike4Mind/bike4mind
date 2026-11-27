@@ -3,14 +3,21 @@ import Button from '@mui/joy/Button';
 import CreditsModal from '../subscription/CreditsModal';
 import SubscriptionModal from '../subscription/SubscriptionModal';
 
-/** `label` lets an offer name the plan it sells instead of the generic verb. */
-export const SubscribeButton = ({ label = 'Subscribe' }: { label?: string }) => {
+/** `label` lets an offer name the plan it sells instead of the generic verb; `onClick` runs as the plans open. */
+export const SubscribeButton = ({ label = 'Subscribe', onClick }: { label?: string; onClick?: () => void }) => {
   const [open, setOpen] = useState(false);
 
   return (
     <>
       {/* 6px corners, like the outlined credits button it usually sits beside (SessionCreditsButton). */}
-      <Button onClick={() => setOpen(true)} data-testid="session-subscribe-btn" sx={{ borderRadius: '6px' }}>
+      <Button
+        onClick={() => {
+          onClick?.();
+          setOpen(true);
+        }}
+        data-testid="session-subscribe-btn"
+        sx={{ borderRadius: '6px' }}
+      >
         {label}
       </Button>
       <SubscriptionModal open={open} onClose={() => setOpen(false)} />
@@ -38,16 +45,22 @@ export const SECONDARY_CREDIT_BUTTON_PROPS = {
 export const SessionCreditsButton = ({
   secondary = false,
   label = 'Add Credits',
+  onClick,
 }: {
   secondary?: boolean;
   label?: string;
+  /** Runs as the credit packs open. */
+  onClick?: () => void;
 }) => {
   const [open, setOpen] = useState(false);
 
   return (
     <>
       <Button
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          onClick?.();
+          setOpen(true);
+        }}
         data-testid="session-credits-btn"
         {...(secondary && SECONDARY_CREDIT_BUTTON_PROPS)}
       >

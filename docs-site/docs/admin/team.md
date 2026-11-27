@@ -11,32 +11,32 @@ The Team tab provides an internal contact list for managing team members used in
 
 ## Team Member List
 
-Team members are displayed as a responsive grid of cards, sorted alphabetically by name. Each card shows the member's name, phone number (clickable to initiate a call), and optional details including email, role, and department.
+Team members are displayed in a table, sorted alphabetically by name. Each row shows the member's name, phone number (clickable to initiate a call), and optional email, role, and department. An empty field shows a dash.
 
-When no team members exist, an informational alert prompts the administrator to use the Create Team Member button.
+When no team members exist, the page shows "No team members yet" with a **Create team member** button.
 
-### Card Information
+### Table Columns
 
-| Field | Description |
-|-------|-------------|
-| **Name** | Team member's full name (displayed prominently with a person icon) |
+| Column | Description |
+|--------|-------------|
+| **Name** | Team member's full name |
 | **Phone** | Phone number, rendered as a clickable `tel:` link |
-| **Email** | Email address (shown below a divider if present) |
-| **Role** | Role label displayed as a colored chip (e.g., "Lead") |
-| **Department** | Department label displayed as a neutral chip (e.g., "Ops") |
+| **Email** | Email address, if present |
+| **Role** | Role label displayed as a chip (e.g., "Lead") |
+| **Department** | Department label (e.g., "Ops") |
 
-### Card Actions
+### Row Actions
 
-Each card provides two action buttons:
+Click a row to open the edit dialog for that member. Each row also has a **...** menu with two actions:
 
 | Action | Description |
 |--------|-------------|
-| **Edit** | Opens the edit modal to update the member's information |
-| **Delete** | Prompts a browser confirmation dialog, then removes the member |
+| **Edit** | Opens the edit dialog to update the member's information |
+| **Remove** | Opens a confirmation dialog, then removes the member |
 
 ## Creating a Team Member
 
-Click the **Create Team Member** button to open the creation modal. The modal contains a form with the following fields:
+Click the **Create team member** button to open the creation dialog. The dialog contains a form with the following fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -46,15 +46,15 @@ Click the **Create Team Member** button to open the creation modal. The modal co
 | **Role** | No | Role or title within the team |
 | **Department** | No | Department or team affiliation |
 
-Validation requires that both Name and Phone are non-empty. If validation fails, an error message is displayed within the form. The modal cannot be closed while a creation request is in progress.
+Validation requires that both Name and Phone are non-empty. If validation fails, an error message is displayed within the form. The dialog cannot be closed while a creation request is in progress.
 
 ## Editing a Team Member
 
-Click the edit icon on any team member card to open the edit modal. The form is pre-populated with the member's current information. The same validation rules apply: Name and Phone are required. Changes are saved by clicking the **Update Team Member** button.
+Click a team member's row, or choose **Edit** from its **...** menu, to open the edit dialog. The form is pre-populated with the member's current information. The same validation rules apply: Name and Phone are required. Changes are saved by clicking the **Update team member** button.
 
 ## Deleting a Team Member
 
-Click the delete icon on any team member card. A browser confirmation dialog asks for confirmation before proceeding. If the deletion fails, an error alert is displayed at the top of the team list.
+Choose **Remove** from a team member's **...** menu. A confirmation dialog names the member; click **Remove** to delete the entry, or **Cancel** to keep it. If the deletion fails, the dialog stays open with the error so you can retry or cancel.
 
 ## Best Practices
 

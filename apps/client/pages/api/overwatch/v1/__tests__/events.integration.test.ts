@@ -52,6 +52,12 @@ const RATE_LIMIT_HEADERS = {
 };
 
 // --- AWS edges (mocked) ---
+vi.mock('@bike4mind/server-utils/utils/apiKeyTrust', () => ({
+  resolveUntrustedKeyLimits: async (_owner: unknown, key: { rateLimit: unknown }) => ({
+    rateLimit: key.rateLimit,
+    ownerUntrusted: false,
+  }),
+}));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendBatchToQueue: (...a: unknown[]) => mockSendBatch(...a) }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
   emitMetric: (...a: unknown[]) => mockEmitMetric(...a),
@@ -62,12 +68,12 @@ vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
 }));
 
 // Keep fire-and-forget analytics writes from touching the DB / polluting output.
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
 // The real apiKeyRateLimit middleware runs; only its Mongo-backed counter check
 // is stubbed (otherwise the query buffers forever against the stubbed connectDB).
 // Overridable per-test (see the 429 case) via mockRateLimit.
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+vi.mock('@bike4mind/server-utils/utils/apiKeyRateLimitCheck', async orig => ({
   // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
   // checkApiKeyRateLimit is stubbed.
   ...(await orig<Record<string, unknown>>()),
@@ -283,14 +289,14 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       expect(mockSendBatch).not.toHaveBeenCalled();
     });
 
-    it('rejects a banned user (401) — apiKeyAuth refuses before the handler', async () => {
+    it('rejects a banned user (403 account_suspended): apiKeyAuth refuses before the handler', async () => {
       mockFindById.mockReturnValue(
         Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: true, disputePending: false })
       );
       const { req, res } = fire();
       await handler(req, res);
-      expect(res._getStatusCode()).toBe(401);
-      expect(res._getJSONData().error).toMatch(/banned/i);
+      expect(res._getStatusCode()).toBe(403);
+      expect(res._getJSONData().errorCode).toBe('account_suspended');
       // apiKeyAuth short-circuits before the rate-limit middleware
       expect(mockRateLimit).not.toHaveBeenCalled();
       expect(mockSendBatch).not.toHaveBeenCalled();
@@ -304,7 +310,7 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
       // distinguish from the scope-check 403 above (message is the dispute one)
-      expect(res._getJSONData().error).toMatch(/dispute/i);
+      expect(res._getJSONData().error).toMatch(/payment review/i);
       expect(mockRateLimit).not.toHaveBeenCalled();
       expect(mockSendBatch).not.toHaveBeenCalled();
     });

@@ -15,17 +15,19 @@ const AUTH_NOTE =
   'and forwards it to the same-origin plugin archives.';
 
 /**
- * The Skill Market as a Claude Code plugin marketplace: one feed per org, one archive plugin per
- * approved Organization listing. Both routes serve only what the caller can already browse.
+ * The Skill Market as a Claude Code plugin marketplace: one feed per org or Space, one archive plugin per
+ * approved Organization or Space listing, plus one per skill bundle. Both routes serve only what the caller can already browse.
  */
 export const getClaudeMarketplaceContract = defineEndpoint({
   method: 'get',
   path: '/api/v1/skills/market/claude-marketplace.json',
   operationId: 'getClaudeMarketplace',
-  summary: "Get an organization's Claude Code plugin marketplace",
+  summary: "Get an organization's or Space's Claude Code plugin marketplace",
   description:
-    "Returns a Claude Code `marketplace.json` listing the organization's approved Organization-visibility " +
-    'Skill Market listings, one `archive` plugin each, pinned by `sha256`. Public and unlisted listings are ' +
+    "Returns a Claude Code `marketplace.json` listing the organization's (`orgId`) or Space's (`spaceId`) approved " +
+    'Skill Market listings, one `archive` plugin each, pinned by `sha256`, followed by one `archive` plugin ' +
+    'per skill bundle whose `version` is a hash prefix, not a semantic version. Send exactly one of `orgId` and ' +
+    '`spaceId`. A Space feed is named `b4m-space-<id>`. Public and unlisted listings are ' +
     `not included. Responses are never cacheable. ${AUTH_NOTE}`,
   tags: ['Skills'],
   auth: 'apiKeyOrJwt',
@@ -55,7 +57,8 @@ export const getClaudeMarketplaceContract = defineEndpoint({
       },
     },
     403: {
-      description: 'The API key lacks `skills:read`, or the caller is not a member of the organization.',
+      description:
+        'The API key lacks `skills:read`, or the caller is not a member of the organization or Space (or Spaces are not enabled).',
       schema: ScopeForbiddenErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
@@ -69,7 +72,8 @@ export const getClaudePluginZipContract = defineEndpoint({
   operationId: 'getClaudePluginZip',
   summary: 'Download a Skill Market listing as a Claude Code plugin',
   description:
-    'A zip holding an approved version as `skills/<name>/SKILL.md`. The optional `version` query pins ' +
+    'A zip holding an approved version as `skills/<name>/SKILL.md`, plus any supporting files the ' +
+    'version ships under `skills/<name>/scripts/` and `skills/<name>/references/`. The optional `version` query pins ' +
     'the listing version advertised by the feed, so later approvals do not change its bytes or `sha256`. ' +
     `Without it, returns the current approved version. ${AUTH_NOTE}`,
   tags: ['Skills'],
@@ -87,6 +91,35 @@ export const getClaudePluginZipContract = defineEndpoint({
       description:
         'No Organization listing with that id is visible to the caller. A listing in an org you are not ' +
         'in, a public or unlisted listing, and a malformed id are all reported as 404.',
+      schema: ApiErrorSchema,
+    },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
+});
+
+export const getClaudeBundleZipContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/skills/market/bundles/{id}/claude-plugin.zip',
+  operationId: 'getClaudeBundleZip',
+  summary: 'Download a Skill Market bundle as a Claude Code plugin',
+  description:
+    "A zip holding the current approved version of each of an organization bundle's member listings, " +
+    'each as `skills/<plugin name>/SKILL.md` plus its supporting files. Members that are no longer ' +
+    `approved or visible are left out. ${AUTH_NOTE}`,
+  tags: ['Skills'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.SKILLS_READ],
+  pathParams: ClaudePluginZipParamSchema,
+  validationErrorStatus: 400,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The plugin archive.', contentType: 'application/zip' },
+    403: { description: 'The API key lacks `skills:read`.', schema: ScopeForbiddenErrorSchema },
+    404: {
+      description:
+        'No bundle with that id is visible to the caller, or none of its members is approved. A bundle in an ' +
+        'org you are not in and a malformed id are both reported as 404.',
       schema: ApiErrorSchema,
     },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },

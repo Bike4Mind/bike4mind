@@ -39,9 +39,9 @@ export interface IOrgWebhookConfigDocument extends IOrgWebhookConfig, IMongoDocu
  * API response type - masks the secret for security
  */
 export interface IOrgWebhookConfigResponse extends Omit<IOrgWebhookConfigDocument, 'secret'> {
-  /** Masked secret showing only last 4 characters (mutual exclusive with secret) */
+  /** Masked secret showing only last 4 characters */
   secretMasked?: string;
-  /** Plain secret for one-time reveal on creation or explicit reveal (mutual exclusive with secretMasked) */
+  /** Plain secret, returned only by create and rotate-secret */
   secret?: string;
   /** Webhook URL to configure in GitHub */
   webhookUrl: string;

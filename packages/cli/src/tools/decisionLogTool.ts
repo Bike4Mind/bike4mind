@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { WorkflowDecision } from '../storage/types.js';
 
@@ -104,7 +103,7 @@ export function createDecisionLogTool(store: DecisionStore): ICompletionOptionTo
       const params = validateParams(args);
 
       const decision: WorkflowDecision = {
-        id: uuidv4(),
+        id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
         summary: params.summary,
         rationale: params.rationale,

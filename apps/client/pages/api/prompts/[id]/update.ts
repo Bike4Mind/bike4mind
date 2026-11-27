@@ -3,6 +3,8 @@ import { promptService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { respond } from '@server/utils/respond';
+import { promptResponseSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
 const UpdatePromptRequestSchema = z.object({
@@ -34,7 +36,7 @@ const handler = baseApi().put(
       { db: { prompts: promptRepository } }
     );
 
-    return res.json(updatedPrompt);
+    return respond(res, promptResponseSchema, updatedPrompt);
   })
 );
 

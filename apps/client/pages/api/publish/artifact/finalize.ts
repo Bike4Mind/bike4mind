@@ -1,9 +1,17 @@
+import {
+  downloadPublishedIndex,
+  deleteRetiredPublishedIndex,
+  publishedContentSnapshotFilter,
+} from '@bike4mind/server-utils/services/publish/currentIndex';
+import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { assertPublicationPublicLink } from '@server/services/publish/organizationPolicy';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getPublishedArtifactsStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
-import { PublishedArtifact } from '@bike4mind/database';
+import { enqueuePublishThumbnail } from '@bike4mind/server-utils/utils/publishThumbnails';
+import { PublishedArtifact, liveShareTokens, type PublishedArtifactShareToken } from '@bike4mind/database';
 import {
   FinalizeRequestSchema,
   PUBLISH_LIMITS,
@@ -12,12 +20,14 @@ import {
   type PublishResult,
   type ValidationViolation,
   normalizePublishTags,
+  ApiKeyScope,
 } from '@bike4mind/common';
 import {
   validateBundle,
   checkScopePermission,
   resolveVisibility,
-  checkPublishQuota,
+  planVersionedPublish,
+  versionsPushUpdate,
   buildPublishS3KeyPrefix,
   buildPublishUrlPath,
   invalidatePublishCdn,
@@ -31,6 +41,7 @@ import {
   SLUG_OWNED_BY_OTHER,
   type PublishUser,
 } from '@server/services/publish';
+import { decodeReactPublishUpload } from '@client/app/utils/reactArtifactPublish';
 
 /**
  * POST /api/publish/artifact/finalize - step 3 of the 3-step publish flow.
@@ -66,14 +77,28 @@ const DraftManifestSchema = z.object({
     // transpiles to an inert bundle (issue #21); every other type is wrapped by
     // renderArtifactIndexHtml. Absent means the bytes are already the final page.
     artifactType: ArtifactTypeSchema.optional(),
+    // With artifactType 'react': index.html is a JSON { entry, files } upload of a multi-file app.
+    reactSiblings: z.array(z.string()).optional(),
   }),
   files: z.array(z.object({ path: z.string(), size: z.number(), mimeType: z.string() })),
 });
 type DraftManifest = z.infer<typeof DraftManifestSchema>;
 
+function decodeReactUpload(raw: string, siblings: string[]): { source: string; files: Record<string, string> } {
+  try {
+    const { entry, files } = decodeReactPublishUpload(raw, siblings);
+    return { source: entry, files };
+  } catch (err) {
+    throw new ReactArtifactTranspileError((err as Error).message);
+  }
+}
+
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({
+  requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
+  grandfatherLegacyKeys: true,
+}).post(outboundActionGate(), async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -121,6 +146,7 @@ const handler = baseApi().post(async (req, res) => {
   if (!viz.ok || viz.visibility !== manifest.visibility) {
     return res.status(400).json({ error: 'Draft visibility is no longer valid for this scope' });
   }
+  if (manifest.visibility === 'public') await assertPublicationPublicLink(manifest);
 
   // 3. Verify every file exists + collect metadata
   type FileWithMeta = ArtifactFile;
@@ -169,14 +195,17 @@ const handler = baseApi().post(async (req, res) => {
 
   // 4a. React artifacts upload raw JSX as index.html; transpile it into a self-contained inert
   // HTML bundle here (issue #21) so the size caps, validateBundle, and promote below all operate
-  // on the FINAL served bytes. Rejectable input (unsupported dep / bad JSX / multi-file) becomes
-  // a clean 422 violation rather than a broken published page.
+  // on the FINAL served bytes. Rejectable input (unsupported dep / bad JSX / unresolvable import)
+  // becomes a clean 422 violation rather than a broken published page.
   if (manifest.source.artifactType === 'react') {
     try {
-      const { indexHtml: bundled } = await buildReactArtifactBundle({
-        source: bufferCache.get('index.html')!.toString('utf-8'),
-        title: manifest.title,
-      });
+      const uploaded = bufferCache.get('index.html')!.toString('utf-8');
+      const siblings = manifest.source.reactSiblings;
+      const { indexHtml: bundled } = await buildReactArtifactBundle(
+        siblings
+          ? { ...decodeReactUpload(uploaded, siblings), title: manifest.title }
+          : { source: uploaded, title: manifest.title }
+      );
       const buf = Buffer.from(bundled, 'utf-8');
       bufferCache.set('index.html', buf);
       indexEntry.size = buf.length;
@@ -192,7 +221,7 @@ const handler = baseApi().post(async (req, res) => {
     }
   } else if (manifest.source.artifactType) {
     // Non-react artifact types signal "render this raw content server-side": wrap the uploaded
-    // source into the canonical published page (byte-identical to the web client's pre-render)
+    // source into the canonical published page (bytes pinned in renderArtifactHtml.test.ts)
     // so the caps, validateBundle, and promote below all operate on the FINAL served bytes.
     const rendered = renderArtifactIndexHtml(
       manifest.source.artifactType,
@@ -235,20 +264,6 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(422).json({ error: 'Validation failed', violations: validation.violations });
   }
 
-  // 4d. Cumulative per-owner quota re-check (defense in depth - the draft may
-  // have been issued before other publishes consumed the allowance). Excludes
-  // the {tier,scopeId,slug} being overwritten so a re-publish isn't double-counted.
-  const quota = await checkPublishQuota({
-    ownerId: String(req.user.id),
-    orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
-    isAdmin: req.user.isAdmin,
-    incoming: { bytes: totalBytes, fileCount: filesWithMeta.length },
-    replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
-  });
-  if (!quota.ok) {
-    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
-  }
-
   // 5. Previous version (overwrite-in-place forensics)
   const previous = await PublishedArtifact.findOne({
     tier: manifest.tier,
@@ -256,7 +271,9 @@ const handler = baseApi().post(async (req, res) => {
     slug: manifest.slug,
     deletedAt: null,
   })
-    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate visibility')
+    .select(
+      'publicId publishedAt ownerId lastPublishedBy size sha256Index indexObjectPath versions accessGate visibility shareTokens source.artifactId v1ArtifactId'
+    )
     .lean<{
       publicId: string;
       publishedAt: Date;
@@ -264,13 +281,52 @@ const handler = baseApi().post(async (req, res) => {
       lastPublishedBy?: string;
       size: { totalBytes: number; fileCount: number };
       sha256Index?: string;
-      versions?: Array<{ sha256Index: string }>;
+      indexObjectPath?: string | null;
+      versions?: Array<{ sha256Index: string; indexBytes?: number }>;
       accessGate?: unknown;
       visibility?: string;
+      shareTokens?: PublishedArtifactShareToken[];
+      source?: { artifactId?: string };
+      v1ArtifactId?: string;
     } | null>();
 
   if (previous && !mayRepublishSlug(previous.ownerId, publishUser)) {
     return res.status(403).json({ error: 'Only the owner can republish this slug', code: SLUG_OWNED_BY_OTHER });
+  }
+  if (previous?.shareTokens?.length && liveShareTokens(previous).length > 0)
+    await assertPublicationPublicLink(manifest);
+
+  // 5a. The prior canonical index.html, archived at step 6 before this overwrite so its bytes
+  // survive in version history (served later via ?v={sha}). Read here because what it archives
+  // counts toward the quota below. Best-effort: nothing to archive on a first promote / missing prior.
+  const canonicalPrefix = buildPublishS3KeyPrefix(manifest.tier, manifest.scopeId, manifest.slug);
+  const priorIndex = previous?.sha256Index
+    ? await downloadPublishedIndex({ ...previous, storageKeyPrefix: canonicalPrefix }, storage).catch(() => null)
+    : null;
+
+  // 5b. Version history (deduped by content sha, `previous` null -> [new] only) and 5c, the cumulative
+  // per-owner quota re-check (defense in depth - the draft may have been issued before other publishes
+  // consumed the allowance). One call: the quota counts the archived versions as they stand after this publish.
+  const now = new Date();
+  const { versionsToPush, quota } = await planVersionedPublish({
+    previous,
+    priorIndex,
+    incoming: {
+      sha256: indexEntry.sha256,
+      publishedBy: String(req.user.id),
+      publishedAt: now,
+      size: { totalBytes, fileCount: filesWithMeta.length },
+      indexBytes: indexEntry.size,
+    },
+    quota: {
+      ownerId: String(req.user.id),
+      orgScopeId: manifest.tier === 'organization' ? manifest.scopeId : null,
+      isAdmin: req.user.isAdmin,
+      replacing: { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug },
+    },
+  });
+  if (!quota.ok) {
+    return res.status(quota.status).json({ error: quota.error, code: quota.code, details: quota.details });
   }
 
   // Validate the embed allowlist against the artifact's FINAL open-public state. A
@@ -285,18 +341,16 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: embed.error, code: embed.code });
   }
 
-  // 6. Promote draft -> canonical prefix
-  const canonicalPrefix = buildPublishS3KeyPrefix(manifest.tier, manifest.scopeId, manifest.slug);
-  // Archive the prior canonical index.html before this overwrite so its bytes
-  // survive in version history (served later via ?v={sha}). Best-effort.
-  if (previous?.sha256Index) {
+  // 6. Promote draft -> canonical prefix, archiving the prior index.html read at 5a first. Best-effort.
+  let archivedPrevious = false;
+  if (previous?.sha256Index && priorIndex) {
     try {
-      const old = await storage.download(`${canonicalPrefix}index.html`);
-      await storage.upload(old, `${canonicalPrefix}versions/${previous.sha256Index}.html`, {
+      await storage.upload(priorIndex, `${canonicalPrefix}versions/${previous.sha256Index}.html`, {
         ContentType: 'text/html',
       });
-    } catch {
-      /* nothing to archive (first promote / missing prior) */
+      archivedPrevious = true;
+    } catch (error) {
+      req.logger.warn('[PUBLISH] Could not archive the prior page; retaining its payload', { error });
     }
   }
   for (const file of filesWithMeta) {
@@ -306,93 +360,77 @@ const handler = baseApi().post(async (req, res) => {
   }
   bufferCache.clear();
 
-  // 7. Upsert record
-  const now = new Date();
+  // 7. Upsert record (versionsToPush from 5b)
   const publicId = previous?.publicId ?? uuidPublicId();
-  // Version history (deduped by content sha): backfill the replaced version if
-  // history doesn't record it, then add the new one unless it's an identical
-  // re-publish (same sha). On first publish, `previous` is null -> [new] only.
-  const haveShas = new Set((previous?.versions ?? []).map(v => v.sha256Index));
-  const versionsToPush: Array<{
-    publishedAt: Date;
-    publishedBy: string;
-    size: { totalBytes: number; fileCount: number };
-    sha256Index: string;
-  }> = [];
-  if (previous?.sha256Index && !haveShas.has(previous.sha256Index)) {
-    versionsToPush.push({
-      publishedAt: previous.publishedAt,
-      publishedBy: previous.lastPublishedBy ?? previous.ownerId,
-      size: previous.size,
-      sha256Index: previous.sha256Index,
-    });
-    haveShas.add(previous.sha256Index);
-  }
-  if (!haveShas.has(indexEntry.sha256)) {
-    versionsToPush.push({
-      publishedAt: now,
-      publishedBy: String(req.user.id),
-      size: { totalBytes, fileCount: filesWithMeta.length },
-      sha256Index: indexEntry.sha256,
-    });
-  }
   const publishTags = normalizePublishTags(manifest.tags ?? []);
   const ownerId = previous ? previous.ownerId : String(req.user.id);
-  const saved = await PublishedArtifact.findOneAndUpdate(
-    // ownerId in the filter: if the slug changed hands after `previous` was read, the upsert's insert
-    // collides on the partial unique {tier, scopeId, slug} index instead of overwriting that row.
-    { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null, ownerId },
-    {
-      $set: {
-        publicId,
-        title: manifest.title,
-        description: manifest.description,
-        // Guarded on the NORMALIZED length, not the raw one. `[]` is truthy, so a client that always
-        // sends the field would clear an artifact's tags on every re-publish - and a raw-length check
-        // has the same hole one step in, since `['  ']` passes it and then normalizes to `[]`. Same
-        // reasoning as the embedOrigins guard below: a publish can only ADD tags, and clearing
-        // belongs to the PATCH path, which has unambiguous full-replace semantics. Re-normalizing
-        // here is idempotent and keeps the invariant local to the write.
-        ...(publishTags.length ? { tags: publishTags } : {}),
-        visibility: manifest.visibility,
-        gatedToGroupId: manifest.gatedToGroupId,
-        commentPolicy: manifest.commentPolicy ?? 'none',
-        // Like accessGate, the embed allowlist is managed post-publish via PATCH and
-        // is NOT part of the normal publish payload. Only write a NON-EMPTY validated
-        // list, so a plain re-publish (or an older client that defaults embedOrigins to
-        // []) can only ADD grants here, never clobber an existing allowlist to [].
-        // Clearing is done through the PATCH path.
-        ...(embed.value.length > 0 ? { embedOrigins: embed.value } : {}),
-        ownerId,
-        lastPublishedBy: String(req.user.id),
-        source: manifest.source,
-        storageKeyPrefix: canonicalPrefix,
-        size: { totalBytes, fileCount: filesWithMeta.length },
-        sha256Index: indexEntry.sha256,
-        manifest: filesWithMeta,
-        publishedAt: now,
-        previousVersionMeta: previous
-          ? {
-              publishedAt: previous.publishedAt,
-              publishedBy: previous.lastPublishedBy ?? previous.ownerId,
-              size: previous.size,
-              sha256Index: previous.sha256Index ?? '',
-            }
-          : undefined,
-      },
-      // Append this version to the history (oldest -> newest), deduped by content
-      // sha and backfilling the replaced version if not yet recorded (an
-      // identical re-publish must not duplicate a sha). Bytes for the current
-      // entry live at index.html; older entries at versions/{sha}.html.
-      $push: { versions: { $each: versionsToPush } },
+  const update = {
+    $set: {
+      publicId,
+      title: manifest.title,
+      description: manifest.description,
+      // Guarded on the NORMALIZED length, not the raw one. `[]` is truthy, so a client that always
+      // sends the field would clear an artifact's tags on every re-publish - and a raw-length check
+      // has the same hole one step in, since `['  ']` passes it and then normalizes to `[]`. Same
+      // reasoning as the embedOrigins guard below: a publish can only ADD tags, and clearing
+      // belongs to the PATCH path, which has unambiguous full-replace semantics. Re-normalizing
+      // here is idempotent and keeps the invariant local to the write.
+      ...(publishTags.length ? { tags: publishTags } : {}),
+      visibility: manifest.visibility,
+      gatedToGroupId: manifest.gatedToGroupId,
+      commentPolicy: manifest.commentPolicy ?? 'none',
+      // Like accessGate, the embed allowlist is managed post-publish via PATCH and
+      // is NOT part of the normal publish payload. Only write a NON-EMPTY validated
+      // list, so a plain re-publish (or an older client that defaults embedOrigins to
+      // []) can only ADD grants here, never clobber an existing allowlist to [].
+      // Clearing is done through the PATCH path.
+      ...(embed.value.length > 0 ? { embedOrigins: embed.value } : {}),
+      ownerId,
+      lastPublishedBy: String(req.user.id),
+      source: manifest.source,
+      storageKeyPrefix: canonicalPrefix,
+      size: { totalBytes, fileCount: filesWithMeta.length },
+      sha256Index: indexEntry.sha256,
+      manifest: filesWithMeta,
+      publishedAt: now,
+      previousVersionMeta: previous
+        ? {
+            publishedAt: previous.publishedAt,
+            publishedBy: previous.lastPublishedBy ?? previous.ownerId,
+            size: previous.size,
+            sha256Index: previous.sha256Index ?? '',
+          }
+        : undefined,
     },
-    { upsert: true, new: true }
+    // Append this version to the history (oldest -> newest), deduped by content
+    // sha and backfilling the replaced version if not yet recorded (an
+    // identical re-publish must not duplicate a sha). Bytes for the current
+    // entry live at index.html; older entries at versions/{sha}.html.
+    ...versionsPushUpdate(versionsToPush),
+  };
+  const scope = { tier: manifest.tier, scopeId: manifest.scopeId, slug: manifest.slug, deletedAt: null, ownerId };
+  // Replacing a v1-published page with a different artifact must drop its one-page-per-artifact
+  // marker, or the old artifact stays locked out of publishing elsewhere.
+  const v1MarkerUnset =
+    previous?.v1ArtifactId && previous.v1ArtifactId !== manifest.source.artifactId ? { v1ArtifactId: 1 } : {};
+  // A first publish includes its newly allocated identity in the upsert filter, so it cannot
+  // match a competing publisher's row. The unique live-slug index rejects that insert instead.
+  const saved = await PublishedArtifact.findOneAndUpdate(
+    { ...scope, publicId, ...(previous ? { ...publishedContentSnapshotFilter(previous), revisingAt: null } : {}) },
+    { ...update, ...(previous ? { $unset: { indexObjectPath: 1, ...v1MarkerUnset } } : {}) },
+    { upsert: !previous, new: true }
   ).catch((err: unknown) => {
     if (isDuplicateKeyError(err)) return null;
     throw err;
   });
   if (!saved) {
     return res.status(409).json({ error: 'This slug was published by another request', code: SLUG_OWNED_BY_OTHER });
+  }
+
+  if (previous && archivedPrevious) {
+    await deleteRetiredPublishedIndex({ ...previous, storageKeyPrefix: canonicalPrefix }, storage, error =>
+      req.logger.warn('[PUBLISH] Could not remove a retired page payload', { error })
+    );
   }
 
   // 7b. Re-publish overwrites the origin in place, but the public `/p/...` page is
@@ -402,6 +440,12 @@ const handler = baseApi().post(async (req, res) => {
   // an update that downgrades it must purge the cached public copy too. Best-effort.
   if (saved.visibility === 'public' || previous?.visibility === 'public') {
     await invalidatePublishCdn(toCacheTarget(saved), req.logger);
+  }
+
+  // 7c. Owner-only thumbnail of the version just promoted (a refresh-from-source lands here too).
+  // Best-effort and never throws: a failed enqueue leaves the card on its generated cover.
+  if (manifest.source.kind === 'bundle') {
+    await enqueuePublishThumbnail({ publicId: saved.publicId, versionId: indexEntry.sha256 }, req.logger);
   }
 
   // 8. Best-effort draft cleanup

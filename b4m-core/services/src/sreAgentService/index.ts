@@ -13,15 +13,24 @@
  *   5. Validate diagnosis against safety rules and file scope
  */
 
-import { type ApiKeyTable, getLlmByModel, getAvailableModels, resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
+import {
+  type ApiKeyTable,
+  getLlmByModel,
+  getAvailableModels,
+  resolveDeprecatedModelId,
+  federatedSharedKeyProviders,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { SreEventPayload, SreDiagnosis, ResolvedRepoConfig, isSreTestFile } from '@bike4mind/common';
 import { z } from 'zod';
+import { SreAccountingError, isSreAccountingError, SreCompletionMeter, type SreAccountingContext } from './accounting';
+export { SreAccountingError, isSreAccountingError, type SreAccountingContext } from './accounting';
 import {
   buildDiagnosticianSystemPrompt,
   buildDiagnosticianUserPrompt,
   buildRevisionUserPrompt,
   escapeCodeFences,
+  frameContextData,
 } from './prompts';
 import { executeTool, RATE_LIMITED_SENTINEL, SreToolContext } from './tools';
 import { sanitizeJsonString, sanitizeJsonStringWithMeta } from '../llm/tools/utils/jsonSanitize';
@@ -160,7 +169,10 @@ const FORCED_DIAGNOSIS_SKELETON_PROMPT =
 export class SreAgentService {
   private logger: Logger;
 
-  constructor(logger: Logger) {
+  constructor(
+    logger: Logger,
+    private readonly accounting?: SreAccountingContext
+  ) {
     this.logger = logger;
   }
 
@@ -186,6 +198,7 @@ export class SreAgentService {
     priorFixHistory?: Array<{ prNumber: number; mergedAt: string; proposedFix: string }>
   ): Promise<DiagnoseResult> {
     const isDryRun = dryRun ?? false;
+    const meter = new SreCompletionMeter(this.accounting);
     // Rule 2 - CI self-heal is source-only. When revising in response to a
     // recoverable CI failure (test/typecheck/apply-fix), the bot is iterating on a
     // red run; it must never edit a test to make it pass. Block all test files in
@@ -267,6 +280,18 @@ export class SreAgentService {
         return withTrace({ diagnosis: null, failureReason: 'Model not available' });
       }
 
+      const directProvider = modelInfo.backend === 'openai' || modelInfo.backend === 'anthropic';
+      const supportedFamily =
+        !modelInfo.adapterFamily ||
+        (modelInfo.backend === 'openai' && ['openai-chat', 'openai-responses'].includes(modelInfo.adapterFamily)) ||
+        (modelInfo.backend === 'anthropic' && modelInfo.adapterFamily === 'anthropic-messages');
+      if (
+        !directProvider ||
+        !supportedFamily ||
+        federatedSharedKeyProviders(apiKeyTable)?.[modelInfo.backend as 'openai' | 'anthropic']
+      )
+        throw new SreAccountingError('unsupported_provider_transport');
+
       const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger });
       if (!llm) {
         this.logger.error('[SRE-DIAGNOSTICIAN] Failed to initialize LLM backend', { modelId });
@@ -333,11 +358,12 @@ export class SreAgentService {
 
           const emergencySystemPrompt =
             'You are a code diagnosis engine. Output ONLY a valid JSON object. No markdown, no code blocks, no preamble. The confidence field is a 0–100 score; if unsure, use a value under 20 and an empty affectedFiles array.';
-          const emergencyUserPrompt = `Error: ${escapeCodeFences(payload.errorMessage)}\nStack: ${escapeCodeFences((payload.stackTrace ?? '').slice(0, 500))}\n\nInvestigation findings:\n${escapeCodeFences(toolSummary)}\n\nOutput JSON (all fields required):\n{"rootCause":"...","proposedFix":"...","confidence":<0-100>,"riskAssessment":"...","affectedFiles":[]}`;
+          const emergencyUserPrompt = `Error:\n${frameContextData(payload.errorMessage)}\nStack:\n${frameContextData((payload.stackTrace ?? '').slice(0, 500))}\n\nInvestigation findings:\n${escapeCodeFences(toolSummary)}\n\nOutput JSON (all fields required):\n{"rootCause":"...","proposedFix":"...","confidence":<0-100>,"riskAssessment":"...","affectedFiles":[]}`;
 
           let emergencyResponse = '';
-          await llm.complete(
-            modelId,
+          await meter.complete(
+            llm,
+            modelInfo,
             [
               { role: 'system', content: emergencySystemPrompt },
               { role: 'user', content: emergencyUserPrompt },
@@ -379,6 +405,7 @@ export class SreAgentService {
           });
           return { diagnosis: emergencyValidated, truncationRepaired };
         } catch (emergencyError) {
+          if (isSreAccountingError(emergencyError)) throw emergencyError;
           this.logger.warn('[SRE-DIAGNOSTICIAN] Emergency context-reset diagnosis failed', {
             error: emergencyError instanceof Error ? emergencyError.message : String(emergencyError),
           });
@@ -415,8 +442,9 @@ export class SreAgentService {
         this.logger.info('[SRE-DIAGNOSTICIAN] LLM round', { round: round + 1, messageCount: messages.length });
 
         let responseContent = '';
-        await llm.complete(
-          modelId,
+        await meter.complete(
+          llm,
+          modelInfo,
           messages,
           {
             temperature: 0.2,
@@ -1134,6 +1162,13 @@ export class SreAgentService {
             : `Max tool rounds exhausted without diagnosis (${totalLlmCalls} LLM calls)`,
       });
     } catch (error) {
+      if (isSreAccountingError(error)) {
+        this.logger.error('[SRE-DIAGNOSTICIAN] Accounting blocked', {
+          reason: error.reason,
+          providerCallId: error.providerCallId,
+        });
+        throw error;
+      }
       this.logger.error('[SRE-DIAGNOSTICIAN] Diagnosis failed', { error });
       return withTrace({
         diagnosis: null,

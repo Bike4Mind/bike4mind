@@ -1,17 +1,12 @@
 import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Mock the API client and the share-footer builder so we can drive/inspect the
-// 3-step publish flow without a network or DOM. buildShareFooterHtml is irrelevant
-// to slug/version logic, so stub it out.
+// Mock the API client so we can drive/inspect the 3-step publish flow without a network.
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn(), post: vi.fn() },
 }));
-vi.mock('@client/app/utils/shareFooter', () => ({
-  buildShareFooterHtml: () => '<!--footer-->',
-  buildSignupGateHtml: () => ({ styles: '', html: '' }),
-}));
 
+import type { ArtifactType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import {
   publishArtifactBundle,
@@ -79,6 +74,49 @@ beforeEach(() => {
   vi.clearAllMocks();
   // S3 PUT in step 2.
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+});
+
+/** The `source` sent to upload-url and the body PUT to S3 as index.html. */
+function uploadedSourceAndBody(): { source: Record<string, unknown>; body: string; size: number } {
+  const call = apiPost.mock.calls.find(c => c[0] === '/api/publish/artifact/upload-url');
+  const draft = call?.[1] as { source: Record<string, unknown>; files: Array<{ size: number }> };
+  const put = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+  return { source: draft.source, body: (put[1] as { body: string }).body, size: draft.files[0].size };
+}
+
+describe('publishArtifactBundle raw upload', () => {
+  const RENDERED_TYPES: ArtifactType[] = ['html', 'svg', 'code', 'python', 'mermaid', 'recharts', 'react'];
+
+  it.each(RENDERED_TYPES)('uploads %s content untouched and lets finalize render it', async type => {
+    wirePublishPosts();
+    // Surrounding whitespace is part of the published page, so it must reach the server as-is.
+    const content = '\n  <p>x & y</p>\n';
+    await publishArtifactBundle({ artifactId: 'artifact_abcdef123456', type, content, title: 'T', userId: 'u1' });
+
+    const { source, body, size } = uploadedSourceAndBody();
+    expect(source.artifactType).toBe(type);
+    expect(body).toBe(content);
+    expect(size).toBe(new TextEncoder().encode(content).length);
+  });
+
+  it('sends a multi-file react entry as one JSON upload with its siblings named', async () => {
+    wirePublishPosts();
+    await publishArtifactBundle({
+      artifactId: 'artifact_abcdef123456',
+      type: 'react',
+      content: 'import B from "./B"; export default B;',
+      title: 'T',
+      userId: 'u1',
+      reactFiles: { B: 'export default () => null;' },
+    });
+
+    const { source, body } = uploadedSourceAndBody();
+    expect(source).toMatchObject({ artifactType: 'react', reactSiblings: ['B'] });
+    expect(JSON.parse(body)).toEqual({
+      entry: 'import B from "./B"; export default B;',
+      files: { B: 'export default () => null;' },
+    });
+  });
 });
 
 describe('publishArtifactBundle', () => {
@@ -315,7 +353,7 @@ describe('findPublishedByArtifact', () => {
 describe('artifactBundlePublisher', () => {
   const baseInput = {
     artifactId: 'artifact_abcdef123456',
-    type: 'react',
+    type: 'react' as const,
     content: 'export default () => null;',
     title: 'Chronosphere v2',
     userId: 'u1',

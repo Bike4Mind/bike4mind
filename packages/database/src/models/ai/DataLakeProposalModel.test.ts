@@ -113,6 +113,28 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.listByLake('lake-1')).toHaveLength(2);
   });
 
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const n of ['a', 'b', 'c', 'd', 'e']) {
+      ids.push((await create({ canonicalSourceKey: `https://example.com/${n}`, textHash: `hash-${n}` })).id);
+    }
+    await DataLakeProposalModel.collection.updateMany(
+      { dataLakeId: 'lake-1' },
+      { $set: { createdAt: new Date('2026-01-01T00:00:00.000Z') } }
+    );
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake('lake-1', { status: 'pending', limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toEqual([...ids].sort().reverse());
+  });
+
   it('lets the same source be pending in two different lakes at once', async () => {
     expect((await repo.createProposal(input())).created).toBe(true);
     expect((await repo.createProposal(input({ dataLakeId: 'lake-2' }))).created).toBe(true);
@@ -193,6 +215,54 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.claimForReview(created.id, review())).not.toBeNull();
   });
 
+  it('claims for a rule with no reviewer and records the matched site', async () => {
+    const created = await create();
+
+    const claimed = await repo.claimForReview(
+      created.id,
+      review({ reviewedByUserId: null, autoAdmission: { configId: 'cfg-1' } })
+    );
+    await repo.recordAdmission(created.id, 'file-9', 'example.com');
+
+    expect(claimed?.reviewedByUserId).toBeNull();
+    const stored = await DataLakeProposalModel.findById(created.id).lean();
+    expect(stored?.autoAdmission).toEqual({ configId: 'cfg-1', trustedDomain: 'example.com' });
+    expect(stored?.admittedFabFileId).toBe('file-9');
+  });
+
+  it('clears autoAdmission when a rule claim is released', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review({ reviewedByUserId: null, autoAdmission: { configId: 'cfg-1' } }));
+
+    await repo.releaseClaim(created.id);
+
+    const stored = await DataLakeProposalModel.findById(created.id).lean();
+    expect(stored?.status).toBe('pending');
+    expect(stored?.autoAdmission).toBeUndefined();
+  });
+
+  it('finds a declined row by text hash within one lake only', async () => {
+    const declined = await create();
+    await repo.claimForReview(declined.id, review({ status: 'declined' }));
+
+    expect(await repo.hasDeclinedWithTextHash('lake-1', 'hash-a')).toBe(true);
+    expect(await repo.hasDeclinedWithTextHash('lake-2', 'hash-a')).toBe(false);
+    expect(await repo.hasDeclinedWithTextHash('lake-1', 'hash-other')).toBe(false);
+  });
+
+  it('finds an approved row for a source key, excluding the row asked about', async () => {
+    const approved = await create();
+    await repo.claimForReview(approved.id, review());
+
+    expect(await repo.hasApprovedForSourceKey('lake-1', 'https://example.com/report', '64b000000000000000000001')).toBe(
+      true
+    );
+    expect(await repo.hasApprovedForSourceKey('lake-1', 'https://example.com/report', approved.id)).toBe(false);
+    expect(await repo.hasApprovedForSourceKey('lake-2', 'https://example.com/report', '64b000000000000000000001')).toBe(
+      false
+    );
+  });
+
   it('leaves a released claim alone when a fresh proposal already holds the pending slot', async () => {
     const approved = await create();
     await repo.claimForReview(approved.id, review());
@@ -248,6 +318,53 @@ describe('DataLakeProposalRepository', () => {
     expect((await DataLakeProposalModel.findById(declined.id))?.status).toBe('declined');
   });
 
+  it('unapproves an approved proposal back to pending, clearing the file and auto-admission', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review());
+    await repo.recordAdmission(created.id, 'file-1', 'example.com');
+
+    const result = await repo.unapprove(created.id);
+
+    expect(result.unapproved).toBe(true);
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('pending');
+    expect(stored?.priorDisposition).toBe('approved');
+    expect(stored?.reviewedByUserId).toBeNull();
+    expect(stored?.admittedFabFileId).toBeNull();
+    expect(stored?.autoAdmission ?? null).toBeNull();
+    if (result.unapproved) expect(result.previous.admittedFabFileId).toBe('file-1');
+  });
+
+  it('unapproves only an approved proposal', async () => {
+    const created = await create();
+
+    expect(await repo.unapprove(created.id)).toEqual({ unapproved: false, reason: 'not_approved' });
+  });
+
+  it('refuses to unapprove when a pending row for the same source appeared meanwhile', async () => {
+    const approved = await create();
+    await repo.claimForReview(approved.id, review());
+    await create({ textHash: 'hash-b' });
+
+    expect(await repo.unapprove(approved.id)).toEqual({ unapproved: false, reason: 'pending_exists' });
+    expect((await DataLakeProposalModel.findById(approved.id))?.status).toBe('approved');
+  });
+
+  it('rolls an unapprove back to the approved row it came from', async () => {
+    const created = await create();
+    await repo.claimForReview(created.id, review());
+    await repo.recordAdmission(created.id, 'file-1');
+    const result = await repo.unapprove(created.id);
+    if (!result.unapproved) throw new Error('expected unapprove to apply');
+
+    await repo.rollbackUnapprove(result.previous);
+
+    const stored = await DataLakeProposalModel.findById(created.id);
+    expect(stored?.status).toBe('approved');
+    expect(stored?.admittedFabFileId).toBe('file-1');
+    expect(stored?.reviewedByUserId).toBe('reviewer-1');
+  });
+
   it('lists a lake queue newest first, and narrows by status', async () => {
     // Explicit, distinct createdAt values: two back-to-back inserts can land in the same millisecond,
     // which leaves `sort({ createdAt: -1 })` free to order them either way and the assertion below
@@ -282,5 +399,46 @@ describe('DataLakeProposalRepository', () => {
     expect(await repo.deleteForLake('lake-1')).toBe(1);
     expect(await repo.listByLake('lake-1')).toHaveLength(0);
     expect(await repo.listByLake('lake-2')).toHaveLength(1);
+  });
+  it('keeps the feed url on provenance through a save, and defaults it to null for a search proposal', async () => {
+    const fromFeed = await create({
+      provenance: {
+        producer: 'research_run',
+        runId: 'run-1',
+        feedUrl: 'https://example.com/feed.xml',
+        retrievedAt: new Date('2026-08-01T00:00:00Z'),
+      },
+    });
+    const fromSearch = await create({
+      sourceUrl: 'https://example.com/other',
+      canonicalSourceKey: 'example.com/other',
+    });
+
+    expect(fromFeed.provenance.feedUrl).toBe('https://example.com/feed.xml');
+    expect(fromSearch.provenance.feedUrl).toBeNull();
+    const reread = await repo.listByLake('lake-1');
+    expect(reread.find(p => p.id === fromFeed.id)?.provenance.feedUrl).toBe('https://example.com/feed.xml');
+  });
+
+  it('keeps a review reason through a save, and leaves it absent otherwise', async () => {
+    const retrievedAt = new Date('2026-08-01T00:00:00Z');
+    const flagged = await create({
+      provenance: {
+        producer: 'research_run',
+        retrievedAt,
+        reviewReason: { kind: 'rule_match', conditions: ['About sports'] },
+      },
+    });
+    const failed = await create({
+      canonicalSourceKey: 'https://example.com/other',
+      provenance: { producer: 'research_run', retrievedAt, reviewReason: { kind: 'rule_check_failed' } },
+    });
+    const plain = await create({ canonicalSourceKey: 'https://example.com/plain' });
+
+    const rows = await repo.listByLake('lake-1');
+    const byId = (id: string) => rows.find(p => p.id === id)?.provenance;
+    expect(byId(flagged.id)?.reviewReason).toEqual({ kind: 'rule_match', conditions: ['About sports'] });
+    expect(byId(failed.id)?.reviewReason).toEqual({ kind: 'rule_check_failed' });
+    expect(byId(plain.id)?.reviewReason).toBeUndefined();
   });
 });

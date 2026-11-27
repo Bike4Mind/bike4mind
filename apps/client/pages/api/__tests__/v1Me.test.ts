@@ -12,13 +12,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope, MeResponseSchema } from '@bike4mind/common';
 
-const { mockResolvePlan, mockEntitlements, mockFindActive, mockPlanByPriceId, baseApiOptions } = vi.hoisted(() => ({
-  mockResolvePlan: vi.fn(),
-  mockEntitlements: vi.fn(),
-  mockFindActive: vi.fn(),
-  mockPlanByPriceId: vi.fn(),
-  baseApiOptions: [] as unknown[],
-}));
+const { mockResolvePlan, mockEntitlements, mockFindActive, mockPlanByPriceId, mockFindLots, baseApiOptions } =
+  vi.hoisted(() => ({
+    mockResolvePlan: vi.fn(),
+    mockFindLots: vi.fn(),
+    mockEntitlements: vi.fn(),
+    mockFindActive: vi.fn(),
+    mockPlanByPriceId: vi.fn(),
+    baseApiOptions: [] as unknown[],
+  }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
@@ -41,7 +43,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/entitlements', () => ({
+vi.mock('@bike4mind/server-utils/entitlements/index', () => ({
   getUserEntitlements: mockEntitlements,
   toEntitlementUser: (user: {
     id: string;
@@ -57,9 +59,14 @@ vi.mock('@server/entitlements', () => ({
     emailVerified: user.emailVerified,
   }),
 }));
+vi.mock('@bike4mind/database', () => ({ creditLotRepository: { findByOwner: mockFindLots } }));
 vi.mock('@server/me/resolveCallerPlan', () => ({ resolveCallerPlan: mockResolvePlan }));
-vi.mock('@server/entitlements/activeSubscriptions', () => ({ getRequestActiveSubscriptions: mockFindActive }));
-vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlanByPriceId }));
+vi.mock('@bike4mind/server-utils/entitlements/activeSubscriptions', () => ({
+  getRequestActiveSubscriptions: mockFindActive,
+}));
+vi.mock('@bike4mind/server-utils/lib/userSubscriptions/utils', () => ({
+  getEntitlingPlanByPriceId: mockPlanByPriceId,
+}));
 
 const { default: handler } = await import('@pages/api/v1/me');
 
@@ -86,13 +93,20 @@ async function run(req: unknown, res: unknown) {
   await (handler as any)(req, res);
 }
 
-const ACTIVE = [{ priceId: 'price_pro', periodEndsAt: new Date('2026-10-18T00:00:00.000Z') }];
+const ACTIVE = [
+  {
+    priceId: 'price_pro',
+    periodEndsAt: new Date('2026-10-18T00:00:00.000Z'),
+    ownerType: 'User',
+  },
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindActive.mockResolvedValue(ACTIVE);
   mockResolvePlan.mockReturnValue({
     tier: 'basic',
+    personalMonthlyCreditAllowance: 50000,
     subscription: {
       plan_name: 'Professional',
       price_id: 'price_pro',
@@ -101,6 +115,7 @@ beforeEach(() => {
     },
   });
   mockEntitlements.mockResolvedValue(['base']);
+  mockFindLots.mockResolvedValue([]);
 });
 
 describe('GET /api/v1/me', () => {
@@ -122,9 +137,28 @@ describe('GET /api/v1/me', () => {
         interval: 'monthly',
         current_period_ends_at: '2026-10-18T00:00:00.000Z',
       },
-      credits: { balance: 1234 },
+      credits: { balance: 1234, monthly_allowance: 50000, expiring: [] },
       entitlements: ['base'],
     });
+  });
+
+  it("lists the caller's own unspent grants due to expire, soonest first", async () => {
+    mockFindLots.mockResolvedValue([
+      { amount: 1000, expiresAt: new Date('2026-10-02T00:00:00.000Z') },
+      { amount: 1000, expiresAt: new Date('2027-01-16T00:00:00.000Z') },
+    ]);
+    const { req, res } = get();
+
+    await run(req, res);
+
+    expect(mockFindLots).toHaveBeenCalledWith('u1', 'User');
+    const body = res._getJSONData();
+    expect(MeResponseSchema.safeParse(body).success).toBe(true);
+    // 2000 granted, 1234 left: the 766 spent comes out of the soonest-expiring grant first.
+    expect(body.credits.expiring).toEqual([
+      { amount: 234, expires_at: '2026-10-02T00:00:00.000Z' },
+      { amount: 1000, expires_at: '2027-01-16T00:00:00.000Z' },
+    ]);
   });
 
   it('publishes no email, tags, or admin flag', async () => {
@@ -179,7 +213,13 @@ describe('GET /api/v1/me', () => {
     mockPlanByPriceId.mockImplementation((priceId: string) =>
       priceId === 'price_team' ? { priceId, name: 'Team', interval: 'monthly', tier: 2 } : undefined
     );
-    const seatRows = [{ priceId: 'price_team', periodEndsAt: new Date('2026-11-01T00:00:00.000Z') }];
+    const seatRows = [
+      {
+        priceId: 'price_team',
+        periodEndsAt: new Date('2026-11-01T00:00:00.000Z'),
+        ownerType: 'Organization',
+      },
+    ];
     mockFindActive.mockResolvedValue(seatRows);
     const { req, res } = get();
 
@@ -197,6 +237,7 @@ describe('GET /api/v1/me', () => {
         interval: 'monthly',
         current_period_ends_at: '2026-11-01T00:00:00.000Z',
       },
+      credits: { monthly_allowance: null },
     });
   });
 

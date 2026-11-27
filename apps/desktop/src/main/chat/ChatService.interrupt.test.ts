@@ -11,13 +11,22 @@ import { MessageQueue } from './MessageQueue';
 import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import { STOP_GRACE_MS } from './tools/interruptible';
 import type { BrowserPage, BrowserProvider, ToolDefinition, ToolReporter } from './tools/types';
+
+vi.mock('../git/hostGitArgs', async importOriginal =>
+  (await import('./plainFolderGit.testHelper')).skipGitOutsideRepositories(await importOriginal())
+);
 
 function frame(payload: unknown): string {
   return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`;
 }
 
 type WireMessage = { role: string; content: unknown };
+
+const realSetTimeout = setTimeout;
+/** A real wait while the grace timer is faked: long enough for a turn that did end to say so. */
+const settle = () => new Promise(resolve => realSetTimeout(resolve, 50));
 
 /**
  * Stop and "send now" while a tool is still running.
@@ -56,7 +65,21 @@ describe('ChatService interrupting a running tool', () => {
         finishNavigation = resolve;
       }),
     back: async () => undefined,
-    snapshot: async () => ({ url: 'http://localhost:3080/app', title: 'App', text: 'late page', truncated: false }),
+    snapshot: async () => ({
+      url: 'http://localhost:3080/app',
+      title: 'App',
+      text: 'late page',
+      truncated: false,
+      model: {
+        url: 'http://localhost:3080/app',
+        title: 'App',
+        capturedAt: '2026-10-24T12:00:00.000Z',
+        blocks: [],
+        actions: [],
+        claims: [],
+        truncated: false,
+      },
+    }),
     click: async () => 'Add',
     scroll: async () => 'Add',
     fill: async () => 'filled',
@@ -127,6 +150,7 @@ describe('ChatService interrupting a running tool', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     service.dispose();
     for (const stream of streams) stream.end();
   });
@@ -154,13 +178,19 @@ describe('ChatService interrupting a running tool', () => {
       timeout: 3000,
       interval: 5,
     });
+  /** Stops (or interrupts) the hung turn with `interrupt`, and runs out the grace it gives the call. */
+  async function interruptPastGrace(interrupt: () => void): Promise<void> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    interrupt();
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS);
+  }
   const storedCall = async (id: string) => (await service.getSession(id))?.messages.at(-1)?.toolCalls?.[0];
 
   it('ends a stopped turn promptly and records the hung call as interrupted', async () => {
     const id = await hangOnTool();
 
     const stoppedAt = Date.now();
-    service.stop(id);
+    await interruptPastGrace(() => service.stop(id));
     await turnDone(id);
 
     expect(Date.now() - stoppedAt).toBeLessThan(2000);
@@ -182,14 +212,14 @@ describe('ChatService interrupting a running tool', () => {
 
   it('drops a result that arrives after the turn has moved on', async () => {
     const id = await hangOnTool();
-    service.stop(id);
+    await interruptPastGrace(() => service.stop(id));
     await turnDone(id);
     const settledEvents = events.length;
 
     hungReport?.progress('still going');
     hungReport?.image(Buffer.from('late'), 'image/png');
     finishHung?.('late result');
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await settle();
 
     expect(events.slice(settledEvents).filter(event => event.sessionId === id)).toEqual([]);
     const stored = await storedCall(id);
@@ -210,14 +240,17 @@ describe('ChatService interrupting a running tool', () => {
     const queued = await service.send(id, 'Whats taking too long?');
     const queuedId = queued.ok && queued.queued ? queued.message.id : '';
 
-    service.sendQueuedNow(id, queuedId);
-    // A second click while the first is unwinding.
-    service.sendQueuedNow(id, queuedId);
+    await interruptPastGrace(() => {
+      service.sendQueuedNow(id, queuedId);
+      // A second click while the first is unwinding.
+      service.sendQueuedNow(id, queuedId);
+    });
 
     await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 2000, interval: 5 });
     // The abandoned call finishing now must not bring a second copy, or a second turn.
     finishHung?.('late result');
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await settle();
+    await settle();
 
     expect(post).toHaveBeenCalledTimes(2);
     expect(queue.list(id)).toEqual([]);
@@ -235,8 +268,9 @@ describe('ChatService interrupting a running tool', () => {
   it('waits out a call that has started writing, and records what it wrote', async () => {
     const id = await hangOn(hungTool.schema.name, '{"write":true}', () => finishHung !== undefined);
 
-    service.stop(id);
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await interruptPastGrace(() => service.stop(id));
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS);
+    await settle();
     expect(events.some(event => event.type === 'done' && event.sessionId === id)).toBe(false);
 
     finishHung?.('Written.');

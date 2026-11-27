@@ -1,6 +1,7 @@
 import { IMessage, SystemPromptDetailSchema } from '@bike4mind/common';
 import type { z } from 'zod';
 import type { featureNames } from './ChatCompletionFeatures';
+import { CURRENT_MODEL_DETAILS_TOOL_NAME } from './tools/implementation/currentModelDetails';
 
 /**
  * The system/context stack a completion is assembled from, as data rather than as an inline array
@@ -32,7 +33,6 @@ export type PromptSourceId =
   | 'toolPrompt'
   | 'toolContext'
   | 'agentDetection'
-  | 'questMaster'
   | 'organizationPrompt'
   | 'sessionPrompt'
   | 'skills'
@@ -72,7 +72,6 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   // varies per request, and in front of that block it split the deployment-wide shareable
   // prefix (see SHAREABLE_PREFIX_SOURCES) down to dateContext alone.
   'extraContext',
-  'questMaster',
   'organizationPrompt',
   'sessionPrompt',
   'skills',
@@ -217,6 +216,8 @@ export function relocatePerTurnContext(
  * final payload by reference. Returns the input array unchanged when history is empty, when that
  * message did not survive the build, or when it cannot carry the flag safely - it is a system
  * message, or its neighbour shares its role, which the stamp would stop the adapter merging with.
+ * A tool_result message is the exception: history after a tool-calling turn ends in one, the
+ * current prompt follows as another user turn, and the API joins the two either way.
  */
 export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage: IMessage | undefined): IMessage[] {
   if (!lastHistoryMessage) return messages;
@@ -225,8 +226,19 @@ export function markHistoryCacheAnchor(messages: IMessage[], lastHistoryMessage:
   const anchor = messages[index];
   const next = messages[index + 1];
   if (anchor.role === 'system') return messages;
-  if (next && next.role === anchor.role) return messages;
+  if (next && next.role === anchor.role && !isToolResultMessage(anchor)) return messages;
   return messages.map((message, i) => (i === index ? { ...message, cache: true } : message));
+}
+
+// The stamp leaves this content an array with no text block, so the Anthropic adapter still merges a
+// following string prompt into it and the breakpoint stays on the last tool_result.
+function isToolResultMessage(message: IMessage): boolean {
+  return (
+    message.role === 'user' &&
+    Array.isArray(message.content) &&
+    message.content.length > 0 &&
+    message.content.every(block => (block as { type?: unknown }).type === 'tool_result')
+  );
 }
 
 /**
@@ -351,7 +363,6 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   sessionPrompt: 11,
   skills: 12,
   agentDetection: 13,
-  questMaster: 14,
   // Unlike the priority-0 caller-content sources above, this one IS a system-role message that
   // reaches the budget - it is the caller's own per-request guidance, ranked just behind the
   // tenant/session band it must defer to.
@@ -406,8 +417,8 @@ export function filterByPromptMode(tagged: TaggedSystemMessage[], mode?: PromptM
  * Features excluded whenever a prompt mode is set, because filtering their messages out of the
  * prompt is not sufficient. Mementos is the reason this exists: it distils the turn into durable
  * user memory as a side effect, so suppressing only its injected text would still let an API
- * workload rewrite what the model believes about the user on every later completion. QuestMaster
- * and agent detection author their own prompt content and can replace the reply outright.
+ * workload rewrite what the model believes about the user on every later completion. Agent
+ * detection authors its own prompt content.
  * Context summarization writes `session.contextSummary`, an admitted source in every non-raw
  * mode, so a mode turn that ran it would quietly shape later in-app completions on the session.
  *
@@ -416,12 +427,7 @@ export function filterByPromptMode(tagged: TaggedSystemMessage[], mode?: PromptM
  * summaries) whose output never re-enters a prompt. Session history itself still accrues -
  * that is what a session is.
  */
-const FEATURES_EXCLUDED_BY_PROMPT_MODE = new Set<featureNames>([
-  'mementos',
-  'questMaster',
-  'agentDetection',
-  'contextSummarization',
-]);
+const FEATURES_EXCLUDED_BY_PROMPT_MODE = new Set<featureNames>(['mementos', 'agentDetection', 'contextSummarization']);
 
 export function filterFeaturesByPromptMode<T extends string>(features: T[], mode?: PromptMode): T[] {
   if (!mode) return features;
@@ -458,12 +464,30 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
  * `server__tool` id (via `session.enabledTools`) keeps it while its unnamed siblings are withheld.
  *
  * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
- * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,
- * `omitIdentityReminder`) - each has the same miss-a-site failure mode, and each should get a named
- * resolver here rather than a second inline derivation when a caller needs it on its own.
+ * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`) - each has the
+ * same miss-a-site failure mode, and each should get a named resolver here rather than a second
+ * inline derivation when a caller needs it on its own.
  */
 export function resolveSkipAutoOffers(body: { promptMode?: PromptMode; skipAutoOffers?: boolean }): boolean {
   return Boolean(body.promptMode) || body.skipAutoOffers === true;
+}
+
+/**
+ * How the adapters treat their model-identity line. `omitIdentityReminder`: `raw` promises an empty
+ * system parameter. `identityViaTool`: the `current_model_details` tool is offered, so the line is
+ * dropped while the adapter still sends tools, and comes back on any recursion that drops them.
+ * Read the FINAL offered list (after deny-list and the Ollama / non-tool-model trims), never the
+ * requested one, or a turn whose tool was stripped would have neither.
+ * `current_model_details` must stay in AUTO_ADDED_TOOL_NAMES (ChatCompletionProcess).
+ */
+export function resolveIdentityReminder(input: { promptMode?: PromptMode; offeredToolNames: readonly string[] }): {
+  omitIdentityReminder: boolean;
+  identityViaTool: boolean;
+} {
+  return {
+    omitIdentityReminder: input.promptMode === 'raw',
+    identityViaTool: input.offeredToolNames.includes(CURRENT_MODEL_DETAILS_TOOL_NAME),
+  };
 }
 
 /**
@@ -486,7 +510,6 @@ export const PROMPT_SOURCE_METADATA: Record<
   toolPrompt: { origin: 'admin', name: 'tool_guidance' },
   toolContext: { origin: 'session', name: 'tool_context' },
   agentDetection: { origin: 'hardcoded', name: 'agent_detection' },
-  questMaster: { origin: 'session', name: 'quest_master' },
   organizationPrompt: { origin: 'org', name: 'organization_prompt' },
   sessionPrompt: { origin: 'session', name: 'session_prompt' },
   skills: { origin: 'session', name: 'skills' },

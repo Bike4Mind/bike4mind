@@ -29,8 +29,6 @@ import {
   IconButton,
 } from '@mui/joy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { JiraPriorityLevel, COMMON_JIRA_WEBHOOK_EVENTS } from '@bike4mind/common';
 import {
   useGetJiraWebhookConfig,
@@ -56,15 +54,11 @@ const PRIORITY_OPTIONS: { key: JiraPriorityLevel; label: string }[] = [
 const JiraNotificationsForm: FC = () => {
   const setConfirmationModal = useConfirmationModal.setState;
   const isDirty = useRef(false);
-  const [showSecret, setShowSecret] = useState(false);
+  const [oneTimeSecret, setOneTimeSecret] = useState<{ configId: string; value: string } | null>(null);
   const currentUser = useUser(s => s.currentUser);
 
   // Data hooks
-  const {
-    data: config,
-    isLoading: configLoading,
-    isError: configError,
-  } = useGetJiraWebhookConfig({ revealSecret: showSecret });
+  const { data: config, isLoading: configLoading, isError: configError } = useGetJiraWebhookConfig();
   const { data: subscriptions, isLoading: subsLoading } = useGetJiraWebhookSubscriptions();
   const createConfig = useCreateJiraWebhookConfig();
   const updateConfig = useUpdateJiraWebhookConfig();
@@ -100,6 +94,8 @@ const JiraNotificationsForm: FC = () => {
       // Sync subscription fields
       if (existingSub) {
         if (existingSub.slackTarget.type === 'channel') {
+          // Keep the form aligned with the loaded subscription until the user edits it.
+          // eslint-disable-next-line react-hooks/set-state-in-effect
           setSlackChannelId(existingSub.slackTarget.channelId);
         } else {
           setSlackChannelId('');
@@ -150,6 +146,7 @@ const JiraNotificationsForm: FC = () => {
     try {
       // Step 1: Create config (events default to COMMON_JIRA_WEBHOOK_EVENTS)
       const newConfig = await createConfig.mutateAsync({ events: COMMON_JIRA_WEBHOOK_EVENTS });
+      if (newConfig.secret) setOneTimeSecret({ configId: newConfig.id, value: newConfig.secret });
 
       // Step 2: Create subscription (accepts all events - event selection is in Jira Admin)
       await createSubscription.mutateAsync({
@@ -205,6 +202,15 @@ const JiraNotificationsForm: FC = () => {
     }
   }, [updateConfig]);
 
+  const handleRotateSecret = useCallback(async () => {
+    try {
+      const updated = await updateConfig.mutateAsync({ rotateSecret: true });
+      if (updated.secret) setOneTimeSecret({ configId: updated.id, value: updated.secret });
+    } catch {
+      // Error handled by hook
+    }
+  }, [updateConfig]);
+
   // Delete (with confirmation)
   const handleDelete = useCallback(() => {
     setConfirmationModal({
@@ -244,7 +250,7 @@ const JiraNotificationsForm: FC = () => {
               Manual Jira Setup Required
             </Typography>
             <Typography level="body-xs" component="div">
-              1. Copy the <b>Webhook URL</b> and <b>Secret</b> below
+              1. Copy the <b>Webhook URL</b> and the one-time <b>Secret</b> when you create or rotate it
               <br />
               2. In Jira, go to <b>Settings → System → Webhooks (under Advanced) → Create a webhook</b>
               <br />
@@ -277,62 +283,43 @@ const JiraNotificationsForm: FC = () => {
           </FormControl>
           <FormControl size="sm">
             <FormLabel>Webhook Secret</FormLabel>
-            <Input
-              readOnly
-              size="sm"
-              type={showSecret && canManageConfig ? 'text' : 'password'}
-              value={
-                showSecret && canManageConfig
-                  ? config.secret || config.secretMasked || ''
-                  : config.secretMasked || '****'
-              }
-              endDecorator={
-                canManageConfig && (
-                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Input readOnly size="sm" value={config.secretMasked || '****'} />
+          </FormControl>
+          {canManageConfig && oneTimeSecret?.configId === config.id && (
+            <Alert color="warning" variant="soft" size="sm">
+              <Stack spacing={1}>
+                <Typography level="body-sm">Copy this secret now. It will not be shown again.</Typography>
+                <Input
+                  readOnly
+                  size="sm"
+                  value={oneTimeSecret.value}
+                  data-testid="jira-one-time-secret"
+                  endDecorator={
                     <IconButton
                       variant="plain"
                       size="sm"
-                      onClick={() => setShowSecret(prev => !prev)}
-                      data-testid="toggle-jira-secret-visibility"
-                    >
-                      {showSecret ? (
-                        <VisibilityOffIcon sx={{ fontSize: 16 }} />
-                      ) : (
-                        <VisibilityIcon sx={{ fontSize: 16 }} />
-                      )}
-                    </IconButton>
-                    <IconButton
-                      variant="plain"
-                      size="sm"
-                      onClick={async () => {
-                        if (config.secret) {
-                          handleCopy(config.secret, 'Secret');
-                        } else {
-                          // Fetch with revealSecret to get the plain secret for copying
-                          try {
-                            const res = await import('@client/app/contexts/ApiContext').then(m =>
-                              m.api.get('/api/webhooks/jira/config', { params: { revealSecret: 'true' } })
-                            );
-                            const secret = res.data?.secret;
-                            if (secret) {
-                              handleCopy(secret, 'Secret');
-                            } else {
-                              toast.error('Could not retrieve secret');
-                            }
-                          } catch {
-                            toast.error('Failed to retrieve secret');
-                          }
-                        }
-                      }}
+                      onClick={() => handleCopy(oneTimeSecret.value, 'Secret')}
                       data-testid="copy-jira-secret"
                     >
                       <ContentCopyIcon sx={{ fontSize: 16 }} />
                     </IconButton>
-                  </Box>
-                )
-              }
-            />
-          </FormControl>
+                  }
+                />
+              </Stack>
+            </Alert>
+          )}
+          {canManageConfig && (
+            <Button
+              variant="outlined"
+              color="warning"
+              size="sm"
+              onClick={handleRotateSecret}
+              loading={updateConfig.isPending}
+              data-testid="rotate-jira-secret"
+            >
+              Rotate Secret
+            </Button>
+          )}
         </Stack>
       )}
 

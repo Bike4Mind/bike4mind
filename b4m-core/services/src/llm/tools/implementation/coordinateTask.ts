@@ -8,9 +8,11 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools, ApiKeyTable } from '@bike4mind/llm-adapters';
 import { getLlmByModel, resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
-import type { ModelInfo } from '@bike4mind/common';
+import type { ModelInfo, ThinkingVisibility } from '@bike4mind/common';
 import { ServerSubagentOrchestrator, spentResultOf } from '../../agents/ServerSubagentOrchestrator';
+import type { ModelAdmission } from '../../modelAdmission';
 import type {
+  ServerOrchestratorDeps,
   ServerSubagentTracker,
   SubagentHandoffSignal,
   SubagentToolPermissions,
@@ -130,6 +132,8 @@ export interface CoordinateTaskToolDeps {
   onCredits?: DelegateToAgentToolDeps['onCredits'];
   onStatusUpdate?: (status: string) => Promise<void>;
   thinking?: { enabled: boolean; budget_tokens: number };
+  /** Reasoning visibility for the caller, applied by every subagent this run spawns. */
+  thinkingVisibility?: ThinkingVisibility;
   agentStore: ServerAgentStore;
   apiKeyTable?: ApiKeyTable;
   /**
@@ -175,6 +179,8 @@ export interface CoordinateTaskToolDeps {
 
   /** See `ServerOrchestratorDeps.checkInsufficientCredits`. */
   checkInsufficientCredits?: (model: string) => boolean | Promise<boolean>;
+  /** See `ServerOrchestratorDeps.substituteIdentity`. */
+  substituteIdentity?: ServerOrchestratorDeps['substituteIdentity'];
 
   /**
    * The parent run's tool-permission lists, forwarded to the coordinator's orchestrator;
@@ -182,6 +188,9 @@ export interface CoordinateTaskToolDeps {
    * their execution rows (`makeDagDispatcher` in apps/workers).
    */
   toolPermissions?: SubagentToolPermissions;
+
+  /** The user's model admission; forwarded to the orchestrator, see `ServerOrchestratorDeps.modelAdmission`. */
+  modelAdmission?: Pick<ModelAdmission, 'assert'>;
 }
 
 /**
@@ -236,6 +245,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         availableModels: deps.availableModels,
         onProgress: deps.onStatusUpdate,
         thinking: deps.thinking,
+        thinkingVisibility: deps.thinkingVisibility,
         resolveBackend: deps.apiKeyTable
           ? (modelId: string) => {
               const modelInfo = deps.availableModels?.find(m => m.id === modelId);
@@ -250,7 +260,9 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         optInTools: deps.optInTools,
         checkMemberCreditCap: deps.checkMemberCreditCap,
         checkInsufficientCredits: deps.checkInsufficientCredits,
+        substituteIdentity: deps.substituteIdentity,
         toolPermissions: deps.toolPermissions,
+        modelAdmission: deps.modelAdmission,
       });
 
       try {

@@ -9,13 +9,12 @@ import {
   isExecutableUploadMimeType,
 } from '@bike4mind/common';
 import { AppFile } from '@bike4mind/database/content';
-import { logEvent } from '@server/utils/analyticsLog';
+import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
-import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 
 const s3Client = createS3Client();
@@ -31,11 +30,7 @@ const handler = baseApi().post(
       if (isExecutableUploadMimeType(data.mimeType))
         throw new BadRequestError(`Content type ${data.mimeType} is not allowed`);
 
-      let fileKey = `${uuidv4()}.${ext}`;
-      if (data.path) {
-        const filePath = data.path.endsWith('/') ? data.path : `${data.path}/`;
-        fileKey = `${filePath}${fileKey}`;
-      }
+      const fileKey = `${crypto.randomUUID()}.${ext}`;
 
       // Bind ContentType into the signature so the caller cannot PUT bytes under a different
       // (e.g. executable) content type than the one validated above. The browser PUT sends a

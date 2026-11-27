@@ -7,12 +7,12 @@ import type { Logger } from '@bike4mind/observability';
 import { resolveLakeAuditRetention } from './resolveLakeAuditRetention';
 
 /**
- * Best-effort write to the lake access audit trail. `record()` throws on failure (a bad enum, a
- * transient Mongo blip); this never rethrows, so a caller can safely `await` it without its own
- * response ever depending on the audit write succeeding - the returned promise always resolves.
+ * Write to the lake access audit trail. By default a failure of `record()` is logged and swallowed,
+ * so awaiting this never fails the caller's response. An input with a non-empty `adminBypassLakeIds`
+ * is strict: a failed write is logged and rethrown, and a missing `recorder` rejects, so a bypass
+ * read cannot go unrecorded.
  * `recorder` is optional because several call sites receive it as an optional DI adapter (see
- * ToolContext['db'].lakeAccessEvents); a host that never wired one in gets a silent no-op rather
- * than a crash.
+ * ToolContext['db'].lakeAccessEvents); when absent, a non-bypass write is a silent no-op.
  *
  * Whether to await: a per-request API route should `await` this before responding - once the
  * response is sent, the runtime may freeze or recycle the execution environment before an
@@ -42,8 +42,10 @@ export function recordLakeAccessEvent(
   logger: Pick<Logger, 'error' | 'warn'>,
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>
 ): Promise<void> {
-  if (!recorder) return Promise.resolve();
+  const strict = !!input.adminBypassLakeIds?.length;
+  if (!recorder && !strict) return Promise.resolve();
   const write = async () => {
+    if (!recorder) throw new Error('lake access recorder not wired for an admin-bypass read');
     // The cast is required, not just convenient: this function only needs error/warn, but
     // resolveLakeAuditRetention forwards `logger` on into getSettingsByNames's cache layer,
     // which constructs `logger || new Logger()` and genuinely needs the full Logger shape - so
@@ -58,5 +60,6 @@ export function recordLakeAccessEvent(
   };
   return write().catch(err => {
     logger.error('[lakeAccessAudit] failed to record access event', err);
+    if (strict) throw err;
   });
 }

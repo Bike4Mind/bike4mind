@@ -11,14 +11,20 @@ const { mockAuthenticate, mockAbility } = vi.hoisted(() => ({
 vi.mock('@server/auth/auth', () => ({
   default: { authenticate: mockAuthenticate },
 }));
-vi.mock('@server/auth/ability', () => ({ default: mockAbility }));
+vi.mock('@bike4mind/server-utils/auth/ability', () => ({ default: mockAbility }));
 
 // The real admission (middlewares/oauthRouteGate.ts) runs; only its leaf reads are stubbed. `enforced`
 // is the admin's enforceMFA toggle.
 const enforcement = vi.hoisted(() => ({ enforced: false, readFails: false }));
 vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/server-utils/auth/organizationMfa', () => ({
+  requiresOrganizationMfaEnrollment: async () => false,
+}));
 vi.mock('@bike4mind/services', () => ({
-  mfaService: { userHasMFAConfigured: (u: { mfa?: { totpEnabled?: boolean } }) => !!u.mfa?.totpEnabled },
+  mfaService: {
+    isMfaEnforcementExempt: (u: { isPersona?: boolean }) => u.isPersona === true,
+    userHasMFAConfigured: (u: { mfa?: { totpEnabled?: boolean } }) => !!u.mfa?.totpEnabled,
+  },
 }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: async () => {
@@ -160,17 +166,25 @@ describe('optionalJwtAuth', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('admits an enrolled session, and an impersonation session, under enforcement', async () => {
+  it('admits an enrolled session under enforcement', async () => {
     enforcement.enforced = true;
-    for (const user of [
-      { id: 'u1', mfa: { totpEnabled: true } },
-      { id: 'u1', impersonatedBy: 'admin-1' },
-    ]) {
-      queueAuthResult(null, user);
-      const { req, res, next } = make({ authorization: 'Bearer good.token' });
-      await run(req, res, next);
-      expect(req.user).toEqual(user);
-    }
+    const user = { id: 'u1', mfa: { totpEnabled: true } };
+    queueAuthResult(null, user);
+    const { req, res, next } = make({ authorization: 'Bearer good.token' });
+    await run(req, res, next);
+    expect(req.user).toEqual(user);
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('degrades impersonation to anonymous with enforceMFA=%s', async enforced => {
+    enforcement.enforced = enforced;
+    queueAuthResult(null, { id: 'u1', impersonatedBy: 'admin-1', mfa: { totpEnabled: true } });
+    const { req, res, next } = make({ authorization: 'Bearer support.token' });
+    await run(req, res, next);
+    expect(req.user).toBeUndefined();
+    expect(req.ability).toBeUndefined();
+    expect(mockAbility).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalledOnce();
   });
 
   it('degrades to anonymous when the enforcement read fails', async () => {

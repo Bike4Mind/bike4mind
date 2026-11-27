@@ -6,12 +6,26 @@ import {
   getLlmWithFallback,
   findFallbackForMissingModel,
   isSafetyRefusalError,
+  isOpenAiPolicyRefusalError,
+  isExpectedCompletionError,
+  isProviderSpendLimitError,
   getHttpStatus,
 } from './fallback';
 import { AxiosError } from 'axios';
 import { ApiError } from '@google/genai';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
 import { toProviderEndUserId } from '../llm';
+import {
+  AnthropicBackend,
+  LlmTimeoutError,
+  createAnthropicRequestTimeoutError,
+  createAnthropicStreamTimeoutError,
+  bedrockEmptyResponseMessage,
+  OutputBudgetExhaustedError,
+  StreamEndedWithoutFinishError,
+  HiddenReasoningOnlyEmptyError,
+  isHiddenReasoningOnlyEmptyError,
+} from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
 function createAxiosError(status: number, code?: string): AxiosError {
@@ -43,6 +57,35 @@ function createAwsSdkError(name: string, httpStatusCode?: number, message?: stri
 }
 
 describe('shouldTriggerFallback', () => {
+  describe('empty reasoning turns', () => {
+    it('falls back on a stream that ended without a finish reason', () => {
+      expect(shouldTriggerFallback(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'))).toBe(true);
+    });
+
+    it('falls back on a finished turn that streamed only hidden reasoning', () => {
+      const error = new HiddenReasoningOnlyEmptyError(
+        'Bedrock',
+        'm',
+        bedrockEmptyResponseMessage('m', 'r', false, true)
+      );
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('does not type the plain empty-response error of the capped or non-reasoning turn', () => {
+      const error = new Error(bedrockEmptyResponseMessage('m', 'r', false, false));
+      expect(isHiddenReasoningOnlyEmptyError(error)).toBe(false);
+      expect(shouldTriggerFallback(error)).toBe(false);
+    });
+
+    it('does not fall back on an exhausted output budget, which fails the same way again', () => {
+      expect(shouldTriggerFallback(new OutputBudgetExhaustedError('DeepSeek', 'deepseek-flash'))).toBe(false);
+    });
+  });
+
+  it('returns true for a Bedrock empty stream that stalled without a terminal event', () => {
+    expect(shouldTriggerFallback(new Error(bedrockEmptyResponseMessage('m', 'r', true)))).toBe(true);
+  });
+
   describe('Anthropic API errors', () => {
     it('should return true for overloaded_error from Anthropic API', () => {
       const error = new Error(
@@ -185,6 +228,15 @@ describe('shouldTriggerFallback', () => {
       const error = new TypeError('terminated');
       expect(shouldTriggerFallback(error)).toBe(true);
     });
+
+    it('should return true for TypeError: fetch failed (undici/fetch)', () => {
+      const error = new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ECONNRESET' }) });
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('should not treat a non-TypeError "fetch failed" as a transport failure', () => {
+      expect(shouldTriggerFallback(new Error('fetch failed'))).toBe(false);
+    });
   });
 
   describe('Model-specific error messages', () => {
@@ -269,6 +321,58 @@ describe('shouldTriggerFallback', () => {
   });
 });
 
+describe('isProviderSpendLimitError', () => {
+  // The SDK error shape: a bare numeric `status` and the provider body in the message.
+  const providerError = (status: number, message: string) => Object.assign(new Error(message), { status });
+
+  const anthropicUsageLimit = providerError(
+    400,
+    '400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}'
+  );
+  const anthropicCreditBalance = providerError(
+    400,
+    '400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}'
+  );
+  const openaiQuota = providerError(
+    429,
+    '429 You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.'
+  );
+
+  it.each([
+    ['Anthropic usage limit', anthropicUsageLimit],
+    ['Anthropic credit balance', anthropicCreditBalance],
+    ['OpenAI insufficient_quota', openaiQuota],
+  ])('classifies the %s refusal as a spend limit that falls back', (_label, error) => {
+    expect(isProviderSpendLimitError(error)).toBe(true);
+    expect(shouldTriggerFallback(error)).toBe(true);
+  });
+
+  it('never classifies a spend limit as overload, so the same model is not retried with backoff', () => {
+    expect(isOverloadedError(anthropicUsageLimit)).toBe(false);
+    expect(isOverloadedError(openaiQuota)).toBe(false);
+  });
+
+  it('leaves an ordinary 400 and a plain rate limit alone', () => {
+    const badRequest = providerError(400, '400 messages: text content blocks must be non-empty');
+    expect(isProviderSpendLimitError(badRequest)).toBe(false);
+    expect(shouldTriggerFallback(badRequest)).toBe(false);
+
+    const rateLimited = providerError(
+      429,
+      '429 rate_limit_error: Number of request tokens has exceeded your rate limit'
+    );
+    expect(isProviderSpendLimitError(rateLimited)).toBe(false);
+    expect(isOverloadedError(rateLimited)).toBe(true);
+
+    const geminiRateLimited = providerError(
+      429,
+      '{"error":{"code":429,"message":"You exceeded your current quota, please check your plan and billing details. Please retry in 41s.","status":"RESOURCE_EXHAUSTED"}}'
+    );
+    expect(isProviderSpendLimitError(geminiRateLimited)).toBe(false);
+    expect(isOverloadedError(geminiRateLimited)).toBe(true);
+  });
+});
+
 describe('isSafetyRefusalError', () => {
   it('matches the error the Anthropic backend throws on a safety-classifier refusal', () => {
     const error = new Error(
@@ -286,6 +390,24 @@ describe('isSafetyRefusalError', () => {
 });
 
 describe('isOverloadedError', () => {
+  it.each([
+    ['stream idle', createAnthropicStreamTimeoutError('stream_idle', 90_000)],
+    ['first event', createAnthropicStreamTimeoutError('first_event', 30_000)],
+    ['request', createAnthropicRequestTimeoutError(60_000)],
+  ])('does not read our own %s timeout as provider overload', (_label, error) => {
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('excludes a typed timeout even if its text mentions overload', () => {
+    const error = new LlmTimeoutError('stream_idle', 90_000, 'stream timeout - the model may be overloaded');
+    expect(isOverloadedError(error)).toBe(false);
+  });
+
+  it('still treats our timeouts as fallback-worthy', () => {
+    expect(shouldTriggerFallback(createAnthropicStreamTimeoutError('stream_idle', 90_000))).toBe(true);
+    expect(shouldTriggerFallback(createAnthropicRequestTimeoutError(60_000))).toBe(true);
+  });
+
   it('should return true for Axios 503', () => {
     expect(isOverloadedError(createAxiosError(503))).toBe(true);
   });
@@ -426,6 +548,38 @@ describe('getLlmWithFallback - forceSwitch option', () => {
   });
 });
 
+describe('getLlmWithFallback - isAdmitted', () => {
+  const opus45 = createModelInfo({ id: 'claude-opus-4-5-20251101', name: 'Opus', backend: ModelBackend.Anthropic });
+  const sonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', name: 'Sonnet', backend: ModelBackend.Anthropic });
+  const gated = createModelInfo({ id: 'claude-opus-4-6', name: 'Gated', backend: ModelBackend.Anthropic });
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+  const isAdmitted = async (id: string) => id !== gated.id;
+
+  it('drops a non-admitted frontend fallback and selects an admitted one automatically', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated, sonnet46], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result!.model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('never selects a non-admitted model automatically', async () => {
+    const result = await getLlmWithFallback(opus45, undefined, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('still uses an admitted frontend fallback', async () => {
+    const result = await getLlmWithFallback(opus45, gated.id, [opus45, gated], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      isAdmitted: async () => true,
+    });
+    expect(result!.model.id).toBe(gated.id);
+  });
+});
+
 describe('getLlmWithFallback - deprecated model fallback preferences', () => {
   // These tests verify that the fallback preferences map correctly routes
   // deprecated Haiku 3.5 to Haiku 4.5 through the automatic fallback path.
@@ -487,9 +641,10 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
     ['global.anthropic.claude-opus-4-6-v1', 'claude-opus-4-6'],
     ['global.anthropic.claude-opus-4-5-20251101-v1:0', 'claude-opus-4-5-20251101'],
     ['global.anthropic.claude-sonnet-5', 'claude-sonnet-5'],
-    ['global.anthropic.claude-sonnet-5-5', 'claude-sonnet-5'],
+    ['global.anthropic.claude-sonnet-5-5', 'claude-sonnet-5-5'],
     ['global.anthropic.claude-sonnet-4-6', 'claude-sonnet-4-6'],
-    ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-4-5-20250929'],
+    // Its direct twin retires 2026-11-30, so the chain leads with Anthropic's named replacement.
+    ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-5-5'],
     ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'],
   ];
 
@@ -534,6 +689,56 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
   });
 });
 
+describe('getLlmWithFallback - excludeBackends (provider spend limit)', () => {
+  const opus55 = createModelInfo({ id: 'claude-opus-5-5', backend: ModelBackend.Anthropic });
+  const opus5 = createModelInfo({ id: 'claude-opus-5', backend: ModelBackend.Anthropic });
+  const opus55Bedrock = createModelInfo({ id: 'global.anthropic.claude-opus-5-5', backend: ModelBackend.Bedrock });
+  const opus5Bedrock = createModelInfo({ id: 'global.anthropic.claude-opus-5', backend: ModelBackend.Bedrock });
+  const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+  const anthropicOut = new Set<string>([ModelBackend.Anthropic]);
+
+  const fallBack = (models: ModelInfo[], options: Parameters<typeof getLlmWithFallback>[5] = {}, frontend?: string) =>
+    getLlmWithFallback(opus55, frontend, models, apiKeyTable, mockLogger, {
+      excludeModelIds: new Set([opus55.id]),
+      excludeBackends: anthropicOut,
+      ...options,
+    });
+
+  it('moves the same model to its Bedrock route even though Bedrock has no key', async () => {
+    const result = await fallBack([opus55, opus5, opus5Bedrock, opus55Bedrock, gpt5]);
+    expect(result?.model.id).toBe(opus55Bedrock.id);
+    expect(result?.attempt).toBe(1);
+  });
+
+  it('skips every model on the exhausted backend when no Bedrock route is listed', async () => {
+    const result = await fallBack([opus55, opus5, gpt5]);
+    expect(result?.model.id).toBe('gpt-5');
+  });
+
+  it('drops a frontend fallback on the exhausted backend in favour of the Bedrock route', async () => {
+    const result = await fallBack([opus55, opus5, opus55Bedrock, gpt5], {}, opus5.id);
+    expect(result?.model.id).toBe(opus55Bedrock.id);
+  });
+
+  it('does not return to a Bedrock route that already failed this request', async () => {
+    const result = await fallBack([opus55, opus5, opus55Bedrock, gpt5], {
+      excludeModelIds: new Set([opus55.id, opus55Bedrock.id]),
+    });
+    expect(result?.model.id).toBe('gpt-5');
+  });
+
+  it('skips a disabled Bedrock route', async () => {
+    const result = await fallBack([opus55, { ...opus55Bedrock, disabled: true }, gpt5]);
+    expect(result?.model.id).toBe('gpt-5');
+  });
+
+  it('keeps the direct tier chain when nothing is excluded', async () => {
+    const result = await fallBack([opus55, opus5, opus55Bedrock, gpt5], { excludeBackends: new Set() });
+    expect(result?.model.id).toBe(opus5.id);
+  });
+});
+
 describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
   // A provider-wide outage walks the preference chain one model per hop. excludeModelIds
   // carries every already-failed model so each hop advances instead of re-picking a dead model.
@@ -564,6 +769,20 @@ describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
     });
     expect(result).not.toBeNull();
     expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('walks the Sonnet 5.5 chain to the cross-provider tail once its direct siblings are excluded', async () => {
+    const sonnet55 = createModelInfo({ id: 'claude-sonnet-5-5', backend: ModelBackend.Anthropic });
+    const sonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', backend: ModelBackend.Anthropic });
+    const result = await getLlmWithFallback(
+      sonnet55,
+      undefined,
+      [sonnet55, sonnet5, sonnet46, gpt5],
+      apiKeyTable,
+      mockLogger,
+      { forceSwitch: true, excludeModelIds: new Set(['claude-sonnet-5', 'claude-sonnet-4-6']) }
+    );
+    expect(result?.model.id).toBe('gpt-5');
   });
 
   it('respects the exclusion on the last-resort path', async () => {
@@ -905,4 +1124,105 @@ describe('fallback candidates must be able to serve the chat', () => {
     const result = findFallbackForMissingModel('retired-model', [geminiImage, geminiText], apiKeyTable, mockLogger);
     expect(result?.model.id).toBe('gemini-3.5-flash');
   });
+});
+
+describe('expected completion outcomes', () => {
+  it.each(['cyber_policy', 'content_policy_violation', 'content_filter'])(
+    'recognizes the structured OpenAI policy code %s',
+    code => {
+      expect(isOpenAiPolicyRefusalError(Object.assign(new Error('refused'), { code }))).toBe(true);
+      expect(isOpenAiPolicyRefusalError(Object.assign(new Error('refused'), { error: { code } }))).toBe(true);
+    }
+  );
+
+  it('recognizes SDK text and typed request timeouts without masking other errors', () => {
+    expect(isExpectedCompletionError(new Error('400 cyber_policy: request refused'))).toBe(true);
+    expect(isExpectedCompletionError(new Error('Safety classifier refusal'))).toBe(true);
+    expect(isExpectedCompletionError(createAnthropicRequestTimeoutError(120000))).toBe(true);
+    expect(isExpectedCompletionError(Object.assign(new Error('bad credentials'), { code: 'invalid_api_key' }))).toBe(
+      false
+    );
+    expect(isExpectedCompletionError(new Error('unexpected failure'))).toBe(false);
+    expect(isExpectedCompletionError(null)).toBe(false);
+    expect(isOpenAiPolicyRefusalError(new Error('cyber_policy_configuration_error'))).toBe(false);
+  });
+});
+
+describe('Fable 5.1 / 5.2 safety-classifier refusal fallback, end to end', () => {
+  const roster = [
+    'claude-fable-5-1',
+    'claude-fable-5-2',
+    'claude-opus-5-5',
+    'claude-opus-5',
+    'claude-opus-4-8',
+    'claude-sonnet-5',
+  ].map(id => createModelInfo({ id, backend: ModelBackend.Anthropic }));
+  const apiKeyTable = { anthropic: 'valid-key' } as Record<string, string>;
+  const refusalEvents = [
+    { type: 'message_start', message: { usage: { input_tokens: 12, output_tokens: 0 } } },
+    { type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { input_tokens: 12, output_tokens: 0 } },
+    { type: 'message_stop' },
+  ];
+  const refusalBody = { content: [], stop_reason: 'refusal', usage: { input_tokens: 12, output_tokens: 0 } };
+
+  async function refusalFrom(model: string, stream: boolean): Promise<Error> {
+    const backend = new AnthropicBackend('test-key');
+    const events = {
+      [Symbol.asyncIterator]: async function* () {
+        yield* refusalEvents;
+      },
+      controller: { abort: () => {} },
+    };
+    (backend as unknown as { _api: unknown })._api = {
+      messages: { create: async () => (stream ? events : refusalBody) },
+    };
+    try {
+      await backend.complete(
+        model,
+        [{ role: 'user', content: 'benign security question' }],
+        { stream },
+        async () => {}
+      );
+    } catch (error) {
+      return error as Error;
+    }
+    throw new Error(`${model} resolved on a refusal`);
+  }
+
+  it.each([
+    ['claude-fable-5-2', true],
+    ['claude-fable-5-2', false],
+    ['claude-fable-5-1', true],
+    ['claude-fable-5-1', false],
+  ])('continues a refused %s request (stream=%s) on claude-opus-4-8', async (id, stream) => {
+    const error = await refusalFrom(id, stream);
+    expect(isSafetyRefusalError(error)).toBe(true);
+    expect(shouldTriggerFallback(error)).toBe(true);
+
+    const refused = roster.find(model => model.id === id)!;
+    const result = await getLlmWithFallback(refused, undefined, roster, apiKeyTable, mockLogger, {
+      excludeModelIds: new Set([id]),
+    });
+    expect(result?.attempt).toBe(1);
+    expect(result?.model.id).toBe('claude-opus-4-8');
+  });
+
+  it.each(['claude-fable-5-1', 'claude-fable-5-2'])(
+    'moves %s to gpt-5 when the Anthropic spend limit is hit',
+    async id => {
+      const gpt4oMini = createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI });
+      const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+      const refused = roster.find(model => model.id === id)!;
+      // gpt-4o-mini is listed first so a last-resort scan would pick it instead of the chain's tail.
+      const result = await getLlmWithFallback(
+        refused,
+        undefined,
+        [gpt4oMini, ...roster, gpt5],
+        { ...apiKeyTable, openai: 'valid-key' },
+        mockLogger,
+        { excludeModelIds: new Set([id]), excludeBackends: new Set<string>([ModelBackend.Anthropic]) }
+      );
+      expect(result?.model.id).toBe('gpt-5');
+    }
+  );
 });

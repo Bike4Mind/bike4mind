@@ -17,6 +17,7 @@ import type { ILogger } from '@bike4mind/observability';
 import { FunctionQueueRunner } from '@bike4mind/utils';
 import type { CreateFabFileAdapters } from '../fabFileService/create';
 import { assertRewriteFits, commitContentRewrite } from '../fabFileService/rewriteStorage';
+import { signedUrlExpiresAt } from '../fabFileService/get';
 import * as tagService from '../tagService';
 
 /**
@@ -60,6 +61,8 @@ export async function findExistingResearchData(
  * @param adapters - Service adapters containing repositories and storage
  * @param logger - Optional logger for tracking operations
  * @returns the file and matching research data if a duplicate already existed (content re-uploaded), or null when no existing record was found.
+ * `file` is null when the matching research data links a file the caller does not own: the caller creates a fresh
+ * file and relinks `researchData` to it.
  * `storageLimitReached` is true when the owner's quota refused the new content and the previous crawl was kept;
  * callers tell the user, since the task itself still succeeds.
  */
@@ -79,8 +82,8 @@ export async function findOrUpdateExistingResearchData(
     storage: CreateFabFileAdapters['storage'];
   },
   logger?: Pick<ILogger, 'info'> & Partial<Pick<ILogger, 'warn'>>
-): Promise<{ file: IFabFileDocument; researchData: IResearchData; storageLimitReached: boolean } | null> {
-  const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
+): Promise<{ file: IFabFileDocument | null; researchData: IResearchData; storageLimitReached: boolean } | null> {
+  const DEFAULT_EXPIRE_IN_SECONDS = 3600;
 
   // Find existing research data using the standardized lookup
   const existingResearchData = await findExistingResearchData(url, researchTask, user, adapters.db.researchDatas);
@@ -89,6 +92,10 @@ export async function findOrUpdateExistingResearchData(
     logger?.info(`🗃️ [RESEARCH_DATA_EXISTS] Research data already exists for ${url}`);
 
     const existingFile = await adapters.db.fabFiles.findById(existingResearchData.fabFileId);
+    if (existingFile && String(existingFile.userId) !== user.id) {
+      logger?.warn?.(`[RESEARCH_DATA_EXISTS] Research data ${existingResearchData.id} links a file of another owner`);
+      return { file: null, researchData: existingResearchData, storageLimitReached: false };
+    }
     if (existingFile && existingFile.filePath) {
       const newSize = typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.length;
       let fits = true;
@@ -124,24 +131,20 @@ export async function findOrUpdateExistingResearchData(
       // ALL mime types (not just images), so a still-pending or legacy (pre-backfill) non-image
       // is withheld too; research content resolves to 'clean' on upload, so in steady state this
       // re-mints as before.
+      existingFile.fileUrl = undefined;
+      existingFile.fileUrlExpireAt = undefined;
       if (isImageServeable(existingFile)) {
         existingFile.fileUrl = await adapters.storage.generateSignedUrl(
           existingFile.filePath,
           DEFAULT_EXPIRE_IN_SECONDS,
           'get'
         );
-        existingFile.fileUrlExpireAt = new Date(Date.now() + DEFAULT_EXPIRE_IN_SECONDS * 1000);
-        existingFile.updatedAt = new Date();
-        await adapters.db.fabFiles.update({
-          id: existingFile.id,
-          fileUrl: existingFile.fileUrl,
-          fileUrlExpireAt: existingFile.fileUrlExpireAt,
-          updatedAt: existingFile.updatedAt,
-        });
+        existingFile.fileUrlExpireAt = signedUrlExpiresAt(existingFile.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
+      }
+      existingFile.updatedAt = new Date();
+      if (existingFile.fileUrl) {
+        await adapters.db.fabFiles.update({ id: existingFile.id, updatedAt: existingFile.updatedAt });
       } else {
-        existingFile.fileUrl = undefined;
-        existingFile.fileUrlExpireAt = undefined;
-        existingFile.updatedAt = new Date();
         await adapters.db.fabFiles.update(
           { id: existingFile.id, updatedAt: existingFile.updatedAt },
           { unset: ['fileUrl', 'fileUrlExpireAt'] }

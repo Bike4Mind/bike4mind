@@ -1,16 +1,38 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { USER_SECRET_FIELDS } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  MODERATION_PAGE_READ,
+  meetsAdminPermissionRequirement,
+  missingAdminPermissionMessage,
+  type AdminPermissionRequirement,
+} from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
-    const chain: any = { use: () => chain, get: (fn: any) => fn };
+const h = vi.hoisted(() => ({ options: null as unknown }));
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (options: { adminPermissions: Partial<Record<string, AdminPermissionRequirement>> }) => {
+    h.options = options;
+    const chain = {
+      use: () => chain,
+      get: (fn: (req: unknown, res: unknown) => Promise<unknown>) => async (req: unknown, res: unknown) => {
+        const requirement = options.adminPermissions.GET;
+        const { user } = req as { user?: Parameters<typeof meetsAdminPermissionRequirement>[0] };
+        if (requirement && !meetsAdminPermissionRequirement(user, requirement)) {
+          throw new ForbiddenError(missingAdminPermissionMessage(requirement));
+        }
+        return fn(req, res);
+      },
+    };
     return chain;
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
 const mockSelect = vi.fn();
+const mockLean = vi.fn<() => Promise<Record<string, unknown>[]>>(() =>
+  Promise.resolve([{ username: 'u', email: 'u@example.com' }])
+);
 vi.mock('@bike4mind/database', () => {
   const query: any = {
     select: (...a: any[]) => {
@@ -20,7 +42,7 @@ vi.mock('@bike4mind/database', () => {
     sort: () => query,
     skip: () => query,
     limit: () => query,
-    lean: () => Promise.resolve([{ username: 'u', email: 'u@example.com' }]),
+    lean: () => mockLean(),
   };
   return { User: { find: () => query, countDocuments: () => Promise.resolve(1) } };
 });
@@ -35,11 +57,16 @@ const DISPLAYED_TIMESTAMPS = [
   'pendingEmailExpires',
 ];
 
+const call = async (user: unknown = { id: 'a1', isAdmin: true }) => {
+  const { req, res } = createMocks({ method: 'GET', query: {} });
+  (req as unknown as Record<string, unknown>).user = user;
+  await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+  return res;
+};
+
 describe('GET /api/admin/users/email-verification', () => {
   it('selects only the display fields and none of the user secret fields', async () => {
-    const { req, res } = createMocks({ method: 'GET', query: {} });
-    (req as any).user = { id: 'a1', isAdmin: true };
-    await (handler as any)(req, res);
+    const res = await call();
 
     expect(res._getStatusCode()).toBe(200);
     const selected = String(mockSelect.mock.calls[0][0]).split(/\s+/);
@@ -47,5 +74,34 @@ describe('GET /api/admin/users/email-verification', () => {
       if (DISPLAYED_TIMESTAMPS.includes(f)) continue;
       expect(selected).not.toContain(f);
     }
+  });
+  it('strips fields that are not part of the response contract', async () => {
+    mockLean.mockResolvedValueOnce([
+      { _id: 'u1', username: 'u', email: 'u@example.com', emailVerificationToken: 'tok', passwordHash: 'hash' },
+    ]);
+    const res = await call();
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.users).toEqual([{ _id: 'u1', username: 'u', email: 'u@example.com' }]);
+    expect(body.pagination).toEqual({ page: 1, limit: 20, totalPages: 1, totalCount: 1 });
+  });
+  it('declares MODERATION_PAGE_READ for GET', () => {
+    expect(h.options).toEqual(expect.objectContaining({ adminPermissions: { GET: MODERATION_PAGE_READ } }));
+  });
+
+  it('refuses a delegate without a moderation read permission before querying', async () => {
+    mockSelect.mockClear();
+
+    await expect(call({ id: 'a2', isAdmin: false, adminPermissions: ['credits:adjust'] })).rejects.toThrow(
+      missingAdminPermissionMessage(MODERATION_PAGE_READ)
+    );
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it.each(['support:read', 'users:moderate'])('admits a delegate holding %s', async permission => {
+    const res = await call({ id: 'a2', isAdmin: false, adminPermissions: [permission] });
+
+    expect(res._getStatusCode()).toBe(200);
   });
 });

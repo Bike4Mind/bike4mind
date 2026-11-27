@@ -130,4 +130,86 @@ describe('McpOAuthClientRegistrationModel', () => {
     expect(results).toHaveLength(8);
     expect(await McpOAuthClientRegistration.countDocuments({})).toBe(1);
   });
+
+  describe('registerIfAbsent', () => {
+    it('keeps one winner when first registrations race, and every caller reads the winner', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          mcpOAuthClientRegistrationRepository.registerIfAbsent({
+            issuer: ISSUER,
+            redirectUri: REDIRECT,
+            clientId: `client-${i}`,
+            tokenEndpointAuthMethod: 'none',
+          })
+        )
+      );
+      expect(await McpOAuthClientRegistration.countDocuments({})).toBe(1);
+      expect(new Set(results.map(r => r?.clientId)).size).toBe(1);
+    });
+
+    it('does not overwrite a live row, and replaces an expired one', async () => {
+      const first = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'first',
+        tokenEndpointAuthMethod: 'none',
+      });
+      const second = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'second',
+        tokenEndpointAuthMethod: 'none',
+      });
+      expect(second?.clientId).toBe('first');
+
+      await McpOAuthClientRegistration.updateOne({ _id: first?.id }, { $set: { clientSecretExpiresAt: new Date(1) } });
+      const third = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'third',
+        tokenEndpointAuthMethod: 'none',
+      });
+      expect(third?.clientId).toBe('third');
+    });
+
+    it('finds a live registration by id with its secret, and not an unknown id', async () => {
+      const row = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'c',
+        clientSecretEnc: 'enc:s',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+      });
+      expect((await mcpOAuthClientRegistrationRepository.findByIdWithCredentials(row?.id ?? ''))?.clientSecretEnc).toBe(
+        'enc:s'
+      );
+      expect(await mcpOAuthClientRegistrationRepository.findByIdWithCredentials('nope')).toBeNull();
+    });
+
+    it('reads an expired registration as missing, and one with no expiry as live', async () => {
+      const expired = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'expired',
+        clientSecretEnc: 'enc:s',
+        clientSecretExpiresAt: new Date(Date.now() + 60_000),
+        tokenEndpointAuthMethod: 'client_secret_basic',
+      });
+      await McpOAuthClientRegistration.updateOne(
+        { _id: expired?.id },
+        { $set: { clientSecretExpiresAt: new Date(1) } }
+      );
+      expect(await mcpOAuthClientRegistrationRepository.findByIdWithCredentials(expired?.id ?? '')).toBeNull();
+
+      const open = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: 'https://other.example',
+        redirectUri: REDIRECT,
+        clientId: 'open',
+        tokenEndpointAuthMethod: 'none',
+      });
+      expect((await mcpOAuthClientRegistrationRepository.findByIdWithCredentials(open?.id ?? ''))?.clientId).toBe(
+        'open'
+      );
+    });
+  });
 });

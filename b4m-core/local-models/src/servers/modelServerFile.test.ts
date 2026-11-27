@@ -1,0 +1,403 @@
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  credentialHeaders,
+  desktopUserDataDirs,
+  desktopUserDataFile,
+  hydrate,
+  isStored,
+  localModelId,
+  parseLocalModelId,
+  readDesktopModelServers,
+  serverManagement,
+  serverRuntimeId,
+} from './modelServerFile';
+
+const SECRET = 'c2VjcmV0LWNpcGhlcnRleHQ=';
+
+function stored(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'a1b2c3d4e5f6',
+    name: 'gpu-box',
+    kind: 'ollama',
+    transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' },
+    access: 'manage',
+    auth: { type: 'bearer' },
+    secret: SECRET,
+    models: ['qwen3:8b'],
+    addedAt: '2026-10-01T00:00:00.000Z',
+    ...over,
+  };
+}
+
+describe('desktopUserDataDirs', () => {
+  it('uses the override alone when set', () => {
+    expect(desktopUserDataDirs({ platform: 'linux', env: { B4M_DESKTOP_USER_DATA: '/x/y' }, home: '/h' })).toEqual([
+      '/x/y',
+    ]);
+  });
+
+  it('ignores a blank override', () => {
+    expect(desktopUserDataDirs({ platform: 'linux', env: { B4M_DESKTOP_USER_DATA: '  ' }, home: '/h' })[0]).toBe(
+      '/h/.config/@bike4mind/desktop'
+    );
+  });
+
+  it('finds linux folders under XDG_CONFIG_HOME or ~/.config', () => {
+    expect(desktopUserDataDirs({ platform: 'linux', env: { XDG_CONFIG_HOME: '/xdg' }, home: '/h' })).toEqual([
+      '/xdg/@bike4mind/desktop',
+      '/xdg/Bike4Mind',
+    ]);
+    expect(desktopUserDataDirs({ platform: 'linux', env: {}, home: '/h' })).toEqual([
+      '/h/.config/@bike4mind/desktop',
+      '/h/.config/Bike4Mind',
+    ]);
+  });
+
+  it('finds macOS folders under Application Support', () => {
+    expect(desktopUserDataDirs({ platform: 'darwin', env: {}, home: '/Users/m' })).toEqual([
+      '/Users/m/Library/Application Support/@bike4mind/desktop',
+      '/Users/m/Library/Application Support/Bike4Mind',
+    ]);
+  });
+
+  it('finds Windows folders under APPDATA or the profile', () => {
+    expect(desktopUserDataDirs({ platform: 'win32', env: { APPDATA: 'C:\\A' }, home: 'C:\\Users\\m' })).toEqual([
+      'C:\\A\\@bike4mind\\desktop',
+      'C:\\A\\Bike4Mind',
+    ]);
+    expect(desktopUserDataDirs({ platform: 'win32', env: {}, home: 'C:\\Users\\m' })[1]).toBe(
+      'C:\\Users\\m\\AppData\\Roaming\\Bike4Mind'
+    );
+  });
+});
+
+describe('readDesktopModelServers', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'b4m-servers-'));
+  });
+  afterEach(() => rm(root, { recursive: true, force: true }));
+
+  const opts = (env: Record<string, string> = {}) => ({ platform: 'linux' as const, env, home: root });
+
+  async function put(folder: string, body: string): Promise<string> {
+    const dir = path.join(root, '.config', folder);
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, 'model-servers.json');
+    await writeFile(file, body);
+    return file;
+  }
+
+  it('reads the packaged folder and drops the secret', async () => {
+    const file = await put('@bike4mind/desktop', JSON.stringify({ version: 1, servers: [stored()] }));
+    const result = await readDesktopModelServers(opts());
+    expect(result.path).toBe(file);
+    expect(result.problem).toBeNull();
+    expect(result.servers).toHaveLength(1);
+    expect(result.servers[0]).toMatchObject({ id: 'a1b2c3d4e5f6', name: 'gpu-box', auth: { type: 'bearer' } });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(result.servers[0]).not.toHaveProperty('secret');
+  });
+
+  it('falls back to the product-name folder', async () => {
+    await put('Bike4Mind', JSON.stringify({ version: 1, servers: [stored({ name: 'second' })] }));
+    expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['second']);
+  });
+
+  it('prefers the first folder that has the file', async () => {
+    await put('@bike4mind/desktop', JSON.stringify({ servers: [stored({ name: 'first' })] }));
+    await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'second' })] }));
+    expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['first']);
+  });
+
+  describe('desktopUserDataFile', () => {
+    const packaged = (name = '') => path.join(root, '.config', '@bike4mind', 'desktop', name);
+    const older = (name = '') => path.join(root, '.config', 'Bike4Mind', name);
+    const SETTINGS = 'model-settings.json';
+    const putSettings = async (dir: string) => {
+      await mkdir(dir, { recursive: true });
+      await writeFile(path.join(dir, SETTINGS), '{"models": {}}');
+    };
+
+    it("reads the older folder's servers past the empty folder Electron created on first launch", async () => {
+      await mkdir(packaged(), { recursive: true });
+      await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'older' })] }));
+      expect(await desktopUserDataFile('model-servers.json', opts())).toBe(older('model-servers.json'));
+      expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['older']);
+    });
+
+    it('takes model settings from the older folder the same way', async () => {
+      await mkdir(packaged(), { recursive: true });
+      await putSettings(older());
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBe(older(SETTINGS));
+    });
+
+    it('keeps the older servers when only the settings moved to the packaged folder', async () => {
+      await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'older' })] }));
+      await putSettings(packaged());
+      expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['older']);
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBe(packaged(SETTINGS));
+    });
+
+    it('keeps the older settings when only the servers moved to the packaged folder', async () => {
+      await put('@bike4mind/desktop', JSON.stringify({ servers: [stored({ name: 'packaged' })] }));
+      await putSettings(older());
+      expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['packaged']);
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBe(older(SETTINGS));
+    });
+
+    it('prefers the packaged folder for a file both folders hold', async () => {
+      await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'older' })] }));
+      await put('@bike4mind/desktop', JSON.stringify({ servers: [stored({ name: 'packaged' })] }));
+      await putSettings(older());
+      await putSettings(packaged());
+      expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['packaged']);
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBe(packaged(SETTINGS));
+    });
+
+    it('uses the first folder that exists when none holds the file, and none when Desktop is not installed', async () => {
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBeNull();
+      await mkdir(older(), { recursive: true });
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBe(older(SETTINGS));
+      await mkdir(packaged(), { recursive: true });
+      expect(await desktopUserDataFile(SETTINGS, opts())).toBe(packaged(SETTINGS));
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      'reports a packaged file it cannot check instead of reading the older one',
+      async () => {
+        await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'older' })] }));
+        await mkdir(packaged(), { recursive: true });
+        await chmod(packaged(), 0);
+        try {
+          const result = await readDesktopModelServers(opts());
+          expect(result).toMatchObject({ servers: [], path: packaged('model-servers.json') });
+          expect(result.problem).toMatch(/could not be read \(EACCES\)/);
+        } finally {
+          await chmod(packaged(), 0o755);
+        }
+      }
+    );
+
+    it('takes B4M_DESKTOP_USER_DATA as given', async () => {
+      await put('Bike4Mind', JSON.stringify({ servers: [stored()] }));
+      expect(await desktopUserDataFile(SETTINGS, opts({ B4M_DESKTOP_USER_DATA: '/not/there' }))).toBe(
+        path.join('/not/there', SETTINGS)
+      );
+    });
+  });
+
+  it('honors B4M_DESKTOP_USER_DATA', async () => {
+    const dir = path.join(root, 'custom');
+    await mkdir(dir);
+    await writeFile(path.join(dir, 'model-servers.json'), JSON.stringify({ servers: [stored()] }));
+    await put('@bike4mind/desktop', JSON.stringify({ servers: [stored({ name: 'ignored' })] }));
+    const result = await readDesktopModelServers(opts({ B4M_DESKTOP_USER_DATA: dir }));
+    expect(result.servers.map(s => s.name)).toEqual(['gpu-box']);
+  });
+
+  it('returns nothing cleanly when Desktop is not installed', async () => {
+    expect(await readDesktopModelServers(opts())).toEqual({ servers: [], path: null, problem: null });
+  });
+
+  it('reports malformed JSON without quoting it', async () => {
+    const file = await put('@bike4mind/desktop', `{"servers": [ {"secret": "${SECRET}" oops`);
+    const result = await readDesktopModelServers(opts());
+    expect(result).toMatchObject({ servers: [], path: file });
+    expect(result.problem).toBeTruthy();
+    expect(result.problem).not.toContain(SECRET);
+  });
+
+  it('reports a file it cannot read without quoting it', async () => {
+    const dir = path.join(root, '.config', '@bike4mind/desktop', 'model-servers.json');
+    await mkdir(dir, { recursive: true });
+    const result = await readDesktopModelServers(opts());
+    expect(result).toMatchObject({ servers: [], path: dir });
+    expect(result.problem).toMatch(/could not be read \(EISDIR\)/);
+  });
+
+  it('reports a file with no server list', async () => {
+    await put('@bike4mind/desktop', JSON.stringify({ version: 1 }));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers).toEqual([]);
+    expect(result.problem).toBeTruthy();
+  });
+
+  it('skips records it cannot use, such as an unknown transport', async () => {
+    const body = {
+      servers: [
+        stored({ id: 'ssh1', transport: { type: 'ssh', host: 'box' } }),
+        stored({ id: 'ws1', transport: { type: 'websocket', url: 'ws://box' } }),
+        stored({ id: 'bad', kind: 'other' }),
+        'junk',
+        stored({ id: 'ok1', name: 'kept' }),
+      ],
+    };
+    await put('@bike4mind/desktop', JSON.stringify(body));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => s.name)).toEqual(['kept']);
+    expect(result.unusable?.map(s => s.id)).toEqual(['ssh1']);
+  });
+
+  it('lists SSH servers with the rest, an old one without a port as Ollama on 11434', async () => {
+    const body = {
+      servers: [
+        stored({ id: 'ssh1', name: 'lab', auth: { type: 'none' }, transport: { type: 'ssh', destination: 'me@lab' } }),
+        stored({
+          id: 'ssh3',
+          name: 'swap',
+          kind: 'openai-compatible',
+          transport: { type: 'ssh', destination: 'me@lab', port: 8080 },
+        }),
+        stored({ id: 'ssh2', transport: { type: 'ssh', destination: '-oProxyCommand=x' } }),
+        stored({ id: 'ssh4', transport: { type: 'ssh', destination: 'me@lab', port: '22 -oProxyCommand=x' } }),
+        stored({ id: 'ok1', name: 'kept' }),
+      ],
+    };
+    await put('@bike4mind/desktop', JSON.stringify(body));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => [s.name, s.kind, s.transport])).toEqual([
+      ['lab', 'ollama', { type: 'ssh', destination: 'me@lab', port: 11434 }],
+      ['swap', 'openai-compatible', { type: 'ssh', destination: 'me@lab', port: 8080 }],
+      ['kept', 'ollama', { type: 'http', baseUrl: 'http://10.0.0.5:11434' }],
+    ]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it('lists an SSH server saved with a port or destination it cannot use, or none, with why, apart from the usable ones', async () => {
+    const ports: unknown[] = [0, 65_536, -1, 1.5, null, 'abc', '', '22 -oProxyCommand=x', { port: 22 }];
+    const body = {
+      servers: [
+        ...ports.map((port, index) =>
+          stored({ id: `p${index}`, name: `port-${index}`, transport: { type: 'ssh', destination: 'me@lab', port } })
+        ),
+        stored({ id: 'd1', name: 'dest', transport: { type: 'ssh', destination: '-oProxyCommand=x', port: 8080 } }),
+        stored({ id: 'ssh1', name: 'none', transport: { type: 'ssh', host: 'box' } }),
+        stored({ id: 'ssh2', name: 'number', transport: { type: 'ssh', destination: 42, port: 8080 } }),
+        stored({ id: 'ok1', name: 'kept' }),
+      ],
+    };
+    await put('@bike4mind/desktop', JSON.stringify(body));
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers.map(s => s.name)).toEqual(['kept']);
+    const missing = { transport: { type: 'ssh', destination: null }, problem: 'It has no saved SSH destination.' };
+    expect(result.unusable).toEqual([
+      ...ports.map((_port, index) => ({
+        id: `p${index}`,
+        name: `port-${index}`,
+        kind: 'ollama',
+        access: 'manage',
+        auth: { type: 'bearer' },
+        addedAt: '2026-10-01T00:00:00.000Z',
+        transport: { type: 'ssh', destination: 'me@lab' },
+        problem: 'Its saved SSH port is not a number from 1 to 65535.',
+      })),
+      expect.objectContaining({
+        id: 'd1',
+        transport: { type: 'ssh', destination: null },
+        problem: 'Its saved SSH destination is not one ssh can be given safely.',
+      }),
+      expect.objectContaining({ id: 'ssh1', name: 'none', ...missing }),
+      expect.objectContaining({ id: 'ssh2', name: 'number', ...missing }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(JSON.stringify(result)).not.toContain('ProxyCommand');
+  });
+
+  it('reads a newer version as it is and never writes the file', async () => {
+    const body = JSON.stringify({ version: 2, servers: [stored({ extra: { a: 1 } })] });
+    const file = await put('@bike4mind/desktop', body);
+    const result = await readDesktopModelServers(opts());
+    expect(result.servers).toHaveLength(1);
+    expect(await readFile(file, 'utf8')).toBe(body);
+  });
+
+  it('removes credentials embedded in an address', async () => {
+    await put(
+      '@bike4mind/desktop',
+      JSON.stringify({
+        servers: [stored({ transport: { type: 'http', baseUrl: 'http://user:pw-zz@10.0.0.5:11434' } })],
+      })
+    );
+    const result = await readDesktopModelServers(opts());
+    expect(JSON.stringify(result)).not.toContain('pw-zz');
+    expect(result.servers[0].transport).toEqual({ type: 'http', baseUrl: 'http://10.0.0.5:11434' });
+  });
+});
+
+describe('stored records', () => {
+  it('checks and hydrates a record without its secret', () => {
+    const record = stored();
+    expect(isStored(record)).toBe(true);
+    expect(hydrate(record as never)).not.toHaveProperty('secret');
+    expect(isStored({ ...record, id: 'UPPER' })).toBe(false);
+  });
+
+  it('hydrates an SSH destination only when it cannot pass as an ssh option', () => {
+    const ssh = (destination: unknown) => hydrate(stored({ transport: { type: 'ssh', destination } }) as never);
+    expect(ssh('me@gpu')?.transport).toEqual({ type: 'ssh', destination: 'me@gpu', port: 11434 });
+    expect(ssh('-oProxyCommand=touch /tmp/x')).toBeNull();
+    expect(ssh('gpu box')).toBeNull();
+    expect(ssh(42)).toBeNull();
+  });
+
+  it('defaults an SSH record saved without a port to Ollama on 11434 and refuses a port that is not one', () => {
+    const ssh = (port: unknown) =>
+      hydrate(stored({ transport: { type: 'ssh', destination: 'me@gpu', port } }) as never)?.transport ?? null;
+    const old = { ...stored({ auth: { type: 'none' }, transport: { type: 'ssh', destination: 'me@gpu' } }) };
+    delete old.secret;
+    expect(hydrate(old as never)).toMatchObject({
+      kind: 'ollama',
+      auth: { type: 'none' },
+      transport: { type: 'ssh', destination: 'me@gpu', port: 11434 },
+    });
+    expect(ssh(8080)).toEqual({ type: 'ssh', destination: 'me@gpu', port: 8080 });
+    expect(ssh('1234')).toEqual({ type: 'ssh', destination: 'me@gpu', port: 1234 });
+    for (const bad of [0, 65_536, -1, 80.5, '8080 -oProxyCommand=x', '127.0.0.1:22', null, {}, 'abc']) {
+      expect(ssh(bad), String(bad)).toBeNull();
+    }
+  });
+
+  it('keeps only specs that check out', () => {
+    const good = { ramGiB: 32, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect(hydrate(stored({ specs: good }) as never)?.specs).toEqual(good);
+    expect(hydrate(stored({ specs: { ...good, ramGiB: -1 } }) as never)?.specs).toBeNull();
+  });
+
+  it('keeps a quantized KV cache type, alone or with figures, and drops any other', () => {
+    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    const specs = (value: unknown) => hydrate(stored({ specs: value }) as never)?.specs;
+    expect(specs({ ...blank, kvCacheType: 'q8_0' })).toEqual({ ...blank, kvCacheType: 'q8_0' });
+    expect(specs({ ...blank, ramGiB: 64, kvCacheType: 'q4_0' })).toEqual({ ...blank, ramGiB: 64, kvCacheType: 'q4_0' });
+    expect(specs({ ...blank, kvCacheType: 'f16' })).toBeNull();
+    expect(specs({ ...blank, ramGiB: 64, kvCacheType: 'q5_1' })).toEqual({ ...blank, ramGiB: 64 });
+  });
+});
+
+describe('credentialHeaders', () => {
+  it('builds bearer and header credentials and refuses reserved names', () => {
+    expect(credentialHeaders({ type: 'none' })).toBeNull();
+    expect(credentialHeaders({ type: 'bearer', token: ' tok ' })).toEqual({ authorization: 'Bearer tok' });
+    expect(credentialHeaders({ type: 'header', name: 'X-Key', value: 'v' })).toEqual({ 'x-key': 'v' });
+    expect(() => credentialHeaders({ type: 'header', name: 'Cookie', value: 'v' })).toThrow(/cannot carry/);
+  });
+});
+
+describe('shared ids', () => {
+  it('round-trips namespaced model ids', () => {
+    const id = localModelId(serverRuntimeId('a1b2'), 'org/model:q4');
+    expect(id).toBe('local:srv-a1b2:org/model:q4');
+    expect(parseLocalModelId(id)).toEqual({ runtimeId: 'srv-a1b2', model: 'org/model:q4' });
+    expect(parseLocalModelId('local:%E0%A4%A:x')).toBeNull();
+  });
+
+  it('says what a server allows', () => {
+    expect(serverManagement({ kind: 'ollama', access: 'manage' })).toBe('allowed');
+    expect(serverManagement({ kind: 'ollama', access: 'chat' })).toBe('chat-only');
+    expect(serverManagement({ kind: 'openai-compatible', access: 'manage' })).toBe('unsupported');
+    expect(serverManagement({ local: true, kind: 'openai-compatible', access: 'chat' })).toBe('allowed');
+  });
+});

@@ -34,6 +34,56 @@ describe('bfl openapi normalization', () => {
     expect(dev?.patch.supportsSafetyTolerance).toBe(true);
   });
 
+  it('covers every FLUX.2 endpoint BFL publishes, with the flags the catalog curates', () => {
+    const byIdMap = byId(openapi);
+
+    for (const id of [
+      'flux-2-flex',
+      'flux-2-klein-4b',
+      'flux-2-klein-9b',
+      'flux-2-klein-9b-preview',
+      'flux-2-max',
+      'flux-2-pro',
+      'flux-2-pro-preview',
+    ]) {
+      expect(byIdMap.get(id)?.patch, `${id} missing from the capture`).toMatchObject({
+        supportsImageVariation: true,
+        supportsSafetyTolerance: true,
+      });
+    }
+  });
+
+  it('reads an `images` array as image input, as the FLUX 3 endpoints declare it', () => {
+    const flux3Shaped = {
+      openapi: '3.1.0',
+      paths: {
+        '/v1/flux-3-image': {
+          post: {
+            requestBody: {
+              content: { 'application/json': { schema: { $ref: '#/components/schemas/Flux3ImageInputs' } } },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          Flux3ImageInputs: {
+            properties: {
+              prompt: { type: 'string' },
+              images: { type: 'array' },
+              safety_tolerance: { type: 'integer' },
+            },
+          },
+        },
+      },
+    };
+
+    expect(byId(flux3Shaped).get('flux-3-image')?.patch).toMatchObject({
+      supportsImageVariation: true,
+      supportsSafetyTolerance: true,
+    });
+  });
+
   it('skips a dangling $ref and a path outside /v1/', () => {
     const ids = [...byId(malformed).keys()];
     expect(ids).toEqual(['flux-pro-1.1']);

@@ -9,6 +9,7 @@ import {
   mongoExportedRecordConverter,
   isTransientTransactionError,
   isConnectionLostError,
+  isMongoNetworkError,
   withTransaction,
   softDeletePlugin,
 } from './mongo';
@@ -194,6 +195,24 @@ describe('MongoDB Utility Functions', () => {
     });
   });
 
+  describe('isMongoNetworkError', () => {
+    it('matches socket-level driver errors by name', () => {
+      for (const name of ['MongoNetworkError', 'MongoNetworkTimeoutError', 'MongoPoolClearedError']) {
+        expect(isMongoNetworkError(Object.assign(new Error('x'), { name }))).toBe(true);
+      }
+    });
+
+    it('does not match server selection, which has already waited its full timeout', () => {
+      expect(isMongoNetworkError(Object.assign(new Error('x'), { name: 'MongoServerSelectionError' }))).toBe(false);
+    });
+
+    it('does not match server-side or non-Mongo errors', () => {
+      expect(isMongoNetworkError(Object.assign(new Error('x'), { name: 'MongoServerError', code: 50 }))).toBe(false);
+      expect(isMongoNetworkError(new Error('boom'))).toBe(false);
+      expect(isMongoNetworkError(null)).toBe(false);
+    });
+  });
+
   describe('softDeletePlugin', () => {
     let schema: mongoose.Schema;
     let mockUpdateOne: ReturnType<typeof vi.fn>;
@@ -313,6 +332,41 @@ describe('MongoDB Utility Functions', () => {
       expect(passedFilter.$or[0]._id).toBeInstanceOf(mongoose.Types.ObjectId);
       expect(passedFilter.$or[0]._id).toEqual(id);
       expect(passedFilter.$or[1].userId).toBe('some-user');
+    });
+
+    describe('updatedAt on a timestamped schema', () => {
+      // Calls the static as a plain function to inject a fake `this`.
+      const callStatic = (target: mongoose.Schema, name: 'deleteOne' | 'deleteMany') =>
+        (target.statics[name] as (this: unknown, filter: object) => Promise<unknown>).call(fakeThis, { userId: 'u' });
+
+      it('deleteOne and deleteMany set updatedAt alongside deletedAt', async () => {
+        const timestamped = new mongoose.Schema({}, { timestamps: true });
+        softDeletePlugin(timestamped);
+        await callStatic(timestamped, 'deleteOne');
+        await callStatic(timestamped, 'deleteMany');
+        for (const [, update] of [mockUpdateOne.mock.calls[0], mockUpdateMany.mock.calls[0]]) {
+          expect(update.$set.deletedAt).toBeInstanceOf(Date);
+          expect(update.$set.updatedAt).toEqual(update.$set.deletedAt);
+        }
+      });
+
+      it('uses a renamed updatedAt path', async () => {
+        const renamed = new mongoose.Schema({}, { timestamps: { updatedAt: 'modifiedAt' } });
+        softDeletePlugin(renamed);
+        await callStatic(renamed, 'deleteOne');
+        const [, update] = mockUpdateOne.mock.calls[0];
+        expect(update.$set.modifiedAt).toBeInstanceOf(Date);
+        expect(update.$set.updatedAt).toBeUndefined();
+      });
+
+      it('leaves updatedAt alone without timestamps or with updatedAt disabled', async () => {
+        const createdOnly = new mongoose.Schema({}, { timestamps: { updatedAt: false } });
+        softDeletePlugin(createdOnly);
+        await callStatic(schema, 'deleteOne');
+        await callStatic(createdOnly, 'deleteMany');
+        expect(Object.keys(mockUpdateOne.mock.calls[0][1].$set)).toEqual(['deletedAt']);
+        expect(Object.keys(mockUpdateMany.mock.calls[0][1].$set)).toEqual(['deletedAt']);
+      });
     });
   });
 

@@ -16,7 +16,12 @@ import { AdminSettings, adminSettingsRepository } from '@bike4mind/database/infr
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
+  baseApi: () => ({
+    use() {
+      return this;
+    },
+    put: (handler: (...a: unknown[]) => unknown) => handler,
+  }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
@@ -27,7 +32,9 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   withTransaction: (fn: () => unknown) => fn(),
 }));
-vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({
+  recordAdminActionFromRequest: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { SECRET_ENCRYPTION_KEY: 'a'.repeat(64) } }));
 vi.mock('@server/utils/publicSettingsArtifact', () => ({
   materializePublicSettingsArtifactSafe: vi.fn(() => Promise.resolve()),

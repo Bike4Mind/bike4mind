@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 
 import {
@@ -15,14 +15,18 @@ import {
   Input,
   FormLabel,
   FormControl,
+  Chip,
 } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useSubmitUserInvitation, useSubmitReferral } from '@client/app/hooks/data/regInvites';
+import { useGetReferralSummary, type InviterMilestone } from '@client/app/hooks/data/referralSummary';
+import { useGetReferralLink } from '@client/app/hooks/data/referralLink';
+import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
+import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
-import { useTranslation } from 'react-i18next';
-import { useServerSettings } from '@client/app/contexts/UserSettingsContext';
+import { Trans, useTranslation } from 'react-i18next';
 import { green, blue, blackAlpha } from '@client/app/utils/themes/colors';
 
 export enum ReferralInviteType {
@@ -61,27 +65,27 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
   // The /api/reg-invites/user-invite endpoint isn't implemented yet, so userInvitation mode is
   // wired but not yet served - no current caller passes it (all use referral).
   const userInvitation = inviteType === ReferralInviteType.referral ? submitReferral : submitUserInvitation;
-  const { serverSettings } = useServerSettings();
 
   const currentUser = useUser(s => s.currentUser);
   const userId = currentUser?.id;
   const userName = currentUser?.name;
 
+  // Disabled by the server while the reward amounts are 0, so the section stays out of sight until launch.
+  const { data: referralSummary } = useGetReferralSummary({ enabled: isOpen && !!userId });
+  const { data: referralLink } = useGetReferralLink({
+    enabled: isOpen && !!userId && inviteType === ReferralInviteType.referral,
+  });
+  const { copied: linkCopied, handleCopyToClipboard } = useCopyToClipboard();
+
   const [friendEmail, setFriendEmail] = useState<string>('');
   const [numReferralsAvailable, setNumReferralsAvailable] = useState<number>(0);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [loading, setLoading] = React.useState<boolean>(false);
 
   const [emailTitle, setEmailTitle] = useState<string>(t('referral.email_title_default'));
   const [emailBody, setEmailBody] = useState<string>(
     t('referral.email_body_default').replace('USER_NAME', currentUser?.name || '')
   );
-
-  const referralCreditsAmount = useMemo(() => {
-    return serverSettings.find(
-      (setting: { settingName: string; settingValue: string }) => setting.settingName === 'ReferralCreditsAmount'
-    );
-  }, [serverSettings]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -140,6 +144,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
           tags,
         },
         {
+          // Losing the quota race is a designed outcome (the server answers 400 with the
+          // reason), so the sender has to see it rather than watch the spinner stop.
+          onError: (error: unknown) => {
+            setLoading(false);
+            toast.error(getErrorMessage(error));
+          },
           // Partial, not full IReferralResult: the referral endpoint returns the complete
           // per-email summary, but the (future) user-invitation endpoint does not. The
           // Array.isArray guards below treat every field as optional, so the type matches
@@ -164,7 +174,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
 
             onClose();
             setFriendEmail('');
-            setNumReferralsAvailable(numReferralsAvailable - sent.length);
+            setEmailBody(t('referral.email_body_default').replace('USER_NAME', currentUser?.name || ''));
+            if (inviteType === ReferralInviteType.userInvitation) {
+              setNumReferralsAvailable(Math.max(0, numReferralsAvailable - sent.length));
+            }
           },
         }
       );
@@ -172,8 +185,6 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
       console.error('Failed to submit referral:', error);
       setLoading(false);
     }
-    setFriendEmail('');
-    setEmailBody(t('referral.email_body_default').replace('USER_NAME', currentUser?.name || ''));
   };
 
   return (
@@ -223,9 +234,95 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
             }}
           >
             Enter the email of the person you want to refer to {t('app_name')}
-            <br />
-            Invited person gets <strong>{referralCreditsAmount?.settingValue} credits</strong>.
           </Typography>
+
+          {referralSummary?.enabled && referralSummary.rewards && (
+            <Box data-testid="referral-modal-rewards" sx={{ mb: 2, textAlign: 'center' }}>
+              {[
+                {
+                  testId: 'first-answer',
+                  i18nKey: 'referral.reward_first_answer',
+                  credits: referralSummary.rewards.firstAnswer,
+                },
+                {
+                  testId: 'first-payment',
+                  i18nKey: 'referral.reward_first_payment',
+                  credits: referralSummary.rewards.firstPayment,
+                },
+                {
+                  testId: 'second-payment',
+                  i18nKey: 'referral.reward_second_payment',
+                  credits: referralSummary.rewards.secondPayment,
+                },
+              ]
+                .filter(({ credits }) => credits > 0)
+                .map(({ testId, i18nKey, credits }) => (
+                  <Typography key={testId} level="body-sm" data-testid={`referral-modal-reward-${testId}`}>
+                    <Trans
+                      i18nKey={i18nKey}
+                      values={{ credits: credits.toLocaleString(i18n.language) }}
+                      components={{ strong: <strong /> }}
+                    />
+                  </Typography>
+                ))}
+            </Box>
+          )}
+
+          {referralSummary?.enabled && referralSummary.milestones.length > 0 && (
+            <ReferralMilestones milestones={referralSummary.milestones} active={referralSummary.active} />
+          )}
+
+          {referralSummary?.enabled && (
+            <Box
+              data-testid="referral-summary"
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: 1,
+                mb: 3,
+                textAlign: 'center',
+              }}
+            >
+              {[
+                { testId: 'invited', label: 'Invited', value: referralSummary.invited },
+                { testId: 'active', label: 'Active', value: referralSummary.active },
+                { testId: 'subscribed', label: 'Subscribed', value: referralSummary.subscribed },
+                { testId: 'credits', label: 'Credits earned', value: referralSummary.creditsEarned },
+              ].map(({ testId, label, value }) => (
+                <Box key={testId}>
+                  <Typography level="title-lg" data-testid={`referral-summary-${testId}`}>
+                    {value.toLocaleString('en-US')}
+                  </Typography>
+                  <Typography level="body-xs">{label}</Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {referralLink && (
+            <FormControl data-testid="referral-link" sx={{ mb: 3 }}>
+              <FormLabel sx={{ mb: 0.5 }}>{t('referral.share_link_label')}</FormLabel>
+              <Stack direction="row" spacing={1}>
+                <Input
+                  readOnly
+                  value={referralLink.url}
+                  onFocus={e => e.target.select()}
+                  slotProps={{ input: { 'data-testid': 'referral-link-input' } }}
+                  sx={{ flex: 1, borderRadius: '4px' }}
+                />
+                <Button
+                  variant="outlined"
+                  data-testid="referral-link-copy-btn"
+                  onClick={() => handleCopyToClipboard(referralLink.url)}
+                >
+                  {linkCopied ? t('referral.share_link_copied') : t('referral.share_link_copy')}
+                </Button>
+              </Stack>
+              <Typography level="body-xs" sx={{ mt: 0.5 }}>
+                {t('referral.share_link_hint')}
+              </Typography>
+            </FormControl>
+          )}
 
           <Stack spacing={2.5} sx={{ mb: 3 }}>
             <FormControl>
@@ -237,6 +334,7 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 Friend&apos;s Email *
               </FormLabel>
               <Input
+                slotProps={{ input: { 'data-testid': 'referral-email-input' } }}
                 value={friendEmail}
                 autoFocus
                 onChange={e => setFriendEmail(e.target.value)}
@@ -310,11 +408,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                   fontWeight: 'bold',
                 }}
               >
-                {numReferralsAvailable}
+                <span data-testid="referral-quota-count">{numReferralsAvailable}</span>
               </Typography>
             </Box>
 
             <Button
+              data-testid="referral-submit-button"
               disabled={!friendEmail || numReferralsAvailable === 0}
               onClick={handleReferralSubmit}
               sx={{
@@ -327,13 +426,51 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
                 },
               }}
             >
-              {loading && <CircularProgress variant="plain" size="sm" sx={{ mr: 1 }} />}
+              {loading && (
+                <CircularProgress data-testid="referral-submit-spinner" variant="plain" size="sm" sx={{ mr: 1 }} />
+              )}
               Invite a User
             </Button>
           </Stack>
         </DialogContent>
       </ModalDialog>
     </Modal>
+  );
+};
+
+const ReferralMilestones: React.FC<{ milestones: InviterMilestone[]; active: number }> = ({ milestones, active }) => {
+  const { t, i18n } = useTranslation();
+  const next = milestones.find(milestone => !milestone.reached);
+  const credits = (amount: number) => amount.toLocaleString(i18n.language);
+  return (
+    <Box data-testid="referral-modal-milestones" sx={{ mb: 2, textAlign: 'center' }}>
+      <Typography level="body-sm" data-testid="referral-modal-milestone-next">
+        {next ? (
+          <Trans
+            i18nKey="referral.milestone_next"
+            count={Math.max(1, next.friends - active)}
+            values={{ credits: credits(next.credits) }}
+            components={{ strong: <strong /> }}
+          />
+        ) : (
+          t('referral.milestone_all_reached')
+        )}
+      </Typography>
+      <Stack direction="row" spacing={1} useFlexGap justifyContent="center" flexWrap="wrap" sx={{ mt: 1 }}>
+        {milestones.map(milestone => (
+          <Chip
+            key={milestone.friends}
+            size="sm"
+            variant={milestone.reached ? 'solid' : 'outlined'}
+            color={milestone.reached ? 'success' : 'neutral'}
+            data-testid={`referral-modal-milestone-${milestone.friends}`}
+            data-reached={milestone.reached}
+          >
+            {t('referral.milestone_chip', { count: milestone.friends, credits: credits(milestone.credits) })}
+          </Chip>
+        ))}
+      </Stack>
+    </Box>
   );
 };
 

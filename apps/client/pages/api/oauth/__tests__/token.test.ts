@@ -19,7 +19,10 @@ const h = vi.hoisted(() => ({
   findValidCode: vi.fn(),
   consumeValidCode: vi.fn(),
   findById: vi.fn(),
-  issueSessionForRequest: vi.fn(async () => ({ accessToken: 'a.jwt', refreshToken: 'r.jwt' })),
+  issueSessionForRequest: vi.fn(async (..._args: unknown[]) => ({ accessToken: 'a.jwt', refreshToken: 'r.jwt' })),
+  recordSignIn: vi.fn(async (..._args: unknown[]) => undefined),
+  withAccountNotPurging: vi.fn(async (_id: string, write: () => Promise<unknown>) => write()),
+  lastLogger: null as null | { warn: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> },
   findGrant: vi.fn(),
   signAccessToken: vi.fn(() => 'oauth.jwt'),
   grantCovers: vi.fn(() => true),
@@ -48,13 +51,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/rateLimit', () => ({
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (opts: NonNullable<typeof h.rateLimitOptions>) => {
     h.rateLimitOptions = opts;
     return () => undefined;
   },
 }));
-vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
+vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp: () => '203.0.113.7' }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.logAuthAudit }));
 vi.mock('@server/auth/oauthServer', () => ({
   validateClient: h.validateClient,
@@ -66,6 +69,7 @@ vi.mock('@bike4mind/database', () => ({
   oauthAuthorizationCodeRepository: { findValidCode: h.findValidCode, consumeValidCode: h.consumeValidCode },
   userRepository: { findById: h.findById },
   oauthGrantRepository: { findGrant: h.findGrant },
+  oauthClientSignInRepository: { recordSignIn: h.recordSignIn },
   oauthClientRepository: { findByClientId: h.findByClientId, verifyClientSecret: h.verifyClientSecret },
   oauthRefreshTokenRepository: { findByFamilyId: h.findByFamilyId, rotate: h.rotate, revokeFamily: h.revokeFamily },
   cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrement },
@@ -88,7 +92,10 @@ vi.mock('@server/auth/oauthRefreshToken', () => ({
   mintRefreshFamily: h.mintRefreshFamily,
   refreshFamilyExpiresAt: () => new Date('2030-01-01T00:00:00Z'),
 }));
-vi.mock('@server/auth/assertAccountStateUsable', () => ({ assertAccountStateUsable: h.assertAccountStateUsable }));
+vi.mock('@bike4mind/server-utils/auth/assertAccountStateUsable', () => ({
+  assertAccountStateUsable: h.assertAccountStateUsable,
+}));
+vi.mock('@server/auth/withAccountNotPurging', () => ({ withAccountNotPurging: h.withAccountNotPurging }));
 vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 3600,
@@ -99,6 +106,7 @@ vi.mock('@server/auth/oauthConsent', () => ({
   oauthAccessTokenAudience: h.oauthAccessTokenAudience,
 }));
 
+import { ForbiddenError } from '@bike4mind/common';
 import handler from '../token';
 
 type Res = {
@@ -135,6 +143,7 @@ function mockRes(): Res {
 const call = (body: Record<string, unknown>) => {
   const res = mockRes();
   const logger = { warn: vi.fn(), info: vi.fn() };
+  h.lastLogger = logger;
   return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)({ body, logger }, res).then(() =>
     Object.assign(res, {
       oauthLines: logger.warn.mock.calls.map(c => String(c[0])).filter(l => l.startsWith('[OAUTH_ERROR]')),
@@ -205,6 +214,25 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
 
     expect(res.body?.access_token).toBe('a.jwt');
     expect(h.issueSessionForRequest).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a code bound to a system account (400 invalid_grant) without issuing a session', async () => {
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.validateClientSecret as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
+    (h.findById as Mock).mockResolvedValue({
+      id: 'sys',
+      email: 'sys@x.com',
+      username: 'sys',
+      tokenVersion: 0,
+      isSystem: true,
+    });
+    seedValidCode(authCode(''));
+
+    const res = await call({ ...baseBody, client_secret: 'right' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toEqual({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('still verifies a recorded challenge for a confidential client (no verifier -> 400 invalid_grant)', async () => {
@@ -413,6 +441,142 @@ describe('POST /api/oauth/token relying-party issuance', () => {
   });
 });
 
+describe('POST /api/oauth/token client sign-in record', () => {
+  const pub = { clientId: 'stored-client', tokenEndpointAuthMethod: 'none' };
+  const rp = { ...pub, clientType: 'relying-party' };
+  const exchange = () => call({ ...baseBody, code_verifier: VALID_VERIFIER });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.withAccountNotPurging.mockImplementation(async (_id, write) => write());
+    h.recordSignIn.mockResolvedValue(undefined);
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', username: 'u', tokenVersion: 0 });
+    (h.grantCovers as Mock).mockReturnValue(true);
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid'] });
+    (h.verifyPkce as Mock).mockReturnValue(true);
+    seedValidCode(authCode('challenge'));
+  });
+
+  it('records a first-party exchange on the stored client id after the session issues, outside the session call', async () => {
+    (h.validateClient as Mock).mockResolvedValue(pub);
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(h.issueSessionForRequest.mock.calls[0][2]).not.toHaveProperty('alsoWithinGuard');
+    expect(h.withAccountNotPurging).toHaveBeenCalledWith('u1', expect.any(Function));
+    expect(h.recordSignIn).toHaveBeenCalledWith({ userId: 'u1', clientId: 'stored-client', at: expect.any(Date) });
+    expect(h.issueSessionForRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      h.recordSignIn.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('still answers 200 with the tokens and warns when recording a first-party sign-in fails', async () => {
+    (h.validateClient as Mock).mockResolvedValue(pub);
+    const error = new Error('db down');
+    h.recordSignIn.mockRejectedValue(error);
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.access_token).toBeDefined();
+    expect(res.body?.refresh_token).toBeDefined();
+    expect(h.lastLogger?.warn).toHaveBeenCalledWith('Failed to record OAuth client sign-in', {
+      clientId: 'stored-client',
+      error,
+    });
+  });
+
+  it('answers a first-party 200 without a warning when the account is being purged', async () => {
+    (h.validateClient as Mock).mockResolvedValue(pub);
+    h.withAccountNotPurging.mockRejectedValue(new ForbiddenError('purging'));
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(h.lastLogger?.warn).not.toHaveBeenCalled();
+  });
+
+  it('records a relying-party exchange inside the purge guard once tokens are minted', async () => {
+    (h.validateClient as Mock).mockResolvedValue(rp);
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(h.withAccountNotPurging).toHaveBeenCalledWith('u1', expect.any(Function));
+    expect(h.recordSignIn).toHaveBeenCalledWith({ userId: 'u1', clientId: 'stored-client', at: expect.any(Date) });
+  });
+
+  it('still answers 200 and warns when recording a relying-party sign-in fails', async () => {
+    (h.validateClient as Mock).mockResolvedValue(rp);
+    const error = new Error('db down');
+    h.recordSignIn.mockRejectedValue(error);
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.access_token).toBe('oauth.jwt');
+    expect(h.lastLogger?.warn).toHaveBeenCalledWith('Failed to record OAuth client sign-in', {
+      clientId: 'stored-client',
+      error,
+    });
+  });
+
+  it('answers 200 without a warning when the account is being purged', async () => {
+    (h.validateClient as Mock).mockResolvedValue(rp);
+    h.withAccountNotPurging.mockRejectedValue(new ForbiddenError('purging'));
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(200);
+    expect(h.lastLogger?.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an unknown code', () => (h.findValidCode as Mock).mockResolvedValue(null)],
+    ['a PKCE mismatch', () => (h.verifyPkce as Mock).mockReturnValue(false)],
+    ['an unknown user', () => (h.findById as Mock).mockResolvedValue(null)],
+    ['missing consent', () => (h.findGrant as Mock).mockResolvedValue(null)],
+  ])('records nothing for %s', async (_label, arrange) => {
+    (h.validateClient as Mock).mockResolvedValue(rp);
+    arrange();
+
+    const res = await exchange();
+
+    expect(res.statusCode).toBe(400);
+    expect(h.recordSignIn).not.toHaveBeenCalled();
+    expect(h.withAccountNotPurging).not.toHaveBeenCalled();
+  });
+
+  it('records nothing on a refresh_token grant', async () => {
+    (h.findByClientId as Mock).mockResolvedValue({ ...rp, clientId: 'stored-client' });
+    (h.findByFamilyId as Mock).mockResolvedValue({
+      familyId: 'fam1',
+      userId: 'u1',
+      clientId: 'client-1',
+      scopes: ['openid', 'offline_access'],
+      tokenHash: 'h:secret0',
+      tokenVersion: 0,
+      expiresAt: new Date(Date.now() + 60_000),
+      revokedAt: null,
+      createdAt: new Date(),
+    });
+    (h.rotate as Mock).mockResolvedValue({ familyId: 'fam1' });
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid', 'offline_access'] });
+    (h.tryIncrement as Mock).mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+
+    const res = await call({
+      grant_type: 'refresh_token',
+      refresh_token: 'fam1.secret0',
+      client_id: 'client-1',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(h.recordSignIn).not.toHaveBeenCalled();
+    expect(h.withAccountNotPurging).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/oauth/token refresh_token grant', () => {
   const SCOPES = ['openid', 'email', 'offline_access'];
   const rp = { clientId: 'client-1', clientType: 'relying-party', tokenEndpointAuthMethod: 'none' };
@@ -516,6 +680,15 @@ describe('POST /api/oauth/token refresh_token grant', () => {
     (h.findByFamilyId as Mock).mockResolvedValue(family({ expiresAt: new Date(Date.now() - 1000) }));
 
     expectRejected(await call(refreshBody));
+  });
+
+  it('rejects a family owned by a system account without consuming the token', async () => {
+    (h.findById as Mock).mockResolvedValue({ id: 'u1', email: 'u@x.com', tokenVersion: 0, isSystem: true });
+
+    const res = await call(refreshBody);
+    expectRejected(res);
+    expect(res.body).toEqual({ error: 'invalid_grant', error_description: 'Invalid refresh token' });
+    expect(h.rotate).not.toHaveBeenCalled();
   });
 
   it('rejects a revoked grant without consuming the token', async () => {

@@ -1,0 +1,185 @@
+import { describe, expect, it } from 'vitest';
+import { ImageModels } from '@bike4mind/common';
+import type { StudioRestoreRequest } from '@client/app/components/Studio/restore/studioRestore';
+import { restoreImageForm } from './imageRestore';
+
+const MODELS = [
+  { id: ImageModels.GPT_IMAGE_2, name: 'GPT Image 2' },
+  { id: ImageModels.GEMINI_3_1_FLASH_IMAGE, name: 'Nano Banana 2' },
+  { id: ImageModels.FLUX_PRO_ULTRA, name: 'FLUX Ultra' },
+  { id: ImageModels.FLUX_KONTEXT_PRO, name: 'FLUX Kontext' },
+];
+const CAT = 'a'.repeat(24);
+const DOG = 'b'.repeat(24);
+
+const restoreOf = (
+  request: Record<string, unknown>,
+  fileNames: StudioRestoreRequest['fileNames'] = {},
+  lineageInputs: StudioRestoreRequest['lineageInputs'] = []
+): StudioRestoreRequest => ({ medium: 'image', request, lineageInputs, fileNames });
+
+describe('restoreImageForm', () => {
+  it('fills the prompt, model, shape, quality and references of a stored image job request', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf(
+        {
+          model: ImageModels.GEMINI_3_1_FLASH_IMAGE,
+          mode: 'generate',
+          prompt: 'a cat on a windowsill',
+          aspectRatio: '16:9',
+          size: '1024x1024',
+          quality: 'high',
+          inputs: [{ role: 'reference', fileId: CAT }],
+        },
+        { [CAT]: 'cat.png' }
+      ),
+      MODELS
+    );
+
+    expect(value).toEqual({
+      modelId: ImageModels.GEMINI_3_1_FLASH_IMAGE,
+      form: {
+        prompt: 'a cat on a windowsill',
+        count: 1,
+        intent: {
+          mode: 'generate',
+          size: '1024x1024',
+          aspectRatio: '16:9',
+          quality: 'high',
+          references: [{ fileId: CAT, fileName: 'cat.png' }],
+        },
+      },
+    });
+    expect(notices).toEqual([]);
+  });
+
+  it('picks the successor of a retired model and says so', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf({ model: ImageModels.GPT_IMAGE_1, mode: 'generate', prompt: 'x' }),
+      MODELS
+    );
+    expect(value.modelId).toBe(ImageModels.GPT_IMAGE_2);
+    expect(notices).toEqual([
+      `${ImageModels.GPT_IMAGE_1} is retired, so its successor ${ImageModels.GPT_IMAGE_2} is picked instead.`,
+    ]);
+  });
+
+  it('leaves the form on its default model, with the reason, when the stored one cannot be picked', () => {
+    const missing = restoreImageForm(restoreOf({ model: ImageModels.GPT_IMAGE_1_5, prompt: 'x' }), MODELS);
+    expect(missing.value.modelId).toBeUndefined();
+    expect(missing.notices).toEqual([
+      `${ImageModels.GPT_IMAGE_1_5} is no longer one of your image models, so the default model is picked.`,
+    ]);
+
+    const editOnly = restoreImageForm(restoreOf({ model: ImageModels.FLUX_KONTEXT_PRO, prompt: 'x' }), MODELS);
+    expect(editOnly.value.modelId).toBeUndefined();
+    expect(editOnly.notices).toEqual([
+      expect.stringMatching(/^FLUX Kontext cannot run in Create \(.+\), so the default model is picked\.$/),
+    ]);
+
+    expect(restoreImageForm(restoreOf({ prompt: 'x' }), MODELS).notices).toEqual([
+      'The take did not record its model, so the default model is picked.',
+    ]);
+  });
+
+  it('restores a listed FLUX model as itself', () => {
+    const flux = restoreImageForm(restoreOf({ model: ImageModels.FLUX_PRO_ULTRA, prompt: 'x' }), MODELS);
+    expect(flux.value.modelId).toBe(ImageModels.FLUX_PRO_ULTRA);
+    expect(flux.notices).toEqual([]);
+  });
+
+  it('reopens an edit in edit mode with its source and mask in their own slots', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf(
+        {
+          model: ImageModels.GPT_IMAGE_2,
+          mode: 'edit',
+          prompt: 'make it blue',
+          inputs: [
+            { role: 'edit_source', fileId: CAT },
+            { role: 'mask', fileId: DOG },
+          ],
+          seed: 7,
+          outputFormat: 'webp',
+        },
+        { [CAT]: 'cat.png', [DOG]: 'mask.png' }
+      ),
+      MODELS
+    );
+
+    expect(value.form.intent).toMatchObject({
+      mode: 'edit',
+      editSource: { fileId: CAT, fileName: 'cat.png' },
+      mask: { fileId: DOG, fileName: 'mask.png' },
+      references: [],
+    });
+    expect(value.modelId).toBe(ImageModels.GPT_IMAGE_2);
+    expect(notices).toEqual(["Create does not set the seed, output format, so the model's defaults are used."]);
+  });
+
+  it('leaves out an input the user can no longer read, and names one outside the trail by its role', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf(
+        {
+          model: ImageModels.GPT_IMAGE_2,
+          prompt: 'x',
+          inputs: [
+            { role: 'reference', fileId: CAT },
+            { role: 'reference', fileId: DOG },
+          ],
+        },
+        { [CAT]: null }
+      ),
+      MODELS
+    );
+
+    expect(value.form.intent.references).toEqual([{ fileId: DOG, fileName: 'Reference image' }]);
+    expect(notices).toEqual(["The take's reference image is no longer available to you, so it was left out."]);
+  });
+
+  it('falls back from a stored value that is no longer valid, with a notice', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf({ model: ImageModels.GPT_IMAGE_2, prompt: 'x', quality: 'ultra' }),
+      MODELS
+    );
+    expect(value.form.intent.quality).toBeUndefined();
+    expect(notices).toEqual(["The take's quality (ultra) is no longer valid, so the default is used."]);
+  });
+
+  it('reads a chat-made request: snake_case keys, a count, and an edit source kept only in the lineage', () => {
+    const { value, notices } = restoreImageForm(
+      restoreOf(
+        {
+          model: ImageModels.GPT_IMAGE_2,
+          prompt: 'paint it gold',
+          n: 3,
+          aspect_ratio: '3:2',
+          output_format: 'png',
+          safety_tolerance: 2,
+          prompt_upsampling: false,
+        },
+        { [CAT]: 'cat.png' },
+        [
+          { fileId: CAT, role: 'edit_source' },
+          { fileId: DOG, role: 'mask' },
+        ]
+      ),
+      MODELS
+    );
+
+    expect(value.form).toEqual({
+      prompt: 'paint it gold',
+      count: 3,
+      intent: {
+        mode: 'edit',
+        aspectRatio: '3:2',
+        editSource: { fileId: CAT, fileName: 'cat.png' },
+        mask: { fileId: DOG, fileName: 'Mask' },
+        references: [],
+      },
+    });
+    expect(notices).toEqual([
+      "Create does not set the output format, safety tolerance, so the model's defaults are used.",
+    ]);
+  });
+});

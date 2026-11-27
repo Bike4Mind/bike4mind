@@ -1,6 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useQuery } from '@tanstack/react-query';
-import type { DriveFolderEstimate as ServerDriveFolderEstimate } from '@server/integrations/google/drive/driveContent';
+import type { DriveFolderEstimate as ServerDriveFolderEstimate } from '@bike4mind/server-utils/integrations/google/drive/driveContent';
 import { checkStorageForUpload, type StorageQuota } from '@client/app/utils/storageQuota';
 
 /** Response of POST /api/google-drive/estimate-folder. */

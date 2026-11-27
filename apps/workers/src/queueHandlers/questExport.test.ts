@@ -41,7 +41,9 @@ const h = vi.hoisted(() => {
         .filter(id => id === SESSION_ID)
         .map(id => ({ id, _id: id, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] }))
     ),
-    runOrgFeedbackSummary: vi.fn(async () => undefined),
+    runOrgFeedbackSummary: vi.fn<
+      (message: unknown, logger: unknown, checkBudget: (minimumRemainingMs?: number) => void) => Promise<void>
+    >(async () => undefined),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
       lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
@@ -62,7 +64,7 @@ const h = vi.hoisted(() => {
 });
 
 // Run the raw handler directly (no SQS logger injection wrapper).
-vi.mock('@server/queueHandlers/utils', () => ({
+vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
@@ -141,7 +143,7 @@ vi.mock('@bike4mind/server-utils/utils/generatedImageAccess', () => ({
   userCanAccessGeneratedImage: h.canAccessGeneratedImage,
 }));
 
-vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
+vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: h.progress }));
 
 vi.mock('@bike4mind/server-utils/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
@@ -516,7 +518,8 @@ describe('questExport queue multiplex', () => {
       ],
     };
 
-    await dispatch(event as never, exportContext as never, makeLogger() as never);
+    const remaining = vi.fn(() => 120000);
+    await dispatch(event as never, { getRemainingTimeInMillis: remaining } as never, makeLogger() as never);
 
     expect(h.runOrgFeedbackSummary).toHaveBeenCalledWith(
       expect.objectContaining({ summaryJobId: 'sum-1' }),
@@ -524,6 +527,15 @@ describe('questExport queue multiplex', () => {
       expect.any(Function)
     );
     expect(h.planFindById).not.toHaveBeenCalled();
+
+    const checkBudget = h.runOrgFeedbackSummary.mock.calls[0][2];
+    expect(() => checkBudget(120000)).not.toThrow();
+    remaining.mockReturnValue(119999);
+    expect(() => checkBudget(120000)).toThrow('Quest export run budget exhausted');
+    remaining.mockReturnValue(1000);
+    expect(() => checkBudget()).not.toThrow();
+    remaining.mockReturnValue(999);
+    expect(() => checkBudget()).toThrow('Quest export run budget exhausted');
   });
 
   it('still exports an untagged legacy message', async () => {
@@ -535,12 +547,27 @@ describe('questExport queue multiplex', () => {
 });
 
 beforeEach(() => {
+  h.findUserById.mockReset().mockImplementation(async id => ({ id, _id: id }));
   h.metadata
     .mockReset()
     .mockRejectedValue(Object.assign(new Error('missing'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } }));
   h.upload.mockReset().mockResolvedValue(undefined);
   h.signedUrl.mockReset().mockResolvedValue('https://download.test/export.zip');
   h.progress.mockReset().mockResolvedValue(undefined);
+});
+
+describe('quest export signup review hold', () => {
+  it('exports existing data without generating an AI summary for a pending requester', async () => {
+    h.findUserById.mockImplementation(async id => ({ id, _id: id, riskScore: { reviewState: 'pending' as const } }));
+    h.availableModels.mockClear();
+    h.createZipBuffer.mockClear();
+
+    await runExport(h.OWNER_ID);
+
+    expect(h.availableModels).not.toHaveBeenCalled();
+    expect(h.createZipBuffer).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.any(String), null);
+    expect(h.upload).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('quest export replay', () => {

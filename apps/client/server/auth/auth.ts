@@ -1,10 +1,10 @@
 import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
-import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
-import ability from '@server/auth/ability';
+import { ACCOUNT_DELETION_PENDING_CODE, AuthStrategy, type IUserDocument } from '@bike4mind/common';
+import ability from '@bike4mind/server-utils/auth/ability';
 import { User } from '@bike4mind/database';
-import { verifyCallback } from '@server/utils/auth/verifyCallback';
+import { selfServeVerifyCallback, verifyCallback } from '@server/utils/auth/verifyCallback';
 import { Config } from '@bike4mind/server-utils/utils/config';
 
 import { Request, RequestHandler, Response } from 'express';
@@ -18,14 +18,24 @@ import {
 } from '@node-saml/passport-saml';
 import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
+import { requestLogUrl } from '../middlewares/requestLogUrl';
 import { jwtSecretOrKeyProvider } from './jwtSecretOrKeyProvider';
 import { verifyJwtPayload } from './verifyJwtPayload';
-import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from './mfaEnforcement';
+import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { createGitHubStrategy } from './githubStrategy';
+import { registerAppleStrategy } from './appleStrategy';
+import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';
 import { samlRequestCache } from './samlRequestCache';
+import {
+  ACCOUNT_DELETION_PENDING_MESSAGE,
+  isBlockedByPendingDeletion,
+  type DeletionGateUser,
+} from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
+import { samlRelayRedirectTo } from '@server/utils/auth/signupClientId';
+import { IDP_ISSUER_MISMATCH } from './samlResponseIssuer';
 
 passport.use(
   new JwtStrategy(
@@ -44,9 +54,14 @@ const MFA_PENDING_ALLOWED_PATHS = new Set([
   '/api/auth/mfa/verify-setup',
   '/api/auth/mfa/verify',
   '/api/auth/mfa/cancel-setup',
+  '/api/auth/mfa/enrollment-abandoned', // funnel telemetry; records nothing outside forced enrollment
   '/api/auth/mfa/status', // MFAEnforcementWrapper reads the user's MFA status
   '/api/auth/mfa/passkey/authenticate-options',
   '/api/auth/mfa/passkey/authenticate',
+  // Enrolling a passkey as the first factor; both routes refuse a pending token whose user
+  // already has a factor, so these cannot add a passkey ahead of the challenge.
+  '/api/auth/mfa/passkey/register-options',
+  '/api/auth/mfa/passkey/register',
   '/api/logout', // lets an mfaPending user abandon and revoke
   '/api/identify', // read-only whoami
   '/api/settings/fetch', // MFAEnforcementWrapper reads enforceMFA
@@ -67,16 +82,19 @@ const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
 function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
   const path = req.url.split('?')[0];
   if (MFA_ENROLLMENT_ALLOWED_PATHS.has(path)) return true;
+  // A deletion-pending account owing enrollment must still be able to cancel the deletion.
+  if (req.method === 'DELETE' && path === '/api/account/deletion') return true;
   // auth/success bootstraps the current user from its own profile after a sign-in.
   return req.method === 'GET' && path === `/api/users/${userId}`;
 }
 
 /**
- * enforceMFA for sessions minted before it applied: the sign-in gate (resolveSecondFactor) only
- * binds new sign-ins, so an existing session, and every access token its refresh chain mints,
- * is confined here to the enrollment routes until the user enrolls. 403, not 401, so the client
- * does not run its token-refresh cascade; MFAEnforcementWrapper renders the enrollment flow.
- * API keys are exempt (they are not a sign-in). A failed settings read fails closed (next(err)).
+ * enforceMFA or a team MFA policy, for sessions minted before it applied: the sign-in gate
+ * (resolveSecondFactor) only binds new sign-ins, so an existing session, and every access token
+ * its refresh chain mints, is confined here to the enrollment routes until the user enrolls.
+ * 403, not 401, so the client does not run its token-refresh cascade; MFAEnforcementWrapper
+ * renders the enrollment flow. API keys are exempt (they are not a sign-in). A failed settings
+ * or policy read fails closed (next(err)).
  */
 async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unknown) => void): Promise<void> {
   const user = req.user as (IUserDocument & { impersonatedBy?: string }) | undefined;
@@ -88,7 +106,7 @@ async function mfaEnrollmentGate(req: Request, res: Response, next: (err?: unkno
   } catch (err) {
     return next(err);
   }
-  req.logger?.info(`[AUTH] Blocked ${req.url} for user ${user.id}: MFA enrollment required.`);
+  req.logger?.info(`[AUTH] Blocked ${requestLogUrl(req.url)} for user ${user.id}: MFA enrollment required.`);
   res.status(403).json({
     error: MFA_ENROLLMENT_REQUIRED_MESSAGE,
     error_description: 'Multi-factor authentication is required. Set it up to continue.',
@@ -123,7 +141,9 @@ export const auth = handler
     // Block access if mfaPending is true and not an allowed endpoint
     if (req.user && (req.user as any).mfaPending) {
       if (!MFA_PENDING_ALLOWED_PATHS.has(req.url.split('?')[0])) {
-        req.logger?.info(`[AUTH] Blocked request to ${req.url} for user ${req.user.id} due to mfaPending.`);
+        req.logger?.info(
+          `[AUTH] Blocked request to ${requestLogUrl(req.url)} for user ${req.user.id} due to mfaPending.`
+        );
         return res.status(401).json({
           error: 'MFA setup or verification required.',
           mfaPending: true,
@@ -153,13 +173,27 @@ export const auth = handler
       !(req.user as { mfaPending?: boolean } | undefined)?.mfaPending &&
       isPolicyConsentRequired(req.user as ConsentGateUser | undefined, req.url, req.method)
     ) {
-      req.logger?.info(`[AUTH] Blocked ${req.url} for user ${req.user!.id} — AUP/ToS acceptance required.`);
+      req.logger?.info(
+        `[AUTH] Blocked ${requestLogUrl(req.url)} for user ${req.user!.id} - AUP/ToS acceptance required.`
+      );
       return res.status(403).json({
         error: 'Policy acceptance required.',
         // Included so any client that surfaces error_description (e.g. the device-activation page)
         // shows an accurate message instead of a misleading fallback. See issue #369.
         error_description: 'Accept the Terms of Service and Acceptable Use Policy to continue.',
         policyAcceptanceRequired: true,
+      });
+    }
+
+    // A deletion-pending account is confined to the cancel screen until it cancels or is purged.
+    // 403, not 401, for the same reason as the consent gate above.
+    const deletionUser = req.user as (DeletionGateUser & { mfaPending?: boolean }) | undefined;
+    if (!deletionUser?.mfaPending && isBlockedByPendingDeletion(deletionUser, req.url, req.method)) {
+      return res.status(403).json({
+        error: ACCOUNT_DELETION_PENDING_MESSAGE,
+        code: ACCOUNT_DELETION_PENDING_CODE,
+        scheduledFor: deletionUser!.deletion!.scheduledFor,
+        request_id: req.requestId,
       });
     }
 
@@ -188,12 +222,13 @@ if (Config.GOOGLE_CLIENT_ID && Config.GOOGLE_CLIENT_ID !== 'not-configured') {
         clientSecret: Config.GOOGLE_CLIENT_SECRET,
         callbackURL: process.env.APP_URL + '/api/auth/google/callback',
         store: googleOAuthStateStore,
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Google)
+      selfServeVerifyCallback(AuthStrategy.Google)
     )
   );
 } else {
-  console.warn('[AUTH] Google OAuth disabled: GOOGLE_CLIENT_ID not configured');
+  Logger.warn('[AUTH] Google OAuth disabled: GOOGLE_CLIENT_ID not configured');
 }
 
 /*
@@ -229,12 +264,18 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
         // it, SSO logins resolve with email=null and fall into the
         // account-create path instead of matching the existing account by email.
         scope: ['user:email'],
+        passReqToCallback: true,
       },
-      verifyCallback(AuthStrategy.Github)
+      selfServeVerifyCallback(AuthStrategy.Github)
     )
   );
 } else {
-  console.warn('[AUTH] GitHub OAuth disabled: GITHUB_CLIENT_ID not configured');
+  Logger.warn('[AUTH] GitHub OAuth disabled: GITHUB_CLIENT_ID not configured');
+}
+
+// Only register Sign in with Apple if all four credentials are configured
+if (!registerAppleStrategy(passport, getAppleConfig())) {
+  Logger.warn('[AUTH] Sign in with Apple disabled: APPLE_* credentials not configured');
 }
 
 // Note: Okta authentication is now handled by openid-client in oktaOidcClient.ts
@@ -273,37 +314,34 @@ export const setupSamlStrategy = (idp: {
   };
 }): string => {
   const strategyName = `saml-${idp._id}`;
-  const requestId = Math.random().toString(36).substr(2, 9);
 
-  console.log(`[SAML-${requestId}] === STARTING SAML STRATEGY SETUP ===`);
-  console.log(`[SAML-${requestId}] Setting up SAML strategy for IDP: ${idp._id}`);
-  console.log(`[SAML-${requestId}] IDP object keys:`, Object.keys(idp));
+  Logger.debug('Setting up SAML strategy', { idpId: idp._id });
 
   if (!idp.samlConfig) {
-    console.error('SAML configuration missing for IDP:', idp._id);
+    Logger.error('SAML configuration missing for IDP', { idpId: idp._id });
     throw new Error('SAML configuration missing for IDP');
   }
 
   if (!idp.samlConfig.entryPoint) {
-    console.error('Missing entryPoint in SAML config for IDP:', idp._id);
+    Logger.error('Missing entryPoint in SAML config for IDP', { idpId: idp._id });
     throw new Error('SAML entryPoint is required');
   }
 
   if (!idp.samlConfig.issuer) {
-    console.error('Missing issuer in SAML config for IDP:', idp._id);
+    Logger.error('Missing issuer in SAML config for IDP', { idpId: idp._id });
     throw new Error('SAML issuer is required');
   }
 
   if (!idp.samlConfig.cert) {
-    console.error('Missing cert in SAML config for IDP:', idp._id);
+    Logger.error('Missing cert in SAML config for IDP', { idpId: idp._id });
     throw new Error('SAML certificate is required');
   }
 
-  console.log('SAML config validation passed for IDP:', idp._id, {
-    entryPoint: idp.samlConfig.entryPoint,
-    issuer: idp.samlConfig.issuer,
-    hasValidCert: !!idp.samlConfig.cert,
-    callbackUrl: idp.samlConfig.callbackUrl || `${process.env.APP_URL}/api/auth/saml/callback`,
+  Logger.debug('SAML config validation passed for IDP', {
+    idpId: idp._id,
+    hasEntryPoint: !!idp.samlConfig.entryPoint,
+    hasIssuer: !!idp.samlConfig.issuer,
+    hasCert: !!idp.samlConfig.cert,
   });
 
   // Clean and format the certificate
@@ -329,9 +367,11 @@ export const setupSamlStrategy = (idp: {
     // legitimately carries no InResponseTo and must not be rejected outright.
     validateInResponseTo: ValidateInResponseTo.ifPresent,
     cacheProvider: samlRequestCache,
+    // The verify reads the RelayState redirectTo, so a new account can record its OAuth client.
+    passReqToCallback: true,
   };
 
-  console.log('Creating SAML strategy with options for IDP:', idp._id);
+  Logger.debug('Creating SAML strategy', { idpId: idp._id });
 
   try {
     passport.use(
@@ -339,6 +379,7 @@ export const setupSamlStrategy = (idp: {
       new SamlStrategy(
         samlOptions,
         async (
+          req: Request,
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {
@@ -348,6 +389,21 @@ export const setupSamlStrategy = (idp: {
               return done(new Error('SAML profile is null'));
             }
             // The profile is the decoded assertion: never logged, at any level.
+
+            // node-saml checks `idpIssuer` on logout messages only, so the signed assertion's
+            // Issuer is bound to this IdP here. The callback picks the IdP row before the
+            // signature is checked; this is what makes that choice binding. The Issuer is the
+            // IdP's public entity ID, so unlike the rest of the profile it is logged.
+            // Trimmed: neither node-saml nor the admin form trims, and padding is never part of an entity ID.
+            const configuredIssuer = idp.samlConfig?.issuer?.trim();
+            if (!configuredIssuer || profile.issuer?.trim() !== configuredIssuer) {
+              Logger.warn('[SAML] Rejecting assertion: its Issuer is not the one configured for this IDP', {
+                idpId: idp._id,
+                expectedIssuer: idp.samlConfig?.issuer,
+                assertedIssuer: profile.issuer,
+              });
+              return done(null, undefined, { reason: IDP_ISSUER_MISMATCH });
+            }
 
             // Extract user info from SAML assertion
             const attributeMappings = idp.samlConfig?.attributeMappings || {};
@@ -412,13 +468,14 @@ export const setupSamlStrategy = (idp: {
             // Use the same verification logic as other OAuth providers
             const samlVerifyCallback = verifyCallback(AuthStrategy.SAML);
 
-            await samlVerifyCallback('null', 'null', standardProfile, done, authProvider);
+            await samlVerifyCallback('null', 'null', standardProfile, done, authProvider, samlRelayRedirectTo(req));
           } catch (error) {
             Logger.error('Error in SAML strategy:', error);
             done(error as Error);
           }
         },
         (
+          _req: Request,
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {
@@ -429,10 +486,10 @@ export const setupSamlStrategy = (idp: {
       )
     );
 
-    console.log('SAML strategy created successfully for IDP:', idp._id);
+    Logger.info('SAML strategy created', { idpId: idp._id });
     return strategyName;
   } catch (error) {
-    console.error('Error creating SAML strategy for IDP:', idp._id, 'Error:', error);
+    Logger.error('Error creating SAML strategy', { idpId: idp._id, error });
     throw error;
   }
 };
@@ -441,7 +498,7 @@ export const setupSamlStrategy = (idp: {
 // The setupOktaStrategy function has been removed in favor of proper OIDC/PKCE support
 
 passport.serializeUser((user, done) => {
-  Logger.log('auth.ts passport.serializeUser user', user);
+  Logger.log('auth.ts passport.serializeUser', { userId: user.id });
   done(null, user.id);
 });
 

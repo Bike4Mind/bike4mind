@@ -1,0 +1,851 @@
+import type { EventBridgeEvent } from 'aws-lambda';
+import {
+  isBlockEndPushHeld,
+  isHeldDuringBusyBlock,
+  isInBusyBlock,
+  isPushCategoryEnabled,
+  PENDING_ACTION_DECISIONS,
+  type InterruptionFeedback,
+  type LiveActivityContentState,
+  type LiveActivityPushEvent,
+  type PushNotificationCategory,
+  type PushNotificationEvent,
+  type PushNotificationPreferences,
+} from '@bike4mind/common';
+import {
+  authSessionRepository,
+  organizationRepository,
+  pushTokenRepository,
+  userRepository,
+  type PushTokenEnvironment,
+  type PushTokenPlatform,
+} from '@bike4mind/database';
+import { Logger } from '@bike4mind/observability';
+import { TOKEN_EXPIRATION_MS } from '@bike4mind/slack';
+import { withEventContext } from '@workers/utils/eventContext';
+import { NotificationEvents } from '@bike4mind/server-utils/utils/eventBus';
+import { truncateForPush } from '@bike4mind/server-utils/utils/pushNotifications';
+import {
+  apnsSigningKeyError,
+  createHttp2ApnsTransport,
+  readApnsConfig,
+  type ApnsConfig,
+  type ApnsTransport,
+} from './sendPush.apns';
+import {
+  createHttpFcmTransport,
+  fcmSigningKeyError,
+  readFcmSenderConfig,
+  type FcmConfig,
+  type FcmMessage,
+  type FcmResponse,
+  type FcmTransport,
+} from './sendPush.fcm';
+
+/**
+ * `notification.push` consumer: delivers to the user's device tokens, over APNs for iOS tokens and FCM for
+ * Android tokens (each provider is optional; see resolveProviders).
+ *
+ * Delivery rules, in order: the user must have device tokens; the category must not be switched off
+ * in `preferences.pushNotifications`; the user's active organization's `redactPushContent` swaps title and
+ * body for category-generic copy. Publishers apply their own gates (e.g. chat only pushes when the
+ * user has no live websocket) before the event exists.
+ *
+ * Dedupe is APNs collapse semantics, not a server-side ledger: every push carries apns-collapse-id
+ * (the publisher's collapseId, else one derived from category + quest/session), so an EventBridge
+ * redelivery or a second terminal site for the same run replaces the notification on the device
+ * instead of stacking a duplicate.
+ *
+ * The same Lambda also consumes `notification.liveActivity` (see deliverLiveActivityPush), routed on
+ * the event's detail-type.
+ */
+
+/**
+ * Responses meaning the token will never work again; the row is deleted. BadDeviceToken is not one:
+ * APNs also returns it for a valid token sent to the wrong gateway (a sandbox token on production or
+ * the reverse), so it is logged with the stored environment and the row is kept.
+ */
+const isUnregistered = (response: { status: number; reason?: string }) =>
+  response.status === 410 || response.reason === 'Unregistered';
+
+/**
+ * Rejections caused by this server's APNs configuration rather than by the device token, with the
+ * likely cause. They are logged at error, consumed (no retry: a redelivery would fail the same way)
+ * and never prune: DeviceTokenNotForTopic in particular means a wrong APNS_TOPIC, and deleting on it
+ * would wipe every registered token on one bad deploy.
+ */
+const CONFIG_ERROR_HINTS: Record<string, string> = {
+  DeviceTokenNotForTopic: 'APNS_TOPIC does not match the bundle id the device tokens were issued for',
+  TopicDisallowed: 'APNS_TOPIC is not allowed for this APNs key',
+  InvalidProviderToken: 'APNS_KEY_ID, APNS_TEAM_ID or APNS_KEY is wrong (Apple rejected the provider token)',
+  ExpiredProviderToken: 'the provider token was rejected as expired; check the server clock',
+  MissingProviderToken: 'no provider token was sent',
+};
+const PROVIDER_AUTH_HINT = 'APNs refused the provider credentials; check APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY';
+
+function configErrorHint(response: { status: number; reason?: string }): string | undefined {
+  if (response.reason && CONFIG_ERROR_HINTS[response.reason]) return CONFIG_ERROR_HINTS[response.reason];
+  // Every 403 is an authentication failure of the provider, never a per-device condition.
+  if (response.status === 403) return PROVIDER_AUTH_HINT;
+  return undefined;
+}
+
+// APNs caps apns-collapse-id at 64 bytes; ids here are ASCII.
+const MAX_COLLAPSE_ID_LENGTH = 64;
+const MAX_TITLE_LENGTH = 80;
+const MAX_BODY_LENGTH = 240;
+const MAX_CONCURRENT_SENDS = 10;
+
+export const REDACTED_PUSH_COPY: Record<PushNotificationCategory, { title: string; body: string }> = {
+  agent_completed: { title: 'Agent finished', body: 'An agent run has finished.' },
+  agent_failed: { title: 'Agent run failed', body: 'An agent run could not finish.' },
+  approval_needed: { title: 'Approval needed', body: 'An agent is waiting for your confirmation.' },
+  chat_completed: { title: 'Reply ready', body: 'A new reply is ready.' },
+  generation_ready: { title: 'Generation ready', body: 'Your generated media is ready.' },
+  agent_message: { title: 'New message', body: 'An agent sent you a message.' },
+  session_handoff: { title: 'Continue your conversation', body: 'Tap to open the conversation you sent here.' },
+  brief_ready: { title: 'Brief ready', body: 'Your assistant has a new brief.' },
+};
+
+export type PushRecipient = {
+  preferences: PushNotificationPreferences | null | undefined;
+  redactContent: boolean;
+  /** Inside a synced calendar busy block now; BUSY_BLOCK_HELD_CATEGORIES are not delivered. */
+  inBusyBlock?: boolean;
+  /** What the user taught the block-end brief push to stay quiet about. */
+  interruptionFeedback?: InterruptionFeedback;
+};
+
+export const APPROVAL_RESOLVED_COPY: Record<
+  NonNullable<PushNotificationEvent['approvalResolved']>,
+  { title: string; body: string }
+> = {
+  approved: { title: 'Approval handled', body: 'This request was approved.' },
+  denied: { title: 'Approval handled', body: 'This request was denied.' },
+  lapsed: { title: 'Approval expired', body: 'This request expired before it was answered.' },
+};
+
+export type SendPushDeps = {
+  tokens: {
+    findByUser(
+      userId: string,
+      kind: 'device'
+    ): Promise<
+      ReadonlyArray<{
+        id?: string;
+        token: string;
+        sid: string;
+        environment: PushTokenEnvironment;
+        platform: PushTokenPlatform;
+      }>
+    >;
+    /** `sid` is the read-time session: a token re-registered under another session meanwhile is kept. */
+    removeByToken(token: string, options: { sid: string }): Promise<boolean>;
+    removeBySids(sids: readonly string[]): Promise<number>;
+  };
+  sessions: {
+    findLiveSids(sids: readonly string[]): Promise<ReadonlySet<string>>;
+  };
+  loadRecipient(userId: string): Promise<PushRecipient | null>;
+  /** APNs, for `ios` tokens. Absent when APNs is not configured: those tokens are skipped, not pruned. */
+  transport?: ApnsTransport;
+  topic?: string;
+  /** FCM, for `android` tokens. Absent when FCM is not configured: those tokens are skipped, not pruned. */
+  fcm?: FcmTransport;
+  /** Resolves a path-only deepLink (see sessionDeepLink in packages/server-utils/src/utils/pushNotifications.ts). */
+  appUrl?: string;
+};
+
+export type PushDeliveryResult =
+  | {
+      status: 'skipped';
+      reason: 'no_tokens' | 'no_recipient' | 'category_disabled' | 'busy_block_hold' | 'interruption_feedback_hold';
+    }
+  | { status: 'sent'; delivered: number; pruned: number; failed: number };
+
+export async function deliverPush(
+  event: PushNotificationEvent,
+  deps: SendPushDeps,
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>,
+  nowMs: number = Date.now()
+): Promise<PushDeliveryResult> {
+  const candidates = await deps.tokens.findByUser(event.userId, 'device');
+  const storedTokens =
+    event.category === 'session_handoff'
+      ? candidates.filter(
+          token =>
+            event.destinationId !== undefined && token.id === event.destinationId && token.sid === event.destinationSid
+        )
+      : candidates;
+  const { tokens, pruned: orphansPruned } = await dropTokensOfEndedSessions(storedTokens, deps, logger);
+  if (tokens.length === 0) {
+    logger.info('[Push] user has no device tokens; nothing to send', { category: event.category });
+    return { status: 'skipped', reason: 'no_tokens' };
+  }
+
+  const recipient = await deps.loadRecipient(event.userId);
+  if (!recipient) {
+    logger.warn('[Push] recipient user not found; dropping', { category: event.category });
+    return { status: 'skipped', reason: 'no_recipient' };
+  }
+  if (!isPushCategoryEnabled(recipient.preferences, event.category)) {
+    logger.info('[Push] category disabled by user preference', { category: event.category });
+    return { status: 'skipped', reason: 'category_disabled' };
+  }
+  // The brief is already ready and listed; only the push announcing it is held. The notifyHeldBlockRuns
+  // summary is never held: it sends only when the block brief does not cover the runs (discarded, failed or
+  // limited to reminders), so it is the one place those runs show up.
+  if (
+    event.category === 'brief_ready' &&
+    event.blockEndCategories &&
+    isBlockEndPushHeld(recipient.interruptionFeedback, event.blockEndCategories)
+  ) {
+    logger.info('[Push] block-end push held by interruption feedback', { categories: event.blockEndCategories });
+    return { status: 'skipped', reason: 'interruption_feedback_hold' };
+  }
+  // Held, not queued: the brief composed when the block ends reports these runs, and when that brief does not
+  // land notifyHeldBlockRuns sends one summary instead. With brief_ready off no block brief is composed
+  // (startBlockBrief returns push_off), so nothing is held.
+  if (
+    !event.busyBlockDigest &&
+    recipient.inBusyBlock &&
+    isHeldDuringBusyBlock(event.category) &&
+    isPushCategoryEnabled(recipient.preferences, 'brief_ready')
+  ) {
+    logger.info('[Push] held during a calendar busy block', { category: event.category });
+    return { status: 'skipped', reason: 'busy_block_hold' };
+  }
+
+  const collapseId = collapseIdFor(event);
+  const iosTokens = tokens.filter(token => token.platform === 'ios');
+  const androidTokens = tokens.filter(token => token.platform === 'android');
+  const outcomes: DeliveryTally[] = [];
+
+  if (iosTokens.length > 0) {
+    if (deps.transport && deps.topic) {
+      const headers = {
+        'apns-topic': deps.topic,
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+        'apns-collapse-id': collapseId,
+        ...apnsExpirationHeader(event, nowMs),
+      };
+      const payload = JSON.stringify(buildPayload(event, recipient.redactContent, deps.appUrl));
+      outcomes.push(
+        await sendToTokens(iosTokens, headers, payload, { ...deps, transport: deps.transport }, logger, event.category)
+      );
+    } else {
+      logger.warn('[Push] APNs is not configured; skipping iOS device tokens', { skipped: iosTokens.length });
+    }
+  }
+  if (androidTokens.length > 0) {
+    if (deps.fcm) {
+      const message = buildFcmMessage(event, recipient.redactContent, deps.appUrl, collapseId);
+      outcomes.push(await sendToFcmTokens(androidTokens, message, { ...deps, fcm: deps.fcm }, logger, event.category));
+    } else {
+      logger.warn('[Push] FCM is not configured; skipping Android device tokens', { skipped: androidTokens.length });
+    }
+  }
+
+  const total = sumTallies(outcomes);
+  const { delivered, failed, retryable } = total;
+  const pruned = orphansPruned + total.pruned;
+
+  logger.info('[Push] delivery finished', { category: event.category, delivered, pruned, failed });
+  // Retry (and finally dead-letter) when nothing landed and at least one device may still be
+  // reachable: pruned, config-error and permanently rejected tokens fail the same way on redelivery and
+  // must not mask a transient failure. A partial success is not retried: collapse-id would absorb the
+  // repeat, but the provider would still bill the quota and the user's other devices would re-alert.
+  // The rule spans both providers: one platform's success is a partial success for the other.
+  if (delivered === 0 && retryable > 0) {
+    throw new Error(`Push delivery failed transiently for ${retryable} of ${failed} device(s)`);
+  }
+  return { status: 'sent', delivered, pruned, failed };
+}
+
+export type SendLiveActivityDeps = {
+  tokens: {
+    findLiveActivityByQuest(
+      userId: string,
+      questId: string
+    ): Promise<ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>>;
+    removeByToken(token: string, options: { sid: string }): Promise<boolean>;
+    removeBySids(sids: readonly string[]): Promise<number>;
+    removeLiveActivityByQuest(userId: string, questId: string): Promise<number>;
+  };
+  sessions: {
+    findLiveSids(sids: readonly string[]): Promise<ReadonlySet<string>>;
+  };
+  /** Same source as deliverPush: the active organization's `redactPushContent` covers activity frames too. */
+  loadRecipient(userId: string): Promise<PushRecipient | null>;
+  transport: ApnsTransport;
+  /** The client's bundle id; live activity pushes go to `${topic}.push-type.liveactivity`. */
+  topic: string;
+};
+
+export type LiveActivityDeliveryResult =
+  | { status: 'skipped'; reason: 'no_tokens' | 'no_recipient' }
+  | { status: 'sent'; delivered: number; pruned: number; failed: number };
+
+/**
+ * Stage labels sent instead of the producer's when the recipient's organization redacts push content.
+ * A producer's label can carry user content (a search query, a file name, reply text), so a redacting
+ * organization gets one fixed label per status; a status not listed here goes without a label.
+ */
+export const REDACTED_LIVE_ACTIVITY_STAGE_LABELS: Readonly<Record<string, string>> = {
+  running: 'Working',
+  paused: 'Waiting for your input',
+  approval_needed: 'Waiting for your approval',
+};
+
+function redactContentState(contentState: LiveActivityContentState): LiveActivityContentState {
+  const { stageLabel, ...rest } = contentState;
+  const redactedLabel = REDACTED_LIVE_ACTIVITY_STAGE_LABELS[contentState.status];
+  return stageLabel !== undefined && redactedLabel !== undefined ? { ...rest, stageLabel: redactedLabel } : rest;
+}
+
+/**
+ * Delivers one live activity frame to the activity tokens registered for the quest. No user
+ * preference or collapse-id applies: the frame is the activity's own state, not a notification.
+ * The organization's `redactPushContent` does apply (redactContentState), since the frame reaches the
+ * lock screen like an alert. An `end` frame also deletes the quest's tokens once it has been sent,
+ * since the activity is over and its tokens will not be used again.
+ */
+export async function deliverLiveActivityPush(
+  event: LiveActivityPushEvent,
+  deps: SendLiveActivityDeps,
+  logger: Pick<Logger, 'info' | 'warn' | 'error'>,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): Promise<LiveActivityDeliveryResult> {
+  const storedTokens = await deps.tokens.findLiveActivityByQuest(event.userId, event.questId);
+  const { tokens } = await dropTokensOfEndedSessions(storedTokens, deps, logger);
+  if (tokens.length === 0) {
+    logger.info('[LiveActivity] no activity tokens for the quest; nothing to send', { event: event.event });
+    return { status: 'skipped', reason: 'no_tokens' };
+  }
+
+  const recipient = await deps.loadRecipient(event.userId);
+  if (!recipient) {
+    logger.warn('[LiveActivity] recipient user not found; dropping', { event: event.event });
+    return { status: 'skipped', reason: 'no_recipient' };
+  }
+
+  const ending = event.event === 'end';
+  const headers = {
+    'apns-topic': `${deps.topic}.push-type.liveactivity`,
+    'apns-push-type': 'liveactivity',
+    // 5 is the low-power tier APNs recommends for frequent updates; the closing frame must land.
+    'apns-priority': ending ? '10' : '5',
+  };
+  const payload = JSON.stringify({
+    aps: {
+      // The publish time, so the device discards a frame older than one it already shows; delivery time
+      // only for events published before producers stamped it.
+      timestamp: event.timestamp ?? nowSeconds,
+      event: event.event,
+      'content-state': recipient.redactContent ? redactContentState(event.contentState) : event.contentState,
+      ...(event.staleDate !== undefined && { 'stale-date': event.staleDate }),
+      ...(event.dismissalDate !== undefined && { 'dismissal-date': event.dismissalDate }),
+    },
+  });
+
+  const outcome = await sendToTokens(tokens, headers, payload, deps, logger);
+  logger.info('[LiveActivity] delivery finished', { event: event.event, ...outcome });
+  // Retry every transient end failure before deleting the activity tokens.
+  if (outcome.retryable > 0 && (outcome.delivered === 0 || ending)) {
+    throw new Error(
+      `APNs live activity delivery failed transiently for ${outcome.retryable} of ${outcome.failed} token(s)`
+    );
+  }
+  if (ending) await deps.tokens.removeLiveActivityByQuest(event.userId, event.questId);
+  return { status: 'sent', delivered: outcome.delivered, pruned: outcome.pruned, failed: outcome.failed };
+}
+
+type DeliveryTally = { delivered: number; pruned: number; failed: number; retryable: number };
+
+/**
+ * One APNs request per token, pruning tokens APNs says are dead; `retryable` counts transient failures.
+ * Configuration rejections (CONFIG_ERROR_HINTS, any 403) are counted as failed, never retried or pruned.
+ */
+async function sendToTokens(
+  tokens: ReadonlyArray<{ token: string; sid: string; environment: PushTokenEnvironment }>,
+  headers: Record<string, string>,
+  payload: string,
+  deps: { transport: ApnsTransport; tokens: Pick<SendPushDeps['tokens'], 'removeByToken'> },
+  logger: Pick<Logger, 'warn' | 'error'>,
+  category?: string
+): Promise<DeliveryTally> {
+  let delivered = 0;
+  let pruned = 0;
+  let failed = 0;
+  let retryable = 0;
+  const configErrors = new Map<string, { status: number; hint: string }>();
+  let next = 0;
+  const worker = async () => {
+    while (next < tokens.length) {
+      const { token, sid, environment } = tokens[next++];
+      try {
+        const response = await deps.transport.send({ environment, deviceToken: token, headers, payload });
+        if (response.status === 200) {
+          delivered++;
+          continue;
+        }
+        failed++;
+        const hint = configErrorHint(response);
+        if (hint) {
+          configErrors.set(response.reason ?? String(response.status), { status: response.status, hint });
+          continue;
+        }
+        if (isUnregistered(response)) {
+          try {
+            if (await deps.tokens.removeByToken(token, { sid })) pruned++;
+          } catch (pruneError) {
+            logger.warn('[Push] failed to prune an unregistered device token', {
+              error: pruneError instanceof Error ? pruneError.message : String(pruneError),
+            });
+          }
+          continue;
+        }
+        if (response.reason === 'BadDeviceToken') {
+          logger.error(
+            '[Push] APNs reported BadDeviceToken; keeping the token (likely a sandbox/production mismatch)',
+            {
+              environment,
+            }
+          );
+          continue;
+        }
+        if (response.status === 429 || response.status >= 500) retryable++;
+        logger.warn('[Push] APNs rejected the notification', {
+          status: response.status,
+          reason: response.reason,
+          environment,
+        });
+      } catch (error) {
+        failed++;
+        retryable++;
+        logger.warn('[Push] APNs request failed', {
+          environment,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_SENDS, tokens.length) }, worker));
+
+  // One error per invocation, not per token: the cause is the deployment, and every token shares it.
+  for (const [reason, { status, hint }] of configErrors) {
+    logger.error('[Push] APNs rejected the server configuration; push delivery is not working', {
+      status,
+      reason,
+      likelyCause: hint,
+      category,
+      pushType: headers['apns-push-type'],
+    });
+  }
+  return { delivered, pruned, failed, retryable };
+}
+
+function sumTallies(tallies: readonly DeliveryTally[]): DeliveryTally {
+  return tallies.reduce(
+    (total, tally) => ({
+      delivered: total.delivered + tally.delivered,
+      pruned: total.pruned + tally.pruned,
+      failed: total.failed + tally.failed,
+      retryable: total.retryable + tally.retryable,
+    }),
+    { delivered: 0, pruned: 0, failed: 0, retryable: 0 }
+  );
+}
+
+/**
+ * Only FCM's UNREGISTERED means the token will never work again (the counterpart of APNs 410/Unregistered);
+ * it is the one response that deletes a row. A 404 NOT_FOUND is deliberately not one: it is also what a wrong
+ * project id returns, and pruning on it would wipe every Android token on one bad deploy.
+ */
+const isFcmUnregistered = (response: FcmResponse) => response.errorStatus === 'UNREGISTERED';
+
+/**
+ * Rejections caused by this server's FCM configuration rather than by the device token. Like the APNs
+ * CONFIG_ERROR_HINTS they are logged at error, consumed (no retry) and never prune.
+ */
+const FCM_AUTH_HINT =
+  'Google rejected the FCM_SERVICE_ACCOUNT credentials; check the service account JSON and the server clock';
+const FCM_CONFIG_ERROR_HINTS: Record<string, string> = {
+  SENDER_ID_MISMATCH:
+    'the device tokens were issued for a different Firebase project than FCM_SERVICE_ACCOUNT belongs to',
+  PERMISSION_DENIED:
+    'the service account may not send FCM messages; enable the Firebase Cloud Messaging API and grant it the FCM Admin role',
+  UNAUTHENTICATED: FCM_AUTH_HINT,
+  NOT_FOUND: 'the Firebase project in FCM_SERVICE_ACCOUNT was not found',
+};
+
+function fcmConfigErrorHint(response: FcmResponse): string | undefined {
+  // The OAuth exchange failing with a 4xx (invalid_grant, invalid_client) is the credentials, never a device.
+  if (response.stage === 'auth') {
+    return response.status >= 400 && response.status < 500 && response.status !== 429 ? FCM_AUTH_HINT : undefined;
+  }
+  if (response.errorStatus && FCM_CONFIG_ERROR_HINTS[response.errorStatus]) {
+    return FCM_CONFIG_ERROR_HINTS[response.errorStatus];
+  }
+  if (response.status === 401 || response.status === 403) return FCM_AUTH_HINT;
+  return undefined;
+}
+
+/**
+ * One FCM request per token, mirroring sendToTokens: prune on UNREGISTERED only, keep tokens on
+ * INVALID_ARGUMENT (a malformed token and a malformed payload look alike), count 429/5xx and transport
+ * errors as `retryable`, and report configuration rejections once per invocation without retrying or pruning.
+ */
+async function sendToFcmTokens(
+  tokens: ReadonlyArray<{ token: string; sid: string }>,
+  message: FcmMessage,
+  deps: { fcm: FcmTransport; tokens: Pick<SendPushDeps['tokens'], 'removeByToken'> },
+  logger: Pick<Logger, 'warn' | 'error'>,
+  category?: string
+): Promise<DeliveryTally> {
+  let delivered = 0;
+  let pruned = 0;
+  let failed = 0;
+  let retryable = 0;
+  const configErrors = new Map<string, { status: number; hint: string }>();
+  let next = 0;
+  const worker = async () => {
+    while (next < tokens.length) {
+      const { token, sid } = tokens[next++];
+      try {
+        const response = await deps.fcm.send({ deviceToken: token, message });
+        if (response.status === 200) {
+          delivered++;
+          continue;
+        }
+        failed++;
+        const hint = fcmConfigErrorHint(response);
+        if (hint) {
+          configErrors.set(response.errorStatus ?? String(response.status), { status: response.status, hint });
+          continue;
+        }
+        if (isFcmUnregistered(response)) {
+          try {
+            if (await deps.tokens.removeByToken(token, { sid })) pruned++;
+          } catch (pruneError) {
+            logger.warn('[Push] failed to prune an unregistered FCM device token', {
+              error: pruneError instanceof Error ? pruneError.message : String(pruneError),
+            });
+          }
+          continue;
+        }
+        if (response.errorStatus === 'INVALID_ARGUMENT') {
+          logger.error(
+            '[Push] FCM reported INVALID_ARGUMENT; keeping the token (the token or the payload is malformed)',
+            {
+              detail: response.errorDetail,
+            }
+          );
+          continue;
+        }
+        if (response.status === 429 || response.status >= 500) retryable++;
+        logger.warn('[Push] FCM rejected the notification', {
+          status: response.status,
+          errorStatus: response.errorStatus,
+          stage: response.stage,
+        });
+      } catch (error) {
+        failed++;
+        retryable++;
+        logger.warn('[Push] FCM request failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_SENDS, tokens.length) }, worker));
+
+  for (const [reason, { status, hint }] of configErrors) {
+    logger.error('[Push] FCM rejected the server configuration; Android push delivery is not working', {
+      status,
+      reason,
+      likelyCause: hint,
+      category,
+    });
+  }
+  return { delivered, pruned, failed, retryable };
+}
+
+/**
+ * Revokes prune tokens eagerly (AuthSessionRepository.revokeBySid), but an expired session is deleted
+ * by the TTL index on AuthSession.expiresAt (AuthSessionModel.ts) with no hook, so its tokens would
+ * keep receiving pushes. One query checks every candidate sid; tokens of ended sessions are deleted
+ * and not sent to.
+ */
+async function dropTokensOfEndedSessions<T extends { sid: string }>(
+  tokens: ReadonlyArray<T>,
+  deps: { tokens: Pick<SendPushDeps['tokens'], 'removeBySids'>; sessions: SendPushDeps['sessions'] },
+  logger: Pick<Logger, 'info' | 'warn'>
+): Promise<{ tokens: T[]; pruned: number }> {
+  if (tokens.length === 0) return { tokens: [], pruned: 0 };
+  const liveSids = await deps.sessions.findLiveSids([...new Set(tokens.map(token => token.sid))]);
+  const live = tokens.filter(token => liveSids.has(token.sid));
+  if (live.length === tokens.length) return { tokens: live, pruned: 0 };
+
+  const endedSids = [...new Set(tokens.filter(token => !liveSids.has(token.sid)).map(token => token.sid))];
+  try {
+    const pruned = await deps.tokens.removeBySids(endedSids);
+    logger.info('[Push] pruned device tokens whose session has ended', { pruned });
+    return { tokens: live, pruned };
+  } catch (error) {
+    logger.warn('[Push] failed to prune device tokens of ended sessions', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { tokens: live, pruned: 0 };
+  }
+}
+
+/**
+ * An actionable `approval_needed` push expires at the pending action's own deadline,
+ * `pendingActionTs + TOKEN_EXPIRATION_MS`: the executors refuse a confirm older than that, so a phone that
+ * comes back online later would otherwise be handed an approval whose buttons can only fail. Without a
+ * `pendingActionTs` the window starts now. The clearing push gets a fresh window from now instead: a
+ * `lapsed` resolution is only published after the original deadline, so reusing it would send the
+ * replacement already expired and leave the stale notification on the lock screen. Other categories send
+ * no header, leaving APNs' default store-and-forward behaviour. The value is absolute epoch seconds.
+ */
+function apnsExpirationHeader(event: PushNotificationEvent, nowMs: number): Record<string, string> {
+  if (event.category !== 'approval_needed') return {};
+  const startMs = event.approvalResolved ? nowMs : (event.pendingActionTs ?? nowMs);
+  return { 'apns-expiration': String(Math.floor((startMs + TOKEN_EXPIRATION_MS) / 1000)) };
+}
+
+function copyFor(event: PushNotificationEvent, redact: boolean): { title: string; body: string } {
+  // Resolution copy names no tool, params or session, so there is nothing to redact.
+  if (event.approvalResolved) return APPROVAL_RESOLVED_COPY[event.approvalResolved];
+  return redact ? REDACTED_PUSH_COPY[event.category] : event;
+}
+
+function collapseIdFor(event: PushNotificationEvent): string {
+  const id =
+    event.collapseId ?? `${event.category}:${event.questId ?? event.sessionId ?? event.briefId ?? event.userId}`;
+  return id.slice(0, MAX_COLLAPSE_ID_LENGTH);
+}
+
+function buildPayload(event: PushNotificationEvent, redact: boolean, appUrl: string | undefined) {
+  const copy = copyFor(event, redact);
+  // Identifiers only, so redaction leaves them: the server re-authorizes the user on every answer.
+  const approval = approvalActionsFor(event);
+  const resolved = event.approvalResolved !== undefined;
+  const briefCategory = briefCategoryFor(event);
+  return {
+    aps: {
+      alert: {
+        title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
+        body: truncateForPush(copy.body, MAX_BODY_LENGTH),
+      },
+      // The clearing push only replaces the delivered approval, so it must not buzz or break through Focus.
+      ...(resolved ? { 'interruption-level': 'passive' } : { sound: 'default' }),
+      ...(event.sessionId && { 'thread-id': event.sessionId }),
+      // Selects the client's registered notification category, whose buttons are PENDING_ACTION_DECISIONS.
+      ...(approval && { category: event.category }),
+      ...(briefCategory && { category: briefCategory }),
+    },
+    category: event.category,
+    deepLink: resolveDeepLink(event.deepLink, appUrl),
+    ...(event.questId && { questId: event.questId }),
+    ...(event.sessionId && { sessionId: event.sessionId }),
+    ...(event.briefId && { briefId: event.briefId }),
+    ...(approval && { approval }),
+    ...(resolved && { approvalResolved: event.approvalResolved }),
+  };
+}
+
+/** The FCM counterpart of buildPayload: same copy, redaction and deep link, with the metadata as string `data`. */
+function buildFcmMessage(
+  event: PushNotificationEvent,
+  redact: boolean,
+  appUrl: string | undefined,
+  collapseId: string
+): FcmMessage {
+  const copy = copyFor(event, redact);
+  return {
+    notification: {
+      title: truncateForPush(copy.title, MAX_TITLE_LENGTH),
+      body: truncateForPush(copy.body, MAX_BODY_LENGTH),
+    },
+    data: {
+      category: event.category,
+      deepLink: resolveDeepLink(event.deepLink, appUrl),
+      ...(event.questId && { questId: event.questId }),
+      ...(event.sessionId && { sessionId: event.sessionId }),
+      ...(event.briefId && { briefId: event.briefId }),
+      ...(event.approvalResolved && { approvalResolved: event.approvalResolved }),
+    },
+    android: {
+      priority: 'HIGH',
+      collapse_key: collapseId,
+      // The tag makes a redelivery or a second terminal site replace the tray entry instead of stacking.
+      notification: { tag: collapseId },
+    },
+  };
+}
+
+function approvalActionsFor(event: PushNotificationEvent) {
+  if (event.category !== 'approval_needed' || event.approvalResolved) return undefined;
+  if (!event.questId || !event.pendingActionTs) return undefined;
+  return { questId: event.questId, pendingActionTs: event.pendingActionTs, actions: PENDING_ACTION_DECISIONS };
+}
+
+// Must stay in sync with BriefNotificationCategory in apps/ios B4MKit Briefs/BriefNotificationAction.swift.
+const BRIEF_ACTION_CATEGORIES = { approval: 'brief_ready_approval', question: 'brief_ready_reply' } as const;
+const BRIEF_LISTEN_CATEGORY = 'brief_ready_listen';
+
+// A brief with no single answerable decision still gets the Listen button; older app builds ignore the category.
+function briefCategoryFor(event: PushNotificationEvent): string | undefined {
+  if (event.category !== 'brief_ready' || !event.briefId) return undefined;
+  return event.briefAction ? BRIEF_ACTION_CATEGORIES[event.briefAction] : BRIEF_LISTEN_CATEGORY;
+}
+
+function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {
+  if (!deepLink.startsWith('/') || !appUrl) return deepLink;
+  return `${appUrl.replace(/\/+$/, '')}${deepLink}`;
+}
+
+/**
+ * The user's opt-outs plus their active organization's redaction setting. Redaction follows the active
+ * organization because chat sessions carry no organization id, so the session's own org cannot be resolved.
+ */
+export async function loadPushRecipient(userId: string): Promise<PushRecipient | null> {
+  const user = await userRepository.findById(userId);
+  if (!user) return null;
+  const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+  return {
+    preferences: user.preferences?.pushNotifications,
+    redactContent: organization?.redactPushContent === true,
+    inBusyBlock: isInBusyBlock(user, new Date()),
+    interruptionFeedback: user.preferences?.interruptionFeedback,
+  };
+}
+
+// Held across warm invocations: Apple asks providers to keep APNs connections open.
+let shared: { config: ApnsConfig; transport: ApnsTransport } | undefined;
+
+function transportFor(config: ApnsConfig): ApnsTransport {
+  const held = shared;
+  if (
+    held &&
+    held.config.keyId === config.keyId &&
+    held.config.teamId === config.teamId &&
+    held.config.key === config.key &&
+    held.config.topic === config.topic
+  ) {
+    return held.transport;
+  }
+  held?.transport.close();
+  shared = {
+    config,
+    transport: createHttp2ApnsTransport(config, Date.now, new Logger({ metadata: { handler: 'sendPush' } })),
+  };
+  return shared.transport;
+}
+
+// Held across warm invocations so the FCM OAuth access token is reused until it nears expiry.
+let sharedFcm: { config: FcmConfig; transport: FcmTransport } | undefined;
+
+function fcmTransportFor(config: FcmConfig): FcmTransport {
+  const held = sharedFcm;
+  if (
+    held &&
+    held.config.projectId === config.projectId &&
+    held.config.clientEmail === config.clientEmail &&
+    held.config.privateKey === config.privateKey
+  ) {
+    return held.transport;
+  }
+  sharedFcm = { config, transport: createHttpFcmTransport(config) };
+  return sharedFcm.transport;
+}
+
+type PushProviders = { apns: ApnsConfig | null; fcm: FcmConfig | null; configErrors: string[] };
+
+/**
+ * Which providers can deliver. An unset provider is silent (preview, self-host without push); a set but
+ * unusable one (a malformed .p8 or service account) is reported in `configErrors` and treated as off, so
+ * a bad secret for one platform never blocks the other.
+ */
+function resolveProviders(): PushProviders {
+  const configErrors: string[] = [];
+  let apns = readApnsConfig();
+  if (apns) {
+    const keyError = apnsSigningKeyError(apns.key);
+    if (keyError) {
+      configErrors.push(`APNS_KEY is not a usable .p8 signing key (server configuration error): ${keyError}`);
+      apns = null;
+    }
+  }
+  let fcm: FcmConfig | null = null;
+  const fcmResult = readFcmSenderConfig();
+  if (fcmResult.status === 'invalid') {
+    configErrors.push(`${fcmResult.error} (server configuration error)`);
+  } else if (fcmResult.status === 'ok') {
+    const keyError = fcmSigningKeyError(fcmResult.credentials.privateKey);
+    if (keyError) {
+      configErrors.push(`FCM_SERVICE_ACCOUNT private_key is not a usable RSA signing key: ${keyError}`);
+    } else {
+      fcm = fcmResult.credentials;
+    }
+  }
+  return { apns, fcm, configErrors };
+}
+
+const LIVE_ACTIVITY_DETAIL_TYPE = 'notification.liveActivity';
+
+const handleWithContext = withEventContext(async (event, logger) => {
+  const { apns, fcm } = resolveProviders();
+  if (event.event === LIVE_ACTIVITY_DETAIL_TYPE) {
+    // Live Activities exist on iOS only.
+    if (!apns) return;
+    const payload = NotificationEvents.LiveActivity.schema.parse(event.properties);
+    logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, questId: payload.questId });
+    await deliverLiveActivityPush(
+      payload,
+      {
+        tokens: pushTokenRepository,
+        sessions: authSessionRepository,
+        loadRecipient: loadPushRecipient,
+        transport: transportFor(apns),
+        topic: apns.topic,
+      },
+      logger
+    );
+    return;
+  }
+
+  const payload = NotificationEvents.Push.schema.parse(event.properties);
+  logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, category: payload.category });
+  await deliverPush(
+    payload,
+    {
+      tokens: pushTokenRepository,
+      sessions: authSessionRepository,
+      loadRecipient: loadPushRecipient,
+      ...(apns && { transport: transportFor(apns), topic: apns.topic }),
+      ...(fcm && { fcm: fcmTransportFor(fcm) }),
+      appUrl: process.env.APP_URL,
+    },
+    logger
+  );
+});
+
+/**
+ * Checked before withEventContext so an unconfigured or misconfigured deployment (preview, self-host,
+ * a malformed APNS_KEY or FCM_SERVICE_ACCOUNT) consumes the event without opening a database connection.
+ */
+export const handler = async (event: EventBridgeEvent<string, unknown>): Promise<void> => {
+  const { apns, fcm, configErrors } = resolveProviders();
+  const logger = new Logger({ metadata: { handler: 'sendPush' } });
+  for (const error of configErrors) {
+    // Consumed rather than thrown: a retry cannot fix a bad secret, and would only fill the DLQ.
+    logger.error(`[Push] ${error}; delivery for that platform is disabled`);
+  }
+  if (!apns && !fcm) {
+    if (configErrors.length === 0) logger.info('[Push] no push provider (APNs, FCM) is configured; skipping');
+    return;
+  }
+  await handleWithContext(event);
+};

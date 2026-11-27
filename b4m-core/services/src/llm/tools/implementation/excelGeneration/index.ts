@@ -1,7 +1,8 @@
+import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import writeXlsxFile from 'write-excel-file/node';
 import type { CellObject, Sheet, SheetData } from 'write-excel-file/node';
-import { v4 as uuidv4 } from 'uuid';
+import { buildContentDisposition } from '@bike4mind/utils/contentDisposition';
 import { z } from 'zod';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 
@@ -162,7 +163,7 @@ function validateFormula(formula: string): string {
   // Check for dangerous patterns
   for (const pattern of DANGEROUS_PATTERNS) {
     if (pattern.test(cleanFormula)) {
-      throw new Error(`Formula contains disallowed pattern: ${formula}`);
+      throw new ExpectedToolError(`Formula contains disallowed pattern: ${formula}`);
     }
   }
 
@@ -172,7 +173,7 @@ function validateFormula(formula: string): string {
   // Verify all functions are in the whitelist
   for (const func of functionMatches) {
     if (!ALLOWED_FORMULA_FUNCTIONS.has(func.toUpperCase())) {
-      throw new Error(`Formula contains disallowed function '${func}': ${formula}`);
+      throw new ExpectedToolError(`Formula contains disallowed function '${func}': ${formula}`);
     }
   }
 
@@ -504,8 +505,8 @@ function sanitizeFilename(filename: string): string {
   // Remove dangerous characters (including control chars U+0000-U+001F)
   // eslint-disable-next-line no-control-regex
   name = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_');
-  // Limit length
-  name = name.slice(0, 100);
+  // Limit length by code point so an emoji's surrogate pair is never split
+  name = Array.from(name).slice(0, 100).join('');
   // Ensure it's not empty
   if (!name) name = 'spreadsheet';
   return name;
@@ -519,7 +520,7 @@ export const excelGenerationTool: ToolDefinition = {
       const parseResult = ExcelGenerationParamsSchema.safeParse(value);
       if (!parseResult.success) {
         const errors = parseResult.error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
-        throw new Error(`Invalid parameters: ${errors}`);
+        throw new ExpectedToolError(`Invalid parameters: ${errors}`);
       }
 
       const params = parseResult.data;
@@ -532,12 +533,12 @@ export const excelGenerationTool: ToolDefinition = {
 
         // Sanitize the user-provided filename and use it for storage
         const sanitizedName = sanitizeFilename(params.filename);
-        const filename = `${sanitizedName}-${uuidv4().slice(0, 8)}.xlsx`;
+        const filename = `${sanitizedName}-${crypto.randomUUID().slice(0, 8)}.xlsx`;
 
         // Upload to generated content storage (same bucket as images)
         await context.imageGenerateStorage.upload(buffer, filename, {
           ContentType: XLSX_MIME,
-          ContentDisposition: `attachment; filename="${sanitizedName}.xlsx"`,
+          ContentDisposition: buildContentDisposition(`${sanitizedName}.xlsx`),
         });
 
         // Persist as a session FabFile so the spreadsheet is browsable + downloadable in the
@@ -557,6 +558,7 @@ export const excelGenerationTool: ToolDefinition = {
 
         return `Successfully generated Excel file: ${sanitizedName}.xlsx`;
       } catch (error) {
+        if (isExpectedToolError(error)) throw error;
         context.logger.error('Excel generation failed:', error);
         throw new Error(`Failed to generate Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }

@@ -41,7 +41,6 @@ vi.mock('@client/app/hooks/usePublishShare', () => ({
 }));
 vi.mock('@client/app/hooks/useAdminTools', () => ({ useAdminTools: () => ({ canUseAdminTools: false }) }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
-vi.mock('@client/app/hooks/data/useQuestExport', () => ({ useQuestExport: () => ({ exportQuest: vi.fn() }) }));
 vi.mock('@client/app/hooks/data/artifacts', () => ({ useArtifact: () => ({ data: undefined }) }));
 vi.mock('@client/app/hooks/useArtifactPersistence', () => ({ useArtifactPersistence: () => ({ isPersisted: false }) }));
 vi.mock('@client/app/utils/fabFileUtils', () => ({ getContentFromFabfile: vi.fn().mockResolvedValue('') }));
@@ -64,7 +63,6 @@ vi.mock('@client/app/components/Knowledge/DOCXViewer', () => ({ default: () => n
 vi.mock('@client/app/components/Knowledge/CSVViewer', () => ({ default: () => null }));
 vi.mock('@client/app/components/Knowledge/JSONViewer', () => ({ default: () => null }));
 vi.mock('@client/app/components/Knowledge/XLSXViewer', () => ({ default: () => null }));
-vi.mock('@client/app/components/GenAI/QuestMasterReply', () => ({ default: () => null }));
 vi.mock('@client/app/components/Charts/MermaidChart', () => ({ default: () => null }));
 vi.mock('@client/app/components/Charts/RechartsRenderer', () => ({ default: () => null }));
 vi.mock('@client/app/components/Chess/ChessBoard', () => ({ default: () => null }));

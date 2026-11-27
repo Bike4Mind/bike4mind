@@ -130,7 +130,7 @@ export class RemoteSkillSource {
   /**
    * Map server skills to `CustomCommand`, dropping any that must not register:
    * - a name that shadows a built-in OR a first-party feature slash command
-   *   (tavern/quest/hearth), which would otherwise hijack the command, and
+   *   (tavern/hearth), which would otherwise hijack the command, and
    * - a foreign-owned skill (a `userId` other than the current user's), which is
    *   only visible cross-account via `isGlobalRead`, and
    * - a Skill Market import: the user owns the copy but someone else wrote it, and local commands run

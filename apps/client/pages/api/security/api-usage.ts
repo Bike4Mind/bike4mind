@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { apiKeyAlertRepository } from '@bike4mind/database/auth';
 import { apiKeyUsageLogRepository } from '@bike4mind/database/auth';
-import { getApiKeyRateLimitUsage } from '@server/utils/apiKeyRateLimitCheck';
+import { getApiKeyRateLimitUsage } from '@bike4mind/server-utils/utils/apiKeyRateLimitCheck';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user?.id;

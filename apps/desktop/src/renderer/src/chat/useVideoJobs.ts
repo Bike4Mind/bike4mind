@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ChatVideoJob, ChatVideoLinkResult } from '@shared/chat';
+import { useSessionEvents } from '../host/useSessionEvents';
 
 export interface VideoJobsController {
   jobs: ChatVideoJob[];
@@ -28,8 +29,8 @@ export function upsertVideoJob(jobs: readonly ChatVideoJob[], job: ChatVideoJob)
  */
 export function useVideoJobs(sessionId: string | null): VideoJobsController {
   const [jobs, setJobs] = useState<ChatVideoJob[]>([]);
-  const activeSessionId = useRef<string | null>(sessionId);
-  activeSessionId.current = sessionId;
+  // Bumped by a resync, which may have skipped a push: the list is read again.
+  const [reads, setReads] = useState(0);
 
   useEffect(() => {
     setJobs([]);
@@ -42,16 +43,14 @@ export function useVideoJobs(sessionId: string | null): VideoJobsController {
     return () => {
       current = false;
     };
-  }, [sessionId]);
+  }, [sessionId, reads]);
 
-  useEffect(
-    () =>
-      window.b4m.chat.onStreamEvent(event => {
-        if (event.type !== 'video-job' || event.sessionId !== activeSessionId.current) return;
-        setJobs(current => upsertVideoJob(current, event.job));
-      }),
-    []
-  );
+  useSessionEvents(sessionId, {
+    event: event => {
+      if (event.type === 'video-job') setJobs(current => upsertVideoJob(current, event.job));
+    },
+    resync: () => setReads(count => count + 1),
+  });
 
   const cancel = useCallback(
     async (jobId: string) => {

@@ -14,6 +14,10 @@ last_reviewed: 2025-06-30
 
 # DocumentDB Support for Bike4Mind
 
+:::warning Deprecated
+AWS DocumentDB support is deprecated and will be removed in a future release. Use MongoDB Atlas or MongoDB Community 7 or later instead. While you still connect to DocumentDB, Bike4Mind logs a deprecation warning at startup.
+:::
+
 This document explains how to configure Bike4Mind to use AWS DocumentDB instead of MongoDB Atlas.
 
 ## Overview

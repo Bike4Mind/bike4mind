@@ -9,18 +9,31 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
-import { generateImageContract, GenerateImageIvokeParams, redactSessionForClient } from '@bike4mind/common';
-import { getOrCreateSession } from '@server/managers/sessionManager';
+import { getImageGeneration } from '@bike4mind/server-utils/imageGenerations/imageGeneration';
+import {
+  chatMessageResponseSchema,
+  generateImageContract,
+  GenerateImageIvokeParams,
+  redactChatMessageForViewer,
+  redactSessionForClient,
+} from '@bike4mind/common';
+import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveMediaBillingOrgId } from '@server/billing/resolveMediaBillingOrgId';
-import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@server/utils/orgAccess';
+import { assertNoStrayBillingOrgKeys, resolveBillingOrgInput } from '@bike4mind/server-utils/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
+import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { isModelRequiresSubscriptionError } from '@bike4mind/services/llm/modelAdmission';
+import type { ImageGenerationRun } from '@bike4mind/services/llm/ImageGeneration';
+import { assertRunBudgetHeadroom } from '@bike4mind/server-utils/billing/runBudgetClaim';
+import { resolvePaidCallRun } from '@server/completionRuns/paidCallRun';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const body = req.validated;
 
   req.logger.updateMetadata({
@@ -43,7 +56,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     promptResolution: body.prompt_resolution ?? 'auto',
   });
 
-  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds, 'generate', body.fabFileIds);
 
   // Loud rejection before any session or billing work: the schemas strip unknown keys, so a
   // billing-org-shaped stray would otherwise vanish and bill the caller's home org.
@@ -57,13 +70,26 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     callbackUrl,
     prompt_resolution: resolutionMode,
     organization_id: _orgAlias,
+    run: requestedRun,
     ...invokeParams
   } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
-  // Before getOrCreateSession, so a refused payer never leaves behind a new, empty notebook.
-  // An org-billed API key bills its org; otherwise null = personal, undefined = the caller's own org.
-  const effectiveOrgId = await resolveMediaBillingOrgId(req, requestedOrgId);
+  // Before getOrCreateSession, so a refused payer or someone else's run never leaves behind a new, empty
+  // notebook. The run's headroom is checked later, in invoke, once the render's price is known.
+  // A run bills the account it is bound to, so the charge lands where the run's usage read looks for it.
+  // Otherwise an org-billed API key bills its org; null = personal, undefined = the caller's own org.
+  const paidRun = await resolvePaidCallRun(
+    { user: req.user, apiKeyInfo: req.apiKeyInfo },
+    requestedRun,
+    requestedOrgId
+  );
+  const effectiveOrgId = paidRun ? paidRun.billingOrganizationId : await resolveMediaBillingOrgId(req, requestedOrgId);
+  // The worker's credit hold claims the run budget; this only refuses up front what cannot fit.
+  const run: ImageGenerationRun | undefined = paidRun && {
+    attribution: paidRun.attribution,
+    assertHeadroom: credits => assertRunBudgetHeadroom(paidRun.attribution.runId, credits),
+  };
 
   const { sessionId, asyncPromises, session } = await getOrCreateSession({
     sessionId: reqSessionId,
@@ -139,8 +165,12 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     const startTime = performance.now();
 
     const quest = await getImageGeneration().invoke({
+      adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
+      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyBillingOwnerType: req.apiKeyInfo?.billingOwnerType,
       userId: req.user.id,
       body: enhancedBody,
+      run,
     });
 
     const endTime = performance.now();
@@ -164,7 +194,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     await Promise.all(asyncPromises);
 
     const response = {
-      quest,
+      // A retry by questId can settle a turn owned by someone else, so the turn goes out as the chat routes send it.
+      quest: chatMessageResponseSchema.parse(redactChatMessageForViewer(quest, session.userId === req.user.id)),
       session: redactSessionForClient(session),
       originalPrompt,
       enhancedPrompt: effectivePrompt,
@@ -174,11 +205,18 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
     return res.json(response);
   } catch (error) {
-    req.logger.error(`[DEBUG API] Error in generate-image endpoint:`, {
+    const details = {
       error,
       errorMessage: error instanceof Error ? error.message : 'Unknown error',
       userId: req.user?.id,
-    });
+    };
+    // A free-tier caller picking a paid-only model is their plan, not a fault: warn, and the error
+    // handler still answers 403. Every other admission refusal stays at error (same rule as ChatCompletionInvoke).
+    if (isModelRequiresSubscriptionError(error)) {
+      req.logger.warn(`[DEBUG API] generate-image refused: model requires a paid plan`, details);
+    } else {
+      req.logger.error(`[DEBUG API] Error in generate-image endpoint:`, details);
+    }
     throw error;
   }
 });

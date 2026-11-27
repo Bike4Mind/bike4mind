@@ -1,6 +1,6 @@
 import { Alert, Box, Typography } from '@mui/joy';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
-import { CreditOfferActions } from './CreditOfferActions';
+import { CREDIT_OFFER_SURFACES, CreditOfferActions } from './CreditOfferActions';
 
 interface InsufficientCreditsNoticeProps {
   /** Plain-language, server-authored explanation (includes the credit numbers). */
@@ -45,7 +45,7 @@ export const InsufficientCreditsNotice = ({ message }: InsufficientCreditsNotice
           {message}
         </Typography>
         <Box sx={{ flexShrink: 0 }} data-testid="insufficient-credits-actions">
-          <CreditOfferActions moment="out" />
+          <CreditOfferActions moment="out" surface={CREDIT_OFFER_SURFACES.insufficientCreditsNotice} />
         </Box>
       </Box>
     </Alert>

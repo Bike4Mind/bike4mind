@@ -1,5 +1,7 @@
 import {
   FabFileSourceType,
+  GENERATED_ASSET_MAX_LINEAGE_ENTRIES,
+  GENERATED_ASSET_MAX_STORED_REQUEST_BYTES,
   GENERATED_ASSET_MAX_STORED_TEXT_CHARS as CAP,
   KnowledgeType,
   StorageLimitError,
@@ -12,7 +14,7 @@ const createFabFile = vi.hoisted(() => vi.fn());
 vi.mock('../fabFileService/create', () => ({ createFabFile }));
 
 const findOne = vi.fn();
-const logger = { info: vi.fn(), error: vi.fn() };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const deps = {
   db: { fabFiles: { create: vi.fn(), findOne }, adminSettings: {}, users: {}, dataLakes: {} },
   storage: { upload: vi.fn(), generateSignedUrl: vi.fn() },
@@ -76,6 +78,79 @@ describe('saveGeneratedAsset', () => {
     expect(findOne).not.toHaveBeenCalled();
   });
 
+  describe('lineage and request', () => {
+    const id = (n: number) => n.toString(16).padStart(24, '0');
+    const provenanceOf = () => createFabFile.mock.calls[0][2].provenance;
+
+    it('stores valid lineage', async () => {
+      const derivedFrom = [{ fileId: id(1), jobId: 'j1', role: 'first_frame' as const }];
+      await saveGeneratedAsset(params({ derivedFrom }), deps);
+      expect(provenanceOf().derivedFrom).toEqual(derivedFrom);
+    });
+
+    it('stores no lineage key when none is given', async () => {
+      await saveGeneratedAsset(params(), deps);
+      expect(provenanceOf()).not.toHaveProperty('derivedFrom');
+    });
+
+    it('drops invalid and uppercase ids without failing the save', async () => {
+      const result = await saveGeneratedAsset(
+        params({
+          derivedFrom: [
+            { fileId: 'A'.repeat(24), role: 'reference' },
+            { fileId: 'not-an-id', role: 'reference' },
+            { fileId: id(2), role: 'reference' },
+          ],
+        }),
+        deps
+      );
+      expect(result.saved).toBe(true);
+      expect(provenanceOf().derivedFrom).toEqual([{ fileId: id(2), role: 'reference' }]);
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+    });
+
+    it('collapses duplicates by file and role but keeps distinct roles', async () => {
+      await saveGeneratedAsset(
+        params({
+          derivedFrom: [
+            { fileId: id(3), role: 'reference' },
+            { fileId: id(3), role: 'reference' },
+            { fileId: id(3), role: 'edit_source' },
+          ],
+        }),
+        deps
+      );
+      expect(provenanceOf().derivedFrom).toEqual([
+        { fileId: id(3), role: 'reference' },
+        { fileId: id(3), role: 'edit_source' },
+      ]);
+    });
+
+    it('caps the number of entries and warns', async () => {
+      const derivedFrom = Array.from({ length: GENERATED_ASSET_MAX_LINEAGE_ENTRIES + 4 }, (_, i) => ({
+        fileId: id(i + 1),
+        role: 'reference' as const,
+      }));
+      await saveGeneratedAsset(params({ derivedFrom }), deps);
+      expect(provenanceOf().derivedFrom).toHaveLength(GENERATED_ASSET_MAX_LINEAGE_ENTRIES);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
+    it('stores the generation request', async () => {
+      const request = { model: 'm', seed: 7 };
+      await saveGeneratedAsset(params({ generation: { ...music, request } }), deps);
+      expect(provenanceOf().sourceMetadata.generation.request).toEqual(request);
+    });
+
+    it('drops an oversized request without logging its content', async () => {
+      const request = { blob: 'secret-content-'.repeat(GENERATED_ASSET_MAX_STORED_REQUEST_BYTES) };
+      const result = await saveGeneratedAsset(params({ generation: { ...music, request } }), deps);
+      expect(result.saved).toBe(true);
+      expect(provenanceOf().sourceMetadata.generation).not.toHaveProperty('request');
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret-content');
+    });
+  });
+
   it('caps the stored prompt and lyrics', async () => {
     const long = 'x'.repeat(CAP * 2);
     await saveGeneratedAsset(params({ generation: { ...music, prompt: long, lyrics: long } }), deps);
@@ -93,6 +168,13 @@ describe('saveGeneratedAsset', () => {
 
     const { generation } = createFabFile.mock.calls[0][2].provenance.sourceMetadata;
     expect(generation.promptTruncated).toBe(false);
+  });
+
+  it('keeps the flag of a re-saved prompt that was already cut', async () => {
+    const generation = { ...music, prompt: 'x'.repeat(CAP), promptTruncated: true };
+    await saveGeneratedAsset(params({ generation }), deps);
+
+    expect(createFabFile.mock.calls[0][2].provenance.sourceMetadata.generation.promptTruncated).toBe(true);
   });
 
   it('treats a prompt of exactly the cap as kept whole', async () => {
@@ -129,6 +211,56 @@ describe('saveGeneratedAsset', () => {
     });
   });
 
+  it('records the chat image key without the delete-cascade copy key', async () => {
+    await saveGeneratedAsset(params({ sessionId: 's1', generatedOutputKey: 'abc.png' }), deps);
+
+    const { sourceMetadata } = createFabFile.mock.calls[0][2].provenance;
+    expect(sourceMetadata.generatedOutputKey).toBe('abc.png');
+    expect(sourceMetadata).not.toHaveProperty('generatedCopyKey');
+  });
+
+  it('stamps retention ownership without overriding storage ownership', async () => {
+    await saveGeneratedAsset(params(), { ...deps, retentionOrganizationId: 'team-1' });
+    const adapters = createFabFile.mock.calls[0][2];
+    expect(adapters.provenance.sourceMetadata.retentionOrganizationId).toBe('team-1');
+    expect(adapters).not.toHaveProperty('ownerOrganizationId');
+  });
+
+  it("keeps the caller's file name over the generated one", async () => {
+    await saveGeneratedAsset(params({ fileName: 'my-song.mp3' }), deps);
+
+    expect(createFabFile.mock.calls[0][1].fileName).toBe('my-song.mp3');
+  });
+
+  // Parity (Library is Files): every generator's output lands as a TOOL_GENERATED FabFile carrying its request
+  // and lineage. Each producer's own test pins that it hands those fields over.
+  describe.each([
+    ['music', 'audio/mpeg', KnowledgeType.AUDIO],
+    ['speech', 'audio/mpeg', KnowledgeType.AUDIO],
+    ['sound_effect', 'audio/mpeg', KnowledgeType.AUDIO],
+    ['video', 'video/mp4', KnowledgeType.VIDEO],
+    ['image', 'image/png', KnowledgeType.FILE],
+  ] as const)('%s', (generator, contentType, type) => {
+    it('lands in Files with the generation request and lineage', async () => {
+      const request = { model: 'm1', prompt: 'p', seed: 7 };
+      const derivedFrom = [{ fileId: 'b'.repeat(24), role: 'reference' as const }];
+
+      const result = await saveGeneratedAsset(
+        params({ contentType, generation: { generator, provider: 'p', prompt: 'p', request }, derivedFrom }),
+        deps
+      );
+
+      expect(result.saved).toBe(true);
+      const [, input, adapters] = createFabFile.mock.calls[0];
+      expect(input.type).toBe(type);
+      expect(adapters.provenance).toMatchObject({
+        sourceType: FabFileSourceType.TOOL_GENERATED,
+        sourceMetadata: { generation: { generator, request } },
+        derivedFrom,
+      });
+    });
+  });
+
   it.each([
     ['audio/L16', 'pcm'],
     ['audio/basic', 'ulaw'],
@@ -161,6 +293,51 @@ describe('saveGeneratedAsset', () => {
     expect(result).toEqual({ saved: true, fileId: 'f0', s3Key: 'generated-video/old.mp4', fileName: 'video.mp4' });
     expect(findOne).toHaveBeenCalledWith({ userId: 'u1', deletedAt: null, tags: { $elemMatch: { name: 'job:j1' } } });
     expect(createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('signs a fresh URL on a job dedupe hit even when the row has no stored fileUrl', async () => {
+    findOne.mockResolvedValue({
+      id: 'f0',
+      fileName: 'video.mp4',
+      filePath: 'generated-video/old.mp4',
+      mimeType: 'video/mp4',
+      moderationStatus: 'clean',
+    });
+    vi.mocked(deps.storage.generateSignedUrl).mockResolvedValue('https://fresh.example.invalid/old.mp4');
+    const generation: GeneratedAssetMetadata = { generator: 'video', provider: 'veo', jobId: 'j1', prompt: 'waves' };
+
+    const result = await saveGeneratedAsset(params({ contentType: 'video/mp4', generation }), deps);
+
+    expect(result).toEqual({
+      saved: true,
+      fileId: 'f0',
+      s3Key: 'generated-video/old.mp4',
+      fileName: 'video.mp4',
+      fileUrl: 'https://fresh.example.invalid/old.mp4',
+    });
+    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-video/old.mp4', 3600, 'get', {
+      ResponseContentDisposition: undefined,
+      ResponseContentType: 'video/mp4',
+    });
+  });
+
+  it('forwards an attachment disposition on a job dedupe hit for a non-media row', async () => {
+    findOne.mockResolvedValue({
+      id: 'f0',
+      fileName: 'page.svg',
+      filePath: 'generated-image/old.svg',
+      mimeType: 'image/svg+xml',
+      moderationStatus: 'clean',
+    });
+    vi.mocked(deps.storage.generateSignedUrl).mockResolvedValue('https://fresh.example.invalid/old.svg');
+    const generation: GeneratedAssetMetadata = { generator: 'image', provider: 'p', jobId: 'j1', prompt: 'x' };
+
+    await saveGeneratedAsset(params({ contentType: 'image/svg+xml', generation }), deps);
+
+    expect(deps.storage.generateSignedUrl).toHaveBeenCalledWith('generated-image/old.svg', 3600, 'get', {
+      ResponseContentDisposition: 'attachment; filename="page.svg"',
+      ResponseContentType: undefined,
+    });
   });
 
   it('rejects when the job dedup lookup fails, so the store step retries instead of falling back', async () => {
@@ -213,13 +390,17 @@ describe('saveGeneratedAsset', () => {
       })
     );
 
-    await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason });
+    const result = await saveGeneratedAsset(params(), deps);
+
+    expect(result).toMatchObject({ saved: false, reason });
+    // Handed back intact, so a caller that must fail rethrows the 400 with its byte counts.
+    expect(result).toHaveProperty('cause', expect.any(StorageLimitError));
   });
 
   it('maps an unrelated failure, even one that quotes the old message, to error', async () => {
     createFabFile.mockRejectedValue(new Error('File size exceeds storage limit'));
 
-    await expect(saveGeneratedAsset(params(), deps)).resolves.toEqual({ saved: false, reason: 'error' });
+    await expect(saveGeneratedAsset(params(), deps)).resolves.toMatchObject({ saved: false, reason: 'error' });
   });
 
   it('reports a created file without a storage path as an error', async () => {

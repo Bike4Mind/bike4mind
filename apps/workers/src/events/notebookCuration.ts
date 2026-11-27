@@ -1,5 +1,5 @@
 import { withEventContext } from '@workers/utils/eventContext';
-import { NotebookCurationEvents } from '@server/utils/eventBus';
+import { NotebookCurationEvents } from '@bike4mind/server-utils/utils/eventBus';
 import { Session, User } from '@bike4mind/database';
 import { sendToQueue } from '@bike4mind/server-utils/utils/sqs';
 import { Resource } from 'sst';
@@ -16,6 +16,7 @@ export const handler = withEventContext(async (event, logger) => {
     artifactTypes,
     exportFormat,
     customNotebookName,
+    billing,
   } = NotebookCurationEvents.Start.schema.parse(event.properties);
 
   logger.updateMetadata({
@@ -28,7 +29,7 @@ export const handler = withEventContext(async (event, logger) => {
     curationType: curationType || 'transcript',
     artifactTypes: artifactTypes || 'all',
     exportFormat: exportFormat || 'markdown',
-    customNotebookName: customNotebookName || 'default',
+    hasCustomNotebookName: Boolean(customNotebookName),
   });
 
   const batchInfo = batchJobId ? ` [Batch ${batchIndex! + 1}/${batchTotal}]` : '';
@@ -63,6 +64,7 @@ export const handler = withEventContext(async (event, logger) => {
       artifactTypes,
       exportFormat,
       customNotebookName,
+      billing,
     });
 
     logger.info(`Successfully queued notebook curation for session ${sessionId}, messageId: ${messageId}`);

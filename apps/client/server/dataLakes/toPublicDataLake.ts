@@ -34,11 +34,16 @@ const toIso = (value: Date | string | undefined | null): string | null => {
 };
 
 /**
- * Project a lake onto the public `DataLakeResource`. `liveStats` overrides the persisted counts; a
+ * Project a lake onto the public `DataLakeResource`. `canManage` must come from `canManageLake` over
+ * the lake's active grants (the research and proposal gate); a built-in lake is forced to false. `liveStats` overrides the persisted counts; a
  * built-in lake has no document, so its counts only exist live and its timestamps are null rather
  * than the synthetic values the access gate stamps on it.
  */
-export function toPublicDataLake(lake: PublicDataLakeSource, liveStats?: LakeStats): DataLakeResource {
+export function toPublicDataLake(
+  lake: PublicDataLakeSource,
+  liveStats: LakeStats | undefined,
+  canManage: boolean
+): DataLakeResource {
   const builtIn = dataLakeService.isFallbackLake(lake);
   return {
     id: lake.id,
@@ -49,6 +54,7 @@ export function toPublicDataLake(lake: PublicDataLakeSource, liveStats?: LakeSta
     organization_id: lake.organizationId || null,
     is_public: lake.isPublic ?? false,
     built_in: builtIn,
+    can_manage: builtIn ? false : canManage,
     status: lake.status ?? 'active',
     file_count: liveStats?.fileCount ?? lake.fileCount ?? 0,
     total_size_bytes: liveStats?.totalSizeBytes ?? lake.totalSizeBytes ?? 0,

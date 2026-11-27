@@ -1,6 +1,6 @@
-import { getDataLakeTags } from '@bike4mind/common';
-import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
-import type { ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
+import { getDataLakeTags, readableGroupIds } from '@bike4mind/common';
+import { holdsDataLakeReadScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import type { ScopedRequest } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 
 /**
  * The set of files this user can reach, for the surfaces that count them and the one that lists
@@ -31,7 +31,7 @@ export function buildUserFileScope(user: { groups?: string[] | null; tags?: stri
   dataLakeTags: string[];
 } {
   return {
-    userGroups: user.groups ?? [],
+    userGroups: readableGroupIds(user),
     dataLakeTags: getDataLakeTags(user.tags ?? []),
   };
 }

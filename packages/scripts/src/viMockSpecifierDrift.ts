@@ -3,7 +3,7 @@ import path from 'node:path';
 import ts from 'typescript';
 
 /**
- * Static analysis behind `checkViMockSpecifierDrift.test.ts`.
+ * Static analysis behind `checkViMockSpecifierDrift.repo.test.ts`.
  *
  * `vi.mock('<specifier>', factory)` intercepts by specifier, so a mock keeps compiling - and
  * keeps passing - after the symbol it stubs moves to a different subpath of the same package.
@@ -63,7 +63,7 @@ export interface DriftFinding {
  *
  * Text-level, so a bundled string literal whose own content starts a line with `export {` would be
  * read as a statement. The backstop is the "can enumerate the exports of every entry point" case in
- * checkViMockSpecifierDrift.test.ts: a scan that breaks down shows up there as an unreadable entry
+ * checkViMockSpecifierDrift.repo.test.ts: a scan that breaks down shows up there as an unreadable entry
  * rather than as a wave of false positives across the tree.
  */
 function exportStatements(text: string): string {

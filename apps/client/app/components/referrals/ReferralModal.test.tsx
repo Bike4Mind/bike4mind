@@ -1,0 +1,287 @@
+import React from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const { submitReferral, submitUserInvitation, refreshUser } = vi.hoisted(() => ({
+  submitReferral: vi.fn(),
+  submitUserInvitation: vi.fn(),
+  refreshUser: vi.fn(),
+}));
+vi.mock('@client/app/contexts/UserContext', async () => {
+  const { create } = await import('zustand');
+  return {
+    useUser: create(() => ({
+      currentUser: { id: 'sender', name: 'Sender', numReferralsAvailable: 2 },
+      refreshUser: () => refreshUser(),
+    })),
+  };
+});
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({ useServerSettings: () => ({ serverSettings: [] }) }));
+vi.mock('@client/app/utils/regInviteAPICalls', () => ({
+  submitReferral,
+  createRegInvites: vi.fn(),
+  deleteRegInvites: vi.fn(),
+  getRegInvitesFromServer: vi.fn(),
+  submitUserInvitation,
+  updateRegInvites: vi.fn(),
+}));
+const { useGetReferralSummary } = vi.hoisted(() => ({ useGetReferralSummary: vi.fn() }));
+vi.mock('@client/app/hooks/data/referralSummary', () => ({ useGetReferralSummary }));
+const { useGetReferralLink } = vi.hoisted(() => ({ useGetReferralLink: vi.fn() }));
+vi.mock('@client/app/hooks/data/referralLink', () => ({ useGetReferralLink }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, opts?: { credits?: string }) => opts?.credits ?? key,
+    i18n: { language: 'en-US' },
+  }),
+  Trans: ({ i18nKey, values, count }: { i18nKey: string; values?: { credits?: string }; count?: number }) =>
+    count === undefined ? `${i18nKey} ${values?.credits ?? ''}` : `${i18nKey} ${count} ${values?.credits ?? ''}`,
+}));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+import { useUser } from '@client/app/contexts/UserContext';
+import { toast } from 'sonner';
+import { ReferralInviteType, ReferralModal, useReferralModal } from './ReferralModal';
+const theme = extendTheme({ ...getThemeConfig() });
+
+const renderModal = (inviteType?: ReferralInviteType) => {
+  const queryClient = new QueryClient();
+  render(
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={theme}>
+        <ReferralModal inviteType={inviteType} />
+      </CssVarsProvider>
+    </QueryClientProvider>
+  );
+  return queryClient;
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useGetReferralSummary.mockReturnValue({ data: undefined });
+  useGetReferralLink.mockReturnValue({ data: undefined });
+  useReferralModal.setState({ isOpen: false });
+  useUser.setState({ currentUser: { id: 'sender', name: 'Sender', numReferralsAvailable: 2 } });
+});
+
+it('clears the spinner and stays open when the referral is rejected', async () => {
+  submitReferral.mockRejectedValue(new Error('Not enough referrals available'));
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('2'));
+  fireEvent.change(screen.getByTestId('referral-email-input'), { target: { value: 'friend@example.com' } });
+  fireEvent.click(screen.getByTestId('referral-submit-button'));
+  await waitFor(() => expect(screen.queryByTestId('referral-submit-spinner')).toBeNull());
+  // The sender has to see why nothing was sent, and their input must survive to be retried.
+  expect(toast.error).toHaveBeenCalledWith('Not enough referrals available');
+  expect(screen.getByTestId('referral-email-input')).toHaveValue('friend@example.com');
+  expect(useReferralModal.getState().isOpen).toBe(true);
+  queryClient.clear();
+});
+
+it('adopts the refreshed quota after a send instead of decrementing it locally', async () => {
+  const refresh = Promise.withResolvers<void>();
+  submitReferral.mockResolvedValue({ message: 'processed', sent: ['friend@example.com'], failed: [] });
+  refreshUser.mockImplementation(async () => {
+    await refresh.promise;
+    useUser.setState(state => ({
+      currentUser: state.currentUser ? { ...state.currentUser, numReferralsAvailable: 0 } : null,
+    }));
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('2'));
+  fireEvent.change(screen.getByTestId('referral-email-input'), { target: { value: 'friend@example.com' } });
+  fireEvent.click(screen.getByTestId('referral-submit-button'));
+  // Closing does not wait on /api/identify; the server owns the count, so the refreshed
+  // value lands whenever it lands and the modal picks it up from the user store.
+  await waitFor(() => expect(useReferralModal.getState().isOpen).toBe(false));
+  await act(async () => {
+    refresh.resolve();
+  });
+  act(() => useReferralModal.getState().open());
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('0'));
+  expect(screen.getByTestId('referral-submit-button')).toBeDisabled();
+  queryClient.clear();
+});
+
+it('decrements the local quota in userInvitation mode without going below zero', async () => {
+  submitUserInvitation.mockResolvedValue({ message: 'invited' });
+  useUser.setState({ currentUser: { id: 'sender', name: 'Sender', numReferralsAvailable: 1 } });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal(ReferralInviteType.userInvitation);
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('1'));
+  fireEvent.change(screen.getByTestId('referral-email-input'), { target: { value: 'a@example.com, b@example.com' } });
+  fireEvent.click(screen.getByTestId('referral-submit-button'));
+  await waitFor(() => expect(useReferralModal.getState().isOpen).toBe(false));
+  act(() => useReferralModal.getState().open());
+  // Two invites against one slot clamps at zero rather than showing a negative count.
+  await waitFor(() => expect(screen.getByTestId('referral-quota-count')).toHaveTextContent('0'));
+  expect(screen.getByTestId('referral-submit-button')).toBeDisabled();
+  queryClient.clear();
+});
+
+it('shows the inviter summary once the program is on', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: true,
+      invited: 4,
+      active: 3,
+      subscribed: 1,
+      creditsEarned: 7000,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+      milestones: [],
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-summary-invited')).toHaveTextContent('4');
+  expect(screen.getByTestId('referral-summary-active')).toHaveTextContent('3');
+  expect(screen.getByTestId('referral-summary-subscribed')).toHaveTextContent('1');
+  expect(screen.getByTestId('referral-summary-credits')).toHaveTextContent('7,000');
+  queryClient.clear();
+});
+
+it("shows the inviter's non-zero rewards and no invitee credit amount", () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: true,
+      invited: 0,
+      active: 0,
+      subscribed: 0,
+      creditsEarned: 0,
+      recentRewards: [],
+      rewards: { firstAnswer: 1000, firstPayment: 0, secondPayment: 2500 },
+      milestones: [],
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-modal-reward-first-answer')).toHaveTextContent(
+    'referral.reward_first_answer 1,000'
+  );
+  expect(screen.queryByTestId('referral-modal-reward-first-payment')).toBeNull();
+  expect(screen.getByTestId('referral-modal-reward-second-payment')).toHaveTextContent(
+    'referral.reward_second_payment 2,500'
+  );
+  expect(screen.queryByText(/Invited person gets/)).toBeNull();
+  queryClient.clear();
+});
+
+it('hides the inviter summary while the program is off', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: {
+      enabled: false,
+      invited: 0,
+      active: 0,
+      subscribed: 0,
+      creditsEarned: 0,
+      recentRewards: [],
+      rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+    },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.queryByTestId('referral-summary')).toBeNull();
+  expect(screen.queryByTestId('referral-modal-rewards')).toBeNull();
+  queryClient.clear();
+});
+
+it('skips the reward lines when a cached summary predates the rewards field', () => {
+  useGetReferralSummary.mockReturnValue({
+    data: { enabled: true, invited: 0, active: 0, subscribed: 0, creditsEarned: 0, recentRewards: [], milestones: [] },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+
+  expect(screen.getByTestId('referral-summary')).toBeInTheDocument();
+  expect(screen.queryByTestId('referral-modal-rewards')).toBeNull();
+  queryClient.clear();
+});
+
+it('only asks for the summary while the modal is open', () => {
+  renderModal();
+  expect(useGetReferralSummary).toHaveBeenCalledWith({ enabled: false });
+});
+
+it('shows the share link once it loads and copies it', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  useGetReferralLink.mockReturnValue({ data: { code: 'abcd2345', url: 'https://app.example.test/r/abcd2345' } });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.getByTestId('referral-link-input')).toHaveValue('https://app.example.test/r/abcd2345');
+  fireEvent.click(screen.getByTestId('referral-link-copy-btn'));
+  expect(writeText).toHaveBeenCalledWith('https://app.example.test/r/abcd2345');
+  await waitFor(() =>
+    expect(screen.getByTestId('referral-link-copy-btn')).toHaveTextContent('referral.share_link_copied')
+  );
+  queryClient.clear();
+});
+
+it('asks for the share link only while the referral modal is open', () => {
+  renderModal();
+  expect(useGetReferralLink).toHaveBeenLastCalledWith({ enabled: false });
+  expect(screen.queryByTestId('referral-link')).toBeNull();
+});
+
+it('leaves the share link out when it cannot be loaded', () => {
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(useGetReferralLink).toHaveBeenLastCalledWith({ enabled: true });
+  expect(screen.queryByTestId('referral-link')).toBeNull();
+  expect(screen.getByTestId('referral-email-input')).toBeInTheDocument();
+  queryClient.clear();
+});
+
+const milestoneSummary = (active: number) => ({
+  data: {
+    enabled: true,
+    invited: 9,
+    active,
+    subscribed: 0,
+    creditsEarned: 0,
+    recentRewards: [],
+    rewards: { firstAnswer: 0, firstPayment: 0, secondPayment: 0 },
+    milestones: [
+      { friends: 5, credits: 500, reached: active >= 5 },
+      { friends: 10, credits: 1500, reached: active >= 10 },
+    ],
+  },
+});
+
+it('shows how far the inviter is from the next milestone and marks the ones reached', () => {
+  useGetReferralSummary.mockReturnValue(milestoneSummary(7));
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.getByTestId('referral-modal-milestone-next')).toHaveTextContent('referral.milestone_next 3 1,500');
+  expect(screen.getByTestId('referral-modal-milestone-5')).toHaveAttribute('data-reached', 'true');
+  expect(screen.getByTestId('referral-modal-milestone-10')).toHaveAttribute('data-reached', 'false');
+  queryClient.clear();
+});
+
+it('says every milestone is reached once the last one is', () => {
+  useGetReferralSummary.mockReturnValue(milestoneSummary(12));
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.getByTestId('referral-modal-milestone-next')).toHaveTextContent('referral.milestone_all_reached');
+  queryClient.clear();
+});
+
+it('leaves the milestone section out while none are set', () => {
+  useGetReferralSummary.mockReturnValue({
+    ...milestoneSummary(0),
+    data: { ...milestoneSummary(0).data, milestones: [] },
+  });
+  useReferralModal.setState({ isOpen: true });
+  const queryClient = renderModal();
+  expect(screen.queryByTestId('referral-modal-milestones')).toBeNull();
+  queryClient.clear();
+});

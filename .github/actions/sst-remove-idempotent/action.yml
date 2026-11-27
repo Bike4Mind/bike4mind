@@ -22,9 +22,11 @@ runs:
       id: capture_secrets
       if: inputs.capture_mongodb_uri == 'true'
       shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
       run: |
         echo "Capturing MongoDB URI from SST secrets..."
-        MONGODB_URI=$(pnpm sst secret list --stage ${{ inputs.stage }} 2>/dev/null | grep "MONGODB_URI" | sed 's/^MONGODB_URI[[:space:]]*=[[:space:]]*//' | sed 's/^MONGODB_URI[[:space:]]*//' || true)
+        MONGODB_URI=$(pnpm sst secret list --stage "${STAGE}" 2>/dev/null | grep "MONGODB_URI" | sed 's/^MONGODB_URI[[:space:]]*=[[:space:]]*//' | sed 's/^MONGODB_URI[[:space:]]*//' || true)
 
         if [ -n "$MONGODB_URI" ]; then
           echo "::add-mask::$MONGODB_URI"

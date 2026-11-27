@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { SETTING_TABS } from '@bike4mind/common';
 import { ADMIN_SETTINGS_SEARCH_PARAM, ADMIN_SETTINGS_SECTION_PARAM, type AdminSearch } from './adminTabParams';
+import { SEARCH_TERM_URL_DEBOUNCE_MS } from './shared/useAdminListUrlState';
 
 export type SettingSectionKey = keyof typeof SETTING_TABS;
 
@@ -10,9 +11,6 @@ const SECTION_ENTRIES = Object.entries(SETTING_TABS) as Array<
 >;
 
 const DEFAULT_SETTING_SECTION: SettingSectionKey = SECTION_ENTRIES[0][0];
-
-// ms of typing idle before the search term is written to the URL.
-export const SEARCH_TERM_URL_DEBOUNCE_MS = 250;
 
 // The URL carries each section's `id` ('aiConfiguration'), the slug-shaped field, not its object key.
 const sectionFromId = (id: string | undefined): SettingSectionKey =>

@@ -1,21 +1,27 @@
 import { describe, it, expect, vi } from 'vitest';
 import mongoose from 'mongoose';
-import type { IDataLakeResearchRun, ResearchRunLevers } from '@bike4mind/common';
+import type { IDataLakeResearchRun, LegacyResearchRunLevers } from '@bike4mind/common';
 import { emptyResearchRunTotals, RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
 import { DataLakeResearchRunModel, dataLakeResearchRunRepository as repo } from './DataLakeResearchRunModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 const LAKE = 'lake-1';
 
-const levers = (overrides: Partial<ResearchRunLevers> = {}): ResearchRunLevers => ({
+const levers = (overrides: Partial<LegacyResearchRunLevers> = {}): LegacyResearchRunLevers => ({
+  source: 'search',
+  feedUrl: null,
   query: 'coastal erosion',
   maxResults: 10,
   maxProposals: 5,
+  trustedDomains: [],
+  reviewDomains: [],
+  unlistedSources: 'review',
   allowedDomains: [],
   blockedDomains: [],
   minRelevance: 0.6,
   costCeilingMicroUsd: 50_000,
   proposedTags: [],
+  itemRules: [],
   ...overrides,
 });
 
@@ -65,6 +71,55 @@ describe('DataLakeResearchRunRepository', () => {
     expect(reread?.levers).toMatchObject({ query: 'coastal erosion', recencyDays: 30, model: 'gpt-4.1-mini' });
   });
 
+  it('snapshots item rules and defaults the rule totals to zero', async () => {
+    const itemRules = [{ condition: 'About sports', action: 'review' as const }];
+    const created = await repo.createRun(input({ levers: levers({ itemRules }) }));
+    const reread = await repo.findByIdInLake(created.id, LAKE);
+    expect(reread?.levers.itemRules).toEqual(itemRules);
+    expect(reread?.totals).toMatchObject({ blockedByRule: 0, reviewedByRule: 0 });
+  });
+
+  it('persists the rule totals a run settles with', async () => {
+    const created = await repo.createRun(input());
+    await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 1,
+      totals: { ...emptyResearchRunTotals(), blockedByRule: 2, reviewedByRule: 1 },
+    });
+    expect((await repo.findByIdInLake(created.id, LAKE))?.totals).toMatchObject({
+      blockedByRule: 2,
+      reviewedByRule: 1,
+    });
+  });
+
+  it('round-trips the drop buckets, and reads unlistedDropped as undefined when it was never saved', async () => {
+    const created = await repo.createRun(input());
+    await repo.settleRun(created.id, {
+      status: 'completed',
+      completedAt: new Date(),
+      spentMicroUsd: 1,
+      totals: { ...emptyResearchRunTotals(), filteredBySource: 3, unresolvedRedirect: 2, unlistedDropped: 4 },
+    });
+    expect((await repo.findByIdInLake(created.id, LAKE))?.totals).toMatchObject({
+      filteredBySource: 3,
+      unresolvedRedirect: 2,
+      unlistedDropped: 4,
+    });
+
+    const legacy = await repo.createRun(input());
+    const { unlistedDropped: _omitted, ...legacyTotals } = emptyResearchRunTotals();
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(legacy.id) },
+        { $set: { totals: { ...legacyTotals, filteredBySource: 5 } } }
+      );
+    const reread = await repo.findByIdInLake(legacy.id, LAKE);
+    expect(reread?.totals.filteredBySource).toBe(5);
+    expect(reread?.totals.unlistedDropped).toBeUndefined();
+  });
+
   it('lists one lake newest first, honoring a limit, and never another lake', async () => {
     // Spaced out: `createdAt` has millisecond resolution, and three inserts inside one millisecond
     // would make the sort this test is about unordered.
@@ -77,6 +132,28 @@ describe('DataLakeResearchRunRepository', () => {
 
     expect((await repo.listByLake(LAKE)).map(r => r.configId)).toEqual(['newest', 'middle', 'oldest']);
     expect((await repo.listByLake(LAKE, { limit: 2 })).map(r => r.configId)).toEqual(['newest', 'middle']);
+  });
+
+  it('pages by keyset without skipping or repeating rows that share a createdAt', async () => {
+    const ids: string[] = [];
+    for (const configId of ['a', 'b', 'c', 'd', 'e']) ids.push((await repo.createRun(input({ configId }))).id);
+    const same = new Date('2026-01-01T00:00:00.000Z');
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateMany({ dataLakeId: LAKE }, { $set: { createdAt: same } });
+
+    const seen: string[] = [];
+    let after: { createdAt: Date; id: string } | undefined;
+    for (let page = 0; page < 5; page++) {
+      const rows = await repo.listByLake(LAKE, { limit: 2, after });
+      seen.push(...rows.map(r => r.id));
+      if (rows.length < 2) break;
+      after = { createdAt: rows[rows.length - 1].createdAt, id: rows[rows.length - 1].id };
+    }
+
+    expect(seen).toHaveLength(5);
+    expect(new Set(seen)).toEqual(new Set(ids));
+    expect(seen).toEqual([...ids].sort().reverse());
   });
 
   it('will not read a run through another lake id', async () => {
@@ -394,5 +471,48 @@ describe('DataLakeResearchRunRepository', () => {
     expect(await repo.deleteForLake(LAKE)).toBe(2);
     expect(await repo.listByLake(LAKE)).toHaveLength(0);
     expect(await repo.listByLake('lake-2')).toHaveLength(1);
+  });
+  describe('feed runs', () => {
+    it('snapshots source and feedUrl on the levers', async () => {
+      const created = await repo.createRun(
+        input({ levers: levers({ source: 'feed', feedUrl: 'https://example.com/feed.xml' }) })
+      );
+
+      expect((await repo.findByIdInLake(created.id, LAKE))?.levers).toMatchObject({
+        source: 'feed',
+        feedUrl: 'https://example.com/feed.xml',
+      });
+    });
+
+    it('stores the backlog beside the totals at settle, and leaves it null for a search run', async () => {
+      const feedRun = await repo.createRun(input());
+      const searchRun = await repo.createRun(input());
+      const base = {
+        status: 'completed' as const,
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+      };
+
+      await repo.settleRun(feedRun.id, { ...base, feedBacklog: 7 });
+      await repo.settleRun(searchRun.id, base);
+
+      expect((await repo.findByIdInLake(feedRun.id, LAKE))?.feedBacklog).toBe(7);
+      expect((await repo.findByIdInLake(searchRun.id, LAKE))?.feedBacklog).toBeNull();
+    });
+
+    it('stores a zero backlog as zero, not null', async () => {
+      const run = await repo.createRun(input());
+
+      await repo.settleRun(run.id, {
+        status: 'completed',
+        completedAt: new Date(),
+        spentMicroUsd: 0,
+        totals: emptyResearchRunTotals(),
+        feedBacklog: 0,
+      });
+
+      expect((await repo.findByIdInLake(run.id, LAKE))?.feedBacklog).toBe(0);
+    });
   });
 });

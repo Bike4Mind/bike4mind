@@ -12,7 +12,7 @@ const mockRefs = vi.hoisted(() => ({
   findFilter: undefined as unknown,
 }));
 
-vi.mock('@server/middlewares/baseApi', () => {
+vi.mock('@server/middlewares/adminApi', () => {
   const chain: any = {
     use: () => chain,
     get: (fn: any) => {
@@ -20,7 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { adminApi: () => chain };
 });
 
 vi.mock('@bike4mind/database', () => ({

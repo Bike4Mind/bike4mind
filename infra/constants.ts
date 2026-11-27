@@ -1,3 +1,4 @@
+// Must stay in sync with the preview test in isPersonalMailStage (infra/personalMailDefaults.ts).
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
 
@@ -13,6 +14,11 @@ export const runsScheduledJobs = ['production', 'dev'].includes($app.stage);
  * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
 import { PRODUCTION_STAGES } from '@bike4mind/infra';
 export { PRODUCTION_STAGES };
+
+/** Stage default for log groups set in `infra/`; must match `resolveDefaultLogging` in b4m-core/infra. */
+export const STAGE_LOG_RETENTION = $app.stage === 'production' ? '1 month' : '1 week';
+/** STAGE_LOG_RETENTION in days, for a log group declared as a raw aws.cloudwatch.LogGroup. */
+export const STAGE_LOG_RETENTION_DAYS = STAGE_LOG_RETENTION === '1 month' ? 30 : 7;
 
 /**
  * Subscriber options for a single-record queue handler (one that reads only
@@ -30,12 +36,17 @@ export { PRODUCTION_STAGES };
 export const SINGLE_RECORD_BATCH = { batch: { size: 1 } } as const;
 
 /**
- * Registers the fake video and music providers so the generation-job path can be exercised end to end without a
- * paid provider key. Never set on production-scale stages, which must only ever reach real providers.
+ * Registers the fake video, music, image and audio (speech, sound effect) providers so the generation-job path can be
+ * exercised end to end without a paid provider key. Never set on production-scale stages, which must only ever reach real providers.
  */
 export const TEST_GENERATION_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
   ? {}
-  : { ENABLE_TEST_VIDEO_PROVIDER: 'true', ENABLE_TEST_MUSIC_PROVIDER: 'true' };
+  : {
+      ENABLE_TEST_VIDEO_PROVIDER: 'true',
+      ENABLE_TEST_MUSIC_PROVIDER: 'true',
+      ENABLE_TEST_IMAGE_PROVIDER: 'true',
+      ENABLE_TEST_AUDIO_PROVIDER: 'true',
+    };
 
 /**
  * Registers the free `test-decisions` model so POST /api/v1/decisions can be exercised end to end without a vendor
@@ -85,13 +96,6 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // Curated domain->display-name map for internal-org analytics grouping (#350). Runtime-read by
   // inferOrganizationFromEmail in the report cron. No brand fallback; empty == title-cased domain.
   NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES: process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES || '',
-  // Enable What's New modal distribution (S3 upload) for main production only
-  // Fork environments should NOT set this - they consume via WHATS_NEW_DISTRIBUTION_URL
-  ENABLE_WHATS_NEW_DISTRIBUTION: process.env.ENABLE_WHATS_NEW_DISTRIBUTION || '',
-  // Extra SSRF-allowlisted host suffix(es) for the What's New distribution URL (open-core #9392).
-  // Comma-separated; no brand fallback (empty == only CloudFront/S3 + SERVER_DOMAIN allowed). Lets
-  // a fork pull the upstream feed from a custom domain that isn't CloudFront/S3 or its own host.
-  WHATS_NEW_ALLOWED_DISTRIBUTION_HOSTS: process.env.WHATS_NEW_ALLOWED_DISTRIBUTION_HOSTS || '',
   // Enable E2E test endpoints (/api/test/*) on preview and staging deployments
   E2E_ENDPOINTS_ENABLED: isPreviewStage || isStagingStage ? 'true' : '',
   // Suppress punycode deprecation warning (DEP0040) from SST's transitive aws-sdk v2 dependency

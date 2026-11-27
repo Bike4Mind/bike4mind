@@ -55,6 +55,34 @@ for (const [rule, bad, good] of cases) {
   });
 }
 
+const apiFindings = (text, path = 'api/x.md') => scanText(text, path).map((f) => f.rule);
+
+for (const [bad, good] of [
+  ['use claude-3-5-sonnet', 'use claude-sonnet-5'],
+  ['use claude-3-opus', 'use claude-opus-4'],
+  ['use gpt-3.5-turbo', 'use gpt-4o'],
+  ['use gemini-pro', 'use gemini-2.5-pro'],
+  ['use gpt-4', 'use gpt-4.1'],
+  ['use gpt-4-turbo', 'use gpt-4o-realtime-preview'],
+]) {
+  test(`retired-model-id (api/): flags ${bad}`, () => {
+    assert.ok(apiFindings(bad).includes('retired-model-id'));
+    assert.ok(!apiFindings(good).includes('retired-model-id'));
+  });
+}
+
+test('stale-api-keys-menu-path (api/): flags the old menu path', () => {
+  for (const bad of ['Settings -> API Keys', 'Settings > API Keys', 'Settings \u2192 API Keys', 'Settings &gt; API Keys']) {
+    assert.ok(apiFindings(bad).includes('stale-api-keys-menu-path'), bad);
+  }
+  assert.ok(!apiFindings('Profile menu -> More -> API Keys').includes('stale-api-keys-menu-path'));
+});
+
+test('api-scoped rules skip files outside api/', () => {
+  assert.deepEqual(scanText('model claude-3-opus', 'cli/features.md'), []);
+  assert.deepEqual(scanText('model claude-3-opus'), []);
+});
+
 test('ignore marker skips only the next line', () => {
   const text = '<!-- docs-guard-ignore-next-line -->\nmail jane@realco.io\nmail jane@realco.io';
   assert.deepEqual(scanText(text), [{ line: 3, rule: 'email' }]);

@@ -1,9 +1,9 @@
-import { initializeSlackPackage } from '@server/integrations/slack/slackPackageInit';
+import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
-import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import {
   getOAuthWorkspaceWithCredentials,
   buildUserLinkRedirectUri,
@@ -23,7 +23,7 @@ const logger = new Logger();
  * Redirects to: Slack OAuth consent page
  *
  * Flow:
- * 1. Auto-pick first available workspace with OAuth configured (for credentials only)
+ * 1. Use the workspace named by ?workspaceId, else the first with OAuth configured (credentials only)
  * 2. Redirect to Slack OAuth WITHOUT team parameter (Slack handles workspace selection)
  * 3. User picks their Slack workspace on Slack's UI
  * 4. Callback verifies the selected team is configured in our system
@@ -43,7 +43,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   }
 
   try {
-    const workspaceResult = await getOAuthWorkspaceWithCredentials();
+    // The Slack app the request names; without one, the first active app with credentials.
+    const requestedWorkspaceId = typeof req.query.workspaceId === 'string' ? req.query.workspaceId : undefined;
+    const workspaceResult = await getOAuthWorkspaceWithCredentials(requestedWorkspaceId);
     if (!workspaceResult.success) {
       return res.redirect(`/profile?tab=integrations&slack_error=${workspaceResult.error}`);
     }
@@ -52,7 +54,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // Generate state token and build OAuth URL. Bind the flow to this browser: the
     // state carries the nonce-cookie hash the callback re-checks (issueStateNonce sets
     // the cookie on res).
-    const state = generateUserLinkStateToken(req.user.id, issueStateNonce(res, NONCE_SLOT.slackUserLink));
+    const state = generateUserLinkStateToken(req.user.id, issueStateNonce(res, NONCE_SLOT.slackUserLink), workspace.id);
     const redirectUri = buildUserLinkRedirectUri(workspace, req);
     const slackAuthUrl = buildSlackOAuthUrl(workspace.slackClientId!, redirectUri, state, workspace.slackTeamId);
 

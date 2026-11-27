@@ -1,4 +1,5 @@
 import { isAxiosError } from 'axios';
+import { SKILL_SHARE_TOKEN_HEADER } from '@bike4mind/common';
 import type { OpenDialogOptions } from 'electron';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type {
@@ -29,7 +30,7 @@ import type {
   SkillUploadPreview,
   SkillWriteCode,
 } from '@shared/skillMarket';
-import { isExternallyOpenable } from '../../externalLinks';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { buildDiff } from '../tools/diff';
 import type { SkillCatalog } from './SkillCatalog';
 import { readSkillSource } from './readSkillSource';
@@ -43,7 +44,7 @@ const SIGNED_OUT = 'Sign in to browse the Skill Market.';
 const CONFLICT_CODES = new Set(['name_taken', 'local_changes', 'version_changed']);
 const UPLOAD_SIGNED_OUT = 'Sign in to upload skills.';
 export const RATE_LIMITED = "You've hit the Skill Market submit limit; try again later.";
-const VISIBILITIES = new Set(['public', 'organization', 'unlisted']);
+const VISIBILITIES = new Set(['public', 'organization', 'unlisted', 'space']);
 
 type WriteFailure = { error: string; status?: number; code?: SkillWriteCode };
 type OpenDialog = (options: OpenDialogOptions) => Promise<{ canceled: boolean; filePaths: string[] }>;
@@ -80,7 +81,7 @@ export class SkillMarket {
     if (filters?.scope) params.scope = filters.scope;
     if (filters?.tools) params.tools = filters.tools;
     if (filters?.minRating) params.minRating = String(filters.minRating);
-    const read = await this.get(MARKET, params);
+    const read = await this.get(MARKET, { params });
     if ('error' in read) return { listings: [], hasMore: false, error: read.error };
     const body = asRecord(read.data);
     return { listings: toListings(body?.data), hasMore: body?.hasMore === true };
@@ -92,13 +93,12 @@ export class SkillMarket {
     return { listings: toListings(asRecord(read.data)?.data), hasMore: false };
   }
 
-  /** By id, or by an unlisted listing's share token (with or without the id), like the web. */
+  /** By an unlisted listing's share token when one is given, else by id; the id route ignores share tokens. */
   async listing(ref: SkillMarketListingRef): Promise<SkillMarketDetailResult> {
     if (typeof ref.id !== 'string' && typeof ref.token !== 'string') return { error: 'No listing to open.' };
-    const url = ref.id
-      ? `${MARKET}/${encodeURIComponent(ref.id)}`
-      : `${MARKET}/by-token/${encodeURIComponent(ref.token ?? '')}`;
-    const read = await this.get(url, ref.id && ref.token ? { token: ref.token } : undefined);
+    const read = ref.token
+      ? await this.get(`${MARKET}/by-token`, { headers: { [SKILL_SHARE_TOKEN_HEADER]: ref.token } })
+      : await this.get(`${MARKET}/${encodeURIComponent(ref.id ?? '')}`);
     if ('error' in read) return { error: read.error };
     const detail = toDetail(read.data);
     if (!detail) return { error: 'The server returned no listing.' };
@@ -143,7 +143,7 @@ export class SkillMarket {
 
   /** The account skills that came from the market, and whether the server has a newer version. */
   async imports(): Promise<SkillMarketImportsResult> {
-    const read = await this.get('/api/skills', { limit: String(SKILLS_LIMIT) });
+    const read = await this.get('/api/skills', { params: { limit: String(SKILLS_LIMIT) } });
     if ('error' in read) return { imports: [], error: read.error };
     const rows = asArray(asRecord(read.data)?.data);
     return {
@@ -373,7 +373,7 @@ export class SkillMarket {
     name: string,
     userId: string
   ): Promise<{ skill?: Record<string, unknown> } | { error: string }> {
-    const read = await this.get('/api/skills', { query: name, limit: String(SKILLS_LIMIT) });
+    const read = await this.get('/api/skills', { params: { query: name, limit: String(SKILLS_LIMIT) } });
     if ('error' in read) return read;
     const skill = asArray(asRecord(read.data)?.data)
       .map(asRecord)
@@ -427,8 +427,8 @@ export class SkillMarket {
     const importedFrom = asRecord(skill?.importedFrom);
     if (typeof skill?.body !== 'string' || importedFrom?.versionId === version.id) return undefined;
 
-    const before = asStrings(skill.allowedTools);
-    const after = version.snapshot.allowedTools ?? [];
+    const before = [...asStrings(skill.allowedTools), ...asStrings(skill.claudeCodeAllowedTools)];
+    const after = [...(version.snapshot.allowedTools ?? []), ...(version.snapshot.claudeCodeAllowedTools ?? [])];
     return {
       skillId: copy.id,
       ...(typeof importedFrom?.version === 'number' ? { fromVersion: importedFrom.version } : {}),
@@ -443,13 +443,13 @@ export class SkillMarket {
 
   private async get(
     url: string,
-    params?: Record<string, string>,
+    request?: { params?: Record<string, string>; headers?: Record<string, string> },
     write = false
   ): Promise<{ data: unknown } | { error: string }> {
     const api = this.deps.getApiClient();
     if (!api) return { error: SIGNED_OUT };
     try {
-      const response = await api.getAxiosInstance().get(url, params ? { params } : undefined);
+      const response = await api.getAxiosInstance().get(url, request);
       return { data: response.data };
     } catch (err) {
       const error = describe(err, { write });
@@ -470,7 +470,18 @@ function toFields(value: unknown): SkillUploadFields | null {
     description: fields.description,
     body: fields.body,
     argumentHint: typeof fields.argumentHint === 'string' ? fields.argumentHint : '',
+    // Always sent, like argumentHint, so an update clears tools the file no longer declares.
+    claudeCodeAllowedTools: Array.isArray(fields.claudeCodeAllowedTools)
+      ? fields.claudeCodeAllowedTools.filter((tool): tool is string => typeof tool === 'string')
+      : [],
+    // '' clears, so an update drops a model the file no longer declares.
+    claudeCodeModel: typeof fields.claudeCodeModel === 'string' ? fields.claudeCodeModel : '',
     disableModelInvocation: fields.disableModelInvocation === true,
+    // Always sent, so re-uploading over a skill replaces its files (the server validates paths and limits).
+    files: (Array.isArray(fields.files) ? fields.files : []).flatMap(file => {
+      const f = asRecord(file);
+      return typeof f?.path === 'string' && typeof f.content === 'string' ? [{ path: f.path, content: f.content }] : [];
+    }),
   };
 }
 
@@ -522,7 +533,9 @@ function toMyListing(row: unknown): SkillMyListing | null {
     id: listing.id,
     name: listing.name,
     visibility:
-      listing.visibility === 'organization' || listing.visibility === 'unlisted' ? listing.visibility : 'public',
+      listing.visibility === 'organization' || listing.visibility === 'unlisted' || listing.visibility === 'space'
+        ? listing.visibility
+        : 'public',
     status: typeof listing.status === 'string' ? listing.status : '',
     hiddenByReports: listing.hiddenByReports === true,
     tags: asStrings(listing.tags),
@@ -562,7 +575,9 @@ function toListing(row: unknown): SkillMarketListing | null {
     description: typeof listing.description === 'string' ? listing.description : '',
     ...(typeof listing.authorName === 'string' ? { authorName: listing.authorName } : {}),
     visibility:
-      listing.visibility === 'organization' || listing.visibility === 'unlisted' ? listing.visibility : 'public',
+      listing.visibility === 'organization' || listing.visibility === 'unlisted' || listing.visibility === 'space'
+        ? listing.visibility
+        : 'public',
     status: typeof listing.status === 'string' ? listing.status : '',
     tags: asStrings(listing.tags),
     ratingAvg: typeof listing.ratingAvg === 'number' ? listing.ratingAvg : 0,
@@ -613,6 +628,7 @@ function toVersion(data: unknown): SkillMarketVersion | null {
       body: snapshot.body,
       ...(typeof snapshot.argumentHint === 'string' ? { argumentHint: snapshot.argumentHint } : {}),
       allowedTools: asStrings(snapshot.allowedTools),
+      claudeCodeAllowedTools: asStrings(snapshot.claudeCodeAllowedTools),
     },
     ...(asRecord(version.honestSummary)
       ? { honestSummary: version.honestSummary as SkillMarketVersion['honestSummary'] }

@@ -1,7 +1,8 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
-import { evaluateGears, type GearKey, type GearKind } from '@server/services/gears/catalog';
+import { evaluateGears, type GearKey, type GearKind, type GearPendingReason } from '@server/services/gears/catalog';
 
 /**
  * GET /api/gears/status - each gear's unlock and reward state for the Gears page.
@@ -32,18 +33,29 @@ export interface GearStatus {
   /** The ledger has paid this gear. Independent of `unlocked`, which follows live
    *  data: deleting your only agent re-locks the gear, but the reward stays spent. */
   claimed?: boolean;
+  /** Claimed while the trickle pool was dry: held, and paid by the hourly release. */
+  rewardQueued?: boolean;
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
-   *  Published: waiting for a non-owner view). */
+   *  Published: waiting for a verified non-owner view). */
   rewardPending?: boolean;
+  /** Why rewardPending is true - drives the UI copy so each reason shows the right message. */
+  pendingReason?: GearPendingReason;
+  /** With pendingReason 'too_new': the account age the payout waits for (gearRewardMinAccountAgeDays). */
+  minAccountAgeDays?: number;
 }
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ME_READ, ApiKeyScope.ADMIN], grandfatherLegacyKeys: true }).get(
   asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
+    // Connected-app keys hold me:read but reach only the routes pinned in exchangeKeyRouteInventory.
+    if (req.apiKeyInfo?.oauthExchangeClientId) {
+      return res.status(403).json({ error: 'Keys minted for a connected app cannot call this route' });
+    }
 
-    const { evaluations, overrides } = await evaluateGears(String(userId));
-    const gears: GearStatus[] = evaluations.map(({ def, unlocked, credits, rewardEligible, alreadyRewarded }) => {
+    const { evaluations, overrides, minAccountAgeDays } = await evaluateGears(String(userId));
+    const gears: GearStatus[] = evaluations.map(evaluation => {
+      const { def, unlocked, credits, rewardEligible, alreadyRewarded, rewardQueued, pendingReason } = evaluation;
       const o = overrides.get(def.key);
       const base = GEAR_PRESENTATION[def.key];
       const gear: GearStatus = {
@@ -57,9 +69,14 @@ const handler = baseApi().get(
         cta: o?.cta ?? base.cta,
         ctaAction: o?.ctaAction ?? base.ctaAction,
       };
-      if (unlocked && !rewardEligible && !alreadyRewarded) gear.rewardPending = true;
+      if (unlocked && !rewardEligible && !alreadyRewarded) {
+        gear.rewardPending = true;
+        if (pendingReason) gear.pendingReason = pendingReason;
+        if (pendingReason === 'too_new') gear.minAccountAgeDays = minAccountAgeDays;
+      }
       if (rewardEligible && credits > 0 && !alreadyRewarded) gear.claimable = true;
       if (alreadyRewarded) gear.claimed = true;
+      if (rewardQueued) gear.rewardQueued = true;
       return gear;
     });
 
